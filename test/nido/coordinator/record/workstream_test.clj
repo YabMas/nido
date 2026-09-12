@@ -465,6 +465,82 @@
         (is (some? (ws/append-entry! :brian (:id w) {:kind :baseline}
                                      (pr-str a-baseline))))))))
 
+(deftest an-intent-may-supersede-an-earlier-one
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
+        (is (some? (ws/append-entry!
+                    :brian (:id w) {:kind :intent}
+                    (pr-str (assoc an-intent :goal "a wider goal"
+                                   :supersedes {:seq 1 :why "implementation found the scope wrong"})))))))))
+
+(deftest a-record-standing-on-a-replaced-goal-is-refused
+  ;; The direction the sequence guard cannot close. `standing` unseats records
+  ;; that already exist when a goal moves; a record written AFTERWARDS resolves
+  ;; every citation, agrees on kind and has nothing postdating it — so nothing
+  ;; unseats it and it would stand on a goal nobody holds.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
+        (ws/append-entry! :brian (:id w) {:kind :intent}
+                          (pr-str (assoc an-intent :goal "a wider goal"
+                                         :supersedes {:seq 1 :why "the scope moved"})))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"stands on the goal at entry 1"
+             (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline)))
+            "a survey may not be scoped for a goal already replaced")
+        (is (some? (ws/append-entry! :brian (:id w) {:kind :baseline}
+                                     (pr-str (assoc a-baseline :intent {:seq 2}))))
+            "naming the live goal is fine")))))
+
+(deftest a-record-reaching-a-replaced-goal-through-its-citations-is-refused
+  ;; Naming the live goal is not enough when something the record rests on was
+  ;; scoped for the one it replaced — the design would read decidable because
+  ;; its own goal predates it, while the survey under it bounds another goal.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (seed-baseline! w)                                        ; 1 intent, 2 baseline
+        (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 2)))
+        (ws/append-entry! :brian (:id w) {:kind :intent}          ; 4 replaces 1
+                          (pr-str (assoc an-intent :goal "a wider goal"
+                                         :supersedes {:seq 1 :why "the scope moved"})))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"stands on the goal at entry 1"
+             (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 2 4))))
+            "a design naming the live goal over a survey scoped for the replaced one")
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"stands on the goal at entry 1"
+             (ws/append-entry! :brian (:id w) {:kind :baseline-review}
+                               (pr-str {:format :baseline-review :baseline-seq 2
+                                        :verdict :sufficient :reason "holds"})))
+            "a review of that survey")
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"stands on the goal at entry 1"
+             (ws/append-entry! :brian (:id w) {:kind :design-approved}
+                               (pr-str {:format :design-approved :design {:seq 3} :at-seq 4})))
+            "a grant of a design that served it")
+        (is (some? (ws/append-entry! :brian (:id w) {:kind :baseline}
+                                     (pr-str (assoc a-baseline :intent {:seq 4}
+                                                    :supersedes {:seq 2 :why "the goal moved"}))))
+            ":supersedes names what it replaces and is not walked")))))
+
+(deftest an-amendment-naming-an-already-replaced-goal-is-refused
+  ;; A chain with two answers is a walk with two answers. `replacement` follows
+  ;; one edge per record, so a fork leaves it unable to say which goal is live.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
+        (ws/append-entry! :brian (:id w) {:kind :intent}
+                          (pr-str (assoc an-intent :supersedes {:seq 1 :why "first"})))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"forks the chain"
+             (ws/append-entry! :brian (:id w) {:kind :intent}
+                               (pr-str (assoc an-intent :supersedes {:seq 1 :why "second"})))))))))
+
 (deftest design-citing-a-baseline-that-does-not-exist-is-refused
   (with-tmp
     (fn [_]

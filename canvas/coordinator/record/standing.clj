@@ -17,7 +17,7 @@
         [:approved-by [:maybe :any]]])
 
 (Module record-standing
-  "Whether a design record still stands, derived from the ledger's own citations.
+  "Whether a design or baseline record still stands, derived from the ledger's own citations.
 
    DERIVED, never stored. A stored standing is a second source of truth that goes stale the
    moment anything is appended after it — and what makes a design stop standing is precisely a
@@ -27,6 +27,11 @@
   (Operation of-design
     "Whether a stamped design record still holds, and what its standing rests on."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design :map]] Standing]
+     :delegates [workstream/entries-of]})
+  (Operation of-baseline
+    "Whether a stamped baseline is still footing a design may be written on: found sufficient at
+     its own number, and scoped for a goal nothing has replaced since."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:baseline :map]] :map]
      :delegates [workstream/entries-of]})
   (Operation why-not-decided
     "Why a standing is not decided, in words a person can act on. nil when it is."
