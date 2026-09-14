@@ -20,7 +20,15 @@
    a position the pipeline will not place, a ledger it cannot read, an exception
    of any kind — asks for nothing, and a turn nobody asked to continue ends as
    it does today. A hook that breaks a session it cannot even resolve is worse
-   than no hook."
+   than no hook.
+
+   IT ASKS ONCE PER PROMPT. A stop the host marks `stop_hook_active` is one a
+   Stop hook — this or a project's — already carried on, and nido asks nothing
+   of it, without folding and so without waiting. The ledger does not move while
+   a stage is being worked, so a fold there returns the answer that carried the
+   turn on, and asking it at every stop keeps a session going, repeating one
+   line, with nobody typing. What that gives up is a session carried across two
+   stages in a row: the second waits for the next prompt."
   (:require
    [cheshire.core :as json]
    [nido.platform.task-args :as task-args]
@@ -55,9 +63,9 @@
   asks-for
   "What nido asks of this boundary, given what the workstream owes.
 
-   Pure over the answer, and the whole of the hook's judgement. `:wait` is not
-   an answer the caller can act on — it is the loop's instruction to fold
-   again — so it never reaches an exit code."
+   Pure over the answer, and the whole of the hook's judgement of the
+   workstream. `:wait` is not an answer the caller can act on — it is the
+   loop's instruction to fold again — so it never reaches an exit code."
   [answer]
   (cond
     (nil? answer)             {:ask :nothing :because :no-workstream}
@@ -97,12 +105,8 @@
            ;; the host's, across every hook that answered.
            :else {:ask :nothing :because :waited-out}))))))
 
-(defn- hook-cwd
-  "The cwd to fold from: the Stop hook's own JSON on stdin, else what the caller
-   named, else where this process is.
-
-   Read from stdin because that is how the host says where a session is
-   standing, and a hook that guessed would answer about a different workstream.
+(defn- hook-input
+  "The Stop hook's own JSON on stdin, or nil when there is none to read.
 
    ONLY WHEN THERE IS NO CONSOLE, and the guard is not defensive — without it
    this verb hangs a terminal. `slurp` reads to EOF, so an interactive shell
@@ -111,24 +115,34 @@
    a pipe that closes after the JSON; a terminal has one. Checking the console
    rather than whether bytes are ready is what makes it a fact about the caller
    instead of a race with them."
-  [opts]
-  (or (when (nil? (System/console))
-        (try (some-> (json/parse-string (slurp *in*) true) :cwd)
-             (catch Throwable _ nil)))
-      (:cwd opts)
-      (System/getProperty "user.dir")))
+  []
+  (when (nil? (System/console))
+    (try (json/parse-string (slurp *in*) true)
+         (catch Throwable _ nil))))
+
+(defn- hook-cwd
+  "The cwd to fold from: the hook's own, else what the caller named, else where
+   this process is.
+
+   The hook's first because that is how the host says where a session is
+   standing, and a hook that guessed would answer about a different workstream."
+  [{:keys [hook cwd]}]
+  (or (:cwd hook) cwd (System/getProperty "user.dir")))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   boundary-cmd*
   "Ask, then exit the way a Stop hook is heard: 2 with the reason on stderr to
    request a continuation, 0 to ask for nothing.
 
-   Every throw is caught and answered with 0. A hook cannot be allowed to break
-   a session by failing — see the namespace docstring."
+   `:hook` is the host's JSON for this stop. One it marks `stop_hook_active`
+   asks for nothing and reads no ledger, and every throw is caught and answered
+   with 0 — both laws of the namespace docstring."
   [opts]
-  (let [d (try (ask-at (hook-cwd opts) opts)
-               (catch Throwable t
-                 {:ask :nothing :because :threw :detail (ex-message t)}))]
+  (let [d (if (get-in opts [:hook :stop_hook_active])
+            {:ask :nothing :because :already-carried-on}
+            (try (ask-at (hook-cwd opts) opts)
+                 (catch Throwable t
+                   {:ask :nothing :because :threw :detail (ex-message t)})))]
     (when (= :continue (:ask d))
       (binding [*out* *err*] (println (:say d))))
     d))
@@ -136,5 +150,5 @@
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   boundary-cmd [& args]
   (let [[_ opts] (task-args/split-args args)
-        d        (boundary-cmd* opts)]
+        d        (boundary-cmd* (assoc opts :hook (hook-input)))]
     (System/exit (if (= :continue (:ask d)) 2 0))))

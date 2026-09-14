@@ -28,10 +28,17 @@
    THE WAIT KEEPS NO STATE. A boundary a person owes is not ended: the same question is asked
    again, in the same process, until the fold answers differently. An answer is an append and the
    next fold reads it, so nothing is delivered to a waiting session and a session that dies
-   mid-wait leaves nothing for a later reader to reconcile."
+   mid-wait leaves nothing for a later reader to reconcile.
+
+   IT ASKS ONCE PER PROMPT. A stop the host marks as already carried on by a Stop hook — this or a
+   project's — asks for nothing, without folding and so without waiting. The ledger does not move
+   while a stage is being worked, so a fold there returns the answer that carried the turn on, and
+   asking it at every stop keeps a session going, repeating one line, with nobody typing. What
+   that gives up is a session carried across two stages in a row: the second waits for the next
+   prompt."
   (Operation asks-for
     "What nido asks of this boundary, given what the workstream owes. Pure over the answer, and
-     the whole of the hook's judgement.
+     the whole of the hook's judgement of the workstream.
 
      The CLAIM is read before the position, deliberately: a workstream something else is already
      advancing owes this caller nothing, and waiting there would put a person's session to sleep

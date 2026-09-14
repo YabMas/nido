@@ -2,7 +2,7 @@
 (ns tasks.nido-boundary-test
   (:require
    [clojure.string :as str]
-   [clojure.test :refer [deftest is]]
+   [clojure.test :refer [deftest is testing]]
    [tasks.nido-boundary :as boundary]
    [tasks.nido-owed :as owed]))
 
@@ -84,12 +84,39 @@
                                     :now-fn (let [t (atom 0)] #(swap! t + 20))}))
     (is (pos? @seen) "it re-asked rather than sleeping on a remembered answer")))
 
+;; ── Once per prompt ─────────────────────────────────────────────────────────
+
+(defn- quietly [f] (binding [*err* (java.io.StringWriter.)] (f)))
+
+(deftest a-stop-a-hook-already-carried-on-asks-for-nothing
+  ;; The ledger does not move while a stage is being worked, so a fold here
+  ;; returns the answer that carried the turn on, and asking it again repeats
+  ;; one line at every stop with nobody typing.
+  (let [folds (atom 0)]
+    (with-redefs [owed/owed-at (fn [_] (swap! folds inc)
+                                 {:at :design-approved :stage :implement
+                                  :mode :working-copy :person nil})]
+      (is (= {:ask :nothing :because :already-carried-on}
+             (quietly #(boundary/boundary-cmd* {:hook {:stop_hook_active true}}))))
+      (is (zero? @folds) "without reading the ledger, so it cannot wait either")
+      (testing "a stop a prompt led to still asks"
+        (is (= :continue
+               (:ask (quietly #(boundary/boundary-cmd*
+                                {:hook {:stop_hook_active false}})))))))))
+
+(deftest it-folds-where-the-hook-says-the-session-stands
+  (let [asked (atom nil)]
+    (with-redefs [owed/owed-at (fn [cwd] (reset! asked cwd) nil)]
+      (boundary/boundary-cmd* {:cwd "/named" :hook {:cwd "/from-hook"}})
+      (is (= "/from-hook" @asked))
+      (boundary/boundary-cmd* {:cwd "/named"})
+      (is (= "/named" @asked) "and what the caller named when there is no hook"))))
+
 ;; ── Failing open ────────────────────────────────────────────────────────────
 
 (deftest a-throw-anywhere-asks-for-nothing
   (with-redefs [owed/owed-at (fn [_] (throw (ex-info "ledger unreadable" {})))]
-    (let [d (binding [*in* (java.io.PushbackReader. (java.io.StringReader. ""))]
-                (boundary/boundary-cmd* {:cwd "/anywhere"}))]
+    (let [d (boundary/boundary-cmd* {:cwd "/anywhere"})]
       (is (= :nothing (:ask d)))
       (is (= :threw (:because d))
           "and it says so, so a hook that is silently doing nothing is
