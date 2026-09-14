@@ -673,11 +673,35 @@
       (assoc :round rounds
              :carried-from (or (:carried-from prior) (:seq prior)))))
 
+(defn- held-to-claims
+  "`verdict` as the ledger may record it against a design stating `claim-ids`, or nil when it
+   cannot be. A design in the shared model names its claims by id and asks for them back by id,
+   and an id the design does not state names nothing a reader can find.
+
+   The two lists fail differently, so they are held differently. A held id the design does not
+   state is dropped: a confirmation of nothing loses nothing true by going. A broken one makes the
+   whole answer a non-answer, because dropping it could turn an accusation into a clean verdict.
+
+   Ids are compared bare — the prompt renders them in brackets and a judge quotes them back so.
+   `claim-ids` nil, for a design from before the shared model whose invariants carry no ids,
+   leaves the verdict as parsed."
+  [verdict claim-ids]
+  (if (nil? claim-ids)
+    verdict
+    (let [bare   #(str/replace (str/trim (str %)) #"^\[|\]$" "")
+          broken (mapv #(update % :invariant bare) (:invariants-broken verdict))
+          held   (into [] (comp (map bare) (filter claim-ids)) (:invariants-held verdict))]
+      (when (every? #(contains? claim-ids (:invariant %)) broken)
+        (cond-> (dissoc verdict :invariants-held :invariants-broken)
+          (seq held)   (assoc :invariants-held held)
+          (seq broken) (assoc :invariants-broken broken))))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   run!
   "Run the verdict pass. Returns the verdict map, or nil when there is no design
-   record to judge against, the agent no-ops, or the answer is unparseable — all
-   three mean 'nothing to record', never a fabricated :sound.
+   record to judge against, the agent no-ops, the answer is unparseable, or it
+   names as broken a claim the design does not state — each means 'nothing to
+   record', never a fabricated :sound.
 
    A standing verdict this run gave no reason to revisit is carried forward
    instead of re-derived; see `still-answers?` for when that holds and
@@ -703,4 +727,6 @@
                               :first-message prompt :budget budget
                               :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})]
           (when-not (or (zero? (or num-turns 0)) result-error?)
-            (parse result-text rounds (:seq design))))))))
+            (some-> (parse result-text rounds (:seq design))
+                    (held-to-claims (when (contains? design :model)
+                                      (into #{} (map :id) (claim-model/claims design)))))))))))

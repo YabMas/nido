@@ -7,8 +7,10 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
+   [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.report :as report]
-   [nido.review.record :as record]))
+   [nido.review.record :as record]
+   [nido.review.stages :as stages]))
 
 (def ^:private baseline
   {:format       :baseline
@@ -341,19 +343,19 @@
         "an inferred goal is the one the design serves, so the check could
          never fail")))
 
-(deftest a-triage-cited-as-intent-contributes-no-directions
-  ;; The projection happens in discover-intent; this pins what the PROMPT may
-  ;; contain once it has, since that is where the damage would be done.
-  (let [p (record/design-prompt
-           {:design design
-            :intent {:goal "Checkout off by a cent"
-                     :summary "Rounding applied per line."
-                     :done-when []}})]
-    (is (str/includes? p "Checkout off by a cent"))
-    (is (str/includes? p "Rounding applied per line."))
-    (is (not (str/includes? p "round once on the total"))
-        "a direction carries a proposed shape and an effort — in the goal
-         yardstick it puts the answer inside the question")))
+(deftest only-an-intent-is-a-goal
+  ;; The append boundary refuses a design citing anything but an :intent, so a citation that
+  ;; resolves to another kind was never written through it and projects no goal.
+  (let [cited (fn [entry]
+                (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                              ws/entry-at-seq            (fn [_ _ _] entry)]
+                  (record/discover-intent "/w" {:intent {:seq 1}})))]
+    (is (= {:goal "Checkout off by a cent" :done-when ["one rounding point"]}
+           (cited {:format :intent :goal "Checkout off by a cent"
+                   :done-when ["one rounding point"]})))
+    (is (nil? (cited {:format :triage-report :title "Checkout off by a cent"
+                      :summary "Rounding applied per line."}))
+        "a triage report is not a goal, whatever it summarises")))
 
 (deftest an-underivable-check-parses-and-is-not-a-failure
   (let [r (record/parse-design-decision

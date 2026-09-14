@@ -381,6 +381,12 @@ because there is none, and nothing is lost by it: the append already holds every
 claim to the elements its own record lists. Adopting a canvas later changes
 where the ids come from, not what the record is.
 
+**A `:role` element names who plays it**, under `:plays` — the ids of the
+modules, operations or kinds the same model lists. Membership is authored, never
+derived, and a claim about the role binds exactly those players. In a project
+with a `canvas/` they are the declared `Role`'s players, and a round stops at
+`:subjects-undeclared` while the two differ.
+
 **`:evidence` says what checks the claim**, recorded rather than inferred: a
 round's judgement, named tests, or a named law. Most claims are `{:by :round}`.
 Write the other two only when the tests or the law exist.
@@ -705,6 +711,48 @@ Amendments that contradict each other are not: a field widened in one and left
 narrow in the next means you are patching the record rather than re-thinking it,
 and those contradictions are yours, not the reviewer's. When that starts, rewrite
 the record whole and supersede once rather than appending another patch.
+
+### A unit that grows: fork it, then merge it back
+
+When work in flight turns out to need a second unit — same area, a claim the
+current design does not make — do not append a second design to the workstream.
+Every reader takes a workstream's newest design, so the new one would replace
+the unit you are in. Fork it:
+
+```bash
+bb nido:workstream:fork :project <p> :ws-id <parent> :goal "…" :done-when '["…"]'
+```
+
+The parent's newest design has to stand — cleared or granted — and it and its
+baseline must be written in the shared model. The child is a new workstream
+holding its own goal, a `:fork` entry naming the parent's baseline and design,
+and a baseline DERIVED from those two: the parent design laid over the parent
+baseline, by id. Verify that baseline with the ordinary round instead of
+surveying again. Nothing is written on the parent.
+
+Design the child like any unit. A design states only what it changes: an id it
+leaves out is carried unchanged, and taking one out is said under
+`:model :removed`.
+
+To bring it home:
+
+```bash
+bb nido:workstream:merge :project <p> :ws-id <child>                     # conflicts, or what the merged design carries
+bb nido:workstream:merge :project <p> :ws-id <child> :file merged.edn    # append it
+```
+
+The merge combines the fork's base, the parent's current design and the child's
+design by id, and names every conflict: an element or claim both sides changed
+differently, a claim kept about something the combination dropped, a claim
+stated against a subject only the other side restated, and a law the
+declaration breaks. Settle each on whichever side is wrong and run it again —
+nothing is appended while one stands. `merged.edn` holds only what you author:
+summary, shape, standing, the relation to the baseline, routes, effort. The
+model, the citations and the supersession come from the merge, and the ledger
+refuses a `:merges` design whose model is not the combination. The merged
+design is then decided like any other, and its round re-checks only what neither
+unit settled: a claim confirmed on either ledger, at text, subject declarations
+and subject code that have not moved since, is shown outside the round's checks.
 
 ## 6. Noticing mid-work
 

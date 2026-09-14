@@ -2,6 +2,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
             [clojure.edn :as edn]
+            [malli.core :as m]
             [nido.coordinator.report :as report]))
 
 (def ^:private valid-report
@@ -1016,6 +1017,48 @@
 (deftest claim-and-element-ids-are-unique-within-a-model
   (is (refused? :baseline (assoc-in model-baseline [:model :claims 1 :id] "c1")))
   (is (refused? :baseline (assoc-in model-baseline [:model :elements 1 :id] "canvas.order/calc"))))
+
+(deftest a-role-recorded-without-players-still-reads
+  ;; The rule that a role names its players is a tightening, so it binds what is written from here on
+  ;; and never what a ledger already holds.
+  (let [older (update-in model-baseline [:model :elements] conj {:id "canvas.order/summers" :sort :role})]
+    (is (refused? :baseline older) "it is refused on write")
+    (is (= older (dissoc (report/parse-event :baseline older) :seq :at))
+        "and a record written before membership was authored reads as it was written")))
+
+(deftest a-role-names-who-plays-it
+  (let [with-role #(update-in model-baseline [:model :elements] conj
+                              (merge {:id "canvas.order/summers" :sort :role} %))]
+    (is (not (refused? :baseline (with-role {:plays ["canvas.order/aggregate"]}))))
+    (is (str/includes? (report/report->markdown (assoc (with-role {:plays ["canvas.order/aggregate"]})
+                                                       :format :baseline))
+                       "`canvas.order/summers` *(role)* played by `canvas.order/aggregate`")
+        "and the ledger shows who plays it")
+    (is (refused? :baseline (with-role {}))
+        "a role with no players binds a claim about it to nothing")
+    (is (refused? :baseline (with-role {:plays ["canvas.order/nowhere"]}))
+        "a player the model does not list names nothing")
+    (is (refused? :baseline (-> (with-role {:plays ["canvas.order/aggregate"]})
+                                (update-in [:model :elements] conj
+                                           {:id "canvas.order/other" :sort :role
+                                            :plays ["canvas.order/summers"]})))
+        "a role is played by modules, operations or kinds, never by another role")
+    (is (refused? :baseline (assoc-in model-baseline [:model :elements 0 :plays] ["canvas.order/aggregate"]))
+        "and only a role names players")))
+
+(deftest a-design-says-what-it-removes-and-a-baseline-removes-nothing
+  (let [model (:model model-baseline)]
+    (is (m/validate report/Model (assoc model :removed {:claims ["gone"]})))
+    (is (not (m/validate report/Model (assoc model :removed {:claims ["c1"]})))
+        "a model never states an id it also states as removed")
+    (is (refused? :baseline (assoc-in model-baseline [:model :removed] {:claims ["gone"]}))
+        "a baseline is laid over nothing, so it removes nothing")))
+
+(deftest a-fork-names-its-parent-and-a-derived-baseline-cites-it
+  (let [a-fork {:format :fork :parent {:ws-id "ws-1" :baseline {:seq 2} :design {:seq 4}}}]
+    (is (= a-fork (report/validate-event :fork a-fork)))
+    (is (refused? :fork (update a-fork :parent dissoc :design)) "a fork names both records it came from"))
+  (is (not (refused? :baseline (assoc model-baseline :fork {:seq 2})))))
 
 (deftest evidence-names-what-checks-the-claim
   (is (refused? :baseline (assoc-in model-baseline [:model :claims 0 :evidence] {:by :test}))

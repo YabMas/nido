@@ -195,6 +195,26 @@
   (is (not= (record/design-finding-base-key (check :relation-honest :broken))
             (record/design-finding-base-key (check :goal-served :broken)))))
 
+(deftest a-design-finding-against-a-claim-is-told-apart-by-the-claims-id
+  (let [against #(assoc (check :goal-served :broken) :claim-ids %)]
+    (testing "one check broken against another claim is another finding, not a stall"
+      (is (not= (record/design-finding-base-key (against ["merge-combines-by-id"]))
+                (record/design-finding-base-key (against ["fork-writes-nothing-on-parent"])))))
+    (testing "the same claims in another order, or named twice, are the same finding"
+      (is (= (record/design-finding-base-key (against ["a" "b"]))
+             (record/design-finding-base-key (against ["b" "a" "a"]))))))
+  (testing "the judge stage hands a broken check only the claim ids of the findings naming it"
+    (with-redefs [record/design-decision! (fn [_] (decision :amend
+                                                            :findings [{:cites ["c"] :claim "x" :check :relation-honest
+                                                                        :claim-id "merge-combines-by-id"}
+                                                                       {:cites ["d"] :claim "y" :check :goal-served
+                                                                        :claim-id "fork-writes-nothing-on-parent"}
+                                                                       {:cites ["e"] :claim "z"}]))
+                  record/append! (fn [_ _] nil)]
+      (let [out (run record/design-judge-stage (ctx))]
+        (is (= [["merge-combines-by-id"]] (mapv :claim-ids (:findings out)))
+            "a claim found against another check moves this finding's identity not at all")))))
+
 ;; ── The judge stage ─────────────────────────────────────────────────────────
 
 (deftest proceed-escalates-because-the-ask-is-the-point
@@ -720,6 +740,15 @@
     (is (str/includes? p "softening :revisit to :within"))
     (is (str/includes? p "1. relation-honest"))
     (is (str/includes? p "IF A CHECK IS WRONGLY MARKED BROKEN"))))
+
+(deftest the-design-amender-is-given-the-baseline-amenders-rule-for-an-elements-id
+  (doseq [declared? [true false]]
+    (is (str/includes? (record/design-amend-prompt
+                        {:design a-design :recommend :amend :reason "r"
+                         :checks [(check :relation-honest :broken)]
+                         :out-path "/run/a.edn" :declared? declared?})
+                       (#'record/element-id-rule declared?))
+        (str "declared? " declared?))))
 
 (deftest a-failed-resurvey-carries-its-reason-out-of-the-nested-loop
   ;; Seen live: the terminal said :resurvey-amend-invalid and stopped. A reader

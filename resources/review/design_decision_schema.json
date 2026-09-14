@@ -67,6 +67,7 @@
         "additionalProperties": false,
         "required": [
           "claim-id",
+          "check",
           "cites",
           "claim",
           "evidence"
@@ -75,6 +76,17 @@
           "claim-id": {
             "type": "string",
             "description": "The id of the design claim this finding is about — the slug shown in brackets, WITHOUT the brackets. Empty string when the finding is about no single claim, or the design lists invariants with no ids."
+          },
+          "check": {
+            "type": "string",
+            "enum": [
+              "relation_honest",
+              "goal_served",
+              "decomposable",
+              "routing_coherent",
+              ""
+            ],
+            "description": "The derived check this finding shows broken. Empty string when it bears on none of the four."
           },
           "cites": {
             "type": "array",

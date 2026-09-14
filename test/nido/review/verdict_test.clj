@@ -2,7 +2,7 @@
 (ns nido.review.verdict-test
   (:require
    [clojure.string :as str]
-   [clojure.test :refer [deftest is]]
+   [clojure.test :refer [deftest is testing]]
    [nido.coordinator.report :as report]
    [nido.coordinator.agent :as agent]
    [nido.review.stages :as stages]
@@ -17,6 +17,28 @@
    :assumes [{:about "line totals are computed per-item" :read ["src/order/calc.clj"]}]})
 
 (defn- fenced [m] (str "prose before\n```json\n" m "\n```"))
+
+(deftest a-verdict-records-only-claim-ids-its-design-states
+  (let [held-to-claims #'verdict/held-to-claims
+        ids            #{"rounded-once" "one-summing-path"}]
+    (testing "a held id the design does not state is dropped, and brackets are not part of an id"
+      (is (= {:verdict :sound :invariants-held ["rounded-once"]}
+             (held-to-claims {:verdict :sound :invariants-held ["[rounded-once]" "a total is rounded"]}
+                             ids)))
+      (is (= {:verdict :sound}
+             (held-to-claims {:verdict :sound :invariants-held ["nothing it states"]} ids))))
+    (testing "a broken id the design does not state makes the answer a non-answer"
+      (is (nil? (held-to-claims {:verdict :invalidated :needs "n"
+                                 :invariants-broken [{:invariant "not-a-claim" :finding "f"}]}
+                                ids)))
+      (is (= [{:invariant "one-summing-path" :finding "f"}]
+             (:invariants-broken (held-to-claims {:verdict :invalidated :needs "n"
+                                                  :invariants-broken [{:invariant "[one-summing-path]"
+                                                                       :finding "f"}]}
+                                                 ids)))))
+    (testing "a design from before the shared model has no ids to hold a verdict to"
+      (let [v {:verdict :sound :invariants-held ["a total is rounded exactly once"]}]
+        (is (= v (held-to-claims v nil)))))))
 
 (deftest prompt-carries-the-record-and-fences-off-the-stance
   (let [p (verdict/build-prompt {:design design :stance "shape of the data is the design"

@@ -10,6 +10,7 @@
    [malli.core :as m]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.report :as report]
+   [nido.coordinator.report.model :as report-model]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.state :as cstate]
    [nido.platform.io :as io]))
@@ -339,12 +340,13 @@
 (defn- check-standing-citations!
   "Every edge `standing` walks resolves to an entry of the kind it expects.
 
-   Five of them. A :retraction's target and a :design-approved's design are
+   Six of them. A :retraction's target and a :design-approved's design are
    kinds of their own; a design's and a baseline's :supersedes were both
    writable and neither was ever checked — that pair is why this exists at all,
    :supersedes being the one citation in the ledger nothing had an opinion
    about. A baseline's :intent is the fifth, and it accepts what a design's
-   does: an :intent entry and nothing else.
+   does: an :intent entry and nothing else. A derived baseline's :fork is the
+   sixth, and names the :fork entry on its own ledger.
 
    A :retraction still reaches a :triage, and that is not an exception to the
    rule above. Retracting says a RECORD is untrue, which a triage report can be;
@@ -362,10 +364,127 @@
         :baseline        (do (cites! w r [:supersedes :seq] #{:baseline}
                                      "Baseline :supersedes")
                              (cites! w r [:intent :seq] #{:intent}
-                                     "Baseline :intent"))
+                                     "Baseline :intent")
+                             (cites! w r [:fork :seq] #{:fork}
+                                     "Baseline :fork"))
         :intent          (cites! w r [:supersedes :seq] #{:intent}
                                  "Intent :supersedes")
         :design-cleared  (cites! w r [:design :seq] #{:design} "Clearance")))))
+
+(defn- check-fork-citation!
+  "A :fork names a parent that is another workstream, whose ledger holds a :baseline and a :design
+   at the seqs it cites, each holding a model a child's can be derived from — and a workstream is
+   forked once.
+
+   The only citation in the ledger that crosses workstreams, so the only one resolved against
+   another ledger. It names immutable entries, which is why resolving it once, here, is enough:
+   nothing appended to the parent afterwards changes what the entries at those numbers are. Once,
+   because a unit has one origin, and a second :fork would leave its lineage two answers to give."
+  [project w kind payload]
+  (when (= :fork kind)
+    (let [{{:keys [ws-id baseline design]} :parent} (edn/read-string payload)
+          parent  (read-ws project ws-id)
+          kind-at (fn [n] (->> (:entries parent) (filter #(= n (:seq %))) first :kind))
+          refuse  (fn [what n expected]
+                    (throw (ex-info (str "Fork cites " what " entry " n " on " ws-id ", which is "
+                                         (if-let [k (kind-at n)] (str "a " k) "not on it")
+                                         " — expected a " expected)
+                                    {:ws-id ws-id :seq n :kind (kind-at n)})))]
+      (cond
+        (= ws-id (:id w))
+        (throw (ex-info (str "A fork's parent is another workstream, and " ws-id " is this one")
+                        {:ws-id ws-id}))
+
+        (nil? parent)
+        (throw (ex-info (str "Fork names parent workstream " ws-id ", which does not exist")
+                        {:ws-id ws-id}))
+
+        (not= :baseline (kind-at (:seq baseline))) (refuse "baseline" (:seq baseline) :baseline)
+        (not= :design (kind-at (:seq design)))     (refuse "design" (:seq design) :design)
+
+        (some #(= :fork (:kind %)) (:entries w))
+        (throw (ex-info (str "Workstream " (:id w) " is already a fork — a unit has one origin")
+                        {:ws-id (:id w)})))
+      (doseq [[what {n :seq}] [["baseline" baseline] ["design" design]]]
+        (when-let [era (report-model/predates (read-entry-at parent n))]
+          (throw (ex-info (str "Fork cites the " what " at entry " n " on " ws-id ", written before "
+                               (if (= :shared-model era) "the shared model" "a role named its players")
+                               " — it holds no model a child's can be derived from")
+                          {:ws-id ws-id :seq n :predates era})))))))
+
+(defn- check-merge-citation!
+  "A design carrying :merges is the combination it says it is. The child it names is a fork of this
+   workstream; it supersedes this workstream's current design and cites that design's baseline; and
+   its effective model is the three-way combination, by id, of the fork's base, the current design
+   and the child's design — appended only while no conflict stands.
+
+   Held here as well as by the merge verb, so that a merge appending nothing else is true of the
+   ledger rather than of one path to it. The laws of the combined declaration stay the verb's: they
+   need a working copy and fukan, and an append has neither."
+  [project w kind payload]
+  (when (= :design kind)
+    (let [r (edn/read-string payload)]
+      (when-let [{child-ws :ws-id {n :seq} :design} (:merges r)]
+        (let [refuse  (fn [msg] (throw (ex-info msg {:merges (:merges r)})))
+              child   (or (read-ws project child-ws)
+                          (refuse (str "The merged design names child workstream " child-ws
+                                       ", which does not exist")))
+              forked  (some->> (:entries child) (filter #(= :fork (:kind %))) first :seq
+                               (read-entry-at child))
+              _       (when-not (= (:id w) (get-in forked [:parent :ws-id]))
+                        (refuse (str child-ws " is no fork of " (:id w)
+                                     ", so it is no child to merge here")))
+              current (some->> (:entries w) (filter #(= :design (:kind %))) (sort-by :seq) last :seq
+                               (read-entry-at w))
+              [fb fd pd cd]
+              [(read-entry-at w (get-in forked [:parent :baseline :seq]))
+               (read-entry-at w (get-in forked [:parent :design :seq]))
+               current
+               (read-entry-at child n)]
+              ;; Every record the combination reads, named by entry. A role recorded before
+              ;; membership was authored leaves a claim about it relying on players nothing states,
+              ;; so a removal the other side made of one could not be read as a conflict.
+              _       (doseq [[record ledger at what]
+                              [[fb w (get-in forked [:parent :baseline :seq]) "the fork's base baseline"]
+                               [fd w (get-in forked [:parent :design :seq]) "the fork's base design"]
+                               [pd w (:seq pd) "this workstream's current design"]
+                               [(some->> (get-in pd [:baseline :seq]) (read-entry-at w)) w
+                                (get-in pd [:baseline :seq]) "the baseline that design cites"]
+                               [cd child n "the child's design"]
+                               [(some->> (get-in cd [:baseline :seq]) (read-entry-at child)) child
+                                (get-in cd [:baseline :seq]) "the baseline the child's design cites"]]]
+                        (when (report-model/predates record)
+                          (refuse (str "A merged design combines records written in the shared model, each"
+                                       " role naming its players — and " what ", at entry " at " on "
+                                       (:id ledger) ", is not, or cannot be read"))))
+              _       (when-not (= :design (:format cd))
+                        (refuse (str "The merged design names entry " n " on " child-ws
+                                     ", which is not a design")))
+              laid    (fn [ledger design]
+                        (report-model/overlay
+                         (:model (read-entry-at ledger (get-in design [:baseline :seq])))
+                         (:model design)))
+              {:keys [model conflicts]} (report-model/combine
+                                         (report-model/overlay (:model fb) (:model fd))
+                                         (laid w pd) (laid child cd))
+              keyed   (fn [m] [(into {} (map (juxt :id identity)) (:elements m))
+                               (into {} (map (juxt :id identity)) (:claims m))])]
+          (cond
+            (not= (get-in r [:supersedes :seq]) (:seq pd))
+            (refuse (str "A merged design supersedes this workstream's current design, entry " (:seq pd)))
+
+            (not= (get-in r [:baseline :seq]) (get-in pd [:baseline :seq]))
+            (refuse (str "A merged design cites the baseline the design it supersedes cites, entry "
+                         (get-in pd [:baseline :seq])))
+
+            (seq conflicts)
+            (refuse (str "A merged design is appended only while no conflict stands: "
+                         (str/join "; " (for [{:keys [kind names]} conflicts]
+                                          (str (name kind) " " (str/join " · " names))))))
+
+            (not= (keyed model) (keyed (laid w r)))
+            (refuse (str "The merged design's effective model is not the combination, by id, of the"
+                         " fork's base, this workstream's current design and the child's design"))))))))
 
 (defn- superseded-goals
   "Every :intent :seq that a later :intent says it replaces.
@@ -997,6 +1116,8 @@
             _     (refuse-unguarded-clearance! (:kind entry))
             _     (check-baseline-citation! w (:kind entry) payload)
             _     (check-standing-citations! w (:kind entry) payload)
+            _     (check-fork-citation! project w (:kind entry) payload)
+            _     (check-merge-citation! project w (:kind entry) payload)
             _     (check-goal-is-live! w (:kind entry) payload)
             _     (check-trail-attribution! w (:kind entry) payload)
             _     (check-one-root! w (:kind entry) payload)
@@ -1048,6 +1169,8 @@
                 [ext payload] (report/entry-payload (:kind entry) content)
                 _     (check-baseline-citation! w (:kind entry) payload)
                 _     (check-standing-citations! w (:kind entry) payload)
+                _     (check-fork-citation! project w (:kind entry) payload)
+                _     (check-merge-citation! project w (:kind entry) payload)
                 _     (check-clearance-owed! w (:kind entry) payload)
                 _     (check-goal-is-live! w (:kind entry) payload)
                 _     (check-trail-attribution! w (:kind entry) payload)

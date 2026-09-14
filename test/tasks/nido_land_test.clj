@@ -242,30 +242,6 @@
     (is (= 1 code) "but changing it on this branch makes it this branch's, and no round judged that")
     (is (str/includes? out "an-earlier-claim — declared on this branch"))))
 
-(deftest a-claim-id-two-claims-declare-is-refused-naming-both
-  ;; Keyed by id, one of them vanishes before the comparison — and when the one left is the
-  ;; design's, the other lands unjudged.
-  (let [elsewhere (assoc (claim-row "one-summing-path" "totals are summed twice" ["canvas.a/m"])
-                         :id "canvas.other/one-summing-path")
-        [code out] (land-claims
-                    {:elements (listed elsewhere
-                                       (claim-row "one-summing-path" "the aggregate is the only summing path"
-                                                  ["canvas.a/m"]))})]
-    (is (= 1 code) out)
-    (is (str/includes? out "one-summing-path — declared as canvas.claims/one-summing-path, canvas.other/one-summing-path"))
-    (is (str/includes? out "How to clear it"))))
-
-(deftest an-id-main-gave-two-claims-carries-neither
-  (let [earlier (claim-row "an-earlier-claim" "landed with some other design" ["canvas.a/m"])
-        [code out] (run {:session? true :design a-design :standing stands
-                         :structure {:status :satisfied}
-                         :elements (listed earlier)
-                         :base (listed (assoc (claim-row "an-earlier-claim" "landed elsewhere" ["canvas.a/m"])
-                                              :id "canvas.other/an-earlier-claim")
-                                       earlier)})]
-    (is (= 1 code) "which of main's two this one repeats cannot be read, so it is this branch's")
-    (is (str/includes? out "an-earlier-claim — declared on this branch"))))
-
 (deftest mains-declaration-is-read-by-the-fukan-the-worktree-runs
   ;; Unstubbed down to fukan's command. A `:cmd` that answers only where the project's deps.edn
   ;; resolves its `:fukan` alias, and only over main's declaration, stands in for fukan.

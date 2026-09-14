@@ -219,29 +219,14 @@
 
 (defn- declared-claims
   "The Claim instances `listing` holds, by id — a Claim's instance name — each as its statement
-   and the set of subjects its `:about` names. Of two instances sharing a name only one survives,
-   which is why a caller asks `claims-named-twice` first."
+   and the set of subjects its `:about` names. Keying by name drops nothing only because the
+   declaration's own law holds a Claim's name unique; a declaration breaking it is refused by the
+   structure check, which a landing always asks beside this one."
   [listing]
   (into {}
         (map (fn [{nm :name doc :doc refs :refs}]
                [nm {:statement (squashed doc) :about (set (:about refs))}]))
         (claim-rows listing)))
-
-(defn- claims-named-twice
-  "Every claim id `listing` gives to more than one Claim instance, each to the qualified identities
-   of the instances declaring it, or empty. The grammar holds an instance name unique within its
-   namespace only, so two canvas namespaces can each declare a claim under one id."
-  [listing]
-  (into (sorted-map)
-        (keep (fn [[nm rows]] (when (< 1 (count rows)) [nm (vec (sort (map :id rows)))])))
-        (group-by :name (claim-rows listing))))
-
-(defn- carried-claims
-  "The claims `base` declares, by id, that a claim declared here can be carried unchanged from. An
-   id main gave to more than one Claim carries nothing: main never declared the one claim a
-   declaration here could repeat, and a claim read as carried is one no round is asked to judge."
-  [base]
-  (apply dissoc (declared-claims base) (keys (claims-named-twice base))))
 
 (defn- judged-claims
   "The claims `design` states, in the shape `declared-claims` reads them. Empty for a design from
@@ -312,9 +297,6 @@
    what a round judged. A claim declared and never judged is a design nobody decided, and one judged
    and never declared is a design that did not land — both pass the other checks untouched.
 
-   A claim id more than one Claim declares is refused before anything is compared, since compared by
-   id all but one of them would go unjudged.
-
    The base listing is read only when the branch declares a claim, since only then can one be new."
   [cwd]
   (if-let [[project worktree] (nido-design/coords cwd)]
@@ -333,19 +315,8 @@
                           " — its claims live in its design records alone"))
             0)
 
-        (let [declared (declared-claims head)
-              twice    (claims-named-twice head)]
+        (let [declared (declared-claims head)]
           (cond
-            (seq twice)
-            (do (println "land:check REFUSED · a claim id is declared by more than one Claim")
-                (doseq [[id ids] twice]
-                  (println (str "  " id " — declared as " (str/join ", " ids))))
-                (println "\nHow to clear it:")
-                (println (str "  A claim's id is its instance name, so these are one id with more than one\n"
-                              "  statement, and only one of them could be held to the design. Rename all but\n"
-                              "  one, and have the design state each under the name it now has."))
-                1)
-
             (and (empty? declared) (empty? judged))
             (do (println "land:check ok · no claim is declared or judged here") 0)
 
@@ -353,7 +324,7 @@
             (let [base (if (seq declared) (base-listing project worktree) {:status :unmodelled})]
               (if (= :undecidable (:status base))
                 (unreadable-claims (:error base))
-                (let [diffs (claim-differences judged declared (carried-claims base))]
+                (let [diffs (claim-differences judged declared (declared-claims base))]
                   (if (empty? diffs)
                     (do (println (str "land:check ok · the declaration carries the "
                                       (count judged) " claim" (when (not= 1 (count judged)) "s")

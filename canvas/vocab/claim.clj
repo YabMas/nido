@@ -28,6 +28,17 @@
 (defstructure Claim
   "One statement about the declared design, about the elements or roles it names. Its instance
    name is its id — the id a baseline or design record carries for it — and its docstring is its
-   statement. `:evidence` says what checks it: a round's judgement, named tests, or a named law."
+   statement. `:evidence` says what checks it: a round's judgement, named tests, or a named law.
+
+   A name is unique across the whole declaration, not only within its namespace as the grammar
+   holds for every other sort, because a record carries a claim by that name alone. This law is
+   the one place that holds it; a reader of the declared elements keys claims by name and
+   guards nothing."
   {:about    [:+ Module Operation Kind Role]
-   :evidence [:enum "round" "test" "law"]})
+   :evidence [:enum "round" "test" "law"]}
+  (law "one Claim per name — a claim id names exactly one Claim anywhere in the declaration"
+    {:offenders [?claim]
+     :where [(named ?claim ?id)
+             (is ?other :canvas.vocab.claim/Claim)
+             (named ?other ?id)
+             [(not= ?claim ?other)]]}))

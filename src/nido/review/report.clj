@@ -364,9 +364,11 @@
       ;; other: a verdict is what the judge decided, an outcome is why there is
       ;; no verdict. A phase that kept only the first renders a codex failure
       ;; exactly like a clean round.
-      ;; :settled is what the judge was NOT asked to check, each with the review
-      ;; that settled it — the one account of a skip a reader can check against the
-      ;; ledger, rather than a quiet round that looked at less.
+      ;; :settled is what the judge was NOT asked to check, each with the judgement
+      ;; that settled it — its entry, and the workstream whose ledger holds it, since a
+      ;; fork's or a merge's confirmations are on another ledger — the one account of a
+      ;; skip a reader can check against the ledger, rather than a quiet round that
+      ;; looked at less.
       ;; :detail and :answer are what an outcome carries in place of a review, and
       ;; the ledger holds neither: :detail says why there is no verdict, :answer is
       ;; a judgment that was made and refused (`:code-moved`), findings and all.
@@ -376,7 +378,7 @@
                                 :outcome (some-> (get-in ctx [:record :outcome]) name)
                                 :findings (vec (:findings ctx)))
                 (seq (:settled ctx))
-                (assoc :settled (mapv (fn [[id by]] {:id id :by by})
+                (assoc :settled (mapv (fn [[id {:keys [ws-id seq]}]] {:id id :by seq :ws-id ws-id})
                                       (sort-by key (:settled ctx))))
                 (and (get-in ctx [:record :outcome]) (get-in ctx [:record :detail]))
                 (assoc :detail (get-in ctx [:record :detail]))

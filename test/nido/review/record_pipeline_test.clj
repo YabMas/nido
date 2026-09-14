@@ -218,6 +218,43 @@
   (is (= [] (record/unresolved-subjects a-baseline {:status :unmodelled}))
       "an older record's claims name no subject, so none is left unresolved"))
 
+(def ^:private a-role-baseline
+  (-> a-model-baseline
+      (update-in [:model :elements] conj {:id "canvas.order/summers" :sort :role
+                                          :plays ["canvas.order/aggregate"]})
+      (update-in [:model :claims] conj {:id "summers-sum-once" :about ["canvas.order/summers"]
+                                        :statement "whatever sums lines sums each once"
+                                        :falsified-by "a summer that visits a line twice"
+                                        :evidence {:by :round}})))
+
+(defn- role-row [plays]
+  {:id "canvas.order/summers" :sort :canvas.vocab.claim/Role :refs {:plays plays}})
+
+(deftest a-role-is-played-by-whom-its-declaration-says
+  (is (= [] (record/misplayed-roles a-role-baseline
+                                    (listing aggregate-row total-row (role-row ["canvas.order/aggregate"])))))
+  (is (= ["canvas.order/summers"]
+         (record/misplayed-roles a-role-baseline
+                                 (listing aggregate-row total-row
+                                          (role-row ["canvas.order/aggregate" "canvas.order/total"]))))
+      "a declared Role with another player binds a claim about it to something else")
+  (is (= [] (record/misplayed-roles a-role-baseline (listing aggregate-row total-row)))
+      "a role the declaration does not hold is unresolved, not misplayed")
+  (is (= [] (record/misplayed-roles a-role-baseline {:status :unmodelled})))
+  (is (= [] (record/misplayed-roles (update-in a-role-baseline [:model :elements 2] dissoc :plays)
+                                    (listing aggregate-row total-row (role-row ["canvas.order/aggregate"]))))
+      "a role recorded before players were authored has none to compare, not an empty membership")
+  (is (str/includes? (record/settled-block {"canvas.order/summers" {}} a-role-baseline)
+                     "played by: canvas.order/aggregate")
+      "a role set apart as settled keeps its players in front of the judge")
+  (testing "a round launches no judge while a role is played otherwise, and says which"
+    (with-redefs [design-check/elements (fn [_ _] (listing aggregate-row total-row
+                                                           (role-row ["canvas.order/total"])))]
+      (let [r (#'record/undeclared-subjects :nido "/w" a-role-baseline nil)]
+        (is (= :subjects-undeclared (:outcome r)))
+        (is (str/includes? (:detail r) "declares other players for the roles: canvas.order/summers"))
+        (is (not (str/includes? (:detail r) "holds no element")))))))
+
 (deftest a-baseline-round-launches-no-judge-while-a-subject-is-undeclared
   (let [launched (atom 0)
         seen     (atom nil)
@@ -493,6 +530,21 @@
     (testing "and it may not write code or append the record itself"
       (is (str/includes? p "Do NOT edit any source file"))
       (is (str/includes? p "Do not append it yourself")))))
+
+(deftest the-amender-is-given-one-rule-for-an-elements-id
+  ;; Told both to keep a module's id and to use canvas identities, an amender keeping the old id
+  ;; stops the next round on an undeclared subject, and one renaming it reads to retreat as a
+  ;; module lost.
+  (testing "a project that declares its design names elements by canvas identity"
+    (let [p (record/amend-prompt {:baseline a-baseline :findings [a-finding]
+                                  :out-path "/x" :declared? true})]
+      (is (str/includes? p "an element's id is its canvas identity"))
+      (is (str/includes? p "never the id an\nolder record gave it"))
+      (is (not (str/includes? p "keeps the id the record already")))))
+  (testing "a project that declares none keeps the ids its record gave"
+    (let [p (record/amend-prompt {:baseline a-baseline :findings [a-finding] :out-path "/x"})]
+      (is (str/includes? p "an element keeps the id the record already\ngave it"))
+      (is (not (str/includes? p "canvas identity"))))))
 
 ;; ── The appeal channel ──────────────────────────────────────────────────────
 
@@ -820,7 +872,7 @@
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-baseline)
                   settled/code-identity (fn [_] tree)
-                  settled/ledger (fn [_ _] settling-ledger)]
+                  settled/ledgers (fn [_ _ _] [(assoc settling-ledger :ws-id "ws-1")])]
       (let [out (run record/judge-stage (ctx))]
         [@seen out]))))
 
@@ -830,13 +882,44 @@
   ;; amendment had changed it. The ledger reading keys on content and tree, and
   ;; still covers the run's own earlier rounds, whose tree does not move.
   (let [[seen out] (judged-at "tree-a")]
-    (is (= {"c1" 2} (:settled seen)))
+    (is (= {"c1" {:ws-id "ws-1" :seq 2}} (:settled seen)))
     (is (= "tree-a" (:code-identity seen)) "with the reading the settling was made at")
-    (is (= {"c1" 2} (:settled out)) "and the report is told what was not asked")))
+    (is (= {"c1" {:ws-id "ws-1" :seq 2}} (:settled out)) "and the report is told what was not asked, and where")))
 
 (deftest nothing-is-settled-at-a-tree-no-review-read
   (let [[seen _] (judged-at "tree-b")]
     (is (= {} (:settled seen)))))
+
+(deftest a-design-claim-about-a-role-it-kept-rests-on-that-roles-players
+  ;; A design restates no role it keeps, so its own model names none of the
+  ;; role's players — and a player moving must unsettle a claim about it anyway.
+  (let [role     {:id "canvas.order/summers" :sort :role :plays ["canvas.order/aggregate"]}
+        claim    {:id "summers-sum-once" :about ["canvas.order/summers"]
+                  :statement "whatever sums lines sums each once"
+                  :falsified-by "a summer that visits a line twice" :evidence {:by :round}}
+        design   {:format :design :seq 1 :baseline {:seq 0} :model {:elements [] :claims [claim]}}
+        ids      {"canvas.order/aggregate" "agg-1" "canvas.order/summers" "role-1"}
+        ledger   {:ws-id "ws-1" :reviews [] :baselines [] :retractions [] :designs [design]
+                  :decisions [{:format :design-decision :seq 2 :design-seq 1 :recommend :proceed
+                               :confirmed ["summers-sum-once"] :subject-identities ids}]}
+        settled-at (fn [now]
+                     (let [seen (atom nil)]
+                       (with-redefs [record/design-decision! (fn [opts] (reset! seen opts)
+                                                               {:outcome :no-output :detail "stub"})
+                                     record/append! (fn [_ _] nil)
+                                     stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                                     ws/latest-entry (fn [_ _ _] design)
+                                     stages/discover-baseline (fn [_ _] (update-in a-model-baseline [:model :elements]
+                                                                                   conj role))
+                                     design-check/elements (fn [_ _] (listing))
+                                     settled/code-identity (fn [_] "tree-a")
+                                     settled/subject-identities (fn [_ _] now)
+                                     settled/ledgers (fn [_ _ _] [ledger])]
+                         (run record/design-judge-stage (ctx))
+                         (:settled @seen))))]
+    (is (= {"summers-sum-once" {:ws-id "ws-1" :seq 2}} (settled-at ids)))
+    (is (= {} (settled-at (assoc ids "canvas.order/aggregate" "agg-2")))
+        "a player the design never restated moved, so the claim is a check again")))
 
 (deftest a-review-confirms-only-what-its-own-judge-checked
   ;; A subject outside the checks was not checked, so a judge listing it confirmed

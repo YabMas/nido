@@ -713,12 +713,17 @@
   "One declared element of the area, named by its canvas identity — `ns/name` as the declared
    design lists it — with its sort. A module may say what it hides and what the rest may assume
    of it, and carry readings of its depth; those are optional because an operation, a kind and a
-   role hide nothing of their own."
+   role hide nothing of their own.
+
+   A role states who plays it under :plays, and only a role does: its players are authored, never
+   derived, so the record carries the membership a claim about the role binds, and a later
+   combination can see it change."
   [:map {:closed true}
    [:id        string?]
    [:sort      [:enum :module :operation :kind :role]]
    [:hides     {:optional true} string?]
    [:interface {:optional true} string?]
+   [:plays     {:optional true} [:vector {:min 1} string?]]
    [:readings  {:optional true} [:vector ModuleReading]]])
 
 (def Claim
@@ -753,16 +758,53 @@
   (let [ids (into #{} (map :id) elements)]
     (every? #(every? ids (:about %)) claims)))
 
+(defn- roles-state-players?
+  "Every role names who plays it, each a module, operation or kind the same model lists, and no
+   element of another sort names any. A role with no players binds a claim about it to nothing,
+   and a player the model does not list is one no reader of the record can find."
+  [{:keys [elements]}]
+  (let [sorts (into {} (map (juxt :id :sort)) elements)]
+    (every? (fn [{:keys [sort plays]}]
+              (if (= :role sort)
+                (and (seq plays) (every? #(#{:module :operation :kind} (sorts %)) plays))
+                (nil? plays)))
+            elements)))
+
+(def Removed
+  "The ids a model states as gone from the model it is laid over, elements and claims apart. Only a
+   design says it: a design restates nothing it keeps, so an id missing from its model is carried,
+   and taking one out has to be said."
+  [:map {:closed true}
+   [:elements {:optional true} [:vector {:min 1} string?]]
+   [:claims   {:optional true} [:vector {:min 1} string?]]])
+
+(defn- removals-not-restated?
+  "Nothing a model states as removed does it also state. An id both stated and removed says two
+   opposite things about one element or claim, and a combination by id could take either."
+  [{:keys [elements claims removed]}]
+  (and (not-any? (set (:elements removed)) (map :id elements))
+       (not-any? (set (:claims removed)) (map :id claims))))
+
 (def Model
-  "The area as elements and the claims made about them."
+  "The area as elements and the claims made about them, and — in a design — the ids it states as
+   removed from the model it is laid over."
   [:and
    [:map {:closed true}
     [:elements [:vector {:min 1} Element]]
-    [:claims   [:vector {:min 1} Claim]]]
+    [:claims   [:vector {:min 1} Claim]]
+    [:removed  {:optional true} Removed]]
    [:fn {:error/message "element ids and claim ids must each be unique within a model"}
     distinct-model-ids?]
    [:fn {:error/message "every claim must be about an element the model lists"}
-    subjects-listed?]])
+    subjects-listed?]
+   [:fn {:error/message "a model never states an id it also states as removed"}
+    removals-not-restated?]])
+
+(def ^:private roles-state-players
+  "The rule that a role names its players, held on the WRITE contracts only. A role recorded
+   before membership was authored carries none, and the read contracts go on reading it."
+  [:fn {:error/message "a role names its players, each a module, operation or kind the model lists, and no other element names any"}
+   #(roles-state-players? (:model %))])
 
 (def ^:private baseline-fields
   "The fields a :baseline carries in every era from the decomposition onward.
@@ -867,6 +909,13 @@
   (every? #(or (not= :module (:sort %)) (and (:hides %) (:interface %)))
           (:elements model)))
 
+(def ForkRelation
+  "The :fork entry, on this workstream's own ledger, a child unit's first baseline was derived
+   from. The :fork entry is what names the parent workstream and the records it forked; the
+   baseline cites it rather than restating them, so there is one place a lineage is written."
+  [:map {:closed true}
+   [:seq int?]])
+
 (def BaselineModel
   "A baseline in the shared model: the area as declared elements and the claims it relies on,
    beside what only a baseline says — its area and boundary, its shape, where the design admits
@@ -876,7 +925,11 @@
    not duplicated: a module is an element, a property is a claim about the elements it concerns,
    and the composition is a claim about the elements it composes. So the claim a baseline makes
    and the claim a design makes are one form, and nothing structural about the area lives
-   outside :model."
+   outside :model.
+
+   :fork is present on a baseline derived when its unit was forked, and names that :fork entry; a
+   surveyed baseline names none. A baseline's model is laid over nothing, so it states no
+   removals."
   [:and
    [:map {:closed true}
     [:format           [:= :baseline]]
@@ -892,17 +945,20 @@
     [:drift            {:optional true} [:vector string?]]
     [:read             [:vector {:min 1} string?]]
     [:unknowns         {:optional true} [:vector string?]]
-    [:supersedes       {:optional true} Supersedes]]
+    [:supersedes       {:optional true} Supersedes]
+    [:fork             {:optional true} ForkRelation]]
    [:fn {:error/message "health observation ids must be unique within a baseline"}
     distinct-health-ids?]
    [:fn {:error/message "every module a baseline lists must say what it hides and what the rest may assume of it"}
-    modules-say-what-they-hide?]])
+    modules-say-what-they-hide?]
+   [:fn {:error/message "a baseline's model is laid over nothing, so it states no removals"}
+    #(nil? (get-in % [:model :removed]))]])
 
 (def BaselineWrite
   "The WRITE contract for :baseline: the shared model, in every project. The survey shape it
    replaced is read and never written — a record in it is refused on append, and one already on a
-   ledger reads through `BaselineAny`."
-  BaselineModel)
+   ledger reads through `BaselineAny`. A role it records names its players; reads do not ask."
+  [:and BaselineModel roles-state-players])
 
 (def LoadBearingLegacy
   "READ SHAPE — a property from before the baseline moved up a level, carrying a
@@ -1172,13 +1228,22 @@
   [{:keys [holds model]}]
   (= (set (keys holds)) (into #{} (map :id) (:claims model))))
 
+(def MergeRelation
+  "The child unit a merged design combined: its workstream, and the design on that ledger. With the
+   :fork entry on the same ledger it is what the combination is recomputed from, which is how the
+   append holds a merged design's model to it."
+  [:map {:closed true}
+   [:ws-id  string?]
+   [:design [:map {:closed true} [:seq int?]]]])
+
 (def ^:private design-model-fields
   "The fields a design in the shared model carries in either phasing: the design's own decisions,
    and its :model in place of :invariants — each invariant is a claim, with an id and the elements
-   it is about."
+   it is about. :merges is present on a design a merge appended, naming the child it combined."
   (concat design-common
           [[:intent IntentRelation]
            [:model  Model]
+           [:merges {:optional true} MergeRelation]
            [:seams  {:optional true} [:vector Seam]]]))
 
 (def UnphasedDesignModel
@@ -1238,8 +1303,9 @@
 
    THIS IS THE WRITE CONTRACT, in every project. The invariants shapes it replaced,
    PhasedDesign and UnphasedDesign, are refused on append; records written in them,
-   and records from before :baseline existed, read through DesignVisionAny."
-  DesignModel)
+   and records from before :baseline existed, read through DesignVisionAny. A role
+   it records names its players; reads do not ask."
+  [:and DesignModel roles-state-players])
 
 (def DesignVisionLegacy
   "LEGACY READ SHAPE — a :design record from before the baseline event existed:
@@ -1972,9 +2038,14 @@
    has to name the thing it falsifies — a load-bearing property, a health
    observation, an invariant, a stance principle, an :open item, or a rejected
    alternative whose reason no longer holds. A finding citing nothing is not a
-   finding, and the schema is where that stops being a hope."
+   finding, and the schema is where that stops being a hope.
+
+   :check, on a design decision's finding, is the derived check it shows broken.
+   It is what ties the claim a finding names to that check, so a check broken
+   against one claim is not re-identified by a finding about another."
   [:map {:closed true}
    [:claim-id {:optional true} string?]
+   [:check    {:optional true} keyword?]
    [:cites    [:vector {:min 1} string?]]
    [:claim    string?]
    [:evidence {:optional true} [:vector string?]]])
@@ -2030,7 +2101,12 @@
                 ;; names it. Present only when the reading taken as the judge
                 ;; launched equals the one taken as it returned: a review without
                 ;; it read no single tree, and settles nothing.
-                [:code-identity {:optional true} string?]]
+                [:code-identity {:optional true} string?]
+                ;; Each declared element's identity as the judge read it, by id, as
+                ;; `nido.review.settled/subject-identities` names them. Present only in a project
+                ;; that declares a design, and only beside a :code-identity — the tree that did not
+                ;; move is what makes these the identities the judge read throughout.
+                [:subject-identities {:optional true} [:map-of string? string?]]]
         shape  (fn [verdict & extra]
                  (into [:map {:closed true}]
                        (concat common [[:verdict [:= verdict]]] extra)))]
@@ -2149,7 +2225,12 @@
                 ;; The claim ids the judge checked and found to hold. An observation, like a
                 ;; baseline review's :confirmed, and optional because a design listing
                 ;; invariants with no ids has nothing to name.
-                [:confirmed  {:optional true} [:vector string?]]]
+                [:confirmed  {:optional true} [:vector string?]]
+                ;; What the judge read its confirmations against, as a baseline review records
+                ;; it: the tree, when it did not move under the judge, and beside it each declared
+                ;; element's identity in a project that declares a design.
+                [:code-identity      {:optional true} string?]
+                [:subject-identities {:optional true} [:map-of string? string?]]]
         shape  (fn [recommend & extra]
                  (into [:map {:closed true}]
                        (concat common [[:recommend [:= recommend]]] extra)))]
@@ -2544,10 +2625,26 @@
     (boolean (or (= :proceed (:recommend decision))
                  (and (seq broken) (every? #(= advisory-check (:check %)) broken))))))
 
+(def Fork
+  "Where a child unit came from, written once on the child workstream's own ledger: the parent
+   workstream, and the baseline and design on its ledger the child was derived from.
+
+   The one entry whose citations name another workstream. They name immutable entries, so nothing
+   appended to the parent since can change what this says. Nothing is written on the parent: a
+   fork is a separate workstream so that every reader of the parent, which takes its newest
+   design, answers as it did before."
+  [:map {:closed true}
+   [:format [:= :fork]]
+   [:parent [:map {:closed true}
+             [:ws-id    string?]
+             [:baseline [:map {:closed true} [:seq int?]]]
+             [:design   [:map {:closed true} [:seq int?]]]]]])
+
 (def event-schemas
   "Entry :kind → its Malli schema. Drives ledger-boundary validation + rendering.
    A :kind absent here is stored as verbatim markdown (legacy / freeform)."
   {:triage                   TriageReport
+   :fork                     Fork
    :intent                   Intent
    :baseline                 BaselineWrite
    :design                   DesignVision
@@ -2838,6 +2935,12 @@
     (for [d done-when] (str "- " d))
     (when context ["\n## Context" context]))))
 
+(defn- fork->markdown
+  [{{:keys [ws-id baseline design]} :parent}]
+  (str "# Fork — where this unit came from\n\n"
+       "Forked from workstream " ws-id ", at its baseline (entry " (:seq baseline)
+       ") and its design (entry " (:seq design) ")."))
+
 (defn- readings->markdown
   [readings]
   (apply str (for [{:keys [lens verdict because]} readings]
@@ -2850,8 +2953,9 @@
   [{:keys [elements claims]} holds]
   (concat
    ["## Elements"]
-   (for [{:keys [id sort hides interface readings]} elements]
+   (for [{:keys [id sort hides interface plays readings]} elements]
      (str "- `" id "` *(" (name sort) ")*"
+          (when (seq plays) (str " played by " (str/join ", " (map #(str "`" % "`") plays))))
           (when hides (str " hides " hides))
           (when interface (str "\n  - interface: " interface))
           (readings->markdown readings)))
@@ -3533,6 +3637,7 @@
     :markdown                 (or (:markdown report) "")
     :triage-report            (triage->markdown report)
     :intent                   (intent->markdown report)
+    :fork                     (fork->markdown report)
     :baseline                 (baseline->markdown report)
     :design                   (design->markdown report)
     :implementation-plan      (plan->markdown report)

@@ -69,3 +69,99 @@
 (deftest anything-else-has-no-model
   (is (nil? (model/model {:format :intent})))
   (is (= [] (model/claims nil))))
+
+(deftest a-record-says-what-it-was-written-before
+  (is (nil? (model/predates model-baseline)))
+  (is (= :shared-model (model/predates survey-baseline)))
+  (is (= :shared-model (model/predates nil)) "a record that could not be read holds no model either")
+  (let [with-role #(update-in model-baseline [:model :elements] conj (merge {:id "r" :sort :role} %))]
+    (is (= :role-players (model/predates (with-role {}))) "a role naming no players was written before they were")
+    (is (nil? (model/predates (with-role {:plays ["canvas.order/total"]}))))))
+
+(deftest an-element-whose-sort-a-design-changes-carries-nothing-of-what-it-was
+  (let [claim    {:id "c1" :about ["r"] :statement "s" :falsified-by "f" :evidence {:by :round}}
+        baseline {:elements [{:id "agg" :sort :module :hides "summing order" :interface "a total"}
+                             {:id "r" :sort :role :plays ["agg"]}]
+                  :claims   [claim]}
+        laid     (model/overlay baseline {:elements [{:id "agg" :sort :operation} {:id "r" :sort :kind}]
+                                          :claims   [claim]})]
+    (is (= [{:id "agg" :sort :operation} {:id "r" :sort :kind}] (:elements laid))
+        "a module restated as an operation hides nothing, and a role restated as a kind plays nobody")))
+
+(deftest a-design-laid-over-its-baseline-restates-nothing-it-keeps
+  (let [c        (fn [id about statement] {:id id :about about :statement statement
+                                           :falsified-by "f" :evidence {:by :round}})
+        baseline {:elements [{:id "agg" :sort :module :hides "summing order" :interface "a total"}
+                             {:id "total" :sort :operation}]
+                  :claims   [(c "c1" ["agg"] "one summing path") (c "c2" ["total"] "rounded once")]}
+        design   {:elements [{:id "agg" :sort :module}
+                             {:id "writer" :sort :module :hides "storage" :interface "store"}]
+                  :claims   [(c "c1" ["agg"] "one summing path, per line") (c "c3" ["writer"] "stored once")]
+                  :removed  {:claims ["c2"]}}
+        laid     (model/overlay baseline design)]
+    (testing "an element the design only names keeps what the baseline said of it"
+      (is (= {:id "agg" :sort :module :hides "summing order" :interface "a total"}
+             (first (:elements laid)))))
+    (testing "a claim the design states is the claim"
+      (is (= "one summing path, per line" (:statement (first (:claims laid))))))
+    (testing "a removed id is dropped, an unstated one carried, and new ids follow the baseline's"
+      (is (= ["c1" "c3"] (mapv :id (:claims laid))))
+      (is (= ["agg" "total" "writer"] (mapv :id (:elements laid)))))
+    (testing "an id missing from a design is never a removal"
+      (is (= (:claims baseline)
+             (:claims (model/overlay baseline {:elements [{:id "agg" :sort :module}]
+                                               :claims   [(first (:claims baseline))]})))))
+    (is (not (contains? laid :removed)) "an effective model is laid over nothing, so removes nothing")))
+
+(deftest three-models-combine-by-id-against-the-base
+  (let [c    (fn [id s] {:id id :about ["agg"] :statement s :falsified-by "f" :evidence {:by :round}})
+        agg  {:id "agg" :sort :module}
+        base {:elements [agg] :claims [(c "c1" "one") (c "c2" "two")]}]
+    (testing "a side that alone changed an id wins, and the same change on both sides is one change"
+      (is (= {:model {:elements [agg] :claims [(c "c1" "one, amended") (c "c2" "two, amended")]}
+              :conflicts []}
+             (model/combine base
+                            {:elements [agg] :claims [(c "c1" "one, amended") (c "c2" "two, amended")]}
+                            {:elements [agg] :claims [(c "c1" "one") (c "c2" "two, amended")]}))))
+    (testing "an id both sides changed differently is a conflict, and left out of the combination"
+      (let [{:keys [model conflicts]}
+            (model/combine base
+                           {:elements [agg] :claims [(c "c1" "the parent's") (c "c2" "two")]}
+                           {:elements [agg] :claims [(c "c1" "the child's") (c "c2" "two")]})]
+        (is (= [{:kind :claim-diverged :names ["c1"]}] conflicts))
+        (is (= ["c2"] (mapv :id (:claims model))))))))
+
+(deftest a-claim-about-a-role-relies-on-its-players-as-any-side-names-them
+  ;; The child narrows the role to play only b and amends the claim about it, while the parent alone
+  ;; changes a. The claim was stated against a role a played at the fork, so a is a subject the
+  ;; other side restated — whichever side's own reading of the role still lists it.
+  (let [a     {:id "a" :sort :module}
+        b     {:id "b" :sort :module}
+        role  {:id "r" :sort :role :plays ["a" "b"]}
+        claim {:id "c" :about ["r"] :statement "each player sums once" :falsified-by "f" :evidence {:by :round}}
+        base  {:elements [a b role] :claims [claim]}]
+    (is (= [{:kind :subject-restated :names ["c" "a"]}]
+           (:conflicts (model/combine base
+                                      {:elements [(assoc a :interface "moved") b role] :claims [claim]}
+                                      {:elements [a b (assoc role :plays ["b"])]
+                                       :claims   [(assoc claim :statement "each remaining player sums once")]}))))))
+
+(deftest a-claim-about-a-role-relies-on-a-player-the-other-side-removed
+  ;; Both sides narrow the role to b; only the parent deletes a, and the child amends the claim. The
+  ;; combined role no longer plays a, but the claim was stated against a role a played at the fork.
+  (let [a      {:id "a" :sort :module}
+        b      {:id "b" :sort :module}
+        role   {:id "r" :sort :role :plays ["a" "b"]}
+        narrow (assoc role :plays ["b"])
+        claim  {:id "c" :about ["r"] :statement "each player sums once" :falsified-by "f" :evidence {:by :round}}
+        base   {:elements [a b role] :claims [claim]}]
+    (is (= [{:kind :subject-removed :names ["c" "a"]}]
+           (:conflicts (model/combine base
+                                      {:elements [b narrow] :claims [claim]}
+                                      {:elements [a b narrow]
+                                       :claims   [(assoc claim :statement "each remaining player sums once")]}))))
+    (is (= [] (:conflicts (model/combine base
+                                         {:elements [b narrow]
+                                          :claims   [(assoc claim :statement "each remaining player sums once")]}
+                                         {:elements [a b role] :claims [claim]})))
+        "a side that removed the player itself and amended the claim leaves nothing for the other to rely on")))

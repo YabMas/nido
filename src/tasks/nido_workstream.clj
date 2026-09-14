@@ -8,6 +8,8 @@
    [nido.coordinator.view.workstreams :as wsv]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.record.fork :as fork]
+   [nido.review.merge :as unit-merge]
    [nido.platform.task-args :as task-args]
    [nido.coordinator.work :as work]))
 
@@ -247,3 +249,68 @@
   show-cmd [& args]
   (let [[_ opts] (task-args/split-args args)]
     (show* opts)))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  fork*
+  "Fork a unit into a child workstream, from a parent whose newest design stands. Prints the
+   child's id; the parent's ledger is not written. A refusal says why and exits 1."
+  [{:keys [project goal done-when context] :as opts}]
+  (when (or (str/blank? (str goal)) (empty? done-when))
+    (println "Missing :goal <str> or :done-when [\"...\"] — a child is a unit, and a unit is rooted in a goal")
+    (System/exit 2))
+  (try
+    (let [child (fork/fork! (keyword project) (resolve-ws-id opts)
+                            (cond-> {:goal      (str goal)
+                                     :done-when (if (sequential? done-when)
+                                                  (mapv str done-when)
+                                                  [(str done-when)])}
+                              context (assoc :context (str context))))]
+      (println (:id child)))
+    (catch clojure.lang.ExceptionInfo e
+      (if (= :fork (:refused (ex-data e)))
+        (do (println "fork REFUSED ·" (ex-message e))
+            (System/exit 1))
+        (throw e)))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  fork-cmd [& args]
+  (let [[_ opts] (task-args/split-args args #{:goal :context})]
+    (fork* opts)))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  merge*
+  "Propose merging a child unit's design into its parent, checking the declaration in `:worktree`
+   (default: here). Prints every conflict, by id and by law, and exits 1 while any stands. With none
+   standing and no :file it prints what the merged design will carry; with :file — the merged
+   design's own fields, as EDN — it appends that design to the parent and prints where."
+  [{:keys [project file worktree] :as opts}]
+  (let [p        (keyword project)
+        child    (resolve-ws-id opts)
+        worktree (str (or worktree (System/getProperty "user.dir")))]
+    (try
+      (let [{:keys [proposal appended]}
+            (if file
+              (unit-merge/merge! p child worktree (edn/read-string (slurp (str file))))
+              {:proposal (unit-merge/proposal p child worktree)})]
+        (cond
+          (seq (:conflicts proposal))
+          (do (println "merge REFUSED ·" (count (:conflicts proposal)) "conflict(s) stand")
+              (println (unit-merge/conflicts-text proposal))
+              (System/exit 1))
+
+          appended
+          (println appended)
+
+          :else
+          (do (println "no conflict stands. Beside the fields you author, the merged design will carry:")
+              (prn (select-keys proposal [:model :parent :child]))
+              (println "Re-run with :file <the merged design's own fields, as EDN> to append it."))))
+      (catch clojure.lang.ExceptionInfo e
+        (println (if (= :merge (:refused (ex-data e))) "merge REFUSED ·" "append rejected:")
+                 (ex-message e))
+        (System/exit 1)))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  merge-cmd [& args]
+  (let [[_ opts] (task-args/split-args args #{:file :worktree})]
+    (merge* opts)))

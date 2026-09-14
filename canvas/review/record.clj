@@ -35,6 +35,12 @@
      project that declares a design, a round with any launches no judge: a claim about nothing
      declared is not one a judge can check. A project that declares none is not asked."
     {:signature [:=> [:catn [:record :map] [:listing DeclaredElements]] [:vector :string]]})
+  (Operation misplayed-roles
+    "The roles a record's model holds that a listing of the declared design declares with other
+     players — empty when every declared role is played as recorded. A round with any launches no
+     judge: a claim about a role binds exactly its players, and a judge checking it against players
+     the design does not declare checks something else."
+    {:signature [:=> [:catn [:record :map] [:listing DeclaredElements]] [:vector :string]]})
   (Operation settled-block
     "The settled subjects, shown for the record-level derivations and outside the round's checks —
      text, readings and id, without the counterexample or evidence a check carries. Says nothing

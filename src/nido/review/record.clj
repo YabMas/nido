@@ -79,11 +79,9 @@
    the design cites none — a pre-intent record — which the prompt states rather
    than papering over.
 
-   A cited :triage entry projects its title and summary only. Its :directions
-   carry a proposed shape and an effort, and feeding those into the goal
-   yardstick would put the answer inside the question: goal-served exists to
-   catch a design that over-serves or that a smaller design would satisfy, and it
-   could never fail honestly against a goal that already names the solution.
+   Only an :intent entry is a goal. The append boundary refuses a design whose
+   :intent names any other kind, so a citation resolving to something else was
+   never written through it, and it projects nothing.
 
    Never throws. The prompt is built as an argument to run-round!, so anything
    that throws here escapes the round's only catch and takes the task down
@@ -93,10 +91,8 @@
     (when-let [n (get-in design [:intent :seq])]
       (when-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
         (let [e (ws/entry-at-seq project ws-id n)]
-          (case (:format e)
-            :intent        {:goal (:goal e) :done-when (:done-when e)}
-            :triage-report {:goal (:title e) :done-when [] :summary (:summary e)}
-            nil))))
+          (when (= :intent (:format e))
+            {:goal (:goal e) :done-when (:done-when e)}))))
     (catch Throwable _ nil)))
 
 ;; ── Prompt construction ─────────────────────────────────────────────────────
@@ -153,8 +149,9 @@
                  (str "[" id "] " property (readings-lines readings "    ")))
                ;; A baseline in the shared model: its elements and claims, as the checks show
                ;; them less the counterexample and what checks them.
-               (for [{:keys [id sort hides interface readings]} (pick (get-in record [:model :elements]))]
+               (for [{:keys [id sort hides interface plays readings]} (pick (get-in record [:model :elements]))]
                  (str "[" id "] (" (name sort) ")"
+                      (when (seq plays) (str "\n    played by: " (str/join ", " plays)))
                       (when hides (str "\n    hides:     " hides))
                       (when interface (str "\n    interface: " interface))
                       (readings-lines readings "    ")))
@@ -292,8 +289,9 @@
          (str "\nELEMENTS — what the claims below are about, by the ids the declared design gives\n"
               "them. A module is what it HIDES; its interface is what is depended on from outside:\n"
               (str/join "\n"
-                        (map (fn [{:keys [id sort hides interface readings]}]
+                        (map (fn [{:keys [id sort hides interface plays readings]}]
                                (str "- [" id "] (" (name sort) ")"
+                                    (when (seq plays) (str "\n    played by: " (str/join ", " plays)))
                                     (when hides (str "\n    hides:     " hides))
                                     (when interface (str "\n    interface: " interface))
                                     (readings-lines readings "    ")))
@@ -626,7 +624,7 @@
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   design-prompt
   "The decision prompt. Derives what can be derived; hands the rest over."
-  [{:keys [design baseline stance intent disputes]}]
+  [{:keys [design baseline stance intent disputes settled]}]
   (let [design   (judged-alone design)
         baseline (judged-alone baseline)]
    (str
@@ -639,7 +637,6 @@
    (if intent
      (str "WHAT THE TASK IS FOR — stated before this was designed:\n"
           (:goal intent) "\n"
-          (when-let [sm (:summary intent)] (str sm "\n"))
           (when-let [d (seq (:done-when intent))]
             (str "Done when:\n" (bullets d) "\n"))
           "\n")
@@ -654,9 +651,13 @@
    "Effort: " (name (:effort design)) "\n"
    ;; A design in the shared model commits to claims, each about the elements it names; the
    ;; shape it replaces lists bare invariants.
+   ;; Settled claims follow the checks rather than standing among them, as a baseline
+   ;; round shows its settled subjects: the four derivations are still made against the
+   ;; whole design.
    (if (contains? design :model)
      (str "Claims — what this design commits to, by id:"
-          (model-block (:model design) (:holds design)))
+          (model-block (:model (checks-of design (set (keys settled)))) (:holds design))
+          (settled-block settled design))
      (str "Invariants:\n" (invariant-lines (:invariants design)) "\n"))
    "Declared against the stance: " (name (get-in design [:standing :relation]))
    (qualifiers (:standing design)) "\n"
@@ -757,7 +758,8 @@
    "             instructions and saying the wrong one is worse than saying\n"
    "             nothing.\n\n"
    "Every finding MUST cite what it falsifies. A finding that cites nothing is\n"
-   "not a finding. A finding about one claim names its id in claim-id.\n\n"
+   "not a finding. A finding about one claim names its id in claim-id, and every\n"
+   "finding names the check it shows broken in check.\n\n"
    "Populate confirmed with the IDS of the claims you checked and found to hold —\n"
    "the bracketed slugs, without the brackets. Leave it empty when the design lists\n"
    "invariants with no ids. Ids, not sentences: a confirmation worded differently\n"
@@ -787,6 +789,12 @@
                      ;; and sometimes not is no identity at all.
                      (assoc :claim-id (str/replace (str/trim (str (:claim-id f)))
                                                    #"^\[|\]$" ""))
+                     ;; Only one of the four derivations. A check named in the answer's
+                     ;; underscore spelling is the same check; anything else ties the finding
+                     ;; to nothing, and is dropped rather than kept as a check no round derives.
+                     (some #{(keyword (str/replace (str/trim (str (:check f))) "_" "-"))}
+                           report/derivations)
+                     (assoc :check (keyword (str/replace (str/trim (str (:check f))) "_" "-")))
                          (seq (:evidence f))
                          (assoc :evidence (mapv str (:evidence f))))))))
         raw))
@@ -972,6 +980,33 @@
                 (remove #(contains? (get declared % #{}) (recorded %))))
           claims)))
 
+(defn ^{:malli/schema [:=> [:cat :map :DeclaredElements] [:vector :string]]}
+  misplayed-roles
+  "The roles `record`'s model holds that `listing` declares as a Role with other players, in the
+   order the model lists them. Empty when every declared role is played as recorded.
+
+   A role's membership is authored twice — in the record a round judges and in the declaration
+   the claim lives on in — and a judge checking a claim about a role whose two memberships differ
+   checks it against players the design does not declare. Compared as sets: players have no
+   order. A role the listing does not declare at all is `unresolved-subjects`' to name, not this;
+   a listing that is not `:listed` declares no Role, so nothing here is misplayed against it."
+  [record listing]
+  (let [declared (when (= :listed (:status listing))
+                   (into {} (keep (fn [{:keys [id sort refs]}]
+                                    (when (= "role" (str/lower-case (name sort)))
+                                      [id (set (:plays refs))])))
+                         (:elements listing)))]
+    (into []
+          (comp (filter #(= :role (:sort %)))
+                (filter #(contains? declared (:id %)))
+                ;; A role written before players were authored has none to compare: its
+                ;; absence is not an empty membership, and reading it as one stops a round
+                ;; over a record that was reviewable before.
+                (filter #(contains? % :plays))
+                (remove #(= (set (:plays %)) (get declared (:id %))))
+                (map :id))
+          (get-in record [:model :elements]))))
+
 (defn- undeclared-subjects
   "Why a round over `record` launches no judge because of what its claims are about, or nil when
    nothing stops it. A claim about something the design does not declare is not one a judge can
@@ -984,10 +1019,15 @@
    Two outcomes, kept apart for the reason every outcome here is tagged: a subject the listing does
    not hold says something about the record, and a listing fukan could not produce says nothing
    about it. A record with no subject to resolve — every record from before the shared model —
-   asks fukan nothing, so a round over one starts no JVM to learn nothing."
-  [project worktree record]
+   asks fukan nothing, so a round over one starts no JVM to learn nothing.
+
+   A role the declaration plays differently stops the round under the first outcome, named apart
+   from an undeclared subject: both say the record describes what the design does not declare.
+
+   `listing` is the one a stage already read at this tree, when it read one; nil reads it here."
+  [project worktree record listing]
   (when (seq (mapcat :about (get-in record [:model :claims])))
-    (let [listing (design-check/elements project worktree)]
+    (let [listing (or listing (design-check/elements project worktree))]
       (case (:status listing)
         :unmodelled nil
 
@@ -996,11 +1036,34 @@
          :detail  (str "the declared design could not be listed at " worktree ": "
                        (:error listing))}
 
-        (when-let [missing (seq (unresolved-subjects record listing))]
-          {:outcome :subjects-undeclared
-           :detail  (str "the declared design at " worktree
-                         " holds no element of the recorded sort for: "
-                         (str/join ", " missing))})))))
+        (let [missing   (seq (unresolved-subjects record listing))
+              misplayed (seq (misplayed-roles record listing))]
+          (when (or missing misplayed)
+            {:outcome :subjects-undeclared
+             :detail  (str "the declared design at " worktree " "
+                           (str/join "; "
+                                     (cond-> []
+                                       missing   (conj (str "holds no element of the recorded sort for: "
+                                                            (str/join ", " missing)))
+                                       misplayed (conj (str "declares other players for the roles: "
+                                                            (str/join ", " misplayed))))))}))))))
+
+(defn- reading-for
+  "What a judge about to read `worktree` would read `record` against: the tree's identity, and — in
+   a project that declares a design, over a record whose claims name subjects — each declared
+   element's identity, from a listing read once here and handed on, so resolving the record's
+   subjects asks fukan nothing more.
+
+   The tree is read FIRST. A declaration edited while the listing is read then moves the tree the
+   round compares against as its judge returns, instead of pairing an old digest with a tree that
+   already holds the new one."
+  [project worktree record]
+  (let [tree    (settled/code-identity worktree)
+        listing (when (and project (seq (mapcat :about (get-in record [:model :claims]))))
+                  (design-check/elements project worktree))]
+    {:listing listing
+     :reading {:code-identity      tree
+               :subject-identities (settled/subject-identities listing worktree)}}))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   baseline-review!
@@ -1023,7 +1086,10 @@
 
    `:settled` and the `:code-identity` they were settled at come from the stage
    that chose them; a caller passing neither settles nothing and reads the
-   identity itself. Settled subjects are shown and are not checks, so the
+   identity itself. So do the `:listing` the stage read and the
+   `:subject-identities` in it, recorded beside the tree's identity only when
+   the tree did not move — they are what a model claim is settled on in a
+   project that declares a design. Settled subjects are shown and are not checks, so the
    review's :confirmed keeps only ids that were checks. And a round handed
    settled subjects whose tree moved appends nothing — it answers
    {:outcome :code-moved :answer <the review>} — because those subjects were
@@ -1032,11 +1098,11 @@
    Its claims' subjects are resolved against the declared design at the tree the
    judge reads before a judge is launched, and before either identity is read —
    see `undeclared-subjects`."
-  [{:keys [cwd code-cwd run-id label disputes baseline settled] :as opts}]
+  [{:keys [cwd code-cwd run-id label disputes baseline settled listing subject-identities] :as opts}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [baseline (or baseline (ws/latest-entry project ws-id :baseline))]
       (if (baseline-round-worth-running? baseline)
-        (or (undeclared-subjects project (or code-cwd cwd) baseline)
+        (or (undeclared-subjects project (or code-cwd cwd) baseline listing)
             (let [code-cwd (or code-cwd cwd)
                   settled  (or settled {})
                   before   (if (contains? opts :code-identity)
@@ -1063,8 +1129,9 @@
 
                 :else
                 (cond-> result
-                  (:confirmed result) (update :confirmed #(filterv checks %))
-                  one-tree            (assoc :code-identity one-tree)))))
+                  (:confirmed result)                     (update :confirmed #(filterv checks %))
+                  one-tree                                (assoc :code-identity one-tree)
+                  (and one-tree (seq subject-identities)) (assoc :subject-identities subject-identities)))))
         {:outcome :nothing-to-check
          :detail "the baseline records no load-bearing property and no health observation"})
       {:outcome :no-record :detail "this workstream has no :baseline entry"})
@@ -1103,6 +1170,18 @@
         {:outcome (or (:reason (:blocked st)) :premise-unverified)
          :detail  (:detail (:blocked st))}))))
 
+(defn- effective-design
+  "`design` with its model laid over the model of the baseline it cites — what a round resolves
+   subjects and roles over. A design restates nothing it keeps, so a role it carries unchanged from
+   its baseline is still one its claims bind, and a declaration playing that role otherwise has to
+   stop the round as surely as one playing a restated role. The design as written when either
+   record carries no model."
+  [cwd design]
+  (let [baseline (stages/discover-baseline cwd design)]
+    (if (and (:model design) (:model baseline))
+      (assoc design :model (model/overlay (:model baseline) (:model design)))
+      design)))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   design-decision!
   "Run the decision round over this workstream's latest design record. Returns
@@ -1121,22 +1200,54 @@
    is never skipped: what the declarations decide is whether a person's grant is
    additionally owed, and that is read after a proceeding decision, by the
    clearance `append!` writes. Skipping the round here would leave exactly the
-   designs that owe nobody a grant with no decision to clear them on."
-  [{:keys [cwd code-cwd run-id label disputes]}]
+   designs that owe nobody a grant with no decision to clear them on.
+
+   Settlement works as it does for a baseline round. The `:design`, the `:settled`
+   claims, the `:listing` and the identities they were settled at come from the
+   stage that chose them. Settled claims are shown apart and are not checks, so
+   the decision's :confirmed keeps only ids that were checks. It carries
+   `:code-identity`, and `:subject-identities` beside it, only when the tree read
+   as the judge launched is the tree read as it returned — and a round holding
+   settled claims whose tree moved appends nothing, answering
+   {:outcome :code-moved :answer <the decision>}."
+  [{:keys [cwd code-cwd run-id label disputes design settled listing subject-identities] :as opts}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
-    (if-let [design (ws/latest-entry project ws-id :design)]
+    (if-let [design (or design (ws/latest-entry project ws-id :design))]
       (or (unverified-premise project ws-id design)
-          (undeclared-subjects project (or code-cwd cwd) design)
-          (judged (run-round!
-                   {:cwd (or code-cwd cwd) :run-id run-id :kind :design-decision
-                    :label label
-                    :prompt (design-prompt
-                             {:design   design
-                              :baseline (stages/discover-baseline cwd design)
-                              :stance   (stages/read-stance project)
-                              :intent   (discover-intent cwd design)
-                              :disputes disputes})})
-                  #(parse-design-decision % (:seq design))))
+          (undeclared-subjects project (or code-cwd cwd) (effective-design cwd design) listing)
+          (let [code-cwd (or code-cwd cwd)
+                settled  (or settled {})
+                before   (if (contains? opts :code-identity)
+                           (:code-identity opts)
+                           (settled/code-identity code-cwd))
+                result   (judged (run-round!
+                                  {:cwd code-cwd :run-id run-id :kind :design-decision
+                                   :label label
+                                   :prompt (design-prompt
+                                            {:design   design
+                                             :baseline (stages/discover-baseline cwd design)
+                                             :stance   (stages/read-stance project)
+                                             :intent   (discover-intent cwd design)
+                                             :disputes disputes
+                                             :settled  settled})})
+                                 #(parse-design-decision % (:seq design)))
+                after    (settled/code-identity code-cwd)
+                one-tree (when (= before after) before)
+                checks   (set (keys (apply dissoc (settled/subjects design) (keys settled))))]
+            (cond
+              (not (:format result)) result
+
+              (and (seq settled) (nil? one-tree))
+              {:outcome :code-moved
+               :detail  (str "the tree changed while the judge read it, with " (count settled)
+                             " claim(s) outside its checks, so its decision was not appended")
+               :answer  result}
+
+              :else
+              (cond-> result
+                (:confirmed result)                     (update :confirmed #(filterv checks %))
+                one-tree                                (assoc :code-identity one-tree)
+                (and one-tree (seq subject-identities)) (assoc :subject-identities subject-identities)))))
       {:outcome :no-record :detail "this workstream has no :design entry"})
     {:outcome :no-workstream :detail (str "cwd resolves to no nido session: " cwd)}))
 
@@ -1401,6 +1512,19 @@
   [history]
   (vec (mapcat :disputes history)))
 
+(defn- element-id-rule
+  "The rule for an element's id given to every amender re-stating a record in the shared model. One
+   text for both, because an id an amender invents is resolved by the next round against one
+   listing whichever record it was invented on."
+  [declared?]
+  (if declared?
+    (str "This project declares its design, so an element's id is its canvas identity,\n"
+         "exactly as `clojure -M:fukan -m fukan.cli elements` lists it — never the id an\n"
+         "older record gave it. The next round resolves every claim subject\n"
+         "against that listing, and an id it does not hold stops the round.\n")
+    (str "This project declares no design, so an element keeps the id the record already\n"
+         "gave it, and an element new to the record takes an id of the record's own.\n")))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   amend-prompt
   "Instruction to repair a baseline the round found wanting.
@@ -1418,7 +1542,7 @@
    right — and the fields that say which it is, :blocks and :needs, were on the
    record and printed nowhere. Only the gap branch is new; the refutation wording
    is the one that converged and is left alone."
-  [{:keys [baseline findings out-path stance]}]
+  [{:keys [baseline findings out-path stance declared?]}]
   (let [gaps? (boolean (some :blocks findings))]
    (str
    (if gaps?
@@ -1548,12 +1672,11 @@
    "Write the record in the shared model — :model {:elements :claims} in place of\n"
    ":modules, :composition and :load-bearing — whatever shape the current one is in.\n"
    "Re-stating an older one changes nothing it says: each module becomes an element\n"
-   "keeping its id, with :sort :module; each load-bearing property a claim keeping\n"
-   "its id, :about the modules it concerns, with {:by :round} evidence and its\n"
-   "evidence as :read-at; the composition a claim about the modules it composes. In\n"
-   "a project with a canvas/, an element's id is its canvas identity, as\n"
-   "`clojure -M:fukan -m fukan.cli elements` lists it. nido reads this file,\n"
-   "validates it, and appends it as the superseding baseline.\n"
+   "with :sort :module; each load-bearing property a claim keeping its id, :about\n"
+   "the modules it concerns, with {:by :round} evidence and its evidence as\n"
+   ":read-at; the composition a claim about the modules it composes.\n"
+   (element-id-rule declared?)
+   "nido reads this file, validates it, and appends it as the superseding baseline.\n"
    "Do not append it yourself and do not commit anything.\n\n"
    ;; The design amender is handed its :seq with a note that an amender shown no
    ;; :seq is being asked to guess the one field the citation is checked against.
@@ -1621,15 +1744,17 @@
         ;; ledger too, at a tree that does not move within a run.
         [project ws-id] (stages/project+ws-from-cwd cwd)
         subject (or target (when project (ws/latest-entry project ws-id :baseline)))
-        tree    (settled/code-identity (or code-cwd cwd))
+        {:keys [listing reading]} (reading-for project (or code-cwd cwd) subject)
         settled (if (and project subject)
-                  (settled/settled (settled/ledger project ws-id) subject tree)
+                  (settled/settled (settled/ledgers project ws-id subject) subject reading)
                   {})
         record (baseline-review!
                 {:cwd cwd :code-cwd code-cwd :run-id run-id
                  :baseline subject
                  :settled settled
-                 :code-identity tree
+                 :listing listing
+                 :code-identity (:code-identity reading)
+                 :subject-identities (:subject-identities reading)
                  :label (str "baseline-review-round-" (:iter ctx))
                  :disputes (disputes-for-judge (:history ctx))})
         ctx    (assoc ctx :settled settled)]
@@ -1691,10 +1816,11 @@
         (fs/delete-if-exists out-path)
         (agent/launch!
          {:run-id run-id :cwd code-cwd :budget budget
-          :first-message (amend-prompt {:baseline prev
-                                        :findings (:findings ctx)
-                                        :out-path out-path
-                                        :stance (stages/read-stance project)})
+          :first-message (amend-prompt {:baseline  prev
+                                        :findings  (:findings ctx)
+                                        :out-path  out-path
+                                        :stance    (stages/read-stance project)
+                                        :declared? (some? (design-check/design-of project code-cwd))})
           :err-file (str (fs/path dir (str "amend-round-" (:iter ctx) ".err.log")))})
         (cond
           (not= before (stages/working-copy-state code-cwd))
@@ -1856,7 +1982,19 @@
   (vec (filter #(= :underivable (:status %)) (:checks record))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
-  design-finding-base-key [c] [:check (:check c)])
+  design-finding-base-key
+  "What tells one design finding from another across rounds: the check that broke, and the claim
+   ids the round's findings name. Both are handles no amendment can move — a check is one of four
+   closed values, a claim id is stable across amendments — so a check broken against one claim
+   and then against another is two findings rather than a stalled loop, and the same claim found
+   again under the same check is one.
+
+   A finding names the check it shows broken, so each broken check carries the claim ids of the
+   findings naming it, as `:claim-ids` — never a claim another check was broken against, whose
+   withdrawal would otherwise move this finding's identity and reset its disputes. Order and
+   repetition among them mean nothing."
+  [c]
+  [:check (:check c) :claims (vec (sort (distinct (:claim-ids c))))])
 (def design-finding-key (dispute-aware design-finding-base-key))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
@@ -1881,7 +2019,7 @@
    :recut and :amend are given different jobs, because saying the wrong one is
    worse than saying nothing: a decomposition that does not hold is not fixed by
    restating claims, and a claim that is wrong is not fixed by re-cutting layers."
-  [{:keys [design baseline recommend reason checks findings out-path]}]
+  [{:keys [design baseline recommend reason checks findings out-path declared?]}]
   (str
    "A read-only judge derived what could be derived about this DESIGN record,\n"
    "before any code is written, and it did not come out clean.\n\n"
@@ -1960,8 +2098,9 @@
    "Write it in the shared model — :model {:elements :claims} in place of\n"
    ":invariants, with :holds keyed by claim id when the design is phased — whatever\n"
    "shape the current one is in. An invariant becomes a claim with an id, the\n"
-   "elements it is about, what would falsify it and {:by :round} evidence. nido\n"
-   "reads this file, validates it, and appends it as the superseding design.\n"
+   "elements it is about, what would falsify it and {:by :round} evidence.\n"
+   (element-id-rule declared?)
+   "nido reads this file, validates it, and appends it as the superseding design.\n"
    "Do not append it yourself and do not commit anything."
    (level-reminder :commitment)))
 
@@ -1969,10 +2108,25 @@
   [ctx]
   (let [{:keys [cwd code-cwd run-id]} (:config ctx)
         counts (dispute-counts (:history ctx))
+        ;; What the judge is not asked to check, read at the tree it is about to read, from
+        ;; every ledger the design's unit reaches — never this run's history. A role's players
+        ;; are the effective model's, as the round resolves them: a role kept from the baseline
+        ;; is not restated, and its players are still what a claim about it rests on.
+        [project ws-id] (stages/project+ws-from-cwd cwd)
+        design  (when project (ws/latest-entry project ws-id :design))
+        {:keys [listing reading]} (reading-for project (or code-cwd cwd) design)
+        settled (if design
+                  (settled/settled (settled/ledgers project ws-id design) design reading
+                                   (effective-design cwd design))
+                  {})
         record (design-decision!
                 {:cwd cwd :code-cwd code-cwd :run-id run-id
+                 :design design :settled settled :listing listing
+                 :code-identity (:code-identity reading)
+                 :subject-identities (:subject-identities reading)
                  :label (str "design-decision-round-" (:iter ctx))
                  :disputes (disputes-for-judge (:history ctx))})
+        ctx    (assoc ctx :settled settled)
         traj   (trajectory (:history ctx))
         final! (fn [c] (append! cwd (cond-> record (seq traj) (assoc :trajectory traj))) c)]
     (cond
@@ -2007,9 +2161,13 @@
                           :stop)))
 
       :else
-      (let [findings (mapv #(assoc % :disputed-n
-                                   (get counts (design-finding-base-key %) 0))
-                           (broken-checks record))]
+      (let [claims-of (fn [{c :check}]
+                        (into [] (comp (filter #(= c (:check %)))
+                                       (keep #(not-empty (str (:claim-id %)))))
+                              (:findings record)))
+            findings  (mapv #(let [f (assoc % :claim-ids (claims-of %))]
+                               (assoc f :disputed-n (get counts (design-finding-base-key f) 0)))
+                            (broken-checks record))]
         (cond
           (some #(>= (:disputed-n %) 2) findings)
           (final! (assoc ctx :record record :findings findings
@@ -2130,7 +2288,8 @@
                        :reason (get-in ctx [:record :reason])
                        :checks (:findings ctx)
                        :findings (get-in ctx [:record :findings])
-                       :out-path out-path})
+                       :out-path out-path
+                       :declared? (some? (design-check/design-of project code-cwd))})
       :err-file (str (fs/path dir (str "design-amend-round-" (:iter ctx) ".err.log")))})
     (cond
       (not= before (stages/working-copy-state code-cwd))

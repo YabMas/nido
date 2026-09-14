@@ -76,4 +76,20 @@
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
   (Operation discharge-cmd
     "bb nido:improvement:discharge — the entry point for `discharge*`."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+
+  (Operation fork*
+    "Fork a unit into a child workstream, from a parent whose design stands. Prints the child's
+     id; the parent's ledger is not written."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation fork-cmd
+    "bb nido:workstream:fork — the entry point for `fork*`."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation merge*
+    "Propose merging a child unit's design into its parent. Prints every conflict, by claim id
+     and by law, and exits non-zero while any stands; the merged design is authored and appended
+     only once none does."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation merge-cmd
+    "bb nido:workstream:merge — the entry point for `merge*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]}))

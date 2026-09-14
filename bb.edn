@@ -547,6 +547,16 @@
    :doc "Add an external ref to a workstream. :project <p> (:ws-id <id> | :ref <BR-####>) :adapter <kw> :id <str> [:url <str> :title <str>]"
    :task (apply nido-workstream/ref-add *command-line-args*)}
 
+  nido:workstream:fork
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "Fork a unit into a child workstream, from a parent whose newest design stands. :project <p> (:ws-id <parent> | :ref <BR-####>) :goal <str> :done-when <edn vector of str> [:context <str>]. Prints the child's id; writes nothing on the parent."
+   :task (apply nido-workstream/fork-cmd *command-line-args*)}
+
+  nido:workstream:merge
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "Merge a forked unit's design back into its parent. :project <p> (:ws-id <child> | :ref <BR-####>) [:worktree <dir>] [:file <merged design's own fields, EDN>]. Prints every conflict and exits 1 while any stands; with :file and none standing, appends the merged design to the parent."
+   :task (apply nido-workstream/merge-cmd *command-line-args*)}
+
   nido:improvement:landed
   {:requires ([tasks.nido-workstream :as nido-workstream])
    :doc "Record that an approved proposal is now in the tree. :project <p> :ws-id <id> :analysis-seq <n> :observation <n> :rev <change-id> [:note <str>]"
