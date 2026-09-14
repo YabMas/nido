@@ -171,9 +171,11 @@
                 replaced-by (replacement bls premise-seq)
                 ;; The goal this design was written to serve, and the goal the
                 ;; baseline under it was scoped for. Either moving unseats the
-                ;; design, and they are asked separately because a design may
-                ;; cite a :triage entry as its intent while its baseline cites
-                ;; an :intent — two edges to one question.
+                ;; design, and they are asked SEPARATELY because the ledger can
+                ;; hold a design whose two edges name different goals. Root
+                ;; agreement refuses one on append; it says nothing about the
+                ;; records already written, and this is a READING over every
+                ;; ledger the base ever admitted.
                 goal-seq    (get-in design [:intent :seq])
                 premise-rec (->> bls (filter #(= premise-seq (:seq %))) first)
                 base-goal   (get-in premise-rec [:intent :seq])
@@ -192,9 +194,10 @@
                                              replaced-by)
                          ;; Set even where :blocked reports the design's OWN goal
                          ;; first, because only this says whether the survey is
-                         ;; owed too: a design and its baseline may cite different
-                         ;; goal entries — an :intent and a :triage — and lose one
-                         ;; while keeping the other.
+                         ;; owed too. The two are one chain for everything root
+                         ;; agreement admitted, and this is the baseline's own
+                         ;; edge either way — asking the design's here would
+                         ;; report the survey sound on a ledger where it is not.
                          :goal-replaced-by (goal-moved base-goal)}
                 invalidated (invalidating-verdict vs oks design-seq)
                 blocked (cond
@@ -234,6 +237,15 @@
                           ;; is scoped FOR a goal, so a design standing on a
                           ;; survey whose goal moved is standing on a boundary
                           ;; drawn for something else.
+                          ;;
+                          ;; Root agreement does not answer this and cannot stand
+                          ;; in for it. It asks which unit a record BELONGS to and
+                          ;; it asks it on APPEND, so it makes the two edges one
+                          ;; chain for records written under it and says nothing
+                          ;; about the ledgers already on disk — where a design
+                          ;; citing one goal over a survey scoped for another is a
+                          ;; shape the boundary of the day admitted. Dropping this
+                          ;; would hand such a design its standing back.
                           (goal-moved base-goal)
                           {:reason :premise-goal-superseded :seq premise-seq
                            :replaced-by (goal-moved base-goal)

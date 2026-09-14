@@ -9,6 +9,7 @@
    [nido.coordinator.record.state :as cstate]
    [nido.platform.io :as pio]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.lane.reentry :as reentry]
    [nido.coordinator.lane.pipeline :as p]))
 
 (defn- with-tmp [f]
@@ -255,12 +256,15 @@
         (let [[id _] (ledger)]
           (is (= :pickup (:intake (p/of :brian id))))))
 
-      (testing "a triage entry states the goal, so a design may cite it"
+      (testing "a triage says HOW the work arrived, and states no goal"
         (let [[id add!] (ledger)]
           (add! :triage a-triage)
-          (is (= :triaged (:intake (p/of :brian id))))
-          (is (= :intent-stated (:at (p/of :brian id)))
-              "triage states the goal, so no separate intent is owed")))
+          (is (= :triaged (:intake (p/of :brian id)))
+              "how it arrived is still read off the triage — that is what
+               intake-kind is for, and it is a fact about the workstream")
+          (is (= :intake (:at (p/of :brian id)))
+              "but the goal is not: a triage proposes candidate directions, so a
+               triaged workstream still owes an intent before a unit begins")))
 
       (testing "a Slack proposal is a proposal, never a decision"
         (let [[id add!] (ledger)]
@@ -337,7 +341,7 @@
 
 (deftest arc-covers-every-spine-stage-in-order
   (let [a (p/arc (kinds->entries [:intent]))]
-    (is (= p/arc-stages (mapv :stage (:stages a)))
+    (is (= p/workstream-stages (mapv :stage (:stages a)))
         "every stage renders, in arc order, whether or not it holds anything")
     (is (= [:current :ahead :ahead :ahead :ahead :ahead :ahead :ahead]
            (mapv :state (:stages a)))
@@ -412,7 +416,7 @@
     (is (every? #(= :ahead (:state %)) (:stages a)))
     (is (empty? (:excursions a))))
   (let [a (p/arc [])]
-    (is (= p/arc-stages (mapv :stage (:stages a))))
+    (is (= p/workstream-stages (mapv :stage (:stages a))))
     (is (empty? (:excursions a)))))
 
 (deftest a-closed-workstream-has-nothing-still-ahead-of-it
@@ -424,8 +428,13 @@
   (let [es (kinds->entries [:intent :baseline :design])
         open   (into {} (map (juxt :stage :state)) (:stages (p/arc es)))
         closed (into {} (map (juxt :stage :state)) (:stages (p/arc es {:closed? true})))]
-    (is (= :ahead (open :shipping))   "still open: the arc has not reached it")
-    (is (= :skipped (closed :shipping)) "closed: it is over, record or no record")
+    (is (= :ahead (open :implementation))
+        "still open: the arc has not reached it")
+    (is (= :skipped (closed :implementation))
+        "closed: it is over, record or no record")
+    (is (= :skipped (closed :shipping))
+        "and shipping too, which is the row the live pane got wrong: `Status —
+         Merged` above an arc still calling it ahead")
     (is (not-any? #(= :ahead %) (vals closed)))
     (is (= :current (open :design))   "still open: the trail ends on the design")
     (is (= :done (closed :design))
@@ -689,13 +698,22 @@
       (let [s (by (p/arc es))]
         (is (= :done (:implementation s)))
         (is (= :current (:review s)))
-        (is (= :ahead (:publication s)))))
+        (is (= :ahead (:publication s))
+            "and the workstream's own spine still runs past it — this ledger has
+             not landed yet, which is a different thing from having no such
+             stage")
+        (is (nil? (:publication (by (p/arc es {:stages p/unit-stages}))))
+            "while the unit's reading of the same ledger ends at the round that
+             reviews its implementation — a landing is the workstream's")))
     (testing "and from the re-entry point upward they are stale"
       (let [s (by (p/arc es {:re-entry :implementation}))]
         (is (= :done (:approval s)) "below the line, untouched")
         (is (= :stale (:implementation s)))
         (is (= :stale (:review s)))
-        (is (= :ahead (:publication s)) "a stage holding nothing is not stale")))
+        (is (= :ahead (:publication s))
+            "and a stage the work never reached is not stale: staleness is a
+             claim about records the ledger no longer stands behind, and there
+             are none here")))
     (testing "closure wins — a finished workstream owes nothing"
       (let [s (by (p/arc es {:re-entry :implementation :closed? true}))]
         (is (= :done (:implementation s)))))))
@@ -723,3 +741,63 @@
                 "and the redone work counts — the superseded entry beside it is
                  history, not a debt that can never be paid")
             (is (= :review-implementation (:stage (:next r))))))))))
+
+;; ── A unit spans intent to implementation ──────────────────────────────────
+
+(deftest a-landing-is-not-a-stage-of-the-unit-that-produced-it
+  ;; `/land` collapses a reviewed stack into ONE PR, so a landing can carry
+  ;; several units; `reopen!` clears :closed for the next one while every earlier
+  ;; :merged stays in the ledger. A stage a unit may hold zero, one or many of,
+  ;; about work that is not only its own, is not a stage of that unit.
+  (is (not-any? #{:publication :shipping} p/unit-stages)
+      "neither landing stage lies on the unit's spine")
+  ;; Whose a stage is, is a fact about its SUBJECT and not about its name, so the
+  ;; landing kinds keep saying which landing they are — a workstream reader wants
+  ;; Publication and Shipping apart, and a single :landing stage would have hidden
+  ;; that from both readings to keep it from one.
+  (is (= [:publication :shipping :shipping]
+         (map p/stage-of [:pr-opened :ship-submitted :merged])))
+  (is (not-any? (set p/unit-stages) (map p/stage-of [:pr-opened :ship-submitted :merged]))
+      "so no stage on the unit's spine is one a landing maps to"))
+
+(defn- landed-ledger []
+  [{:kind :intent :seq 1} {:kind :design :seq 2}
+   {:kind :pr-opened :seq 3} {:kind :merged :seq 4}])
+
+(defn- state-of [a st]
+  (:state (first (filter #(= st (:stage %)) (:stages a)))))
+
+(deftest a-landing-is-reported-beside-the-unit-arc-rather-than-in-it
+  (let [a (p/arc (landed-ledger) {:stages p/unit-stages})]
+    (is (= [:publication :shipping] (mapv :stage (:excursions a)))
+        "both landing records sit beside the unit's arc")
+    (is (= p/unit-stages (mapv :stage (:stages a)))
+        "and nothing of them on it")))
+
+(deftest the-workstream-spine-still-runs-through-shipping
+  ;; The unit arc is a SECOND reading of the ledger, not a narrowing of the only
+  ;; one. A pane over a workstream is what holds the landings, so publication and
+  ;; shipping are rows with a state each — an `off the arc` footnote would tell a
+  ;; reader that a merged workstream never shipped.
+  (let [a (p/arc (landed-ledger))]
+    (is (= p/workstream-stages (mapv :stage (:stages a))))
+    (is (empty? (:excursions a))
+        "neither landing is off the workstream's arc")
+    (is (= :done (state-of a :publication)))
+    (is (= :current (state-of a :shipping)))))
+
+(deftest a-re-entry-at-a-landing-still-marks-the-landing-stale
+  ;; The one failure a reader cannot see. `arc` indexes staleness by the spine it
+  ;; is reading with, so a stage `reentry/stages` can name and the spine cannot
+  ;; makes NOTHING stale: the clamp goes on working in `place` while the picture
+  ;; keeps its ✓ against work the ledger no longer stands behind.
+  (let [a (p/arc (landed-ledger) {:re-entry :publication})]
+    (is (= :stale (state-of a :publication)))
+    (is (= :stale (state-of a :shipping)))
+    (is (= :done (state-of a :design))
+        "and nothing below the re-entry point moves")))
+
+(deftest every-stage-re-entry-can-name-is-one-the-workstream-spine-renders
+  ;; Not tidiness — this is what the staleness index is built from. A stage in one
+  ;; list and not the other is a re-entry that silently marks nothing.
+  (is (every? (set p/workstream-stages) reentry/stages)))

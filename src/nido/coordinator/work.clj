@@ -2478,8 +2478,13 @@
 (def arc-stages
   "The stages a workstream travels, in order. The plane naming its own spine — a surface deciding
    whether a key is a stage should ask the work plane, not the lane that happens to compute the
-   arc today."
-  pipeline/arc-stages)
+   arc today.
+
+   THE WORKSTREAM's spine, which is what every surface above here is showing: a pane renders one
+   workstream and its landings, so :publication and :shipping are stages it may expand. The unit
+   arc is a second reading of the same ledger and has no surface yet; when one arrives it asks
+   `pipeline/arc` for it by name rather than reinterpreting this."
+  pipeline/workstream-stages)
 
 (def pickup-trigger
   "The trigger name a pickup enqueues under. Surfaces need it to ask whether a pickup would

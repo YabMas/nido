@@ -418,6 +418,12 @@
   ;; goal, so a design standing on one whose goal moved stands on a boundary
   ;; drawn for something else. The design cites a SECOND, untouched goal here so
   ;; its own edge stays live and only the premise's can fire.
+  ;;
+  ;; Written the way a ledger from before root agreement holds it, because that
+  ;; is the only ledger this can be read on — and every one of them is still on
+  ;; disk. Root agreement refuses the shape on APPEND and says nothing about the
+  ;; records already written, so it cannot stand in for this reading: dropping
+  ;; the reading would hand such a design its standing back.
   (with-tmp
     (fn [_]
       (let [[id add] (ledger)
@@ -425,13 +431,49 @@
             b  (add :baseline a-baseline)            ; scoped for goal 1
             _  (add :baseline-review {:format :baseline-review :verdict :sufficient
                                       :baseline-seq b :reason "it holds"})
-            d  (add :design (assoc (a-design b) :intent {:seq i2}))
+            d  (add-from-an-older-era! id :design (assoc (a-design b) :intent {:seq i2}))
             _  (add :intent {:format :intent :goal "a wider goal" :done-when ["d"]
                              :supersedes {:seq 1 :why "the scope moved"}})
             st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
         (is (false? (:decidable? st)))
         (is (= :premise-goal-superseded (:reason (:blocked st))))
         (is (= b (:seq (:blocked st))) "it names the survey, not the goal")))))
+
+(deftest a-moved-goal-is-reported-once-where-both-edges-name-it
+  ;; The two goal edges — the design's own, and the one its baseline was scoped
+  ;; for — are one chain for every design root agreement admitted, since a design
+  ;; whose baseline roots elsewhere is refused on append. So the reading that
+  ;; asks both reports ONE reason here, naming the design's own goal, and the
+  ;; premise carries the rest.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b (add :baseline a-baseline)             ; scoped for goal 1
+            _ (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                     :baseline-seq b :reason "it holds"})
+            d (add :design (a-design b))             ; serves goal 1
+            _ (add :intent {:format :intent :goal "a wider goal" :done-when ["d"]
+                            :supersedes {:seq 1 :why "the scope moved"}})
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (false? (:decidable? st)))
+        (is (= :goal-superseded (:reason (:blocked st)))
+            "one reason, naming the goal — the survey beneath it was scoped for
+             the same goal, so there is no second thing to report")
+        (is (= 1 (:seq (:blocked st))))
+        (is (some? (:goal-replaced-by (:premise st)))
+            "and the premise still says the survey is owed too")))))
+
+(deftest a-design-may-not-root-elsewhere-than-its-baseline
+  ;; What makes the two edges coincide from here on — and only from here on,
+  ;; which is why the reading goes on asking both.
+  (with-tmp
+    (fn [_]
+      (let [[_id add] (ledger)
+            i2 (add :intent {:format :intent :goal "a second goal" :done-when ["d"]})
+            b  (add :baseline a-baseline)]          ; scoped for goal 1
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"reaches 2 goals"
+             (add :design (assoc (a-design b) :intent {:seq i2}))))))))
 
 (deftest a-verified-baseline-whose-goal-moved-is-verified-no-longer
   ;; With NO design on the ledger, which is the case only the baseline can be

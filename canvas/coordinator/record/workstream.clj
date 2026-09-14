@@ -172,6 +172,27 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:ref :map]
                             [:opts [:? [:maybe :map]]]] Workstream]
      :delegates [read-ws write! append-entry!]})
+  (Operation unit-of
+    "The unit an entry belongs to, addressed by its root goal's `:seq` — or nil where the
+     entry is the WORKSTREAM's rather than any unit's.
+
+     A workstream may hold more than one goal-to-implementation unit, and this is what tells
+     them apart. The unit is the citation closure rooted at a goal — an `:intent`, the one
+     kind a baseline's and a design's `:intent` may cite: a baseline cites its goal, a design
+     cites its baseline and its goal, an implementation and a review cite the design they were
+     made under, and an intent citing `:supersedes` continues its unit while one citing
+     nothing opens another. The append boundary refuses a record whose citations reach more
+     than one, so the partition is established by CONSTRUCTION rather than asserted here.
+
+     A landing is outside the closure, not missing from it. A `:pr-opened` and a `:merged`
+     NAME the design whose work they carry and stand on none of it, so they reach no root and
+     are the workstream's — as are a triage, a note and a blocker, which stand on nothing at
+     all.
+
+     Resolved and never stored, for the reason every other reading over this ledger is
+     derived: a field beside the citations would be a second answer to a question the graph
+     already settles, and the one that drifts."
+    {:signature [:=> [:catn [:w Workstream] [:seq-n :int]] [:maybe :int]]})
   (Operation live-design-seq
     "The :seq of the newest :design on a workstream, or nil when it holds none — what a
      trail record cites only where nothing names the design its work was done under.

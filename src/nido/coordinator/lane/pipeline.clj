@@ -178,6 +178,14 @@
    :review          :review
    :review-analysis :review
    :findings        :findings
+   ;; THE WORKSTREAM'S STAGES, and they keep their own names because whose they
+   ;; are is a fact about the SUBJECT rather than about the vocabulary. A landing
+   ;; is never one unit's work: `/land` collapses a reviewed stack into a single
+   ;; PR, so one :pr-opened and one :merged can carry several units, and `reopen!`
+   ;; clears :closed for the next landing while every earlier :merged stays in the
+   ;; ledger for ever. What keeps them out of a unit is that `unit-stages` does
+   ;; not run this far, not a stage that hides which of them happened — a reader
+   ;; of the workstream still wants Publication and Shipping apart.
    :pr-opened       :publication
    :ship-submitted  :shipping
    :merged          :shipping})
@@ -201,20 +209,49 @@
   [kind]
   (get stage-of-kind kind))
 
-(def arc-stages
-  "The stages of the arc, in the order a workstream travels them.
+(def workstream-stages
+  "The stages a WORKSTREAM travels, in the order it travels them.
 
-   The spine only — somewhere work arrives, does something and leaves a record
-   behind. What is NOT here is in `off-arc`, and the distinction is the reason
-   this is a vector rather than the key set of `stage-of-kind`: a halt is
-   something that happens TO a workstream, not a place it got to, and a line that
-   put it in sequence would say a blocked workstream had advanced to blocked."
+   End to end, and unchanged by the unit arc beside it. A workstream is what holds
+   the landings — several of them, once `reopen!` has cleared :closed — so a pane
+   reading one shows :publication and :shipping as stage rows with a state each,
+   and `reentry` goes on clamping an outrun landing here: a picture showing a
+   landing behind a design it no longer stands on is stale whoever owns the
+   landing.
+
+   It must name every stage `reentry/stages` can, and that is a load-bearing
+   correspondence rather than a tidiness. `arc` builds its staleness index from
+   the spine it is reading with, so a stage re-entry can name and the spine cannot
+   makes NOTHING stale — the clamp survives in `place` and silently leaves the
+   picture alone, which is the one failure a reader cannot see."
   [:intent :baseline :design :approval :implementation :review :publication :shipping])
 
-(def ^:private off-arc
-  "Stages that interrupt the arc rather than lying on it. Reported beside it and
-   never in it — see `arc-stages`."
-  #{:halt :retraction :findings})
+(def unit-stages
+  "The stages ONE UNIT OF WORK travels, from the goal to the change that serves it.
+
+   The same correspondence read to a different end, and that is the whole of the
+   distinction: `stage-of-kind` says which stage a record belongs to, and a spine
+   says which of those stages are its reader's business. A unit ends at the
+   implementation and the round that reviews it, because a LANDING is not one
+   unit's — one :pr-opened and one :merged can carry several units — so
+   :publication and :shipping lie off this spine.
+
+   What ARRIVES before a unit still reads at :intent: a ticket or a triage report
+   is the workstream's record and `unit-of` says so, but the stage it belongs to
+   is the one it produced, and there is no second place to put it until something
+   renders a unit on its own. A :triage stage of the workstream's own is what
+   would separate them, and nothing needs it yet.
+
+   Nothing renders this yet; `arc` takes it and the tests read it. The pane that
+   shows a workstream one unit at a time is a later phase, and until it exists the
+   unit reading is a vocabulary with a test for a reader rather than a surface.
+
+   No list of what is off a spine, for either spine: off is everything the spine
+   does not name. That is why these are vectors rather than the key set of
+   `stage-of-kind` — a halt is something that happens TO a unit, not a place it
+   got to, and a line that put it in sequence would say a blocked unit had
+   advanced to blocked."
+  [:intent :baseline :design :approval :implementation :review])
 
 (defn ^{:malli/schema [:=> [:cat :any [:? :map]] :any]}
   arc
@@ -227,6 +264,15 @@
    :at}` maps the pane lists one per row — so it reads nothing of its own and
    cannot come to disagree with the index it sits above. Entries of a kind this
    vocabulary does not place are dropped rather than bucketed somewhere.
+
+   `:stages` is WHICH SPINE to read the ledger along, and it is the one option
+   that changes what the answer is about rather than what it says. The default is
+   `workstream-stages`, which is what a pane over a workstream wants. Pass
+   `unit-stages` and the same entries read as one unit's arc: the stages it does
+   not name — a landing, a halt — fall to `:excursions`, because off the spine is
+   defined as whatever the spine does not name rather than listed separately. A
+   spine that listed its own exclusions would have to be kept in step with every
+   other spine, and the first one to drift would report a stage in neither place.
 
    `:visits` is the field that earns this over a list. It counts how many times
    the workstream ENTERED a stage, not how many records the stage holds, and it
@@ -268,14 +314,15 @@
    reads to answer :shipped, taken from the same place, so the two cannot come
    apart."
   ([entries] (arc entries {}))
-  ([entries {:keys [closed? re-entry]}]
+  ([entries {:keys [closed? re-entry stages] :or {stages workstream-stages}}]
   (let [staged  (keep (fn [e]
                         (when-let [st (stage-of (:kind e))]
                           (assoc e :stage st)))
                       entries)
-        spine   (remove #(off-arc (:stage %)) staged)
+        on-spine? (set stages)
+        spine   (filter #(on-spine? (:stage %)) staged)
         current (:stage (last staged))
-        idx     (zipmap arc-stages (range))
+        idx     (zipmap stages (range))
         ;; Everything from the re-entry stage upward is behind what the ledger
         ;; now stands on. nil re-entry — the ordinary case — makes this false
         ;; everywhere and the four original states are exactly what they were.
@@ -308,8 +355,8 @@
                                                   :current :done)
                                        (or closed? (past? st))      :skipped
                                        :else                        :ahead))))
-                   arc-stages)
-     :excursions (->> (filter #(off-arc (:stage %)) staged)
+                   stages)
+     :excursions (->> (remove #(on-spine? (:stage %)) staged)
                       (group-by :stage)
                       (mapv (fn [[st es]] (facet st es)))
                       (sort-by :last-seq)
@@ -503,8 +550,12 @@
     (contains? ks :design)         :designed
     verified?                      :baseline-verified
     (contains? ks :baseline)       :baselined
-    (or (contains? ks :intent)
-        (contains? ks :triage))    :intent-stated
+    ;; A :triage is NOT a goal. It proposes candidate directions and belongs to
+    ;; the workstream; a unit begins where somebody states what this change is
+    ;; for. So a triaged workstream owes an :establish-intent it did not owe
+    ;; before, which is the price of a goal that can be amended rather than only
+    ;; abandoned.
+    (contains? ks :intent)         :intent-stated
 
     ;; A workstream that exists to HOLD a reading, not to do work. The review
     ;; loop mints one per analysed run and files one analysis into it; decisions

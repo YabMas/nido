@@ -35,14 +35,20 @@
 (def ^:private stages-order
   "Arc stage order, for picking the LOWEST owed one. A copy of the spine's order
    rather than a require of it: `pipeline` depends on this namespace, so reaching
-   back for `arc-stages` would make the two mutually dependent — which is the
-   cycle Parnas warns about, where neither module hides anything from the other."
+   back for `workstream-stages` would make the two mutually dependent — which is
+   the cycle Parnas warns about, where neither module hides anything from the
+   other.
+
+   The copy is the workstream's spine and not the unit's, and that is the half
+   that has to hold. `arc` indexes staleness by the spine it reads with, so a
+   stage named here and absent there is one a re-entry marks nothing at: the
+   clamp goes on working in `place` while the picture stops showing it."
   [:intent :baseline :design :approval :implementation :review :publication :shipping])
 
 (def stages
   "The arc stages re-entry can name, innermost first.
 
-   A subset of `pipeline/arc-stages` and deliberately not all of it. Nothing here
+   A subset of `pipeline/workstream-stages` and deliberately not all of it. Nothing here
    sends a workstream back to :intent or :baseline — those are established once
    and only an explicit retraction unseats them, which `place` already reports as
    its own position. The rest are the trail stages, which a later design unseats."
