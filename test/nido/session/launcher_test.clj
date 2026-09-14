@@ -318,6 +318,45 @@
                  (slurp (str (fs/path home ".claude" "agents" "lane-malli.md")))))))
       (finally (fs/delete-tree tmp)))))
 
+(deftest boundary-hook-lands-in-the-home-not-the-worktree
+  ;; A worktree that is a symlink to its source checkout carries the checkout's
+  ;; own settings.local.json, and compose links it into the home. Written
+  ;; through that link, the hook would run for every agent started in the
+  ;; checkout and the checkout's own settings would be gone.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [{:keys [home wt]} (fake-session-home! tmp)
+            own-path (str (fs/path wt ".claude" "settings.local.json"))
+            own      {:permissions {:allow ["Bash(bb nido:test)"]}}
+            composed (fs/path home ".claude" "settings.local.json")]
+        (spit own-path (json/generate-string own))
+        (@#'launcher/compose-claude-dir! (str home) {})
+        (is (fs/sym-link? composed) "precondition: compose linked the checkout's file")
+
+        (@#'launcher/ensure-boundary-hook! (str home))
+
+        (testing "the checkout's file is untouched"
+          (is (= own (json/parse-string (slurp own-path) true))))
+        (testing "the home holds a real file carrying the checkout's settings and the hook"
+          (let [s (json/parse-string (slurp (str composed)) true)]
+            (is (not (fs/sym-link? composed)))
+            (is (= (:permissions own) (:permissions s)))
+            (is (= (str "cd '" home "' && bb nido:boundary")
+                   (get-in s [:hooks :Stop 0 :hooks 0 :command]))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest boundary-hook-gives-a-fresh-home-a-file-of-its-own
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [{:keys [home]} (fake-session-home! tmp)]
+        (@#'launcher/compose-claude-dir! (str home) {})
+        (@#'launcher/ensure-boundary-hook! (str home))
+        (let [s (json/parse-string
+                 (slurp (str (fs/path home ".claude" "settings.local.json"))) true)]
+          (is (= [:hooks] (keys s)))
+          (is (= 1 (count (get-in s [:hooks :Stop]))))))
+      (finally (fs/delete-tree tmp)))))
+
 (deftest nido-native-entries-skips-mirrored-symlinks-and-wrong-shapes
   (let [tmp (fs/create-temp-dir)]
     (try

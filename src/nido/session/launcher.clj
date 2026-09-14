@@ -934,8 +934,8 @@
   1860)
 
 (defn- boundary-settings
-  "The settings a guided session composes: one Stop hook, running nido's
-   boundary verb from the session home.
+  "`settings` with nido's Stop hook added: one entry, running nido's boundary
+   verb from the session home. Every hook `settings` already declares stays.
 
    From the HOME rather than the worktree because that is where the bb.edn
    symlink is, and `bb nido:boundary` has to resolve nido's tasks. Which
@@ -943,22 +943,32 @@
    session's cwd on stdin and folds from there, which is what keeps this
    function free of any knowledge of a workstream and keeps
    `Session :may-depend Platform, Integration, Design` intact."
-  [home]
-  {:hooks {:Stop [{:hooks [{:type    "command"
-                            :command (str "cd '" home "' && bb nido:boundary")
-                            :timeout boundary-hook-timeout-s}]}]}})
+  [settings home]
+  (update-in settings [:hooks :Stop] (fnil conj [])
+             {:hooks [{:type    "command"
+                       :command (str "cd '" home "' && bb nido:boundary")
+                       :timeout boundary-hook-timeout-s}]}))
 
 (defn- ensure-boundary-hook!
-  "Write nido's Stop hook into every composed session home.
+  "Write nido's Stop hook into a composed session home's
+   `.claude/settings.local.json`.
 
-   `settings.local.json` IS THE FREE SLOT, and it is free by measurement rather
-   than by hope. `compose-claude-dir!` symlinks every top-level entry of the
-   worktree's `.claude`, so any name a project commits is already taken — brian
-   commits `.claude/settings.json` and every one of its worktrees carries it.
+   That name is free in the usual case, by measurement rather than by hope.
+   `compose-claude-dir!` symlinks every top-level entry of the worktree's
+   `.claude`, so any name a project commits is already taken — brian commits
+   `.claude/settings.json` and every one of its worktrees carries it.
    `settings.local.json` is gitignored in all three registered repos that have
-   one, so it is untracked, so a fresh worktree never holds it and nothing
-   composes a symlink of that name. Nido writes its own file beside the
-   project's and clobbers nothing.
+   one, so a fresh worktree never holds it and nothing composes a link of that
+   name.
+
+   A worktree that is not fresh CAN hold one — a checkout's own, or a worktree
+   that is itself a symlink to the source checkout — and then the composed name
+   is a link into it. Writing to that path writes THROUGH the link: the
+   checkout's own settings are replaced, and every agent started in the checkout
+   runs this session's hook, still, after the home it names is gone. So a linked
+   file is read, the link removed, and a real file written in the home carrying
+   the checkout's settings with the hook added. A link to a file that cannot be
+   read contributes nothing, and says so.
 
    A project's own hooks still fire, and that is observed rather than assumed:
    two Stop hooks defined across the two settings files both ran, in parallel,
@@ -966,10 +976,17 @@
    Which is also why nido installing this can never keep a session going that
    its project wants stopped, or stop one its project wants going — every hook
    answers and any single request is granted."
-  [project-name session-name]
-  (let [home (state/session-home-dir project-name session-name)
-        path (str (fs/path home ".claude" "settings.local.json"))]
-    (io/write-json! path (boundary-settings (str home)))))
+  [home]
+  (let [path     (str (fs/path home ".claude" "settings.local.json"))
+        linked?  (fs/sym-link? path)
+        checkout (when linked?
+                   (try (io/read-json path)
+                        (catch Exception e
+                          (core/log-step (str "warning: unreadable " path ": "
+                                              (ex-message e)))
+                          nil)))]
+    (when linked? (fs/delete path))
+    (io/write-json! path (boundary-settings (or checkout {}) (str home)))))
 
 (defn- ensure-bb-edn-symlink!
   "Create or refresh a `bb.edn` symlink inside the session-home pointing
@@ -1068,7 +1085,7 @@
           (core/log-step (str "warning: worktree symlink: " (ex-message e)))))
       (try
         (ensure-claude-dir! project-name session-name)
-        (ensure-boundary-hook! project-name session-name)
+        (ensure-boundary-hook! home)
         (catch Exception e
           (core/log-step (str "warning: .claude symlink: " (ex-message e)))))
       (try
