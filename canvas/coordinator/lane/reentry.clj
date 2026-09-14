@@ -31,11 +31,14 @@
     "How each trail kind stands against the current design: which are current, which are behind."
     {:signature [:=> [:catn [:w Workstream] [:current :int]] :map]})
   (Operation of*
-    "Re-entry from what a caller already holds — pure, and the arity the fold uses."
-    {:signature [:=> [:catn [:w Workstream] [:design [:maybe :map]] [:standing [:maybe Standing]]]
+    "Re-entry from what a caller already holds — pure, and the arity the fold uses. The newest
+     baseline's standing is one of its inputs: a goal replaced after that survey sends the arc
+     back to the baseline rung, whether or not a design exists."
+    {:signature [:=> [:catn [:w Workstream] [:design [:maybe :map]] [:standing [:maybe Standing]]
+                      [:baseline-standing [:maybe :map]]]
                  [:maybe :map]]
      :delegates [trail-standing]})
   (Operation of
     "Re-entry for a workstream, reading what it needs."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
-     :delegates [of* workstream/read-ws standing/of-design]}))
+     :delegates [of* workstream/read-ws standing/of-design standing/of-baseline]}))

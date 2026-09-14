@@ -125,13 +125,16 @@
   "The design reading of a triage deepdive. :defect-layer is the bit that routes
    the work: :implementation means the design is right and the code doesn't honour
    it (a fix), :design means the code faithfully implements a design that is wrong
-   (a decision). :unknown is honest for a shallow route, which does not root-cause.
+   (a decision), and :intent means the design faithfully serves a GOAL that is
+   wrong — the layer below a decision, and the one a round could not report at all
+   until an intent could be superseded. :unknown is honest for a shallow route,
+   which does not root-cause.
 
    :governing cites the stance — what frames this area — because that is what makes
    :defect-layer answerable at all. :violated cites the checkable layer, because
    that is the only layer a diff can actually break."
   [:map {:closed true}
-   [:defect-layer [:enum :implementation :design :unknown]]
+   [:defect-layer [:enum :implementation :design :intent :unknown]]
    [:governing    {:optional true} [:vector string?]]
    [:violated     {:optional true} [:vector Violation]]
    [:note         {:optional true} string?]])
@@ -405,6 +408,13 @@
     :permanent (str "permanent — " why)
     nil))
 
+(def Supersedes
+  "Set when this record amends one the review found wrong. The superseded entry
+   stays in the ledger — a design is amended and cited, never silently rewritten."
+  [:map {:closed true}
+   [:seq int?]
+   [:why string?]])
+
 (def Intent
   "What the task is FOR, and what would make it done. Authored BEFORE the design
    that cites it, and closed against everything that needs the change to fill in
@@ -430,12 +440,24 @@
    [:format    [:= :intent]]
    [:goal      string?]
    [:done-when [:vector {:min 1} string?]]
-   [:context   {:optional true} string?]])
+   [:context   {:optional true} string?]
+   ;; The goal this one replaces, when it replaces one. The same {:seq :why} the
+   ;; other two foundations carry, and it arrives for the reason theirs did: a
+   ;; goal that moved mid-flight had no legal way to be recorded, so the only
+   ;; doors were a spin-out — wrong when the work stays here — or a retraction,
+   ;; which discards a design that may still be mostly right.
+   ;;
+   ;; It carries no classification of the amendment. What survives a goal change
+   ;; is not predicted by how far the goal moved: a narrowing can admit a cleaner
+   ;; interface and cost more than a widening does. So the record says what
+   ;; changed and why, and each rung above concludes for itself.
+   [:supersedes {:optional true} Supersedes]])
 
 (def IntentRelation
-  "Which entry states what this change is for. :seq may name an :intent entry or
-   an existing :triage entry — a workstream whose intent is already written down
-   does not restate it — and the append boundary refuses anything else.
+  "Which entry states what this change is for. :seq names an :intent entry, and
+   the append boundary refuses anything else — a triage report is not a goal:
+   each of its :directions is a branch a human picks BETWEEN at the gate, so one
+   report stands for several possible units rather than stating the goal of one.
 
    A citation rather than a lookup, for the reason the baseline is one: resolving
    'the latest intent' would let an entry appended later silently change what an
@@ -479,13 +501,6 @@
                  [:health-id string?]
                  [:to        [:= :declined]]
                  [:why       string?]]]])
-
-(def Supersedes
-  "Set when this record amends one the review found wrong. The superseded entry
-   stays in the ledger — a design is amended and cited, never silently rewritten."
-  [:map {:closed true}
-   [:seq int?]
-   [:why string?]])
 
 (def lenses
   "The borrowed perspectives a baseline may read a claim or a module through.
@@ -675,37 +690,11 @@
   [{:keys [health]}]
   (or (< (count health) 2) (apply distinct? (map :id health))))
 
-(def Baseline
-  "An area's current design, as it is — the yardstick every later judgement in the
-   workstream is made against. Authored BEFORE the design record and independent
-   of it, which is the whole point: an inference made by someone who already knows
-   the fix is an inference bent toward the fix.
-
-   :health is the one field that is a judgement rather than a reading, and it is
-   still an `is`: whether what is here holds, not whether it should be different.
-   It never carries a destination — routing needs the change, and a baseline by
-   someone who already knows the change is worth nothing. The design record that
-   cites this baseline is what routes them.
-
-   THE TEST FOR WHAT BELONGS HERE: every field must be fillable without knowing the
-   change. That is why nothing about effort, direction or intended shape appears —
-   those are the design record's business, and a field that needs them has crossed
-   from `is` to `ought`.
-
-   Scoped to the design that GOVERNS the behaviour, not to the files a change would
-   touch. Those differ, and the difference is where design flaws hide: the blast
-   radius is defined by the fix, while the flaw is routinely upstream of it. Hence
-   :bounded-by — the scoping decision is the first claim this record makes, and the
-   only guard against both failure modes (reading the whole codebase, and reading
-   three files and calling it a design).
-
-   Per workstream, and never written into the codebase. A checked-in current design
-   rots and then lies, which is worse than one that is absent, because it is
-   citable. /design §4 anticipates harvesting a written one from records like these
-   later; this is not that."
-  [:and
-   [:map {:closed true}
-    [:format           [:= :baseline]]
+(def ^:private baseline-fields
+  "The fields a :baseline carries in every era from the decomposition onward.
+   Spliced rather than repeated, so the pre-intent read shape and the current
+   write shape cannot drift in anything but the one field that separates them."
+  [[:format           [:= :baseline]]
     [:area             string?]
     [:bounded-by       string?]
     ;; The same boundary decision as `:bounded-by`, made RUNNABLE. `:bounded-by` says in prose
@@ -747,11 +736,54 @@
     ;; round has since repaired had no way to be told which record would
     ;; re-establish its premise. Same {:seq :why} a design already carries: an
     ;; author names what they superseded, and nobody derives it.
-    [:supersedes       {:optional true} Supersedes]]
+    [:supersedes       {:optional true} Supersedes]])
+
+(defn- baseline-shape
+  "One baseline era: the common fields plus what that era adds, under the two
+   uniqueness checks every era is held to."
+  [extra]
+  [:and (into [:map {:closed true}] (concat baseline-fields extra))
    [:fn {:error/message "health observation ids must be unique within a baseline"}
     distinct-health-ids?]
    [:fn {:error/message "claim and module ids must be unique within a baseline"}
     distinct-record-ids?]])
+
+(def BaselinePreIntent
+  "READ SHAPE — a baseline from before it named the intent it was scoped for.
+   Identical to the current shape but for that one field, which is why both are
+   built from `baseline-fields`. Not writable: a survey whose subject is
+   remembered rather than recorded is what the citation exists to end."
+  (baseline-shape []))
+
+(def Baseline
+  "An area's current design, as it is — the yardstick every later judgement in the
+   workstream is made against. Authored BEFORE the design record and independent
+   of it, which is the whole point: an inference made by someone who already knows
+   the fix is an inference bent toward the fix.
+
+   :health is the one field that is a judgement rather than a reading, and it is
+   still an `is`: whether what is here holds, not whether it should be different.
+   It never carries a destination — routing needs the change, and a baseline by
+   someone who already knows the change is worth nothing. The design record that
+   cites this baseline is what routes them.
+
+   THE TEST FOR WHAT BELONGS HERE: every field must be fillable without knowing the
+   change. That is why nothing about effort, direction or intended shape appears —
+   those are the design record's business, and a field that needs them has crossed
+   from `is` to `ought`.
+
+   Scoped to the design that GOVERNS the behaviour, not to the files a change would
+   touch. Those differ, and the difference is where design flaws hide: the blast
+   radius is defined by the fix, while the flaw is routinely upstream of it. Hence
+   :bounded-by — the scoping decision is the first claim this record makes, and the
+   only guard against both failure modes (reading the whole codebase, and reading
+   three files and calling it a design).
+
+   Per workstream, and never written into the codebase. A checked-in current design
+   rots and then lies, which is worse than one that is absent, because it is
+   citable. /design §4 anticipates harvesting a written one from records like these
+   later; this is not that."
+  (baseline-shape [[:intent IntentRelation]]))
 
 (def LoadBearingLegacy
   "READ SHAPE — a property from before the baseline moved up a level, carrying a
@@ -894,21 +926,29 @@
     distinct-health-ids?]])
 
 (def BaselineAny
-  "The READ contract for :baseline — three eras.
+  "The READ contract for :baseline — four eras.
 
    Dispatch reads the record rather than trusting a version marker: a
-   decomposition means it is not the oldest shape, and a :kind on any property
-   means it predates readings."
+   decomposition means it is not the oldest shape, a :kind on any property means
+   it predates readings, and an absent :intent means it predates the citation.
+
+   The :intent clause is LAST of the four because it is the only one that asks
+   after a field the newer shape adds rather than one an older shape still
+   carries: a legacy baseline has no :intent either, and testing for it first
+   would read every one of them as merely pre-intent and then fail on the
+   decomposition it has never had."
   [:multi {:dispatch (fn [b]
                        (cond
                          (not (contains? b :modules))            :legacy
                          (some :kind (:load-bearing b))          :kind-era
                          (not-every? :id (:load-bearing b))      :no-ids
+                         (not (contains? b :intent))             :pre-intent
                          :else                                   :current))}
-   [:current  Baseline]
-   [:no-ids   BaselineNoIds]
-   [:kind-era BaselineKindEra]
-   [:legacy   BaselineLegacy]])
+   [:current    Baseline]
+   [:pre-intent BaselinePreIntent]
+   [:no-ids     BaselineNoIds]
+   [:kind-era   BaselineKindEra]
+   [:legacy     BaselineLegacy]])
 
 (def BaselineRelation
   "How this change relates to the area's CURRENT design — the layer-2 question,
@@ -1165,7 +1205,13 @@
                             [:ref  string?]
                             [:url  {:optional true} string?]]]]
    [:design-delta {:optional true} DesignDelta]
-   [:open         {:optional true} [:vector string?]]])
+   [:open         {:optional true} [:vector string?]]
+   ;; The design this work was done under. OPTIONAL in the schema and REQUIRED at
+   ;; the append boundary whenever the workstream holds a design, because the rule
+   ;; is conditional on the ledger and a schema sees one record. Absent on every
+   ;; record written before the citation existed, which is what keeps those
+   ;; readable; `reentry/generation` is their attribution and only theirs.
+   [:design {:optional true} [:map {:closed true} [:seq int?]]]])
 
 (def Attempt
   "One thing the machinery already did about this halt, before it gave up.
@@ -1292,7 +1338,13 @@
    [:format  [:= :pr-opened]]
    [:url     string?]
    [:title   string?]
-   [:summary {:optional true} string?]])
+   [:summary {:optional true} string?]
+   ;; The design this work was done under. OPTIONAL in the schema and REQUIRED at
+   ;; the append boundary whenever the workstream holds a design, because the rule
+   ;; is conditional on the ledger and a schema sees one record. Absent on every
+   ;; record written before the citation existed, which is what keeps those
+   ;; readable; `reentry/generation` is their attribution and only theirs.
+   [:design {:optional true} [:map {:closed true} [:seq int?]]]])
 
 (def Merged
   "The landing, appended by the GitHub poller at the moment it closes the
@@ -1308,7 +1360,13 @@
    [:pr        string?]                      ; owner/repo#number — the correlation key
    [:url       string?]
    [:title     string?]
-   [:merged-at {:optional true} [:maybe string?]]])
+   [:merged-at {:optional true} [:maybe string?]]
+   ;; The design this work was done under. OPTIONAL in the schema and REQUIRED at
+   ;; the append boundary whenever the workstream holds a design, because the rule
+   ;; is conditional on the ledger and a schema sees one record. Absent on every
+   ;; record written before the citation existed, which is what keeps those
+   ;; readable; `reentry/generation` is their attribution and only theirs.
+   [:design {:optional true} [:map {:closed true} [:seq int?]]]])
 
 (def ShipSubmitted
   "The branch handed to the merge lane by `nido ship`. Carries no judgement — the
@@ -1628,7 +1686,13 @@
    [:report-path        [:maybe string?]]
    ;; Dormant extension point: no caller populates :summary yet (review-event omits it).
    ;; Kept for a future emitter wanting a one-line human note on the timeline card.
-   [:summary            {:optional true} string?]])
+   [:summary            {:optional true} string?]
+   ;; The design this work was done under. OPTIONAL in the schema and REQUIRED at
+   ;; the append boundary whenever the workstream holds a design, because the rule
+   ;; is conditional on the ledger and a schema sees one record. Absent on every
+   ;; record written before the citation existed, which is what keeps those
+   ;; readable; `reentry/generation` is their attribution and only theirs.
+   [:design {:optional true} [:map {:closed true} [:seq int?]]]])
 
 (def ReviewReportPreSettled
   "The shape :review was written in while the dispatch count was called
@@ -2221,6 +2285,95 @@
    [:at-seq  int?]
    [:note    {:optional true} string?]])
 
+(def DesignCleared
+  "A decision round found this design implementable without a person: it
+   recommended proceeding, nothing blocked it, and its own declarations owed
+   nobody a grant.
+
+   RECORDED rather than recomputed, and that is the whole of why it exists. The
+   three parts could be composed on demand from records that stay put — a
+   decision recommending :proceed, declarations frozen in the design — but the
+   composition does not survive its own ordering. A :conforms/:within design
+   starts its first round; a verdict invalidates it before the round appends;
+   the round then appends :proceed. Nothing was superseded, so a freshness test
+   accepts it — yet clearance was false before the append, because no decision
+   existed, and false after it, because an invalidating verdict stays unanswered
+   until an APPROVAL names the design and a proceeding decision is not one. The
+   composition reports a moment that never happened.
+
+   So the answer is appended when it is reached, exactly as a grant is, and
+   every later reader asks a citation instead of recomputing a predicate.
+
+   The position is NOT STORED. The reading and the write are two operations with
+   a ledger between them, so the append goes through `append-entry-at!` with the
+   position `standing` was read at: an unmoved ledger has an unmoved answer, and
+   one that moved takes the position and the write is refused rather than
+   recording a clearance for a design something has since reached. What that
+   makes true is that the entry's own place in the ledger IS the snapshot — a
+   stored copy would be a second one the append never compares, free to
+   disagree with the position it actually guarded."
+  [:map {:closed true}
+   [:format [:= :design-cleared]]
+   [:design [:map {:closed true} [:seq int?]]]])
+
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  owes-a-person?
+  "Does this design record, on its own, say something high-level is at stake?
+
+   Over the RECORD ALONE and never the ledger, which is what lets the append
+   boundary and `standing` ask it without one calling the other. Two
+   declarations, both already required and both already carrying their
+   obligations: `:challenges` against the project stance needs a note,
+   `:revisit` against the baseline must name what it `:breaks`. A change that
+   declares neither is saying it lands on an existing extension point and adds
+   no commitment — which is the case a person was being asked about for no
+   reason.
+
+   The declarations decide whether a GRANT is owed. They never decide whether
+   the decision round runs: that round is what falsifies them against the
+   record, and a design no round has judged is not cleared by saying so about
+   itself."
+  [design]
+  (boolean (or (= :challenges (get-in design [:standing :relation]))
+               (= :revisit    (get-in design [:baseline :relation])))))
+
+(def ^:private advisory-check
+  "The one derived check that may not block, and the reason it is the only one.
+
+   `relation-honest`, `goal-served` and `routing-coherent` judge what the change
+   COMMITS TO. `decomposable` judges how the work will be sliced for review — and
+   layers do not survive: the stack is collapsed into one commit before it lands,
+   so a bad cut costs the attention of the reviewers reading it now and nothing
+   afterwards. By the time a round can report the cut is wrong, that attention is
+   already spent, and another round of re-cutting spends more than it saves.
+
+   Measured before this existed: `decomposable` was 143 of the 357 findings the
+   design round had produced, it was the sole complaint in 41 of 193
+   finding-bearing rounds, and it was the only check still open at the terminal
+   round of 16 of the 61 runs that ended badly. Two prompt-level bars against
+   over-splitting were already in place through all of that, which is why the
+   rule is enforced and not only asked for."
+  :decomposable)
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
+  proceeds?
+  "Does this design decision let its design proceed?
+
+   It does when it recommends :proceed, and when everything the round found
+   broken is the advisory check, whatever it recommended — a complaint about the
+   cut alone may not hold a design. False when nothing broke on a round that did
+   not say :proceed: a clean round reads as its own recommendation.
+
+   ONE definition, over the record alone, for every reader that asks it: the
+   judge that ends the round, the clearance writer and the boundary that admits
+   its record, the position fold, and the gate that offers a grant. A reader
+   testing the recorded :recommend instead is how an advisory-only design came to
+   be parked for a person whose grant nothing then accepted."
+  [decision]
+  (let [broken (filter #(= :broken (:status %)) (:checks decision))]
+    (boolean (or (= :proceed (:recommend decision))
+                 (and (seq broken) (every? #(= advisory-check (:check %)) broken))))))
+
 (def event-schemas
   "Entry :kind → its Malli schema. Drives ledger-boundary validation + rendering.
    A :kind absent here is stored as verbatim markdown (legacy / freeform)."
@@ -2248,7 +2401,8 @@
    :improvement-claim-reserved ImprovementClaimReserved
    :proposed-ticket          ProposedTicket
    :retraction               Retraction
-   :design-approved          DesignApproved})
+   :design-approved          DesignApproved
+   :design-cleared           DesignCleared})
 
 (def read-schemas
   "Kinds whose READ contract is wider than their write contract, because records

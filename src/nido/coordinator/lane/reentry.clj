@@ -35,18 +35,26 @@
 (def ^:private stages-order
   "Arc stage order, for picking the LOWEST owed one. A copy of the spine's order
    rather than a require of it: `pipeline` depends on this namespace, so reaching
-   back for `arc-stages` would make the two mutually dependent — which is the
-   cycle Parnas warns about, where neither module hides anything from the other."
-  [:intent :baseline :design :approval :implementation :review :publication :shipping])
+   back for `workstream-stages` would make the two mutually dependent — which is
+   the cycle Parnas warns about, where neither module hides anything from the
+   other.
+
+   The copy is the workstream's spine and not the unit's, and that is the half
+   that has to hold. `arc` indexes staleness by the spine it reads with, so a
+   stage named here and absent there is one a re-entry marks nothing at: the
+   clamp goes on working in `place` while the picture stops showing it."
+  [:intent :baseline :design :approval :implementation :publication :shipping])
 
 (def stages
   "The arc stages re-entry can name, innermost first.
 
-   A subset of `pipeline/arc-stages` and deliberately not all of it. Nothing here
-   sends a workstream back to :intent or :baseline — those are established once
-   and only an explicit retraction unseats them, which `place` already reports as
-   its own position. The rest are the trail stages, which a later design unseats."
-  [:design :approval :implementation :review :publication :shipping])
+   A subset of `pipeline/workstream-stages` and deliberately not all of it.
+   Nothing here sends a workstream back to :intent — that is established once and only an
+   explicit retraction unseats it, which `place` already reports as its own
+   position. :baseline is named for one reason only: the goal the newest survey
+   was scoped for was replaced. The rest are the trail stages, which a later
+   design unseats."
+  [:baseline :design :approval :implementation :publication :shipping])
 
 (def trail-kinds
   "The entry kinds whose stage `place` passes by presence alone, each with the arc
@@ -57,7 +65,10 @@
    no entry here is a stage that can be passed and never un-passed, which is the
    whole defect this exists to close."
   {:implementation-completed :implementation
-   :review                   :review
+   ;; The implementation's review passes the stage it reviews, now that it folds
+   ;; into it. A stale implementation takes its review with it, which is what
+   ;; sending the work back to :implementation already meant.
+   :review                   :implementation
    :pr-opened                :publication
    :merged                   :shipping})
 
@@ -65,11 +76,18 @@
   "The :seq of the newest design appended BEFORE `n` — which design a record
    written at `n` was made under.
 
-   Positional, and that is a seam rather than an oversight: `:implementation-
-   completed`, `:review` and `:pr-opened` cite nothing at all, so append order is
-   the only thing that can attribute them. It is the same evidence a person
-   reading the timeline would use, and the answer rides on the result so a reader
-   can disagree with it.
+   THE PRE-CONTRACT READING, and only that. A trail record now NAMES the design
+   it was made under and the index carries that citation as `:under`, so append
+   order is no longer evidence about anything written since. What remains is
+   every record written before the citation existed, which carries none and can
+   be attributed no other way — so this is kept for them, and no writer may
+   produce a record it applies to.
+
+   Positional, which is what made it a seam while it was the only answer: it
+   reports a fact about the ORDER entries were written in rather than about what
+   the records say. Over the pre-contract region that is the same evidence a
+   person reading the timeline would use, and the answer rides on the result so a
+   reader can disagree with it.
 
    nil when no design precedes `n`. That is a refusal, not a default: work done
    before any design exists cannot be attributed to one, and calling it stale
@@ -101,9 +119,14 @@
                      (map :seq)
                      sort
                      vec)
+        ;; The citation first, the walk only for rows that predate it. The two
+        ;; cannot disagree: a row carrying `:under` was written under this
+        ;; contract, where append order stopped being evidence, and one without
+        ;; it was written before the field existed at all.
         graded  (into []
                       (keep (fn [e]
-                              (when-let [g (generation designs (:seq e))]
+                              (when-let [g (or (:under e)
+                                               (generation designs (:seq e)))]
                                 {:kind (:kind e) :seq (:seq e) :under g})))
                       (filter #(trail-kinds (:kind %)) (:entries w)))]
     {:current (into #{} (comp (filter #(>= (:under %) current)) (map :kind)) graded)
@@ -113,11 +136,12 @@
      ;; as rotten.
      :stale   (into [] (filter #(< (:under %) current)) graded)}))
 
-(defn ^{:malli/schema [:=> [:cat :Workstream [:maybe :map] [:maybe :Standing]] [:maybe :map]]}
+(defn ^{:malli/schema [:=> [:cat :Workstream [:maybe :map] [:maybe :Standing] [:maybe :map]]
+                        [:maybe :map]]}
   of*
   "Re-entry from what a caller already holds: the workstream record, its latest
-   design, and that design's standing. Pure, and the arity the position fold
-   uses.
+   design, that design's standing, and the standing of its newest baseline
+   (`standing/of-baseline`). Pure, and the arity the position fold uses.
 
    Split from `of` for a measured reason. `pipeline/of` already reads the
    workstream and already runs a standing closure — ~4ms a row, ~190ms for a
@@ -125,34 +149,58 @@
    most expensive part of a render to answer a question the caller had the inputs
    for.
 
-   Returns {:stage :trail :because} or nil. `:because` is the standing's own
-   :blocked map where standing is what decided, so a surface renders one
-   vocabulary of reasons rather than a translation of it. `:trail` is the trail
-   kinds that DO still stand — what the position fold may still read — and it is
-   empty whenever the design or the approval is what is owed, because nothing
-   above the approval may be reported at all."
-  [w design st]
+   Returns {:stage :trail :because (:indeterminate?)} or nil. `:because` is the
+   standing's own :blocked map where standing is what decided, so a surface
+   renders one vocabulary of reasons rather than a translation of it. `:trail` is
+   the trail kinds that DO still stand — what the position fold may still read —
+   and it is empty whenever the baseline, the design or the approval is what is
+   owed, because nothing above the approval may be reported at all.
+   `:indeterminate?` marks the answer standing could not derive, which the fold
+   must not read as a design that is merely owed again."
+  [w design st bst]
   (cond
+    ;; Indeterminate outranks the rest: standing could not be derived, and it
+    ;; fails closed rather than waving a workstream through on a ledger nobody
+    ;; can read.
+    (and design (:indeterminate? st))
+    {:stage :design :trail #{} :because (:blocked st) :indeterminate? true}
+
+    ;; A judgement somebody derived about THIS design keeps its own answer.
+    ;; `standing` orders both above a moved goal for that reason, and the fold
+    ;; reports each as a position of its own.
+    (and design (#{:design-retracted :design-invalidated} (get-in st [:blocked :reason])))
+    {:stage :design :trail #{} :because (:blocked st)}
+
+    ;; The survey is owed before anything written over it, a design or none: a
+    ;; goal replaced after the newest baseline was scoped leaves that baseline
+    ;; unable to be reviewed or designed over, so the arc comes back to the
+    ;; baseline rung. Not to the design that cites it, and not to the
+    ;; verification of the survey scoped for the old goal — the boundary refuses
+    ;; both. An indeterminate baseline standing blocks nothing here: it is never
+    ;; :verified?, which is the fail-closed half, and routing on a ledger nobody
+    ;; can read would be advancing on a default.
+    (= :goal-superseded (get-in bst [:blocked :reason]))
+    {:stage :baseline :trail #{} :because (:blocked bst)}
+
     ;; No design, nothing to be standing on, and nothing to come back to. A
     ;; workstream this early is placed by its record trail exactly as before.
     (nil? design) nil
 
-    ;; Indeterminate outranks the rest: standing could not be derived, and it
-    ;; fails closed rather than waving a workstream through on a ledger nobody
-    ;; can read.
-    (:indeterminate? st)
-    {:stage :design :trail #{} :because (:blocked st)}
-
     (not (:decidable? st))
     {:stage :design :trail #{} :because (:blocked st)}
 
-    (nil? (:approved-by st))
+    ;; A clearance satisfies this as a grant does. Without that, a conforming
+    ;; design that cleared and was implemented reads with an EMPTY trail, so
+    ;; `place` ignores the completed implementation, returns :design-cleared
+    ;; again, and points the next action back at :implement for ever — looping at
+    ;; the gate it was supposed to have skipped.
+    (and (nil? (:approved-by st)) (nil? (:cleared-by st)))
     {:stage :approval
      :trail #{}
      :because {:reason :not-approved
                :seq (:seq design)
-               :detail (str "no :design-approved names the design at entry "
-                            (:seq design))}}
+               :detail (str "neither a :design-approved nor a :design-cleared names"
+                            " the design at entry " (:seq design))}}
 
     :else
     (let [{:keys [current stale]} (trail-standing w (:seq design))
@@ -189,5 +237,7 @@
    path should use `of*` with what it already has."
   [project ws-id]
   (when-let [w (ws/read-ws project ws-id)]
-    (let [d (ws/latest-entry project ws-id :design)]
-      (of* w d (when d (standing/of-design project ws-id d))))))
+    (let [d (ws/latest-entry project ws-id :design)
+          b (ws/latest-entry project ws-id :baseline)]
+      (of* w d (when d (standing/of-design project ws-id d))
+           (when b (standing/of-baseline project ws-id b))))))

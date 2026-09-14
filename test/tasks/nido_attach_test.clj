@@ -21,7 +21,10 @@
       (finally (fs/delete-tree tmp)))))
 
 (def ^:private a-baseline
-  {:format :baseline :area "a" :bounded-by "b" :shape "s"
+  ;; :intent names entry 1: these fixtures append the goal to a fresh
+  ;; workstream before the survey, which is the order the boundary now requires.
+  {:format :baseline :intent {:seq 1}
+   :area "a" :bounded-by "b" :shape "s"
    :modules [{:id "m" :module "m" :hides "h" :interface "i"}]
    :composition "c"
    :load-bearing [{:id "c1" :property "p" :falsified-by "f"}]

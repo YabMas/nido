@@ -1378,6 +1378,8 @@
         "collapsed, because a record's line breaks come from the EDN a human typed")))
 
 (def ^:private an-arc
+  ;; The workstream's spine, which is the one a pane draws: intent through
+  ;; shipping, each stage's own review folded into the stage it reviews.
   {:stages [{:stage :intent  :state :done    :entries 1  :visits 1 :last-seq 1 :seqs [1]}
             {:stage :baseline :state :done   :entries 4  :visits 2 :last-seq 8
              :seqs [2 3 7 8]}
@@ -1385,7 +1387,6 @@
              :seqs [9 10]}
             {:stage :approval :state :skipped :entries 0 :visits 0}
             {:stage :implementation :state :ahead :entries 0 :visits 0}
-            {:stage :review  :state :ahead   :entries 0  :visits 0}
             {:stage :publication :state :ahead :entries 0 :visits 0}
             {:stage :shipping :state :ahead  :entries 0  :visits 0}]
    :excursions [{:stage :halt :entries 2 :last-seq 6 :seqs [5 6]}]})
@@ -1404,7 +1405,7 @@
   ;; shape unreadable across two of them.
   (let [html (views/workstream-pane (assoc a-pane :arc an-arc) {})]
     (doseq [s ["Intent" "Baseline" "Design" "Approval" "Implementation"
-               "Review" "Publication" "Shipping"]]
+               "Publication" "Shipping"]]
       (is (str/includes? html s) (str s " has a row")))))
 
 (deftest a-revisited-stage-says-so-and-a-once-through-stage-does-not

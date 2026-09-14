@@ -161,11 +161,50 @@
      would expect — the ref is load-bearing, so it always landed; the ledger event was merely
      informative, so it was dropped on more than half the PRs. One fact, one call.
 
+     The event cites the design the PUBLISHED work was done under — the one the publisher names
+     in `:opts`, else the one an implementation record listing the PR names — and never the
+     newest design, which may have been appended while that work was being done. Where nothing
+     names one on a ledger holding a design, the ref is stamped and the event skipped rather
+     than guessed.
+
      `:opts` is OPTIONAL rather than a second arity: the two-arity form is a defaults chain, and
      `[:?]` describes the contract where `[:function …]` would describe the implementation."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:ref :map]
                             [:opts [:? [:maybe :map]]]] Workstream]
      :delegates [read-ws write! append-entry!]})
+  (Operation unit-of
+    "The unit an entry belongs to, addressed by its root goal's `:seq` — or nil where the
+     entry is the WORKSTREAM's rather than any unit's.
+
+     A workstream may hold more than one goal-to-implementation unit, and this is what tells
+     them apart. The unit is the citation closure rooted at a goal — an `:intent`, the one
+     kind a baseline's and a design's `:intent` may cite: a baseline cites its goal, a design
+     cites its baseline and its goal, an implementation and a review cite the design they were
+     made under, and an intent citing `:supersedes` continues its unit while one citing
+     nothing opens another. The append boundary refuses a record whose citations reach more
+     than one, so the partition is established by CONSTRUCTION rather than asserted here.
+
+     A landing is outside the closure, not missing from it. A `:pr-opened` and a `:merged`
+     NAME the design whose work they carry and stand on none of it, so they reach no root and
+     are the workstream's — as are a triage, a note and a blocker, which stand on nothing at
+     all.
+
+     Resolved and never stored, for the reason every other reading over this ledger is
+     derived: a field beside the citations would be a second answer to a question the graph
+     already settles, and the one that drifts."
+    {:signature [:=> [:catn [:w Workstream] [:seq-n :int]] [:maybe :int]]})
+  (Operation holds-design?
+    "Whether a workstream holds a :design at all — a PRESENCE CHECK, and never a citation
+     source.
+
+     Every trail record is about work, and cites what that work named: a PR the design its
+     publisher names, a merge the PR's own records, a review the design its rounds judged
+     against. When nothing names one the writer skips the record and says so, because append
+     order is not evidence of which design work was done under; all it needs to know is whether
+     a citation was owed at all. A boolean on purpose, so no writer can read it as `which
+     design`. PUBLIC because the :pr-opened writer, the merge poller and the review loop each
+     ask it, and three implementations of `does this ledger hold a design` would drift."
+    {:signature [:=> [:catn [:w Workstream]] :boolean]})
   (Operation engagement
     "Whether anyone is engaged with this workstream, from its own sessions."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :keyword]

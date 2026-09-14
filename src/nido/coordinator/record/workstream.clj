@@ -274,10 +274,14 @@
    the check belongs here — the one place that holds both the record and the
    ledger it is joining.
 
-   The intent citation accepts two kinds: an :intent entry, or a :triage entry
-   for a workstream whose intent was already written down when the ticket was
-   triaged. Anything else is refused, so a design can never cite a review, a
-   blocker or a baseline as the thing it is for.
+   The intent citation accepts ONE kind. A triage report is not a goal: it
+   proposes candidate directions — `report/Direction` calls each one a branch a
+   human picks BETWEEN — so one report stands for several possible units, and
+   reading it as one unit's goal collapses a fan-out into a scalar. It belongs to
+   the workstream, which is what holds the units a triage gives rise to.
+
+   Anything else is refused too, so a design can never cite a review, a blocker or
+   a baseline as the thing it is for.
 
    Rejecting a dangling ref matters more than it looks: the baseline is the whole
    yardstick, and a :seq pointing at nothing reads downstream exactly like one
@@ -297,14 +301,14 @@
         (check-routes-total! (read-entry-at w n) record))
       (when-let [n (get-in record [:intent :seq])]
         (let [e (->> (:entries w) (filter #(= n (:seq %))) first)]
-          (when-not (#{:intent :triage} (:kind e))
+          (when-not (= :intent (:kind e))
             (throw (ex-info (str "Design cites intent entry " n
-                                 ", which is neither an :intent nor a :triage "
-                                 "entry on this workstream")
+                                 ", which is not an :intent entry on this "
+                                 "workstream")
                             {:seq n
                              :kind (:kind e)
                              :citable (->> (:entries w)
-                                           (filter #(#{:intent :triage} (:kind %)))
+                                           (filter #(= :intent (:kind %)))
                                            (mapv (juxt :seq :kind)))}))))))))
 
 (defn- cites!
@@ -335,14 +339,18 @@
 (defn- check-standing-citations!
   "Every edge `standing` walks resolves to an entry of the kind it expects.
 
-   Four of them, and they arrived with this change: a :retraction's target and
-   a :design-approved's design are new kinds entirely, while a design's and a
-   baseline's :supersedes were both writable and neither was ever checked. That
-   last pair is why this exists at all — :supersedes was the one citation in
-   the ledger nothing had an opinion about, recorded in the baseline this change
-   was designed against as an invisibly-incomplete health observation."
+   Five of them. A :retraction's target and a :design-approved's design are
+   kinds of their own; a design's and a baseline's :supersedes were both
+   writable and neither was ever checked — that pair is why this exists at all,
+   :supersedes being the one citation in the ledger nothing had an opinion
+   about. A baseline's :intent is the fifth, and it accepts what a design's
+   does: an :intent entry and nothing else.
+
+   A :retraction still reaches a :triage, and that is not an exception to the
+   rule above. Retracting says a RECORD is untrue, which a triage report can be;
+   citing one as a goal says a unit is FOR it, which it cannot be."
   [w kind payload]
-  (when (#{:retraction :design-approved :design :baseline} kind)
+  (when (#{:retraction :design-approved :design-cleared :design :baseline :intent} kind)
     (let [r (edn/read-string payload)]
       (case kind
         :retraction      (cites! w r [:retracts :seq]
@@ -351,8 +359,246 @@
         :design-approved (cites! w r [:design :seq] #{:design} "Approval")
         :design          (cites! w r [:supersedes :seq] #{:design}
                                  "Design :supersedes")
-        :baseline        (cites! w r [:supersedes :seq] #{:baseline}
-                                 "Baseline :supersedes")))))
+        :baseline        (do (cites! w r [:supersedes :seq] #{:baseline}
+                                     "Baseline :supersedes")
+                             (cites! w r [:intent :seq] #{:intent}
+                                     "Baseline :intent"))
+        :intent          (cites! w r [:supersedes :seq] #{:intent}
+                                 "Intent :supersedes")
+        :design-cleared  (cites! w r [:design :seq] #{:design} "Clearance")))))
+
+(defn- superseded-goals
+  "Every :intent :seq that a later :intent says it replaces.
+
+   Read off the INDEX-resolved entries rather than a walk, because one hop is
+   all this question needs: a chain is built one append at a time and every link
+   was refused unless its target was live, so a superseded tip can only be
+   reached by a citation written before the replacement existed — and that
+   citation is exactly what the sequence guard in `standing` unseats on the read."
+  [w]
+  (into #{} (keep #(get-in (read-entry-at w (:seq %)) [:supersedes :seq]))
+        (filter #(= :intent (:kind %)) (:entries w))))
+
+(def ^:private rests-on
+  "Entry kind → the citations a record of that kind RESTS on, as paths into it.
+
+   A baseline's goal; a design's baseline and goal; and the subject of every
+   record that judges a rung of the arc. A :review names its design only where
+   it carries one.
+
+   Not every citation. :supersedes names what a record REPLACES, and a baseline
+   written because the goal moved supersedes one whose ground moved with it —
+   walking that edge would refuse the one append the amendment exists to make.
+   The trail's facts — :implementation-completed, :pr-opened, :merged — record
+   that something happened rather than that something holds, so they are absent."
+  {:baseline        [[:intent :seq]]
+   :design          [[:baseline :seq] [:intent :seq]]
+   :baseline-review [[:baseline-seq]]
+   :design-decision [[:design-seq]]
+   :design-verdict  [[:design-seq]]
+   :design-approved [[:design :seq]]
+   :review          [[:design :seq]]
+   :design-cleared  [[:design :seq]]})
+
+(defn- goals-reached
+  "Every goal — an :intent, and only an :intent — that `record`, of
+   `kind`, rests on through `rests-on`, however many citations away.
+
+   Follows the kind of the entry each citation resolves to, so a design reached
+   from an approval is walked as a design. A dangling or unreadable entry reaches
+   nothing, which `cites!` has already refused on the edges it checks."
+  [w kind record]
+  (loop [todo  (vec (keep #(get-in record %) (rests-on kind)))
+         seen  #{}
+         goals #{}]
+    (if-let [n (peek todo)]
+      (let [todo (pop todo)
+            k    (->> (:entries w) (filter #(= n (:seq %))) first :kind)]
+        (cond
+          (contains? seen n)       (recur todo seen goals)
+          (= :intent k)            (recur todo (conj seen n) (conj goals n))
+          :else
+          (recur (into todo (keep #(get-in (read-entry-at w n) %) (rests-on k)))
+                 (conj seen n) goals)))
+      goals)))
+
+(defn- check-goal-is-live!
+  "Nothing a record stands on stands on a goal something has replaced.
+
+   The other half of the amendment rule, and it closes the direction the
+   sequence guard cannot. `standing` unseats records that ALREADY EXIST when a
+   goal moves, by noticing a replacement appended after them; it says nothing
+   about a record written AFTERWARDS. Append the amendment first and a design or
+   a survey may still name the goal it replaced — every citation resolves, every
+   kind is right, nothing postdates it, so nothing unseats it and it stands on a
+   goal nobody holds.
+
+   That is an authoring error rather than a propagation failure, so it is
+   refused where authoring errors are refused. An :intent's own :supersedes is
+   held to the same rule for a different reason: an amendment naming an
+   already-replaced tip forks the chain and leaves the walk two answers to take.
+
+   However many citations away, which is why this walks `goals-reached` rather
+   than reading the record's own goal: a design naming the live goal over a
+   baseline scoped for the replaced one, or a review of that baseline, stands on
+   the replaced goal exactly as much. A baseline that is itself superseded is not
+   refused here — that is a reading `standing` reports, not an authoring error.
+
+   Refused over the WHOLE ledger rather than its recent end, which this rule can
+   afford to claim because no intent on any ledger is superseded today — the
+   field arrives with this change, so every supersession that will ever exist is
+   appended under it."
+  [w kind payload]
+  (when (or (= :intent kind) (contains? rests-on kind))
+    (let [r     (edn/read-string payload)
+          goals (if (= :intent kind)
+                  (keep identity [(get-in r [:supersedes :seq])])
+                  (goals-reached w kind r))]
+      (when (seq goals)
+        (let [dead (superseded-goals w)]
+          (when-let [n (some dead goals)]
+            (throw (ex-info (str (str/capitalize (name kind)) " stands on the goal at entry "
+                                 n ", which a later intent has replaced"
+                                 (when (= :intent kind)
+                                   " — an amendment naming an already-replaced goal forks the chain"))
+                            {:seq n :kind kind :superseded (vec (sort dead))}))))))))
+
+(def ^:private trail-kinds
+  "The records that say something HAPPENED, each of which names the design it
+   happened under. The same four `reentry/trail-kinds` attributes, and the two
+   lists have to stay in step: a kind that gains a monotone clause there and no
+   citation here is a kind attributed by append order for ever."
+  #{:implementation-completed :review :pr-opened :merged})
+
+(defn- check-trail-attribution!
+  "A trail record names the design it was made under, whenever there is one to
+   name.
+
+   CONDITIONAL ON THE LEDGER, which is why it is here and not in the schema: a
+   workstream that holds no design has nothing for the record to cite, and work
+   done before any design exists cannot be attributed to one. Calling that a
+   violation would be inventing a generation to blame — the same refusal
+   `reentry/generation` already makes by answering nil.
+
+   Where a design DOES exist the citation is required, because the alternative is
+   what the ledger did before: `:implementation-completed`, `:review`,
+   `:pr-opened` and `:merged` cited nothing, so append order was the whole of the
+   evidence. That is a fact about how the ledger was written rather than about
+   what the records say, and it cannot survive a workstream holding more than one
+   unit — `:merged` least of all, since `reopen!` clears `:closed` for the next
+   landing and every earlier one stays in the ledger for ever."
+  [w kind payload]
+  (when (contains? trail-kinds kind)
+    (let [designs (filter #(= :design (:kind %)) (:entries w))
+          r       (edn/read-string payload)]
+      (when (and (seq designs) (nil? (get-in r [:design :seq])))
+        (throw (ex-info (str "A " (name kind) " must name the design it was made"
+                             " under — this workstream holds " (count designs)
+                             ", so append order is not evidence")
+                        {:kind kind :designs (mapv :seq designs)})))
+      ;; Only the REQUIREMENT is conditional on a design existing. A citation
+      ;; that is supplied must resolve whatever the ledger holds, or a record on
+      ;; a design-less ledger carries an invented :under that `trail-standing`
+      ;; later reads as current.
+      (cites! w r [:design :seq] #{:design}
+              (str (str/capitalize (name kind)) " :design")))))
+
+(def ^:private stands-on
+  "Which citation on each kind reaches the record it stands on.
+
+   A record belongs to the unit its citations reach, so this is the whole of the
+   walk's knowledge about shape. A kind absent here reaches nothing, and every
+   absent kind roots nowhere — a `:triage`, a `:note`, a `:blocker`, a
+   `:review-analysis`. They are the WORKSTREAM's rather than any unit's, and
+   inventing a root for them would put records in units their authors never
+   placed them in.
+
+   THE LANDINGS ARE ABSENT TOO, by a different route to the same answer. A
+   `:pr-opened` and a `:merged` NAME the design whose work they carry and stand
+   on none of it: `/land` collapses a reviewed stack into a SINGLE PR, so one
+   landing may carry work from several units, and a citation that names is not
+   one that rests. Walking it here would seat a landing in whichever unit its
+   citation happened to reach while the arc reports it as the workstream's — one
+   record with two owners. `rests-on` draws the same line between naming and
+   resting for the same two kinds."
+  {:intent          [[:supersedes :seq]]
+   :baseline        [[:intent :seq] [:supersedes :seq]]
+   :design          [[:baseline :seq] [:intent :seq] [:supersedes :seq]]
+   :baseline-review [[:baseline-seq]]
+   :design-decision [[:design-seq]]
+   :design-verdict  [[:design-seq]]
+   :design-approved [[:design :seq]]
+   :design-cleared  [[:design :seq]]
+   :implementation-completed [[:design :seq]]
+   :review          [[:design :seq]]})
+
+(defn- roots-of
+  "Every root this record reaches, as a set. A root is a goal citing no other —
+   an :intent that supersedes nothing. `#{}` means the record reaches none.
+
+   The same ONE kind a baseline's and a design's :intent may cite, and the two
+   sets have to stay equal. A goal kind the citation admits and this walk does
+   not root would make every arc written from it rootless; one this walk roots
+   and the citation refuses could never be reached at all.
+
+   ONE WALK WITH THREE ANSWERS — one root, several, or none — rather than a
+   rule beside the closure that could disagree with it about the same record.
+   Several is refused at the boundary. NONE means the record is the
+   workstream's: a triage report, a note, a blocker, a landing that names a
+   design without standing on it, or a record descending from a design written
+   before the citation existed.
+
+   Bounded by the entry count, so a citation cycle cannot spin here."
+  [w record kind]
+  (letfn [(step [k rec depth]
+            (if (or (nil? rec) (neg? depth))
+              #{}
+              (let [paths (get stands-on k)
+                    targets (keep #(get-in rec %) paths)]
+                (if (and (= :intent k) (empty? targets))
+                  ;; A goal citing nothing IS a root, and :intent is the only
+                  ;; kind that can be one.
+                  #{(:seq rec)}
+                  (into #{}
+                        (mapcat (fn [n]
+                                  (when-let [e (->> (:entries w)
+                                                    (filter #(= n (:seq %))) first)]
+                                    (step (:kind e) (read-entry-at w n) (dec depth)))))
+                        targets)))))]
+    (step kind record (count (:entries w)))))
+
+(defn- check-one-root!
+  "A record's citations agree on at most one unit.
+
+   Reaching a root is not the same as reaching exactly one, and the difference is
+   the whole partition. A design may cite one intent while the baseline beneath
+   it was scoped for an unrelated other: every citation resolves, every kind is
+   right, and the record roots in two units at once. Nothing else can see that,
+   because every other check reads one citation at a time.
+
+   AT MOST ONE admits NONE, and none is not a defect. A decision or a trail
+   record naming a design from before `:intent` was required cites a record that
+   roots nowhere and inherits that — refusing it would strand every legacy design
+   mid-arc, unable to receive the decision its own rung is owed. Such a record is
+   in the workstream's PRE-CONTRACT REGION, addressed by the workstream because
+   no :seq addresses it.
+
+   Rootlessness is INHERITED and never spontaneous ACROSS THE KINDS THIS CHECKS,
+   which is what makes that a boundary rather than a leak: an intent citing
+   nothing is its own root, a baseline and a design must cite one, and everything
+   in the table reaches whatever it stands on. So a rootless record written today
+   descends from one written before the contract, and no new unit is ever opened
+   there. A kind outside the table — a note, a blocker, a landing — is rootless
+   on its own account and is never asked, because it belongs to the workstream
+   rather than to a unit that could be in doubt."
+  [w kind payload]
+  (when (contains? stands-on kind)
+    (let [roots (roots-of w (edn/read-string payload) kind)]
+      (when (< 1 (count roots))
+        (throw (ex-info (str "This " (name kind) " reaches " (count roots)
+                             " goals — " (str/join ", " (sort roots))
+                             " — so it belongs to no single unit of work")
+                        {:kind kind :roots (vec (sort roots))}))))))
 
 (defn- check-seam-phase-ref!
   "A seam that says a phase closes it names that phase by its :claim. Malli sees
@@ -380,9 +626,56 @@
                          :named        (mapv :phase orphan)
                          :phases       (vec claims)}))))))
 
+(defn- check-clearance-owed!
+  "A clearance is admitted only on the evidence that makes it one: the latest
+   decision naming its design recommended proceeding, and that design's own
+   declarations owe nobody a grant.
+
+   Asked of entries this lock can see and never of `standing`, which reads this
+   namespace. The third part — nothing blocked the design when it was cleared —
+   IS standing's answer, read by the writer at a position it hands
+   `append-entry-at!` — never stores — and that compare is what keeps the
+   reading true at the write. That is why `append-entry!`
+   refuses the kind outright: every reader that admits a design on a clearance
+   naming it trusts this record, so one written with no round behind it, or
+   over a design that owes a person the grant, is work nobody judged.
+
+   Fails closed on a decision nobody can parse, since the one unread may be the
+   latest and may not proceed."
+  [w kind payload]
+  (when (= :design-cleared kind)
+    (let [n         (get-in (edn/read-string payload) [:design :seq])
+          design    (read-entry-at w n)
+          decisions (->> (:entries w)
+                         (filter #(= :design-decision (:kind %)))
+                         (mapv #(read-entry-at w (:seq %))))
+          decision  (->> decisions (filter #(= n (:design-seq %))) last)
+          refuse!   (fn [why] (throw (ex-info (str "Clearance names the design at entry "
+                                                   n ", " why)
+                                              {:design n :decision (:seq decision)})))]
+      (cond
+        (or (nil? design) (some nil? decisions))
+        (refuse! "and an entry it rests on cannot be read")
+
+        (nil? decision)
+        (refuse! "which no decision round has judged")
+
+        (not (report/proceeds? decision))
+        (refuse! (str "whose latest decision recommends " (name (:recommend decision))
+                      " and does not proceed"))
+
+        (report/owes-a-person? design)
+        (refuse! "whose declarations owe a person the grant")))))
+
 (defn- check-implementation-approved!
-  "Refuse an implementation record on a workstream whose live design nobody
-   granted.
+  "Refuse an implementation record on a workstream whose live design nothing
+   cleared — neither a round nor a person.
+
+   TWO ways a design becomes implementable, because a grant is owed only when
+   the design says something high-level is at stake. A `:design-cleared` is a
+   round having found it implementable without one; a `:design-approved` is a
+   person granting it. Either satisfies this floor, and a design carrying
+   neither has had nobody and nothing say it may be built.
 
    ONLY when the workstream HAS a design, and that guard is the whole of the
    rule's aim. Measured across the live ledgers: of the 18 implementation
@@ -415,20 +708,102 @@
    this adds is the floor underneath that — the pipeline governs what nido
    TELLS a session to do, and a person who implements anyway can still be
    refused the record that would carry the arc past the grant they never got."
-  [w kind]
+  [w kind payload]
   (when (= :implementation-completed kind)
-    (when-let [design (->> (:entries w) (filter #(= :design (:kind %))) last)]
-      (let [granted (->> (:entries w)
-                         (filter #(= :design-approved (:kind %)))
-                         (keep #(get-in (read-entry-at w (:seq %)) [:design :seq]))
-                         set)]
-        (when-not (contains? granted (:seq design))
-          (throw (ex-info (str "No approval names the live design (entry "
+    ;; The design the record CITES, not the ledger's newest. Since a trail record
+    ;; names what it was made under, the two come apart exactly where it matters:
+    ;; work completed under a cleared D1 while an unjudged D2 sits above it is a
+    ;; fact about D1, so asking D2's clearance would refuse the truth and admit
+    ;; the lie. Falls back to the newest for a record citing none, which can only
+    ;; be a workstream holding no design at all.
+    (when-let [design (let [n (get-in (edn/read-string payload) [:design :seq])]
+                        (if n
+                          (->> (:entries w) (filter #(= n (:seq %))) first)
+                          (->> (:entries w) (filter #(= :design (:kind %))) last)))]
+      (let [named   (fn [k] (->> (:entries w)
+                                 (filter #(= k (:kind %)))
+                                 (keep #(get-in (read-entry-at w (:seq %)) [:design :seq]))
+                                 set))
+            granted (named :design-approved)
+            cleared (named :design-cleared)]
+        (when-not (or (contains? granted (:seq design))
+                      (contains? cleared (:seq design)))
+          (throw (ex-info (str "Nothing clears the live design (entry "
                                (:seq design) ") on " (:id w)
-                               " — grant it from the gate, or supersede it")
+                               " — a round must clear it, or a person grant it,"
+                               " or it must be superseded")
                           {:design    (:seq design)
                            :granted   (vec (sort granted))
+                           :cleared   (vec (sort cleared))
                            :ws-id     (:id w)})))))))
+
+(defn- refuse-unguarded-clearance!
+  "A `:design-cleared` goes through `append-entry-at!` and nowhere else.
+
+   A clearance is an answer read at a position, and only the guarded writer can
+   say that position has not moved since. Admitted here it would be a clearance
+   compared against nothing — and the implementation floor above trusts one as
+   it trusts a grant."
+  [kind]
+  (when (= :design-cleared kind)
+    (throw (ex-info "A :design-cleared is appended only through append-entry-at!"
+                    {:kind kind}))))
+
+(defn- check-clearance-earned!
+  "A `:design-cleared` records a round that ran, over a design that owes nobody,
+   at the position it was compared at.
+
+   Both are on the ledger or in hand under the lock, so each is asked rather
+   than trusted to the writer: a `:design-decision` naming the design that
+   `report/proceeds?`, and the design's own declarations
+   (`report/owes-a-person?`). The shared predicate rather than the recorded
+   `:recommend`, because this is one more reader of the one clearance answer:
+   testing the recommendation refused an advisory-only round that the clearance
+   writer and the gate had both accepted, leaving a conforming design with
+   nothing that could clear it and no grant to ask for. Not `standing` — it
+   reads this namespace, and
+   re-deriving it under the lock is the alternative the design turned down.
+   The stale refusal is what answers for standing: any append after the
+   writer's reading moves the position, so nothing can land in between.
+
+   The POSITION is not among them, and the record carries none. It is
+   `append-entry-at!`'s own argument, compared under this same lock, so a
+   clearance's place in the ledger IS the snapshot it was written against — a
+   field restating it could only ever agree or be wrong.
+
+   Without it a clearance was admitted on its kind alone, and an append supplied
+   the decision no round had reached."
+  [w kind payload at]
+  (when (= :design-cleared kind)
+    (let [r        (edn/read-string payload)
+          n        (get-in r [:design :seq])
+          proceeds (->> (:entries w)
+                        (filter #(= :design-decision (:kind %)))
+                        (map #(read-entry-at w (:seq %)))
+                        (some #(and (= n (:design-seq %))
+                                    (report/proceeds? %))))
+          design   (read-entry-at w n)]
+      (cond
+        (not proceeds)
+        (throw (ex-info (str "Clearance names the design at entry " n
+                             ", and no :design-decision on " (:id w)
+                             " recommends proceeding on it — a clearance records"
+                             " a round, and none reached it")
+                        {:design n :ws-id (:id w)}))
+
+        (nil? design)
+        (throw (ex-info (str "Clearance names the design at entry " n
+                             ", which cannot be read — its declarations are what"
+                             " say whether a grant is owed")
+                        {:design n :ws-id (:id w)}))
+
+        (report/owes-a-person? design)
+        (throw (ex-info (str "Clearance names the design at entry " n
+                             ", which declares :challenges or :revisit — it owes"
+                             " a person a grant, and no round can clear it")
+                        {:design n :ws-id (:id w)}))
+
+))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
   append-lock-path
@@ -515,6 +890,69 @@
     (when-let [unindexed (seq (remove indexed (entry-filenames project ws-id)))]
       (vec unindexed))))
 
+(defn ^{:malli/schema [:=> [:cat :Workstream :int] [:maybe :int]]}
+  unit-of
+  "The unit the entry at `seq-n` belongs to, addressed by its root goal's :seq —
+   an :intent — or nil when it belongs to the workstream rather than to any
+   unit.
+
+   RESOLVED, never stored. The citations already connect a record to the goal it
+   descends from, so a field beside them would be a second answer to a question
+   the graph settles — and the one that drifts. It is the same refusal `place`,
+   `reentry` and `standing` all make about their own readings, for the same
+   reason.
+
+   Total over the ledger: every entry answers, and the two honest answers are a
+   :seq and nil. Three routes reach nil and they need no rules of their own,
+   because none of the three is owed to a unit: a kind that stands on nothing —
+   a note, a blocker, a review analysis; a landing, which NAMES the design whose
+   work it carries and stands on none of it; and a record inheriting
+   rootlessness from a design written before the intent citation was required.
+   Each is reported as the workstream's rather than assigned to whichever unit
+   happens to surround it, because putting a record in a unit its author never
+   placed it in is the error this walk exists to refuse."
+  [w seq-n]
+  (when-let [e (->> (:entries w) (filter #(= seq-n (:seq %))) first)]
+    (first (roots-of w (read-entry-at w seq-n) (:kind e)))))
+
+(defn ^{:malli/schema [:=> [:cat :Workstream] :boolean]}
+  holds-design?
+  "Does `w` hold a :design at all?
+
+   A PRESENCE CHECK, and never a citation source. Every trail record records
+   work and cites the design that work named: a PR the one its publisher names,
+   a merge the PR's own records, a review the design its rounds judged against.
+   When nothing names one, the writer skips the record and says so rather than
+   filing it under the newest design — append order is not evidence of which
+   design work was done under. What those writers need is only whether a
+   citation was owed at all, which is this.
+
+   A boolean on purpose: an answer that cannot be read as `which design` is one
+   no writer can fall back to for a citation.
+
+   Off the INDEX, so it parses nothing."
+  [w]
+  (boolean (some #(= :design (:kind %)) (:entries w))))
+
+(defn- index-row
+  "The index row for an entry: what `entry` carried, plus the ledger's own
+   stamps, plus the design it names.
+
+   `:under` MIRRORS the record's `:design :seq` onto the index, and is the one
+   field here that comes out of the payload. It is a citation the author wrote,
+   copied the way `:kind` already is — not a conclusion, which is what the index
+   may never hold. It is mirrored because `reentry/trail-standing` reads the
+   index and parses nothing, deliberately: that is what keeps the re-entry clamp
+   affordable on a board computing a position per rendered row, and an
+   attribution only readable by parsing every trail entry would have cost exactly
+   that. Absent on rows written before the citation existed, where
+   `reentry/generation` is still the answer."
+  [entry seq-n payload rel]
+  (let [under (when (contains? trail-kinds (:kind entry))
+                (get-in (edn/read-string payload) [:design :seq]))]
+    (cond-> (assoc entry :seq seq-n :at (clock/now-iso) :file rel)
+      under (assoc :under under))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string] :Path]}
   append-entry!
   "Write an immutable entry file under entries/ and record it in :entries.
@@ -534,8 +972,14 @@
    :seq is the identity every citation in the ledger is keyed on, so an
    unattended driver appending beside a session agent is exactly the condition
    under which `it does not in fact race` stops being a property of the system
-   and starts being a property of the operator."
+   and starts being a property of the operator.
+
+   A :design-cleared is refused here: it records a reading of the ledger at a
+   position, so it is written only through `append-entry-at!`."
   [project ws-id entry content]
+  (when (= :design-cleared (:kind entry))
+    (throw (ex-info "A :design-cleared is written at a position — through append-entry-at!"
+                    {:kind (:kind entry) :ws-id ws-id})))
   (io/with-file-lock
     (append-lock-path project ws-id)
     (fn []
@@ -550,17 +994,21 @@
             seq-n (inc (max (count (:entries w))
                             (highest-seq-on-disk project ws-id)))
             [ext payload] (report/entry-payload (:kind entry) content)
+            _     (refuse-unguarded-clearance! (:kind entry))
             _     (check-baseline-citation! w (:kind entry) payload)
             _     (check-standing-citations! w (:kind entry) payload)
+            _     (check-goal-is-live! w (:kind entry) payload)
+            _     (check-trail-attribution! w (:kind entry) payload)
+            _     (check-one-root! w (:kind entry) payload)
             _     (check-seam-phase-ref! (:kind entry) payload)
-            _     (check-implementation-approved! w (:kind entry))
+            _     (check-implementation-approved! w (:kind entry) payload)
             fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
             rel   (str "entries/" fname)
             abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
         (refuse-if-taken! abs seq-n)
         (io/write-text! abs payload)
         (write! (update w :entries (fnil conj [])
-                        (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
+                        (index-row entry seq-n payload rel)))
         abs))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int :map :string] :map]}
@@ -600,15 +1048,20 @@
                 [ext payload] (report/entry-payload (:kind entry) content)
                 _     (check-baseline-citation! w (:kind entry) payload)
                 _     (check-standing-citations! w (:kind entry) payload)
+                _     (check-clearance-owed! w (:kind entry) payload)
+                _     (check-goal-is-live! w (:kind entry) payload)
+                _     (check-trail-attribution! w (:kind entry) payload)
+                _     (check-one-root! w (:kind entry) payload)
                 _     (check-seam-phase-ref! (:kind entry) payload)
-            _     (check-implementation-approved! w (:kind entry))
+                _     (check-implementation-approved! w (:kind entry) payload)
+                _     (check-clearance-earned! w (:kind entry) payload latest)
                 fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
                 rel   (str "entries/" fname)
                 abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
             (refuse-if-taken! abs seq-n)
             (io/write-text! abs payload)
             (write! (update w :entries (fnil conj [])
-                            (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
+                            (index-row entry seq-n payload rel)))
             abs))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] [:maybe :LedgerEntry]]}
@@ -690,26 +1143,66 @@
       (->> (fs/list-dir d) (filter fs/directory?) (mapv #(str (fs/file-name %))))
       [])))
 
+(defn- published-design
+  "The design the work a PR publishes was done under: what the publisher names,
+   else what an implementation record listing this PR among its :artifacts names.
+   nil when neither does.
+
+   NEVER the newest design. A PR publishes work already done, and a design
+   appended while it was being done is one the work was never made under — citing
+   the newest would record D1's work as published under D2, and the merge poller
+   copies this citation onto the landing."
+  [w {:keys [id url]} design]
+  (or design
+      (->> (:entries w)
+           (filter #(and (:under %) (= :implementation-completed (:kind %))))
+           (filter (fn [e]
+                     (some #(and (= :pr (:kind %))
+                                 (or (and id (= (str/lower-case id)
+                                                (some-> (:ref %) str/lower-case)))
+                                     (and url (= url (:url %)))))
+                           (:artifacts (read-entry-at w (:seq e))))))
+           last
+           :under)))
+
 (defn- record-pr-opened!
-  "Append the :pr-opened event for a freshly-stamped :github ref, unless this
-   workstream already carries one. Stacks stamp one ref per layer but ship once,
-   so the FIRST layer's ref is the shipment's mark on the timeline and the rest
-   are silent — the per-layer detail already lives in the refs themselves and in
+  "Append the :pr-opened event for a freshly-stamped :github ref, unless a
+   shipment is already OUTSTANDING — a :pr-opened with no :merged after it.
+   Stacks stamp one ref per layer but ship once, so the FIRST layer's ref is
+   that shipment's mark on the timeline and the rest are silent — the per-layer
+   detail already lives in the refs themselves and in
    :implementation-completed's :artifacts.
 
-   Skipped (loudly) without a :url and :title, which PrOpened requires. The ref
-   is already written by then: correlation is what the merge poller needs, and it
-   must never be lost to a malformed event."
-  [project w {:keys [url title]} summary]
-  (when-not (some #(= :pr-opened (:kind %)) (:entries w))
-    (if (or (str/blank? url) (str/blank? title))
-      (binding [*err* *err*]
-        (.println ^java.io.PrintWriter *err*
-                  (str "WARN: github ref on " (:id w)
-                       " carries no :url/:title; skipping the :pr-opened ledger event")))
-      (append-entry! project (:id w) {:kind :pr-opened}
-                     (pr-str (cond-> {:format :pr-opened :url url :title title}
-                               (not (str/blank? summary)) (assoc :summary summary)))))))
+   Outstanding rather than \"carries one at all\", because `reopen!` keeps the
+   entries: a workstream that landed and came back is on its NEXT shipment, and
+   suppressing that one discards the citation the publisher handed us. Nothing
+   else holds it — `github-merge/merge-design` reads the shipment's :pr-opened
+   when no record of the new PR names a design yet — so the later landing would
+   be skipped for naming none, after the workstream had already closed on it.
+
+   Skipped (loudly) without a :url and :title, which PrOpened requires, and on a
+   ledger holding a design when nothing names the one the work was done under —
+   the append would refuse it, and a guessed citation is the thing it refuses.
+   The ref is already written by then: correlation is what the merge poller
+   needs, and it must never be lost to a malformed event."
+  [project w {:keys [url title] :as ref} {:keys [summary design]}]
+  (when-not (= :pr-opened (:kind (last (filter #(#{:pr-opened :merged} (:kind %))
+                                               (:entries w)))))
+    (let [d    (published-design w ref design)
+          skip (cond
+                 (or (str/blank? url) (str/blank? title))
+                 "carries no :url/:title"
+                 (and (nil? d) (holds-design? w))
+                 "names no :design, and no implementation record listing it does")]
+      (if skip
+        (binding [*err* *err*]
+          (.println ^java.io.PrintWriter *err*
+                    (str "WARN: github ref on " (:id w) " " skip
+                         "; skipping the :pr-opened ledger event")))
+        (append-entry! project (:id w) {:kind :pr-opened}
+                       (pr-str (cond-> {:format :pr-opened :url url :title title}
+                                 (not (str/blank? summary)) (assoc :summary summary)
+                                 d (assoc :design {:seq d}))))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map [:? [:maybe :map]]] :Workstream]}
   add-ref!
@@ -721,9 +1214,10 @@
    expect — the ref is load-bearing (the merge poller correlates on it) so it
    always landed, while the ledger event, being merely informative, was dropped on
    more than half the PRs. One fact, one call, nothing left to remember. `opts`
-   may carry a :summary — the one part of the event nido cannot synthesize."
+   may carry the two parts of the event nido cannot synthesize: a :summary, and
+   the :design seq the published work was done under."
   ([project ws-id ref] (add-ref! project ws-id ref nil))
-  ([project ws-id ref {:keys [summary]}]
+  ([project ws-id ref opts]
    (let [w (or (read-ws project ws-id)
                (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
          dup? (some #(and (= (:adapter %) (:adapter ref)) (= (:id %) (:id ref)))
@@ -732,7 +1226,7 @@
        w
        (let [w' (write! (update w :external-refs (fnil conj []) ref))]
          (when (= :github (:adapter ref))
-           (record-pr-opened! project w' ref summary))
+           (record-pr-opened! project w' ref opts))
          w')))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}

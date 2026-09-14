@@ -364,6 +364,9 @@
 
 (def ^:private a-baseline
   {:format       :baseline
+   ;; Entry 1 on every ledger here: `seed-baseline!` appends the goal before the
+   ;; survey, which is the order the append boundary requires of a citation.
+   :intent       {:seq 1}
    :area         "order totalling"
    :bounded-by   "everything that reads or writes a money amount on an order"
    :shape        "The aggregate is the only thing that sums lines."
@@ -394,8 +397,8 @@
 
 (defn- design-citing
   "A design citing baseline `n` and, unless overridden, the intent this suite
-   seeds at seq 2."
-  ([n] (design-citing n 2))
+   seeds at seq 1 — `seed-baseline!` writes the goal before the survey."
+  ([n] (design-citing n 1))
   ([n intent-seq]
    (cond-> {:format     :design
             :summary    "Round on the total."
@@ -406,21 +409,148 @@
             :effort     :M}
      intent-seq (assoc :intent {:seq intent-seq}))))
 
-(defn- seed-intent!
-  "Append the intent entry the default design-citing points at. Callers append a
-   baseline first, so the intent lands at seq 2."
-  [w]
-  (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent)))
+(defn- seed-baseline!
+  "An :intent at seq 1 and the :baseline scoped for it at seq 2 — the order the
+   append boundary requires, since a survey now cites the goal it was scoped for
+   and a citation can only name an entry already on the ledger.
+
+   One helper rather than two calls at every site, because the ORDER is the part
+   a caller must not get wrong and a helper is where an order belongs."
+  ([w] (seed-baseline! w a-baseline))
+  ([w baseline]
+   (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
+   (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str baseline))))
 
 (deftest design-may-cite-a-real-baseline-on-the-same-workstream
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (seed-baseline! w)
+        (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 2)))
+        (is (= 2 (get-in (ws/latest-entry :brian (:id w) :design) [:baseline :seq])))
+        (is (= 1 (get-in (ws/latest-entry :brian (:id w) :design) [:intent :seq])))))))
+
+(deftest a-baseline-cites-the-intent-it-was-scoped-for
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
         (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
-        (seed-intent! w)
-        (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 1)))
-        (is (= 1 (get-in (ws/latest-entry :brian (:id w) :design) [:baseline :seq])))
-        (is (= 2 (get-in (ws/latest-entry :brian (:id w) :design) [:intent :seq])))))))
+        (is (= 1 (get-in (ws/latest-entry :brian (:id w) :baseline) [:intent :seq]))
+            "the survey records which goal bounded it, instead of that being
+             remembered by whoever ran the round")))))
+
+(deftest a-baseline-citing-an-entry-that-states-no-intent-is-refused
+  ;; The same rule a design's intent citation is held to, and for the same
+  ;; reason: a :seq pointing at the wrong kind reads downstream exactly like one
+  ;; pointing at a real goal, so the survey would look scoped for something it
+  ;; was not.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :note} "just a note")
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"Baseline :intent cites entry 1"
+             (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))))
+        (is (= 1 (count (:entries (ws/read-ws :brian (:id w)))))
+            "refused before anything is written")))))
+
+(deftest a-baseline-may-not-cite-a-triage-entry-as-its-intent
+  ;; A triage report is not a goal. It proposes candidate DIRECTIONS, so one
+  ;; report stands for several possible units and belongs to the workstream that
+  ;; holds them; a unit begins where somebody states what this change is for.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :triage} (pr-str a-triage))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"Baseline :intent cites entry 1"
+             (ws/append-entry! :brian (:id w) {:kind :baseline}
+                               (pr-str a-baseline))))))))
+
+(deftest an-intent-may-supersede-an-earlier-one
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
+        (is (some? (ws/append-entry!
+                    :brian (:id w) {:kind :intent}
+                    (pr-str (assoc an-intent :goal "a wider goal"
+                                   :supersedes {:seq 1 :why "implementation found the scope wrong"})))))))))
+
+(deftest a-record-standing-on-a-replaced-goal-is-refused
+  ;; The direction the sequence guard cannot close. `standing` unseats records
+  ;; that already exist when a goal moves; a record written AFTERWARDS resolves
+  ;; every citation, agrees on kind and has nothing postdating it — so nothing
+  ;; unseats it and it would stand on a goal nobody holds.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
+        (ws/append-entry! :brian (:id w) {:kind :intent}
+                          (pr-str (assoc an-intent :goal "a wider goal"
+                                         :supersedes {:seq 1 :why "the scope moved"})))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"stands on the goal at entry 1"
+             (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline)))
+            "a survey may not be scoped for a goal already replaced")
+        (is (some? (ws/append-entry! :brian (:id w) {:kind :baseline}
+                                     (pr-str (assoc a-baseline :intent {:seq 2}))))
+            "naming the live goal is fine")))))
+
+(deftest a-record-reaching-a-replaced-goal-through-its-citations-is-refused
+  ;; Naming the live goal is not enough when something the record rests on was
+  ;; scoped for the one it replaced — the design would read decidable because
+  ;; its own goal predates it, while the survey under it bounds another goal.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (seed-baseline! w)                                        ; 1 intent, 2 baseline
+        (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 2)))
+        (ws/append-entry! :brian (:id w) {:kind :intent}          ; 4 replaces 1
+                          (pr-str (assoc an-intent :goal "a wider goal"
+                                         :supersedes {:seq 1 :why "the scope moved"})))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"stands on the goal at entry 1"
+             (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 2 4))))
+            "a design naming the live goal over a survey scoped for the replaced one")
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"stands on the goal at entry 1"
+             (ws/append-entry! :brian (:id w) {:kind :baseline-review}
+                               (pr-str {:format :baseline-review :baseline-seq 2
+                                        :verdict :sufficient :reason "holds"})))
+            "a review of that survey")
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"stands on the goal at entry 1"
+             (ws/append-entry! :brian (:id w) {:kind :design-approved}
+                               (pr-str {:format :design-approved :design {:seq 3} :at-seq 4})))
+            "a grant of a design that served it")
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"stands on the goal at entry 1"
+             (ws/append-entry! :brian (:id w) {:kind :review}
+                               (pr-str {:format :review-report :status :converged :base "main"
+                                        :base-rev "abc123" :rounds 1 :fix-attempts 0
+                                        :defects-settled 0 :findings-remaining 0
+                                        :report-path "/tmp/report.json" :design {:seq 3}})))
+            "a review judged against that design")
+        (is (some? (ws/append-entry! :brian (:id w) {:kind :baseline}
+                                     (pr-str (assoc a-baseline :intent {:seq 4}
+                                                    :supersedes {:seq 2 :why "the goal moved"}))))
+            ":supersedes names what it replaces and is not walked")))))
+
+(deftest an-amendment-naming-an-already-replaced-goal-is-refused
+  ;; A chain with two answers is a walk with two answers. `replacement` follows
+  ;; one edge per record, so a fork leaves it unable to say which goal is live.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
+        (ws/append-entry! :brian (:id w) {:kind :intent}
+                          (pr-str (assoc an-intent :supersedes {:seq 1 :why "first"})))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"forks the chain"
+             (ws/append-entry! :brian (:id w) {:kind :intent}
+                               (pr-str (assoc an-intent :supersedes {:seq 1 :why "second"})))))))))
 
 (deftest design-citing-a-baseline-that-does-not-exist-is-refused
   (with-tmp
@@ -451,14 +581,13 @@
   (assoc (design-citing n) :routes routes))
 
 (defn- with-health-baseline
-  "Mint a workstream carrying the health baseline at seq 1, then run `f` on it."
+  "Mint a workstream carrying the intent at seq 1 and the health baseline at
+   seq 2, then run `f` on it."
   [f]
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
-        (ws/append-entry! :brian (:id w) {:kind :baseline}
-                          (pr-str a-baseline-with-health))
-        (seed-intent! w)
+        (seed-baseline! w a-baseline-with-health)
         (f w)))))
 
 (deftest design-routing-every-health-observation-is-accepted
@@ -466,7 +595,7 @@
     (fn [w]
       (ws/append-entry!
        :brian (:id w) {:kind :design}
-       (pr-str (design-routing 1 [{:health-id "invoice-resums" :to :spin-out
+       (pr-str (design-routing 2 [{:health-id "invoice-resums" :to :spin-out
                                    :why "revealed, not created" :ref "FU-88"}
                                   {:health-id "half-migrated" :to :fix-here}])))
       (is (= 2 (count (:routes (ws/latest-entry :brian (:id w) :design))))))))
@@ -478,7 +607,7 @@
            clojure.lang.ExceptionInfo #"unrouted|half-migrated"
            (ws/append-entry!
             :brian (:id w) {:kind :design}
-            (pr-str (design-routing 1 [{:health-id "invoice-resums" :to :fix-here}])))))
+            (pr-str (design-routing 2 [{:health-id "invoice-resums" :to :fix-here}])))))
       (is (= 2 (count (:entries (ws/read-ws :brian (:id w)))))
           "refused before anything is written — only the baseline and the intent
            it was seeded with are there"))))
@@ -490,7 +619,7 @@
            clojure.lang.ExceptionInfo #"does not record"
            (ws/append-entry!
             :brian (:id w) {:kind :design}
-            (pr-str (design-routing 1 [{:health-id "invoice-resums" :to :fix-here}
+            (pr-str (design-routing 2 [{:health-id "invoice-resums" :to :fix-here}
                                        {:health-id "half-migrated" :to :fix-here}
                                        {:health-id "invented" :to :declined
                                         :why "nobody observed this"}]))))))))
@@ -502,7 +631,7 @@
            clojure.lang.ExceptionInfo #"more than once"
            (ws/append-entry!
             :brian (:id w) {:kind :design}
-            (pr-str (design-routing 1 [{:health-id "invoice-resums" :to :fix-here}
+            (pr-str (design-routing 2 [{:health-id "invoice-resums" :to :fix-here}
                                        {:health-id "invoice-resums" :to :declined
                                         :why "changed my mind halfway down"}
                                        {:health-id "half-migrated" :to :fix-here}]))))
@@ -515,7 +644,7 @@
            clojure.lang.ExceptionInfo #"invisibly incomplete"
            (ws/append-entry!
             :brian (:id w) {:kind :design}
-            (pr-str (design-routing 1 [{:health-id "invoice-resums" :to :fix-here}
+            (pr-str (design-routing 2 [{:health-id "invoice-resums" :to :fix-here}
                                        {:health-id "half-migrated" :to :spin-out
                                         :why "feels separate" :ref "FU-99"}]))))
           "the one rule in /spin-out that is not a judgment call, enforced where
@@ -526,7 +655,7 @@
     (fn [w]
       (ws/append-entry!
        :brian (:id w) {:kind :design}
-       (pr-str (design-routing 1 [{:health-id "invoice-resums" :to :declined
+       (pr-str (design-routing 2 [{:health-id "invoice-resums" :to :declined
                                    :why "cold corner"}
                                   {:health-id "half-migrated" :to :constrains
                                    :why "this change may not add a ninth unmigrated site"}])))
@@ -537,56 +666,61 @@
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
-        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
-        (seed-intent! w)
-        (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 1)))
+        (seed-baseline! w)
+        (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 2)))
         (is (ws/latest-entry :brian (:id w) :design)
             "every design record written before health existed still appends")))))
 
-(deftest a-design-may-cite-a-triage-entry-as-its-intent
+(deftest a-design-may-not-cite-a-triage-entry-as-its-intent
+  ;; The same rule the baseline is held to, and for the same reason: a goal is
+  ;; one kind on every edge — citation, rooting and amendment — so a goal that
+  ;; can be stated can always be amended rather than only abandoned.
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
-        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (seed-baseline! w)
         (ws/append-entry! :brian (:id w) {:kind :triage} (pr-str a-triage))
-        (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 1 2)))
-        (is (= 2 (get-in (ws/latest-entry :brian (:id w) :design) [:intent :seq]))
-            "a workstream whose intent was written down at triage does not
-             restate it")))))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"not an :intent entry"
+             (ws/append-entry! :brian (:id w) {:kind :design}
+                               (pr-str (design-citing 2 3)))))))))
 
 (deftest a-design-citing-an-entry-that-states-no-intent-is-refused
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
-        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (seed-baseline! w)
         (ws/append-entry! :brian (:id w) {:kind :blocker}
                           (pr-str {:format :blocker :summary "s" :needs "n"}))
         (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"neither an :intent nor a :triage"
+             clojure.lang.ExceptionInfo #"not an :intent entry"
              (ws/append-entry! :brian (:id w) {:kind :design}
-                               (pr-str (design-citing 1 2)))))
-        (is (= 2 (count (:entries (ws/read-ws :brian (:id w)))))
+                               (pr-str (design-citing 2 3)))))
+        (is (= 3 (count (:entries (ws/read-ws :brian (:id w)))))
             "refused before anything is written")))))
 
 (deftest a-design-citing-an-intent-that-does-not-exist-is-refused
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
-        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (seed-baseline! w)
         (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"neither an :intent nor a :triage"
+             clojure.lang.ExceptionInfo #"not an :intent entry"
              (ws/append-entry! :brian (:id w) {:kind :design}
-                               (pr-str (design-citing 1 9)))))))))
+                               (pr-str (design-citing 2 9)))))))))
 
 (deftest design-citing-an-entry-that-is-not-a-baseline-is-refused
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
         (ws/append-entry! :brian (:id w) {:kind :note} "just a note")
         (is (thrown? clojure.lang.ExceptionInfo
                      (ws/append-entry! :brian (:id w) {:kind :design}
-                                       (pr-str (design-citing 1))))
-            "seq 1 exists, but it is a note — the ref must name a baseline")))))
+                                       (pr-str (design-citing 2))))
+            "seq 2 exists, but it is a note — the ref must name a baseline.
+             The intent at seq 1 resolves, so the refusal can only be the
+             baseline's")))))
 
 (defn- phased-design-citing
   "A two-phase design on baseline `n`, with a seam that `phase` closes. Same
@@ -598,7 +732,7 @@
    :shape      "Two writers during the migration; one reader throughout."
    :invariants [{:invariant "no request reads a column no writer maintains" :holds :always}]
    :standing   {:relation :conforms}
-   :intent     {:seq 2}
+   :intent     {:seq 1}
    :baseline   {:seq n :relation :within}
    :phases     [{:claim     "both writers maintain the new column"
                  :habitable "nothing reads the new column yet"
@@ -617,10 +751,9 @@
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
-        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
-        (seed-intent! w)
+        (seed-baseline! w)
         (ws/append-entry! :brian (:id w) {:kind :design}
-                          (pr-str (phased-design-citing 1 "the old column is dropped")))
+                          (pr-str (phased-design-citing 2 "the old column is dropped")))
         (is (= 2 (count (:phases (ws/latest-entry :brian (:id w) :design)))))))))
 
 (deftest a-seam-naming-a-phase-that-is-not-in-the-plan-is-refused
@@ -630,11 +763,11 @@
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
-        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (seed-baseline! w)
         (is (thrown? clojure.lang.ExceptionInfo
                      (ws/append-entry! :brian (:id w) {:kind :design}
-                                       (pr-str (phased-design-citing 1 "some later phase")))))
-        (is (= 1 (count (:entries (ws/read-ws :brian (:id w)))))
+                                       (pr-str (phased-design-citing 2 "some later phase")))))
+        (is (= 2 (count (:entries (ws/read-ws :brian (:id w)))))
             "refused before anything is written — only the baseline is on the ledger")))))
 
 (deftest a-seam-cannot-promise-a-phase-on-a-record-with-no-phase-plan
@@ -644,10 +777,10 @@
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
-        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (seed-baseline! w)
         (is (thrown? clojure.lang.ExceptionInfo
                      (ws/append-entry! :brian (:id w) {:kind :design}
-                                       (pr-str (-> (phased-design-citing 1 "the old column is dropped")
+                                       (pr-str (-> (phased-design-citing 2 "the old column is dropped")
                                                    (dissoc :phases)
                                                    (assoc :invariants ["no request reads a column no writer maintains"]))))))))))
 
@@ -683,11 +816,11 @@
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
-        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (seed-baseline! w)
         (ws/append-entry! :brian (:id w) {:kind :baseline}
                           (pr-str (assoc a-baseline :area "a second, wider baseline")))
-        (is (= "order totalling" (:area (ws/entry-at-seq :brian (:id w) 1))))
-        (is (= "a second, wider baseline" (:area (ws/entry-at-seq :brian (:id w) 2))))
+        (is (= "order totalling" (:area (ws/entry-at-seq :brian (:id w) 2))))
+        (is (= "a second, wider baseline" (:area (ws/entry-at-seq :brian (:id w) 3))))
         (is (= "a second, wider baseline" (:area (ws/latest-entry :brian (:id w) :baseline)))
             "latest and cited genuinely differ here — which is why the reader
              following a :seq cannot be latest-entry")
@@ -705,24 +838,25 @@
       (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
             id  (:id w)
             add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
-        (add :baseline a-baseline)                                    ; seq 1
+        (add :intent an-intent)                                       ; seq 1
+        (add :baseline a-baseline)                                    ; seq 2
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"Retraction cites entry 99"
              (add :retraction {:format :retraction :retracts {:seq 99}
                                :because "b" :evidence ["src/a.clj:1"]}))
             "a retraction naming no entry")
-        (is (some? (add :retraction {:format :retraction :retracts {:seq 1}
+        (is (some? (add :retraction {:format :retraction :retracts {:seq 2}
                                      :because "b" :evidence ["src/a.clj:1"]}))
-            "and one naming a real baseline is fine")
+            "and one naming a real baseline is fine")                 ; seq 3
         (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"Approval cites entry 1, which is a :baseline"
-             (add :design-approved {:format :design-approved :design {:seq 1} :at-seq 2}))
+             clojure.lang.ExceptionInfo #"Approval cites entry 2, which is a :baseline"
+             (add :design-approved {:format :design-approved :design {:seq 2} :at-seq 3}))
             "an approval must name a design, and the refusal says what it found")
         (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"Baseline :supersedes cites entry 2"
-             (add :baseline (assoc a-baseline :supersedes {:seq 2 :why "corrected"})))
+             clojure.lang.ExceptionInfo #"Baseline :supersedes cites entry 3"
+             (add :baseline (assoc a-baseline :supersedes {:seq 3 :why "corrected"})))
             "a baseline correcting a retraction is not a correction")
-        (is (some? (add :baseline (assoc a-baseline :supersedes {:seq 1 :why "corrected"})))
+        (is (some? (add :baseline (assoc a-baseline :supersedes {:seq 2 :why "corrected"})))
             "a baseline correcting a baseline is")))))
 
 (deftest a-citation-standing-never-reads-is-left-alone
@@ -919,6 +1053,239 @@
    :summary   "Rounded the total at the aggregate."
    :artifacts [{:kind :commit :ref "abc1234"}]})
 
+(deftest a-trail-record-names-the-design-it-was-made-under
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)                                                     ; 1, 2
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
+        (ws/append-entry! :brian id {:kind :design-approved}
+                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"must name the design it was made under"
+             (ws/append-entry! :brian id {:kind :implementation-completed}
+                               (pr-str an-implementation)))
+            "append order is not evidence once a design exists")
+        (ws/append-entry! :brian id {:kind :implementation-completed}
+                          (pr-str (assoc an-implementation :design {:seq 3})))
+        (is (= 3 (:under (last (:entries (ws/read-ws :brian id)))))
+            "and the citation is mirrored onto the index, so the re-entry clamp
+             reads it without parsing every trail entry")))))
+
+(deftest a-trail-record-on-a-workstream-with-no-design-cites-nothing
+  ;; The refusal `reentry/generation` already makes, at the boundary: work done
+  ;; before any design exists cannot be attributed to one, and demanding a
+  ;; citation there would be inventing a generation to blame.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+        (is (some? (ws/append-entry! :brian (:id w) {:kind :implementation-completed}
+                                     (pr-str an-implementation))))
+        (is (nil? (:under (last (:entries (ws/read-ws :brian (:id w)))))))))))
+
+(deftest a-supplied-citation-must-resolve-even-where-none-is-required
+  ;; Only the REQUIREMENT is conditional on the ledger. A citation naming nothing
+  ;; would be stored as `:under`, and the moment a real design is written
+  ;; `trail-standing`'s `>=` reads it as work done under that design.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo
+             #"Implementation-completed :design cites entry 999, which is not on this workstream"
+             (ws/append-entry! :brian (:id w) {:kind :implementation-completed}
+                               (pr-str (assoc an-implementation :design {:seq 999})))))
+        (is (empty? (:entries (ws/read-ws :brian (:id w))))
+            "refused before anything is written")))))
+
+(deftest every-trail-kind-records-on-a-ledger-that-holds-a-design
+  ;; Every trail writer cites the design its work named, and `holds-design?` is
+  ;; only the presence check that says a citation was owed — never a citation
+  ;; source. An append that throws once a design exists would cost each writer
+  ;; its event — the merge poller's for good, since it marks the PR seen
+  ;; afterwards. :pr-opened goes through its real writer, `add-ref!`, citing what
+  ;; its publisher names.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)                                                     ; 1, 2
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
+        (ws/append-entry! :brian id {:kind :design-approved}
+                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+        (is (ws/holds-design? (ws/read-ws :brian id)))
+        (ws/append-entry! :brian id {:kind :implementation-completed}
+                          (pr-str (assoc an-implementation :design {:seq 3})))
+        (ws/append-entry! :brian id {:kind :review}
+                          (pr-str {:format :review-report :status :converged :base "main"
+                                   :base-rev "abc123" :rounds 1 :fix-attempts 0
+                                   :defects-settled 0 :findings-remaining 0
+                                   :report-path "/tmp/report.json" :design {:seq 3}}))
+        (ws/add-ref! :brian id {:adapter :github :id "o/r#1"
+                                :url "https://gh/1" :title "Round the total"}
+                     {:design 3})
+        (ws/append-entry! :brian id {:kind :merged}
+                          (pr-str {:format :merged :pr "o/r#1" :url "https://gh/1"
+                                   :title "Round the total" :merged-at "2026-09-11T10:00:00Z"
+                                   :design {:seq 3}}))
+        (is (= {:implementation-completed 3 :review 3 :pr-opened 3 :merged 3}
+               (into {} (keep #(when (:under %) [(:kind %) (:under %)]))
+                     (:entries (ws/read-ws :brian id)))))))))
+
+(deftest a-pr-cites-the-design-its-work-was-done-under-not-the-newest
+  ;; D1's work, published after D2 was appended. D2 is the newest design, and
+  ;; citing it would record D1's work as published under D2 — and, once the
+  ;; merge poller copies the citation, as shipped under it.
+  (with-tmp
+    (fn [_]
+      (let [pr     {:adapter :github :id "o/r#1" :url "https://gh/1" :title "Round the total"}
+            d1-d2! (fn [impl]
+                     (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+                           id (:id w)]
+                       (seed-baseline! w)                                                      ; 1, 2
+                       (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3 — D1
+                       (ws/append-entry! :brian id {:kind :design-approved}
+                                         (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+                       (when impl
+                         (ws/append-entry! :brian id {:kind :implementation-completed} (pr-str impl)))
+                       (ws/append-entry! :brian id {:kind :design}                             ; D2
+                                         (pr-str (assoc (design-citing 2)
+                                                        :supersedes {:seq 3 :why "the shape could not hold"})))
+                       id))
+            opened (fn [id] (first (filter #(= :pr-opened (:kind %))
+                                           (:entries (ws/read-ws :brian id)))))
+            named  (d1-d2! nil)
+            listed (d1-d2! (assoc an-implementation :design {:seq 3}
+                                  :artifacts [{:kind :pr :ref "o/r#1"}]))
+            none   (d1-d2! nil)]
+        (ws/add-ref! :brian named pr {:design 3})
+        (is (= 3 (:under (opened named))) "the design its publisher names")
+        (ws/add-ref! :brian listed pr)
+        (is (= 3 (:under (opened listed))) "the design the implementation listing it names")
+        (ws/add-ref! :brian none pr)
+        (is (nil? (opened none)) "nothing names one, so the event is skipped, not guessed")
+        (is (= [pr] (:external-refs (ws/read-ws :brian none)))
+            "and the ref the merge poller correlates on is stamped regardless")))))
+
+(deftest a-trail-record-citing-something-that-is-not-a-design-is-refused
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))
+        (ws/append-entry! :brian id {:kind :design-approved}
+                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"Implementation-completed :design cites entry 2"
+             (ws/append-entry! :brian id {:kind :implementation-completed}
+                               (pr-str (assoc an-implementation :design {:seq 2})))))))))
+
+(deftest a-workstream-may-hold-two-units-and-every-record-is-in-one
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)
+            add #(do (ws/append-entry! :brian id {:kind %1} (pr-str %2))
+                     (count (:entries (ws/read-ws :brian id))))]
+        ;; unit A, rooted at 1
+        (add :intent an-intent)                                          ; 1
+        (add :baseline a-baseline)                                       ; 2
+        (add :design (design-citing 2))                                  ; 3
+        ;; unit B, rooted at 4 — a second goal citing nothing opens one
+        (add :intent (assoc an-intent :goal "a different story"))        ; 4
+        (add :baseline (assoc a-baseline :intent {:seq 4}))              ; 5
+        (add :design (assoc (design-citing 5) :intent {:seq 4}))         ; 6
+        (let [w (ws/read-ws :brian id)]
+          (is (= [1 1 1 4 4 4] (mapv #(ws/unit-of w %) [1 2 3 4 5 6]))
+              "every record is in exactly one unit, and the two are told apart
+               by the goal each descends from")))))) 
+
+(deftest a-landing-names-a-design-and-belongs-to-no-unit
+  ;; Naming a unit's design is not belonging to that unit. `/land` collapses a
+  ;; reviewed stack into a SINGLE PR, so one landing may carry work from several
+  ;; units — and the arc reports a landing as the workstream's. A walk that
+  ;; seated it in the unit its citation reaches would give one record two owners.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)                                                     ; 1, 2
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
+        (ws/append-entry! :brian id {:kind :design-approved}
+                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+        (ws/append-entry! :brian id {:kind :implementation-completed}           ; 5
+                          (pr-str (assoc an-implementation :design {:seq 3})))
+        (ws/add-ref! :brian id {:adapter :github :id "o/r#1"                    ; 6 — :pr-opened
+                                :url "https://gh/1" :title "Round the total"}
+                     {:design 3})
+        (ws/append-entry! :brian id {:kind :merged}                            ; 7
+                          (pr-str {:format :merged :pr "o/r#1" :url "https://gh/1"
+                                   :title "Round the total" :merged-at "2026-09-11T10:00:00Z"
+                                   :design {:seq 3}}))
+        (let [w (ws/read-ws :brian id)]
+          (is (= 1 (ws/unit-of w 5))
+              "the implementation is the unit's own work")
+          (is (= [nil nil] (mapv #(ws/unit-of w %) [6 7]))
+              "and neither landing is, though both name the same design"))))))
+
+(deftest a-record-reaching-two-goals-is-refused
+  ;; Reaching a root is not reaching exactly one. Every citation resolves, every
+  ;; kind is right — and nothing else can see it, because every other check reads
+  ;; one citation at a time.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)
+            add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
+        (add :intent an-intent)                                          ; 1
+        (add :baseline a-baseline)                                       ; 2  roots at 1
+        (add :intent (assoc an-intent :goal "a different story"))        ; 3  roots at 3
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"reaches 2 goals"
+             (add :design (assoc (design-citing 2) :intent {:seq 3})))
+            "a design over one unit's survey serving another unit's goal
+             belongs to neither")))))
+
+(deftest a-triage-roots-no-unit
+  ;; The kinds a survey's and a design's :intent may cite are the kinds the walk
+  ;; roots at, and that rule is unchanged — what changed is the set. It is
+  ;; `#{:intent}` on both sides, so a triage roots nothing and cannot be cited as
+  ;; a goal: one report proposes several candidate DIRECTIONS, so it stands for
+  ;; several possible units and belongs to the workstream that holds them.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (ws/append-entry! :brian id {:kind :triage} (pr-str a-triage))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"Baseline :intent cites entry 1"
+             (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline)))
+            "a survey may not be scoped for a triage")
+        (is (nil? (ws/unit-of (ws/read-ws :brian id) 1))
+            "and the report itself is the workstream's — no :seq addresses it")))))
+(deftest a-record-that-stands-on-nothing-is-in-the-pre-contract-region
+  ;; The reachable half of `at most one admits none`. A note is beside the arc
+  ;; rather than on it, so it reaches no goal and is reported as pre-contract —
+  ;; never assigned to whichever unit happens to surround it, which is the error
+  ;; the walk exists to refuse.
+  ;;
+  ;; The other half — a legacy design that roots nowhere, and the decisions and
+  ;; trail records inheriting that — cannot be built through this boundary any
+  ;; more, because a design must cite a rooted goal. It exists only on ledgers
+  ;; written before the citation, which is exactly what makes the region a
+  ;; boundary rather than a leak: nothing new can be created inside it.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
+        (ws/append-entry! :brian (:id w) {:kind :note} "beside the arc")
+        (let [rec (ws/read-ws :brian (:id w))]
+          (is (= 1 (ws/unit-of rec 1)) "the goal roots itself")
+          (is (nil? (ws/unit-of rec 2))
+              "and the note reaches no goal, so no :seq addresses it"))))))
+
 (deftest a-workstream-that-never-designed-may-still-record-an-implementation
   ;; The guard, and the reason the rule is usable at all. Seven of the eighteen
   ;; implementation records in the live ledgers are on workstreams carrying no
@@ -935,13 +1302,12 @@
     (fn [_]
       (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
             id (:id w)]
-        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline))   ; 1
-        (seed-intent! w)                                                     ; 2
-        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 1))) ; 3
+        (seed-baseline! w)                          ; intent 1, baseline 2
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
         (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"No approval names the live design \(entry 3\)"
+             clojure.lang.ExceptionInfo #"Nothing clears the live design \(entry 3\)"
              (ws/append-entry! :brian id {:kind :implementation-completed}
-                               (pr-str an-implementation)))
+                               (pr-str (assoc an-implementation :design {:seq 3}))))
             "designed, never granted, and the refusal names the entry to grant")
         (is (= 3 (count (:entries (ws/read-ws :brian id))))
             "refused before anything is written")))))
@@ -951,13 +1317,12 @@
     (fn [_]
       (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
             id (:id w)]
-        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline))
-        (seed-intent! w)
-        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 1)))
+        (seed-baseline! w)
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))
         (ws/append-entry! :brian id {:kind :design-approved}
                           (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
         (is (some? (ws/append-entry! :brian id {:kind :implementation-completed}
-                                     (pr-str an-implementation))))))))
+                                     (pr-str (assoc an-implementation :design {:seq 3})))))))))
 
 (deftest a-design-superseded-after-its-grant-needs-granting-again
   ;; The case worth catching rather than an awkward edge: redesigning is how a
@@ -967,16 +1332,168 @@
     (fn [_]
       (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
             id (:id w)]
-        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline))
-        (seed-intent! w)
-        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 1)))  ; 3
+        (seed-baseline! w)
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))  ; 3
         (ws/append-entry! :brian id {:kind :design-approved}
                           (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
         (ws/append-entry! :brian id {:kind :design}                              ; 5
-                          (pr-str (assoc (design-citing 1)
+                          (pr-str (assoc (design-citing 2)
                                          :supersedes {:seq 3 :why "the shape could not hold"})))
         (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"No approval names the live design \(entry 5\)"
+             clojure.lang.ExceptionInfo #"Nothing clears the live design \(entry 5\)"
              (ws/append-entry! :brian id {:kind :implementation-completed}
-                               (pr-str an-implementation)))
+                               (pr-str (assoc an-implementation :design {:seq 5}))))
             "the grant names entry 3, and entry 5 is what would be implemented")))))
+
+;; ── The gate is read, not reached ──────────────────────────────────────────
+
+(defn- decide!
+  "A decision round's record on the design at `n`, recommending `recommend`."
+  ([id n] (decide! id n :proceed))
+  ([id n recommend]
+   (ws/append-entry! :brian id {:kind :design-decision}
+                     (pr-str (cond-> {:format :design-decision :recommend recommend
+                                      :design-seq n :reason "r" :asks "worth it?"
+                                      :checks [{:check :relation-honest :status :held
+                                                :note "n"}]}
+                               (not= :proceed recommend)
+                               (assoc :findings [{:cites ["decomposable"]
+                                                  :claim "the cut does not hold"}]))))))
+
+(defn- clear!
+  "A clearance of the design at `n`, through the only writer that takes one and
+   at the position it compares.
+
+   The record stores no position of its own: the append succeeds only while the
+   reading's position is still the ledger's latest, so the entry's own place in
+   the ledger IS the snapshot it was written against."
+  [id n]
+  (let [at (count (:entries (ws/read-ws :brian id)))]
+    (ws/append-entry-at! :brian id at {:kind :design-cleared}
+                         (pr-str {:format :design-cleared :design {:seq n}}))))
+
+(deftest a-clearance-lets-the-implementation-through-without-a-grant
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)                                                      ; 1, 2
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
+        (decide! id 3)                                                          ; 4
+        (clear! id 3)                                                           ; 5
+        (is (some? (ws/append-entry! :brian id {:kind :implementation-completed}
+                                     (pr-str (assoc an-implementation :design {:seq 3}))))
+            "a round proceeded and cleared it, so nobody was owed a grant")))))
+
+(deftest a-clearance-is-written-only-at-a-position
+  ;; Every reader that admits a design on a clearance trusts this record, so the
+  ;; unguarded append would let anyone write one past the reading it stands for.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))
+        (decide! id 3 :proceed)
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"through append-entry-at!"
+             (ws/append-entry! :brian id {:kind :design-cleared}
+                               (pr-str {:format :design-cleared :design {:seq 3}}))))
+        (is (= 4 (count (:entries (ws/read-ws :brian id)))) "and nothing is written")))))
+
+(deftest a-clearance-needs-a-proceeding-decision-on-its-design
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))  ; 3
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"which no decision round has judged"
+             (clear! id 3))
+            "no round, so nothing judged the design")
+        (decide! id 3 :proceed)                                                 ; 4
+        (decide! id 3 :amend)                                                   ; 5
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"latest decision recommends amend"
+             (clear! id 3))
+            "the latest decision sent it back, so the earlier :proceed clears nothing")))))
+
+(deftest a-clearance-over-a-design-owing-a-person-is-refused
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)
+        (ws/append-entry! :brian id {:kind :design}                             ; 3
+                          (pr-str (assoc (design-citing 2)
+                                         :standing {:relation :challenges
+                                                    :note "it moves the boundary"})))
+        (decide! id 3 :proceed)
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"owe a person the grant"
+             (clear! id 3))
+            "a :challenges design is granted by a person, whatever the round said")))))
+
+(deftest a-clearance-must-name-a-design
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"Clearance cites entry 2"
+             (clear! id 2)))))))
+
+(deftest a-clearance-belongs-to-the-unit-of-the-design-it-clears
+  ;; `stands-on` is the exhaustive registry the unit walk reads. A kind that
+  ;; validates its citation at the boundary but is absent from the registry is
+  ;; reported as pre-contract — a newly authored member of a unit, placed outside
+  ;; every unit.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)                                                     ; 1, 2
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
+        (decide! id 3)                                                         ; 4
+        (clear! id 3)                                                          ; 5
+        (let [rec (ws/read-ws :brian id)]
+          (is (= 1 (ws/unit-of rec 5)) "the same unit as the design it clears")
+          (is (= (ws/unit-of rec 3) (ws/unit-of rec 5))))))))
+
+(deftest a-completion-is-cleared-by-the-design-it-cites
+  ;; The guard read the ledger's newest design, which comes apart from the cited
+  ;; one exactly where it matters: work done under a cleared D1 while an unjudged
+  ;; D2 sits above it is a fact about D1.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)                                                     ; 1, 2
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
+        (decide! id 3)                                                         ; 4
+        (clear! id 3)                                                          ; 5
+        (ws/append-entry! :brian id {:kind :design}                            ; 6
+                          (pr-str (assoc (design-citing 2)
+                                         :supersedes {:seq 3 :why "recut"})))
+        (is (some? (ws/append-entry! :brian id {:kind :implementation-completed}
+                                     (pr-str (assoc an-implementation :design {:seq 3}))))
+            "a completion citing the cleared D1 is the truth, and is admitted")
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"Nothing clears the live design \(entry 6\)"
+             (ws/append-entry! :brian id {:kind :implementation-completed}
+                               (pr-str (assoc an-implementation :design {:seq 6}))))
+            "and D1's clearance does not admit a completion citing the uncleared D2")))))
+
+(deftest a-trail-citation-is-checked-even-with-no-design-on-the-ledger
+  ;; Only the REQUIREMENT is conditional. An unresolvable citation stored as
+  ;; `:under` reads as CURRENT to `trail-standing`, whose comparison is `>=`, so
+  ;; work recorded before any design would satisfy a design appended later.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"Implementation-completed :design cites entry 999"
+             (ws/append-entry! :brian (:id w) {:kind :implementation-completed}
+                               (pr-str (assoc an-implementation :design {:seq 999})))))))))

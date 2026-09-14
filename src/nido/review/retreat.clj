@@ -21,11 +21,12 @@
       property the code does not have should lose it. So this reports, and the
       caller decides; what the caller must not do is let one pass silently.
 
-   2. Pure, and dependency-free by choice. Whether a retreated record has fallen
-      below the point where its own round would still run is a question for the
-      predicates that own it (`record/baseline-round-worth-running?` and its
-      design sibling), asked by the stage that has both records in hand. Reaching
-      for them here would invert that ownership to save a line."
+   2. Pure, and dependency-free by choice. Whether a retreated baseline has
+      fallen below the point where its own round would still run is a question
+      for the predicate that owns it (`record/baseline-round-worth-running?`),
+      asked by the stage that has both records in hand. Reaching for it here
+      would invert that ownership to save a line. A design has no such floor:
+      its decision round is never skipped."
   (:require
    [clojure.string :as str]))
 
@@ -238,11 +239,9 @@
 
    Routes are read in one direction only. :fix-here is the conservative
    destination — it says you are doing the work — so moving TO it is not a
-   retreat, and moving AWAY from it to any form of not-doing-it is. That this
-   also happens to be the direction that makes `design-round-worth-running?`
-   fall silent is a separate question, and one for the caller: quieting the
-   round by promising MORE work is not something this can call a retreat without
-   lying about which way the doctrine points."
+   retreat, and moving AWAY from it to any form of not-doing-it is. Promising
+   MORE work is not something this can call a retreat without lying about which
+   way the doctrine points."
   [prev curr]
   (let [proutes (into {} (map (juxt :health-id :to)) (:routes prev))
         croutes (into {} (map (juxt :health-id :to)) (:routes curr))]

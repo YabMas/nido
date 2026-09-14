@@ -69,21 +69,41 @@
   (into {} (map (juxt #(get-in % [:retracts :seq]) :seq)) retractions))
 
 (defn- replacement
-  "The newest baseline reachable from `seq-n` by correction citations, or nil.
+  "The newest record in `records` reachable from `seq-n` by :supersedes
+   citations, or nil.
 
-   Follows only a citation a correcting baseline WROTE naming what it corrected.
-   Every baseline written before that field existed carries none, and those yield
-   no replacement — taking the newest baseline instead is exactly the recency the
-   ledger's citations exist to refuse. Bounded by the number of baselines, so a
-   citation cycle cannot spin here."
-  [baselines seq-n]
+   Follows only a citation a replacing record WROTE naming what it replaced.
+   Every record written before its kind carried that field has none, and those
+   yield no replacement — taking the newest of the kind instead is exactly the
+   recency the ledger's citations exist to refuse. Bounded by the number of
+   records, so a citation cycle cannot spin here.
+
+   Over any one kind, not baselines alone: an intent replaces an intent by the
+   same edge and is walked by the same rule, so a goal that moved is found the
+   way a re-survey already was. Callers pass one kind's records — a chain must
+   not step between kinds."
+  [records seq-n]
   (let [by-superseded (into {} (map (juxt #(get-in % [:supersedes :seq]) :seq))
-                            (filter #(get-in % [:supersedes :seq]) baselines))]
-    (loop [at seq-n, seen #{seq-n}, found nil, budget (count baselines)]
+                            (filter #(get-in % [:supersedes :seq]) records))]
+    (loop [at seq-n, seen #{seq-n}, found nil, budget (count records)]
       (let [nxt (by-superseded at)]
         (if (or (nil? nxt) (contains? seen nxt) (neg? budget))
           found
           (recur nxt (conj seen nxt) nxt (dec budget)))))))
+
+(defn- goal-replaced
+  "The :seq of the intent that replaced the goal at `goal-seq` after the record
+   at `record-seq` was written, or nil.
+
+   The one goal walk every rung is unseated by — `replacement` over the intents,
+   under the sequence guard a re-survey is held to — so a design and the survey
+   beneath it cannot disagree about whether the same goal still holds.
+   `replacement` walks forward and every step is a later entry, so the seq it
+   returns is the newest: the live goal, and one comparison places it."
+  [ins goal-seq record-seq]
+  (when goal-seq
+    (when-let [r (replacement ins goal-seq)]
+      (when (> r record-seq) r))))
 
 (defn- invalidating-verdict
   "The :seq of a verdict that put `design-seq` itself in question and that nobody
@@ -130,8 +150,10 @@
             revs (readable project ws-id w :baseline-review)
             oks  (readable project ws-id w :design-approved)
             bls  (readable project ws-id w :baseline)
-            vs   (readable project ws-id w :design-verdict)]
-        (if (some #{::unreadable} [rs revs oks bls vs])
+            vs   (readable project ws-id w :design-verdict)
+            ins  (readable project ws-id w :intent)
+            clr  (readable project ws-id w :design-cleared)]
+        (if (some #{::unreadable} [rs revs oks bls vs ins clr])
           {:indeterminate? true
            :blocked {:reason :unreadable-ledger
                      :detail (str "an entry standing depends on could not be read on "
@@ -143,11 +165,29 @@
                 approval    (->> oks
                                  (filter #(= design-seq (get-in % [:design :seq])))
                                  last)
+                ;; A round having found this design implementable without a
+                ;; person. Keyed on THIS design's :seq for the reason the grant
+                ;; is: a clearance naming a design that has since been superseded
+                ;; says nothing about the one standing now.
+                clearance   (->> clr
+                                 (filter #(= design-seq (get-in % [:design :seq])))
+                                 last)
                 sufficient? (boolean
                              (some #(and (= premise-seq (:baseline-seq %))
                                          (report/verdict-holds (:verdict %)))
                                    revs))
                 replaced-by (replacement bls premise-seq)
+                ;; The goal this design was written to serve, and the goal the
+                ;; baseline under it was scoped for. Either moving unseats the
+                ;; design, and they are asked SEPARATELY because the ledger can
+                ;; hold a design whose two edges name different goals. Root
+                ;; agreement refuses one on append; it says nothing about the
+                ;; records already written, and this is a READING over every
+                ;; ledger the base ever admitted.
+                goal-seq    (get-in design [:intent :seq])
+                premise-rec (->> bls (filter #(= premise-seq (:seq %))) first)
+                base-goal   (get-in premise-rec [:intent :seq])
+                goal-moved  #(goal-replaced ins % design-seq)
                 premise {:seq premise-seq
                          :retracted-by (retracted premise-seq)
                          :sufficient?  sufficient?
@@ -159,7 +199,14 @@
                          ;; whether any replacement postdates the design.
                          :superseded-after (when (and replaced-by
                                                      (> replaced-by design-seq))
-                                             replaced-by)}
+                                             replaced-by)
+                         ;; Set even where :blocked reports the design's OWN goal
+                         ;; first, because only this says whether the survey is
+                         ;; owed too. The two are one chain for everything root
+                         ;; agreement admitted, and this is the baseline's own
+                         ;; edge either way — asking the design's here would
+                         ;; report the survey sound on a ledger where it is not.
+                         :goal-replaced-by (goal-moved base-goal)}
                 invalidated (invalidating-verdict vs oks design-seq)
                 blocked (cond
                           (retracted design-seq)
@@ -177,6 +224,44 @@
                            :detail (str "the review round at entry " invalidated
                                         " found this design invalid rather than its"
                                         " execution, and no approval since answers it")}
+
+                          ;; ABOVE the premise clauses, and the order is the
+                          ;; claim. A moved goal is the deeper fact: re-verifying
+                          ;; the baseline underneath it answers a question nobody
+                          ;; is asking any more, so reporting the premise first
+                          ;; would send an author to re-establish footing for work
+                          ;; whose point has changed. Below the two clauses that
+                          ;; name a judgement about THIS design, for the reason
+                          ;; those already give — somebody derived those.
+                          (goal-moved goal-seq)
+                          {:reason :goal-superseded :seq goal-seq
+                           :replaced-by (goal-moved goal-seq)
+                           :detail (str "the design serves the goal at entry " goal-seq
+                                        ", which was superseded at entry "
+                                        (goal-moved goal-seq) " after this design"
+                                        " was written — it serves a goal nobody holds")}
+
+                          ;; The same fact reached through the baseline. A survey
+                          ;; is scoped FOR a goal, so a design standing on a
+                          ;; survey whose goal moved is standing on a boundary
+                          ;; drawn for something else.
+                          ;;
+                          ;; Root agreement does not answer this and cannot stand
+                          ;; in for it. It asks which unit a record BELONGS to and
+                          ;; it asks it on APPEND, so it makes the two edges one
+                          ;; chain for records written under it and says nothing
+                          ;; about the ledgers already on disk — where a design
+                          ;; citing one goal over a survey scoped for another is a
+                          ;; shape the boundary of the day admitted. Dropping this
+                          ;; would hand such a design its standing back.
+                          (goal-moved base-goal)
+                          {:reason :premise-goal-superseded :seq premise-seq
+                           :replaced-by (goal-moved base-goal)
+                           :detail (str "the baseline at entry " premise-seq
+                                        " was scoped for the goal at entry " base-goal
+                                        ", superseded at entry " (goal-moved base-goal)
+                                        " — the survey bounds an area chosen for a"
+                                        " goal nobody holds")}
 
                           (nil? premise-seq)
                           {:reason :no-premise
@@ -218,14 +303,86 @@
             ;; DECIDABLE — and the absence of an approval is deliberately not in
             ;; it. The premise gate reads this before a human has had anything
             ;; to approve, and a gate that refused an unapproved design would
-            ;; make the design round unreachable. What wants both is the landing
-            ;; check, and it composes them itself.
+            ;; make the design round unreachable. What wants both is :cleared?
+            ;; below, and every reader that gates on the arc asks that.
             (cond-> {:live?       (nil? (retracted design-seq))
                      :premise     premise
                      :approved-by (:seq approval)
+                     ;; BESIDE :approved-by, never folded into it. `:decided?`
+                     ;; goes on meaning `nothing blocks this and a person granted
+                     ;; it`, which is what `work` and the dashboard report. What
+                     ;; GATES — `place`, `reentry`, the implementation floor and
+                     ;; `tasks/nido_land.clj` — asks :cleared?, and may, because
+                     ;; the append boundary admits a clearance only over a
+                     ;; proceeding decision on a design that owes nobody.
+                     :cleared-by  (:seq clearance)
                      :decidable?  (nil? blocked)
-                     :decided?    (and (nil? blocked) (some? approval))}
+                     :decided?    (and (nil? blocked) (some? approval))
+                     ;; What the arc asks: nothing blocks it, and something said
+                     ;; it may be built — a grant, or a round that owed nobody.
+                     :cleared?    (and (nil? blocked)
+                                       (or (some? approval) (some? clearance)))}
               blocked (assoc :blocked blocked))))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
+  of-baseline
+  "Whether `baseline` — a stamped :baseline record — is still footing a design
+   may be written on: a round found it sufficient at exactly this number, and
+   the goal it was scoped for has not been replaced since.
+
+   The baseline rung's own reading of the fact `of-design` reaches through its
+   premise, by the same walk. It is asked of the baseline because the case that
+   needs it has no design to ask: a goal replaced after its survey was verified
+   leaves the arc owing a design, and the append boundary refuses every design
+   over that survey, and every review of it — either would stand on the
+   replaced goal through it. So :verified? stops counting the sufficient
+   verdict, and :blocked says why. What re-opens is the survey, not its
+   verification: a reader that routes on :verified? alone asks for the one
+   review nothing may write.
+
+   :blocked's :replaced-by is the live goal, and it is the citation a baseline
+   written under the amended goal carries; its :baseline is the survey that one
+   `:supersedes`. Whoever writes that survey reads both here rather than taking
+   the newest intent, which is the recency the intent citation exists to refuse.
+   The pipeline routes on this reading — `baseline-verified?` is its :verified?,
+   and `reentry` sends the arc back to the baseline rung on its :blocked.
+
+   Fails closed like `of-design`: a review or an intent the index claims and
+   nobody can parse leaves verification indeterminate, never granted."
+  [project ws-id baseline]
+  (let [w (ws/read-ws project ws-id)]
+    (if (nil? w)
+      {:indeterminate? true :verified? false
+       :blocked {:reason :no-workstream :detail (str "no workstream " ws-id)}}
+      (let [revs (readable project ws-id w :baseline-review)
+            ins  (readable project ws-id w :intent)]
+        (if (some #{::unreadable} [revs ins])
+          {:indeterminate? true :verified? false
+           :blocked {:reason :unreadable-ledger
+                     :detail (str "an entry standing depends on could not be read on "
+                                  ws-id " — standing cannot be derived, so nothing "
+                                  "may proceed on it")}}
+          (let [seq-n       (:seq baseline)
+                goal-seq    (get-in baseline [:intent :seq])
+                moved       (goal-replaced ins goal-seq seq-n)
+                sufficient? (boolean
+                             (some #(and (= seq-n (:baseline-seq %))
+                                         (report/verdict-holds (:verdict %)))
+                                   revs))]
+            (cond-> {:sufficient? sufficient?
+                     :verified?   (and sufficient? (nil? moved))}
+              moved (assoc :blocked
+                           {:reason :goal-superseded :seq goal-seq
+                            :replaced-by moved
+                            ;; What the survey under the amended goal
+                            ;; `:supersedes` — the two citations it carries are
+                            ;; both read here, never taken from recency.
+                            :baseline seq-n
+                            :detail (str "the baseline at entry " seq-n
+                                         " was scoped for the goal at entry " goal-seq
+                                         ", superseded at entry " moved
+                                         " — a baseline under the amended goal cites"
+                                         " entry " moved)}))))))))
 
 (defn ^{:malli/schema [:=> [:cat :Standing] [:maybe :string]]}
   why-not-decided
