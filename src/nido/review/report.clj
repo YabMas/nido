@@ -364,16 +364,34 @@
       ;; other: a verdict is what the judge decided, an outcome is why there is
       ;; no verdict. A phase that kept only the first renders a codex failure
       ;; exactly like a clean round.
-      :judge  (assoc ph :verdict (some-> (get-in ctx [:record :verdict]) name)
-                        :outcome (some-> (get-in ctx [:record :outcome]) name)
-                        :findings (vec (:findings ctx)))
+      ;; :settled is what the judge was NOT asked to check, each with the review
+      ;; that settled it — the one account of a skip a reader can check against the
+      ;; ledger, rather than a quiet round that looked at less.
+      ;; :detail and :answer are what an outcome carries in place of a review, and
+      ;; the ledger holds neither: :detail says why there is no verdict, :answer is
+      ;; a judgment that was made and refused (`:code-moved`), findings and all.
+      ;; The report is the only place either can be read, so a fold that drops
+      ;; them loses them.
+      :judge  (cond-> (assoc ph :verdict (some-> (get-in ctx [:record :verdict]) name)
+                                :outcome (some-> (get-in ctx [:record :outcome]) name)
+                                :findings (vec (:findings ctx)))
+                (seq (:settled ctx))
+                (assoc :settled (mapv (fn [[id by]] {:id id :by by})
+                                      (sort-by key (:settled ctx))))
+                (and (get-in ctx [:record :outcome]) (get-in ctx [:record :detail]))
+                (assoc :detail (get-in ctx [:record :detail]))
+                (get-in ctx [:record :answer])
+                (assoc :answer (get-in ctx [:record :answer])))
       ;; What the stage actually DID, not what its name suggests. An amend phase
       ;; that spent its round re-surveying and never reached an amendment must
       ;; not report itself as having amended anything.
-      :amend  (assoc ph :retreats (vec (:retreats ctx))
-                        :disputes (vec (:disputes ctx))
-                        :amended? (boolean (:amended? ctx))
-                        :resurveyed (some-> (:resurveyed ctx) name))
+      ;; :amend-error is why an amendment the ledger refused was not appended —
+      ;; the judge phase's :detail, for this stage, and held nowhere else either.
+      :amend  (cond-> (assoc ph :retreats (vec (:retreats ctx))
+                                :disputes (vec (:disputes ctx))
+                                :amended? (boolean (:amended? ctx))
+                                :resurveyed (some-> (:resurveyed ctx) name))
+                (:amend-error ctx) (assoc :amend-error (:amend-error ctx)))
 
       ;; :conflicted is what ended THIS round, where the copy on the target is
       ;; what the stack looked like when the run last asked. A round that stopped

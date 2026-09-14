@@ -6,6 +6,7 @@
    so nothing here spawns a process."
   (:require
    [babashka.fs :as fs]
+   [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
    [nido.platform.core :as core]
@@ -14,6 +15,7 @@
    [nido.coordinator.record.workstream :as ws]
    [nido.review.loop :as rloop]
    [nido.review.record :as record]
+   [nido.review.report :as report]
    [nido.review.settled :as settled]
    [nido.review.stages :as stages]))
 
@@ -254,12 +256,28 @@
     (is (= :amend-unreadable (:status out)))
     (is (nil? appended))))
 
+(defn- persisted-phase
+  "`out`, a stage's finished ctx, folded into a run report as `phase` and read
+   back off disk — what a reader of the finished run actually has, as against
+   what the stage returned."
+  [phase out]
+  (let [path (str (fs/create-temp-file {:suffix ".json"}))]
+    (try
+      (-> (report/init {:run-id "r1" :cwd "/w" :base nil :started-at "t0"})
+          (report/apply-event {:event :phase-started :iter 1 :phase phase :at "t1"} nil)
+          (report/apply-event {:event :phase-finished :iter 1 :phase phase :at "t2" :ctx out} nil)
+          (report/persist! path))
+      (-> (json/parse-string (slurp path) true) :rounds first :phases first)
+      (finally (fs/delete-if-exists path)))))
+
 (deftest a-record-the-ledger-refuses-is-its-own-outcome
   (let [[out _] (with-amend {:append-throws? true
                              :writes (fn [p] (spit p (pr-str a-baseline)))}
                             (ctx :findings [a-finding]))]
     (is (= :amend-invalid (:status out)))
-    (is (= "schema said no" (:amend-error out)))))
+    (is (= "schema said no" (:amend-error out)))
+    (is (= "schema said no" (:amend-error (persisted-phase :amend out)))
+        "and the report keeps it, since nothing was appended to say it")))
 
 (deftest a-corrected-record-is-appended-and-the-loop-continues
   (let [corrected (assoc-in a-baseline [:load-bearing 0 :property]
@@ -701,58 +719,126 @@
     (is (str/includes? p "stays true as the code moves")
         "and what to prefer when a claim does have to change")))
 
-;; ── What an earlier round already settled ───────────────────────────────────
+;; ── What the ledger already settled ─────────────────────────────────────────
 
-(deftest confirmations-travel-to-the-next-judge
-  ;; Measured on a frozen run: three of five findings in one round were against
-  ;; records byte-identical to what the previous round had CONFIRMED. Improving
-  ;; the record could never have fixed that, because the record was already right.
+(def ^:private settling-ledger
+  "A ledger on which a review that read tree-a confirmed c1 of `a-baseline`."
+  {:reviews     [{:format :baseline-review :seq 2 :baseline-seq 1 :verdict :sufficient
+                  :reason "ok" :confirmed ["c1"] :code-identity "tree-a"}]
+   :baselines   [(assoc a-baseline :seq 1)]
+   :retractions []})
+
+(defn- judged-at
+  "Run the judge stage with the tree reading as `tree` and `settling-ledger` on
+   the workstream. Returns [what baseline-review! was handed, the stage's ctx]."
+  [tree]
   (let [seen (atom nil)]
     (with-redefs [record/baseline-review! (fn [opts] (reset! seen opts)
                                             {:format :baseline-review :verdict :sufficient :reason "ok"})
                   record/append! (fn [_ _] nil)
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
-                  ws/latest-entry (fn [_ _ _] a-baseline)]
-      (run record/judge-stage
-           (ctx :history [{:confirmed ["the aggregate is the only summing path"]}
-                          {:confirmed ["a total is derived, never stored"
-                                       "the aggregate is the only summing path"]}]))
-      (is (= ["the aggregate is the only summing path" "a total is derived, never stored"]
-             (:confirmed @seen))
-          "every distinct confirmation, once"))))
+                  ws/latest-entry (fn [_ _ _] a-baseline)
+                  settled/code-identity (fn [_] tree)
+                  settled/ledger (fn [_ _] settling-ledger)]
+      (let [out (run record/judge-stage (ctx))]
+        [@seen out]))))
 
-(deftest a-round-records-what-it-confirmed
-  ;; By id, and only ids the baseline actually contains — a confirmation naming
-  ;; nothing confirms nothing, and must not accumulate in the list later rounds
-  ;; are shown.
-  (let [corrected (assoc a-baseline :area "corrected")
-        real-id   (:id (first (:load-bearing a-baseline)))
-        [out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record corrected})))}
-                            (ctx :findings [a-finding]
-                                 :record {:verdict :falsified
-                                          :confirmed [real-id "a sentence about nothing"]}))]
-    (is (= [real-id] (:confirmed (first (:history out))))
-        "or nothing travels and the next round may re-litigate it silently")))
+(deftest the-judge-is-handed-what-the-ledger-settled-at-this-tree
+  ;; Not what earlier rounds of this run said: that channel keyed on the id alone,
+  ;; and told the judge a confirmation stood for this same record after an
+  ;; amendment had changed it. The ledger reading keys on content and tree, and
+  ;; still covers the run's own earlier rounds, whose tree does not move.
+  (let [[seen out] (judged-at "tree-a")]
+    (is (= {"c1" 2} (:settled seen)))
+    (is (= "tree-a" (:code-identity seen)) "with the reading the settling was made at")
+    (is (= {"c1" 2} (:settled out)) "and the report is told what was not asked")))
 
-(deftest the-judge-may-still-withdraw-a-confirmation-but-must-say-so
-  (let [p (record/baseline-prompt {:baseline {:format :baseline}
-                                   :confirmed ["a claim that held"]})]
-    (is (str/includes? p "ALREADY CONFIRMED"))
-    (is (str/includes? p "You may still refute one"))
-    (is (str/includes? p "cannot converge"))
-    (is (str/includes? p "Spend your effort on what is NOT in this list"))))
+(deftest nothing-is-settled-at-a-tree-no-review-read
+  (let [[seen _] (judged-at "tree-b")]
+    (is (= {} (:settled seen)))))
 
-(deftest a-confirmation-naming-nothing-in-the-baseline-is-dropped
-  ;; Watched live: a judge asked for ids answered with "design" and
-  ;; "implementation" — health-observation AXIS values, not ids. Kept, those
-  ;; accumulate in the list every later round is shown, and a list that is partly
-  ;; ids and partly not is the prose problem creeping back one entry at a time.
-  (let [rec {:load-bearing [{:id "real-claim"}] :modules [{:id "real-module"}]
-             :health [{:id "real-health"}]}]
-    (is (= ["real-claim" "real-module" "real-health"]
-           (record/confirmed-in rec ["real-claim" "design" "real-module"
-                                     "implementation" "real-health" "real-claim"]))
-        "known ids only, deduplicated, order preserved")))
+(deftest a-review-confirms-only-what-its-own-judge-checked
+  ;; A subject outside the checks was not checked, so a judge listing it confirmed
+  ;; nothing; nor does an id naming nothing — watched live, a judge answered with
+  ;; health AXIS values. Either kept would let a later round settle on a check
+  ;; that never happened.
+  (with-redefs [record/run-round! (fn [_] {:ok (str "{\"verdict\":\"sufficient\",\"reason\":\"ok\","
+                                                    "\"confirmed\":[\"c1\",\"mod-the-order-aggregate\","
+                                                    "\"design\",\"shape\",\"shape\"],\"findings\":[]}")})
+                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                settled/code-identity (fn [_] "tree-a")]
+    (let [r (record/baseline-review! {:cwd "/w" :run-id "r1" :baseline (assoc a-baseline :seq 3)
+                                      :settled {"c1" 2} :code-identity "tree-a"})]
+      (is (= ["mod-the-order-aggregate" "shape"] (:confirmed r))))))
+
+(deftest a-tree-that-moved-under-a-round-with-settled-subjects-appends-nothing
+  ;; Those subjects were settled against the tree read as the judge launched, and
+  ;; its judge did not read that tree throughout — so the verdict would cover
+  ;; subjects nobody checked against what it did read. No review; the answer is
+  ;; kept for the report.
+  (with-redefs [record/run-round! (fn [_] {:ok "{\"verdict\":\"sufficient\",\"reason\":\"ok\",\"confirmed\":[],\"findings\":[]}"})
+                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                settled/code-identity (fn [_] "tree-b")]
+    (let [r (record/baseline-review! {:cwd "/w" :run-id "r1" :baseline (assoc a-baseline :seq 3)
+                                      :settled {"c1" 2} :code-identity "tree-a"})]
+      (is (= :code-moved (:outcome r)))
+      (is (nil? (:format r)) "an outcome is never appended")
+      (is (= :sufficient (get-in r [:answer :verdict]))))))
+
+(deftest the-refused-answer-is-kept-in-the-persisted-report
+  ;; Nothing was appended, so the report is the only place the judgment can be
+  ;; read — and a fold that kept only the outcome wrote a round that said a tree
+  ;; moved and nothing about what its judge found.
+  (let [moved {:outcome :code-moved :detail "the tree changed while the judge read it"
+               :answer  {:format :baseline-review :verdict :falsified :reason "no"
+                         :findings [a-finding]}}
+        out   (with-redefs [record/baseline-review! (fn [_] moved)
+                            record/append! (fn [_ _] nil)
+                            stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                            ws/latest-entry (fn [_ _ _] a-baseline)
+                            settled/code-identity (fn [_] "tree-a")
+                            settled/ledger (fn [_ _] settling-ledger)]
+                (run record/judge-stage (ctx)))
+        ph    (persisted-phase :judge out)]
+    (is (= "code-moved" (:outcome ph)))
+    (is (= "the tree changed while the judge read it" (:detail ph))
+        "why there is no verdict, which no ledger entry says either")
+    (is (= "falsified" (get-in ph [:answer :verdict])))
+    (is (= [(:claim a-finding)] (map :claim (get-in ph [:answer :findings])))
+        "with what the judge found, since the stage copies none of it into :findings")))
+
+(deftest a-settled-subject-is-shown-but-is-not-a-check
+  (let [p (record/baseline-prompt {:baseline a-baseline :settled {"c1" 2 "shape" 2}})
+        [checks outside] (str/split p #"OUTSIDE THIS ROUND'S CHECKS" 2)]
+    (is (some? outside) "every subject is still shown")
+    (is (str/includes? outside "[c1] the aggregate is the only summing path"))
+    (is (str/includes? outside "[shape] the aggregate is the only thing that sums lines"))
+    (is (not (str/includes? outside "refuted by")) "with nothing to go looking for")
+    (is (not (str/includes? checks "[c1]")) "and not among the checks")
+    (is (not (str/includes? checks "[shape]")))
+    (is (str/includes? checks "[invoice-resums]") "an unsettled subject is still a check")))
+
+(deftest a-record-with-every-claim-settled-heads-no-empty-list
+  ;; A header over nothing reads as a baseline that claims nothing, which is the
+  ;; opposite of true: every claim is there, outside the checks.
+  (let [all-claims (into {} (map (fn [c] [(:id c) 2])) (:load-bearing a-baseline))
+        [checks _] (str/split (record/baseline-prompt {:baseline a-baseline :settled all-claims})
+                              #"OUTSIDE THIS ROUND'S CHECKS" 2)]
+    ;; The header itself, not the word: the lens vocabulary above it says a claim
+    ;; lens reads "a LOAD-BEARING CLAIM".
+    (is (not (str/includes? checks "LOAD-BEARING — what is claimed"))))
+  (testing "while a record with no claims at all keeps the header it always had"
+    (is (str/includes? (record/baseline-prompt {:baseline {:format :baseline}})
+                       "LOAD-BEARING — what is claimed"))))
+
+(deftest the-judge-is-never-told-why-a-subject-is-outside-its-checks
+  ;; The partition is all it learns. A judge told a subject was checked before, or
+  ;; that the rest are what changed, is judging a delta.
+  (let [p (record/baseline-prompt {:baseline a-baseline :settled {"c1" 2}})
+        section (-> p (str/split #"OUTSIDE THIS ROUND'S CHECKS" 2) second
+                    (str/split #"\n\nTwo distinct failures" 2) first str/lower-case)]
+    (doseq [w ["earlier" "before" "previous" "already" "amend" "chang" "settled" "entry" "round of"]]
+      (is (not (str/includes? section w)) (str "the section says \"" w "\"")))))
 
 (deftest a-gap-is-keyed-on-the-derivation-it-blocks
   ;; The one handle an amendment cannot move. A gap carries no :claim-id — the
@@ -776,23 +862,20 @@
   ;; loop has already paid for three times. :shape and :composition are not
   ;; items in a vector and so carry no :id of their own, and they are the two a
   ;; decomposition-level round challenges most.
-  (let [ids (record/known-ids a-baseline)]
+  (let [ids (set (keys (settled/subjects a-baseline)))]
     (is (contains? ids "shape"))
     (is (contains? ids "composition"))
     (is (contains? ids "c1") "the claim ids are still there")
     (is (contains? ids "invoice-resums") "and the health observation ids")))
 
 (deftest a-reserved-id-is-only-known-when-the-baseline-fills-it-in
-  (is (not (contains? (record/known-ids (dissoc a-baseline :composition))
+  (is (not (contains? (settled/subjects (dissoc a-baseline :composition))
                       "composition"))))
-
-(deftest a-confirmation-may-name-a-whole-record-field
-  (is (= ["composition"] (record/confirmed-in a-baseline ["composition"]))))
 
 (deftest the-judge-is-shown-the-ids-it-is-asked-to-cite
   ;; An id in the record and not in the prompt cannot be cited back. Health
   ;; observations carried one all along and it was the one subject never
-  ;; printed, so `confirmed-in` dropped whatever the judge said about them.
+  ;; printed, so a judge could not confirm one by id.
   (let [p (record/baseline-prompt {:baseline a-baseline})]
     (is (str/includes? p "[shape]"))
     (is (str/includes? p "[composition]"))

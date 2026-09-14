@@ -400,6 +400,16 @@
         s (render/record-frame r now-10s {:title "t"})]
     (is (re-find #"✓ amend\s+nothing to amend" s))))
 
+(deftest a-judge-names-what-it-was-not-asked-to-check
+  ;; A round that looked at less must say so, and say on whose authority: the
+  ;; entry that settled each subject is what a reader checks the skip against.
+  (let [r (assoc-in record-report [:rounds 0 :phases 0]
+                    {:phase "judge" :status "ok" :started-at "2026-01-01T00:00:00Z"
+                     :ended-at "2026-01-01T00:00:04Z" :verdict "sufficient"
+                     :settled [{:id "c1" :by 12} {:id "c2" :by 12} {:id "m1" :by 9}]})
+        s (render/record-frame r now-10s {:title "t"})]
+    (is (re-find #"✓ judge\s+sufficient · 3 settled \(1 by entry 9, 2 by entry 12\)" s))))
+
 (deftest a-judge-that-could-not-run-never-renders-like-a-clean-one
   ;; A ✓ with nothing after it reads as "judged, found nothing". For a round that
   ;; never reached a judgment that is the one wrong reading available.

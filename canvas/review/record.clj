@@ -27,21 +27,18 @@
     {:signature [:=> [:catn [:baseline :map]] :boolean]})
   (Operation discover-intent "The intent a design cited."
     {:signature [:=> [:catn [:cwd Path] [:design :map]] [:maybe :map]]})
-  (Operation known-ids "Every id a baseline actually defines."
-    {:signature [:=> [:catn [:record :map]] :any]})
-  (Operation confirmed-in "The confirmations that name ids this record has."
-    {:signature [:=> [:catn [:record :map] [:confirmed :any]] :any] :delegates [known-ids]})
-  (Operation confirmed-so-far "Every claim an earlier round confirmed."
-    {:signature [:=> [:catn [:history :any]] :any]})
-  (Operation confirmations-block "What earlier rounds already settled, for the prompt."
-    {:signature [:=> [:catn [:confirmed :any]] :string]})
+  (Operation settled-block
+    "The settled subjects, shown for the record-level derivations and outside the round's checks —
+     text, readings and id, without the counterexample or evidence a check carries. Says nothing
+     about why a subject is there."
+    {:signature [:=> [:catn [:settled :map] [:record :map]] :string]})
   (Operation disputes-block "What an earlier amendment disputed, for the prompt."
     {:signature [:=> [:catn [:disputes :any]] :string]})
   (Operation lens-block "The perspectives in play, and what each is for."
     {:signature [:=> [:catn] :string]})
   (Operation baseline-prompt "The verification prompt for a baseline."
     {:signature [:=> [:catn [:opts :map]] :string]
-     :delegates [confirmations-block disputes-block lens-block]})
+     :delegates [settled-block disputes-block lens-block]})
   (Operation design-prompt "The decision prompt for a design."
     {:signature [:=> [:catn [:opts :map]] :string] :delegates [disputes-block]})
   (Operation parse-baseline-review "The agent's answer as a baseline review record."

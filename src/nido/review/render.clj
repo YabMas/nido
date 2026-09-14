@@ -450,6 +450,16 @@
 
 (def ^:private title-cap 72)
 
+(defn- settled-detail
+  "What a judge was not asked to check, grouped by the entry that settled it — the
+   entries are what a reader checks the skip against. Blank when nothing was."
+  [settled]
+  (when (seq settled)
+    (str " · " (count settled) " settled ("
+         (str/join ", " (for [[by ids] (sort-by key (group-by :by settled))]
+                          (str (count ids) " by entry " by)))
+         ")")))
+
 (defn- judge-detail
   "A verdict, or — when there is none — why there is none.
 
@@ -459,9 +469,10 @@
   (if-let [v (:verdict ph)]
     (let [n (count (:findings ph))]
       (str v (when (pos? n)
-               (str " · " n " finding" (when (not= 1 n) "s")))))
+               (str " · " n " finding" (when (not= 1 n) "s")))
+           (settled-detail (:settled ph))))
     (when-let [o (:outcome ph)]
-      (str o " — no judgment"))))
+      (str o " — no judgment" (settled-detail (:settled ph))))))
 
 (defn- amend-detail
   "What the round did, in the order it did it.

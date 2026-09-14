@@ -749,6 +749,10 @@
    :round-crashed        :retry
    :unusable-answer      :retry
    :review-failed        :retry
+   ;; The tree changed while a baseline round's judge read it, with subjects
+   ;; outside its checks: nothing was appended, and the same round on a tree that
+   ;; holds still is the whole of the remedy.
+   :code-moved           :retry
 
    ;; ── an earlier record is at fault, and it is nameable ──
    :premise-unverified   :route-back  ; go verify the baseline this design cites

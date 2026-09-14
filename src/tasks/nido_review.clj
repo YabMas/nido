@@ -1821,7 +1821,8 @@
    going. It had a line here, which said the loop can end that way; it cannot."
   {:sufficient "the baseline holds against the code, and a decision can be made against it"
    :no-record "author the baseline first"
-   :nothing-to-check "nothing in the baseline is refutable yet"})
+   :nothing-to-check "nothing in the baseline is refutable yet"
+   :code-moved "the tree changed while the judge read it, and some subjects were outside its checks — nothing was appended; run the round again once nothing is editing the tree"})
 
 (defn- baseline-at
   "The baseline named by :seq, or nil for `whichever is newest`.
