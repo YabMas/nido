@@ -51,6 +51,7 @@
    [nido.review.codex :as codex]
    [nido.review.loop :as rloop]
    [nido.review.retreat :as retreat]
+   [nido.review.settled :as settled]
    [nido.review.stages :as stages]))
 
 ;; ── Whether a round is worth running ────────────────────────────────────────
@@ -886,18 +887,28 @@
    follow-up written beside the broad one it came out of — and a loop that
    re-reads `latest` repairs whichever was appended last, which need not be the
    one anybody asked about. It then cannot converge by construction: the design
-   citing the other baseline is never answered however long it runs."
+   citing the other baseline is never answered however long it runs.
+
+   The review carries `:code-identity` only when the tree read as the judge
+   launched is the tree read as it returned. The judge reads the live tree, so
+   that equality is all that ties its confirmations to code; a round that saw
+   the tree move records none, and settles nothing (see `nido.review.settled`)."
   [{:keys [cwd code-cwd run-id label disputes baseline confirmed]}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [baseline (or baseline (ws/latest-entry project ws-id :baseline))]
       (if (baseline-round-worth-running? baseline)
-        (judged (run-round! {:cwd (or code-cwd cwd) :run-id run-id :kind :baseline-review
-                             :label label
-                             :prompt (baseline-prompt {:baseline baseline
-                                                       :disputes disputes
-                                                       :confirmed confirmed
-                                                       :stance (stages/read-stance project)})})
-                #(parse-baseline-review % (:seq baseline)))
+        (let [code-cwd (or code-cwd cwd)
+              before   (settled/code-identity code-cwd)
+              result   (judged (run-round! {:cwd code-cwd :run-id run-id :kind :baseline-review
+                                            :label label
+                                            :prompt (baseline-prompt {:baseline baseline
+                                                                      :disputes disputes
+                                                                      :confirmed confirmed
+                                                                      :stance (stages/read-stance project)})})
+                               #(parse-baseline-review % (:seq baseline)))
+              after    (settled/code-identity code-cwd)]
+          (cond-> result
+            (and (:format result) before (= before after)) (assoc :code-identity before)))
         {:outcome :nothing-to-check
          :detail "the baseline records no load-bearing property and no health observation"})
       {:outcome :no-record :detail "this workstream has no :baseline entry"})

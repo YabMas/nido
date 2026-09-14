@@ -14,6 +14,7 @@
    [nido.coordinator.record.workstream :as ws]
    [nido.review.loop :as rloop]
    [nido.review.record :as record]
+   [nido.review.settled :as settled]
    [nido.review.stages :as stages]))
 
 (defn- with-tmp-nido-root
@@ -102,6 +103,41 @@
       (record/baseline-review! {:cwd "/ledger" :run-id "r1"})
       (is (= "/ledger" (:cwd @seen))
           "they are the same tree in the ordinary case, and nothing has to say so"))))
+
+;; ── The tree a review read ──────────────────────────────────────────────────
+
+(defn- reviewed-over
+  "baseline-review! with a judge that finds the baseline sufficient, while the code
+   identity reads as `trees` in turn — the first as the judge launches, the second
+   as it returns. `answer` replaces what the round returns."
+  ([trees] (reviewed-over trees {:ok "{\"verdict\":\"sufficient\",\"reason\":\"ok\",\"confirmed\":[\"c1\"],\"findings\":[]}"}))
+  ([trees answer]
+   (let [left (atom trees)]
+     (with-redefs [record/run-round! (fn [_] answer)
+                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                   ws/latest-entry (fn [_ _ _] (assoc a-baseline :seq 2))
+                   settled/code-identity (fn [_] (let [t (first @left)] (swap! left rest) t))]
+       (record/baseline-review! {:cwd "/w" :run-id "r1"})))))
+
+(deftest a-review-names-the-tree-its-judge-read
+  (let [r (reviewed-over ["tree-a" "tree-a"])]
+    (is (= :sufficient (:verdict r)))
+    (is (= "tree-a" (:code-identity r)))))
+
+(deftest a-tree-that-moved-under-the-judge-is-not-recorded
+  ;; The judge reads the live tree, so a confirmation made while it moved names no
+  ;; single tree. The verdict still stands; it just settles nothing later.
+  (let [r (reviewed-over ["tree-a" "tree-b"])]
+    (is (= :sufficient (:verdict r)))
+    (is (not (contains? r :code-identity)))))
+
+(deftest a-tree-with-no-identity-is-not-recorded
+  (is (not (contains? (reviewed-over [nil nil]) :code-identity))))
+
+(deftest a-round-that-did-not-run-carries-no-tree
+  (let [r (reviewed-over ["tree-a" "tree-a"] {:outcome :codex-failed :detail "d"})]
+    (is (= :codex-failed (:outcome r)))
+    (is (not (contains? r :code-identity)))))
 
 (deftest an-accurate-verdict-stops-the-loop
   (with-redefs [record/baseline-review! (fn [_] {:format :baseline-review

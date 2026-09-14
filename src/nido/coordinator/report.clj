@@ -1864,7 +1864,12 @@
   (let [common [[:format       [:= :baseline-review]]
                 [:baseline-seq int?]
                 [:reason       string?]
-                [:confirmed    {:optional true} [:vector string?]]]
+                [:confirmed    {:optional true} [:vector string?]]
+                ;; The tree the judge read, as `nido.review.settled/code-identity`
+                ;; names it. Present only when the reading taken as the judge
+                ;; launched equals the one taken as it returned: a review without
+                ;; it read no single tree, and settles nothing.
+                [:code-identity {:optional true} string?]]
         shape  (fn [verdict & extra]
                  (into [:map {:closed true}]
                        (concat common [[:verdict [:= verdict]]] extra)))]
