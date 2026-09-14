@@ -3,8 +3,10 @@
    orphan reclaim, the resume shim, agent guidance files, and the memory bench."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
+            [fukan.common.vocab.patterns.fulfilment :refer [Fulfilment]]
             [canvas.coordinator.record.state :refer [Path]]
             [canvas.platform.project :refer [ProjectName]]
+            [canvas.session.service :as service]
             [canvas.session.state :as sstate]
             [fukan.common.typing.malli]))
 
@@ -17,6 +19,12 @@
     {:signature [:=> [:catn [:service-def :map] [:saved-state :any] [:session-ctx :map]] :any]})
   (Operation stop-app! "Evaluate the service's stop form."
     {:signature [:=> [:catn [:service-def :map] [:saved-state :any]] :any]}))
+
+;; The eval service is one implementation of the session-service protocol, by dispatch on :eval.
+;; Declared beside the supplier because the protocol must not name its implementations.
+(Fulfilment eval-starts-service {:satisfier services-eval :surface service/start-service!})
+(Fulfilment eval-stops-service {:satisfier services-eval :surface service/stop-service!})
+(Fulfilment eval-reports-status {:satisfier services-eval :surface service/service-status})
 
 (Module session-run
   "Running a project-declared command inside a session's worktree."

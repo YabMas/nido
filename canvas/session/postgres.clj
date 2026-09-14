@@ -8,8 +8,10 @@
    everyone's writes. A session picks per its profile and can switch with `isolate!`."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
+            [fukan.common.vocab.patterns.fulfilment :refer [Fulfilment]]
             [canvas.coordinator.record.state :refer [Path]]
             [canvas.platform.project :refer [ProjectName]]
+            [canvas.session.service :as service]
             [canvas.session.state :as sstate]
             [fukan.common.typing.malli]))
 
@@ -119,3 +121,9 @@
   (Operation resolve-pg-mode
     "The effective provisioning mode for a service — private clone or shared cluster."
     {:signature [:=> [:catn [:service-def :map]] :keyword]}))
+
+;; The Postgres service is one implementation of the session-service protocol, by dispatch on
+;; :postgresql. Declared beside the supplier because the protocol must not name its implementations.
+(Fulfilment postgresql-starts-service {:satisfier services-postgresql :surface service/start-service!})
+(Fulfilment postgresql-stops-service {:satisfier services-postgresql :surface service/stop-service!})
+(Fulfilment postgresql-reports-status {:satisfier services-postgresql :surface service/service-status})
