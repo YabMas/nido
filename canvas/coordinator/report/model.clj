@@ -77,6 +77,10 @@
     "What a record was written before, of the two things laying one model over another needs: the
      shared model, or a role naming its players. nil for a record written after both."
     {:signature [:=> [:catn [:record [:maybe :map]]] [:maybe [:enum :shared-model :role-players]]]})
+  (Operation undescribed-modules
+    "The modules a design adds to its baseline without saying what they hide and what the rest may
+     assume of them. A baseline derived from the two would list a module that hides nothing."
+    {:signature [:=> [:catn [:baseline Model] [:design Model]] [:vector :string]]})
   (Operation overlay
     "A design's effective model: the model it leaves when laid over its baseline's, by id. An id
      it neither states nor removes is carried unchanged, one it states as removed is dropped, a

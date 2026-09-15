@@ -903,8 +903,9 @@
 
 (defn- modules-say-what-they-hide?
   "Every module a baseline lists says what it hides and what the rest may assume of it. A module
-   that hides nothing is a file, and a survey of files has described the implementation. Only a
-   baseline is held to it: a design names the modules it is about without re-describing them."
+   that hides nothing is a file, and a survey of files has described the implementation. A design
+   names the modules its baseline describes without re-describing them, so it is held to this only
+   for a module it adds — at the append, where the baseline it cites can be read."
   [{:keys [model]}]
   (every? #(or (not= :module (:sort %)) (and (:hides %) (:interface %)))
           (:elements model)))

@@ -10,6 +10,8 @@
 
    Lineage is read off the child's `:fork` entry whenever it is asked, and stored nowhere else."
   (:require
+   [clojure.string :as str]
+   [malli.error :as me]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.report :as report]
@@ -68,8 +70,9 @@
    Refuses — throwing with `:refused :fork` and writing nothing anywhere — a parent with no design;
    a design that does not stand, because nothing cleared or granted it or something blocks it; a
    design or baseline written before the shared model, or before a role named its players, named by
-   entry; and child records the ledger would not accept, with why. All of it is decided before the
-   child is minted, so a refused fork leaves no workstream behind."
+   entry; a design adding a module it does not describe, naming the modules; and child records the
+   ledger would not accept, with why. All of it is decided before the child is minted, so a refused
+   fork leaves no workstream behind."
   [project parent {:keys [goal done-when context]}]
   (let [design   (or (ws/latest-entry project parent :design)
                      (refuse! (str "Workstream " parent " holds no design to fork") {:parent parent}))
@@ -90,6 +93,12 @@
                                      :role-players "a role named its players, so a claim about that role binds nothing")
                                    " to fork by — re-survey the area in the current shape first")
                               {:parent parent :seq n})))
+        _        (when-let [bare (seq (model/undescribed-modules (:model baseline) (:model design)))]
+                   (refuse! (str "The design at entry " (:seq design) " on " parent " adds "
+                                 (str/join ", " bare) " without saying what each hides and what the"
+                                 " rest may assume of it, so the child's baseline would list a module"
+                                 " that hides nothing — amend the design to describe them first")
+                            {:parent parent :seq (:seq design) :modules (vec bare)}))
         intent   (cond-> {:format :intent :goal goal :done-when (vec done-when)}
                    context (assoc :context context))
         derived  (derived-baseline baseline design)
@@ -98,7 +107,8 @@
         _        (try (report/validate-event :intent intent)
                       (report/validate-event :baseline (assoc derived :intent {:seq 1} :fork {:seq 2}))
                       (catch clojure.lang.ExceptionInfo e
-                        (refuse! (str "The child's first records would not be accepted: " (ex-message e))
+                        (refuse! (str "The child's first records would not be accepted: " (ex-message e)
+                                      (some->> (:explain (ex-data e)) me/humanize pr-str (str " — ")))
                                  {:parent parent :explain (:explain (ex-data e))})))
         child    (:id (ws/create! project {:stage :in-progress :external-refs []}))
         add!     (fn [kind record]

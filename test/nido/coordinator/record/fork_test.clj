@@ -148,6 +148,37 @@
               (is (str/includes? (ex-message e) "design at entry 9"))
               (is (str/includes? (ex-message e) "before a role named its players")))))))))
 
+(deftest a-design-adding-a-module-it-does-not-describe-is-refused-by-entry
+  ;; A design may name a module bare only where its baseline describes it. Watched on nido's own
+  ;; ledger: a design naming five new modules bare left every fork of it refused anonymously.
+  (with-tmp
+    (fn [_]
+      (let [p (parent)]
+        (with-redefs [ws/latest-entry    (fn [_ _ _] (-> (a-design 2)
+                                                         (assoc :seq 9)
+                                                         (update-in [:model :elements] conj
+                                                                    {:id "ledger" :sort :module})))
+                      standing/of-design (fn [& _] {:cleared? true})]
+          (let [e (try (fork/fork! :brian p goal) nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+            (is (= :fork (:refused (ex-data e))))
+            (is (= ["ledger"] (:modules (ex-data e))))
+            (is (str/includes? (ex-message e) "entry 9"))
+            (is (str/includes? (ex-message e) "adds ledger without saying what each hides"))))))))
+
+(deftest a-child-record-the-ledger-would-refuse-says-why
+  (with-tmp
+    (fn [_]
+      (let [p (parent)]
+        (with-redefs [ws/entry-at-seq    (fn [_ _ _] (dissoc a-baseline :read))
+                      standing/of-design (fn [& _] {:cleared? true})]
+          (let [e (try (fork/fork! :brian p goal) nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+            (is (= :fork (:refused (ex-data e))))
+            (is (str/includes? (ex-message e) "would not be accepted"))
+            (is (str/includes? (ex-message e) ":read")
+                "the refusal names what the ledger would refuse, not only that it would")))))))
+
 (deftest the-ledger-holds-a-fork-to-one-origin-on-another-workstream
   (with-tmp
     (fn [_]

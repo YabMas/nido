@@ -41,6 +41,11 @@
         baseline (ws/entry-at-seq project ws-id bseq)]
     (model-era! ws-id [design (:seq design) (str whose " design")])
     (model-era! ws-id [baseline bseq (str whose " baseline")])
+    (when-let [bare (seq (model/undescribed-modules (:model baseline) (:model design)))]
+      (refuse! (str "The " whose " design at entry " (:seq design) " on " ws-id " adds "
+                    (str/join ", " bare) " without saying what each hides and what the rest may"
+                    " assume of it — amend it to describe them before merging")
+               {:ws-id ws-id :seq (:seq design) :modules (vec bare)}))
     {:baseline baseline
      :model    (model/overlay (:model baseline) (:model design))}))
 
@@ -78,8 +83,8 @@
    parent's current design with the baseline and intent it cites, and the child design combined.
 
    Refuses, throwing with `:refused :merge`: a workstream that was not forked, a parent or child
-   holding no design, a record that cannot be read or predates the shared model, and a declaration
-   fukan could not check."
+   holding no design, a record that cannot be read or predates the shared model, a design adding a
+   module it does not describe, and a declaration fukan could not check."
   [project child-ws worktree]
   (let [child   (or (ws/read-ws project child-ws)
                     (refuse! (str "No workstream " child-ws) {:ws-id child-ws}))

@@ -111,6 +111,24 @@
     (some #(and (= :role (:sort %)) (empty? (:plays %))) (get-in record [:model :elements]))
     :role-players))
 
+(defn ^{:malli/schema [:=> [:cat :Model :Model] [:vector :string]]}
+  undescribed-modules
+  "The ids of the modules `design` adds to `baseline` — a module the baseline does not hold as a
+   module — that do not say both what they hide and what the rest may assume of them, in the
+   design's order.
+
+   A design names a module its baseline already describes by id alone, and laid over the baseline
+   it keeps that description. A module it adds has none to keep, so a baseline derived from the two
+   would list a module that hides nothing, which no baseline may."
+  [baseline design]
+  (let [modules (into #{} (keep #(when (= :module (:sort %)) (:id %))) (:elements baseline))]
+    (into []
+          (comp (filter #(= :module (:sort %)))
+                (remove #(contains? modules (:id %)))
+                (remove #(and (:hides %) (:interface %)))
+                (map :id))
+          (:elements design))))
+
 (defn ^{:malli/schema [:=> [:cat :Model :Model] :Model]}
   overlay
   "The model `design` leaves when laid over `baseline`, by id — a design's EFFECTIVE model.

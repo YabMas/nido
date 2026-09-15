@@ -268,6 +268,19 @@
                            " — deferring these leaves the branch untrue")
                       {:vetoed (vec (sort spun))})))))
 
+(defn- check-modules-described!
+  "A design adding a module to the baseline it cites says what that module hides and what the rest
+   may assume of it. A module the baseline describes the design names by id alone, and keeps that
+   description; one it adds has none to keep, and a child forked from the design would take it
+   into a baseline that lists a module hiding nothing. Records from before the shared model are
+   left to the readers that refuse them."
+  [baseline record]
+  (when (and (contains? baseline :model) (contains? record :model))
+    (when-let [bare (seq (report-model/undescribed-modules (:model baseline) (:model record)))]
+      (throw (ex-info (str "Design adds " (str/join ", " bare) " to baseline entry " (:seq baseline)
+                           " without saying what each hides and what the rest may assume of it")
+                      {:seq (:seq baseline) :modules (vec bare)})))))
+
 (defn- check-baseline-citation!
   "A :design record's :baseline names the entry it was judged against, its
    :routes answer that entry's health observations, and its :intent names what
@@ -299,7 +312,9 @@
                            :baselines (->> (:entries w)
                                            (filter #(= :baseline (:kind %)))
                                            (mapv :seq))})))
-        (check-routes-total! (read-entry-at w n) record))
+        (let [baseline (read-entry-at w n)]
+          (check-routes-total! baseline record)
+          (check-modules-described! baseline record)))
       (when-let [n (get-in record [:intent :seq])]
         (let [e (->> (:entries w) (filter #(= n (:seq %))) first)]
           (when-not (= :intent (:kind e))

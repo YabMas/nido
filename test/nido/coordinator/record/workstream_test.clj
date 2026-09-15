@@ -408,7 +408,9 @@
    (cond-> {:format     :design
             :summary    "Round on the total."
             :shape      "One rounding boundary at the aggregate."
-            :model      {:elements [{:id "order-aggregate" :sort :module}]
+            :model      {:elements [{:id "order-aggregate" :sort :module
+                                     :hides "where a total is rounded"
+                                     :interface "a total rounded once"}]
                          :claims   [{:id "rounded-once" :about ["order-aggregate"]
                                      :statement "a total is rounded exactly once"
                                      :falsified-by "a total rounded twice on one path"
@@ -438,6 +440,28 @@
         (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 2)))
         (is (= 2 (get-in (ws/latest-entry :brian (:id w) :design) [:baseline :seq])))
         (is (= 1 (get-in (ws/latest-entry :brian (:id w) :design) [:intent :seq])))))))
+
+(deftest a-design-describes-a-module-it-adds-to-its-baseline
+  ;; A module its baseline describes, a design names by id alone. One it adds has no description to
+  ;; keep, and a child forked from the design would take a module that hides nothing into its baseline.
+  (with-tmp
+    (fn [_]
+      (let [w      (ws/create! :brian {:stage :in-progress :external-refs []})
+            _      (seed-baseline! w)
+            naming (fn [element]
+                     (pr-str (assoc (design-citing 2) :model
+                                    {:elements [element]
+                                     :claims   [{:id "rounded-once" :about [(:id element)]
+                                                 :statement "a total is rounded exactly once"
+                                                 :falsified-by "a total rounded twice on one path"
+                                                 :evidence {:by :round}}]})))]
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo
+             #"Design adds order-aggregate to baseline entry 2 without saying what each hides"
+             (ws/append-entry! :brian (:id w) {:kind :design} (naming {:id "order-aggregate" :sort :module}))))
+        (is (some? (ws/append-entry! :brian (:id w) {:kind :design}
+                                     (naming {:id "mod-the-order-aggregate" :sort :module})))
+            "a module the baseline describes is named by id alone")))))
 
 (deftest a-baseline-cites-the-intent-it-was-scoped-for
   (with-tmp
@@ -739,7 +763,9 @@
   {:format     :design
    :summary    "The address moves to its own column."
    :shape      "Two writers during the migration; one reader throughout."
-   :model      {:elements [{:id "address-column" :sort :module}]
+   :model      {:elements [{:id "address-column" :sort :module
+                            :hides "which column holds an order's address"
+                            :interface "an order's address"}]
                 :claims   [{:id "no-unmaintained-read" :about ["address-column"]
                             :statement "no request reads a column no writer maintains"
                             :falsified-by "a request reading the new column before both writers maintain it"

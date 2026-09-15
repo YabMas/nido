@@ -362,6 +362,11 @@ properties still holds. Only where it is written moves:
 
 - A module is an element of `:sort :module`, still defined by what it `:hides`.
   Operations, kinds and roles are elements too, and hide nothing of their own.
+- A design names a module its baseline already describes by `:id` and `:sort`
+  alone, and keeps that description. A module the design ADDS says what it
+  `:hides` and its `:interface`, as a survey's would: a child forked from the
+  design takes it into a baseline, and no baseline lists a module that hides
+  nothing. The ledger refuses a design that adds one bare.
 - A load-bearing property is a claim, and so is a design's invariant — one form
   in both records, which is what lets a round say which claim it confirmed and
   lets two records be combined by id.

@@ -152,6 +152,22 @@
             (is (= 4 (:seq (ex-data e))) "named by the child design's entry")
             (is (str/includes? (str (ex-message e)) "before a role named its players"))))))))
 
+(deftest a-design-adding-a-module-it-does-not-describe-is-refused-by-entry
+  (with-tmp
+    (fn [_]
+      (let [[_ c]  (parent-and-child)
+            _      (child-designs! c c3-about-total)
+            latest ws/latest-entry]
+        (with-redefs [ws/latest-entry (fn [project ws-id kind]
+                                        (cond-> (latest project ws-id kind)
+                                          (= c ws-id) (update-in [:model :elements] conj
+                                                                 {:id "ledger" :sort :module})))]
+          (let [e (try (unit-merge/proposal :brian c "/w") nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+            (is (= :merge (:refused (ex-data e))))
+            (is (= 4 (:seq (ex-data e))) "named by the child design's entry")
+            (is (= ["ledger"] (:modules (ex-data e))))))))))
+
 (deftest the-ledger-appends-a-merged-design-only-as-the-combination
   (with-tmp
     (fn [_]

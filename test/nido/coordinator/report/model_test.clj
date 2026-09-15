@@ -78,6 +78,21 @@
     (is (= :role-players (model/predates (with-role {}))) "a role naming no players was written before they were")
     (is (nil? (model/predates (with-role {:plays ["canvas.order/total"]}))))))
 
+(deftest a-design-describes-the-modules-it-adds
+  (let [baseline {:elements [{:id "agg" :sort :module :hides "summing order" :interface "a total"}
+                             {:id "total" :sort :operation}]
+                  :claims   []}]
+    (is (= [] (model/undescribed-modules
+               baseline {:elements [{:id "agg" :sort :module}
+                                    {:id "writer" :sort :module :hides "storage" :interface "store a total"}]
+                         :claims   []}))
+        "a module the baseline describes is named by id alone, and an added one that says both passes")
+    (is (= ["writer" "total"]
+           (model/undescribed-modules
+            baseline {:elements [{:id "writer" :sort :module :hides "storage"} {:id "total" :sort :module}]
+                      :claims   []}))
+        "an added module, and an operation restated as one, say what they hide and what they expose")))
+
 (deftest an-element-whose-sort-a-design-changes-carries-nothing-of-what-it-was
   (let [claim    {:id "c1" :about ["r"] :statement "s" :falsified-by "f" :evidence {:by :round}}
         baseline {:elements [{:id "agg" :sort :module :hides "summing order" :interface "a total"}
