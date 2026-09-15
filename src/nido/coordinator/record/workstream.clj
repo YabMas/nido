@@ -662,10 +662,10 @@
 
    ONE WALK WITH THREE ANSWERS — one root, several, or none — rather than a
    rule beside the closure that could disagree with it about the same record.
-   Several is refused at the boundary. NONE means the record is the
-   workstream's: a triage report, a note, a blocker, a landing that names a
-   design without standing on it, or a record descending from a design written
-   before the citation existed.
+   ONE is a unit. NONE and SEVERAL are the workstream's: a triage report, a
+   note, a blocker, a landing that names a design without standing on it, or a
+   record descending from one written before the contract. `check-one-root!`
+   is what confines several to that last route.
 
    Bounded by the entry count, so a citation cycle cannot spin here."
   [w record kind]
@@ -686,37 +686,50 @@
                         targets)))))]
     (step kind record (count (:entries w)))))
 
+(defn- roots-at
+  "Every root the entry at `seq-n` reaches — `#{}` when no entry is there."
+  [w seq-n]
+  (if-let [e (->> (:entries w) (filter #(= seq-n (:seq %))) first)]
+    (roots-of w (read-entry-at w seq-n) (:kind e))
+    #{}))
+
 (defn- check-one-root!
-  "A record's citations agree on at most one unit.
+  "A record reaches no more goals than one of its citations already does.
 
-   Reaching a root is not the same as reaching exactly one, and the difference is
-   the whole partition. A design may cite one intent while the baseline beneath
-   it was scoped for an unrelated other: every citation resolves, every kind is
-   right, and the record roots in two units at once. Nothing else can see that,
-   because every other check reads one citation at a time.
+   That is what makes the closure a partition. A design may cite one intent while
+   the baseline beneath it was scoped for an unrelated other: every citation
+   resolves, every kind is right, and the record joins two units. Nothing else
+   can see that, because every other check reads one citation at a time. The one
+   record the rule does not ask is an :intent citing nothing, which opens a unit
+   rather than joining any.
 
-   AT MOST ONE admits NONE, and none is not a defect. A decision or a trail
-   record naming a design from before `:intent` was required cites a record that
-   roots nowhere and inherits that — refusing it would strand every legacy design
-   mid-arc, unable to receive the decision its own rung is owed. Such a record is
-   in the workstream's PRE-CONTRACT REGION, addressed by the workstream because
-   no :seq addresses it.
+   INHERITING IS NOT JOINING, and the rule is phrased to admit it. A record
+   reaching NONE — a decision on a design from before `:intent` was required —
+   and one reaching SEVERAL — anything citing a design that served one goal
+   while superseding a design under another, which is how a goal amendment was
+   written before an intent could cite what it replaces — reach exactly what
+   they cite. Refusing either strands that design mid-arc, unable to receive its
+   own decision, review or supersession, and the only record that would unstick
+   it is one misstating what the work stands on. Both are in the workstream's
+   PRE-CONTRACT REGION, where `unit-of` addresses no unit.
 
-   Rootlessness is INHERITED and never spontaneous ACROSS THE KINDS THIS CHECKS,
-   which is what makes that a boundary rather than a leak: an intent citing
-   nothing is its own root, a baseline and a design must cite one, and everything
-   in the table reaches whatever it stands on. So a rootless record written today
-   descends from one written before the contract, and no new unit is ever opened
-   there. A kind outside the table — a note, a blocker, a landing — is rootless
-   on its own account and is never asked, because it belongs to the workstream
+   Neither can be MADE through this boundary, which is what keeps the region a
+   boundary rather than a leak: a baseline and a design must cite a goal, and a
+   record reaching none or several is admitted only citing one that already
+   does, so every such record descends from one written before the contract. A
+   kind outside the table — a note, a blocker, a landing — reaches nothing on
+   its own account and is never asked, because it belongs to the workstream
    rather than to a unit that could be in doubt."
   [w kind payload]
   (when (contains? stands-on kind)
-    (let [roots (roots-of w (edn/read-string payload) kind)]
-      (when (< 1 (count roots))
+    (let [record (edn/read-string payload)
+          cited  (keep #(get-in record %) (stands-on kind))
+          roots  (roots-of w record kind)]
+      (when (and (seq cited) (not-any? #(= roots (roots-at w %)) cited))
         (throw (ex-info (str "This " (name kind) " reaches " (count roots)
                              " goals — " (str/join ", " (sort roots))
-                             " — so it belongs to no single unit of work")
+                             " — more than any record it cites, so it belongs"
+                             " to no single unit of work")
                         {:kind kind :roots (vec (sort roots))}))))))
 
 (defn- check-seam-phase-ref!
@@ -1022,17 +1035,20 @@
    reason.
 
    Total over the ledger: every entry answers, and the two honest answers are a
-   :seq and nil. Three routes reach nil and they need no rules of their own,
-   because none of the three is owed to a unit: a kind that stands on nothing —
+   :seq and nil. Four routes reach nil and they need no rules of their own,
+   because none of the four is owed to a unit: a kind that stands on nothing —
    a note, a blocker, a review analysis; a landing, which NAMES the design whose
-   work it carries and stands on none of it; and a record inheriting
-   rootlessness from a design written before the intent citation was required.
+   work it carries and stands on none of it; a record inheriting rootlessness
+   from a design written before the intent citation was required; and a record
+   reaching several goals, which `check-one-root!` admits only where it inherits
+   them from a record written before an intent could cite what it replaces.
    Each is reported as the workstream's rather than assigned to whichever unit
    happens to surround it, because putting a record in a unit its author never
    placed it in is the error this walk exists to refuse."
   [w seq-n]
-  (when-let [e (->> (:entries w) (filter #(= seq-n (:seq %))) first)]
-    (first (roots-of w (read-entry-at w seq-n) (:kind e)))))
+  (let [roots (roots-at w seq-n)]
+    (when (= 1 (count roots))
+      (first roots))))
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] :boolean]}
   holds-design?

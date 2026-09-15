@@ -181,8 +181,10 @@
      kind a baseline's and a design's `:intent` may cite: a baseline cites its goal, a design
      cites its baseline and its goal, an implementation and a review cite the design they were
      made under, and an intent citing `:supersedes` continues its unit while one citing
-     nothing opens another. The append boundary refuses a record whose citations reach more
-     than one, so the partition is established by CONSTRUCTION rather than asserted here.
+     nothing opens another. The append boundary refuses a record reaching more goals than
+     any one of its citations does, so the partition is established by CONSTRUCTION rather
+     than asserted here. A record from before that boundary reaching several goals is the
+     workstream's, like one reaching none, and so is everything citing it.
 
      A landing is outside the closure, not missing from it. A `:pr-opened` and a `:merged`
      NAME the design whose work they carry and stand on none of it, so they reach no root and

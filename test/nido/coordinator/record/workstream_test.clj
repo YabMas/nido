@@ -1261,6 +1261,74 @@
             "a design over one unit's survey serving another unit's goal
              belongs to neither")))))
 
+(defn- amended-mid-design!
+  "A ledger holding what a goal amendment looked like before an intent could
+   cite what it replaces: goal 1 with its design at 3, a bare second goal at 4,
+   and a design at 5 serving goal 4 while superseding 3 — so it reaches both.
+
+   Entry 5 is written by hand: the append boundary refuses it, and live ledgers
+   hold it anyway. Returns the workstream id."
+  []
+  (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+        id  (:id w)
+        rel "entries/0005-design.edn"]
+    (seed-baseline! w)                                                         ; 1, 2
+    (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))    ; 3
+    (ws/append-entry! :brian id {:kind :intent}                                ; 4
+                      (pr-str (assoc an-intent :goal "Totals match the invoice, in cents.")))
+    (io/write-text! (str (fs/path (cstate/workstream-dir :brian id) rel))      ; 5
+                    (pr-str (assoc (design-citing 2 4) :supersedes {:seq 3 :why "the goal moved"})))
+    (ws/write! (update (ws/read-ws :brian id) :entries conj
+                       {:kind :design :seq 5 :at "2026-09-11T16:26:00Z" :file rel}))
+    id))
+
+(deftest a-record-may-inherit-the-goals-a-pre-contract-design-reaches
+  ;; Everything written against the design at 5 reaches both goals through no
+  ;; choice of its own. Refusing it strands that design with no decision, no
+  ;; review and no successor — the only record that would unstick it is one
+  ;; misstating what the work stands on.
+  (with-tmp
+    (fn [_]
+      (let [id  (amended-mid-design!)
+            add #(do (ws/append-entry! :brian id {:kind %1} (pr-str %2))
+                     (count (:entries (ws/read-ws :brian id))))]
+        (is (some? (ws/entry-at-seq :brian id 5)) "the hand-written design reads back")
+        (add :design-decision {:format :design-decision :recommend :proceed    ; 6
+                               :design-seq 5 :reason "r" :asks "worth it?"
+                               :checks [{:check :relation-honest :status :held :note "n"}]})
+        (is (= 7 (add :review {:format :review-report :status :converged :base "main"
+                               :base-rev "abc123" :rounds 1 :fix-attempts 0
+                               :defects-settled 0 :findings-remaining 0
+                               :report-path "/tmp/report.json" :design {:seq 5}}))
+            "its decision and its review may be written")
+        (is (= 8 (add :design (assoc (design-citing 2 4) :supersedes {:seq 5 :why "amended"})))
+            "and so may the design that supersedes it")
+        (let [rec (ws/read-ws :brian id)]
+          (is (= [1 4] (mapv #(ws/unit-of rec %) [3 4])))
+          (is (= [nil nil nil nil] (mapv #(ws/unit-of rec %) [5 6 7 8]))
+              "none of them is either goal's — each reaches both, so each is the
+               workstream's rather than seated in whichever goal a set yields first"))))))
+
+(deftest a-record-may-not-add-a-goal-to-what-it-inherits
+  ;; Inheriting is the only way to reach several goals, so the pre-contract
+  ;; region stays a boundary: nothing in it can be made, and nothing citing it
+  ;; may widen it.
+  (with-tmp
+    (fn [_]
+      (let [id  (amended-mid-design!)
+            add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"reaches 2 goals"
+             (add :design (assoc (design-citing 2 4) :supersedes {:seq 3 :why "again"})))
+            "a design like the one at 5 cannot be appended — it cites nothing
+             that already reaches both goals")
+        (add :intent (assoc an-intent :goal "a third story"))                  ; 6
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"reaches 3 goals"
+             (add :design (assoc (design-citing 2 6) :supersedes {:seq 5 :why "moved"})))
+            "and a successor serving a goal its predecessor never reached joins
+             a third unit to the two it inherits")))))
+
 (deftest a-triage-roots-no-unit
   ;; The kinds a survey's and a design's :intent may cite are the kinds the walk
   ;; roots at, and that rule is unchanged — what changed is the set. It is
