@@ -1103,6 +1103,44 @@
     (cond-> (assoc entry :seq seq-n :at (clock/now-iso) :file rel)
       under (assoc :under under))))
 
+(defn- check-append!
+  "Every refusal an append makes of `payload` joining `w`, in the order `append-entry!` asks them.
+   Shared by the two writes that give an entry its index row — a new entry, and one an interrupted
+   append left on disk — so neither indexes an entry past a check the other would have made."
+  [project w kind payload]
+  (refuse-unguarded-clearance! kind)
+  (check-baseline-citation! w kind payload)
+  (check-standing-citations! w kind payload)
+  (check-fork-citation! project w kind payload)
+  (check-merge-citation! project w kind payload)
+  (check-goal-is-live! w kind payload)
+  (check-trail-attribution! w kind payload)
+  (check-one-root! w kind payload)
+  (check-seam-phase-ref! kind payload)
+  (check-implementation-approved! w kind payload))
+
+(defn- append-locked!
+  "The append, for a caller already holding the append lock over `w`: number the entry off the
+   disk, make every check, write the payload and then its index row. Returns the absolute path."
+  [project ws-id w entry content]
+  (let [;; From the DISK, not from the index count. The two agree until an
+        ;; append writes its payload and dies before updating the index, and
+        ;; from then on every append computes a number the index says is
+        ;; free and the directory says is taken — overwriting a real entry
+        ;; and leaving the ledger looking consistent.
+        seq-n (inc (max (count (:entries w))
+                        (highest-seq-on-disk project ws-id)))
+        [ext payload] (report/entry-payload (:kind entry) content)
+        _     (check-append! project w (:kind entry) payload)
+        fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
+        rel   (str "entries/" fname)
+        abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
+    (refuse-if-taken! abs seq-n)
+    (io/write-text! abs payload)
+    (write! (update w :entries (fnil conj [])
+                    (index-row entry seq-n payload rel)))
+    abs))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string] :Path]}
   append-entry!
   "Write an immutable entry file under entries/ and record it in :entries.
@@ -1133,35 +1171,11 @@
   (io/with-file-lock
     (append-lock-path project ws-id)
     (fn []
-      (let [w     (or (read-ws project ws-id)
-                      (throw (ex-info "Workstream not found"
-                                      {:project project :ws-id ws-id})))
-            ;; From the DISK, not from the index count. The two agree until an
-            ;; append writes its payload and dies before updating the index, and
-            ;; from then on every append computes a number the index says is
-            ;; free and the directory says is taken — overwriting a real entry
-            ;; and leaving the ledger looking consistent.
-            seq-n (inc (max (count (:entries w))
-                            (highest-seq-on-disk project ws-id)))
-            [ext payload] (report/entry-payload (:kind entry) content)
-            _     (refuse-unguarded-clearance! (:kind entry))
-            _     (check-baseline-citation! w (:kind entry) payload)
-            _     (check-standing-citations! w (:kind entry) payload)
-            _     (check-fork-citation! project w (:kind entry) payload)
-            _     (check-merge-citation! project w (:kind entry) payload)
-            _     (check-goal-is-live! w (:kind entry) payload)
-            _     (check-trail-attribution! w (:kind entry) payload)
-            _     (check-one-root! w (:kind entry) payload)
-            _     (check-seam-phase-ref! (:kind entry) payload)
-            _     (check-implementation-approved! w (:kind entry) payload)
-            fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
-            rel   (str "entries/" fname)
-            abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
-        (refuse-if-taken! abs seq-n)
-        (io/write-text! abs payload)
-        (write! (update w :entries (fnil conj [])
-                        (index-row entry seq-n payload rel)))
-        abs))))
+      (append-locked! project ws-id
+                      (or (read-ws project ws-id)
+                          (throw (ex-info "Workstream not found"
+                                          {:project project :ws-id ws-id})))
+                      entry content))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int :map :string] :map]}
   append-entry-at!
@@ -1217,6 +1231,59 @@
             (write! (update w :entries (fnil conj [])
                             (index-row entry seq-n payload rel)))
             abs))))))
+
+(def ^:private entry-file-name
+  "An entry file's name in its parts: the :seq, then the kind `append-entry!` wrote it as."
+  #"^(\d{4})-(.+)\.[a-z]+$")
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string :any] :map]}
+  append-entry-once!
+  "Append an entry of `entry`'s kind only when no entry of that kind is already the one `same?`
+   identifies, and complete an interrupted append of it rather than write a second. Returns
+   `{:appended path}` for a new entry, `{:indexed path}` for an entry file it gave the index row an
+   interrupted append never wrote, or `{:existing path}` when an indexed entry already matches.
+
+   `same?` is the caller's identity for the record: a predicate over an entry parsed through the
+   read contract, so only a kind whose entries are EDN can ever match. An interrupted append leaves
+   its payload under entries/ with no index row; no reader of the index sees it, and a retry of the
+   same append writes a second copy beside it. So, under the append lock, the indexed entries of
+   the kind are asked first and then the entry files no row names. A match among those is indexed
+   at the :seq its file name carries, after the checks an append makes, and is never rewritten or
+   renumbered; a file that does not parse matches nothing and is left as it is."
+  [project ws-id entry content same?]
+  (io/with-file-lock
+    (append-lock-path project ws-id)
+    (fn []
+      (let [w       (or (read-ws project ws-id)
+                        (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+            kind    (:kind entry)
+            dir     (cstate/workstream-dir project ws-id)
+            abs     #(str (fs/path dir %))
+            match?  (fn [rel]
+                      (try (boolean (same? (report/parse-event kind (io/read-edn (abs rel)))))
+                           (catch Throwable _ false)))
+            indexed (->> (:entries w) (filter #(= kind (:kind %))) (map :file) (filter match?) first)
+            orphan  (when-not indexed
+                      (some (fn [fname]
+                              (let [[_ n k] (re-find entry-file-name fname)
+                                    rel     (str "entries/" fname)]
+                                (when (and (= (name kind) k) (match? rel))
+                                  [rel (parse-long n)])))
+                            (index-drift project ws-id)))]
+        (cond
+          indexed
+          {:existing (abs indexed)}
+
+          orphan
+          (let [[rel seq-n] orphan
+                payload     (slurp (abs rel))]
+            (check-append! project w kind payload)
+            ;; Placed by :seq, since readers take a kind's newest entry as the last row of it.
+            (write! (update w :entries #(vec (sort-by :seq (conj (vec %) (index-row entry seq-n payload rel))))))
+            {:indexed (abs rel)})
+
+          :else
+          {:appended (append-locked! project ws-id w entry content)})))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] [:maybe :LedgerEntry]]}
   latest-entry

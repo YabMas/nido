@@ -16,9 +16,11 @@
    [nido.design.check :as design]
    [tasks.nido-design :as nido-design]
    [nido.coordinator.record.workstream :as cws]
+   [nido.review.layers :as layers]
    [nido.review.stages :as stages]
    [nido.session.lifecycle :as lifecycle]
-   [nido.platform.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]
+   [nido.vsdd.jj :as jj]))
 
 (defn- way-out
   "What to DO about a refusal, as commands rather than advice.
@@ -359,4 +361,97 @@
    the push stops there without anyone having to read the output."
   [& args]
   (let [code (apply check args)]
+    (when-not (zero? code) (System/exit code))))
+
+(defn- origin-slug
+  "owner/repo of the origin remote, or nil when origin is not a GitHub remote."
+  [cwd]
+  (let [{:keys [exit out]} (jj/jj! cwd "git" "remote" "list")]
+    (when (zero? exit)
+      (some->> (str/split-lines (or out ""))
+               (some #(when (str/starts-with? % "origin ") (second (str/split % #"\s+"))))
+               (re-find #"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$")
+               second))))
+
+(defn- unrecorded
+  "Print why a landing was not recorded, with its way out, and return the exit code."
+  [why way-out]
+  (println (str "land:record REFUSED · " why))
+  (println "\nHow to clear it:")
+  (println (str "  " way-out))
+  1)
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :int]}
+  record
+  "Record the landing of the worktree's tip once origin's main holds it: close the workstream, then
+   append a :merged naming that commit and the design that stands. Returns an exit code.
+
+   The landing recipe's step after `jj git push -b main`. It records nothing it cannot see landed —
+   a tip origin's main does not hold, or a newest design that does not stand — and a re-run
+   completes what an earlier run left undone: a closed workstream is not closed again, and the
+   append goes through `append-entry-once!` keyed on the commit, so one landing is on the ledger
+   once however often this runs."
+  [& args]
+  (let [[_ opts] (task-args/split-args args)
+        given    (or (:cwd opts) (System/getProperty "user.dir"))
+        cwd      (or (lifecycle/worktree-from-cwd given) given)
+        [project ws-id] (stages/project+ws-from-cwd cwd)]
+    (if-not ws-id
+      (unrecorded (str cwd " belongs to no nido session, so there is no workstream to record a landing on")
+                  "run it from the worktree of the session whose work landed")
+      (let [fetched (jj/jj! cwd "git" "fetch")
+            ;; The worktree's own tip: the nearest change at or below @ that carries content, since
+            ;; a push leaves an empty working copy on top of what it pushed.
+            tip    (layers/resolve-rev cwd "heads(::@ ~ empty())")
+            landed (when tip (layers/resolve-rev cwd (str tip " & ::main@origin")))
+            design (cws/latest-entry project ws-id :design)
+            st     (when design (standing/of-design project ws-id design))]
+        (cond
+          ;; A stale main@origin would read as a tip nobody pushed, and send the way out to a push
+          ;; that already happened.
+          (not (zero? (:exit fetched)))
+          (unrecorded (str "origin could not be fetched, so whether main holds the tip is unknown: "
+                           (str/trim (str (or (:err fetched) (:out fetched)))))
+                      "check the origin remote and the network, then run this again")
+
+          (nil? tip)
+          (unrecorded "the worktree's tip could not be read" "check `jj log` in the worktree, then run this again")
+
+          (nil? landed)
+          (unrecorded (str "origin's main does not hold the worktree's tip " (subs tip 0 (min 12 (count tip))))
+                      "push it — jj git push -b main — then run this again")
+
+          (not (:cleared? st))
+          (unrecorded (str "the workstream's newest design" (when design (str " at entry " (:seq design)))
+                           " does not stand")
+                      "bb nido:land:check says why; repair that, then run this again")
+
+          :else
+          (let [title  (str/trim (or (:out (jj/jj! cwd "log" "-r" tip "--no-graph" "-T" "description.first_line()")) ""))
+                slug   (origin-slug cwd)
+                landing {:format :merged
+                         :commit tip
+                         :url    (if slug (str "https://github.com/" slug "/commit/" tip) tip)
+                         :title  title
+                         :design {:seq (:seq design)}}]
+            (try
+              (when-not (:closed (cws/read-ws project ws-id))
+                (cws/close! project ws-id :done))
+              (let [result (cws/append-entry-once! project ws-id {:kind :merged} (pr-str landing)
+                                                   #(= tip (:commit %)))]
+                (println (str "land:record ok · " ws-id " is closed, and its landing at "
+                              (subs tip 0 (min 12 (count tip))) " is "
+                              (cond (:appended result) "recorded"
+                                    (:indexed result)  "recorded, completing an interrupted run"
+                                    :else              "already on the ledger")))
+                0)
+              (catch Exception e
+                (unrecorded (str "a write failed: " (ex-message e))
+                            "repair what it names, then run this again — a re-run completes what this one left undone")))))))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  record-cmd
+  "bb entry point: exits non-zero when the landing is not recorded, so the recipe's step stops there."
+  [& args]
+  (let [code (apply record args)]
     (when-not (zero? code) (System/exit code))))

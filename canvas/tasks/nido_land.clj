@@ -10,7 +10,8 @@
             [fukan.common.typing.malli]))
 
 (Module nido-land
-  "The landing gate: refuse a branch whose design does not stand right now."
+  "The landing gate: refuse a branch whose design does not stand right now, and record the landing
+   once main holds it."
   (Operation check
     "The landing gate: every question, and a refusal from any is a refusal."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
@@ -24,4 +25,12 @@
     {:signature [:=> [:catn [:cwd :string]] :int]})
   (Operation cmd
     "bb entry point: exits non-zero on a refusal, so a recipe that runs it before"
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation record
+    "Record the landing of the worktree's tip once origin's main holds it: close the workstream and
+     append a :merged naming that commit and the design that stands, once however often it runs.
+     A tip main does not hold, or a design that does not stand, is refused with its way out."
+    {:signature [:=> [:catn [:args [:* :any]]] :int]})
+  (Operation record-cmd
+    "bb entry point: exits non-zero when the landing is not recorded, so the recipe's step stops there."
     {:signature [:=> [:catn [:args [:* :any]]] :any]}))

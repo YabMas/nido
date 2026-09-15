@@ -114,6 +114,12 @@
      lock that stops two people deciding the same thing from both writing the decision."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:expected-seq :int] [:entry :map] [:content :string]] :map]
      :delegates [append-lock-path read-ws write! report/entry-payload]})
+  (Operation append-entry-once!
+    "Append an entry only when none of its kind is already the one the caller's identity names, and
+     complete an append an earlier run was interrupted in — indexing its entry file at the :seq the
+     file carries, after the checks an append makes — rather than write a second."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:entry :map] [:content :string] [:same? :any]] :map]
+     :delegates [append-lock-path read-ws write! index-drift report/entry-payload report/parse-event]})
   (Operation latest-entry
     "The most recent entry of a kind, parsed through the READ contract. nil when there is none,
      and nil when the one that is there no longer parses."

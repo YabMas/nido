@@ -1216,11 +1216,11 @@
    [:p [:strong title] " — " [:a {:href url :target "_blank"} url]]
    (when summary (md/render summary))])
 
-(defn- merged-card [{:keys [pr url title merged-at]}]
+(defn- merged-card [{:keys [pr commit url title merged-at]}]
   [:div.md
    [:h2 "Merged"]
    [:p [:strong title] " — " [:a {:href url :target "_blank"} url]]
-   [:p [:code pr] (when merged-at (str " · " merged-at))]])
+   [:p [:code (or pr commit)] (when merged-at (str " · " merged-at))]])
 
 (defn- ship-submitted-card [{:keys [session]}]
   [:div.md

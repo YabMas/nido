@@ -1575,26 +1575,36 @@
    [:design {:optional true} [:map {:closed true} [:seq int?]]]])
 
 (def Merged
-  "The landing, appended by the GitHub poller at the moment it closes the
-   workstream (nido.coordinator.lane.github-merge/react-to-merge!).
+  "The landing: appended by the GitHub poller at the moment it closes the
+   workstream (nido.coordinator.lane.github-merge/react-to-merge!), or by
+   `bb nido:land:record` for a landing that fast-forwarded main with no pull
+   request.
 
-   Nido-emitted, and every field is something the poller already holds — nothing
+   Nido-emitted, and every field is something the writer already holds — nothing
    here needs judgement. That is the point: the events an agent has to remember
    to write are the events that go missing (28 workstreams carried a PR ref and
    13 carried the matching :pr-opened), so the one event that ends the timeline
-   is written by the code that ends the work."
-  [:map {:closed true}
-   [:format    [:= :merged]]
-   [:pr        string?]                      ; owner/repo#number — the correlation key
-   [:url       string?]
-   [:title     string?]
-   [:merged-at {:optional true} [:maybe string?]]
-   ;; The design this work was done under. OPTIONAL in the schema and REQUIRED at
-   ;; the append boundary whenever the workstream holds a design, because the rule
-   ;; is conditional on the ledger and a schema sees one record. Absent on every
-   ;; record written before the citation existed, which is what keeps those
-   ;; readable; `reentry/generation` is their attribution and only theirs.
-   [:design {:optional true} [:map {:closed true} [:seq int?]]]])
+   is written by the code that ends the work.
+
+   What landed is named exactly once — the pull request a merge carried, or the
+   commit main was fast-forwarded to. Every reader of a landing reads its kind,
+   never which of the two it names."
+  [:and
+   [:map {:closed true}
+    [:format    [:= :merged]]
+    [:pr        {:optional true} string?]    ; owner/repo#number — the poller's correlation key
+    [:commit    {:optional true} string?]    ; the commit id main was fast-forwarded to
+    [:url       string?]
+    [:title     string?]
+    [:merged-at {:optional true} [:maybe string?]]
+    ;; The design this work was done under. OPTIONAL in the schema and REQUIRED at
+    ;; the append boundary whenever the workstream holds a design, because the rule
+    ;; is conditional on the ledger and a schema sees one record. Absent on every
+    ;; record written before the citation existed, which is what keeps those
+    ;; readable; `reentry/generation` is their attribution and only theirs.
+    [:design {:optional true} [:map {:closed true} [:seq int?]]]]
+   [:fn {:error/message "a landing names the pull request it merged or the commit it landed as — exactly one"}
+    #(= 1 (count (filter % [:pr :commit])))]])
 
 (def ShipSubmitted
   "The branch handed to the merge lane by `nido ship`. Carries no judgement — the
@@ -3178,11 +3188,11 @@
   (str/join "\n"
     (remove nil? ["# PR opened" (str "**" title "** — " url) (when summary (str "\n" summary))])))
 
-(defn- merged->markdown [{:keys [pr url title merged-at]}]
+(defn- merged->markdown [{:keys [pr commit url title merged-at]}]
   (str/join "\n"
     (remove nil? ["# Merged"
                   (str "**" title "** — " url)
-                  (str "`" pr "`" (when merged-at (str " · " merged-at)))])))
+                  (str "`" (or pr commit) "`" (when merged-at (str " · " merged-at)))])))
 
 (defn- ship-submitted->markdown [{:keys [session]}]
   (str/join "\n" ["# Ship submitted" "" (str "`" session "` handed to the merge lane.")]))

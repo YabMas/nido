@@ -1085,6 +1085,33 @@
               "every entry file is named by an index row, so the listing hides nothing")))
       (finally (fs/delete-tree tmp)))))
 
+(deftest an-append-identified-by-what-it-records-happens-once
+  ;; An append that died between its payload and its index row left a record no reader of the index
+  ;; could see, and retrying the same append wrote a second copy beside it.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (let [id     (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+              dir    (fs/path (cstate/workstream-dir :brian id) "entries")
+              landed (fn [pr] {:format :merged :pr pr :url (str "https://x/" pr) :title "t"})
+              once   (fn [pr] (ws/append-entry-once! :brian id {:kind :merged} (pr-str (landed pr))
+                                                     #(= pr (:pr %))))]
+          (is (contains? (once "o/r#1") :appended) "nothing matches, so it appends")
+          (is (contains? (once "o/r#1") :existing) "an indexed match, so it writes nothing")
+          (is (= 1 (count (:entries (ws/read-ws :brian id)))))
+          ;; The crash: the second landing's payload on disk, and no index row for it.
+          (spit (str (fs/path dir "0002-merged.edn")) (pr-str (landed "o/r#2")))
+          (is (= (str (fs/path dir "0002-merged.edn")) (:indexed (once "o/r#2")))
+              "the interrupted append is completed where it lies, not written again")
+          (is (= [1 2] (mapv :seq (:entries (ws/read-ws :brian id)))))
+          (is (nil? (ws/index-drift :brian id)))
+          (is (= "o/r#2" (:pr (ws/latest-entry :brian id :merged))))
+          (spit (str (fs/path dir "0003-merged.edn")) "{:format :merged")
+          (is (contains? (once "o/r#3") :appended) "a file that does not parse matches nothing")
+          (is (= "{:format :merged" (slurp (str (fs/path dir "0003-merged.edn"))))
+              "and is left as it is")))
+      (finally (fs/delete-tree tmp)))))
+
 ;; ── Implementing what nobody granted ────────────────────────────────────────
 
 (def ^:private an-implementation

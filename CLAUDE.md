@@ -186,7 +186,15 @@ bb nido:test                                  # green BEFORE it lands — nothin
 bb nido:land:check                            # the design stands, and the code still obeys it
 jj bookmark set main -r <top-change-id>       # fast-forward
 jj git push -b main
+bb nido:land:record                           # close the workstream and record the landing
 ```
+
+**Record the landing after the push.** `bb nido:land:record` closes the
+workstream and appends a `:merged` naming the pushed commit and the design that
+stands, so a landed workstream stops reading as owed a draft PR. It refuses,
+naming why, when origin's main does not hold the worktree's tip or the newest
+design no longer stands — repair the cause and run it again. A re-run completes
+what an earlier run left undone and never records one landing twice.
 
 **`main` is linear and stays that way** — it has no merge commit anywhere in its
 history, and the rebase is what keeps that true. `jj git push -b main` refuses a

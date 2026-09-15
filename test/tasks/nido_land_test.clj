@@ -8,6 +8,7 @@
    [nido.coordinator.record.workstream :as cws]
    [nido.design.check :as design]
    [nido.platform.project :as project]
+   [nido.review.layers :as layers]
    [nido.review.stages :as stages]
    [nido.session.lifecycle :as lifecycle]
    [nido.vsdd.jj :as jj]
@@ -36,6 +37,78 @@
                     design/elements (constantly (or elements {:status :unmodelled}))]
         (with-redefs-fn {#'land/base-listing (constantly (or base {:status :unmodelled}))}
           (fn [] [(land/check ":cwd" "/wt") (str out)]))))))
+
+;; ── Recording a landing ─────────────────────────────────────────────────────
+
+(def ^:private sha "0123456789abcdef0123456789abcdef01234567")
+
+(defn- record-run
+  "Drive the landing record with the repository and the ledger stubbed. `held?` is whether origin's
+   main holds the tip. Returns [exit-code output calls], calls being the writes in the order made."
+  [{:keys [held? standing closed? once-result fetch-fails?]}]
+  (let [out   (java.io.StringWriter.)
+        calls (atom [])]
+    (binding [*out* out]
+      (with-redefs [lifecycle/worktree-from-cwd (fn [g] g)
+                    stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                    jj/jj! (fn [_ & args]
+                             (cond
+                               (= ["git" "remote" "list"] (vec args))
+                               {:exit 0 :out "origin git@github.com:YabMas/nido.git\n"}
+                               (= ["git" "fetch"] (vec args))
+                               (if fetch-fails? {:exit 1 :err "Error: failed to connect"} {:exit 0 :out ""})
+                               (= "log" (first args)) {:exit 0 :out "feat: land it\n"}
+                               :else {:exit 0 :out ""}))
+                    layers/resolve-rev (fn [_ rev] (cond (= rev "heads(::@ ~ empty())") sha
+                                                         held? rev
+                                                         :else nil))
+                    cws/latest-entry (fn [& _] a-design)
+                    standing/of-design (constantly standing)
+                    cws/read-ws (fn [& _] (cond-> {:id "ws-1"} closed? (assoc :closed {:outcome :done})))
+                    cws/close! (fn [& args] (swap! calls conj [:close args]) {})
+                    cws/append-entry-once! (fn [_ _ entry content same?]
+                                             (swap! calls conj [:append entry (read-string content) same?])
+                                             (or once-result {:appended "/e/0009-merged.edn"}))]
+        [(land/record ":cwd" "/wt") (str out) @calls]))))
+
+(deftest a-landing-is-recorded-only-once-main-holds-the-tip
+  (let [[code out calls] (record-run {:held? false :standing {:cleared? true}})]
+    (is (= 1 code))
+    (is (str/includes? out "origin's main does not hold the worktree's tip 0123456789ab"))
+    (is (str/includes? out "jj git push -b main") "and the way out is the push")
+    (is (empty? calls) "nothing is closed or appended")))
+
+(deftest a-landing-is-not-recorded-when-origin-cannot-be-fetched
+  (let [[code out calls] (record-run {:held? true :standing {:cleared? true} :fetch-fails? true})]
+    (is (= 1 code))
+    (is (str/includes? out "origin could not be fetched"))
+    (is (str/includes? out "failed to connect") "and says what the fetch answered")
+    (is (empty? calls) "nothing is closed or appended on a stale reading of main")))
+
+(deftest a-landing-is-recorded-only-while-its-design-stands
+  (let [[code out calls] (record-run {:held? true :standing {:cleared? false}})]
+    (is (= 1 code))
+    (is (str/includes? out "newest design at entry 4 does not stand"))
+    (is (empty? calls))))
+
+(deftest a-recorded-landing-closes-the-workstream-then-names-its-commit
+  (let [[code out calls] (record-run {:held? true :standing {:cleared? true}})
+        [[first-write] [second-write entry landing same?]] calls]
+    (is (= 0 code))
+    (is (= [:close :append] [first-write second-write]) "closed first, appended after")
+    (is (= {:kind :merged} entry))
+    (is (= {:format :merged :commit sha :url (str "https://github.com/YabMas/nido/commit/" sha)
+            :title "feat: land it" :design {:seq 4}}
+           landing))
+    (is (and (same? {:commit sha}) (not (same? {:commit "another"}))) "keyed on the commit")
+    (is (str/includes? out "is recorded"))))
+
+(deftest a-re-run-completes-what-an-earlier-run-left-undone
+  (let [[code out calls] (record-run {:held? true :standing {:cleared? true} :closed? true
+                                      :once-result {:existing "/e/0009-merged.edn"}})]
+    (is (= 0 code))
+    (is (= [:append] (mapv first calls)) "a closed workstream is not closed again")
+    (is (str/includes? out "already on the ledger"))))
 
 (deftest a-standing-approved-design-lands
   (let [[code out] (run {:session? true :design a-design
