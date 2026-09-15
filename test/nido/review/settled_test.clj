@@ -63,16 +63,25 @@
   (let [l (ledger :baselines [(baseline 1 c1)] :reviews [(review 2 1)])]
     (is (= {} (settled/settled [l] (baseline 3 c1) tree-a)))))
 
-(deftest a-finding-at-the-key-unsettles-for-good
+(deftest a-finding-at-the-key-stands-until-a-later-confirmation-answers-it
+  ;; A finding was held for good, so a record amended elsewhere in answer to it left the claim a
+  ;; check however often a later round confirmed it at the same content and key.
   (let [found (review 4 1 :verdict :falsified
                       :findings [{:claim-id "c1" :cites ["x"] :claim "wrong"}])]
-    (testing "after the confirmation"
+    (testing "a finding after the confirmation unsettles"
       (is (= {} (settled/settled [(ledger :baselines [(baseline 1 c1)]
                                           :reviews [(review 2 1 :confirmed ["c1"]) found])]
                                  (baseline 5 c1) tree-a))))
-    (testing "and before a later confirmation of the same content"
+    (testing "a later confirmation of the same content at the same key answers it"
+      (is (= {"c1" (by 6)}
+             (settled/settled [(ledger :baselines [(baseline 1 c1)]
+                                       :reviews [found (review 6 1 :confirmed ["c1"])])]
+                              (baseline 7 c1) tree-a))))
+    (testing "and a judgement's :at orders them, whichever ledger each is on"
       (is (= {} (settled/settled [(ledger :baselines [(baseline 1 c1)]
-                                          :reviews [found (review 6 1 :confirmed ["c1"])])]
+                                          :reviews [(review 6 1 :confirmed ["c1"] :at "2026-09-01T10:00:00Z")])
+                                  (ledger :ws-id "ws-2" :baselines [(baseline 1 c1)]
+                                          :reviews [(assoc found :at "2026-09-02T10:00:00Z")])]
                                  (baseline 7 c1) tree-a))))
     (testing "but not a finding about the same id at other content"
       (is (= {"c1" (by 6)}

@@ -15,8 +15,10 @@
 
    A subject is settled when a baseline review or a design decision named its id in `:confirmed`
    while judging a record whose subject with that id is byte-identical, at this subject's key; when
-   no judgement at that same content and key, before or since, found against it; and when the
-   record the confirming judgement judged is not retracted. The id alone is never the key: an id
+   no judgement at that same content and key has found against it since that confirmation; and
+   when the record the confirming judgement judged is not retracted. A finding stands until a later
+   confirmation at the same key answers it, so a record amended elsewhere in answer to a finding
+   leaves the subject confirmable rather than checked for ever. The id alone is never the key: an id
    confirmed and then amended is a subject nobody has checked.
 
    The key is what the subject rests on. A claim or element of a model, in a project that declares

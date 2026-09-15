@@ -21,7 +21,9 @@
      round judged, or a judged claim the declaration dropped, is a design that did not land. A claim
      carried unchanged from main is another design's, and an id main gave two Claims carries neither.
      A claim id two Claims declare, or a declaration nobody could read, refuses. A project with no
-     canvas keeps its claims in its records alone, so there is nothing to hold them to."
+     canvas keeps its claims in its records alone, so there is nothing to hold them to. A merged
+     design writes out its whole combination, so it is asked only for the claims its parent's design
+     and its child's design state, never for one it only carries from a baseline."
     {:signature [:=> [:catn [:cwd :string]] :int]})
   (Operation cmd
     "bb entry point: exits non-zero on a refusal, so a recipe that runs it before"

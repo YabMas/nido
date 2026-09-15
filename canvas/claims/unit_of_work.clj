@@ -30,7 +30,7 @@
   {:about [report-model] :evidence "round"})
 
 (Claim declared-claims-land-with-the-design
-  "In a project that declares a design, a current-era design's claims are declared in the canvas it lands with, as Claim instances carrying the same ids, statements and subjects. The landing check holds a branch to its cleared design both ways: every claim the design states is declared with that statement and those subjects, wherever the declaration came from, and every Claim new or changed since main is one the design states; a Claim carried unchanged from main is an earlier landing's and is asked of no later design."
+  "In a project that declares a design, a current-era design's claims are declared in the canvas it lands with, as Claim instances carrying the same ids, statements and subjects. The landing check holds a branch to its cleared design both ways: every claim the design states is declared with that statement and those subjects, wherever the declaration came from, and every Claim new or changed since main is one the design states; a Claim carried unchanged from main is an earlier landing's and is asked of no later design. A merged design writes out its whole combination, so the claims it is held to are those its parent's design and its child's design state, never one it only carries from a baseline."
   {:about [nido-land] :evidence "round"})
 
 (Claim claims-addressed-by-id
@@ -74,5 +74,5 @@
   {:about [coordinator-report review-record review-merge] :evidence "round"})
 
 (Claim settled-at-text-declarations-code
-  "A claim is settled only by a confirmation, in a baseline review or a design decision, on its own ledger or a ledger its unit's fork or merge cites, at its identical text, the identical declaration of every one of its subjects, and the identical content of those subjects' code correspondents, with no finding against it at that key; in a project that declares no design, at its text and the whole tree's identity."
+  "A claim is settled only by a confirmation, in a baseline review or a design decision, on its own ledger or a ledger its unit's fork or merge cites, at its identical text, the identical declaration of every one of its subjects, and the identical content of those subjects' code correspondents, when no judgement at that key has found against it since that confirmation; in a project that declares no design, at its text and the whole tree's identity."
   {:about [review-settled design-check] :evidence "round"})

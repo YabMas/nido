@@ -184,10 +184,12 @@
 
    A subject is settled when a baseline review or a design decision, on any of `ledgers`, named its
    id in :confirmed while judging a record nobody retracted whose subject with that id is identical
-   to this one, at this subject's key — and no judgement at that same content and key, before or
-   since, found against it. A finding at the key is permanent: the subject is checked again only by
-   changing, which is what an amendment does. A holding verdict settles nothing by itself; only an id
-   its judge says it checked does.
+   to this one, at this subject's key — and no judgement at that same content and key has found
+   against it since. The newest judgement at the key that bears on the subject decides, ordered by
+   :at whichever ledger it is on: a finding stands until a later confirmation answers it, so a record
+   amended elsewhere in answer to a finding leaves the subject to be confirmed again rather than
+   checked for ever. A holding verdict settles nothing by itself; only an id its judge says it
+   checked does.
 
    Only `record`'s own subjects are candidates, but a role's players are read from `effective` — for
    a design, its model laid over its baseline's, since a role it keeps is not restated and a claim
@@ -207,17 +209,19 @@
                      :retracted? (contains? retracted cited)})]
        (into {}
              (keep (fn [[id content]]
-                     (let [needed   (rests-on record effective content)
-                           at-key   (filter #(and (= content (get (:subjects %) id))
-                                                  (at-key? reading needed (:judgement %)))
-                                            judged)
-                           against? (some (fn [{j :judgement}] (some #(= id (:claim-id %)) (:findings j)))
-                                          at-key)
-                           by       (->> at-key
-                                         (filter #(and (not (:retracted? %))
-                                                       (some #{id} (get-in % [:judgement :confirmed]))))
-                                         (sort-by #(str (get-in % [:judgement :at])))
-                                         last)]
-                       (when (and by (not against?))
-                         [id {:ws-id (:ws-id by) :seq (get-in by [:judgement :seq])}]))))
+                     (let [needed  (rests-on record effective content)
+                           at-key  (filter #(and (= content (get (:subjects %) id))
+                                                 (at-key? reading needed (:judgement %)))
+                                           judged)
+                           ;; What bears on the subject at this key: a finding over any record, and a
+                           ;; confirmation over one nobody retracted. A judgement doing both found.
+                           bearing (keep (fn [{j :judgement :as m}]
+                                           (cond
+                                             (some #(= id (:claim-id %)) (:findings j)) (assoc m :found? true)
+                                             (and (not (:retracted? m)) (some #{id} (:confirmed j))) m))
+                                         at-key)
+                           latest  (last (sort-by (fn [{j :judgement}] [(str (:at j)) (or (:seq j) 0)])
+                                                  bearing))]
+                       (when (and latest (not (:found? latest)))
+                         [id {:ws-id (:ws-id latest) :seq (get-in latest [:judgement :seq])}]))))
              (subjects record))))))

@@ -301,6 +301,34 @@
       (is (= 1 code))
       (is (str/includes? out "declared about canvas.a/n; the design's is about canvas.a/m")))))
 
+(deftest a-merged-design-is-held-to-the-claims-its-two-designs-state
+  ;; A merged design writes out its whole combination, claims it only carries from a baseline
+  ;; included, and holding it to everything it states refused every landing after a merge.
+  (let [claim  (fn [id] {:id id :about ["canvas.a/m"] :statement (str id " holds") :evidence {:by :round}})
+        parent {:format :design :seq 7 :model {:elements [] :claims [(claim "parent-claim")]}}
+        child  {:format :design :seq 3 :model {:elements [] :claims [(claim "child-claim")]}}
+        merged (assoc a-design :seq 8 :supersedes {:seq 7} :merges {:ws-id "ws-child" :design {:seq 3}}
+                      :model {:elements [{:id "canvas.a/m" :sort :module}]
+                              :claims   [(claim "parent-claim") (claim "child-claim")
+                                         (claim "carried-from-baseline")]})
+        land   (fn [& rows] (run {:session? true :design merged :standing stands
+                                  :structure {:status :satisfied} :elements (apply listed rows)}))]
+    (with-redefs [cws/entry-at-seq (fn [_ ws-id n] (get {["ws-1" 7] parent ["ws-child" 3] child} [ws-id n]))]
+      (let [[code out] (land (claim-row "parent-claim" "parent-claim holds" ["canvas.a/m"])
+                             (claim-row "child-claim" "child-claim holds" ["canvas.a/m"]))]
+        (is (zero? code) out)
+        (is (str/includes? out "carries the 2 claims the design states")
+            "a claim carried from the baseline is not one it is held to"))
+      (let [[code out] (land (claim-row "parent-claim" "parent-claim holds" ["canvas.a/m"]))]
+        (is (= 1 code))
+        (is (str/includes? out "child-claim — the design states it, and the declaration does not")
+            "but a claim its child's design states still is")))
+    (with-redefs [cws/entry-at-seq (fn [_ ws-id n] (get {["ws-1" 7] parent} [ws-id n]))]
+      (let [[code out] (land (claim-row "parent-claim" "parent-claim holds" ["canvas.a/m"]))]
+        (is (= 2 code))
+        (is (str/includes? out "child design it merges at entry 3 on ws-child could not be read")
+            "a design it cites that cannot be read refuses, rather than holding it to fewer claims")))))
+
 (deftest a-claim-carried-unchanged-from-main-is-another-designs
   (let [earlier (claim-row "an-earlier-claim" "landed with some other design" ["canvas.a/m"])
         [code out] (run {:session? true :design a-design :standing stands

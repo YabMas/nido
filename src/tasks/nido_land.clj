@@ -239,6 +239,28 @@
                [id {:statement (squashed statement) :about (set about)}]))
         (get-in design [:model :claims])))
 
+(defn- held-to
+  "`design` as the landing holds it to the declaration. A merged design writes out its whole
+   combination, claims it only carries from a baseline included, so it keeps only the claims its
+   parent's design — the one it supersedes — and its child's design state, each read the same way.
+   Any other design is held to every claim it states.
+
+   Throws when a design it cites cannot be read: holding a merged design to fewer claims than its
+   designs state would let a claim nobody declared land."
+  [project ws-id design]
+  (if-let [{child-ws :ws-id {n :seq} :design} (:merges design)]
+    (let [read   (fn [ledger seq-n what]
+                   (or (cws/entry-at-seq project ledger seq-n)
+                       (throw (ex-info (str "the " what " at entry " seq-n " on " ledger " could not be read")
+                                       {:ws-id ledger :seq seq-n}))))
+          stated (fn [ledger d] (get-in (held-to project ledger d) [:model :claims]))
+          ids    (into #{} (map :id)
+                       (concat (stated ws-id (read ws-id (get-in design [:supersedes :seq])
+                                                   "design this merged design supersedes"))
+                               (stated child-ws (read child-ws n "child design it merges"))))]
+      (update-in design [:model :claims] #(filterv (comp ids :id) %)))
+    design))
+
 (defn- base-listing
   "The declared elements as they stood on `main`, or why they could not be read.
 
@@ -297,16 +319,21 @@
    A third question beside the other two. Standing asks whether the design record still holds and
    structure whether the code obeys the declaration; neither asks whether the declaration carries
    what a round judged. A claim declared and never judged is a design nobody decided, and one judged
-   and never declared is a design that did not land — both pass the other checks untouched.
+   and never declared is a design that did not land — both pass the other checks untouched. A merged
+   design is asked only for the claims its parent's and child's designs state (`held-to`).
 
    The base listing is read only when the branch declares a claim, since only then can one be new."
   [cwd]
   (if-let [[project worktree] (nido-design/coords cwd)]
-    (let [design (when-let [[p ws-id] (stages/project+ws-from-cwd cwd)]
-                   (cws/latest-entry p ws-id :design))
-          judged (judged-claims design)
+    (let [[p ws-id] (stages/project+ws-from-cwd cwd)
+          design    (when ws-id (cws/latest-entry p ws-id :design))
+          held      (try {:design (when design (held-to p ws-id design))}
+                         (catch clojure.lang.ExceptionInfo e {:error (ex-message e)}))
+          judged    (judged-claims (:design held))
           head   (design/elements project worktree)]
-      (case (:status head)
+      (if-let [error (:error held)]
+        (unreadable-claims error)
+       (case (:status head)
         :undecidable
         (unreadable-claims (:error head))
 
@@ -340,7 +367,7 @@
                                       "  docstring is its statement and whose :about names its subjects. Declare\n"
                                       "  what the design states — or, if the declaration is right, supersede the\n"
                                       "  design so it states that, and have it decided again."))
-                        1)))))))))
+                        1))))))))))
     0))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
