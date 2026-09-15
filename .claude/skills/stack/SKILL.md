@@ -12,60 +12,61 @@ description: Develop a session's work as a stack of layered PRs — the layering
 
 ## What this is
 
-How to develop a session's work as an ordered stack of pull requests, each a
-focused layer, so a large autonomous change can be reviewed layer by layer with
-targeted feedback.
+How to develop a session's work as an ordered stack of pull requests, one per
+level of abstraction the change builds, so it is read the way it was built: each
+layer in terms of what the layers below it provide.
 
 **Invoke this at planning time, not at ship time.** The layers are planned
 before they are built. A doctrine read only when shipping cannot produce layered
 commits — by then the work is a heap.
 
-**And invoke `/design` before this.** Layers are a decomposition of *decisions*,
-so you cannot cut them before you have said what the decisions are. The design
+**And invoke `/design` before this.** Layers are the levels of the design's
+shape, so you cannot cut them before you have said what the shape is. The design
 record's `:layers` is where the intended cut is stated; this skill is how it gets
 built. If the record has no `:layers`, the design is not decomposed yet — go back
 and finish it rather than inventing a cut here.
 
 ## 0. Should this be a stack at all?
 
-**No stack** when the change is under ~200 lines total, or has no real
-dependency cut. One plain PR, today's flow. GitHub's own docs: stacking *"is
-not a reason to split one small change into five PRs."*
+**No stack** when the change is written at one level of abstraction, however
+large, and none of §2's three boundaries applies. One plain PR, today's flow.
+Nor when it is under ~200 lines, even with two levels — pure deletions and
+generated files count toward nothing. GitHub's own docs: stacking *"is not a
+reason to split one small change into five PRs."*
 
-**Stack** when there are genuine dependency boundaries — schema beneath the code
-that reads it, a mechanical rename apart from the judgment call it enables.
+**Stack** when the change builds a level and then writes something in it — a
+schema and the domain code expressed against it, a new abstraction and the
+callers moved onto it — or when one of §2's boundaries applies: the old path
+removed on top, a refactor beneath the change it enables, a mechanical sweep
+apart from the judgment around it.
 
 **The layer count is not the test — one story is.** State what the whole stack
 claims, in one sentence, with no "and". If you cannot, it is two tickets, and
-that is as true of four layers as of nine. A change with many genuine dependency
-cuts is not mis-scoped for having them.
+that is as true of four layers as of nine. A change that genuinely builds many
+levels is not mis-scoped for having them.
 
-**But the cut itself gets reviewed, and every layer adds to that review.** A
-reviewer holds two questions at once: does this layer's claim stand, and is this
-the right decomposition? Only the first shrinks when you split — the second
-grows, because n layers is n claims to judge plus n boundaries to justify. So a
-split is never free, and layers that are each individually defensible can still
-be the wrong cut.
-
-This asymmetry is the thing to watch, because nothing else corrects it.
-"Can this be separated?" is always more true after a split, so any check that
-asks it — including a design round's `decomposable` — ratchets one way and never
-back. **Make the merge case against yourself before you make the split one**, and
-if you cannot say what a boundary buys a reader, it does not buy anything.
+**Why levels, and not what a reviewer can hold.** Cut to fit a reviewer's
+working memory and every split looks like a gain — a smaller piece is always
+easier to hold — so "can this be separated?" gets more true after each one, and
+any check that asks it ratchets toward stacks of layers too small to mean
+anything. The level test (§1) does not ratchet: split a level in two and one
+half provides nothing the other is written in, so the split fails the very test
+it was meant to pass. A reader is served by the structure — each layer readable
+from the interfaces of the layers below it — not by the size of the pieces.
 
 **And a cut is deleted at land time**, which bounds what getting it wrong can
-cost: §3's collapse means no layer survives in the merged history, so a bad cut
-costs the attention of the reviewers currently reading it and nothing after
-that. By the time anyone can report the cut is wrong, that attention is spent —
-which is why re-cutting has to save more than it spends, and why a concern about
-the cut alone never blocks a design round or a review. The shipping doctrine's
-*The words, and which boundaries survive a landing* is where that rule and the
-four boundary words are stated; this section is it applied to the vertical cut.
+cost: §3's collapse means no layer survives in the merged history. The levels
+survive, because they are in the code, and the code lands whole whichever way it
+was cut — so a cut that misreads them costs only the reading it was drawn for,
+and a concern about the cut alone never blocks a design round or a review. The
+shipping doctrine's *The words, and which boundaries survive a landing* is where
+that rule and the four boundary words are stated; this section is it applied to
+the vertical cut.
 
-**The shape to aim at is a story.** Read bottom to top, the layers should
-narrate how the change was made: each a coherent, self-contained move a reader
-could stop at and still know where they are. Not "could this be separated" —
-"does separating it tell the reader something".
+**The shape to aim at is a language being built.** Read bottom to top, each
+layer is written in what the layers below provide, and provides what the layers
+above are written in. A reader who stops at any layer holds a working
+vocabulary, not half of one.
 
 Record the decision in the plan. A one-layer stack is exactly today's flow,
 which is why every sibling skill forks on **layer count**, not on a flag.
@@ -84,65 +85,96 @@ than compete: phase 2 of a plan being a three-layer stack is normal. The counts
 multiply though — four phases of five layers each is the mis-scoping signal
 firing on both axes at once, not thoroughness.
 
-## 1. Ordering — dependency direction
+## 1. Levels — where a boundary goes
 
-One hard rule: **if code in layer A depends on code in layer B, B is in the same
-layer or lower.** Dependency direction is objective; ordering is never a taste
-call.
+A layer is a **level of abstraction**, in the sense of stratified design
+(Abelson & Sussman, *Structure and Interpretation of Computer Programs* §2.2.4):
+a system built as a sequence of levels, each described in a language made from
+the primitives of the level below it, each providing the primitives the next
+level is written in.
 
-Strata are a topological sort of *this change's* dependency graph, named from
-the change. The common shape:
+> **The level test: name what this layer provides that the layer above is
+> written in.**
 
-**foundation → core (one per area of substance) → wiring → supersede**
+What a level provides is vocabulary — a function, a type, a schema, a protocol,
+a table — that the layer above uses by its interface, without reading its body.
+Nothing to name, no boundary. That is also why the cut is stated in the design
+record before it is cut in jj: the levels are a fact about the design's shape.
 
-- **foundation** — migrations, malli schemas, `defattr`, shared types
-- **core** — domain logic, module internals. **Plural** when the change has
-  substance in more than one area. Substantial UI work is its own core stratum,
-  usually above domain core since components consume the domain.
-- **wiring** — routes, call sites, connecting existing components to new
-  functionality
-- **supersede** — delete the old path, drop the flag, remove dead code.
-  **Always on top**: you can only delete the old thing once the new one is wired.
+- **A level is a vocabulary, not a helper.** One function called once is not
+  something a layer is written in; it belongs to the layer that calls it.
+- **A level is not a pipeline stage.** Parse → transform → persist over one
+  representation is one level expressed in three steps — the stance's point that
+  a pipeline is not a decomposition. Nor is a file type, a directory, or a
+  review lane.
+- **One abstraction is one level.** Two layers that each provide half of it —
+  one module's secret split across a boundary — leave the layer above with
+  nothing it can use by interface alone.
+- **The code has the levels; the cut reads them.** A change written at one
+  level is one layer however large it is. A boundary the code does not have is a
+  design change: build it in the code (§2's *refactor before change*), never only
+  in the packaging.
 
-This is a common shape, not a schema. The test for whether something earns its
-own stratum is a design question first:
+One hard rule for order, and it falls out of the test: **if code in layer A
+depends on code in layer B, B is in the same layer or lower.** A level sits below
+everything written in it. Dependency direction is objective; ordering is never a
+taste call.
 
-> **Does it carry its own design decision?** And, confirming that: does reviewing
-> it require a different mindset?
+The common shape, read as levels:
 
-The first half decides; the second checks the first. A stratum is where a
-separable decision lives — which is why the cut is stated in the design record
-before it is cut in jj. Two things that share a decision belong in one layer
-however differently they read; two things that carry different decisions are two
-layers however similar the code looks.
+**data definition → domain vocabulary → the program written in it → supersede**
 
-New components: yes. Wiring existing components to new functionality: no — that
-is wiring, and it carries no decision of its own.
+- **data definition** — migrations, malli schemas, `defattr`, shared types: what
+  the domain code is written against
+- **domain vocabulary** — the functions and module interfaces the change adds.
+  **Plural** only when the change builds more than one level — a UI level
+  composed from a domain level, say — never one per area of the codebase it
+  touches.
+- **the program written in it** — routes, call sites, the existing system moved
+  onto the new vocabulary. A level when it is written in what the layer below
+  provides; wiring that merely calls one new function belongs with that function.
+- **supersede** — delete the old path, drop the flag, remove dead code. Not a
+  level: §2's first boundary, always on top.
 
-## 2. Subdivision — one review mode per layer
+This is a common shape, not a schema. Plenty of changes have two of these, and a
+change that has one is one layer.
 
-**Mechanical or judgment. Never mixed.**
+## 2. Three boundaries that are not levels
 
-Lines are a bad proxy for what matters, which is review cost. A 2,000-line
-uniform rename costs a reviewer *O(1)* — confirm uniformity, spot-check, done. A
-200-line judgment diff costs *O(lines)*.
+The level test finds the change's structure. Three further boundaries are worth
+drawing although they are not levels, because each separates a different *kind*
+of change — and they are the only three. Nothing else splits a level: not its
+size, not review mode, not which lane reviews it.
 
-- **Mechanical layer** — one uniform transformation, statable in one sentence,
-  with no exceptions hidden inside. **Unbounded size.**
-- **Judgment layer** — everything else. Soft target 50–200 changed lines. Past
-  ~400, ask yourself whether this is really one thing; if you keep it, say why.
-  These are guidance, not gates.
-- **The sharp edge:** a layer labelled mechanical that contains
-  specially-handled sites **is not mechanical**. Either those sites move up into
-  a judgment layer, or the layer is reclassified. This is the rule that stops a
-  real decision being smuggled into a diff the reviewer was about to skim.
+1. **Introduce, then remove.** Removing what a new abstraction replaces — the old
+   path, the flag, the dead code — is its own layer, **always on top**: you can
+   only delete the old thing once nothing is written in it any more. Introducing
+   the new abstraction and moving callers onto it are levels already (§1); the
+   removal is the boundary the level test would not draw. Pure deletions count
+   toward nothing, so a 2,000-line supersede layer is a one-minute read.
+2. **Refactor before change.** A behaviour-preserving restructure sits below the
+   behaviour change it makes easy — *make the change easy, then make the easy
+   change*. Often the refactor is what builds the level the change is written
+   in, and §1 has already drawn it. When it is not, the boundary still separates
+   *nothing changed* from *this changed*, which is what the `Layer:` trailer
+   (§4) asserts.
+3. **Mechanical sweep apart.** One uniform transformation — a rename, a
+   reformat, a regenerated file — statable in one sentence with no exceptions,
+   stays out of any layer that carries judgment. **Unbounded size.** Lines are a
+   bad proxy here: a 2,000-line uniform rename costs a reader *O(1)* — confirm
+   uniformity, spot-check, done — while a 200-line judgment diff costs
+   *O(lines)*, and one buried in the other hides the judgment. A sweep of a
+   handful of sites is part of the layer it serves.
 
-**Tiebreaker.** Unsure whether two things belong in one stratum? *Would these go
-to the same specialist?* Project review lanes are real subject boundaries.
+   **The sharp edge:** a layer labelled mechanical that contains
+   specially-handled sites **is not mechanical**. Either those sites move into
+   the layer that carries the judgment, or the layer is reclassified. This is the
+   rule that stops a real decision being smuggled into a diff the reader was
+   about to skim.
 
-**Every layer's claim must be checkable from that layer's own diff.** This is
-the test that decides where a boundary goes once dependency order has narrowed
-it. A reviewer is handed one layer and its `Claims:`, and nothing else — so a
+**Every layer's claim must be checkable from that layer's own diff**, given the
+interfaces of the layers below it — which is what the level test guarantees. A
+reviewer is handed one layer and its `Claims:`, and nothing else — so a
 claim they cannot confirm or refute from what is in front of them is a claim
 written at the wrong altitude, and no amount of care further up recovers it. If
 verifying "this is mechanical" needs the layer above to see what compensates for
@@ -151,16 +183,17 @@ them, and do it now rather than discovering it in review. A reviewer saying *I
 cannot check this from here* is reporting a defect in the cut, not asking a
 question.
 
-**A layer with no claim is not a small layer — it is not a layer.** One that
-only forwards what the layer below already accepts, or renames on the way
-through, gives a reviewer nothing to stop at. Fold it into the layer whose claim
-it serves.
+**A layer that provides nothing is not a small layer — it is not a layer.** One
+that only forwards what the layer below already accepts, or renames on the way
+through, gives the layer above nothing new to be written in. Fold it into the
+layer whose vocabulary it serves.
 
 The way these get into a plan is always the same: **the cut was drawn against
 the call chain someone expected, not the one that exists.** A parameter
-"threaded rung by rung, so a reviewer sees which contract changed" is four
-layers if each rung names its arguments, and one layer if they pass an open map
-— and only the code says which. Check the rungs before committing to the cut.
+"threaded rung by rung, so a reviewer sees which contract changed" builds no
+level at any rung — each rung is written in the same vocabulary it was before —
+so it is one layer, and when the rungs pass an open map it is barely a change at
+all. Only the code says which. Read the rungs before committing to the cut.
 
 **When a layer resists on contact, suspect the cut.** Collapsing one boundary
 while executing is a local fix. Collapsing a second is a finding about the
@@ -170,9 +203,9 @@ disproved.
 
 ## 3. Universal rules
 
-- **One-sentence title test.** Every layer's PR title is one sentence containing
-  no "and". Needing "and" means it is two layers. Cheapest check here, highest
-  yield.
+- **The title names what the layer provides.** One sentence, no "and". A title
+  that needs "and" is listing the layer's parts — name the level instead, or the
+  §2 boundary it is. If there is no one thing to name, it is two layers.
 - **Every layer's claim traces to the design record.** A layer whose `Claims:`
   is not a line in `:layers` is a signal, and a useful one in both directions:
   either the design is incomplete, or the layer is smuggling a decision nobody
@@ -195,8 +228,6 @@ disproved.
   *because the collapse means no layer boundary is ever a merge boundary*. When
   a boundary **does** have to be survivable, it is not a layer: it is a phase,
   and `/phase` §2 is the test.
-- **Size exemptions.** Pure deletions and generated files count toward nothing.
-  A 2,000-line supersede layer is a one-minute review.
 
 ## 4. Mechanics
 
@@ -227,7 +258,8 @@ tracked and the session bookmark never is, every bare `jj git push` already mean
 
 ### The `Layer:` trailer
 
-One per layer commit, exactly one value:
+One per layer commit, exactly one value — the strongest thing the layer does, so
+a level that restructures and changes behaviour is `behavioral`:
 
 | value | meaning | asserts |
 |---|---|---|
@@ -578,11 +610,13 @@ a reviewer's first question is what state the system is being left in:
 
 ### The four brief fields you author
 
-- **Claims** — what this layer asserts about itself. It should be the `:claim`
-  from the design record's `:layers`, verbatim or close to it; if you find
-  yourself writing something the record doesn't contain, one of the two is
-  wrong. A layer's claim is about the **diff**; if it is about the running
-  system, you are describing a phase (`/phase` §2).
+- **Claims** — what this layer asserts about itself: for a level, what it
+  provides to the layers above; for a §2 boundary, that the removal, refactor or
+  sweep is exactly that. It should be the `:claim` from the design record's
+  `:layers`, verbatim or close to it; if you find yourself writing something the
+  record doesn't contain, one of the two is wrong. A layer's claim is about the
+  **diff**; if it is about the running system, you are describing a phase
+  (`/phase` §2).
 - **Verify** — concrete checks, never "review this".
 - **Lane** — which specialism applies; also how a reviewer agent is picked.
 - **Out of scope** — what this layer's reviewer should *not* flag, and where it
@@ -863,12 +897,16 @@ cleaning up a merged stack's branches.
 
 ## Common mistakes
 
-- **Splitting because you can, not because a reader gains.** "Can this be
-  separated?" is more true after every split, so it converges on more layers
-  forever. The question is what the boundary buys a reader (§0).
+- **Splitting a level** — by size, by review mode, by pipeline stage, by lane.
+  "Can this be separated?" is more true after every split, so it converges on
+  more layers forever. The question is what the lower layer provides that the
+  upper one is written in (§1), or which of §2's three boundaries this is.
+- **Drawing a boundary the code does not have.** If the change wants a level
+  that is not there, build it — a refactor below the change (§2) — rather than
+  cutting the packaging as if it existed.
 - **Cutting against the call chain you expect rather than the one that exists.**
-  A parameter threaded "one rung per layer" is one layer, not four, when the
-  rungs pass an open map. Check the code before committing to the cut (§2).
+  A parameter threaded "one rung per layer" is one layer, not four: threading it
+  builds no level at any rung. Read the code before committing to the cut (§2).
 - **Collapsing a second boundary during execution without amending the design.**
   One collapse is a local fix; two is a finding about the decomposition (§2).
 - **`gh repo view -R "$SLUG"`** — `gh repo view` takes the repo as a
@@ -934,12 +972,13 @@ cleaning up a merged stack's branches.
   open PRs. Ordinals go in PR titles only.
 - **Reading this skill only at ship time** — by then the work is a heap and the
   only option left is post-hoc restacking. Invoke at planning time.
-- **Mixing review modes in one layer** — a "mechanical" layer with three
-  special-cased sites is not mechanical.
-- **Stacking a small change** — under ~200 lines with no dependency cut, ship
-  one plain PR.
+- **Burying a mechanical sweep in a judgment layer, or judgment in a sweep** —
+  a "mechanical" layer with three special-cased sites is not mechanical (§2).
+- **Stacking a change with one level** — ship one plain PR however large it is,
+  and under ~200 lines ship one even with two (§0).
 - **Using a layer boundary where a phase boundary is needed** — if the system
   has to run in that state, green tests are not the obligation; habitability is
   (§3, `/phase` §2).
 - **Pushing the session bookmark** — only `<session>--*` bookmarks get pushed.
-- **Writing "and" in a layer's PR title** — that is two layers.
+- **Writing "and" in a layer's PR title** — name what the layer provides; if
+  there is no one thing, it is two layers (§3).

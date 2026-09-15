@@ -51,7 +51,7 @@
               "decomposable",
               "routing-coherent"
             ],
-            "description": "Which derivation this gap blocks. 'none' for a FALSIFIED finding, which refutes a claim rather than reporting a gap. On an INSUFFICIENT finding it must name one of the four, because a gap blocking none of them is not a finding. relation-honest: whether a change stands where it says it stands, against this area's modules and load-bearing properties. goal-served: whether a change serves the goal and only the goal. decomposable: whether the change's cut can be stated and follows this area's module boundaries. routing-coherent: whether this area's health observations belong to one story."
+            "description": "Which derivation this gap blocks. 'none' for a FALSIFIED finding, which refutes a claim rather than reporting a gap. On an INSUFFICIENT finding it must name one of the four, because a gap blocking none of them is not a finding. relation-honest: whether a change stands where it says it stands, against this area's modules and load-bearing properties. goal-served: whether a change serves the goal and only the goal. decomposable: whether the change's cut can be stated and follows the levels of abstraction this area's modules compose into. routing-coherent: whether this area's health observations belong to one story."
           },
           "cites": {
             "type": "array",

@@ -323,10 +323,10 @@ repeating it.
 
 **Say what the layering claims, not just what order it is in.** A cover note that
 lists dependency order tells a reviewer something jj already told them. State the
-decomposition as the design decision it is — *these are the separable decisions,
-and here is the one each layer carries* — which is exactly the design record's
-`:layers`. A reviewer who knows which decision a layer owns can accept or reject
-that layer on its own, which is the entire point of stacking it.
+decomposition as the design fact it is — *these are the levels this change
+builds, and here is what each provides to the ones above* — which is exactly the
+design record's `:layers`. A reviewer who knows what a layer provides can read the
+layer above in its terms, which is the point of stacking it.
 
 ### 4. Link them into a stack, by PR number
 

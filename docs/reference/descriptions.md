@@ -102,9 +102,10 @@ weakness found by a reviewer costs a round, and found in production costs more.
 - **Imperative mood**, "as if you are giving orders to the codebase to change
   its behaviour" (the kernel). The test: *If applied, this commit will* ______.
   If your subject does not complete that sentence, rewrite it.
-- **No "and".** Already nido's rule (`/stack`): needing "and" means it is two
-  layers. It is also a description rule — a subject joining two claims lets a
-  reader check neither.
+- **No "and".** Already nido's rule (`/stack` §3): a title needing "and" lists
+  a layer's parts instead of naming what it provides, and if there is no one
+  thing to name it is two layers. It is also a description rule — a subject
+  joining two claims lets a reader check neither.
 - **Say what becomes true, not where bytes went.** Google lists *"Moving code
   from A to B"* among its bad descriptions for this reason: it is a true
   sentence that tells a reader nothing they could act on. So are *"fix bug"*,

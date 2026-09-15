@@ -71,6 +71,17 @@
       (is (str/includes? doc "mechanical"))
       (is (str/includes? doc "structural"))
       (is (str/includes? doc "behavioral")))
+    (testing "layers are cut by level of abstraction, not sized to a reviewer"
+      (is (str/includes? doc "level of abstraction"))
+      (is (str/includes? doc "The level test")
+          "a boundary has to name what the layer below provides")
+      (is (str/includes? doc "does NOT decide how a change is layered")
+          "reviewer attention is not the vertical cut's objective")
+      (doseq [boundary ["Introduce, then remove"
+                        "Refactor before change"
+                        "Mechanical sweep apart"]]
+        (is (str/includes? doc boundary)
+            (str "a boundary that is not a level is named: " boundary))))
     (testing "all four destinations are named"
       (is (str/includes? doc "this layer"))
       (is (str/includes? doc "another layer"))

@@ -712,14 +712,19 @@
     :how  (str "read the `out of scope` lines above as one set, and ask what in\n"
                "  the branch falls through all of them.")}
    {:kind "misplaced-cut" :asks :cut :remedy :fold :costs :packaging
-    :what (str "the cut itself is wrong: one idea split so neither side is\n"
-               "  coherent alone, or a layer boundary running through the middle\n"
-               "  of a thing. **Report the cut, not a patch.** Saying where the\n"
+    :what (str "the cut itself is wrong: a boundary that is not a level. One\n"
+               "  abstraction split so the layer above is not written in what the\n"
+               "  layer below provides, or a boundary running through the middle\n"
+               "  of one thing. **Report the cut, not a patch.** Saying where the\n"
                "  cut should have been is worth more than repairing either side,\n"
                "  and a fix applied to one side makes the wrong cut permanent.")
-    :how  (str "you have usually already found this when a defect has no good\n"
-               "  owner. When placing it on either layer feels arbitrary, that is\n"
-               "  the cut telling you about itself — say so instead of choosing.")}
+    :how  (str "ask what the lower layer provides that the upper one uses by\n"
+               "  interface. When the answer is nothing, and the boundary is not\n"
+               "  a removal on top, a refactor below a change or a mechanical\n"
+               "  sweep, this is the kind. You have often found it already when a\n"
+               "  defect has no good owner: placing it on either layer feels\n"
+               "  arbitrary because the cut is telling you about itself — say so\n"
+               "  instead of choosing.")}
    {:kind "aggregate" :asks :wiring :costs :merged-tree
     :what (str "each layer's contribution is defensible alone and their sum is\n"
                "  not: a cost, a lock, a query, an allocation added once per\n"
@@ -842,10 +847,11 @@
      "Your subject is not the code. It is the CUT and the WIRING — whether this\n"
      "change was decomposed into the right pieces, and whether those pieces hold\n"
      "together. Two questions, and every finding you return answers one of them:\n\n"
-     "  THE CUT — are these the right pieces? Right boundaries, nothing built\n"
-     "  twice because two layers could not see each other, nothing falling\n"
-     "  through the gap between what they all excluded, each layer's stated\n"
-     "  claim actually true of what it contains.\n\n"
+     "  THE CUT — are these the right pieces? Each boundary where the\n"
+     "  vocabulary changes — the layer above written in what the layer below\n"
+     "  provides — nothing built twice because two layers could not see each\n"
+     "  other, nothing falling through the gap between what they all excluded,\n"
+     "  each layer's stated claim actually true of what it contains.\n\n"
      "  THE WIRING — do the pieces hold together? Each one has to stand up where\n"
      "  it sits, given only what the layers below it actually supply, and what\n"
      "  they add up to has to be defensible too.\n\n"

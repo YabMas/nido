@@ -63,10 +63,10 @@ environment — do NOT start a fresh JVM, Kaocha runner, or
 - `~/Code/nido/docs/reference/notion-access.md` (supersedes brian's
   `docs/reference/notion-context.md` for agent sessions)
 
-## Layer boundaries and review lanes
+## Review lanes for stacked layers
 
-When cutting a change into stacked layers (see `/stack`), brian's review lanes
-are the concrete tiebreaker for "would these go to the same specialist?":
+A lane does not decide where a layer splits — `/stack`'s level test does. It
+decides who reviews the layer once it is cut:
 
 | lane | owns |
 |---|---|
@@ -77,6 +77,6 @@ are the concrete tiebreaker for "would these go to the same specialist?":
 | `lane-missionary` | `m/sp`, `m/ap`, supervision, backpressure |
 | `lane-statechart` | charts, `rt/process-event!`, working memory |
 
-A migration stratum is a `lane-db-deploy` layer; a substantial-UI stratum is a
-`lane-datastar` layer. Name the lane in each layer's review brief so per-layer
-review can dispatch the right specialist.
+A data-definition layer of migrations usually goes to `lane-db-deploy`; a UI
+level composed from the domain usually goes to `lane-datastar`. Name the lane in
+each layer's review brief so per-layer review can dispatch the right specialist.

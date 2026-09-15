@@ -2592,7 +2592,7 @@
   "The one derived check that may not block, and the reason it is the only one.
 
    `relation-honest`, `goal-served` and `routing-coherent` judge what the change
-   COMMITS TO. `decomposable` judges how the work will be sliced for review — and
+   COMMITS TO. `decomposable` judges how the work is cut into layers — and
    layers do not survive: the stack is collapsed into one commit before it lands,
    so a bad cut costs the attention of the reviewers reading it now and nothing
    afterwards. By the time a round can report the cut is wrong, that attention is

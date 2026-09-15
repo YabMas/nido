@@ -25,8 +25,10 @@ cut against nothing.
 
 The same thing the shipping doctrine optimises: **change landed per unit of
 reviewer attention, at constant-or-rising trust.** This skill serves it from the
-other end. `/stack` and `/spin-out` bound how much arrives at once and `/phase` bounds how
-much is at risk in one landing; a design record makes what arrives **evaluable**.
+other end. `/spin-out` bounds how much arrives at once and `/phase` bounds how
+much is at risk in one landing; a design record makes what arrives **evaluable**
+— and states the levels of abstraction `/stack` cuts along, which is layering's
+own criterion rather than this one.
 
 The failure it exists to prevent: *a finding is only meaningful relative to an
 intent.* With no stated intent, "this is wrong" and "this is not what we decided"
@@ -161,8 +163,10 @@ what survives the session.
   other. `:revisit` must name what it breaks — otherwise "the design needs
   revisiting" is a feeling, and deriving it instead of feeling it is the entire
   point of surveying first.
-- **`:layers` is the design's decomposition claim** — `/stack` realises it.
-  Claim and review mode only; bookmarks, slugs and ordering are mechanics.
+- **`:layers` is the design's decomposition claim** — `/stack` realises it. Each
+  claim names what that layer provides to the ones above it, or which of
+  `/stack` §2's three boundaries it is; `:mode` says whether it is a mechanical
+  sweep. Bookmarks, slugs and ordering are mechanics.
 - **`:phases` is the design's *other* decomposition claim** — `/phase` realises
   it, as `/stack` realises `:layers`. Present only when the change cannot reach
   production in one landing. Each phase claims something about the running
@@ -202,9 +206,11 @@ A claim, a test, and the failure mode it prevents.
    *about* them.
    *Failure:* an implementation sketch that cannot survive the first surprise in
    the code, so it is abandoned rather than amended.
-8. **The layering is part of the design.** If the layers cannot be stated from
-   the design, the design is not decomposed yet. *Test:* every layer's `Claims:`
-   traces to a line in the record.
+8. **The layering is read off the design.** A layer is a level of abstraction,
+   so the layers are the levels the shape already has — plus, where they apply,
+   the removal of an old path, a refactor before the change, a mechanical sweep.
+   If the layers cannot be stated from the design, the design is not decomposed
+   yet. *Test:* every layer's `Claims:` traces to a line in the record.
 9. **Visible incompleteness is a design decision; invisible incompleteness is a
    defect; incompleteness nothing will close is a wish.** A design may leave a
    seam — then say so in `:seams`, with what makes it visible *and* what closes

@@ -43,9 +43,9 @@ anything to phase.
 
 The same thing the whole doctrine optimises — **change landed per unit of
 reviewer attention, at constant-or-rising trust** — served from the third side.
-`/stack` and `/spin-out` bound how much arrives at once; `/design` makes what
-arrives evaluable; this bounds **how much of the system is at risk in one
-landing**, and buys real evidence between landings.
+`/spin-out` bounds how much arrives at once; `/design` makes what arrives
+evaluable; this bounds **how much of the system is at risk in one landing**, and
+buys real evidence between landings.
 
 It is a trade, and both sides are real. It costs more landings, more ceremony,
 and a cold re-entry at every boundary — the context you are holding right now is
