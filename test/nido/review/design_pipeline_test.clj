@@ -13,6 +13,7 @@
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as ws]
+   [nido.design.check :as design-check]
    [nido.review.loop :as rloop]
    [nido.review.record :as record]
    [nido.review.stages :as stages]))
@@ -115,6 +116,41 @@
     (is (= :no-output (:outcome (run [{:format :baseline-review
                                        :verdict :sufficient :baseline-seq 1}]))))
     (is (= 1 @launched))))
+
+(def ^:private a-model-design
+  (-> a-design
+      (dissoc :invariants)
+      (assoc :model {:elements [{:id "canvas.order/aggregate" :sort :module}]
+                     :claims   [{:id "rounded-once" :about ["canvas.order/aggregate"]
+                                 :statement "a total is rounded exactly once"
+                                 :falsified-by "a total rounded twice"
+                                 :evidence {:by :round}}]})))
+
+(deftest a-design-claim-about-nothing-declared-spends-no-judge
+  (let [launched (atom 0)
+        seen     (atom nil)
+        run (fn [rows]
+              (reset! launched 0)
+              (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                            ws/latest-entry (fn [_ _ k] (when (= :design k) a-model-design))
+                            standing/of-design (constantly {:decidable? true})
+                            stages/read-stance (constantly nil)
+                            stages/discover-baseline (constantly nil)
+                            record/discover-intent (constantly nil)
+                            design-check/elements (fn [_ worktree]
+                                                    (reset! seen worktree)
+                                                    {:status :listed :elements rows})
+                            record/run-round! (fn [_] (swap! launched inc)
+                                                {:outcome :no-output :detail "stub"})]
+                (record/design-decision! {:cwd "/w" :code-cwd "/tree" :run-id "r1" :label "l"})))]
+    (let [out (run [])]
+      (is (= :subjects-undeclared (:outcome out)))
+      (is (str/includes? (:detail out) "canvas.order/aggregate"))
+      (is (= "/tree" @seen) "resolved at the tree carrying the design's own declaration")
+      (is (zero? @launched)))
+    (is (= :no-output (:outcome (run [{:id "canvas.order/aggregate"
+                                       :sort :fukan.common.vocab.code.module/Module}]))))
+    (is (= 1 @launched) "the control: every subject declared, and the judge is reached")))
 
 (deftest a-design-declaring-it-moves-nothing-still-reaches-the-round
   ;; The declarations decide whether a person's grant is additionally owed,
@@ -225,15 +261,18 @@
          b    (add! :baseline
                     {:format :baseline :intent {:seq 1}
                      :area "a" :bounded-by "b" :shape "s"
-                     :modules [{:id "m" :module "m" :hides "h" :interface "i"}]
-                     :composition "c"
-                     :load-bearing [{:id "c1" :property "p" :falsified-by "f"
-                                     :evidence ["src/a.clj:1"]}]
+                     :model {:elements [{:id "m" :sort :module :hides "h" :interface "i"}]
+                             :claims [{:id "c1" :about ["m"] :statement "p" :falsified-by "f"
+                                       :evidence {:by :round} :read-at ["src/a.clj:1"]}]}
                      :read ["src/a.clj"]})
          _    (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                       :baseline-seq b :reason "holds"})
          d    (add! :design {:format :design :summary "s" :shape "sh"
-                             :invariants ["one path"] :standing standing
+                             :model {:elements [{:id "m" :sort :module}]
+                                     :claims [{:id "one-path" :about ["m"] :statement "one path"
+                                               :falsified-by "a second path"
+                                               :evidence {:by :round}}]}
+                             :standing standing
                              :baseline {:seq b :relation :within}
                              :intent {:seq 1} :effort :S})]
      [id #(add! :design-decision

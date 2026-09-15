@@ -782,6 +782,15 @@
    :proceed              :escalate  ; the design round's ask, when a person IS owed one
    :disputed             :escalate  ; judge and amender deadlocked
    :underivable          :escalate  ; no yardstick to derive against
+   ;; A claim names something the declared design does not hold. Not :route-back: the
+   ;; refusal writes nothing, so the next tick reads the position that fired this round
+   ;; and fires it again. The record or the declaration has to move, and which one is an
+   ;; author's call.
+   :subjects-undeclared  :escalate
+   ;; fukan could not list the declaration. Machinery, and still not :retry, for the
+   ;; reason :fix-launch-failed is not: a canvas or source file that will not parse, or a
+   ;; fukan without the verb, does not lift inside a backoff.
+   :declaration-unreadable :escalate
    :unfixable            :escalate  ; raised every round and never moved
    :no-progress          :escalate
    :unresolved           :escalate  ; the run ended still holding findings

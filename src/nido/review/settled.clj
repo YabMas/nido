@@ -53,7 +53,9 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   subjects
-  "Every subject of a baseline, by id, each as the vector of what carries that id.
+  "Every subject of a baseline, by id, each as the vector of what carries that id —
+   its claims, modules and health observations, or in the shared model its claims
+   and elements.
 
    A vector because ids are unique per kind and not across kinds: a claim and a
    module may share one, and a judge confirming that id cannot say which it meant.
@@ -63,7 +65,8 @@
   (let [add (fn [m id v] (update m id (fnil conj []) v))]
     (cond-> (reduce (fn [m s] (if-let [id (:id s)] (add m id s) m))
                     {}
-                    (concat (:load-bearing record) (:modules record) (:health record)))
+                    (concat (:load-bearing record) (:modules record) (:health record)
+                            (get-in record [:model :claims]) (get-in record [:model :elements])))
       (some? (:shape record))       (add "shape" (:shape record))
       (some? (:composition record)) (add "composition" (:composition record)))))
 

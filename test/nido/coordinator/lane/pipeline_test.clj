@@ -25,16 +25,21 @@
   {:format :baseline :intent {:seq 1}
    :area "order totalling" :bounded-by "money on an order"
    :shape "one summing path"
-   :modules [{:id "agg" :module "the aggregate" :hides "the summing order"
-              :interface "an order's total"}]
-   :composition "only the aggregate sees the lines"
-   :load-bearing [{:id "c1" :property "the aggregate is the only summing path"
-                   :falsified-by "a second path that sums lines"
-                   :evidence ["src/a.clj:1"]}]
+   :model {:elements [{:id "agg" :sort :module :hides "the summing order"
+                       :interface "an order's total"}]
+           :claims [{:id "c1" :about ["agg"]
+                     :statement "the aggregate is the only summing path"
+                     :falsified-by "a second path that sums lines"
+                     :evidence {:by :round} :read-at ["src/a.clj:1"]}]}
    :read ["src/a.clj"]})
 
 (defn- a-design [baseline-seq]
-  {:format :design :summary "s" :shape "sh" :invariants ["one summing path"]
+  {:format :design :summary "s" :shape "sh"
+   :model {:elements [{:id "agg" :sort :module}]
+           :claims [{:id "one-summing-path" :about ["agg"]
+                     :statement "one summing path"
+                     :falsified-by "a second path that sums lines"
+                     :evidence {:by :round}}]}
    :standing {:relation :conforms}
    :baseline {:seq baseline-seq :relation :within}
    :intent {:seq 1} :effort :S})
@@ -489,7 +494,8 @@
              :nothing-to-check :no-record :no-workstream
              :premise-unverified :premise-retracted :design-retracted
              :premise-superseded :premise-goal-superseded :goal-superseded
-             :no-premise :unreadable-ledger :dry-run]]
+             :no-premise :unreadable-ledger :dry-run
+             :subjects-undeclared :declaration-unreadable]]
     (is (contains? @#'p/disposition-of-status s)
         (str s " must be named in the table"))))
 

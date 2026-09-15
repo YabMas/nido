@@ -20,6 +20,7 @@
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.report.model :as claim-model]
    [nido.review.analysis :as analysis]
    [nido.review.frontend :as frontend]
    [nido.review.layers :as layers]
@@ -579,7 +580,7 @@
    compared the change to the design it committed to, which is the case where
    the comparison is the only evidence there is.
 
-   So: a design carrying invariants is enough on its own. A review that did not
+   So: a design stating claims is enough on its own. A review that did not
    happen has nothing to judge — whether it broke or no reviewer could be run —
    and a dry run changed nothing to judge. A run that ended because jj refused
    a step on the stack has a review and no branch it can vouch for: the refusal
@@ -593,7 +594,7 @@
   (and (not (#{:review-failed :reviewer-unavailable :stack-unmovable :dry-run} status))
        (boolean (or (seq (:findings final))
                     (seq (:history final))
-                    (seq (:invariants design))))))
+                    (seq (claim-model/claims design))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   unreadable-tree
@@ -1626,7 +1627,9 @@
    :codex-failed "the judge did not run — this is NOT a clean result"
    :no-output  "the judge ran and wrote nothing — NOT a clean result"
    :unusable-answer "the judge answered, but not in a form a record accepts"
-   :round-crashed "the round threw before it could degrade"})
+   :round-crashed "the round threw before it could degrade"
+   :subjects-undeclared "a claim is about something the declared design does not hold — declare it in canvas/ or correct the record's element; no judge was launched"
+   :declaration-unreadable "fukan could not list the declared design, so no subject was resolved and no judge was launched — `bb nido:design:check` shows why"})
 
 (defn- shared-remedy
   "The shared line, plus the one status whose meaning depends on what the round

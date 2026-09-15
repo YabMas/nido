@@ -21,14 +21,16 @@
       property the code does not have should lose it. So this reports, and the
       caller decides; what the caller must not do is let one pass silently.
 
-   2. Pure, and dependency-free by choice. Whether a retreated baseline has
+   2. Pure, and reaching nothing but the shared model's readings, which say what a
+      record claims whichever era wrote it. Whether a retreated baseline has
       fallen below the point where its own round would still run is a question
       for the predicate that owns it (`record/baseline-round-worth-running?`),
       asked by the stage that has both records in hand. Reaching for it here
       would invert that ownership to save a line. A design has no such floor:
       its decision round is never skipped."
   (:require
-   [clojure.string :as str]))
+   [clojure.string :as str]
+   [nido.coordinator.report.model :as model]))
 
 (defn- retreat
   [what detail]
@@ -141,6 +143,30 @@
      (within :modules      "module" [:module :hides :interface])
      (within :load-bearing "claim"  [:property :falsified-by]))))
 
+(defn- as-survey
+  "A baseline in the shape the measures below read — modules and load-bearing properties. One in
+   the shared model is read out through its elements and claims: an element is a module and a claim
+   a property, under the same ids. So a retreat is measured alike whichever era either record was
+   written in, including a survey amended into a model."
+  [b]
+  (if (contains? b :model)
+    (-> b
+        (assoc :modules (mapv (fn [{:keys [id hides interface readings]}]
+                                (cond-> {:id id :module id}
+                                  hides          (assoc :hides hides)
+                                  interface      (assoc :interface interface)
+                                  (seq readings) (assoc :readings readings)))
+                              (model/elements b))
+               :load-bearing (mapv (fn [{:keys [id statement falsified-by readings read-at drift]}]
+                                     (cond-> {:id id :property statement}
+                                       falsified-by   (assoc :falsified-by falsified-by)
+                                       (seq readings) (assoc :readings readings)
+                                       (seq read-at)  (assoc :evidence read-at)
+                                       drift          (assoc :drift drift)))
+                                   (model/claims b)))
+        (dissoc :model))
+    b))
+
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]}
   baseline-retreats
   "Everything the superseding baseline claims less of than the one before it.
@@ -152,7 +178,9 @@
    nothing cites any more. A property genuinely corrected keeps pointing at the
    code that corrected it; one quietly dropped takes its evidence with it."
   [prev curr]
-  (let [;; By id now, not by name. A module renamed while the decomposition grew
+  (let [prev (as-survey prev)
+        curr (as-survey curr)
+        ;; By id now, not by name. A module renamed while the decomposition grew
         ;; read as a module lost, because its own description was its identity and
         ;; the amender rewrites descriptions.
         id-or-name (fn [m] (or (:id m) (:module m)))
@@ -253,11 +281,16 @@
                         (get-in prev [:baseline :relation]) (get-in curr [:baseline :relation]))
              (rank-drop :standing-softened standing-order
                         (get-in prev [:standing :relation]) (get-in curr [:standing :relation]))
-             (fewer :invariants-fewer "invariants" (:invariants prev) (:invariants curr))
+             (fewer :invariants-fewer "invariants" (model/claims prev) (model/claims curr))
              (fewer :rejected-fewer "rejected alternatives" (:rejected prev) (:rejected curr))
              (when (and (seq (:phases prev)) (empty? (:phases curr)))
                (retreat :phases-dropped
                         (str (count (:phases prev)) " phases → none; the change now claims one landing")))])
+      ;; By id, where claims have one: a claim reworded keeps its id and is not a loss, and a
+      ;; claim dropped is named. An invariant with no id can only be counted, above.
+      (let [ids #(into #{} (keep :id) (model/claims %))]
+        (for [c (sort (remove (ids curr) (ids prev)))]
+          (retreat :claim-dropped (str "claim " c " is no longer made"))))
       (for [[hid to] (sort-by key croutes)
             :let [was (proutes hid)]
             :when (and was (= :fix-here was) (not= :fix-here to))]

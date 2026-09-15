@@ -6,6 +6,7 @@
     "reason",
     "checks",
     "findings",
+    "confirmed",
     "asks"
   ],
   "properties": {
@@ -50,7 +51,7 @@
               "broken",
               "underivable"
             ],
-            "description": "underivable means you could NOT derive this check \u2014 a missing yardstick, not a failed one. Never use broken for something you could not check."
+            "description": "underivable means you could NOT derive this check — a missing yardstick, not a failed one. Never use broken for something you could not check."
           },
           "note": {
             "type": "string"
@@ -65,11 +66,16 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "claim-id",
           "cites",
           "claim",
           "evidence"
         ],
         "properties": {
+          "claim-id": {
+            "type": "string",
+            "description": "The id of the design claim this finding is about — the slug shown in brackets, WITHOUT the brackets. Empty string when the finding is about no single claim, or the design lists invariants with no ids."
+          },
           "cites": {
             "type": "array",
             "items": {
@@ -86,6 +92,13 @@
             }
           }
         }
+      }
+    },
+    "confirmed": {
+      "type": "array",
+      "description": "The IDS of the design claims you checked and found to hold — the bracketed slugs, without the brackets. Empty when the design lists invariants with no ids. Ids, not sentences: a confirmation worded differently each round cannot be matched to the claim it is about.",
+      "items": {
+        "type": "string"
       }
     },
     "asks": {

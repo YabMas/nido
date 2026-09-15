@@ -1074,7 +1074,9 @@
            :max-iters          "not convergence"
            :no-output          "wrote nothing"
            :unusable-answer    "not in a form a record accepts"
-           :round-crashed      "threw before it could degrade"}]
+           :round-crashed      "threw before it could degrade"
+           :subjects-undeclared    "does not hold"
+           :declaration-unreadable "could not list"}]
     (with-redefs [rloop/run-loop (fn [_] {:status status})]
       (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
         (is (str/includes? out marker) (str status " must say what to do about it"))

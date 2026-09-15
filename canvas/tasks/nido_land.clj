@@ -12,8 +12,16 @@
 (Module nido-land
   "The landing gate: refuse a branch whose design does not stand right now."
   (Operation check
-    "The landing gate: both questions, and a refusal from either is a refusal."
+    "The landing gate: every question, and a refusal from any is a refusal."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation claims-check
+    "Whether the claims this branch declares are the claims its cleared design states — by id,
+     statement and subjects. A difference is a refusal naming it, because a declared claim no
+     round judged, or a judged claim the declaration dropped, is a design that did not land. A claim
+     carried unchanged from main is another design's, and an id main gave two Claims carries neither.
+     A claim id two Claims declare, or a declaration nobody could read, refuses. A project with no
+     canvas keeps its claims in its records alone, so there is nothing to hold them to."
+    {:signature [:=> [:catn [:cwd :string]] :int]})
   (Operation cmd
     "bb entry point: exits non-zero on a refusal, so a recipe that runs it before"
     {:signature [:=> [:catn [:args [:* :any]]] :any]}))

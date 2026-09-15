@@ -33,8 +33,9 @@
      frozen between the two readings."
     {:signature [:=> [:catn [:cwd Path]] [:maybe :string]]})
   (Operation subjects
-    "Every subject a baseline carries, by id — claims, modules, health observations, and the
-     whole-record fields named by their field names. Pure."
+    "Every subject a baseline carries, by id — claims, modules, health observations, or in the
+     shared model its claims and elements, and the whole-record fields named by their field
+     names. Pure."
     {:signature [:=> [:catn [:record :map]] :map]})
   (Operation ledger
     "The reviews, baselines and retractions of a workstream as `settled` reads them, or nil when

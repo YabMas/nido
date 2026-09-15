@@ -106,6 +106,57 @@
     (is (not (str/includes? p "COMPOSITION — how those are claimed")))
     (is (str/includes? p "the aggregate is the only summing path"))))
 
+;; ── the shared model, as a judge reads it ────────────────────────────────────
+
+(def ^:private model-baseline
+  (-> baseline
+      (dissoc :modules :composition :load-bearing)
+      (assoc :model {:elements [{:id "canvas.order/aggregate" :sort :module
+                                 :hides "the order in which lines are summed"
+                                 :interface "an order's total"}]
+                     :claims   [{:id "one-summing-path" :about ["canvas.order/aggregate"]
+                                 :statement "the aggregate is the only summing path"
+                                 :falsified-by "a caller outside the aggregate that reads lines and sums them"
+                                 :evidence {:by :test :tests ["order.aggregate-test/one-path"]}
+                                 :read-at ["src/order/aggregate.clj:12"]}]})))
+
+(deftest a-model-baseline-shows-its-elements-and-claims-by-id
+  (let [p (record/baseline-prompt {:baseline model-baseline})]
+    (is (str/includes? p "ELEMENTS —"))
+    (is (str/includes? p "[canvas.order/aggregate] (module)"))
+    (is (str/includes? p "[one-summing-path] the aggregate is the only summing path"))
+    (is (str/includes? p "about:      canvas.order/aggregate")
+        "a claim says which elements it is about, by the ids the judge can cite back")
+    (is (str/includes? p "checked by: tests order.aggregate-test/one-path"))
+    (is (not (str/includes? p "LOAD-BEARING —")) "the survey section has nothing to show for a model")
+    (is (str/includes? p "THE PERSPECTIVES THIS BASELINE IS READ THROUGH")
+        "a model carries readings as the survey did, so the lenses are shown")))
+
+(deftest a-model-baseline-is-worth-verifying-on-its-claims-alone
+  (is (record/baseline-round-worth-running? (dissoc model-baseline :health))))
+
+(deftest a-model-design-is-judged-claim-by-claim
+  (let [d (-> design
+              (dissoc :invariants)
+              (assoc :model {:elements [{:id "canvas.order/aggregate" :sort :module}]
+                             :claims   [{:id "rounded-once" :about ["canvas.order/aggregate"]
+                                         :statement "a total is rounded exactly once"
+                                         :falsified-by "two rounding calls reached for one total"
+                                         :evidence {:by :round}}]}))
+        p (record/design-prompt {:design d})]
+    (is (str/includes? p "[rounded-once] a total is rounded exactly once"))
+    (is (not (str/includes? p "Invariants:")))
+    (is (str/includes? p "Populate confirmed with the IDS of the claims"))))
+
+(deftest a-decision-records-the-claims-its-judge-confirmed
+  (let [r (record/parse-design-decision
+           (json/generate-string {:recommend "proceed" :reason "r" :asks "worth it?"
+                                  :checks [{:check "relation_honest" :status "held" :note "n"}]
+                                  :findings [] :confirmed ["[rounded-once]" "lines-exact" ""]})
+           4)]
+    (is (= ["rounded-once" "lines-exact"] (:confirmed r)) "ids, brackets and blanks taken off")
+    (is (report/validate-event :design-decision r) "and the ledger takes it")))
+
 (deftest the-decision-prompt-carries-the-four-derivations-and-the-answer-key
   (let [p (record/design-prompt
            {:design (assoc design

@@ -75,22 +75,27 @@
    :area         "order totalling"
    :bounded-by   "everything that reads or writes a money amount on an order"
    :shape        "The aggregate is the only thing that sums lines."
-   :modules      [{:id "mod-the-order-aggregate" :module "the order aggregate"
-                   :hides "the order in which lines are summed"
-                   :interface "an order's total"}]
-   :composition  "Only the aggregate can see the lines, so only it can sum them."
-   :load-bearing [{:id "c1" :property "the aggregate is the only summing path"
-                   :falsified-by "a caller outside the aggregate that reads lines and sums them"
-                   :readings [{:lens :parnas/dependency :verdict :on-interface
-                               :because "callers take the total, never the lines"}]
-                   :evidence ["src/order/aggregate.clj:12"]}]
+   :model        {:elements [{:id "mod-the-order-aggregate" :sort :module
+                              :hides "the order in which lines are summed"
+                              :interface "an order's total"}]
+                  :claims   [{:id "c1" :about ["mod-the-order-aggregate"]
+                              :statement "the aggregate is the only summing path"
+                              :falsified-by "a caller outside the aggregate that reads lines and sums them"
+                              :readings [{:lens :parnas/dependency :verdict :on-interface
+                                          :because "callers take the total, never the lines"}]
+                              :evidence {:by :round}
+                              :read-at ["src/order/aggregate.clj:12"]}]}
    :read         ["src/order/aggregate.clj"]})
 
 (def ^:private a-design
   {:format     :design
    :summary    "Round on the total."
    :shape      "One rounding boundary at the aggregate."
-   :invariants ["a total is rounded exactly once"]
+   :model      {:elements [{:id "mod-the-order-aggregate" :sort :module}]
+                :claims   [{:id "rounded-once" :about ["mod-the-order-aggregate"]
+                            :statement "a total is rounded exactly once"
+                            :falsified-by "a total rounded twice"
+                            :evidence {:by :round}}]}
    :standing   {:relation :conforms}
    :baseline   {:seq 2 :relation :within}
    :intent     {:seq 1}

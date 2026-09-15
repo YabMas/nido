@@ -140,6 +140,35 @@
     (is (not (str/includes? out ":holds")) "no EDN reaches the warden as prose")
     (is (str/includes? out "every read goes through the aggregate  [holds ON COMPLETION"))))
 
+(def ^:private model-design
+  "`design`'s record written in the shared model: its invariants are claims with ids."
+  (-> design
+      (dissoc :invariants)
+      (assoc :model {:elements [{:id "order/aggregate" :sort :module}]
+                     :claims   [{:id "rounded-once" :about ["order/aggregate"]
+                                 :statement "a total is rounded exactly once"
+                                 :evidence {:by :round}}
+                                {:id "reads-through-aggregate" :about ["order/aggregate"]
+                                 :statement "every read goes through the aggregate"
+                                 :evidence {:by :round}}]}
+             :holds {"rounded-once" :always "reads-through-aggregate" :on-completion})))
+
+(deftest warden-prompt-shows-a-shared-model-claim-by-the-id-it-is-quoted-by
+  ;; `stages/uncited-invariant` accepts a claim's whole id as its citation, so the
+  ;; warden has to be shown the id and told that is what to quote.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design model-design})]
+    (is (str/includes? out "- [rounded-once] a total is rounded exactly once\n"))
+    (is (str/includes? out "[reads-through-aggregate] every read goes through the aggregate  [holds ON COMPLETION"))
+    (is (str/includes? out "quoted by that id"))))
+
+(deftest a-reviewer-names-a-shared-model-claim-by-its-id
+  ;; `stages/cite-invariants` checks `contradicts` against the ids, so the reviewer
+  ;; is asked for the id — not told to copy wording that no longer has to match.
+  (let [out (prompts/design-yardstick-block model-design)]
+    (is (str/includes? out "- [rounded-once] a total is rounded exactly once"))
+    (is (str/includes? out "put THAT claim's id"))
+    (is (not (str/includes? out "copied VERBATIM")))))
+
 (deftest warden-prompt-ties-escalate-to-a-named-invariant
   (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "CONTRADICTS A NAMED INVARIANT"))

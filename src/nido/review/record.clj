@@ -45,9 +45,11 @@
    [malli.error :as me]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.report :as report]
+   [nido.coordinator.report.model :as model]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
+   [nido.design.check :as design-check]
    [nido.review.codex :as codex]
    [nido.review.loop :as rloop]
    [nido.review.retreat :as retreat]
@@ -59,14 +61,16 @@
 (defn ^{:malli/schema [:=> [:cat :map] :boolean]}
   baseline-round-worth-running?
   "A baseline is worth verifying when there is something checkable in it. That is
-   any load-bearing property or health observation — every one carries evidence,
-   so every one is a claim the code can refute.
+   any claim — a load-bearing property, or a claim of its model — or any health
+   observation: each names what would refute it, so each is something the code can
+   refute.
 
-   A baseline with neither is not a baseline that passed; it is one that recorded
+   A baseline with none is not a baseline that passed; it is one that recorded
    nothing to check, and a round over it could only produce prose."
   [baseline]
   (boolean (and baseline
                 (or (seq (:load-bearing baseline))
+                    (seq (get-in baseline [:model :claims]))
                     (seq (:health baseline))))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :map] [:maybe :map]]}
@@ -147,6 +151,16 @@
                (when (ids "composition") [(str "[composition] " (:composition record))])
                (for [{:keys [id property readings]} (pick (:load-bearing record))]
                  (str "[" id "] " property (readings-lines readings "    ")))
+               ;; A baseline in the shared model: its elements and claims, as the checks show
+               ;; them less the counterexample and what checks them.
+               (for [{:keys [id sort hides interface readings]} (pick (get-in record [:model :elements]))]
+                 (str "[" id "] (" (name sort) ")"
+                      (when hides (str "\n    hides:     " hides))
+                      (when interface (str "\n    interface: " interface))
+                      (readings-lines readings "    ")))
+               (for [{:keys [id statement about readings]} (pick (get-in record [:model :claims]))]
+                 (str "[" id "] " statement "\n    about:      " (str/join ", " about)
+                      (readings-lines readings "    ")))
                (for [{:keys [id axis observation]} (pick (:health record))]
                  (str "[" id "] [" (name axis) "] " observation)))]
     (when (seq lines)
@@ -255,6 +269,53 @@
                  (str "\n    read from:  " (str/join ", " evidence)))))
         load-bearing)))
 
+(defn- evidence-line
+  "What checks a claim, as a judge reads it."
+  [{:keys [by tests law]}]
+  (case by
+    :round "a round's judgement"
+    :test  (str "tests " (str/join ", " tests))
+    :law   (str "the law " law)
+    (str by)))
+
+(defn- model-block
+  "A record's shared model as a judge reads it: the elements, then every claim with the ids it is
+   about, the counterexample that would refute it and what checks it. Every subject carries its
+   bracketed id, because an id the judge is never shown is one it cannot confirm or refute by.
+
+   `holds` is a phased design's map of claim id to when it holds. A claim false ON PURPOSE mid-plan
+   says so beside it, or a judge reads a designed intermediate state as a broken design."
+  [{:keys [elements claims]} holds]
+  ;; Each section headed only when it lists something: a round whose claims are all settled
+  ;; has none left here, and a header over an empty list reads as a record that claims nothing.
+  (str (when (seq elements)
+         (str "\nELEMENTS — what the claims below are about, by the ids the declared design gives\n"
+              "them. A module is what it HIDES; its interface is what is depended on from outside:\n"
+              (str/join "\n"
+                        (map (fn [{:keys [id sort hides interface readings]}]
+                               (str "- [" id "] (" (name sort) ")"
+                                    (when hides (str "\n    hides:     " hides))
+                                    (when interface (str "\n    interface: " interface))
+                                    (readings-lines readings "    ")))
+                             elements))
+              "\n"))
+       (when (seq claims)
+         (str "\nCLAIMS — each with the elements it is about and the counterexample that would\n"
+              "refute it:\n"
+              (str/join "\n"
+                        (map (fn [{:keys [id about statement falsified-by evidence readings read-at]}]
+                               (str "- [" id "] " statement
+                                    "\n    about:      " (str/join ", " about)
+                                    "\n    refuted by: " falsified-by
+                                    "\n    checked by: " (evidence-line evidence)
+                                    (when (= :on-completion (get holds id))
+                                      "\n    holds ON COMPLETION — not yet true mid-plan, and NOT a finding")
+                                    (readings-lines readings "    ")
+                                    (when (seq read-at)
+                                      (str "\n    read from:  " (str/join ", " read-at)))))
+                             claims))
+              "\n"))))
+
 (defn- level-reminder
   "The last thing in the window before control passes back.
 
@@ -310,6 +371,8 @@
       (contains? record :modules)      (update :modules unnamed)
       (contains? record :load-bearing) (update :load-bearing unnamed)
       (contains? record :health)       (update :health unnamed)
+      (contains? record :model)        (update :model #(-> % (update :elements unnamed)
+                                                             (update :claims unnamed)))
       (ids "shape")                    (dissoc :shape)
       (ids "composition")              (dissoc :composition))))
 
@@ -375,9 +438,9 @@
    ;; it — one with a decomposition and no analysis — so nothing ever told anyone
    ;; the perspectives existed. The first real baseline written in this shape
    ;; carried five modules and zero readings.
-   (when (contains? baseline :modules)
+   (when (or (contains? baseline :modules) (contains? baseline :model))
      (str (if (some (comp seq :readings)
-                    (concat (:load-bearing full) (:modules full)))
+                    (concat (model/claims full) (model/elements full)))
             (str "A READING IS A CLAIM TOO, and refutable on its own terms. State read\n"
                  "as essential is refuted by a derivation that computes it. An ordering\n"
                  "read as required is refuted by showing the two things commute. A module\n"
@@ -402,17 +465,20 @@
    (when-let [c (:composition baseline)]
      (str "\nCOMPOSITION — how those are claimed to produce the behaviour:\n"
           "[composition] " c "\n"))
-   ;; Headed only while there are claims to check. A record whose every claim is
-   ;; settled has none here, and a header over an empty list reads as a baseline
-   ;; that claims nothing; a record with no claims at all keeps it, as it always had.
-   (when (or (seq (:load-bearing baseline)) (empty? (:load-bearing full)))
-     (str "\nLOAD-BEARING — what is claimed to break if violated"
-          (if (some :falsified-by (:load-bearing full))
-            ", each with the\ncounterexample that would refute it:\n"
-            (str ".\n\nThis baseline predates the rule that a claim must name its own\n"
-                 "counterexample, so none of them do. Judge the claims as stated, and treat\n"
-                 "a claim you cannot see any way to refute as a finding in its own right.\n"))
-          (claim-block (:load-bearing baseline)) "\n"))
+   ;; A baseline in the shared model states its properties as claims about its elements, shown
+   ;; for what is still to check; the survey shape it replaces lists load-bearing properties,
+   ;; headed only while there are claims to check — a record whose every claim is settled has
+   ;; none here, and a header over an empty list reads as a baseline that claims nothing.
+   (if (contains? baseline :model)
+     (model-block (:model baseline) nil)
+     (when (or (seq (:load-bearing baseline)) (empty? (:load-bearing full)))
+       (str "\nLOAD-BEARING — what is claimed to break if violated"
+            (if (some :falsified-by (:load-bearing full))
+              ", each with the\ncounterexample that would refute it:\n"
+              (str ".\n\nThis baseline predates the rule that a claim must name its own\n"
+                   "counterexample, so none of them do. Judge the claims as stated, and treat\n"
+                   "a claim you cannot see any way to refute as a finding in its own right.\n"))
+            (claim-block (:load-bearing baseline)) "\n")))
    (when-let [h (seq (:health baseline))]
      (str "\nHEALTH — claimed about whether what holds is sound. :design means a\n"
           "weak design cleanly executed; :implementation means a strong design\n"
@@ -500,8 +566,10 @@
                 "point not listed here is asking for the design to be revisited. This\n"
                 "is the yardstick for the declared relation:\n"
                 (bullets (map #(str (:at %) " — " (:how %)) e)) "\n"))
-         "\nLOAD-BEARING — what the baseline claims breaks if violated:\n"
-         (claim-block (:load-bearing baseline)) "\n"
+         (if (contains? baseline :model)
+           (model-block (:model baseline) nil)
+           (str "\nLOAD-BEARING — what the baseline claims breaks if violated:\n"
+                (claim-block (:load-bearing baseline)) "\n"))
          (when-let [h (seq (:health baseline))]
            (str "\nHEALTH OBSERVED — the design's routes cite these BY ID, and\n"
                 "routing-coherent is derived against them. :design means a weak design\n"
@@ -584,7 +652,12 @@
    "Summary: " (:summary design) "\n"
    "Shape: " (:shape design) "\n"
    "Effort: " (name (:effort design)) "\n"
-   "Invariants:\n" (invariant-lines (:invariants design)) "\n"
+   ;; A design in the shared model commits to claims, each about the elements it names; the
+   ;; shape it replaces lists bare invariants.
+   (if (contains? design :model)
+     (str "Claims — what this design commits to, by id:"
+          (model-block (:model design) (:holds design)))
+     (str "Invariants:\n" (invariant-lines (:invariants design)) "\n"))
    "Declared against the stance: " (name (get-in design [:standing :relation]))
    (qualifiers (:standing design)) "\n"
    ;; A design written before the baseline event existed carries no :baseline at
@@ -684,7 +757,11 @@
    "             instructions and saying the wrong one is worse than saying\n"
    "             nothing.\n\n"
    "Every finding MUST cite what it falsifies. A finding that cites nothing is\n"
-   "not a finding.\n\n"
+   "not a finding. A finding about one claim names its id in claim-id.\n\n"
+   "Populate confirmed with the IDS of the claims you checked and found to hold —\n"
+   "the bracketed slugs, without the brackets. Leave it empty when the design lists\n"
+   "invariants with no ids. Ids, not sentences: a confirmation worded differently\n"
+   "each round cannot be matched to the claim it is about.\n\n"
    "asks is REQUIRED whatever you recommend: state the question the human still\n"
    "has to answer, in one or two sentences, with everything you derived already\n"
    "taken off the table. Never answer it yourself."
@@ -806,6 +883,15 @@
                  :reason (str (:reason m))
                  :checks checks
                  :asks asks}
+          ;; Normalised like a baseline review's: an id that is sometimes bracketed is no
+          ;; identity at all.
+          (seq (:confirmed m))
+          (assoc :confirmed (into [] (comp (map #(-> (str %) str/trim
+                                                    (str/replace "[" "")
+                                                    (str/replace "]" "")))
+                                           (remove str/blank?)
+                                           (distinct))
+                                  (:confirmed m)))
           (not= :proceed r) (assoc :findings findings))))
     (catch Exception _ nil)))
 
@@ -855,6 +941,67 @@
          :detail "the answer did not satisfy what a round must return"})
     result))
 
+(defn ^{:malli/schema [:=> [:cat :map :DeclaredElements] [:vector :string]]}
+  unresolved-subjects
+  "The subjects `record`'s claims are about that `listing` does not hold under the sort the record
+   gives them, each once, in the order the claims name them. Empty when every subject resolves.
+
+   Only a record written in the shared model has subjects to resolve. An older record read as
+   claims still names things — a composition is about every module — but by the prose names its
+   survey gave them, which no declaration was ever asked to hold, so it is judged as it always was.
+
+   The SORT is part of resolving. A record describing `canvas.order/total` as a module where the
+   declaration holds an operation by that id describes something the design does not declare, and
+   a judge handed it would check a claim about the wrong thing. An id the listing holds more than
+   once keeps every sort it is listed under, and resolves under any of them — keeping one row per
+   id would drop the others silently, and a subject declared as exactly what the record says would
+   read as undeclared.
+
+   Given the listing rather than reading it, so the round that reads it once can say why when it
+   could not be read. A listing that is not `:listed` holds nothing, so nothing resolves against it."
+  [record listing]
+  (let [{:keys [elements claims]} (:model record)
+        recorded (into {} (map (juxt :id :sort)) elements)
+        declared (when (= :listed (:status listing))
+                   (reduce (fn [m {id :id s :sort}]
+                             (update m id (fnil conj #{}) (keyword (str/lower-case (name s)))))
+                           {} (:elements listing)))]
+    (into []
+          (comp (mapcat :about)
+                (distinct)
+                (remove #(contains? (get declared % #{}) (recorded %))))
+          claims)))
+
+(defn- undeclared-subjects
+  "Why a round over `record` launches no judge because of what its claims are about, or nil when
+   nothing stops it. A claim about something the design does not declare is not one a judge can
+   check, and the listing that says so is in reach before a judge is paid for.
+
+   Only a project that declares a design is held to it. One that declares none writes the same
+   model under element ids of its own, and its claims name the elements its record lists — which
+   the append already holds them to — so there is no declaration left to resolve them against.
+
+   Two outcomes, kept apart for the reason every outcome here is tagged: a subject the listing does
+   not hold says something about the record, and a listing fukan could not produce says nothing
+   about it. A record with no subject to resolve — every record from before the shared model —
+   asks fukan nothing, so a round over one starts no JVM to learn nothing."
+  [project worktree record]
+  (when (seq (mapcat :about (get-in record [:model :claims])))
+    (let [listing (design-check/elements project worktree)]
+      (case (:status listing)
+        :unmodelled nil
+
+        :undecidable
+        {:outcome :declaration-unreadable
+         :detail  (str "the declared design could not be listed at " worktree ": "
+                       (:error listing))}
+
+        (when-let [missing (seq (unresolved-subjects record listing))]
+          {:outcome :subjects-undeclared
+           :detail  (str "the declared design at " worktree
+                         " holds no element of the recorded sort for: "
+                         (str/join ", " missing))})))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   baseline-review!
   "Verify a baseline against the code. Returns the ledger record, or
@@ -880,39 +1027,44 @@
    review's :confirmed keeps only ids that were checks. And a round handed
    settled subjects whose tree moved appends nothing — it answers
    {:outcome :code-moved :answer <the review>} — because those subjects were
-   settled against a tree its judge did not read throughout."
+   settled against a tree its judge did not read throughout.
+
+   Its claims' subjects are resolved against the declared design at the tree the
+   judge reads before a judge is launched, and before either identity is read —
+   see `undeclared-subjects`."
   [{:keys [cwd code-cwd run-id label disputes baseline settled] :as opts}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [baseline (or baseline (ws/latest-entry project ws-id :baseline))]
       (if (baseline-round-worth-running? baseline)
-        (let [code-cwd (or code-cwd cwd)
-              settled  (or settled {})
-              before   (if (contains? opts :code-identity)
-                         (:code-identity opts)
-                         (settled/code-identity code-cwd))
-              result   (judged (run-round! {:cwd code-cwd :run-id run-id :kind :baseline-review
-                                            :label label
-                                            :prompt (baseline-prompt {:baseline baseline
-                                                                      :disputes disputes
-                                                                      :settled settled
-                                                                      :stance (stages/read-stance project)})})
-                               #(parse-baseline-review % (:seq baseline)))
-              after    (settled/code-identity code-cwd)
-              one-tree (when (= before after) before)
-              checks   (set (keys (apply dissoc (settled/subjects baseline) (keys settled))))]
-          (cond
-            (not (:format result)) result
+        (or (undeclared-subjects project (or code-cwd cwd) baseline)
+            (let [code-cwd (or code-cwd cwd)
+                  settled  (or settled {})
+                  before   (if (contains? opts :code-identity)
+                             (:code-identity opts)
+                             (settled/code-identity code-cwd))
+                  result   (judged (run-round! {:cwd code-cwd :run-id run-id :kind :baseline-review
+                                                :label label
+                                                :prompt (baseline-prompt {:baseline baseline
+                                                                          :disputes disputes
+                                                                          :settled settled
+                                                                          :stance (stages/read-stance project)})})
+                                   #(parse-baseline-review % (:seq baseline)))
+                  after    (settled/code-identity code-cwd)
+                  one-tree (when (= before after) before)
+                  checks   (set (keys (apply dissoc (settled/subjects baseline) (keys settled))))]
+              (cond
+                (not (:format result)) result
 
-            (and (seq settled) (nil? one-tree))
-            {:outcome :code-moved
-             :detail  (str "the tree changed while the judge read it, with " (count settled)
-                           " subject(s) outside its checks, so its answer was not appended")
-             :answer  result}
+                (and (seq settled) (nil? one-tree))
+                {:outcome :code-moved
+                 :detail  (str "the tree changed while the judge read it, with " (count settled)
+                               " subject(s) outside its checks, so its answer was not appended")
+                 :answer  result}
 
-            :else
-            (cond-> result
-              (:confirmed result) (update :confirmed #(filterv checks %))
-              one-tree            (assoc :code-identity one-tree))))
+                :else
+                (cond-> result
+                  (:confirmed result) (update :confirmed #(filterv checks %))
+                  one-tree            (assoc :code-identity one-tree)))))
         {:outcome :nothing-to-check
          :detail "the baseline records no load-bearing property and no health observation"})
       {:outcome :no-record :detail "this workstream has no :baseline entry"})
@@ -961,7 +1113,9 @@
    Two of the no-verdict outcomes are read out of the records before a judge is
    launched, and cost nothing: no design, and a design standing on a baseline
    nobody verified. The second is the one that was previously discovered by
-   paying for the round — see `unverified-premise`.
+   paying for the round — see `unverified-premise`. A third is read out of the
+   declared design: a claim about something it does not declare — see
+   `undeclared-subjects`.
 
    A design declaring it moves nothing structural is NOT one of them. The round
    is never skipped: what the declarations decide is whether a person's grant is
@@ -972,6 +1126,7 @@
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [design (ws/latest-entry project ws-id :design)]
       (or (unverified-premise project ws-id design)
+          (undeclared-subjects project (or code-cwd cwd) design)
           (judged (run-round!
                    {:cwd (or code-cwd cwd) :run-id run-id :kind :design-decision
                     :label label
@@ -1317,7 +1472,7 @@
    ;; told what a reading may say. It invented verdicts outside a lens's
    ;; vocabulary and lenses outside the registry; the ledger refused the record,
    ;; and an otherwise good amendment was thrown away whole.
-   (when (contains? baseline :modules)
+   (when (or (contains? baseline :modules) (contains? baseline :model))
      (str "A reading may only use its own lens's verdicts, and a lens only reads the\n"
           "subject it is about. The ledger refuses anything else and the whole record\n"
           "is lost with it, so use these and nothing else:\n"
@@ -1389,10 +1544,17 @@
    "  {:record   <the COMPLETE corrected baseline — every field, not a diff>\n"
    "   :disputes [{:finding 2 :because \"...\" :evidence [\"src/x.clj:41\"]}]}\n\n"
    "Omit :record entirely if every finding is disputed and the baseline needs no\n"
-   "change. Omit :disputes if you accepted all of them. The record must satisfy\n"
-   "the same schema the current one does; nido reads this file, validates it, and\n"
-   "appends it as the superseding baseline. Do not append it yourself and do not\n"
-   "commit anything.\n\n"
+   "change. Omit :disputes if you accepted all of them.\n\n"
+   "Write the record in the shared model — :model {:elements :claims} in place of\n"
+   ":modules, :composition and :load-bearing — whatever shape the current one is in.\n"
+   "Re-stating an older one changes nothing it says: each module becomes an element\n"
+   "keeping its id, with :sort :module; each load-bearing property a claim keeping\n"
+   "its id, :about the modules it concerns, with {:by :round} evidence and its\n"
+   "evidence as :read-at; the composition a claim about the modules it composes. In\n"
+   "a project with a canvas/, an element's id is its canvas identity, as\n"
+   "`clojure -M:fukan -m fukan.cli elements` lists it. nido reads this file,\n"
+   "validates it, and appends it as the superseding baseline.\n"
+   "Do not append it yourself and do not commit anything.\n\n"
    ;; The design amender is handed its :seq with a note that an amender shown no
    ;; :seq is being asked to guess the one field the citation is checked against.
    ;; The baseline amender was told nothing at all, so it guessed — reliably the
@@ -1776,13 +1938,9 @@
                        (when (seq (:evidence f))
                          (str "\n  evidence: " (str/join ", " (:evidence f))))))
                 findings))))
-   ;; DORMANT: no :design shape carries :modules, so this never fires today —
-   ;; the decomposition and its readings live in the BASELINE, and a design
-   ;; declares its relation to that. Kept, and kept guarded, because the guard is
-   ;; already the right question: the day a design states modules of its own this
-   ;; is what its amender has to be told, and the ledger refuses a reading
-   ;; outside the registry whichever record it is on.
-   (when (contains? design :modules)
+   ;; A design in the shared model states elements of its own, and they and its claims carry
+   ;; readings — which the ledger refuses outside the registry whichever record they are on.
+   (when (contains? design :model)
      (str "\n\nA reading may only use its own lens's verdicts, and a lens only reads the\n"
           "subject it is about. The ledger refuses anything else and the whole record\n"
           "is lost with it, so use these and nothing else:\n"
@@ -1798,10 +1956,13 @@
    "Write EDN to:\n\n  " out-path "\n\n"
    "  {:record   <the COMPLETE superseding design — every field, not a diff>\n"
    "   :disputes [{:finding 1 :because \"...\" :evidence [\"src/x.clj:41\"]}]}\n\n"
-   "Omit :record if every check is disputed and the design needs no change.\n"
-   "It must satisfy the same schema the current one does; nido reads this file,\n"
-   "validates it, and appends it as the superseding design. Do not append it\n"
-   "yourself and do not commit anything."
+   "Omit :record if every check is disputed and the design needs no change.\n\n"
+   "Write it in the shared model — :model {:elements :claims} in place of\n"
+   ":invariants, with :holds keyed by claim id when the design is phased — whatever\n"
+   "shape the current one is in. An invariant becomes a claim with an id, the\n"
+   "elements it is about, what would falsify it and {:by :round} evidence. nido\n"
+   "reads this file, validates it, and appends it as the superseding design.\n"
+   "Do not append it yourself and do not commit anything."
    (level-reminder :commitment)))
 
 (defn- run-design-judge-stage

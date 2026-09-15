@@ -690,6 +690,80 @@
   [{:keys [health]}]
   (or (< (count health) 2) (apply distinct? (map :id health))))
 
+;; ── The shared model ────────────────────────────────────────────────────────
+;;
+;; The part a baseline and a design have in common: the area as declared ELEMENTS and the
+;; CLAIMS made about them. A baseline's model is the area as it is; a design's is the area as
+;; the change leaves it. One schema for both, so a claim is the same thing whichever record
+;; states it — and so one record can be derived from another and two can be combined by id.
+
+(def Evidence
+  "What checks a claim. Recorded, never inferred, because how much of a design still rests on
+   a round's judgement is a question the ledger has to be able to answer on its own.
+
+     :round  a round's judgement is the only check
+     :test   named tests cover it
+     :law    a named law in the declared design checks it"
+  [:multi {:dispatch :by}
+   [:round [:map {:closed true} [:by [:= :round]]]]
+   [:test  [:map {:closed true} [:by [:= :test]] [:tests [:vector {:min 1} string?]]]]
+   [:law   [:map {:closed true} [:by [:= :law]] [:law string?]]]])
+
+(def Element
+  "One declared element of the area, named by its canvas identity — `ns/name` as the declared
+   design lists it — with its sort. A module may say what it hides and what the rest may assume
+   of it, and carry readings of its depth; those are optional because an operation, a kind and a
+   role hide nothing of their own."
+  [:map {:closed true}
+   [:id        string?]
+   [:sort      [:enum :module :operation :kind :role]]
+   [:hides     {:optional true} string?]
+   [:interface {:optional true} string?]
+   [:readings  {:optional true} [:vector ModuleReading]]])
+
+(def Claim
+  "One claim about the area, the same in a baseline and a design.
+
+   :id is stable across amendments — it is how a round names what it confirmed or refuted, and
+   how two records are combined. :about names the elements or roles the claim is about, by the
+   ids the model lists, and is never empty: a claim about nothing declared is prose. :falsified-by
+   is the counterexample a reviewer goes looking for. :read-at is where the author looked, when
+   there was somewhere to look."
+  [:map {:closed true}
+   [:id           string?]
+   [:about        [:vector {:min 1} string?]]
+   [:statement    string?]
+   [:falsified-by string?]
+   [:evidence     Evidence]
+   [:readings     {:optional true} [:vector ClaimReading]]
+   [:read-at      {:optional true} [:vector string?]]
+   [:drift        {:optional true} string?]])
+
+(defn- distinct-model-ids?
+  "Element ids are unique among elements and claim ids among claims. A duplicate makes `which
+   claim did you confirm` unanswerable, and a combination by id ambiguous."
+  [{:keys [elements claims]}]
+  (and (or (< (count elements) 2) (apply distinct? (map :id elements)))
+       (or (< (count claims) 2) (apply distinct? (map :id claims)))))
+
+(defn- subjects-listed?
+  "Every id a claim is about is an element the same model lists. What the declared design holds
+   is a round's question; that a claim names something the record itself declares is this one's."
+  [{:keys [elements claims]}]
+  (let [ids (into #{} (map :id) elements)]
+    (every? #(every? ids (:about %)) claims)))
+
+(def Model
+  "The area as elements and the claims made about them."
+  [:and
+   [:map {:closed true}
+    [:elements [:vector {:min 1} Element]]
+    [:claims   [:vector {:min 1} Claim]]]
+   [:fn {:error/message "element ids and claim ids must each be unique within a model"}
+    distinct-model-ids?]
+   [:fn {:error/message "every claim must be about an element the model lists"}
+    subjects-listed?]])
+
 (def ^:private baseline-fields
   "The fields a :baseline carries in every era from the decomposition onward.
    Spliced rather than repeated, so the pre-intent read shape and the current
@@ -784,6 +858,51 @@
    citable. /design §4 anticipates harvesting a written one from records like these
    later; this is not that."
   (baseline-shape [[:intent IntentRelation]]))
+
+(defn- modules-say-what-they-hide?
+  "Every module a baseline lists says what it hides and what the rest may assume of it. A module
+   that hides nothing is a file, and a survey of files has described the implementation. Only a
+   baseline is held to it: a design names the modules it is about without re-describing them."
+  [{:keys [model]}]
+  (every? #(or (not= :module (:sort %)) (and (:hides %) (:interface %)))
+          (:elements model)))
+
+(def BaselineModel
+  "A baseline in the shared model: the area as declared elements and the claims it relies on,
+   beside what only a baseline says — its area and boundary, its shape, where the design admits
+   extension, its health, what it read and what it could not determine.
+
+   The modules, load-bearing properties and composition of the survey shape are gone from it,
+   not duplicated: a module is an element, a property is a claim about the elements it concerns,
+   and the composition is a claim about the elements it composes. So the claim a baseline makes
+   and the claim a design makes are one form, and nothing structural about the area lives
+   outside :model."
+  [:and
+   [:map {:closed true}
+    [:format           [:= :baseline]]
+    [:intent           IntentRelation]
+    [:area             string?]
+    [:bounded-by       string?]
+    [:scope            {:optional true} [:vector any?]]
+    [:shape            string?]
+    [:model            Model]
+    [:extension-points {:optional true} [:vector ExtensionPoint]]
+    [:health           {:optional true} [:vector HealthObservation]]
+    [:governing        {:optional true} [:vector string?]]
+    [:drift            {:optional true} [:vector string?]]
+    [:read             [:vector {:min 1} string?]]
+    [:unknowns         {:optional true} [:vector string?]]
+    [:supersedes       {:optional true} Supersedes]]
+   [:fn {:error/message "health observation ids must be unique within a baseline"}
+    distinct-health-ids?]
+   [:fn {:error/message "every module a baseline lists must say what it hides and what the rest may assume of it"}
+    modules-say-what-they-hide?]])
+
+(def BaselineWrite
+  "The WRITE contract for :baseline: the shared model, in every project. The survey shape it
+   replaced is read and never written — a record in it is refused on append, and one already on a
+   ledger reads through `BaselineAny`."
+  BaselineModel)
 
 (def LoadBearingLegacy
   "READ SHAPE — a property from before the baseline moved up a level, carrying a
@@ -939,11 +1058,15 @@
    decomposition it has never had."
   [:multi {:dispatch (fn [b]
                        (cond
+                         ;; FIRST, and not for recency: a model baseline carries no :modules,
+                         ;; so the legacy test below would claim it.
+                         (contains? b :model)                    :model
                          (not (contains? b :modules))            :legacy
                          (some :kind (:load-bearing b))          :kind-era
                          (not-every? :id (:load-bearing b))      :no-ids
                          (not (contains? b :intent))             :pre-intent
                          :else                                   :current))}
+   [:model      BaselineModel]
    [:current    Baseline]
    [:pre-intent BaselinePreIntent]
    [:no-ids     BaselineNoIds]
@@ -1044,15 +1167,52 @@
                  [:phases     [:vector {:min 2} Phase]]
                  [:seams      {:optional true} [:vector Seam]]])))
 
+(defn- holds-cover-claims?
+  "A phased design says when EVERY claim it makes holds, and names no claim it does not make."
+  [{:keys [holds model]}]
+  (= (set (keys holds)) (into #{} (map :id) (:claims model))))
+
+(def ^:private design-model-fields
+  "The fields a design in the shared model carries in either phasing: the design's own decisions,
+   and its :model in place of :invariants — each invariant is a claim, with an id and the elements
+   it is about."
+  (concat design-common
+          [[:intent IntentRelation]
+           [:model  Model]
+           [:seams  {:optional true} [:vector Seam]]]))
+
+(def UnphasedDesignModel
+  "A design in the shared model that lands once. Its claims hold at the one moment there is."
+  (into [:map {:closed true}] design-model-fields))
+
+(def PhasedDesignModel
+  "A design in the shared model with a phase plan. When each claim holds is its own map, keyed by
+   claim id, rather than a field on the claim: a claim is the same form in a baseline, which has no
+   phases, and the phase plan is this record's own decision about it."
+  [:and
+   (into [:map {:closed true}]
+         (concat design-model-fields
+                 [[:phases [:vector {:min 2} Phase]]
+                  [:holds  [:map-of string? [:enum :always :on-completion]]]]))
+   [:fn {:error/message "a phased design says when every claim holds, and names no claim it does not make"}
+    holds-cover-claims?]])
+
+(def DesignModel
+  "A design in the shared model, phased or not. Dispatched on :phases for the reason the survey
+   shapes are: the two make different claims about when the design is true."
+  [:multi {:dispatch (fn [r] (if (contains? r :phases) :phased :unphased))}
+   [:phased   PhasedDesignModel]
+   [:unphased UnphasedDesignModel]])
+
 (def DesignVision
   "The high-level design one workstream commits to — authored by the impl session
    before any code, and resolving a triage :squirrel into a concrete effort.
    Replaces ImplementationPlan, and drops its :steps: a step list is working
    memory, and the ledger holds what survives the session.
 
-   :invariants is required and non-empty on purpose. It is what the review warden
-   checks findings against; a design that names none is unfalsifiable, and every
-   finding against it becomes a matter of taste.
+   :model's claims are required and non-empty on purpose. They are what the review
+   warden checks findings against; a design that names none is unfalsifiable, and
+   every finding against it becomes a matter of taste.
 
    :routes is where the cited baseline's health observations get their
    destinations. It is not free-form commentary: the ledger checks that every
@@ -1070,17 +1230,16 @@
    project's stance, :baseline relates it to the current design, and a change can
    satisfy either while breaking the other.
 
-   The dispatch is on :phases, and it is a dispatch rather than a pair of
-   optional fields on purpose: the two shapes make DIFFERENT claims about when
-   the design is true, so a record that carries a phase plan and plain-string
-   invariants is not a lenient case to wave through — it is a phase plan whose
-   author has not said which of its claims survive the middle of it.
+   It splits on :phases (see DesignModel), and that is a dispatch rather than a
+   pair of optional fields on purpose: the two make DIFFERENT claims about when
+   the design is true, so a record that carries a phase plan and no :holds is not
+   a lenient case to wave through — it is a phase plan whose author has not said
+   which of its claims survive the middle of it.
 
-   THIS IS THE WRITE CONTRACT. Records appended before :baseline existed do not
-   satisfy it and are not supposed to — see DesignVisionLegacy and read-schemas."
-  [:multi {:dispatch (fn [r] (if (contains? r :phases) :phased :unphased))}
-   [:phased   PhasedDesign]
-   [:unphased UnphasedDesign]])
+   THIS IS THE WRITE CONTRACT, in every project. The invariants shapes it replaced,
+   PhasedDesign and UnphasedDesign, are refused on append; records written in them,
+   and records from before :baseline existed, read through DesignVisionAny."
+  DesignModel)
 
 (def DesignVisionLegacy
   "LEGACY READ SHAPE — a :design record from before the baseline event existed:
@@ -1154,9 +1313,11 @@
    the read shape that preceded it, so a tightening adds a tier rather than
    rewriting one."
   [:multi {:dispatch (fn [r] (cond
+                               (contains? r :model)    :model
                                (contains? r :intent)   :current
                                (contains? r :baseline) :pre-intent
                                :else                   :legacy))}
+   [:model      DesignModel]
    [:current    DesignVisionReadCurrent]
    [:pre-intent DesignVisionRead]
    [:legacy     DesignVisionLegacy]])
@@ -1984,7 +2145,11 @@
                 ;; Optional because a round can still be run once, by hand, and
                 ;; a one-shot round has no trajectory to report — not because
                 ;; a looped one may omit it.
-                [:trajectory {:optional true} [:vector TrajectoryRound]]]
+                [:trajectory {:optional true} [:vector TrajectoryRound]]
+                ;; The claim ids the judge checked and found to hold. An observation, like a
+                ;; baseline review's :confirmed, and optional because a design listing
+                ;; invariants with no ids has nothing to name.
+                [:confirmed  {:optional true} [:vector string?]]]
         shape  (fn [recommend & extra]
                  (into [:map {:closed true}]
                        (concat common [[:recommend [:= recommend]]] extra)))]
@@ -2384,7 +2549,7 @@
    A :kind absent here is stored as verbatim markdown (legacy / freeform)."
   {:triage                   TriageReport
    :intent                   Intent
-   :baseline                 Baseline
+   :baseline                 BaselineWrite
    :design                   DesignVision
    :implementation-plan      ImplementationPlan
    :implementation-completed ImplementationCompleted
@@ -2673,9 +2838,41 @@
     (for [d done-when] (str "- " d))
     (when context ["\n## Context" context]))))
 
+(defn- readings->markdown
+  [readings]
+  (apply str (for [{:keys [lens verdict because]} readings]
+               (str "\n  - " (namespace lens) "/" (name lens)
+                    " → **" (name verdict) "** — " because))))
+
+(defn- model->markdown
+  "A model's elements and claims, for a baseline or a design. `holds` is a phased design's map of
+   claim id to when it holds; a claim holding at every boundary says nothing."
+  [{:keys [elements claims]} holds]
+  (concat
+   ["## Elements"]
+   (for [{:keys [id sort hides interface readings]} elements]
+     (str "- `" id "` *(" (name sort) ")*"
+          (when hides (str " hides " hides))
+          (when interface (str "\n  - interface: " interface))
+          (readings->markdown readings)))
+   ["" "## Claims"]
+   (for [{:keys [id about statement falsified-by evidence readings read-at drift]} claims]
+     (str "- `" id "` " statement
+          "\n  - about: " (str/join ", " (map #(str "`" % "`") about))
+          (when falsified-by (str "\n  - falsified by: " falsified-by))
+          "\n  - checked by: " (case (:by evidence)
+                                 :round "a round"
+                                 :test  (str "tests " (str/join ", " (map #(str "`" % "`") (:tests evidence))))
+                                 :law   (str "law `" (:law evidence) "`"))
+          (when (= :on-completion (get holds id))
+            "\n  - holds on completion — not at every phase boundary")
+          (readings->markdown readings)
+          (when (seq read-at) (str "\n  - " (str/join ", " (map #(str "`" % "`") read-at))))
+          (when drift (str "\n  - drift from the stance: " drift))))))
+
 (defn- baseline->markdown
   [{:keys [area bounded-by shape modules composition load-bearing extension-points
-           health governing drift read unknowns]}]
+           health governing drift read unknowns model]}]
   (str/join
    "\n"
    (concat
@@ -2685,6 +2882,7 @@
     (when (seq governing)
       [(str "**Governed by:** " (str/join ", " governing))])
     ["" "## Shape" shape ""]
+    (when model (model->markdown model nil))
     (when (seq modules)
       (cons "## Modules — what each one hides"
             (for [{:keys [module hides interface readings]} modules]
@@ -2695,16 +2893,17 @@
                                      " → **" (name verdict) "** — " because)))))))
     (when composition
       ["" "## Composition — how they produce the behaviour" composition])
-    ["" "## Load-bearing — what breaks if you violate it"]
-    (for [{:keys [property falsified-by readings evidence] lb-drift :drift} load-bearing]
-      (str "- " property
-           (when falsified-by (str "\n  - falsified by: " falsified-by))
-           (apply str (for [{:keys [lens verdict because]} readings]
-                        (str "\n  - " (namespace lens) "/" (name lens)
-                             " → **" (name verdict) "** — " because)))
-           (when (seq evidence)
-             (str "\n  - " (str/join ", " (map #(str "`" % "`") evidence))))
-           (when lb-drift (str "\n  - drift from the stance: " lb-drift))))
+    ;; Only the survey shape carries load-bearing properties; a model states them as claims.
+    (when (seq load-bearing)
+      (concat
+       ["" "## Load-bearing — what breaks if you violate it"]
+       (for [{:keys [property falsified-by readings evidence] lb-drift :drift} load-bearing]
+         (str "- " property
+              (when falsified-by (str "\n  - falsified by: " falsified-by))
+              (readings->markdown readings)
+              (when (seq evidence)
+                (str "\n  - " (str/join ", " (map #(str "`" % "`") evidence))))
+              (when lb-drift (str "\n  - drift from the stance: " lb-drift))))))
     (when (seq extension-points)
       (cons "\n## Extension points — where the design already admits change"
             (for [{:keys [at how]} extension-points]
@@ -2729,7 +2928,7 @@
 
 (defn- design->markdown
   [{:keys [summary shape invariants standing baseline intent assumes routes
-           rejected layers phases seams open supersedes effort]}]
+           rejected layers phases seams open supersedes effort model holds]}]
   (str/join
    "\n"
    (concat
@@ -2743,12 +2942,17 @@
     (when intent [(str "**For:** entry " (:seq intent))])
     (when supersedes
       [(str "*Supersedes entry " (:seq supersedes) " — " (:why supersedes) "*")])
-    ["" summary "" "## Shape" shape "" "## Invariants"]
-    (for [i invariants]
-      (let [{t :invariant h :holds} (invariant i)]
-        (str "- " t
-             (when (= :on-completion h)
-               " *(holds on completion — not at every phase boundary)*"))))
+    ["" summary "" "## Shape" shape ""]
+    ;; A design in the shared model states its invariants as claims; the shape it replaces
+    ;; carries them as a list.
+    (if model
+      (model->markdown model holds)
+      (cons "## Invariants"
+            (for [i invariants]
+              (let [{t :invariant h :holds} (invariant i)]
+                (str "- " t
+                     (when (= :on-completion h)
+                       " *(holds on completion — not at every phase boundary)*"))))))
     (when (seq phases)
       (cons "\n## Phases"
             (map-indexed

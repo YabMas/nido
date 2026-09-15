@@ -5,6 +5,7 @@
             [canvas.coordinator.agent :as agent]
             [canvas.coordinator.record.standing :as standing]
             [canvas.coordinator.record.state :refer [Path WorkstreamId]]
+            [canvas.design.check :as design :refer [DeclaredElements]]
             [canvas.platform.project :refer [ProjectName]]
             [canvas.review.settled :as settled]
             [fukan.common.typing.malli]))
@@ -27,6 +28,13 @@
     {:signature [:=> [:catn [:baseline :map]] :boolean]})
   (Operation discover-intent "The intent a design cited."
     {:signature [:=> [:catn [:cwd Path] [:design :map]] [:maybe :map]]})
+  (Operation unresolved-subjects
+    "The subjects a record's claims name that a listing of the declared design does not hold under
+     the sort the record gives them — empty when every one resolves. Given the listing rather than
+     reading it, so the round that reads it once can say why when it could not be read. In a
+     project that declares a design, a round with any launches no judge: a claim about nothing
+     declared is not one a judge can check. A project that declares none is not asked."
+    {:signature [:=> [:catn [:record :map] [:listing DeclaredElements]] [:vector :string]]})
   (Operation settled-block
     "The settled subjects, shown for the record-level derivations and outside the round's checks —
      text, readings and id, without the counterexample or evidence a check carries. Says nothing
@@ -49,7 +57,8 @@
     "Run the verification round over a baseline, recording on its review the code identity its
      judge read when the readings taken either side of the judge agree."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [baseline-prompt parse-baseline-review settled/code-identity]})
+     :delegates [baseline-prompt parse-baseline-review settled/code-identity
+                 unresolved-subjects design/elements]})
   (Operation unverified-premise
     "Why a design cannot be judged yet — the premise it rests on has not been verified, which is
      a different answer from the design being wrong."
@@ -57,7 +66,7 @@
      :delegates [standing/of-design]})
   (Operation design-decision! "Run the decision round over a design."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [design-prompt parse-design-decision]})
+     :delegates [design-prompt parse-design-decision unresolved-subjects design/elements]})
   (Operation append! "Append a round's record to the ledger."
     {:signature [:=> [:catn [:cwd Path] [:record :map]] :any]})
   (Operation clear!

@@ -208,6 +208,45 @@
                {:status :undecidable
                 :error  (or (:error report) (str/trim (str err)) (str "exit " exit))}))))))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] :DeclaredElements]}
+  elements
+  "The declared design's elements as data, as fukan lists them for `worktree`:
+
+     {:status :unmodelled}                     no design declared — nothing to list
+     {:status :listed      :elements [...]}    one row per authored element
+     {:status :undecidable :error \"…\"}         fukan did not answer
+
+   A row's `:id` is the element's canvas identity (`canvas.review.record/review-record`) and its
+   `:sort` the qualified sort it is declared under; `:ns` and `:file` are there only where its
+   module pairs with code. Anything else fukan puts on a row is carried as it came.
+
+   An empty listing is an answer only when fukan printed one. A caller resolving names against a
+   listing reads every name missing from it as undeclared, so a run that timed out, failed, or
+   printed something that is not a listing is `:undecidable`, never `[]`. The code is read to
+   pair elements with it, which is why this has the check's budget and not the renderer's."
+  [project-name worktree]
+  (if-let [{:keys [src spec-dirs] :as design} (design-of project-name worktree)]
+    (let [done (run-fukan design worktree "elements"
+                          ["--src" src "--spec-dirs" (str/join "," spec-dirs)] check-timeout-ms)]
+      (if (= ::timeout done)
+        {:status :undecidable
+         :error  (str "the element listing did not finish within "
+                      (quot check-timeout-ms 1000) "s")}
+        (let [{:keys [exit out err]} done
+              listing (parse-report out)]
+          (cond
+            (not (zero? (long exit)))
+            {:status :undecidable
+             :error  (let [e (str/trim (str err))]
+                       (if (str/blank? e) (str "fukan exited " exit) e))}
+
+            (vector? (:elements listing))
+            {:status :listed :elements (:elements listing)}
+
+            :else
+            {:status :undecidable :error (str "unreadable listing: " (str/trim (str out)))}))))
+    {:status :unmodelled}))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe [:vector :string]] [:vector :string]] :string]}
   offender-line
   "One offender row as a line, its columns LABELLED by the law's own offender var names.

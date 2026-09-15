@@ -152,6 +152,29 @@
     (is (str/includes? p "line totals are computed per-item")
         "the legacy :assumes still reaches it, so an old workstream is not left blind")))
 
+(deftest a-shared-model-record-reaches-the-judge-as-claims-by-id
+  ;; The judge's answer names what held and what broke. A record in the shared model
+  ;; names its claims, so the judge is shown the ids and asked for them back.
+  (let [aggregate {:id "order/aggregate" :sort :module}
+        p (verdict/build-prompt
+           {:design   {:seq 3 :shape "one rounding boundary at the order aggregate"
+                       :model {:elements [aggregate]
+                               :claims   [{:id "rounded-once" :about ["order/aggregate"]
+                                           :statement "a total is rounded exactly once"
+                                           :evidence {:by :round}}]}
+                       :baseline {:seq 2 :relation :within}}
+            :baseline {:seq 2 :format :baseline
+                       :model {:elements [aggregate]
+                               :claims   [{:id "one-summing-path" :about ["order/aggregate"]
+                                           :statement "the aggregate is the only summing path"
+                                           :evidence {:by :round}
+                                           :read-at ["src/order/aggregate.clj:12"]}]}}
+            :findings [] :history [] :rounds 1})]
+    (is (str/includes? p "[rounded-once] a total is rounded exactly once [holds always]"))
+    (is (str/includes? p "name a claim by its id in invariants_held"))
+    (is (str/includes? p "- [one-summing-path] the aggregate is the only summing path [src/order/aggregate.clj:12]"))
+    (is (str/includes? p "ids of the claims this round"))))
+
 ;; ── What the fixers did not get into the code ──────────────────────────────
 
 (deftest a-rolled-back-run-tells-the-judge-the-repair-is-not-in-the-code

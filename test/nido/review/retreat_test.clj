@@ -36,6 +36,36 @@
 (deftest an-unchanged-baseline-retreats-nothing
   (is (= [] (retreat/baseline-retreats base-baseline base-baseline))))
 
+(def model-baseline
+  {:format :baseline :area "a" :bounded-by "b" :shape "s"
+   :model {:elements [{:id "canvas.x/m" :sort :module :hides "h"}]
+           :claims   [{:id "k1" :about ["canvas.x/m"] :statement "one" :falsified-by "f1"
+                       :evidence {:by :round} :read-at ["src/a.clj:1"]}
+                      {:id "k2" :about ["canvas.x/m"] :statement "two" :falsified-by "f2"
+                       :evidence {:by :round} :read-at ["src/b.clj:2"]}]}
+   :read ["src/a.clj"]})
+
+(deftest a-model-baseline-is-measured-by-its-claim-ids
+  (is (= [] (retreat/baseline-retreats model-baseline model-baseline)))
+  (let [rs (retreat/baseline-retreats model-baseline (update-in model-baseline [:model :claims] pop))]
+    (is (some #(= "claim k2 is no longer made" (:detail %)) rs) "a dropped claim is named")
+    (is (contains? (whats rs) :evidence-dropped) "and the place only it cited is reported"))
+  (is (= [] (retreat/baseline-retreats
+             model-baseline (assoc-in model-baseline [:model :claims 0 :statement] "one, reworded")))
+      "a claim reworded under its id is not a loss"))
+
+(deftest a-model-design-that-drops-a-claim-names-it
+  (let [d  {:format :design :effort :M :standing {:relation :conforms}
+            :baseline {:seq 1 :relation :within}
+            :model {:elements [{:id "canvas.x/m" :sort :module}]
+                    :claims   [{:id "k1" :about ["canvas.x/m"] :statement "one" :falsified-by "f"
+                                :evidence {:by :round}}
+                               {:id "k2" :about ["canvas.x/m"] :statement "two" :falsified-by "f"
+                                :evidence {:by :round}}]}}
+        rs (retreat/design-retreats d (update-in d [:model :claims] pop))]
+    (is (= #{:invariants-fewer :claim-dropped} (whats rs)))
+    (is (some #(= "claim k2 is no longer made" (:detail %)) rs))))
+
 (deftest a-dropped-property-is-a-retreat-and-names-the-evidence-nothing-cites
   (let [curr (update base-baseline :load-bearing pop)
         rs   (retreat/baseline-retreats base-baseline curr)]

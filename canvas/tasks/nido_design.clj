@@ -21,10 +21,17 @@
   (Operation cmd
     "bb entry point: exits non-zero on a refusal, so a recipe that runs it before the push stops"
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation materialize-spec-dirs!
+    "The spec dirs as they stood at a revision, written into a fresh directory the caller deletes —
+     nil when the revision names nothing. Everything else the worktree holds is linked in beside
+     them, so fukan runs there on the project's own dependency configuration. A task's to do,
+     because a revision is a VCS question the design seam's band may not reach."
+    {:signature [:=> [:catn [:worktree :string] [:rev :string] [:spec-dirs [:vector :string]]]
+                 [:maybe :string]]})
   (Operation diff
     "Print what this branch changes about the declared design, against a base revision."
     {:signature [:=> [:catn [:args [:* :any]]] :any]
-     :delegates [coords]})
+     :delegates [coords materialize-spec-dirs!]})
   (Operation diff-cmd
     "bb entry point for the diff."
     {:signature [:=> [:catn [:args [:* :any]]] :any]}))

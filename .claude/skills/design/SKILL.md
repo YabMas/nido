@@ -85,9 +85,10 @@ One `:design` event per workstream, appended to the ledger:
  :summary    "2–4 sentences: what this change makes true of the system."
  :shape      "The structural claim: which parts exist, where the boundaries
               fall, what crosses them."
- :invariants ["what must hold once this lands — one per line, checkable"]
-              ;; a PHASED record writes maps instead, each saying when it holds:
-              ;; [{:invariant "…" :holds :always | :on-completion}]
+ :model      {:elements […] :claims […]}  ; what must hold once this lands, as claims —
+              ;; each with an id, what it is about and what would falsify it (§4).
+              ;; A PHASED record says when each holds: :holds {"claim-id" :always | :on-completion}.
+              ;; Records from before the shared model carry :invariants — read, never written.
  :standing   {:relation   :conforms          ; :conforms | :extends | :challenges
               :principles ["refs into the project's stance"]
               :note       "REQUIRED for :extends / :challenges — what, and why"}
@@ -109,7 +110,7 @@ One `:design` event per workstream, appended to the ledger:
  :effort     :M}                     ; concrete; resolves a triage :squirrel
 ```
 
-Required: `:format :summary :shape :invariants :standing :baseline :effort`. The
+Required: `:format :summary :shape :model :standing :baseline :effort`. The
 append validates and rejects a malformed record with an explain dump — fix and
 retry, and it also refuses a `:baseline :seq` that names no baseline on this
 workstream.
@@ -121,13 +122,17 @@ what survives the session.
 
 ### The fields that carry weight
 
-- **`:invariants` is the yardstick.** The review judge checks findings against
-  these and nothing else. Required, non-empty, and each one written so a reviewer
-  could state an observation that proves it false. **On a phased record each one
-  also says *when* it holds** — `:always` at every phase boundary, or
-  `:on-completion` — because a phase plan creates intermediate states that are
-  wrong on purpose, and without the marker the judge reads the plan working as
-  the design failing.
+- **The claims are the yardstick.** The review judge checks findings against
+  `:model`'s claims and nothing else. Required, non-empty, and each one written
+  so a reviewer could state an observation that proves it false. Review names
+  them by `:id`: a reviewer's `contradicts`, a warden's quoted citation and the
+  verdict's held and broken lists all carry the id, which cannot be restated
+  wider the way copied wording can. **On a phased record `:holds` says *when*
+  each holds** — `:always` at every phase boundary, or `:on-completion` —
+  because a phase plan creates intermediate states that are wrong on purpose,
+  and without the marker the judge reads the plan working as the design failing.
+  It is keyed by claim id rather than written on the claim, because a claim is
+  the same form in a baseline, which has no phases.
 - **`:rejected` is what makes a later review round decidable.** Without it,
   round three re-proposes what round zero rejected and nobody can tell whether
   that is new insight or re-litigation. With it, a finding is either *answered*
@@ -325,6 +330,81 @@ produce again.
 are prose that a review warden judges; a `canvas/` law is judged by a machine on
 every landing. Moving a claim from the first to the second is what makes "this
 design is checked" true of the design itself and not only of the code.
+
+### The record is a model
+
+A baseline and a design state their common part in one shape, `:model`, in place
+of `:modules`, `:composition`, `:load-bearing` and `:invariants` — in every
+project, whether or not it declares a design. The shape is fukan's; a project
+only needs a `canvas/` for the parts below that say so:
+
+```clojure
+:model {:elements [{:id "canvas.order.aggregate/aggregate" :sort :module
+                    :hides "the order in which lines are summed"
+                    :interface "an order's total"}
+                   {:id "canvas.order.aggregate/total" :sort :operation}]
+        :claims   [{:id "one-summing-path"            ; stable — never changes once written
+                    :about ["canvas.order.aggregate/aggregate"]
+                    :statement "the aggregate is the only thing that sums lines"
+                    :falsified-by "a caller that sums an order's lines itself"
+                    :evidence {:by :round}          ; | {:by :test :tests [...]} | {:by :law :law "..."}
+                    :read-at ["src/order/aggregate.clj:12"]}]}
+```
+
+Everything the rest of §4 says about modules, the composition and load-bearing
+properties still holds. Only where it is written moves:
+
+- A module is an element of `:sort :module`, still defined by what it `:hides`.
+  Operations, kinds and roles are elements too, and hide nothing of their own.
+- A load-bearing property is a claim, and so is a design's invariant — one form
+  in both records, which is what lets a round say which claim it confirmed and
+  lets two records be combined by id.
+- The composition is a claim about the elements it composes.
+- `:readings` stay where they were: a module's on its element, a property's on
+  its claim.
+
+**Every claim is `:about` at least one element the model lists**, and where
+those ids come from depends on the project.
+
+**In a project with a `canvas/`, an element's `:id` is its canvas identity** —
+`ns/name`, as `clojure -M:fukan -m fukan.cli elements` lists it — and its
+`:sort` is the sort it is declared under. Before a round launches a judge it
+resolves every subject against the declared design at the tree the judge reads,
+and stops at `:subjects-undeclared`, naming each one the declaration does not
+hold. A survey naming something undeclared has found a gap in the declaration or
+described something that is not there; either is for you to settle, not a judge.
+
+**In a project without one, the record gives its elements ids of its own** —
+short stable slugs, like a claim's — and a `:sort` saying what each is: a
+module, an operation, a data shape. Nothing is resolved against a declaration,
+because there is none, and nothing is lost by it: the append already holds every
+claim to the elements its own record lists. Adopting a canvas later changes
+where the ids come from, not what the record is.
+
+**`:evidence` says what checks the claim**, recorded rather than inferred: a
+round's judgement, named tests, or a named law. Most claims are `{:by :round}`.
+Write the other two only when the tests or the law exist.
+
+**In a project with a `canvas/`, a design's claims live on in it.** Declare each one in `canvas/` as a
+`Claim`, in the same change as the design: its name is the claim's id, its
+docstring the statement, and its `:about` the elements or `Role`s it names.
+
+```clojure
+(ns canvas.order.claims
+  (:require [canvas.vocab.claim :refer [Claim]]
+            [canvas.order.aggregate :refer [aggregate]]))
+
+(Claim one-summing-path
+  "the aggregate is the only thing that sums lines"
+  {:about [aggregate] :evidence "round"})
+```
+
+`land:check` refuses a branch whose declared claims are not its design's: a
+claim the design states and the declaration lacks, one declared with another
+statement or other subjects, and one this branch declares that no round judged.
+A claim carried unchanged from an earlier landing belongs to that design, not
+yours. A project with no `canvas/` has nowhere for a claim to live on, so its
+claims live in its records alone.
 
 ### The level a survey is written at
 
@@ -550,6 +630,15 @@ workstream that touches it. Baselines accumulate in ledgers, and a written
 current design can be harvested from them later if it is ever wanted — that is a
 different decision, not this one.
 
+**The one exception is a claim.** In a modelled project a design's claims are
+declared in `canvas/` as it lands, and that is not the checked-in current design
+this warns against. A `Claim` is a node fukan keeps well-formed — its `:about`
+can only name declared modules, operations, kinds and roles, and fukan refuses
+anything else — and `land:check` holds it to the claims a round judged, so it
+cannot quietly drift from what was decided. What
+rots is prose nothing reads against the code, and the survey's area, shape,
+health and unknowns stay in the ledger.
+
 ### Correcting a survey: replace, never append
 
 **When you correct a claim, re-state it so it is simply true. Do not keep the
@@ -718,16 +807,17 @@ cat > /tmp/baseline.edn <<'EDN'
  ;; the usual case. A selection, never prose: :bounded-by above is the prose.
  :scope        [(Band ?n) (named ?n "Lane")]
  :shape        "…"
- :modules      [{:id "short-stable-slug"
-                 :module "…" :hides "the decision nothing outside may depend on"
-                 :interface "what the rest may know"}]
- :composition  "how those produce the required behaviour"
- :load-bearing [{:id "short-stable-slug"      ; never changes once written
-                 :property "…"
-                 :falsified-by "the counterexample that would make this false"
-                 :readings [{:lens :tarpit/state :verdict :derived :because "…"}]
-                 :evidence ["src/…:41"]        ; optional — where you looked
-                 :drift "…"}]
+ :model        {:elements [{:id "…" :sort :module  ; canvas identity, or an id of the record's own
+                            :hides "the decision nothing outside may depend on"
+                            :interface "what the rest may know"}]
+                :claims   [{:id "short-stable-slug" ; never changes once written
+                            :about ["…"]             ; ids of elements this model lists
+                            :statement "…"           ; the composition is one of these too
+                            :falsified-by "the counterexample that would make this false"
+                            :evidence {:by :round}
+                            :readings [{:lens :tarpit/state :verdict :derived :because "…"}]
+                            :read-at ["src/…:41"]  ; optional — where you looked
+                            :drift "…"}]}
  :extension-points [{:at "…" :how "…"}]
  :health       [{:id "short-slug" :axis :design :observation "…"
                  :evidence ["src/…:88"] :invisibly-incomplete? false}]
@@ -739,6 +829,9 @@ EDN
 bb nido:ticket:append :project brian :br <BR-####> :kind baseline \
   :session <session> :run-id <run-id> :file /tmp/baseline.edn
 ```
+
+Its element ids are canvas identities in a project with a `canvas/` and ids of
+the record's own in one without (§4).
 
 **Then verify it, BEFORE the design cites it:**
 
@@ -780,7 +873,7 @@ cat > /tmp/design.edn <<'EDN'
 {:format     :design
  :summary    "…"
  :shape      "…"
- :invariants ["…"]
+ :model      {:elements […] :claims […]}
  :standing   {:relation :conforms}
  :baseline   {:seq 2 :relation :within}
  :intent     {:seq 1}
@@ -791,6 +884,9 @@ EDN
 bb nido:ticket:append :project brian :br <BR-####> :kind design \
   :session <session> :run-id <run-id> :file /tmp/design.edn
 ```
+
+A phased design adds `:holds` beside its `:model`. In a project with a
+`canvas/`, its claims are declared in `canvas/` in the same change (§4).
 
 Derive `<session>` from cwd and `<run-id>` from the `./run-link/` symlink target.
 
@@ -874,6 +970,12 @@ Read back what is there with `bb nido:workstream:show :project <p> :ref <ref>`.
 - **Cutting a phase where a layer belongs.** If nobody is ever on the
   intermediate state, it is a layer — the merge dissolves the boundary anyway
   (`/phase` §2).
+- **Naming a model element in prose in a modelled project.** Its id is its canvas
+  identity; a round resolves every subject before it launches a judge, and stops
+  on one the declaration does not hold (§4).
+- **A design claim the canvas does not declare, or declares differently.**
+  `land:check` refuses both. Declare it with the design, or supersede the design
+  so it states what the declaration does (§4).
 - **A design longer than its diff.** It is a plan; cut it back to claims.
 - **Layers that do not appear in the record** — either the design is incomplete
   or the layer is smuggling a decision nobody stated (`/stack` §2).

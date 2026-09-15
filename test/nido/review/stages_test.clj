@@ -1057,6 +1057,33 @@
                                                   :because "the invariant `own form` holds"}))
                        "without quoting one the record contains"))))
 
+(def ^:private one-claim-design
+  "The clause `one-invariant-design` states, as a claim in the shared model."
+  {:shape "..."
+   :model {:elements [{:id "fukan.extract/calls" :sort :operation}]
+           :claims   [{:id "positional-edges" :about ["fukan.extract/calls"]
+                       :statement positional-attribution :evidence {:by :round}}]}})
+
+(deftest a-claim-is-quoted-by-its-id
+  ;; The warden is told to quote a shared-model claim by its id, and an id is
+  ;; shorter than any clause — the threshold that refuses `own form` would refuse
+  ;; `positional-edges` too, and fail the warden for obeying its prompt.
+  (is (not (str/includes? (:because (ruling-against one-claim-design
+                                                    {:disposition "fix"
+                                                     :because "this repair keeps the invariant `positional-edges`"}))
+                          "without quoting"))
+      "the whole id cites the claim it names")
+  (is (str/includes? (:because (ruling-against one-claim-design
+                                                {:disposition "fix"
+                                                 :because "the invariant \"to a call inside a method's own form\" holds"}))
+                     "without quoting one the record contains")
+      "a design that names its claims is cited by id, so its copied wording licenses nothing")
+  (is (str/includes? (:because (ruling-against one-claim-design
+                                                {:disposition "fix"
+                                                 :because "the invariant `positional` holds"}))
+                     "without quoting one the record contains")
+      "a short span that is only part of an id cites nothing"))
+
 (deftest a-refused-citation-does-not-move-the-ruling
   ;; Demotion is the fail-safe for a missing FIELD, and it is the wrong one
   ;; here: a park is how a finding that contradicts an invariant reaches a
@@ -4421,6 +4448,26 @@
   (let [out (#'stages/cite-invariants [{:id "a" :contradicts "anything at all"}] nil)]
     (is (nil? (:contradicts (first out))))
     (is (= "anything at all" (:miscited (first out))))))
+
+(deftest a-reviewer-cites-a-shared-model-claim-by-its-id
+  (let [design {:model {:elements [{:id "db/pool" :sort :module}]
+                        :claims   [{:id "no-held-connection" :about ["db/pool"]
+                                    :statement "a caller never holds a connection across a reconnect"
+                                    :evidence {:by :round}}]}}
+        out (#'stages/cite-invariants
+             [{:id "a" :contradicts "no-held-connection"}
+              {:id "b" :contradicts "connection-never-held"}
+              {:id "c" :contradicts "held-connection"}
+              {:id "d" :contradicts "a caller never holds a connection across a reconnect"}]
+             design)]
+    (is (= "no-held-connection" (:contradicts (first out)))
+        "the id the prompt asked for stands")
+    (is (= "connection-never-held" (:miscited (second out)))
+        "an id the design never named is moved, as a paraphrase is")
+    (is (= "held-connection" (:miscited (nth out 2)))
+        "part of an id names no claim")
+    (is (= "a caller never holds a connection across a reconnect" (:miscited (nth out 3)))
+        "nor does the claim's wording: a design that names its claims is cited by id")))
 
 (deftest a-reviewer-is-handed-the-rounds-design
   ;; The wire itself. `fan-out-reviews` reads the record once per round — every

@@ -54,6 +54,31 @@
               "an override supplies only what it changes")))
       (finally (fs/delete-tree wt)))))
 
+(deftest the-element-listing-is-read-as-data
+  (let [wt     (worktree-with {"canvas/a.clj" "(ns canvas.a)" "src/a.clj" "(ns a)"})
+        row    {:id "canvas.a/m" :sort :fukan.common.vocab.code.module/Module
+                :ns "a" :file "src/a.clj" :declaration "d1"}
+        listed (fn [out code]
+                 (with-redefs [project/get-project (constantly {:design {:cmd (answering out code)}})]
+                   (design/elements "p" wt)))]
+    (try
+      (testing "a listing fukan printed comes back as its rows, whatever else each row carries"
+        (is (= {:status :listed :elements [row]} (listed (pr-str {:elements [row]}) 0))))
+      (testing "an empty listing is an answer when fukan printed one"
+        (is (= {:status :listed :elements []} (listed "{:elements []}" 0))))
+      (testing "a failed or unreadable listing is undecidable, never an empty one — a caller
+                resolving names against [] would read every name as undeclared"
+        (is (= :undecidable (:status (listed "" 2))))
+        (is (= :undecidable (:status (listed "not a listing" 0)))))
+      (finally (fs/delete-tree wt)))))
+
+(deftest a-project-with-no-canvas-lists-no-elements
+  (let [wt (worktree-with {"src/a.clj" "(ns a)"})]
+    (try
+      (with-redefs [project/get-project (constantly nil)]
+        (is (= {:status :unmodelled} (design/elements "p" wt))))
+      (finally (fs/delete-tree wt)))))
+
 (deftest the-checkers-exit-code-is-the-verdict
   (let [wt (worktree-with {"canvas/bands.clj" "(ns canvas.bands)"})
         run (fn [out code]

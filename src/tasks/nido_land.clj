@@ -10,6 +10,7 @@
    It refuses by exit code, not by a paragraph in a recipe. A rule that lives
    only in prose is followed by whoever read the prose."
   (:require
+   [babashka.fs :as fs]
    [clojure.string :as str]
    [nido.coordinator.record.standing :as standing]
    [nido.design.check :as design]
@@ -206,9 +207,172 @@
                          2)))
     0))
 
+(defn- squashed
+  "`s` with every run of whitespace one space. A docstring wraps where a record's statement does
+   not, and where a line breaks says nothing about what the claim is."
+  [s]
+  (str/trim (str/replace (str s) #"\s+" " ")))
+
+(defn- claim-rows
+  [listing]
+  (filter #(= "Claim" (name (:sort %))) (:elements listing)))
+
+(defn- declared-claims
+  "The Claim instances `listing` holds, by id — a Claim's instance name — each as its statement
+   and the set of subjects its `:about` names. Of two instances sharing a name only one survives,
+   which is why a caller asks `claims-named-twice` first."
+  [listing]
+  (into {}
+        (map (fn [{nm :name doc :doc refs :refs}]
+               [nm {:statement (squashed doc) :about (set (:about refs))}]))
+        (claim-rows listing)))
+
+(defn- claims-named-twice
+  "Every claim id `listing` gives to more than one Claim instance, each to the qualified identities
+   of the instances declaring it, or empty. The grammar holds an instance name unique within its
+   namespace only, so two canvas namespaces can each declare a claim under one id."
+  [listing]
+  (into (sorted-map)
+        (keep (fn [[nm rows]] (when (< 1 (count rows)) [nm (vec (sort (map :id rows)))])))
+        (group-by :name (claim-rows listing))))
+
+(defn- carried-claims
+  "The claims `base` declares, by id, that a claim declared here can be carried unchanged from. An
+   id main gave to more than one Claim carries nothing: main never declared the one claim a
+   declaration here could repeat, and a claim read as carried is one no round is asked to judge."
+  [base]
+  (apply dissoc (declared-claims base) (keys (claims-named-twice base))))
+
+(defn- judged-claims
+  "The claims `design` states, in the shape `declared-claims` reads them. Empty for a design from
+   before the shared model, which states none."
+  [design]
+  (into {}
+        (map (fn [{:keys [id statement about]}]
+               [id {:statement (squashed statement) :about (set about)}]))
+        (get-in design [:model :claims])))
+
+(defn- base-listing
+  "The declared elements as they stood on `main`, or why they could not be read.
+
+   Only the declaration is main's. The source root it is listed against is the worktree's, linked
+   in with the rest of what fukan runs from, and nothing here reads what an element pairs with."
+  [project worktree]
+  (if-let [{:keys [spec-dirs]} (design/design-of project worktree)]
+    (if-let [dir (nido-design/materialize-spec-dirs! worktree "main" spec-dirs)]
+      (try
+        (design/elements project dir)
+        (finally (fs/delete-tree dir)))
+      {:status :undecidable :error "main names no revision to read the declared claims at"})
+    {:status :unmodelled}))
+
+(defn- claim-differences
+  "Every way the claims this branch declares and the claims its design states disagree, one line
+   each, or empty.
+
+   A claim this branch declares is one new or changed since `main`. One carried unchanged from an
+   earlier landing is another design's and says nothing about this one — but a claim this design
+   states is held to the declaration wherever it came from."
+  [judged declared base]
+  (let [ours (into {} (remove (fn [[id c]] (= c (get base id)))) declared)]
+    (vec
+     (concat
+      (for [[id _] (sort-by key ours) :when (not (contains? judged id))]
+        (str id " — declared on this branch, and no design round judged it"))
+      (for [[id j] (sort-by key judged)
+            :let [d (get declared id)]
+            :when (not= d j)]
+        (cond
+          (nil? d)
+          (str id " — the design states it, and the declaration does not")
+
+          (not= (:statement d) (:statement j))
+          (str id " — declared with a statement the design does not make")
+
+          :else
+          (str id " — declared about " (str/join ", " (sort (:about d)))
+               "; the design's is about " (str/join ", " (sort (:about j))))))))))
+
+(defn- unreadable-claims
+  [error]
+  (println (str "land:check REFUSED · the declared claims could not be read: " error))
+  (println "\nHow to clear it:")
+  (println (str "  Nobody could tell whether this branch declares its design's claims, which is\n"
+                "  not the same as it doing so. bb nido:design:check reproduces a declaration\n"
+                "  fukan cannot read."))
+  2)
+
+(defn ^{:malli/schema [:=> [:cat :string] :int]}
+  claims-check
+  "Refuse unless the claims this branch declares are the claims its design states — by id,
+   statement and subjects.
+
+   A third question beside the other two. Standing asks whether the design record still holds and
+   structure whether the code obeys the declaration; neither asks whether the declaration carries
+   what a round judged. A claim declared and never judged is a design nobody decided, and one judged
+   and never declared is a design that did not land — both pass the other checks untouched.
+
+   A claim id more than one Claim declares is refused before anything is compared, since compared by
+   id all but one of them would go unjudged.
+
+   The base listing is read only when the branch declares a claim, since only then can one be new."
+  [cwd]
+  (if-let [[project worktree] (nido-design/coords cwd)]
+    (let [design (when-let [[p ws-id] (stages/project+ws-from-cwd cwd)]
+                   (cws/latest-entry p ws-id :design))
+          judged (judged-claims design)
+          head   (design/elements project worktree)]
+      (case (:status head)
+        :undecidable
+        (unreadable-claims (:error head))
+
+        ;; not an empty declaration: a project with no canvas keeps its claims in its records
+        ;; alone, and holding them to a declaration it never had would refuse its every landing
+        :unmodelled
+        (do (println (str "land:check ok · " (design/unmodelled-line project)
+                          " — its claims live in its design records alone"))
+            0)
+
+        (let [declared (declared-claims head)
+              twice    (claims-named-twice head)]
+          (cond
+            (seq twice)
+            (do (println "land:check REFUSED · a claim id is declared by more than one Claim")
+                (doseq [[id ids] twice]
+                  (println (str "  " id " — declared as " (str/join ", " ids))))
+                (println "\nHow to clear it:")
+                (println (str "  A claim's id is its instance name, so these are one id with more than one\n"
+                              "  statement, and only one of them could be held to the design. Rename all but\n"
+                              "  one, and have the design state each under the name it now has."))
+                1)
+
+            (and (empty? declared) (empty? judged))
+            (do (println "land:check ok · no claim is declared or judged here") 0)
+
+            :else
+            (let [base (if (seq declared) (base-listing project worktree) {:status :unmodelled})]
+              (if (= :undecidable (:status base))
+                (unreadable-claims (:error base))
+                (let [diffs (claim-differences judged declared (carried-claims base))]
+                  (if (empty? diffs)
+                    (do (println (str "land:check ok · the declaration carries the "
+                                      (count judged) " claim" (when (not= 1 (count judged)) "s")
+                                      " the design states, and no claim it never judged"))
+                        0)
+                    (do (println (str "land:check REFUSED · the declared claims are not the design's"
+                                      (when-let [s (:seq design)] (str " at entry " s))))
+                        (doseq [d diffs] (println (str "  " d)))
+                        (println "\nHow to clear it:")
+                        (println (str "  A claim lives on in canvas/ as a Claim whose name is its id, whose\n"
+                                      "  docstring is its statement and whose :about names its subjects. Declare\n"
+                                      "  what the design states — or, if the declaration is right, supersede the\n"
+                                      "  design so it states that, and have it decided again."))
+                        1)))))))))
+    0))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   check
-  "The landing gate: both questions, and a refusal from either is a refusal.
+  "The landing gate: every question, and a refusal from any is a refusal.
 
    Every check runs even when an earlier one refuses. An agent that has to
    discover its blockers one push at a time will make one trip per blocker."
@@ -216,7 +380,7 @@
   (let [[_ opts] (task-args/split-args args)
         given (or (:cwd opts) (System/getProperty "user.dir"))
         cwd   (or (lifecycle/worktree-from-cwd given) given)]
-    (apply max (mapv #(% cwd) [standing-check structure-check]))))
+    (apply max (mapv #(% cwd) [standing-check structure-check claims-check]))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   cmd

@@ -1,5 +1,5 @@
 (ns nido.coordinator.report-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
             [clojure.edn :as edn]
             [nido.coordinator.report :as report]))
@@ -108,8 +108,15 @@
   {:format     :design
    :summary    "Rounding moves to a single point on the order total."
    :shape      "One rounding boundary at the order aggregate; line items stay exact."
-   :invariants ["a total is rounded exactly once"
-                "no line item carries a rounded amount"]
+   :model      {:elements [{:id "canvas.order/aggregate" :sort :module}]
+                :claims   [{:id "rounded-once" :about ["canvas.order/aggregate"]
+                            :statement "a total is rounded exactly once"
+                            :falsified-by "two rounding calls reached for one total"
+                            :evidence {:by :round}}
+                           {:id "lines-exact" :about ["canvas.order/aggregate"]
+                            :statement "no line item carries a rounded amount"
+                            :falsified-by "a line amount read back rounded"
+                            :evidence {:by :round}}]}
    :standing   {:relation :conforms :principles ["shape of the data is the design"]}
    :baseline   {:seq 1 :relation :within}
    :intent     {:seq 2}
@@ -122,6 +129,15 @@
                  :closed-by :spun-out :ref "FU-12"}]
    :open       ["whether invoices should follow in the same arc"]
    :effort     :M})
+
+(def ^:private invariants-design
+  "`valid-design` as the invariants shape wrote it: plain-string invariants where the model is.
+   Refused on write and read through DesignVisionAny, so it is what the tests of reading and
+   rendering that era's records use."
+  (-> valid-design
+      (dissoc :model)
+      (assoc :invariants ["a total is rounded exactly once"
+                          "no line item carries a rounded amount"])))
 
 (def ^:private legacy-design
   "A :design record from before the baseline event: no :baseline, carrying the
@@ -141,12 +157,22 @@
 (def ^:private phased-design
   "A change that reaches production in three landings. The middle one is the
    reason :holds exists: while it is live there are two writers, so the record's
-   own second invariant is false ON PURPOSE."
+   own `one-writer` claim is false ON PURPOSE."
   {:format     :design
    :summary    "The order address moves to its own column."
    :shape      "Two writers during the migration; one reader throughout."
-   :invariants [{:invariant "no request reads a column no writer maintains" :holds :always}
-                {:invariant "exactly one writer maintains the address"      :holds :on-completion}]
+   :model      {:elements [{:id "canvas.order/address" :sort :module
+                            :hides "which column holds an order's address"}]
+                :claims   [{:id "no-orphan-read" :about ["canvas.order/address"]
+                            :statement "no request reads a column no writer maintains"
+                            :falsified-by "a read path selecting a column that no write path updates"
+                            :evidence {:by :round}}
+                           {:id "one-writer" :about ["canvas.order/address"]
+                            :statement "exactly one writer maintains the address"
+                            :falsified-by "two write paths that both update the address"
+                            :evidence {:by :round}}]}
+   :holds      {"no-orphan-read" :always
+                "one-writer"     :on-completion}
    :standing   {:relation :conforms}
    :intent     {:seq 2}
    :baseline   {:seq 1 :relation :within}
@@ -168,12 +194,61 @@
                  :closed-by :phase :phase "the old column is dropped"}]
    :effort     :L})
 
+(def ^:private invariants-phased-design
+  "`phased-design` as the invariants shape wrote it: each invariant a map carrying its own :holds,
+   where the model design keeps one :holds map beside its claims. Refused on write; read and
+   rendered as that era's records are."
+  (-> phased-design
+      (dissoc :model :holds)
+      (assoc :invariants [{:invariant "no request reads a column no writer maintains" :holds :always}
+                          {:invariant "exactly one writer maintains the address"      :holds :on-completion}])))
+
 (deftest validate-event-accepts-a-design
-  (is (= valid-design (report/validate-event :design valid-design))))
+  (is (= valid-design (report/validate-event :design valid-design)))
+  (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :design invariants-design))
+      "the invariants shape reads and is never written"))
+
+(deftest a-design-may-be-written-in-the-shared-model
+  (is (= valid-design (report/validate-event :design valid-design)))
+  (is (= valid-design (report/parse-event :design valid-design)) "and it reads back as written"))
+
+(deftest a-model-design-states-its-invariants-once
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :design (assoc valid-design :invariants (:invariants invariants-design))))
+      "an invariant beside the model is a claim stated twice"))
+
+(deftest a-decision-may-record-the-claims-its-judge-confirmed
+  (is (report/validate-event :design-decision
+                             {:format :design-decision :recommend :proceed :design-seq 3
+                              :reason "r" :asks "worth it?" :confirmed ["rounded-once"]
+                              :checks [{:check :relation-honest :status :held :note "n"}]})))
+
+(deftest a-phased-model-design-says-when-every-claim-holds
+  (let [phased (assoc valid-design
+                      :phases (:phases phased-design)
+                      :seams  (:seams phased-design)
+                      :holds  {"rounded-once" :always "lines-exact" :on-completion})]
+    (is (= phased (report/validate-event :design phased)))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :design (update phased :holds dissoc "lines-exact")))
+        "a claim with no moment named is a plan whose author has not said what survives it")
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :design (assoc-in phased [:holds "never-made"] :always)))
+        "and a moment for a claim the design does not make names nothing")
+    (is (re-find #"holds on completion" (report/report->markdown phased))
+        "the rendering says which claims are false on purpose mid-plan")))
+
+(deftest report->markdown-renders-a-model
+  (let [md (report/report->markdown valid-design)]
+    (is (re-find #"## Claims" md))
+    (is (re-find #"`rounded-once` a total is rounded exactly once" md))
+    (is (re-find #"about: `canvas.order/aggregate`" md))
+    (is (not (re-find #"## Invariants" md)) "a model design has no invariants section to leave empty")))
 
 (deftest design-requires-at-least-one-invariant
   (is (thrown? clojure.lang.ExceptionInfo
-               (report/validate-event :design (assoc valid-design :invariants [])))))
+               (report/validate-event :design (assoc-in valid-design [:model :claims] [])))
+      "a model design's invariants are its claims"))
 
 (deftest design-conforms-needs-no-note
   (is (report/validate-event :design (assoc valid-design :standing {:relation :conforms}))))
@@ -198,7 +273,7 @@
       "the design is where a triage :squirrel resolves into a concrete size"))
 
 (deftest report->markdown-design-has-its-sections
-  (let [md (report/report->markdown valid-design)]
+  (let [md (report/report->markdown invariants-design)]
     (is (str/includes? md "# Design"))
     (is (str/includes? md "**Stance:** conforms"))
     (is (str/includes? md "## Invariants"))
@@ -212,7 +287,7 @@
 
 (deftest report->markdown-design-omits-empty-optional-sections
   (let [md (report/report->markdown
-            (dissoc valid-design :rejected :layers :seams :open))]
+            (dissoc invariants-design :rejected :layers :seams :open))]
     (is (str/includes? md "## Invariants"))
     (is (not (str/includes? md "## Rejected")))
     (is (not (str/includes? md "## Intended layers")))
@@ -235,31 +310,33 @@
   (let [[ext payload] (report/entry-payload :design (pr-str valid-design))]
     (is (= "edn" ext))
     (is (str/includes? payload ":design"))
-    (is (= valid-design (edn/read-string payload)))))
+    (is (= valid-design (edn/read-string payload))))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/entry-payload :design (pr-str invariants-design)))
+      "an append in the invariants shape is refused before it reaches the ledger"))
 
 ;; ---------------------------------------------------------------------------
 ;; Phasing — the temporal cut. A phase plan makes the record claim things about
 ;; a RUNNING system across several landings, which is why two fields tighten.
 
 (deftest validate-event-accepts-a-phased-design
-  (is (= phased-design (report/validate-event :design phased-design))))
+  (is (= phased-design (report/validate-event :design phased-design)))
+  (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :design invariants-phased-design))
+      "the phased invariants shape reads and is never written"))
 
 (deftest a-phase-plan-forces-every-invariant-to-say-when-it-holds
   ;; The whole point: without :holds the verdict pass judges the middle of a
   ;; migration against the end of it, and reports the plan working as a defect.
   (is (thrown? clojure.lang.ExceptionInfo
-               (report/validate-event
-                :design (assoc phased-design
-                               :invariants ["exactly one writer maintains the address"])))))
+               (report/validate-event :design (dissoc phased-design :holds)))))
 
-(deftest an-unphased-design-keeps-plain-string-invariants
-  ;; And may not use the map form: one landing has exactly one moment for an
-  ;; invariant to hold at, so :holds there is ceremony with one legal answer.
+(deftest an-unphased-design-says-nothing-about-when-its-claims-hold
+  ;; One landing has exactly one moment for a claim to hold at, so :holds there
+  ;; is ceremony with one legal answer.
   (is (thrown? clojure.lang.ExceptionInfo
                (report/validate-event
                 :design (assoc valid-design
-                               :invariants [{:invariant "a total is rounded exactly once"
-                                             :holds :always}])))))
+                               :holds {"rounded-once" :always "lines-exact" :always})))))
 
 (deftest one-phase-is-not-a-plan
   (is (thrown? clojure.lang.ExceptionInfo
@@ -299,14 +376,14 @@
   ;; costs no history. A record written before :closed-by must never become
   ;; invalid — read validation swallows failures, so it would silently vanish
   ;; from the panes and from the verdict pass rather than being contradicted.
-  (let [old-shape (assoc valid-design
+  (let [old-shape (assoc invariants-design
                          :seams [{:what "the legacy path stays"
                                   :visible-how "old fn kept, marked deprecated"}])]
     (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :design old-shape)))
     (is (= old-shape (report/parse-event :design old-shape)))))
 
 (deftest a-string-invariant-survives-on-read
-  (is (= valid-design (report/parse-event :design valid-design))))
+  (is (= invariants-design (report/parse-event :design invariants-design))))
 
 (deftest invariant-normalises-both-shapes
   (is (= {:invariant "x" :holds :always} (report/invariant "x")))
@@ -321,7 +398,7 @@
   (is (nil? (report/seam-closure {:what "w" :visible-how "v"}))))
 
 (deftest report->markdown-phased-design-shows-the-plan
-  (let [md (report/report->markdown phased-design)]
+  (let [md (report/report->markdown invariants-phased-design)]
     (is (str/includes? md "## Phases"))
     (is (str/includes? md "1. both writers maintain the new column; nothing reads it"))
     (is (str/includes? md "exit (observation): shadow-read discrepancy counter flat at zero for 7 days"))
@@ -814,33 +891,44 @@
                   render layer is out, it only formats what it is handed"
    :shape        "Line items hold exact amounts; the order aggregate is the only
                   thing that sums them; invoices read the aggregate, never lines."
-   :modules      [{:id "mod-calc" :module "calc"
-                   :hides "how a money amount is represented and rounded"
-                   :interface "exact amounts in, exact amounts out"}
-                  {:id "mod-the-order-aggregate" :module "the order aggregate"
-                   :hides "the order in which lines are summed"
-                   :interface "an order's total"}
-                  {:id "mod-the-invoice-reader" :module "the invoice reader"
-                   :hides "the invoice document's layout"
-                   :interface "renders a total it is handed"}]
-   :composition  "The aggregate is the only reader of lines and the only writer of
-                  a total; the invoice reader consumes that total. One summing
-                  path exists because only one module can see the lines."
-   :load-bearing [{:id "c1" :property "a line item's amount is never rounded in place"
-                   :falsified-by "a write path that stores a rounded amount back onto a line"
-                   :readings [{:lens :tarpit/state :verdict :essential
-                               :because "the amount a customer was charged cannot be recomputed"}]
-                   :evidence ["src/order/calc.clj:41"]}
-                  {:id "c2" :property "the aggregate is the only summing path"
-                   :falsified-by "a caller outside the aggregate that reads lines and sums them"
-                   :readings [{:lens :parnas/dependency :verdict :on-interface
-                               :because "the invoice reader takes the total; nothing reads lines"}]
-                   :evidence ["src/order/aggregate.clj:12" "src/order/invoice.clj:88"]
-                   :drift    "invoice.clj re-sums defensively — copied, never decided"}
-                  {:id "c3" :property "an order total is derived, never stored"
-                   :falsified-by "a column or cache holding a total that is edited independently"
-                   :readings [{:lens :tarpit/state :verdict :derived
-                               :because "computable from the lines by summation"}]}]
+   :model
+   {:elements [{:id "mod-calc" :sort :module
+                :hides "how a money amount is represented and rounded"
+                :interface "exact amounts in, exact amounts out"}
+               {:id "mod-the-order-aggregate" :sort :module
+                :hides "the order in which lines are summed"
+                :interface "an order's total"}
+               {:id "mod-the-invoice-reader" :sort :module
+                :hides "the invoice document's layout"
+                :interface "renders a total it is handed"}]
+    :claims   [{:id "c1" :about ["mod-calc"]
+                :statement "a line item's amount is never rounded in place"
+                :falsified-by "a write path that stores a rounded amount back onto a line"
+                :evidence {:by :round}
+                :readings [{:lens :tarpit/state :verdict :essential
+                            :because "the amount a customer was charged cannot be recomputed"}]
+                :read-at ["src/order/calc.clj:41"]}
+               {:id "c2" :about ["mod-the-order-aggregate" "mod-the-invoice-reader"]
+                :statement "the aggregate is the only summing path"
+                :falsified-by "a caller outside the aggregate that reads lines and sums them"
+                :evidence {:by :round}
+                :readings [{:lens :parnas/dependency :verdict :on-interface
+                            :because "the invoice reader takes the total; nothing reads lines"}]
+                :read-at ["src/order/aggregate.clj:12" "src/order/invoice.clj:88"]
+                :drift "invoice.clj re-sums defensively — copied, never decided"}
+               {:id "c3" :about ["mod-the-order-aggregate"]
+                :statement "an order total is derived, never stored"
+                :falsified-by "a column or cache holding a total that is edited independently"
+                :evidence {:by :round}
+                :readings [{:lens :tarpit/state :verdict :derived
+                            :because "computable from the lines by summation"}]}
+               {:id "composition"
+                :about ["mod-calc" "mod-the-order-aggregate" "mod-the-invoice-reader"]
+                :statement "The aggregate is the only reader of lines and the only writer of
+                            a total; the invoice reader consumes that total. One summing
+                            path exists because only one module can see the lines."
+                :falsified-by "a module other than the aggregate that reads lines or writes a total"
+                :evidence {:by :round}}]}
    :extension-points [{:at "the aggregate's reducer"
                        :how "a new money kind adds a case; nothing else changes"}]
    :governing    ["two registers of data — values in motion vs state at rest"]
@@ -848,12 +936,105 @@
    :read         ["src/order/calc.clj" "src/order/aggregate.clj" "src/order/invoice.clj"]
    :unknowns     ["whether the legacy CSV importer bypasses the aggregate"]})
 
+(def ^:private survey-baseline
+  "`valid-baseline` as the survey shape wrote it: modules, a composition and load-bearing
+   properties where the model is. Refused on write and read through BaselineAny, so it is what the
+   tests of reading and rendering that era's records use."
+  (-> valid-baseline
+      (dissoc :model)
+      (assoc :modules      [{:id "mod-calc" :module "calc"
+                             :hides "how a money amount is represented and rounded"
+                             :interface "exact amounts in, exact amounts out"}
+                            {:id "mod-the-order-aggregate" :module "the order aggregate"
+                             :hides "the order in which lines are summed"
+                             :interface "an order's total"}
+                            {:id "mod-the-invoice-reader" :module "the invoice reader"
+                             :hides "the invoice document's layout"
+                             :interface "renders a total it is handed"}]
+             :composition  "The aggregate is the only reader of lines and the only writer of
+                            a total; the invoice reader consumes that total. One summing
+                            path exists because only one module can see the lines."
+             :load-bearing [{:id "c1" :property "a line item's amount is never rounded in place"
+                             :falsified-by "a write path that stores a rounded amount back onto a line"
+                             :readings [{:lens :tarpit/state :verdict :essential
+                                         :because "the amount a customer was charged cannot be recomputed"}]
+                             :evidence ["src/order/calc.clj:41"]}
+                            {:id "c2" :property "the aggregate is the only summing path"
+                             :falsified-by "a caller outside the aggregate that reads lines and sums them"
+                             :readings [{:lens :parnas/dependency :verdict :on-interface
+                                         :because "the invoice reader takes the total; nothing reads lines"}]
+                             :evidence ["src/order/aggregate.clj:12" "src/order/invoice.clj:88"]
+                             :drift    "invoice.clj re-sums defensively — copied, never decided"}
+                            {:id "c3" :property "an order total is derived, never stored"
+                             :falsified-by "a column or cache holding a total that is edited independently"
+                             :readings [{:lens :tarpit/state :verdict :derived
+                                         :because "computable from the lines by summation"}]}])))
+
 (deftest validate-event-accepts-a-baseline
-  (is (= valid-baseline (report/validate-event :baseline valid-baseline))))
+  (is (= valid-baseline (report/validate-event :baseline valid-baseline)))
+  (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :baseline survey-baseline))
+      "the survey shape reads and is never written"))
+
+;; ── the shared model ────────────────────────────────────────────────────────
+
+(def ^:private model-baseline
+  "A smaller model over `valid-baseline`'s area: elements named by their canvas identity, and one
+   claim checked by named tests rather than by a round."
+  (-> valid-baseline
+      (assoc :model
+             {:elements [{:id "canvas.order/calc" :sort :module
+                          :hides "how a money amount is represented and rounded"
+                          :interface "exact amounts in, exact amounts out"}
+                         {:id "canvas.order/aggregate" :sort :module
+                          :hides "the order in which lines are summed"
+                          :interface "an order's total"}]
+              :claims   [{:id "c1" :about ["canvas.order/calc"]
+                          :statement "a line item's amount is never rounded in place"
+                          :falsified-by "a write path that stores a rounded amount back onto a line"
+                          :evidence {:by :round}
+                          :read-at ["src/order/calc.clj:41"]}
+                         {:id "c2" :about ["canvas.order/aggregate"]
+                          :statement "the aggregate is the only summing path"
+                          :falsified-by "a caller outside the aggregate that reads lines and sums them"
+                          :evidence {:by :test :tests ["order.aggregate-test/one-summing-path"]}}]})))
+
+(defn- refused? [kind record]
+  (try (report/validate-event kind record) false
+       (catch clojure.lang.ExceptionInfo _ true)))
+
+(deftest a-baseline-may-be-written-in-the-shared-model
+  (is (= model-baseline (report/validate-event :baseline model-baseline)))
+  (is (= model-baseline (dissoc (report/parse-event :baseline model-baseline) :seq :at))
+      "and it reads back as written"))
+
+(deftest a-claim-is-about-something-the-model-declares
+  (is (refused? :baseline (assoc-in model-baseline [:model :claims 0 :about] []))
+      "a claim about nothing is prose")
+  (is (refused? :baseline (assoc-in model-baseline [:model :claims 0 :about] ["canvas.order/nowhere"]))
+      "a claim about an element the model does not list names nothing"))
+
+(deftest claim-and-element-ids-are-unique-within-a-model
+  (is (refused? :baseline (assoc-in model-baseline [:model :claims 1 :id] "c1")))
+  (is (refused? :baseline (assoc-in model-baseline [:model :elements 1 :id] "canvas.order/calc"))))
+
+(deftest evidence-names-what-checks-the-claim
+  (is (refused? :baseline (assoc-in model-baseline [:model :claims 0 :evidence] {:by :test}))
+      "a claim covered by tests names them")
+  (is (refused? :baseline (assoc-in model-baseline [:model :claims 0 :evidence] {:by :law}))
+      "a claim checked by a law names it")
+  (is (not (refused? :baseline (assoc-in model-baseline [:model :claims 0 :evidence]
+                                         {:by :law :law ":correspondence/module-ambiguous"})))))
+
+(deftest a-model-baseline-states-its-structure-once
+  (testing "the survey shape's structural fields are refused beside a model, so a module or a
+            property cannot be stated twice and come to disagree"
+    (is (refused? :baseline (assoc model-baseline :load-bearing (:load-bearing survey-baseline))))
+    (is (refused? :baseline (assoc model-baseline :modules (:modules survey-baseline))))
+    (is (refused? :baseline (assoc model-baseline :composition "the aggregate sums")))))
 
 (deftest baseline-requires-at-least-one-load-bearing-property
   (is (thrown? clojure.lang.ExceptionInfo
-               (report/validate-event :baseline (assoc valid-baseline :load-bearing [])))
+               (report/validate-event :baseline (assoc-in valid-baseline [:model :claims] [])))
       "a baseline naming nothing load-bearing cannot answer whether a defect is
        implementation or design — which is the only reason it exists"))
 
@@ -864,17 +1045,18 @@
   ;; implementation archaeology in their place.
   (is (thrown? clojure.lang.ExceptionInfo
                (report/validate-event
-                :baseline (assoc valid-baseline
-                                 :load-bearing [{:id "c4" :property "totals are exact"}])))
+                :baseline (assoc-in valid-baseline [:model :claims]
+                                    [{:id "c4" :about ["mod-calc"] :statement "totals are exact"
+                                      :evidence {:by :round}}])))
       "a property nothing could refute is a guess"))
 
 ;; ── Readings — borrowed perspectives, each with a closed vocabulary ─────────
 
 (defn- with-reading [r]
-  (assoc valid-baseline
-         :load-bearing [{:id "c5" :property "totals are exact"
-                         :falsified-by "a rounded total"
-                         :readings [r]}]))
+  (assoc-in valid-baseline [:model :claims]
+            [{:id "c5" :about ["mod-calc"] :statement "totals are exact"
+              :falsified-by "a rounded total" :evidence {:by :round}
+              :readings [r]}]))
 
 (deftest a-reading-must-use-a-verdict-its-own-lens-defines
   ;; The whole point of a closed vocabulary per perspective: `accidental` means
@@ -902,25 +1084,26 @@
                                                      :because "wrong subject"}))))
   (is (thrown? clojure.lang.ExceptionInfo
                (report/validate-event
-                :baseline (assoc-in valid-baseline [:modules 0 :readings]
+                :baseline (assoc-in valid-baseline [:model :elements 0 :readings]
                                     [{:lens :tarpit/state :verdict :essential
                                       :because "wrong subject"}])))))
 
 (deftest a-module-reads-through-its-own-lenses
   (is (report/validate-event
-       :baseline (assoc-in valid-baseline [:modules 0 :readings]
+       :baseline (assoc-in valid-baseline [:model :elements 0 :readings]
                            [{:lens :ousterhout/depth :verdict :deep
                              :because "one entry point over all the money rules"}]))))
 
 (deftest readings-are-optional-and-plural
   (is (report/validate-event :baseline valid-baseline))
   (is (report/validate-event
-       :baseline (assoc valid-baseline
-                        :load-bearing [{:id "c6" :property "p" :falsified-by "q"
-                                        :readings [{:lens :tarpit/state :verdict :derived
-                                                    :because "computable from lines"}
-                                                   {:lens :parnas/dependency :verdict :on-interface
-                                                    :because "callers take the total"}]}]))))
+       :baseline (assoc-in valid-baseline [:model :claims]
+                           [{:id "c6" :about ["mod-calc"] :statement "p" :falsified-by "q"
+                             :evidence {:by :round}
+                             :readings [{:lens :tarpit/state :verdict :derived
+                                         :because "computable from lines"}
+                                        {:lens :parnas/dependency :verdict :on-interface
+                                         :because "callers take the total"}]}]))))
 
 (deftest every-registered-lens-declares-what-it-reads-and-where-it-came-from
   (doseq [[lens spec] report/lenses]
@@ -930,27 +1113,44 @@
     (is (seq (:verdicts spec)) (str lens " must close its vocabulary"))))
 
 (deftest baseline-requires-the-decomposition-and-what-it-buys
-  (doseq [k [:modules :composition]]
-    (is (thrown? clojure.lang.ExceptionInfo
-                 (report/validate-event :baseline (dissoc valid-baseline k)))
-        (str k " is the level this record exists to operate at")))
   (is (thrown? clojure.lang.ExceptionInfo
-               (report/validate-event :baseline (assoc valid-baseline :modules [])))
-      "a baseline with no modules has described an implementation"))
+               (report/validate-event :baseline (dissoc valid-baseline :model)))
+      ":model is the level this record exists to operate at")
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :baseline (assoc-in valid-baseline [:model :elements] [])))
+      "a baseline with no modules has described an implementation")
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :baseline (assoc-in valid-baseline [:model :claims] [])))
+      "and one with no claims has not said what its elements buy"))
 
 (deftest a-module-must-say-what-it-hides
+  ;; A module is what it hides; one that hides nothing is a file, and a survey of files has
+  ;; described the implementation. A baseline holds every module it lists to that. An operation, a
+  ;; kind and a role hide nothing of their own, and a design names modules without re-describing them.
   (is (thrown? clojure.lang.ExceptionInfo
                (report/validate-event
-                :baseline (assoc valid-baseline
+                :baseline (assoc-in valid-baseline [:model :elements 0]
+                                    {:id "mod-calc" :sort :module :interface "amounts"})))
+      "a module that hides nothing is a file")
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :baseline (assoc-in valid-baseline [:model :elements 0]
+                                    {:id "mod-calc" :sort :module :hides "rounding"})))
+      "nor is one that says nothing of what the rest may assume of it")
+  (is (report/validate-event :design valid-design)
+      "a design names the module it is about without re-describing it")
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/parse-event
+                :baseline (assoc survey-baseline
                                  :modules [{:id "mod-calc" :module "calc" :interface "amounts"}])))
-      "a module that hides nothing is a file"))
+      "and a survey-era record read back is held to the same rule"))
 
 (deftest a-baseline-from-the-kind-era-still-reads
   ;; Its era lasted hours and a record was written in it. A schema tightened
   ;; without a read shape does not error — latest-entry swallows the parse
   ;; failure, so the record stops being there.
-  (let [kind-era (assoc (dissoc valid-baseline :intent)
-                        :modules (mapv #(dissoc % :id) (:modules valid-baseline))
+  (let [kind-era (assoc (dissoc survey-baseline :intent)
+                        :modules (mapv #(dissoc % :id) (:modules survey-baseline))
                         :load-bearing [{:property "the aggregate is the only summing path"
                                         :kind :module-boundary
                                         :falsified-by "an outside caller that sums lines"
@@ -967,8 +1167,8 @@
   ;; live workstream, minutes before the schema moved under them. A tightening
   ;; without a read shape does not error: latest-entry swallows the parse
   ;; failure, so the record stops being there.
-  (let [kind-era (assoc (dissoc valid-baseline :intent)
-                        :modules (mapv #(dissoc % :id) (:modules valid-baseline))
+  (let [kind-era (assoc (dissoc survey-baseline :intent)
+                        :modules (mapv #(dissoc % :id) (:modules survey-baseline))
                         :load-bearing [{:property "the aggregate is the only summing path"
                                         :kind :module-boundary
                                         :falsified-by "an outside caller that sums lines"
@@ -981,14 +1181,14 @@
                        "the aggregate is the only summing path"))))
 
 (deftest the-four-eras-are-told-apart-by-what-the-record-carries
-  (let [pre-intent (dissoc valid-baseline :intent)
-        kind-era (assoc (dissoc valid-baseline :intent)
-                        :modules (mapv #(dissoc % :id) (:modules valid-baseline))
+  (let [pre-intent (dissoc survey-baseline :intent)
+        kind-era (assoc (dissoc survey-baseline :intent)
+                        :modules (mapv #(dissoc % :id) (:modules survey-baseline))
                         :load-bearing [{:property "p" :kind :derived :falsified-by "q"}])
-        legacy   (-> valid-baseline
+        legacy   (-> survey-baseline
                      (dissoc :modules :composition :intent)
                      (assoc :load-bearing [{:property "p" :evidence ["src/x.clj:1"]}]))]
-    (doseq [[label rec] {"current"    valid-baseline
+    (doseq [[label rec] {"current"    survey-baseline
                          "pre-intent" pre-intent
                          "kind-era"   kind-era
                          "legacy"     legacy}]
@@ -1001,7 +1201,7 @@
 
 (deftest a-baseline-written-before-the-level-moved-still-reads
   ;; Entries are immutable, so the question is whether it was valid when written.
-  (let [legacy (-> valid-baseline
+  (let [legacy (-> survey-baseline
                    (dissoc :modules :composition :intent)
                    (assoc :load-bearing [{:property "the aggregate is the only summing path"
                                           :evidence ["src/order/aggregate.clj:12"]}]))]
@@ -1031,7 +1231,7 @@
         (str "closed map rejects " k))))
 
 (deftest report->markdown-baseline-has-its-sections
-  (let [md (report/report->markdown valid-baseline)]
+  (let [md (report/report->markdown survey-baseline)]
     (is (str/includes? md "# Baseline — the current design"))
     (is (str/includes? md "**Area:** order totalling"))
     (is (str/includes? md "*Bounded by:"))
@@ -1053,7 +1253,7 @@
 
 (deftest report->markdown-baseline-omits-empty-optional-sections
   (let [md (report/report->markdown
-            (dissoc valid-baseline :extension-points :governing :drift :unknowns))]
+            (dissoc survey-baseline :extension-points :governing :drift :unknowns))]
     (is (str/includes? md "## Load-bearing"))
     (is (not (str/includes? md "**Governed by:**")))
     (is (not (str/includes? md "## Extension points")))
@@ -1084,7 +1284,10 @@
            :invisibly-incomplete? true}]))
 
 (deftest validate-event-accepts-a-baseline-with-health
-  (is (= healthy-baseline (report/validate-event :baseline healthy-baseline))))
+  (is (= healthy-baseline (report/validate-event :baseline healthy-baseline)))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :baseline (assoc survey-baseline :health (:health healthy-baseline))))
+      "health does not make the survey shape writable"))
 
 (deftest health-is-optional
   (is (= valid-baseline (report/validate-event :baseline valid-baseline))
@@ -1212,7 +1415,7 @@
        way :baseline is"))
 
 (deftest a-pre-intent-design-is-unwritable-but-still-readable
-  (let [pre (dissoc valid-design :intent)]
+  (let [pre (dissoc invariants-design :intent)]
     (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :design pre))
         "strict on write")
     (is (= pre (report/parse-event :design pre))
@@ -1221,8 +1424,8 @@
          contradicted, they would simply stop being there")))
 
 (deftest all-three-design-eras-read
-  (doseq [[label r] {"current"    valid-design
-                     "pre-intent" (dissoc valid-design :intent)
+  (doseq [[label r] {"current"    invariants-design
+                     "pre-intent" (dissoc invariants-design :intent)
                      "pre-baseline" legacy-design}]
     (is (= r (report/parse-event :design r)) label)))
 
@@ -1512,10 +1715,9 @@
   ;; none, and that absence is what stops a reader inferring the edge from
   ;; append order.
   (let [b {:format :baseline :intent {:seq 1} :area "a" :bounded-by "b" :shape "s"
-           :modules [{:id "m" :module "m" :hides "h" :interface "i"}]
-           :composition "c"
-           :load-bearing [{:id "c1" :property "p" :falsified-by "f"
-                           :evidence ["src/a.clj:1"]}]
+           :model {:elements [{:id "m" :sort :module :hides "h" :interface "i"}]
+                   :claims   [{:id "c1" :about ["m"] :statement "p" :falsified-by "f"
+                               :evidence {:by :round} :read-at ["src/a.clj:1"]}]}
            :read ["src/a.clj"]}]
     (is (some? (report/entry-payload :baseline (pr-str b))))
     (is (some? (report/entry-payload

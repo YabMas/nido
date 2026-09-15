@@ -882,9 +882,9 @@
 (def ^:private approvable-baseline
   ;; :intent names entry 1 — the goal is appended before the survey it scopes.
   {:format :baseline :intent {:seq 1} :area "a" :bounded-by "b" :shape "s"
-   :modules [{:id "m" :module "m" :hides "h" :interface "i"}]
-   :composition "c"
-   :load-bearing [{:id "c1" :property "p" :falsified-by "f" :evidence ["src/a.clj:1"]}]
+   :model {:elements [{:id "m" :sort :module :hides "h" :interface "i"}]
+           :claims [{:id "c1" :about ["m"] :statement "p" :falsified-by "f"
+                     :evidence {:by :round} :read-at ["src/a.clj:1"]}]}
    :read ["src/a.clj"]})
 
 (defn- approvable
@@ -900,7 +900,10 @@
           _ (add :baseline-review {:format :baseline-review :verdict :sufficient
                                    :baseline-seq b :reason "ok"})
           d (add :design {:format :design :summary "s" :shape "sh"
-                          :invariants ["one path"] :standing {:relation :conforms}
+                          :model {:elements [{:id "m" :sort :module}]
+                                  :claims [{:id "one-path" :about ["m"] :statement "one path"
+                                            :falsified-by "a second path" :evidence {:by :round}}]}
+                          :standing {:relation :conforms}
                           :baseline {:seq b :relation :within} :intent {:seq 1}
                           :effort :S})
           dd (add :design-decision {:format :design-decision :recommend :proceed
@@ -1491,11 +1494,11 @@
   (workstream/append-entry! :brian id {:kind :baseline}
     (pr-str {:format :baseline :intent {:seq 1}
              :area "the area" :bounded-by "the bound" :shape "the shape"
-             :modules [{:id "mod-m" :module "m" :hides "how p is stored" :interface "p"}]
-             :composition "m is the only reader of p, so p holds"
-             :load-bearing [{:id "c1" :property "p holds"
-                             :falsified-by "a caller that reads p without going through m"
-                             :evidence ["src/x.clj:1"]}]
+             :model {:elements [{:id "mod-m" :sort :module
+                                 :hides "how p is stored" :interface "p"}]
+                     :claims [{:id "c1" :about ["mod-m"] :statement "p holds"
+                               :falsified-by "a caller that reads p without going through m"
+                               :evidence {:by :round} :read-at ["src/x.clj:1"]}]}
              :read ["src/x.clj"]}))
   id)
 
@@ -1510,7 +1513,11 @@
                     :standing   {:relation :conforms}
                     :baseline   {:seq 2 :relation :within}
                     :intent     {:seq 1}
-                    :invariants ["the thing holds"]
+                    :model      {:elements [{:id "mod-m" :sort :module}]
+                                 :claims [{:id "holds" :about ["mod-m"]
+                                           :statement "the thing holds"
+                                           :falsified-by "the thing does not hold"
+                                           :evidence {:by :round}}]}
                     :effort     :S}
              amends (assoc :supersedes {:seq amends :why "the premise moved"})))))
 
@@ -2854,10 +2861,9 @@
         (let [b (add! :baseline
                       {:format :baseline :intent {:seq 1}
                        :area "a" :bounded-by "b" :shape "s"
-                       :modules [{:id "m" :module "m" :hides "h" :interface "i"}]
-                       :composition "c"
-                       :load-bearing [{:id "c1" :property "p" :falsified-by "f"
-                                       :evidence ["src/a.clj:1"]}]
+                       :model {:elements [{:id "m" :sort :module :hides "h" :interface "i"}]
+                               :claims [{:id "c1" :about ["m"] :statement "p" :falsified-by "f"
+                                         :evidence {:by :round} :read-at ["src/a.clj:1"]}]}
                        :read ["src/a.clj"]})]
           (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                   :baseline-seq b :reason "it holds"})
@@ -2868,7 +2874,9 @@
           ;; goes to the clearance stage, which is nido's own move.
           (let [d (add! :design
                         {:format :design :summary "s" :shape "sh"
-                         :invariants ["one path"]
+                         :model {:elements [{:id "m" :sort :module}]
+                                 :claims [{:id "one-path" :about ["m"] :statement "one path"
+                                           :falsified-by "a second path" :evidence {:by :round}}]}
                          :standing {:relation :challenges :note "n"}
                          :baseline {:seq b :relation :within}
                          :intent {:seq 1} :effort :S})]

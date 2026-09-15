@@ -14,7 +14,7 @@ Set "reach" on every finding. It says what the DESIGN settles about the finding 
 
 Mark "structural" honestly rather than forcing a call. It is not the weaker answer: a structural finding is one whose resolution is a DECISION, so it goes to a person, while a local one goes to a fixer to repair. A structural concern filed as a local defect gets patched instead of decided — the patch makes the symptom disappear and the hole in the design stays exactly where it was, which is the outcome this field exists to prevent.
 
-Set "contradicts" to the design invariant this finding departs from, copied verbatim from the list below, or null when it departs from none. Most findings depart from none. "structural" and "contradicts" answer different questions and are not alternatives: one says the design is SILENT here, the other says the design SPEAKS and the code disagrees.
+Set "contradicts" to the design invariant this finding departs from, copied verbatim from the list below — the claim's bracketed id, without the brackets, where the list gives one — or null when it departs from none. Most findings depart from none. "structural" and "contradicts" answer different questions and are not alternatives: one says the design is SILENT here, the other says the design SPEAKS and the code disagrees.
 
 This is a STATIC branch review under a read-only sandbox. The diff is NOT inlined — you are given the base branch and the list of changed files below, and you EXPLORE the working directory yourself:
 

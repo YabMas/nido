@@ -13,6 +13,7 @@
    [nido.coordinator.agent :as agent]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
+   [nido.design.check :as design-check]
    [nido.review.loop :as rloop]
    [nido.review.record :as record]
    [nido.review.report :as report]
@@ -164,11 +165,91 @@
   ;; The distinction the one-shot round already held, and which matters more in
   ;; a loop: :codex-failed on round three is not convergence.
   (doseq [outcome [:codex-failed :no-output :nothing-to-check :no-record
-                   :no-workstream :round-crashed :unusable-answer]]
+                   :no-workstream :round-crashed :unusable-answer
+                   :subjects-undeclared :declaration-unreadable]]
     (with-redefs [record/baseline-review! (fn [_] {:outcome outcome :detail "d"})
                   record/append! (fn [_ _] nil)]
       (is (= outcome (:status (run record/judge-stage (ctx))))
           (str outcome " must terminate under its own name")))))
+
+;; ── What a claim is about ───────────────────────────────────────────────────
+
+(def ^:private a-model-baseline
+  {:format :baseline :area "order totalling" :bounded-by "money amounts on an order"
+   :model {:elements [{:id "canvas.order/aggregate" :sort :module}
+                      {:id "canvas.order/total" :sort :operation}]
+           :claims   [{:id "one-summing-path"
+                       :about ["canvas.order/aggregate" "canvas.order/total"]
+                       :statement "the aggregate is the only summing path"
+                       :falsified-by "a caller that sums lines itself"
+                       :evidence {:by :round}}]}})
+
+(def ^:private aggregate-row {:id "canvas.order/aggregate" :sort :fukan.common.vocab.code.module/Module})
+(def ^:private total-row {:id "canvas.order/total" :sort :fukan.common.vocab.code.operation/Operation})
+(defn- listing [& rows] {:status :listed :elements (vec rows)})
+
+(deftest a-subject-resolves-to-a-declared-element-of-its-recorded-sort
+  (is (= [] (record/unresolved-subjects a-model-baseline (listing aggregate-row total-row))))
+  (is (= ["canvas.order/total"]
+         (record/unresolved-subjects a-model-baseline (listing aggregate-row)))
+      "an element the declaration does not hold")
+  (is (= ["canvas.order/total"]
+         (record/unresolved-subjects
+          a-model-baseline
+          (listing aggregate-row (assoc total-row :sort :fukan.common.vocab.code.kind/Kind))))
+      "one it holds under another sort — the record describes something else")
+  (let [total-as-kind (assoc total-row :sort :fukan.common.vocab.code.kind/Kind)]
+    (is (= [] (record/unresolved-subjects a-model-baseline
+                                          (listing aggregate-row total-row total-as-kind)))
+        "an id listed twice keeps the row of the recorded sort, whichever comes last")
+    (is (= [] (record/unresolved-subjects a-model-baseline
+                                          (listing aggregate-row total-as-kind total-row)))
+        "and in either order"))
+  (is (= ["canvas.order/total"]
+         (record/unresolved-subjects
+          a-model-baseline
+          (listing aggregate-row
+                   (assoc total-row :sort :fukan.common.vocab.code.kind/Kind)
+                   (assoc total-row :sort :fukan.common.vocab.code.module/Module))))
+      "an id listed twice under no recorded sort is still unresolved")
+  (is (= ["canvas.order/aggregate" "canvas.order/total"]
+         (record/unresolved-subjects a-model-baseline {:status :unmodelled}))
+      "a project declaring no design resolves nothing")
+  (is (= [] (record/unresolved-subjects a-baseline {:status :unmodelled}))
+      "an older record's claims name no subject, so none is left unresolved"))
+
+(deftest a-baseline-round-launches-no-judge-while-a-subject-is-undeclared
+  (let [launched (atom 0)
+        seen     (atom nil)
+        run      (fn [baseline listed]
+                   (reset! launched 0)
+                   (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                                 stages/read-stance (constantly nil)
+                                 design-check/elements (fn [_ worktree] (reset! seen worktree) listed)
+                                 record/run-round! (fn [_] (swap! launched inc)
+                                                     {:outcome :no-output :detail "stub"})]
+                     (record/baseline-review! {:cwd "/ledger" :code-cwd "/base" :run-id "r1"
+                                               :baseline baseline})))]
+    (let [out (run a-model-baseline (listing aggregate-row))]
+      (is (= :subjects-undeclared (:outcome out)))
+      (is (str/includes? (:detail out) "canvas.order/total") "which subject is the thing to act on")
+      (is (= "/base" @seen) "resolved at the tree the judge would have read")
+      (is (zero? @launched)))
+    (let [out (run a-model-baseline {:status :undecidable :error "extraction could not read src/x.clj"})]
+      (is (= :declaration-unreadable (:outcome out))
+          "a listing nobody could read is not a record naming nothing declared")
+      (is (str/includes? (:detail out) "src/x.clj"))
+      (is (zero? @launched)))
+    ;; The control: with every subject declared, the same call reaches the judge.
+    (is (= :no-output (:outcome (run a-model-baseline (listing aggregate-row total-row)))))
+    (is (= 1 @launched))
+    (reset! seen nil)
+    (is (= :no-output (:outcome (run a-baseline {:status :undecidable :error "never asked"}))))
+    (is (nil? @seen) "an older record names no subject, so fukan is never asked")
+    (testing "a project that declares no design gives its elements ids of its own, and nothing is
+              resolved against a declaration that is not there"
+      (is (= :no-output (:outcome (run a-model-baseline {:status :unmodelled}))))
+      (is (= 1 @launched)))))
 
 ;; ── The amend stage ─────────────────────────────────────────────────────────
 
@@ -871,6 +952,15 @@
 (deftest a-reserved-id-is-only-known-when-the-baseline-fills-it-in
   (is (not (contains? (settled/subjects (dissoc a-baseline :composition))
                       "composition"))))
+
+(deftest a-model-baseline-names-its-claims-and-elements-as-subjects
+  (let [ids (settled/subjects {:format :baseline :shape "s"
+                               :model {:elements [{:id "canvas.x/m" :sort :module}]
+                                       :claims   [{:id "k1" :about ["canvas.x/m"] :statement "s"
+                                                   :falsified-by "f" :evidence {:by :round}}]}})]
+    (is (contains? ids "k1") "a claim is confirmed by its id")
+    (is (contains? ids "canvas.x/m") "and so is an element")
+    (is (contains? ids "shape"))))
 
 (deftest the-judge-is-shown-the-ids-it-is-asked-to-cite
   ;; An id in the record and not in the prompt cannot be cited back. Health

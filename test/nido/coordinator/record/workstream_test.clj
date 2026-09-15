@@ -370,15 +370,20 @@
    :area         "order totalling"
    :bounded-by   "everything that reads or writes a money amount on an order"
    :shape        "The aggregate is the only thing that sums lines."
-   :modules      [{:id "mod-the-order-aggregate" :module "the order aggregate"
-                   :hides "the order in which lines are summed"
-                   :interface "an order's total"}]
-   :composition  "Only the aggregate can see the lines, so only it can sum them."
-   :load-bearing [{:id "c1" :property "the aggregate is the only summing path"
-                   :falsified-by "a caller outside the aggregate that reads lines and sums them"
-                   :readings [{:lens :parnas/dependency :verdict :on-interface
-                               :because "callers take the total, never the lines"}]
-                   :evidence ["src/order/aggregate.clj:12"]}]
+   :model        {:elements [{:id "mod-the-order-aggregate" :sort :module
+                              :hides "the order in which lines are summed"
+                              :interface "an order's total"}]
+                  :claims   [{:id "c1" :about ["mod-the-order-aggregate"]
+                              :statement "the aggregate is the only summing path"
+                              :falsified-by "a caller outside the aggregate that reads lines and sums them"
+                              :evidence {:by :round}
+                              :readings [{:lens :parnas/dependency :verdict :on-interface
+                                          :because "callers take the total, never the lines"}]
+                              :read-at ["src/order/aggregate.clj:12"]}
+                             {:id "composition" :about ["mod-the-order-aggregate"]
+                              :statement "Only the aggregate can see the lines, so only it can sum them."
+                              :falsified-by "a module other than the aggregate that can see an order's lines"
+                              :evidence {:by :round}}]}
    :read         ["src/order/aggregate.clj"]})
 
 (def ^:private a-triage
@@ -403,7 +408,11 @@
    (cond-> {:format     :design
             :summary    "Round on the total."
             :shape      "One rounding boundary at the aggregate."
-            :invariants ["a total is rounded exactly once"]
+            :model      {:elements [{:id "order-aggregate" :sort :module}]
+                         :claims   [{:id "rounded-once" :about ["order-aggregate"]
+                                     :statement "a total is rounded exactly once"
+                                     :falsified-by "a total rounded twice on one path"
+                                     :evidence {:by :round}}]}
             :standing   {:relation :conforms}
             :baseline   {:seq n :relation :within}
             :effort     :M}
@@ -730,7 +739,12 @@
   {:format     :design
    :summary    "The address moves to its own column."
    :shape      "Two writers during the migration; one reader throughout."
-   :invariants [{:invariant "no request reads a column no writer maintains" :holds :always}]
+   :model      {:elements [{:id "address-column" :sort :module}]
+                :claims   [{:id "no-unmaintained-read" :about ["address-column"]
+                            :statement "no request reads a column no writer maintains"
+                            :falsified-by "a request reading the new column before both writers maintain it"
+                            :evidence {:by :round}}]}
+   :holds      {"no-unmaintained-read" :always}
    :standing   {:relation :conforms}
    :intent     {:seq 1}
    :baseline   {:seq n :relation :within}
@@ -781,8 +795,7 @@
         (is (thrown? clojure.lang.ExceptionInfo
                      (ws/append-entry! :brian (:id w) {:kind :design}
                                        (pr-str (-> (phased-design-citing 2 "the old column is dropped")
-                                                   (dissoc :phases)
-                                                   (assoc :invariants ["no request reads a column no writer maintains"]))))))))))
+                                                   (dissoc :phases :holds))))))))))
 
 (deftest a-legacy-design-entry-on-disk-still-reads-back
   ;; The migration case, at the level that matters: a record written before

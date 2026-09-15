@@ -76,6 +76,24 @@
         [:digest {:optional true} :string]
         [:error {:optional true} :string]])
 
+(Kind DeclaredElements
+  "What the declared design holds, as DATA: each element's canvas identity, name and sort, its
+   docstring, the declared elements its slots name, and for one that pairs with code, the namespace
+   and source file it pairs with.
+
+   The one reading of the declaration that is neither a document nor a verdict, and still asked of
+   FUKAN — nido parses no model to get it. A claim's subjects are resolved against it, a declared
+   claim's statement and subjects are read off it, and a claim's code is read through it.
+   `:undecidable` when fukan did not answer, never an empty listing."
+  [:map [:status [:enum :unmodelled :listed :undecidable]]
+        [:elements {:optional true} [:vector [:map [:id :string] [:name :string] [:sort :keyword]
+                                                   [:declaration :string]
+                                                   [:doc {:optional true} :string]
+                                                   [:refs {:optional true} [:map-of :keyword [:vector :string]]]
+                                                   [:ns {:optional true} :string]
+                                                   [:file {:optional true} :string]]]]
+        [:error {:optional true} :string]])
+
 (Module design-check
   "Does this worktree's code still stand up the design its project declared?
 
@@ -83,7 +101,7 @@
    second opinion here would be a second design. And not an opinion about what to DO with one: a
    briefing warns, a landing gate refuses, a review loop hands it to a fixer, which is why every
    reading returns a status rather than exiting."
-  {:child [DesignConfig CheckResult DesignDocument Refusal DesignDiff]}
+  {:child [DesignConfig CheckResult DesignDocument Refusal DesignDiff DeclaredElements]}
   (Operation design-of
     "A project's design configuration, or nil when it declares none."
     {:signature [:=> [:catn [:project-name ProjectName] [:worktree :string]] [:maybe DesignConfig]]
@@ -147,4 +165,10 @@
      has never heard of."
     {:signature [:=> [:catn [:project-name ProjectName] [:worktree :string] [:base-dir :string]
                             [:scope [:? [:maybe :any]]]] DesignDiff]
-     :delegates [describe]}))
+     :delegates [describe]})
+  (Operation elements
+    "The declared elements and their code correspondents, as fukan lists them for this worktree.
+     A reading, like the rest: an element the declaration holds is listed whether or not its code
+     exists, and one that pairs with nothing carries no namespace rather than a guessed one."
+    {:signature [:=> [:catn [:project-name ProjectName] [:worktree :string]] DeclaredElements]
+     :delegates [design-of]}))

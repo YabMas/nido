@@ -28,9 +28,9 @@
   ;; workstream before the survey, which is the order the boundary now requires.
   {:format :baseline :intent {:seq 1}
    :area "a" :bounded-by "b" :shape "s"
-   :modules [{:id "m" :module "m" :hides "h" :interface "i"}]
-   :composition "c"
-   :load-bearing [{:id "c1" :property "p" :falsified-by "f"}]
+   :model {:elements [{:id "m" :sort :module :hides "h" :interface "i"}]
+           :claims [{:id "c1" :about ["m"] :statement "p" :falsified-by "f"
+                     :evidence {:by :round}}]}
    :read ["src/a.clj"]})
 
 (defn- a-ws []
@@ -438,7 +438,11 @@
         ;; is handed to the clearance stage instead, which the driver fires.
         (ws/append-entry! :brian id {:kind :design}
                           (pr-str {:format :design :summary "s" :shape "sh"
-                                   :invariants ["one summing path"]
+                                   :model {:elements [{:id "m" :sort :module}]
+                                           :claims [{:id "one-summing-path" :about ["m"]
+                                                     :statement "one summing path"
+                                                     :falsified-by "a second summing path"
+                                                     :evidence {:by :round}}]}
                                    :standing {:relation :challenges :note "n"}
                                    :baseline {:seq 2 :relation :within}
                                    :intent {:seq 1} :effort :S}))

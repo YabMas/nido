@@ -90,12 +90,22 @@
         (:scope (cws/latest-entry (keyword project) ws-id :baseline))))
     (catch Throwable _ nil)))
 
-(defn- materialize-spec-dirs!
-  "Write the spec dirs as they stood at `rev` into a fresh directory, and answer it.
+(defn ^{:malli/schema [:=> [:cat :string :string [:vector :string]] [:maybe :string]]}
+  materialize-spec-dirs!
+  "Write the spec dirs as they stood at `rev` into a fresh directory, beside a link to everything
+   else the worktree holds, and answer it. The caller deletes it, which removes the links and never
+   what they point at.
 
    This is the half `nido.design.check` may not do. Its band depends on Platform alone, and a
    revision is a VCS concept two bands away — so a task, which may reach everything, resolves
-   the revision to a tree and hands down a directory.
+   the revision to a tree and hands down a directory. Public because the landing gate reads the
+   base's declared claims through the same tree.
+
+   The links are what let fukan run there at all. Its documented command resolves the `:fukan`
+   alias from the project's `deps.edn` where it runs, and puts that directory on the classpath as
+   `.` — so a directory holding the declaration alone has no fukan to read it with, and one linking
+   the worktree's spec dirs reads the wrong declaration. Only the spec dirs are the base's; what
+   reads them is the worktree's, as it is at the other end of a diff.
 
    File by file rather than a second workspace: a workspace costs a checkout of the whole repo
    and has to be forgotten afterwards, and what is wanted is a few dozen small files. nil when
@@ -108,7 +118,14 @@
                         (map str/trim)
                         (filter (fn [f] (and (str/ends-with? f ".clj")
                                              (some #(str/starts-with? f (str % "/")) spec-dirs)))))
-            dir    (fs/create-temp-dir {:prefix "nido-design-base-"})]
+            dir    (fs/create-temp-dir {:prefix "nido-design-base-"})
+            ;; a spec dir's root is the base's, and a classpath cache or a VCS store is the
+            ;; worktree's own — neither is to be read, or written, through a link
+            unlinked (into #{".cpcache" ".git" ".jj"} (map #(first (str/split % #"/"))) spec-dirs)]
+        (doseq [entry (fs/list-dir worktree)
+                :let [nm (str (fs/file-name entry))]
+                :when (not (unlinked nm))]
+          (fs/create-sym-link (fs/path dir nm) (fs/absolutize entry)))
         (doseq [f wanted]
           (let [target (fs/path dir f)]
             (fs/create-dirs (fs/parent target))

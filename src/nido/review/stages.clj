@@ -12,6 +12,7 @@
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.report :as report]
+   [nido.coordinator.report.model :as claim-model]
    [nido.platform.core :as core]
    [nido.review.cache :as cache]
    [nido.review.codex :as codex]
@@ -195,26 +196,45 @@
       str/trim))
 
 (defn- quoted-spans
-  "The delimited spans of `s` long enough to be a clause, as `citation-text`
-   compares them.
+  "The delimited spans of `s`, as `citation-text` compares them.
 
    Double quotes and backticks both delimit: the warden is writing JSON, where
    the first has to be escaped, and reaches for the second when it would rather
-   not. `min-citation-chars` is what keeps the backtick spelling from turning
-   every mention of a field name into a citation."
+   not. `cites?` is what keeps the backtick spelling from turning every mention
+   of a field name into a citation."
   [s]
-  (->> (re-seq #"[\"`]([^\"`]+)[\"`]" s)
-       (map (comp str/trim second))
-       (filter #(>= (count %) min-citation-chars))))
+  (map (comp str/trim second) (re-seq #"[\"`]([^\"`]+)[\"`]" s)))
+
+(defn- cites?
+  "Whether the quoted span `q` cites one of `invariants`, as `design-invariants`
+   gives them.
+
+   A design in the shared model names its claims, and there a span cites a claim
+   only by being its whole id — `rounded-once`, whatever its length. The claim's
+   wording is not a citation, copied or not, and neither is part of an id. Before
+   the shared model a clause had nothing to be named by, so a clause-sized span
+   cites the clause it sits inside."
+  [{:keys [ids clauses]} q]
+  (if ids
+    (some #(= (citation-text %) q) ids)
+    (and (>= (count q) min-citation-chars)
+         (some #(str/includes? % q) clauses))))
 
 (defn- design-invariants
-  "The invariant clauses of `design`, as `citation-text` compares them. Empty
-   for a workstream with no record."
+  "What a citation of `design` may name: `{:ids}` for a design in the shared model,
+   its claims' ids as the record spells them, and `{:clauses}` before it, every
+   invariant clause as `citation-text` compares them. Empty for a workstream with
+   no record.
+
+   Never both. A design that names its claims is cited by name alone: an id cannot
+   be restated wider the way copied wording can, and a check that also took the
+   wording would let exactly that back in."
   [design]
-  (into []
-        (comp (map report/invariant) (map :invariant) (map citation-text)
-              (remove str/blank?))
-        (:invariants design)))
+  (if (contains? design :model)
+    {:ids (into #{} (keep :id) (claim-model/claims design))}
+    {:clauses (into []
+                    (comp (map :statement) (map citation-text) (remove str/blank?))
+                    (claim-model/claims design))}))
 
 (defn- cite-invariants
   "Hold each finding's `:contradicts` against the design's own clauses, and keep
@@ -225,12 +245,14 @@
    performs is worse than no promise: it buys the compliance of whoever believed
    it and none of the guarantee.
 
-   Same substring test, same normalisation and the same reason as
-   `uncited-invariant` one reader downstream: an invariant is a text inside the
-   prompt that quoted it, which makes this the one claim in the loop a string
-   comparison settles at no agent cost. And the same failure it exists for — a
-   clause restated slightly wider is a DIFFERENT rule, and everything after here
-   acts on the words the citation carries.
+   The same rule and the same reason as `uncited-invariant` one reader
+   downstream: an invariant is a text inside the prompt that quoted it, which
+   makes this the one claim in the loop a string comparison settles at no agent
+   cost. And the same failure it exists for — a clause restated slightly wider is
+   a DIFFERENT rule, and everything after here acts on the words the citation
+   carries. A design in the shared model is cited by a claim's id, so there the
+   field has to BE one exactly: it goes on as that claim's name. Before it, the
+   field has to sit inside a clause, through the same normalisation.
 
    A citation that matches nothing is MOVED rather than dropped, to
    `:miscited`. The reviewer's reading may be right even where its quoting was
@@ -239,10 +261,12 @@
    What it must not do is keep counting as a citation, because ground (a) turns
    on one."
   [findings design]
-  (let [clauses (design-invariants design)]
+  (let [{:keys [ids clauses]} (design-invariants design)]
     (mapv (fn [f]
             (if-let [c (:contradicts f)]
-              (if (some #(str/includes? % (citation-text c)) clauses)
+              (if (if ids
+                    (contains? ids c)
+                    (some #(str/includes? % (citation-text c)) clauses))
                 f
                 (-> f (dissoc :contradicts) (assoc :miscited c)))
               f))
@@ -255,7 +279,7 @@
    The word is the trigger and a verbatim quote is the discharge. A warden is
    report-only and holds no tools, so almost nothing it asserts is falsifiable
    by the loop — but an invariant is a text inside its own prompt, which makes
-   this the one claim a substring test settles at no agent cost.
+   this the one claim a string comparison settles at no agent cost.
 
    What it is for: a `because` is the only sentence the loop carries from the
    warden to the fixer, and `fix-prompt` renders it as the reviewer of the whole
@@ -275,11 +299,10 @@
     (let [text (citation-text because)]
       (when (str/includes? text prompts/invariant-citation-cue)
         (cond
-          (empty? invariants)
+          (empty? (or (:ids invariants) (:clauses invariants)))
           "the warden leaned on a design invariant and this workstream records none"
 
-          (not-any? (fn [q] (some #(str/includes? % q) invariants))
-                    (quoted-spans text))
+          (not-any? #(cites? invariants %) (quoted-spans text))
           (str "the warden leaned on a design invariant without quoting one the "
                "record contains, so that ground is not a licence"))))))
 

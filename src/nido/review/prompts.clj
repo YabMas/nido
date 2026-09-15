@@ -7,7 +7,8 @@
    ;; about the record's schema, which lives there; rendering them here in a
    ;; second `case` would drop a fourth closure kind silently on whichever side
    ;; was not edited.
-   [nido.coordinator.report :as report]))
+   [nido.coordinator.report :as report]
+   [nido.coordinator.report.model :as claim-model]))
 
 (def review-prompt
   "codex review-guidelines prompt (lifted from codex's review template)."
@@ -1377,6 +1378,19 @@
                              "  [holds ON COMPLETION — not yet true mid-plan]"))))
                 invariants)))
 
+(defn- claim-lines
+  "A design's claims for a reader holding code against them. In the shared model each
+   one by its bracketed id, because the id is what a citation names and what the loop
+   checks it against; before it, the invariant clauses `invariant-lines` renders."
+  [design]
+  (if (contains? design :model)
+    (bullets (map (fn [{:keys [id statement]}]
+                    (str "[" id "] " statement
+                         (when (= :on-completion (get (:holds design) id))
+                           "  [holds ON COMPLETION — not yet true mid-plan]")))
+                  (claim-model/claims design)))
+    (invariant-lines (:invariants design))))
+
 (defn- seam-lines
   "The gaps the design noticed and left, each with how a reader is supposed to
    see it.
@@ -1404,7 +1418,8 @@
 
    What is here and why:
 
-   `:shape` and `:invariants` — the yardstick itself. Without them a reviewer
+   `:shape` and the claims — `:invariants`, or a shared-model design's claims by
+   id — the yardstick itself. Without them a reviewer
    judges the code against the surrounding code, which is how the intended shape
    gets inferred from the very lines that depart from it.
 
@@ -1431,21 +1446,27 @@
    nil when there is no record. `tasks.nido-review/no-yardstick` now refuses such
    a run outright, so this is the second reader of the same fact rather than the
    one that has to cope with it."
-  [{:keys [shape invariants seams]}]
-  (when (or (seq invariants) (not (str/blank? (str shape))))
+  [{:keys [shape invariants seams model] :as design}]
+  (when (or (seq invariants) (seq model) (not (str/blank? (str shape))))
     (str
      "THE DESIGN THIS CHANGE COMMITTED TO — your job is to validate the\n"
      "implementation against it.\n\n"
      (when-not (str/blank? (str shape)) (str "Shape: " shape "\n\n"))
-     (when (seq invariants)
+     (when (or (seq invariants) (seq model))
        (str "MUST REMAIN TRUE — the design states each of these:\n"
-            (invariant-lines invariants) "\n\n"
-            "Where the code departs from one, put THAT invariant in the finding's\n"
-            "`contradicts` field, copied VERBATIM and whole. Verbatim because the\n"
-            "field is checked against this list, and because a restated invariant\n"
-            "is a different rule — the reader downstream acts on the words you\n"
-            "wrote, not the ones you were holding. A paraphrase is refused and the\n"
-            "finding arrives as though you had named nothing.\n"
+            (claim-lines design) "\n\n"
+            (if model
+              (str "Where the code departs from one, put THAT claim's id in the finding's\n"
+                   "`contradicts` field — the bracketed slug, without the brackets. The\n"
+                   "field is checked against these ids, and an id cannot be restated wider\n"
+                   "the way copied wording can. A citation that names no claim is refused\n"
+                   "and the finding arrives as though you had named nothing.\n")
+              (str "Where the code departs from one, put THAT invariant in the finding's\n"
+                   "`contradicts` field, copied VERBATIM and whole. Verbatim because the\n"
+                   "field is checked against this list, and because a restated invariant\n"
+                   "is a different rule — the reader downstream acts on the words you\n"
+                   "wrote, not the ones you were holding. A paraphrase is refused and the\n"
+                   "finding arrives as though you had named nothing.\n"))
             "It is not a severity and it does not change priority. It says the\n"
             "DESIGN is what is in question here, which is a decision for a person\n"
             "rather than a repair for a fixer, and nothing else in this review can\n"
@@ -1478,10 +1499,12 @@
    cannot see the seams rules `fix` on a gap the record argued for, and the fixer
    builds the machinery the record decided against, which the next round then
    reviews as new code."
-  [{:keys [shape invariants rejected standing layers seams]}]
+  [{:keys [shape rejected standing layers seams model] :as design}]
   (str "THE DESIGN THIS CHANGE COMMITTED TO — judge the findings against this:\n"
        "Shape: " shape "\n"
-       "Invariants:\n" (invariant-lines invariants) "\n"
+       (if model "Claims:\n" "Invariants:\n") (claim-lines design) "\n"
+       (when model
+         "A claim shown with a [bracketed id] is quoted by that id — the id is the clause.\n")
        "QUOTE ONE, DO NOT RESTATE IT. A `because` using the word \""
        invariant-citation-cue "\"\n"
        "must carry the clause it leans on verbatim, in double quotes or\n"

@@ -32,11 +32,12 @@
            :area         "the work plane's lanes"
            :bounded-by   "everything that advances a workstream from one stage to the next"
            :shape        "one namespace per verb, over the record layer"
-           :modules      [{:id "lanes" :module "the lanes" :hides "the order of the steps"
-                           :interface "one fn per verb, taking a workstream id"}]
-           :composition  "each lane reads the record, acts, and appends"
-           :load-bearing [{:id "c1" :property "a lane never writes another lane's record"
-                           :falsified-by "two lanes writing the same entries/ file"}]
+           :model        {:elements [{:id "lanes" :sort :module :hides "the order of the steps"
+                                      :interface "one fn per verb, taking a workstream id"}]
+                          :claims   [{:id "c1" :about ["lanes"]
+                                      :statement "a lane never writes another lane's record"
+                                      :falsified-by "two lanes writing the same entries/ file"
+                                      :evidence {:by :round}}]}
            :read         ["src/nido/coordinator/lane/"]}
     scope (assoc :scope scope)))
 

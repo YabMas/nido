@@ -15,6 +15,7 @@
    [clojure.string :as str]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.report :as report]
+   [nido.coordinator.report.model :as claim-model]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.review.stages :as stages]))
@@ -42,9 +43,14 @@
          "against, baselined BEFORE the design was written. These are properties\n"
          "the code relied on beforehand, with where they were read:\n"
          (str/join "\n"
-                   (map #(str "- " (:property %)
-                              " [" (str/join ", " (:evidence %)) "]")
-                        (:load-bearing baseline)))
+                   (if (contains? baseline :model)
+                     (map #(str "- [" (:id %) "] " (:statement %)
+                                (when (seq (:read-at %))
+                                  (str " [" (str/join ", " (:read-at %)) "]")))
+                          (claim-model/claims baseline))
+                     (map #(str "- " (:property %)
+                                " [" (str/join ", " (:evidence %)) "]")
+                          (:load-bearing baseline))))
          "\n\n"
          "The change declared itself " (str/upper-case (name (:relation relation)))
          " this design"
@@ -64,8 +70,12 @@
          "   simply not true of the code, the design may be sound and the BASELINE\n"
          "   wrong. Classify that finding as \"baseline\" — it means re-survey,\n"
          "   not redesign, and the two must not be confused.\n"
-         "Populate load_bearing_held with the properties this round confirmed\n"
-         "still stand, for the same reason invariants_held exists.\n")))
+         (if (contains? baseline :model)
+           (str "Populate load_bearing_held with the ids of the claims this round\n"
+                "confirmed still stand, for the same reason invariants_held exists, and\n"
+                "name a broken claim by its id in load_bearing_broken.\n")
+           (str "Populate load_bearing_held with the properties this round confirmed\n"
+                "still stand, for the same reason invariants_held exists.\n")))))
 
 (defn- phase-section
   "What a phase plan changes about the question being asked, or nil when the
@@ -239,11 +249,19 @@
    "answered from the diff summary alone.\n\n"
    "THE DESIGN THIS CHANGE COMMITTED TO:\n"
    "Shape: " (:shape design) "\n"
-   "Invariants:\n"
-   (bullets (map (fn [i]
-                   (let [{t :invariant h :holds} (report/invariant i)]
-                     (str t " [holds " (name h) "]")))
-                 (:invariants design)))
+   ;; A design in the shared model names its claims, and the judge names them back by id in
+   ;; invariants_held and invariants_broken; the shape before it lists bare clauses.
+   (if (contains? design :model)
+     (str "Claims — name a claim by its id in invariants_held and invariants_broken:\n"
+          (bullets (map (fn [{:keys [id statement]}]
+                          (str "[" id "] " statement
+                               " [holds " (name (get (:holds design) id :always)) "]"))
+                        (claim-model/claims design))))
+     (str "Invariants:\n"
+          (bullets (map (fn [i]
+                          (let [{t :invariant h :holds} (report/invariant i)]
+                            (str t " [holds " (name h) "]")))
+                        (:invariants design)))))
    "\n"
    (phase-section (:phases design))
    (when-let [r (seq (:rejected design))]
