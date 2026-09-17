@@ -49,7 +49,11 @@
   {:poll-ms    (* 2 60000)
    :ceiling-ms (* 24 3600000)})
 
-(defn- pacing-of [source-config]
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :map]}
+  pacing
+  "The pacing a :session-failure source config declares — its poll interval and
+   ceiling in milliseconds — with the source's defaults where it declares none."
+  [source-config]
   {:poll-ms    (or (duration-ms (:poll source-config)) (:poll-ms default-pacing))
    :ceiling-ms (or (duration-ms (:ceiling source-config)) (:ceiling-ms default-pacing))})
 
@@ -132,21 +136,32 @@
 (defn- ended-at [run]
   (some-> run :state-history last :at java.time.Instant/parse))
 
+(defn ^{:malli/schema [:=> [:cat [:vector :map]] :int]}
+  failed-in-a-row
+  "How many of a cause's recovery Runs, oldest first, failed at the end of the list."
+  [runs]
+  (count (take-while #(= :failed (:state %)) (reverse runs))))
+
+(defn ^{:malli/schema [:=> [:cat [:vector :map] :map] :any]}
+  due-at
+  "When a cause may next be recovered, given the recovery Runs on its open
+   workstream, oldest first, as an Instant — or nil when it may be recovered at any
+   time, because the latest did not fail or its end time is unreadable. After k
+   consecutive failures it is the last one's end plus one poll interval doubled
+   k-1 times, capped at the ceiling."
+  [runs {:keys [poll-ms ceiling-ms]}]
+  (let [k (failed-in-a-row runs)]
+    (when (pos? k)
+      (when-let [since (ended-at (last runs))]
+        (.plusMillis ^java.time.Instant since
+                     (min ceiling-ms (* poll-ms (bit-shift-left 1 (min 40 (dec k))))))))))
+
 (defn ^{:malli/schema [:=> [:cat [:vector :map] :any :map] :boolean]}
   due?
-  "Whether a cause may be recovered at `now` given the recovery Runs on its open
-   workstream, oldest first: always when the latest did not fail; otherwise once
-   one poll interval doubled for each consecutive failure after the first, capped
-   at the ceiling, has passed since the last ended."
-  [runs now {:keys [poll-ms ceiling-ms]}]
-  (let [failed (->> (reverse runs) (take-while #(= :failed (:state %))))
-        k      (count failed)]
-    (or (zero? k)
-        (let [delay (min ceiling-ms
-                         (* poll-ms (bit-shift-left 1 (min 40 (dec k)))))
-              since (ended-at (first failed))]
-          (or (nil? since)
-              (>= (- (.toEpochMilli ^java.time.Instant now) (.toEpochMilli since)) delay))))))
+  "Whether a cause may be recovered at `now`: when due-at is nil or not after it."
+  [runs now pacing]
+  (let [at (due-at runs pacing)]
+    (or (nil? at) (not (.isAfter ^java.time.Instant at ^java.time.Instant now)))))
 
 (defn- innermost-message [f]
   (let [msgs (keep #(not-empty (:message %)) (:error f))]
@@ -198,7 +213,7 @@
         recs       (recoveries project)
         owed-fs    (owed (failure/failures) recs)
         now        (java.time.Instant/now)
-        events     (recovery-events owed-fs recs now (pacing-of source-config))]
+        events     (recovery-events owed-fs recs now (pacing source-config))]
     (doseq [e events] (emit-fn e))
     {:type             :session-failure
      :source-config    source-config

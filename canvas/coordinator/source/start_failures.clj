@@ -30,6 +30,16 @@
    session cannot start is not something another recovery could fix."
   (Operation duration-ms "A declared duration — 90s, 2m, 1h, 1d — in milliseconds, or nil."
     {:signature [:=> [:catn [:s :string]] [:maybe :int]]})
+  (Operation pacing
+    "The pacing a :session-failure source config declares, in milliseconds, with the defaults."
+    {:signature [:=> [:catn [:source-config [:maybe :map]]] :map] :delegates [duration-ms]})
+  (Operation failed-in-a-row "How many of a cause's recovery Runs failed at the end of the list."
+    {:signature [:=> [:catn [:runs [:vector :map]]] :int]})
+  (Operation due-at
+    "When a cause may next be recovered — nil when it may be at any time. After k consecutive
+     failures, the last one's end plus one poll interval doubled k-1 times, capped at the ceiling."
+    {:signature [:=> [:catn [:runs [:vector :map]] [:pacing :map]] :any]
+     :delegates [failed-in-a-row]})
   (Operation recoveries
     "Every recovery workstream of a project as data: its cause, whether it closed, the failures
      named on it, the outcomes restores recorded, its recovery runs and its sessions."
@@ -48,7 +58,8 @@
   (Operation due?
     "Whether a cause may be recovered now, given its open workstream's recovery Runs: always when
      none of the latest failed, else once the doubled delay since the last has passed."
-    {:signature [:=> [:catn [:runs [:vector :map]] [:now :any] [:pacing :map]] :boolean]})
+    {:signature [:=> [:catn [:runs [:vector :map]] [:now :any] [:pacing :map]] :boolean]
+     :delegates [due-at]})
   (Operation recovery-events
     "One event per cause among owed failures that is due, naming every owed failure of it, under a
      ref keyed by the cause and its earliest owed failure — the key the fire gate dedups on."

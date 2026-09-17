@@ -167,6 +167,11 @@
     {:signature [:=> [:catn [:project ProjectName] [:names :any]] :map] :delegates [machine-rows]})
   (Operation all-machine-rows "Machine rows across every registered project, live first."
     {:signature [:=> [:catn [:rows-fn [:? :any]] [:projects [:? :any]]] [:vector :map]]})
+  (Operation session-recovery
+    "Session recovery as the Operations page shows it. The door, not the derivation: it gathers
+     kept failures, the recovery workstreams of every project declaring a :session-failure trigger
+     with their entries, and that trigger's pacing, and hands them to the recovery read model."
+    {:signature [:=> [:catn [:opts [:? [:maybe :map]]]] :map]})
   (Operation proposals "Every proposal this project's review analyses have made."
     {:signature [:=> [:catn [:project ProjectName]] [:vector :map]]
      :delegates [workstream/list-ids]})

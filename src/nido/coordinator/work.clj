@@ -18,6 +18,7 @@
    [nido.coordinator.lane.findings :as findings]
    [nido.coordinator.source.notion-cache :as notion-cache]
    [nido.coordinator.source.queue :as queue]
+   [nido.coordinator.source.start-failures :as start-failures]
    [nido.coordinator.lane.pickup :as pickup]
    [nido.coordinator.lane.promote :as promote]
    [nido.coordinator.report :as report]
@@ -33,6 +34,7 @@
    [nido.platform.io :as io]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as cws]
+   [nido.coordinator.view.recoveries :as recoveries-view]
    [nido.coordinator.view.workstreams :as wsv]
    [nido.notion.client :as notion]
    [nido.notion.views :as views]
@@ -40,6 +42,7 @@
    [nido.slack.client :as slack]
    [nido.platform.process :as proc]
    [nido.platform.project :as project]
+   [nido.session.failure :as failure]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as sstate]))
 
@@ -722,6 +725,40 @@
 (def ^:private first-heading proposal/first-heading)
 (def ^:private entry->report proposal/entry->report)
 (def ^:private active-ledger proposal/active-ledger)
+
+(defn ^{:malli/schema [:=> [:cat [:? [:maybe :map]]] :map]}
+  session-recovery
+  "Session recovery as the Operations page shows it: counts, one row per live or
+   recently settled cause, and the activity feed — see view.recoveries/overview.
+
+   The door, not the derivation. It gathers what recovery keeps — every kept
+   failure with its cause, and each recovery workstream of every project that
+   declares a :session-failure trigger, with the entries a recovery writes — and
+   the pacing that trigger declares, so the waiting times shown are the ones the
+   source fires on. Read on every call.
+
+   `opts`: :now (an Instant, default the present) and :feed-from (the feed
+   position to page from, nil for the newest)."
+  ([] (session-recovery nil))
+  ([{:keys [now feed-from]}]
+   (let [declaring (for [[pname _] (project/list-projects)
+                         :let  [pk (keyword pname)
+                                t  (some #(when (= :session-failure (-> % :source :type)) %)
+                                         (triggers/load-for-project pk))]
+                         :when t]
+                     [pk t])
+         recs      (vec (for [[pk _] declaring
+                              r      (start-failures/recoveries pk)]
+                          (assoc r :entries
+                                 (into {} (for [kind [:session-diagnosis :session-restored
+                                                      :blocker :merged :pr-opened]]
+                                            [kind (vec (cws/entries-of pk (:ws-id r) kind))])))))]
+     (recoveries-view/overview
+      {:failures   (mapv #(assoc % :cause (failure/cause %)) (failure/failures))
+       :recoveries recs
+       :now        (or now (java.time.Instant/now))
+       :feed-from  feed-from
+       :pacing     (start-failures/pacing (-> declaring first second :source))}))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
   proposals
