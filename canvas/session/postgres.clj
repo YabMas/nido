@@ -50,8 +50,10 @@
     {:signature [:=> [:catn [:filename :string]] [:maybe :int]]})
   (Operation migration-file->description "A migration filename's description."
     {:signature [:=> [:catn [:filename :string]] :string]})
-  (Operation pending-migrations "The migrations newer than what has been applied."
-    {:signature [:=> [:catn [:applied-max :any] [:filenames [:vector :string]]] [:vector :string]]
+  (Operation pending-migrations
+    "The migrations the cluster has not applied — by membership, not by version order, since a
+     branch session can apply a migration numbered above one main has yet to deliver."
+    {:signature [:=> [:catn [:applied-versions [:set :int]] [:filenames [:vector :string]]] [:vector :string]]
      :delegates [migration-file->version]})
   (Operation app-role-sql
     "Idempotent SQL establishing the application role — which may read and write but NOT run
@@ -63,7 +65,7 @@
     {:signature [:=> [:catn [:opts :map]] :any] :delegates [app-role-sql run-owner-sql!]})
   (Operation history-insert-sql "One row matching what Flyway itself would have written."
     {:signature [:=> [:catn [:opts :map]] :string]})
-  (Operation shared-applied-max "The highest version and rank the cluster has applied."
+  (Operation shared-applied-history "Every version the cluster has applied, and its highest rank."
     {:signature [:=> [:catn [:opts :map]] :map]})
   (Operation list-main-migration-files
     "The migration files on `main@origin`, read through jj — one checkout-free read, so a
@@ -73,7 +75,7 @@
     {:signature [:=> [:catn [:source-repo Path] [:dest-dir Path] [:filename :string]] :any]})
   (Operation advance-shared-to-main! "Apply every pending `main@origin` migration."
     {:signature [:=> [:catn [:opts :map]] :any]
-     :delegates [list-main-migration-files pending-migrations materialize-one! shared-applied-max history-insert-sql]})
+     :delegates [list-main-migration-files pending-migrations materialize-one! shared-applied-history history-insert-sql]})
   (Operation ensure-ready! "Bring the shared cluster up, migrated and with its app role in place."
     {:signature [:=> [:catn [:project-name ProjectName] [:opts :map]] :any]
      :delegates [ensure-up! advance-shared-to-main! ensure-app-role!]}))

@@ -90,13 +90,35 @@
 
 (deftest pending-migrations-are-sorted-and-filtered
   (is (= ["V234__a.sql" "V258__c.sql"]
-         (shared/pending-migrations 233 ["V258__c.sql" "V233__b.sql" "V234__a.sql" "not-a-migration.sql"])))
-  (is (= [] (shared/pending-migrations 300 ["V258__c.sql"])))
-  ;; a fully-advanced cluster whose max version is a 14-digit timestamp: the
-  ;; older sequential migrations are all below it, so nothing is pending.
-  (is (= [] (shared/pending-migrations 20260708212543
+         (shared/pending-migrations #{1 233} ["V258__c.sql" "V233__b.sql" "V234__a.sql" "not-a-migration.sql"])))
+  (is (= [] (shared/pending-migrations #{1 258 300} ["V258__c.sql"])))
+  ;; a fully-advanced cluster whose versions include 14-digit timestamps:
+  ;; everything main holds is recorded, so nothing is pending.
+  (is (= [] (shared/pending-migrations #{1 278 20260708212543}
                                        ["V1__baseline.sql" "V278__x.sql"
                                         "V20260708212543__y.sql"]))))
+
+(deftest pending-migrations-include-a-main-migration-below-a-branch-applied-one
+  ;; A branch session's Flyway applied V…164003 to the shared history; main then
+  ;; delivered V…080000, numbered below it. A high-water mark skips it forever,
+  ;; and the next main migration that depends on it fails to apply.
+  (is (= ["V20260915080000__auth_embed_handoff_token.sql"
+          "V20260916142931__auth_embed_handoff_token_sweep_window.sql"]
+         (shared/pending-migrations #{1 20260911100934 20260915164003}
+                                    ["V1__baseline.sql"
+                                     "V20260911100934__message_attachment_file_id_index.sql"
+                                     "V20260916142931__auth_embed_handoff_token_sweep_window.sql"
+                                     "V20260915080000__auth_embed_handoff_token.sql"]))))
+
+(deftest pending-migrations-never-reach-below-the-baseline
+  ;; A cluster seeded from a baseline records one row for everything it folds in;
+  ;; the migrations beneath it are applied, just not listed.
+  (is (= ["V251__after.sql"]
+         (shared/pending-migrations #{250} ["V2__early.sql" "V249__late.sql"
+                                            "V250__baseline.sql" "V251__after.sql"])))
+  (is (= ["V1__baseline.sql" "V2__next.sql"]
+         (shared/pending-migrations #{} ["V2__next.sql" "V1__baseline.sql"]))
+      "an empty history applies everything"))
 
 (deftest app-role-sql-grants-dml-and-withholds-ddl
   (let [sql (shared/app-role-sql {:schema "brian" :app-user "brian_app"})]
@@ -130,7 +152,7 @@
     (is (re-find #"'V258__create_licence_expiry_notification.sql', -616010157, 'user', now\(\), 0, true" sql))))
 
 (deftest advance-is-a-noop-when-shared-is-current
-  (with-redefs [shared/shared-applied-max (fn [_] {:version 263 :rank 261})
+  (with-redefs [shared/shared-applied-history (fn [_] {:versions #{1 263} :rank 261})
                 shared/list-main-migration-files (fn [_] ["V263__x.sql"])
                 babashka.process/shell (fn [& _] (throw (ex-info "must not shell out when nothing is pending" {})))]
     (is (= 0 (shared/advance-shared-to-main!
@@ -142,7 +164,7 @@
 ;; call here would throw at runtime, which the no-op test above cannot catch.
 (deftest advance-applies-pending-migration-with-checksum-and-history
   (let [shell-calls (atom [])]
-    (with-redefs [shared/shared-applied-max (fn [_] {:version 233 :rank 231})
+    (with-redefs [shared/shared-applied-history (fn [_] {:versions #{1 233} :rank 231})
                   shared/list-main-migration-files (fn [_] ["V234__add_foo.sql"])
                   shared/materialize-one!
                   (fn [_src dest filename]

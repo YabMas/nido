@@ -211,16 +211,24 @@
   (when-let [[_ _ desc] (re-matches #"V(\d+)__(.*)\.sql" filename)]
     (str/replace desc "_" " ")))
 
-(defn ^{:malli/schema [:=> [:cat :any [:vector :string]] [:vector :string]]}
+(defn ^{:malli/schema [:=> [:cat [:set :int] [:vector :string]] [:vector :string]]}
   pending-migrations
-  "Migration filenames whose version is greater than applied-max, sorted
-   ascending by version. Non-versioned names are ignored."
-  [applied-max filenames]
-  (->> filenames
-       (keep (fn [f] (when-let [v (migration-file->version f)] [v f])))
-       (filter (fn [[v _]] (> v applied-max)))
-       (sort-by first)
-       (mapv second)))
+  "Migration filenames whose version the cluster has not applied, sorted
+   ascending by version. Non-versioned names are ignored.
+
+   Membership, not a high-water mark: a branch session's Flyway writes its own
+   migrations into the shared history, so a main migration can arrive with a
+   version BELOW one already applied. brian migrates out-of-order for the same
+   reason. Versions at or below the lowest applied one are the baseline's
+   pre-history — a seeded cluster records only the baseline row, not the
+   migrations it folds in — and are never pending."
+  [applied-versions filenames]
+  (let [floor (if (seq applied-versions) (apply min applied-versions) 0)]
+    (->> filenames
+         (keep (fn [f] (when-let [v (migration-file->version f)] [v f])))
+         (filter (fn [[v _]] (and (> v floor) (not (contains? applied-versions v)))))
+         (sort-by first)
+         (mapv second))))
 
 ;; ---------------------------------------------------------------------------
 ;; DDL-less application role
@@ -290,33 +298,29 @@
        checksum ", '" owner-user "', now(), 0, true);"))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
-  shared-applied-max
-  "Max applied version and max installed_rank in the shared history. Returns
-   {:version 0 :rank 0} for an empty/baseline-free history."
+  shared-applied-history
+  "The numeric versions the shared history records, and its max installed_rank.
+   Returns {:versions #{} :rank 0} for an empty/baseline-free history."
   [{:keys [port db-name owner-user schema]}]
   (let [bin-dir (pg/find-pg-bin-dir)
         ;; max(installed_rank) must scan ALL rows — a version-regex filter here
         ;; would drop NULL/non-numeric versions (e.g. a repeatable R__ row) from
         ;; the rank max, undercounting the next installed_rank and colliding on
-        ;; its PK. The regex belongs only on the version::bigint cast.
+        ;; its PK. The regex belongs only on the versions.
         ;;
-        ;; bigint, not int: brian's timestamp-versioned migrations (e.g.
-        ;; V20260708212543__…) overflow int4 (max ~2.1e9). An ::int cast here
-        ;; ERRORs mid-query; the error is swallowed (:continue true) so the fn
-        ;; falls back to {:version 0}, and the advance loop then re-applies
-        ;; every migration from V1__baseline.sql onto a live schema → "schema
-        ;; already exists". bigint holds a 14-digit timestamp comfortably.
+        ;; Versions are parsed as longs, not ints: brian's timestamp-versioned
+        ;; migrations (e.g. V20260708212543__…) overflow int4 (max ~2.1e9).
         q (str "select "
-               "coalesce((select max(version::bigint) from " schema ".flyway_schema_history"
-               " where version ~ '^[0-9]+$'), 0), "
-               "coalesce((select max(installed_rank) from " schema ".flyway_schema_history), 0);")
+               "coalesce(string_agg(version, ',') filter (where version ~ '^[0-9]+$'), ''), "
+               "coalesce(max(installed_rank), 0) "
+               "from " schema ".flyway_schema_history;")
         result (shell {:continue true :out :string :err :string}
                       (pg/pg-cmd bin-dir "psql")
                       "-h" "127.0.0.1" "-p" (str port) "-U" owner-user "-d" db-name
                       "-At" "-F" "|" "-c" q)
-        [v r] (some-> (:out result) str/trim (str/split #"\|"))]
-    {:version (or (some-> v str/trim parse-long) 0)
-     :rank    (or (some-> r str/trim parse-long) 0)}))
+        [vs r] (some-> (:out result) str/trim (str/split #"\|" 2))]
+    {:versions (into #{} (keep (comp parse-long str/trim)) (some-> vs (str/split #",")))
+     :rank     (or (some-> r str/trim parse-long) 0)}))
 
 (def ^:private migrations-subdir "resources/db/migrations")
 
@@ -358,16 +362,17 @@
    the owner. No-op when already current — nothing is materialized or shelled
    out to jj/psql in that case. Returns the count applied."
   [{:keys [port db-name owner-user schema source-repo] :as opts}]
-  (let [{:keys [version rank]} (shared-applied-max opts)
+  (let [{:keys [versions rank]} (shared-applied-history opts)
         basenames (list-main-migration-files source-repo)
-        pending   (pending-migrations version basenames)]
+        pending   (pending-migrations versions basenames)]
     (if (empty? pending)
       0
       (let [tmp (str (fs/create-temp-dir {:prefix "nido-shared-advance"}))]
         ;; Only reached (and only removed) when there IS pending work.
         (try
           (core/log-step (str "Advancing shared cluster to main@origin: applying "
-                              (count pending) " migration(s) from V" version))
+                              (count pending) " migration(s): "
+                              (str/join ", " (map #(str "V" (migration-file->version %)) pending))))
           (loop [[f & more] pending, rank (inc rank), applied 0]
             (if-not f
               applied
