@@ -610,7 +610,7 @@
 
   nido:boundary
   {:requires ([tasks.nido-boundary :as nido-boundary])
-   :doc "What nido asks for at a session's turn boundary — a Claude Code Stop hook. Exit 2 asks the turn to continue; 0 asks for nothing. [:cwd <dir>]"
+   :doc "What nido asks for at a session's turn boundary — a Claude Code Stop hook. DISABLED (tasks.nido-boundary/enabled?): always exits 0. Enabled, exit 2 asks the turn to continue; 0 asks for nothing. [:cwd <dir>]"
    :task (apply nido-boundary/boundary-cmd *command-line-args*)}
 
   nido:owed

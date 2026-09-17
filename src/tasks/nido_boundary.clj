@@ -34,6 +34,18 @@
    [nido.platform.task-args :as task-args]
    [tasks.nido-owed :as owed]))
 
+(def ^:private enabled?
+  "Whether the hook asks anything at all. OFF since 2026-09-17: in use it cost
+   more than it gave — sessions held asleep in the thirty-minute wait, turns
+   carried on nobody asked for — and it stays off until that is re-assessed.
+
+   Switched off HERE rather than by uninstalling, because this is the one place
+   every session reaches: the hook resolves this verb through nido's checkout at
+   each stop, so a live session goes quiet at its next stop with no restart,
+   and the homes that already carry the hook need no cleanup. Everything below
+   stays built and tested; turning it back on is flipping this."
+  false)
+
 (def ^:private default-wait-ms
   "How long a boundary held for a person keeps asking before it gives up.
 
@@ -149,6 +161,7 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   boundary-cmd [& args]
+  (when-not enabled? (System/exit 0))
   (let [[_ opts] (task-args/split-args args)
         d        (boundary-cmd* (assoc opts :hook (hook-input)))]
     (System/exit (if (= :continue (:ask d)) 2 0))))
