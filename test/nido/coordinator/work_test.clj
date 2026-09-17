@@ -488,7 +488,7 @@
         (session/create! :brian (:id w) {:name "run-x" :weight :light :autonomy parked-autonomy})
         (write-run! "r1" (:id w) "run-x" "sid")
         (with-redefs [runs/home-present? (constantly false)
-                      runs/spawn-session-for-run! (fn [_] (swap! spawned inc))]
+                      runs/spawn-session-for-run! (fn [& _] (swap! spawned inc))]
           (is (true? (work/ensure-open! :brian (:id w) "run-x"))
               "re-provisions and reports it re-hydrated"))
         (is (= 1 @spawned))))))
@@ -501,7 +501,7 @@
         (session/create! :brian (:id w) {:name "run-x" :weight :light :autonomy parked-autonomy})
         (write-run! "r1" (:id w) "run-x" "sid")
         (with-redefs [runs/home-present? (constantly true)
-                      runs/spawn-session-for-run! (fn [_] (swap! spawned inc))]
+                      runs/spawn-session-for-run! (fn [& _] (swap! spawned inc))]
           (is (false? (work/ensure-open! :brian (:id w) "run-x"))))
         (is (zero? @spawned))))))
 

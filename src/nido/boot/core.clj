@@ -416,6 +416,14 @@
        (some? (:num-turns result))
        (zero? (:num-turns result))))
 
+(defn- kept-failure-id
+  "The id of the failure record a session start kept, when `t` or anything it
+   wraps carries one — a re-hydration wraps the start's exception rather than
+   passing it through."
+  [^Throwable t]
+  (some #(:session-failure/id (ex-data %))
+        (take-while some? (iterate #(.getCause ^Throwable %) t))))
+
 (defn- provision-blocked?
   "True when a provision-only (:plan-bug / :plan-github-issue) run's launch failed
    in a way that should PARK the workstream as a blocked gate — surfacing the
@@ -617,7 +625,8 @@
                                            :budget            (-> run :limits :budget)
                                            :claude-session-id session-id}))
                          (catch Throwable t
-                           {:spawn-error true :detail (.getMessage t)}))
+                           (cond-> {:spawn-error true :detail (.getMessage t)}
+                             (kept-failure-id t) (assoc :failure-id (kept-failure-id t)))))
 
                        (not (skill-resolvable? run))
                        {:skill-unavailable true :skill (:skill run)}
@@ -636,7 +645,8 @@
                                            :budget            (-> run :limits :budget)
                                            :claude-session-id session-id}))
                          (catch Throwable t
-                           {:spawn-error true :detail (.getMessage t)})))
+                           (cond-> {:spawn-error true :detail (.getMessage t)}
+                             (kept-failure-id t) (assoc :failure-id (kept-failure-id t))))))
         next-state (cond
                      ;; Provision-only failures park a BLOCKED gate instead of
                      ;; :failed — a :failed here reverts the ticket :planning→:triaged
@@ -673,6 +683,8 @@
                                            (:spawn-error result)
                                            (assoc :reason :spawn-failed
                                                   :detail (:detail result))
+                                           (:failure-id result)
+                                           (assoc :failure-id (:failure-id result))
                                            (:timed-out? result)
                                            (assoc :reason :timeout
                                                   :budget (-> r :limits :budget))

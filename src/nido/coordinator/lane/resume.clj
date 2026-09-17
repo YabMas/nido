@@ -64,7 +64,12 @@
    execution substrate (`ensure-session-home!` / `launch-context`), guarded for nil."
   [project ws-id session-name s run input]
   (try
-    (when run (runs/ensure-session-home! run))
+    (when run
+      (runs/ensure-session-home! run {:kind    :resume
+                                      :project project
+                                      :ws-id   ws-id
+                                      :session session-name
+                                      :input   input}))
     (let [lc     (if run (runs/launch-context run) {})
           sid    (or (get-in s [:autonomy :claude-session-id])
                      (:claude-session-id run))

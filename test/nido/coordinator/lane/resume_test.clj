@@ -160,7 +160,7 @@
         (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
         (with-redefs [runs/home-present? (fn [_] true)
-                      runs/spawn-session-for-run! (fn [_] (swap! spawned inc))
+                      runs/spawn-session-for-run! (fn [& _] (swap! spawned inc))
                       agent/launch! (fn [opts] (reset! launched opts) {:exit-code 0 :num-turns 1})]
           (let [s (first (session/list-sessions :brian (:id w)))]
             (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "apply")))
@@ -177,7 +177,7 @@
         (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
         (with-redefs [runs/home-present? (fn [_] false)
-                      runs/spawn-session-for-run! (fn [_] (swap! spawned inc))
+                      runs/spawn-session-for-run! (fn [& _] (swap! spawned inc))
                       agent/launch! (fn [opts] (reset! launched opts) {:exit-code 0})]
           (let [s (first (session/list-sessions :brian (:id w)))]
             (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "apply")))
@@ -209,7 +209,7 @@
         (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
         (with-redefs [runs/home-present? (fn [_] false)
-                      runs/spawn-session-for-run! (fn [_] (throw (ex-info "no branch" {})))
+                      runs/spawn-session-for-run! (fn [& _] (throw (ex-info "no branch" {})))
                       agent/launch! (fn [_] {:exit-code 0})]
           (let [s (first (session/list-sessions :brian (:id w)))]
             (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "apply")))

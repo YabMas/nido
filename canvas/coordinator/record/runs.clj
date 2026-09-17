@@ -73,9 +73,14 @@
      that governs its area."
     {:signature [:=> [:catn [:request :map] [:meta :map]] Run]
      :delegates [write-run! triggers/render-payload workstream/latest-entry state/run-dir]})
+  (Operation run-origin
+    "On whose behalf a run's session is started, as a failed start keeps it."
+    {:signature [:=> [:catn [:run Run]] :map]})
   (Operation spawn-session-for-run!
-    "Bring up the session a run executes in, marked as owned by it."
-    {:signature [:=> [:catn [:run Run]] :any]})
+    "Bring up the session a run executes in, marked as owned by it. The origin a failed start
+     keeps is the run's own unless the caller starts it for something else — a reply, a restore."
+    {:signature [:=> [:catn [:run Run] [:origin [:? :map]]] :any]
+     :delegates [run-origin]})
   (Operation home-present?
     "Whether the run's session home still exists. It is ephemeral and may be reclaimed under a
      run that is still going, which is why nothing assumes it."
@@ -83,7 +88,7 @@
      :delegates [state/run-session-home-link]})
   (Operation ensure-session-home!
     "Re-provision a reclaimed session home so a resume has somewhere to land."
-    {:signature [:=> [:catn [:run Run]] :any]
+    {:signature [:=> [:catn [:run Run] [:origin [:? :map]]] :any]
      :delegates [home-present? spawn-session-for-run!]})
   (Operation teardown-session-for-run!
     "Reclaim the session a run spawned, once it has reached a resolved state."

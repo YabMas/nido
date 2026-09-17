@@ -455,6 +455,30 @@
         (is (nil? (tickets/status :brian "BR-Z"))
             "ticket cleared on spawn-failure terminal ⇒ re-triable")))))
 
+(deftest a-spawn-failure-names-the-failure-its-start-kept
+  ;; The Run's :error keeps only a message; the kept record holds the evidence the
+  ;; teardown is about to delete. The id is what joins the two, and it may arrive
+  ;; wrapped — a re-hydration wraps the start's exception rather than passing it.
+  (gate-with-tmp
+    (fn [_]
+      (runs/write-run! {:id "rk" :project :brian :trigger :triage-teacher-bugs
+                        :source {:type :notion-view} :event-payload {:id "BR-K"}
+                        :skill :triage-bug :first-message "x" :agent :claude
+                        :session-name "run-rk" :claude-session-id nil :limits {}
+                        :priority 0 :session-profile :lite :uncapped? false
+                        :state :queued :state-history [{:at "t" :state :queued}]
+                        :artifacts [] :error nil})
+      (with-redefs [runs/spawn-session-for-run!
+                    (fn [_] (throw (ex-info "Re-hydration failed" {:reason :rehydrate-failed}
+                                            (ex-info "Timed out waiting for .nrepl-port"
+                                                     {:session-failure/id "F-42"}))))
+                    cstate/run-session-home-link (constantly "/tmp/nope")
+                    anomaly/record-failure       (fn [det _] det)
+                    breakers/record-failure!     (fn [& _] nil)]
+        (#'core/run-blocking! "rk")
+        (is (= {:reason :spawn-failed :failure-id "F-42"}
+               (select-keys (:error (runs/read-run "rk")) [:reason :failure-id])))))))
+
 (deftest run-blocking-fails-no-op-agent-exit
   ;; Regression (the "36 sessions" incident): claude rejected the launch with
   ;; "Unknown command: /triage-bug" — exit 0, is_error false, num_turns 0. The

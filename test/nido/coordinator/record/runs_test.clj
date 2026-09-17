@@ -576,7 +576,7 @@
       (mk-run "r1" :triage-bug :awaiting-review)
       (let [spawned (atom 0)]
         (with-redefs [runs/home-present? (constantly true)
-                      runs/spawn-session-for-run! (fn [_] (swap! spawned inc))]
+                      runs/spawn-session-for-run! (fn [& _] (swap! spawned inc))]
           (is (false? (runs/ensure-session-home! (runs/read-run "r1")))
               "present home → returns false, did not re-provision"))
         (is (zero? @spawned))))))
@@ -587,7 +587,7 @@
       (mk-run "r1" :triage-bug :awaiting-review)
       (let [spawned (atom 0)]
         (with-redefs [runs/home-present? (constantly false)
-                      runs/spawn-session-for-run! (fn [_] (swap! spawned inc))]
+                      runs/spawn-session-for-run! (fn [& _] (swap! spawned inc))]
           (is (true? (runs/ensure-session-home! (runs/read-run "r1")))
               "reclaimed home → returns true after re-provisioning"))
         (is (= 1 @spawned) "re-provisioned exactly once")))))
@@ -597,7 +597,7 @@
     (fn [_]
       (mk-run "r1" :triage-bug :awaiting-review)
       (with-redefs [runs/home-present? (constantly false)
-                    runs/spawn-session-for-run! (fn [_] (throw (ex-info "no branch" {})))]
+                    runs/spawn-session-for-run! (fn [& _] (throw (ex-info "no branch" {})))]
         (is (= :rehydrate-failed
                (try (runs/ensure-session-home! (runs/read-run "r1")) nil
                     (catch clojure.lang.ExceptionInfo e (:reason (ex-data e)))))

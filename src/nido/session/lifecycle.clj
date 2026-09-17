@@ -33,6 +33,7 @@
    [nido.platform.config :as config]
    [nido.platform.core :as core]
    [nido.session.engine :as engine]
+   [nido.session.failure :as failure]
    [nido.session.launcher :as launcher]
    [nido.session.links :as links]
    [nido.session.profiles :as profiles]
@@ -506,6 +507,44 @@
   (or (:profile opts)
       (profiles/resolve-profile project-name (or (:session-profile opts) :full))))
 
+(def ^:private kept-opts
+  "The options a failed start keeps, so a restore can start it again the same
+   way. Plain data only: a resolved :profile is kept too, because a session
+   brought up with its persisted profile must come back with it."
+  [:project :session-profile :profile :run-dir :base :branch :path])
+
+(defn- keeping-failure
+  "Run `start`, the part of a lifecycle verb that brings a session up; when it
+   throws, keep the failure and rethrow it carrying the record's id under
+   :session-failure/id, with its message and ex-data otherwise as they were.
+
+   Only the start is wrapped, never the verb's refusals before it: an unknown
+   project, a missing worktree or a reset refused on the shared cluster is the
+   caller being told no, not a session that failed to come up.
+
+   The caller's :origin option — on whose behalf the start ran — is kept as it
+   stands, a person's start when there is none. An exception that already
+   carries an id was kept by an inner start and is rethrown untouched."
+  [verb name opts {:keys [project-name instance-id]} worktree-existed? start]
+  (try
+    (start)
+    (catch Exception e
+      (if (:session-failure/id (ex-data e))
+        (throw e)
+        (let [kept (failure/record! {:verb              verb
+                                     :session           name
+                                     :project           project-name
+                                     :instance-id       instance-id
+                                     :opts              (select-keys opts kept-opts)
+                                     :worktree-existed? worktree-existed?
+                                     :origin            (or (:origin opts) {:kind :person})}
+                                    e)]
+          (throw (if kept
+                   (ex-info (or (ex-message e) "")
+                            (assoc (or (ex-data e) {}) :session-failure/id (:id kept))
+                            e)
+                   e)))))))
+
 (defn ^{:malli/schema [:=> [:cat :string :map] :map]}
   session-coords
   "Resolve {:wt-path :instance-id} for a named session. The instance-id is the
@@ -558,27 +597,31 @@
    Worktree creation routes by source-repo VCS: jj-colocated → `jj
    workspace add`; plain git → `git worktree add`."
   [name opts]
-  (let [{:keys [project-name project-dir wt-path branch base]} (with-context name opts)
-        profile (effective-profile project-name opts)]
-    (cond
-      (and (fs/exists? wt-path) (jj-worktree-poisoned? wt-path))
-      (do
-        (core/log-step (str "Worktree at " wt-path " is poisoned (empty working copy, @ on the root commit) — recreating."))
-        (remove-jj-workspace! project-dir wt-path branch branch false) ; forget + rm dir; KEEP the bookmark (it's correctly placed)
-        (create-jj-workspace! project-dir wt-path branch base))
+  (let [{:keys [project-name project-dir wt-path branch base] :as ctx} (with-context name opts)
+        profile (effective-profile project-name opts)
+        existed? (fs/exists? wt-path)]
+    (keeping-failure
+     :up name opts ctx existed?
+     (fn []
+       (cond
+         (and existed? (jj-worktree-poisoned? wt-path))
+         (do
+           (core/log-step (str "Worktree at " wt-path " is poisoned (empty working copy, @ on the root commit) — recreating."))
+           (remove-jj-workspace! project-dir wt-path branch branch false) ; forget + rm dir; KEEP the bookmark (it's correctly placed)
+           (create-jj-workspace! project-dir wt-path branch base))
 
-      (fs/exists? wt-path)
-      (core/log-step (str "Worktree already exists at " wt-path " — starting session."))
+         existed?
+         (core/log-step (str "Worktree already exists at " wt-path " — starting session."))
 
-      (= :symlink (-> profile :worktree :strategy))
-      (create-symlink-worktree! wt-path (-> profile :worktree :target))
+         (= :symlink (-> profile :worktree :strategy))
+         (create-symlink-worktree! wt-path (-> profile :worktree :target))
 
-      (jj-source-repo? project-dir)
-      (create-jj-workspace! project-dir wt-path branch base)
+         (jj-source-repo? project-dir)
+         (create-jj-workspace! project-dir wt-path branch base)
 
-      :else
-      (create-git-worktree! project-dir wt-path branch base))
-    (engine/start-session! wt-path (assoc opts :session-name name :profile profile))))
+         :else
+         (create-git-worktree! project-dir wt-path branch base))
+       (engine/start-session! wt-path (assoc opts :session-name name :profile profile))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   down!
@@ -596,8 +639,9 @@
    `bb nido:session:down` followed by `:up` covers the CLI case."
   [name opts]
   (down! name opts)
-  (let [{:keys [wt-path]} (with-context name opts)]
-    (engine/start-session! wt-path (assoc opts :session-name name))))
+  (let [{:keys [wt-path] :as ctx} (with-context name opts)]
+    (keeping-failure :restart name opts ctx true
+                     #(engine/start-session! wt-path (assoc opts :session-name name)))))
 
 (defn- effective-pg-mode
   "Resolved PG mode for a session: the per-session override if set, else the
@@ -621,7 +665,7 @@
    Refuses for sessions on the shared cluster — a per-session reset there
    would reset the DB for every session. Use `bb nido:shared:pg:reset`."
   [name opts]
-  (let [{:keys [wt-path project-name instance-id]} (with-context name opts)]
+  (let [{:keys [wt-path project-name instance-id] :as ctx} (with-context name opts)]
     (when (= :shared (effective-pg-mode project-name instance-id))
       (throw (ex-info (str "This session uses the shared cluster — a per-session "
                            "reset would reset the shared DB for every session. Use "
@@ -630,14 +674,17 @@
                       {:project-name project-name :session name})))
     (when-not (fs/exists? wt-path)
       (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
-    (try (engine/stop-session! wt-path)
-         (catch Exception e
-           (core/log-step (str "warning: stop during reset: " (ex-message e)))))
-    (let [pg-data (state/pg-data-dir instance-id)]
-      (when (fs/exists? pg-data)
-        (core/log-step (str "Dropping PGDATA at " pg-data))
-        (fs/delete-tree pg-data)))
-    (engine/start-session! wt-path (assoc opts :session-name name))))
+    (keeping-failure
+     :reset name opts ctx true
+     (fn []
+       (try (engine/stop-session! wt-path)
+            (catch Exception e
+              (core/log-step (str "warning: stop during reset: " (ex-message e)))))
+       (let [pg-data (state/pg-data-dir instance-id)]
+         (when (fs/exists? pg-data)
+           (core/log-step (str "Dropping PGDATA at " pg-data))
+           (fs/delete-tree pg-data)))
+       (engine/start-session! wt-path (assoc opts :session-name name))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   isolate!
@@ -645,14 +692,17 @@
    per-session :isolated override, then stop+start so it re-provisions its own
    PGDATA from the template. Other sessions are unaffected. Reverse with `share!`."
   [name opts]
-  (let [{:keys [wt-path instance-id]} (with-context name opts)]
+  (let [{:keys [wt-path instance-id] :as ctx} (with-context name opts)]
     (when-not (fs/exists? wt-path)
       (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
     (state/write-pg-mode-override! instance-id :isolated)
-    (try (engine/stop-session! wt-path)
-         (catch Exception e
-           (core/log-step (str "warning: stop during isolate: " (ex-message e)))))
-    (engine/start-session! wt-path (assoc opts :session-name name))))
+    (keeping-failure
+     :isolate name opts ctx true
+     (fn []
+       (try (engine/stop-session! wt-path)
+            (catch Exception e
+              (core/log-step (str "warning: stop during isolate: " (ex-message e)))))
+       (engine/start-session! wt-path (assoc opts :session-name name))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   share!
@@ -660,18 +710,21 @@
    drop its private PGDATA, then stop+start so it re-provisions against the
    shared cluster. Safe to call on an already-shared session."
   [name opts]
-  (let [{:keys [wt-path instance-id]} (with-context name opts)]
+  (let [{:keys [wt-path instance-id] :as ctx} (with-context name opts)]
     (when-not (fs/exists? wt-path)
       (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
     (state/clear-pg-mode-override! instance-id)
-    (try (engine/stop-session! wt-path)
-         (catch Exception e
-           (core/log-step (str "warning: stop during share: " (ex-message e)))))
-    (let [pg-data (state/pg-data-dir instance-id)]
-      (when (fs/exists? pg-data)
-        (core/log-step (str "Dropping private PGDATA at " pg-data))
-        (fs/delete-tree pg-data)))
-    (engine/start-session! wt-path (assoc opts :session-name name))))
+    (keeping-failure
+     :share name opts ctx true
+     (fn []
+       (try (engine/stop-session! wt-path)
+            (catch Exception e
+              (core/log-step (str "warning: stop during share: " (ex-message e)))))
+       (let [pg-data (state/pg-data-dir instance-id)]
+         (when (fs/exists? pg-data)
+           (core/log-step (str "Dropping private PGDATA at " pg-data))
+           (fs/delete-tree pg-data)))
+       (engine/start-session! wt-path (assoc opts :session-name name))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   destroy!

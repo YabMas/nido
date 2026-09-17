@@ -317,25 +317,44 @@
     (fs/create-dirs (cstate/run-artifacts-dir run-id))
     (write-run! run)))
 
-(defn ^{:malli/schema [:=> [:cat :Run] :any]}
+(defn ^{:malli/schema [:=> [:cat :Run] :map]}
+  run-origin
+  "On whose behalf a Run's session is started, as a failed start keeps it: the
+   Run, and the source that fired it — which is how a recovery tells its own
+   failed starts from the ones it exists to recover."
+  [run]
+  {:kind        :run
+   :run-id      (:id run)
+   :project     (:project run)
+   :ws-id       (:workstream-id run)
+   :trigger     (:trigger run)
+   :source-type (-> run :source :type)})
+
+(defn ^{:malli/schema [:=> [:cat :Run [:? :map]] :any]}
   spawn-session-for-run!
   "Bring up a session for the given Run. The launcher takes the :run-dir we resolve
    here and writes the resume shim + run-link via nido.session.resume-shim — that
    directory is what marks the session as this Run's. After session-up, also writes
    the reverse `<run-dir>/session-home` symlink the coordinator uses to locate the
    worktree (per spec §Runs / Identity & storage). Returns whatever
-   session-lifecycle/up! returns."
-  [run]
+   session-lifecycle/up! returns.
+
+   `origin` is what a failed start keeps as its reason for running; the Run's own
+   origin unless a caller starting it for something else — a reply, a restore —
+   says so."
+  ([run] (spawn-session-for-run! run (run-origin run)))
+  ([run origin]
   (let [{:keys [project session-name id session-profile]} run
         result       (session-lifecycle/up! session-name
                                             {:project         project
                                              :run-dir         (cstate/run-dir id)
-                                             :session-profile session-profile})
+                                             :session-profile session-profile
+                                             :origin          origin})
         session-home (session-state/session-home-dir (name project) session-name)
         link-path    (cstate/run-session-home-link id)]
     (when (fs/exists? link-path) (fs/delete link-path))
     (fs/create-sym-link link-path session-home)
-    result))
+    result)))
 
 (defn ^{:malli/schema [:=> [:cat :Run] :boolean]}
   home-present?
@@ -346,21 +365,28 @@
   [run]
   (fs/exists? (cstate/run-session-home-link (:id run))))
 
-(defn ^{:malli/schema [:=> [:cat :Run] :any]}
+(defn ^{:malli/schema [:=> [:cat :Run [:? :map]] :any]}
   ensure-session-home!
   "Re-provision `run`'s session-home if it was reclaimed, so a caller can land
    in it again. The transcript survives keyed by the home path, so spawning at
    the same path re-anchors it (`spawn-session-for-run!` is idempotent). Returns
    true if it re-provisioned, false if the home was already present. A
-   re-provision failure is re-thrown tagged `:rehydrate-failed`. Shared by the
-   headless resume turn and the interactive TUI open."
-  [run]
-  (if (home-present? run)
-    false
-    (do (try (spawn-session-for-run! run)
-             (catch Throwable t
-               (throw (ex-info "Re-hydration failed" {:reason :rehydrate-failed} t))))
-        true)))
+   re-provision failure is re-thrown tagged `:rehydrate-failed`, carrying the
+   kept failure's :session-failure/id. Shared by the headless resume turn and the
+   interactive TUI open; a resume passes its reply as the `origin`, so a restore
+   can deliver the reply the failure stopped."
+  ([run] (ensure-session-home! run (run-origin run)))
+  ([run origin]
+   (if (home-present? run)
+     false
+     (do (try (spawn-session-for-run! run origin)
+              (catch Throwable t
+                (throw (ex-info "Re-hydration failed"
+                                (cond-> {:reason :rehydrate-failed}
+                                  (:session-failure/id (ex-data t))
+                                  (assoc :session-failure/id (:session-failure/id (ex-data t))))
+                                t))))
+         true))))
 
 (def ^:private provision-only-skills
   "Skills whose run hands its session to a human: once provisioned it is their
