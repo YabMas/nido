@@ -62,15 +62,22 @@ repo). jj is the source of truth in these worktrees. Add this cwd-gated guard to
 `~/.zshrc` so bare `git` fails loudly instead of lying; it passes through
 untouched in colocated repos, plain-git worktrees, and non-repos.
 
+It also passes through when git's root is nested *inside* the jj root — the
+inverse of the worktree shape. There a nearer real `.git` shadows a jj repo in
+an ancestor directory (e.g. a stray `jj git init` in `~/Code` above a plain-git
+checkout), so git already binds to the right repo; without the exemption every
+git call in that checkout was blocked.
+
 ```zsh
 # Fail loud instead of silently binding to the PARENT source repo when a bare
 # `git` runs inside a nido jj-workspace worktree. Block iff git and jj disagree
-# on the repo root; passthrough everywhere else.
+# on the repo root, unless git's root is nested inside the jj root (a nearer
+# real .git — git is already right); passthrough everywhere else.
 git() {
   local top jjroot
   top=$(command git rev-parse --show-toplevel 2>/dev/null)
   jjroot=$(command jj root 2>/dev/null)
-  if [[ -n "$jjroot" && -n "$top" && "$top" != "$jjroot" ]]; then
+  if [[ -n "$jjroot" && -n "$top" && "$top" != "$jjroot" && "$top" != "$jjroot"/* ]]; then
     print -u2 "✋ nido: bare git binds to the SOURCE repo here ($top), not this"
     print -u2 "   jj workspace ($jjroot) — it returns wrong content/history. Use jj:"
     print -u2 "   jj st | jj log | jj diff | jj show <rev>"
