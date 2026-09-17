@@ -341,6 +341,27 @@ The exception is a session the coordinator spawned for a Run. It is torn down wh
 
 Debug escape hatch: `bb nido:session:status` / `bb nido:session:list` stay scan-based and model-independent — they work even when the workstream model is wedged.
 
+### Failed starts recover themselves
+
+Every session start that throws — `session:up`, the TUI or dashboard, a reply re-hydrating a parked session, a Run's spawn — is kept under `~/.nido/failures/` with its error chain, its service logs and on whose behalf it ran. `bb nido:recovery:failures` shows them.
+
+The `:session-recovery` trigger fires `/recover-session` once per cause. The recovery diagnoses the cause, then repairs it: a nido defect lands through `bb nido:recovery:land`, a project defect becomes a PR, and a one-off gets session-private remediation. It then restores every failed session and whatever that session's failure interrupted, with `bb nido:recovery:restore`. A recovery parks only when restoring would destroy shared or uncommitted state. A cause whose recoveries fail is retried after a doubling delay, up to `:ceiling`. Closing its recovery workstream is how a person stops it.
+
+The trigger lives in `~/.nido/projects/nido/triggers.edn`:
+
+```clojure
+{:name                :session-recovery
+ :source              {:type :session-failure :poll "2m" :ceiling "24h"}
+ :skill               :recover-session
+ :session-profile     :full
+ :session-name-prefix "recover-"
+ :payload             "Cause {{event/cause}}: {{event/count}} session start(s) failed, first {{event/project}}/{{event/session}} — {{event/message}}\n\nFailures: {{event/failures}}\n\nRead them with `bb nido:recovery:failures :cause {{event/cause}}`."
+ :limits              {:budget "4h" :max-failures 3}
+ :max-in-flight       2}
+```
+
+`:max-failures` is inert for this trigger: a recovery charges no breaker, because a breaker counts a trigger and one stubborn cause would stop every other.
+
 ## Launcher artifacts
 
 `session:up` populates `~/.nido/sessions/<project>/<session>/` with the agent-discoverable files described in **Working model**. Everything is regenerated each `up` (idempotent) and removed on `session:destroy`. If you run `session:enter` against a downed session, it will refuse — bring it `up` first.
