@@ -86,9 +86,14 @@
      :delegates [shell workstreams-fragment workstream-pane pickup-bar intent-bar]})
   (Operation operations-fragment "The proposal list."
     {:signature [:=> [:catn [:proposals :any]] :any]})
-  (Operation operations-page "Every proposal the review analyses have made."
-    {:signature [:=> [:catn [:ctx :map] [:proposals :any]] :any]
-     :delegates [shell]})
+  (Operation recovery-fragment
+    "Session recovery on the Operations page: counts, one row per live or recently settled
+     cause, and the activity feed — or a notice when recovery could not be read."
+    {:signature [:=> [:catn [:overview [:maybe :map]]] :string]})
+  (Operation operations-page
+    "Session recovery above every proposal the review analyses have made."
+    {:signature [:=> [:catn [:ctx :map] [:proposals :any] [:recovery [:maybe :map]]] :any]
+     :delegates [shell recovery-fragment operations-fragment]})
   (Operation proposal-result-fragment "What deciding a proposal swaps in."
     {:signature [:=> [:catn [:result :map] [:proposals :any]] :any] :delegates [operations-fragment]})
   (Operation not-found-page "The 404."
@@ -125,7 +130,7 @@
   (Operation handle-request "One request, routed."
     {:signature [:=> [:catn [:req :map]] :map]
      :delegates [derive-screen parse-findings-lines resolve-failure-msg read-pickup-blocker
-                 read-intent-blocker work/start-intent!]})
+                 read-intent-blocker work/start-intent! work/session-recovery]})
   (Operation start! "Start the dashboard server."
     {:signature [:=> [:catn [:opts :map]] :any] :delegates [handle-request]})
   (Operation stop! "Stop it."

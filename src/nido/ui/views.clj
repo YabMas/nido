@@ -3,6 +3,8 @@
   (:require [clojure.string :as str]
             [hiccup2.core :as h]
             [nido.coordinator.report :as report]
+            [nido.coordinator.view.recoveries :as recoveries-view]
+            [nido.coordinator.view.runs :as runs-view]
             [nido.coordinator.view.workstreams :as wsv]
             [nido.coordinator.control :as control]
             [nido.platform.process :as process]
@@ -346,6 +348,23 @@
            beside a proposal, so its 38% column would leave the evidence — the
            part you actually have to read — wrapped against two-thirds empty. */
         .ops-col { max-width:900px; padding-top:4px; }
+        /* Session recovery — the state chip is the first thing read, so each
+           state has its own colour: red asks for a person, blue is nido working,
+           amber is nido waiting, green and grey are finished. */
+        .rec-title { font-size:13px; color:#9a9ac0; text-transform:uppercase; letter-spacing:.06em;
+                     margin:6px 0 10px; }
+        .rec-needs-you { background:#3a1a1a; color:#f87171; }
+        .rec-recovering { background:#16304a; color:#7dd3fc; }
+        .rec-waiting { background:#3a2e14; color:#fbbf24; }
+        .rec-owed { background:#26262b; color:#cfd8e3; }
+        .rec-restored { background:#1a3a2a; color:#4ade80; }
+        .rec-dismissed { background:#26262b; color:#9aa3ad; }
+        .rec-did { font-size:12px; color:#a8b4c0; margin:0 0 8px; }
+        .rec-feed { font-size:12px; margin-top:8px; }
+        .rec-evt { display:flex; gap:10px; padding:3px 0; border-bottom:1px solid #1f1f1f; }
+        .rec-evt-at { color:#777; min-width:64px; }
+        .rec-evt-kind { color:#aee0ff; min-width:104px; }
+        .rec-evt-what { color:#cfd8e3; overflow:hidden; text-overflow:ellipsis; }
 "))
 
 ;; ---------------------------------------------------------------------------
@@ -2498,6 +2517,143 @@
       [:div.pane (h/raw (workstream-pane (:ws selection) (:dev-states selection) (:machine selection)))]])))
 
 ;; ---------------------------------------------------------------------------
+;; Operations — session recovery
+
+(defn- ago [iso]
+  (if (str/blank? (str iso)) "" (runs-view/format-age iso)))
+
+(defn- until [iso]
+  (try
+    (let [secs (.getSeconds (java.time.Duration/between (java.time.Instant/now)
+                                                        (java.time.Instant/parse iso)))]
+      (cond
+        (<= secs 0)     "now"
+        (< secs 3600)   (str "in " (max 1 (quot secs 60)) "m")
+        (< secs 86400)  (str "in " (quot secs 3600) "h")
+        :else           (str "in " (quot secs 86400) "d")))
+    (catch Exception _ "?")))
+
+(def ^:private recovery-state-label
+  {:needs-you  "needs you"
+   :recovering "recovering"
+   :waiting    "waiting"
+   :owed       "owed"
+   :restored   "restored"
+   :dismissed  "dismissed"})
+
+(defn- recovery-state-chip [state]
+  [:span {:class (str "prop-verdict rec-" (name state))} (recovery-state-label state state)])
+
+(defn- recovery-did
+  "What the recovery did about a cause, in the words its records use."
+  [{:keys [landed prs restores]}]
+  (let [parts (concat
+               (for [{:keys [commit url title]} landed]
+                 [:span "landed "
+                  [:a {:href url :target "_blank"} (subs (str commit) 0 (min 8 (count (str commit))))]
+                  (when title (str " " title))])
+               (for [{:keys [url title]} prs]
+                 [:span "PR " [:a {:href url :target "_blank"} (or title url)]])
+               (when (seq restores)
+                 [[:span (str/join " · " (for [[k n] (sort-by key restores)]
+                                           (str n " " (name k))))]]))]
+    (when (seq parts)
+      (into [:p.rec-did] (interpose " · " parts)))))
+
+(defn- recovery-row
+  [{:keys [state cause ws-id gate-ws sessions failures message first-at last-at runs
+           due-at failed-in-a-row diagnosis closed] :as r}]
+  [:div {:class (str "prop rec" (when (#{:restored :dismissed} state) " settled"))}
+   [:div.prop-head
+    (recovery-state-chip state)
+    [:span.prop-where (str/join ", " sessions)]
+    [:span.meta (str (count failures) " failed start" (when (not= 1 (count failures)) "s")
+                     (when last-at (str " · last " (ago last-at))))]]
+   (when message [:p.prop-ev message])
+   (when diagnosis
+     [:p.prop-fix [:b (name (:verdict diagnosis))] " — " (:cause diagnosis)
+      (when-let [remedy (:remedy diagnosis)] [:span.meta (str " · " remedy)])])
+   (recovery-did r)
+   [:div.prop-meta
+    [:span.mono (str "cause " cause)]
+    (when (= :waiting state)
+      [:span (str failed-in-a-row " failed recover" (if (= 1 failed-in-a-row) "y" "ies")
+                  " · next " (until due-at))])
+    (when (pos? (or runs 0)) [:span (str runs " recovery run" (when (not= 1 runs) "s"))])
+    (when closed [:span (str "closed " (name (:outcome closed)) " " (ago (:at closed)))])
+    (when first-at [:span (str "first " (ago first-at))])
+    (when gate-ws [:a {:href (str "/?sel=nido:" gate-ws)} "open the gate"])
+    (when ws-id [:a {:href (str "/workstreams?sel=nido:" ws-id)} ws-id])]])
+
+(defn- feed-href
+  "The Operations page at feed position `pos`; the newest page when nil."
+  [pos]
+  (if pos (str "/operations?feed=" (java.net.URLEncoder/encode (str pos) "UTF-8")) "/operations"))
+
+(defn- activity-line
+  [{:keys [at kind session message verdict text outcomes state reason outcome commit url count]}]
+  [:div.rec-evt
+   [:span.rec-evt-at (ago at)]
+   [:span {:class (str "rec-evt-kind rec-k-" (name kind))} (str/replace (name kind) "-" " ")]
+   [:span.rec-evt-what
+    (case kind
+      :failure-kept   (str session " — " message)
+      :recovery-fired (str "for " count " failure" (when (not= 1 count) "s"))
+      :recovery-ended (str (name state) (when reason (str " · " (name reason))))
+      :diagnosed      (str (name verdict) " — " text)
+      :restore        (str/join " · " (for [[k n] (sort-by key outcomes)] (str n " " (name k))))
+      :parked         text
+      :landed         (list [:a {:href url :target "_blank"} (subs (str commit) 0 (min 8 (clojure.core/count (str commit))))]
+                            (str " " text))
+      :pr-opened      [:a {:href url :target "_blank"} text]
+      :closed         (name outcome)
+      "")]])
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :string]}
+  recovery-fragment
+  "Session recovery, as the Operations page shows it: what is being recovered,
+   what needs a person, what is waiting, what came back, and the trail of what
+   happened. Patched under #recovery by the page's poll.
+
+   Settled causes and the feed fold away; a cause that needs someone or is in
+   flight does not. `overview` nil means it could not be read — said, rather
+   than rendered as a section with nothing in it."
+  [overview]
+  (let [{:keys [counts causes feed]} overview
+        activity (:events feed)
+        {live false settled true} (group-by #(boolean (#{:restored :dismissed} (:state %))) causes)]
+    (str
+     (h/html
+      [:div {:id "recovery"}
+       [:h3.rec-title "Session recovery"]
+       (if (nil? overview)
+         [:p.ops-empty "Session recovery could not be read — see the coordinator log."]
+         (list
+          [:div.ops-head
+           [:strong (str (:needs-you counts) " need you")]
+           [:span.prop-verdict.rec-recovering (str (:recovering counts) " recovering")]
+           [:span.prop-verdict.rec-waiting (str (:waiting counts) " waiting")]
+           [:span.meta (str (:owed counts) " failed start" (when (not= 1 (:owed counts)) "s")
+                            " not yet settled · " (:restored counts) " restored in the last "
+                            recoveries-view/window-days " days")]]
+          (if (and (empty? causes) (empty? activity) (nil? (:from feed)))
+            [:p.ops-empty "No session has failed to start."]
+            (list
+             (for [r live] (recovery-row r))
+             (when (seq settled)
+               [:details.trail
+                [:summary (str (clojure.core/count settled) " settled in the last "
+                               recoveries-view/window-days " days")]
+                (for [r settled] (recovery-row r))])
+             [:details.trail {:open (boolean (or (seq live) (:from feed)))}
+              [:summary (str "Activity" (when (:from feed) " · older"))]
+              [:div.rec-feed (for [e activity] (activity-line e))]
+              [:div.prop-meta {:style "margin-top:8px"}
+               (when (:from feed) [:a {:href (feed-href nil)} "newest"])
+               (when (:next feed) [:a {:href (feed-href (:next feed))} "older →"])]]))))
+       [:h3.rec-title "Improvement backlog"]]))))
+
+;; ---------------------------------------------------------------------------
 ;; Operations — nido's own improvement backlog
 
 (defn- prop-decision-chip [{:keys [verdict decided-by]}]
@@ -2663,7 +2819,7 @@
                   [:summary (str (count settled) " settled")]
                   (for [p settled] (proposal-card p))])))]))))
 
-(defn ^{:malli/schema [:=> [:cat :map :any] :any]}
+(defn ^{:malli/schema [:=> [:cat :map :any [:maybe :map]] :any]}
   operations-page
   "Every proposal nido's review-loop analyses have made, and what was decided.
 
@@ -2677,14 +2833,24 @@
    the project a proposal is filed under is always nido whatever it reviewed.
 
    One column rather than the board's queue+pane split — there is no pane, since
-   a proposal carries its own evidence and nothing opens beside it."
-  [ctx proposals]
+   a proposal carries its own evidence and nothing opens beside it.
+
+   Session recovery sits above the backlog: it is what is happening now, and the
+   part of it that needs a person must not scroll away under ninety proposals."
+  [ctx proposals recovery]
   (shell
    (assoc ctx :active :operations :title "Operations")
-   [:div.ops-col {:data-on-interval__duration.5s "@get('/_fragment/operations')"}
+   ;; The poll asks for the feed page the reader is on, so reading an older page
+   ;; does not snap back to the newest every five seconds.
+   [:div.ops-col {:data-on-interval__duration.5s
+                  (str "@get('/_fragment/operations"
+                       (when-let [pos (-> recovery :feed :from)]
+                         (str "?feed=" (java.net.URLEncoder/encode (str pos) "UTF-8")))
+                       "')")}
     ;; Rendered inline, not left as a placeholder for the first poll to fill:
     ;; the poll is a refresh, and a surface that is blank until it fires reads
     ;; as a surface with nothing on it.
+    (h/raw (recovery-fragment recovery))
     (h/raw (operations-fragment proposals))]))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :any]}

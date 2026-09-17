@@ -229,8 +229,26 @@
                  (try (work/proposals pname) (catch Throwable _ [])))
                (project/list-projects))))
 
-(defn- operations-fragment-response []
-  (sse-response (sse-fragment (views/operations-fragment (all-proposals)))))
+(defn- feed-position
+  "The recovery feed position a request names in ?feed=, or nil for the newest."
+  [req]
+  (not-empty (or (get-in req [:params "feed"])
+                 (some-> (re-find #"(?:^|&)feed=([^&]*)" (str (:query-string req))) second
+                         (java.net.URLDecoder/decode "UTF-8")))))
+
+(defn- session-recovery
+  "The recovery overview at a feed position, or nil when it could not be read — a
+   broken recovery reading must not take the improvement backlog down with it."
+  [feed-from]
+  (try (work/session-recovery {:feed-from feed-from})
+       (catch Throwable t
+         (binding [*out* *err*]
+           (println (str "[nido] reading session recovery failed: " (ex-message t))))
+         nil)))
+
+(defn- operations-fragment-response [feed-from]
+  (sse-response (sse-fragment (str (views/recovery-fragment (session-recovery feed-from))
+                                   (views/operations-fragment (all-proposals))))))
 
 (defn- ops-fragment-response
   "`scope` filters the badge count to one project's gates (string :project on
@@ -608,11 +626,12 @@
       ["operations"]
       (html-response 200 (views/operations-page
                           (rail-ctx :operations (derive-screen (view-state/parse req)))
-                          (all-proposals)))
+                          (all-proposals)
+                          (session-recovery (feed-position req))))
 
       ;; GET /_fragment/operations — SSE proposal-list refresh
       ["_fragment" "operations"]
-      (operations-fragment-response)
+      (operations-fragment-response (feed-position req))
 
       ;; GET /_fragment/ops — SSE ops-panel refresh (patches #ops-panel + rail).
       ;; Scope rides ?scope=, parsed the same way every other view-state is —
