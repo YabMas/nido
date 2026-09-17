@@ -108,14 +108,31 @@
 (defn- fired-by-this-source? [f]
   (= :session-failure (-> f :origin :source-type)))
 
+(defn ^{:malli/schema [:=> [:cat [:vector :map]] [:set :string]]}
+  discharged-ids
+  "The ids of every failure a closed recovery workstream named — settled, and
+   never owed again. Known from the recoveries alone, which is what lets a
+   reader skip those records without opening them."
+  [recoveries]
+  (into #{} (comp (filter :closed) (mapcat :named)) recoveries))
+
 (defn ^{:malli/schema [:=> [:cat [:vector :map] [:vector :map]] [:vector :map]]}
   owed
   "The failures still owed a recovery: not named by a closed recovery workstream,
    and not the start of a recovery Run — a recovery whose own session cannot
    start is nothing another recovery could fix."
   [failures recoveries]
-  (let [discharged (into #{} (comp (filter :closed) (mapcat :named)) recoveries)]
+  (let [discharged (discharged-ids recoveries)]
     (vec (remove #(or (discharged (:id %)) (fired-by-this-source? %)) failures))))
+
+(defn ^{:malli/schema [:=> [:cat [:vector :map]] [:vector :map]]}
+  undischarged-failures
+  "Every kept failure no closed recovery workstream named, read from disk — the
+   only records `owed` can keep. Settled failures, which are nearly all of them
+   once recovery has run a while, are never opened."
+  [recoveries]
+  (let [discharged (discharged-ids recoveries)]
+    (vec (keep failure/failure (remove discharged (failure/ids))))))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :map] :string] :boolean]}
   in-flight?
@@ -202,7 +219,8 @@
   owed-failures
   "The failures `project`'s recoveries still owe, read from disk now."
   [project]
-  (owed (failure/failures) (recoveries project)))
+  (let [recs (recoveries project)]
+    (owed (undischarged-failures recs) recs)))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :map]}
   poll-once!
@@ -211,7 +229,7 @@
   [source-config emit-fn]
   (let [project    (:project source-config)
         recs       (recoveries project)
-        owed-fs    (owed (failure/failures) recs)
+        owed-fs    (owed (undischarged-failures recs) recs)
         now        (java.time.Instant/now)
         events     (recovery-events owed-fs recs now (pacing source-config))]
     (doseq [e events] (emit-fn e))

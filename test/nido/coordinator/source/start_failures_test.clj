@@ -7,6 +7,7 @@
    [nido.coordinator.source.start-failures :as sf]
    [nido.session.failure :as failure]))
 
+
 (defn- kept [id & {:keys [session message origin project]
                    :or   {session "feat" message "Timed out waiting for .nrepl-port"
                           origin {:kind :person} project "brian"}}]
@@ -116,3 +117,12 @@
   (is (= 120000 (sf/duration-ms "2m")))
   (is (= 86400000 (sf/duration-ms "1d")))
   (is (nil? (sf/duration-ms "soon"))))
+
+(deftest settled-failures-are-never-opened
+  (let [opened (atom [])]
+    (with-redefs [failure/ids     (constantly ["F1" "F2" "F3"])
+                  failure/failure (fn [id] (swap! opened conj id) (kept id))]
+      (is (= ["F3"] (mapv :id (sf/undischarged-failures
+                               [(recovery "c" :closed {:at "t"} :named ["F1" "F2"])]))))
+      (is (= ["F3"] @opened)
+          "the records a closed recovery named are known settled from their ids"))))

@@ -21,13 +21,26 @@
      restored or dismissed."
     {:signature [:=> [:catn [:cause :string] [:ctx :map]] :map]
      :delegates [sf/in-flight? sf/due-at sf/failed-in-a-row]})
+  (Operation page-failure-ids
+    "Which failure records a feed page can show: at most eighty past a position, named from the
+     failure index alone — the only records that page needs read."
+    {:signature [:=> [:catn [:failure-index [:sequential :map]] [:from [:maybe :string]]]
+                 [:vector :string]]})
+  (Operation row-sample
+    "The newest few of a row's failures — the only ones it reads, to say which sessions failed and
+     what the latest error was; it counts the rest from their ids."
+    {:signature [:=> [:catn [:ids [:sequential :string]]] [:vector :string]]})
+  (Operation shown?
+    "Whether a recovery workstream is shown now: open, or closed within the window."
+    {:signature [:=> [:catn [:r :map] [:now :any]] :boolean]})
   (Operation feed-page
     "The page of every recovery fact that follows a feed position — the newest when there is none
      — at most eighty events, naming the position of the next older page when events remain."
-    {:signature [:=> [:catn [:records :map] [:from [:maybe :string]]] :map]})
+    {:signature [:=> [:catn [:records :map] [:from [:maybe :string]]] :map]
+     :delegates [page-failure-ids]})
   (Operation overview
     "Counts, one row per live or recently settled cause, and the activity feed, from kept failures
      carrying their causes, the source's recovery readings carrying their entries, a time and a
      pacing."
     {:signature [:=> [:catn [:inputs :map]] :map]
-     :delegates [cause-state feed-page sf/owed]}))
+     :delegates [cause-state feed-page shown? row-sample sf/owed]}))

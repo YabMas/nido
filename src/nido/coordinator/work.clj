@@ -731,11 +731,17 @@
   "Session recovery as the Operations page shows it: counts, one row per live or
    recently settled cause, and the activity feed — see view.recoveries/overview.
 
-   The door, not the derivation. It gathers what recovery keeps — every kept
-   failure with its cause, and each recovery workstream of every project that
-   declares a :session-failure trigger, with the entries a recovery writes — and
-   the pacing that trigger declares, so the waiting times shown are the ones the
-   source fires on. Read on every call.
+   The door, not the derivation. It gathers what recovery keeps — each recovery
+   workstream of every project that declares a :session-failure trigger, with the
+   entries a recovery writes, and the pacing that trigger declares, so the
+   waiting times shown are the ones the source fires on. Read on every call.
+
+   Failure records are read only where the page needs them: undischarged ones,
+   the newest few a shown recovery names, and ones on the feed page being asked
+   for. Every
+   other failure is known by its id alone. Kept failures are never pruned and
+   each carries its log tails, so reading all of them on a five-second poll
+   would cost more with every failure nido has ever recovered.
 
    `opts`: :now (an Instant, default the present) and :feed-from (the feed
    position to page from, nil for the newest)."
@@ -753,12 +759,23 @@
                                  (into {} (for [kind [:session-diagnosis :session-restored
                                                       :blocker :merged :pr-opened]]
                                             [kind (vec (cws/entries-of pk (:ws-id r) kind))])))))]
-     (recoveries-view/overview
-      {:failures   (mapv #(assoc % :cause (failure/cause %)) (failure/failures))
+     (let [now   (or now (java.time.Instant/now))
+           index (mapv (fn [id] {:id id :ms (failure/id-ms id)}) (failure/ids))
+           gone  (start-failures/discharged-ids recs)
+           need  (-> #{}
+                     (into (comp (map :id) (remove gone)) index)
+                     (into (recoveries-view/page-failure-ids index feed-from))
+                     (into (comp (filter #(recoveries-view/shown? % now))
+                                 (mapcat #(recoveries-view/row-sample (:named %))))
+                           recs))]
+       (recoveries-view/overview
+      {:failures      (vec (keep #(some-> (failure/failure %) (as-> f (assoc f :cause (failure/cause f))))
+                                 (sort need)))
+       :failure-index index
        :recoveries recs
-       :now        (or now (java.time.Instant/now))
+       :now        now
        :feed-from  feed-from
-       :pacing     (start-failures/pacing (-> declaring first second :source))}))))
+       :pacing     (start-failures/pacing (-> declaring first second :source))})))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
   proposals

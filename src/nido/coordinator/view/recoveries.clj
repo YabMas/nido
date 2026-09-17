@@ -98,23 +98,38 @@
 
 (defn- entries [ws kind] (get-in ws [:entries kind]))
 
-(defn- row [cause {:keys [failures-by-id owed recoveries] :as ctx}]
+(def sample-size
+  "How many of a row's failures, newest first, it reads to say which sessions
+   failed and what the latest error was. A cause can fail hundreds of starts; its
+   row counts all of them from their ids and reads only these."
+  10)
+
+(defn ^{:malli/schema [:=> [:cat [:sequential :string]] [:vector :string]]}
+  row-sample
+  "The ids a row reads records for: the newest `sample-size` of its failures."
+  [ids]
+  (vec (take-last sample-size (sort ids))))
+
+(defn- ms->iso [ms] (when ms (str (java.time.Instant/ofEpochMilli ms))))
+
+(defn- row [cause {:keys [failures-by-id ms-by-id owed recoveries] :as ctx}]
   (let [mine     (filter #(= cause (:cause %)) recoveries)
         ws       (latest-ws mine)
-        ids      (into (set (keep #(when (= cause (:cause %)) (:id %)) owed))
-                       (when ws (:named ws)))
-        fs       (sort-by :id (keep failures-by-id ids))
+        ids      (sort (into (set (keep #(when (= cause (:cause %)) (:id %)) owed))
+                             (when ws (:named ws))))
+        sample   (keep failures-by-id (row-sample ids))
+        at-of    (fn [id] (or (ms->iso (ms-by-id id)) (:at (failures-by-id id))))
         outcomes (mapcat :outcomes (entries ws :session-restored))
         diag     (last (entries ws :session-diagnosis))]
     (merge
      (cause-state cause ctx)
      {:cause     cause
       :ws-id     (:ws-id ws)
-      :failures  (mapv :id fs)
-      :sessions  (vec (distinct (map #(str (:project %) "/" (:session %)) fs)))
-      :message   (some-> (last fs) innermost-message)
-      :first-at  (:at (first fs))
-      :last-at   (:at (last fs))
+      :failures  (vec ids)
+      :sessions  (vec (distinct (map #(str (:project %) "/" (:session %)) (reverse sample))))
+      :message   (some-> (last sample) innermost-message)
+      :first-at  (some-> (first ids) at-of)
+      :last-at   (some-> (last ids) at-of)
       :runs      (count (:runs ws))
       :closed    (:closed ws)
       :diagnosis (when diag (select-keys diag [:verdict :cause :remedy :at]))
@@ -122,14 +137,40 @@
       :prs       (mapv #(select-keys % [:url :title]) (entries ws :pr-opened))
       :restores  (frequencies (map :outcome outcomes))})))
 
+(defn- event-key
+  "An event's place in the feed's order, unique and sortable as a string: its
+   epoch millisecond, then its kind, then what names the record it came from."
+  [ms kind ident]
+  (format "%013d~%s~%s" (or ms 0) (name kind) ident))
+
+(defn- failure-key [{:keys [id ms]}]
+  (event-key ms :failure-kept id))
+
+(defn- after? [k from]
+  (or (nil? from) (neg? (compare k from))))
+
+(defn ^{:malli/schema [:=> [:cat [:sequential :map] [:maybe :string]] [:vector :string]]}
+  page-failure-ids
+  "Which failure records the feed page after position `from` can show: the at
+   most `page-size` newest failures past it, from the failure index — each
+   failure's :id and the epoch millisecond its id carries — alone. Any failure
+   on that page is one of these, so these are the only records it needs read."
+  [failure-index from]
+  (->> failure-index
+       (map (fn [f] [(failure-key f) (:id f)]))
+       (filter #(after? (first %) from))
+       (sort-by first #(compare %2 %1))
+       (take page-size)
+       (mapv second)))
+
 (defn- events
-  "Every recovery fact there is, as feed events. `:key` is the event's place in
-   the feed's order and is unique: its time, then its kind, then what names the
-   record it came from."
-  [{:keys [failures recoveries]}]
+  "Recovery facts as feed events, each with its `:key`: every fact the recovery
+   workstreams hold, and one per failure record handed in."
+  [{:keys [failures recoveries ms-by-id]}]
   (let [evt (fn [ident m]
-              (let [ms (or (some-> (:at m) instant .toEpochMilli) 0)]
-                (assoc m :key (format "%013d~%s~%s" ms (name (:kind m)) ident))))]
+              (assoc m :key (event-key (or (when (= :failure-kept (:kind m)) (ms-by-id ident))
+                                           (some-> (:at m) instant .toEpochMilli))
+                                       (:kind m) ident)))]
     (concat
      (for [f failures]
        (evt (:id f)
@@ -170,37 +211,63 @@
   "The page of the feed that follows position `from` — nil for the newest — in
    newest-first order, at most `page-size` events. `:next` is the position of the
    next older page, nil when this page reaches the oldest event. Following
-   `:next` from the newest reaches every event exactly once."
-  [records from]
-  (let [ordered (sort-by :key #(compare %2 %1) (events records))
-        after   (if from (drop-while #(>= (compare (:key %) from) 0) ordered) ordered)
-        page    (vec (take page-size after))]
+   `:next` from the newest reaches every event exactly once.
+
+   Failures are counted from `:failure-index` and shown from the records handed
+   in, which must include every failure `page-failure-ids` names for `from`;
+   older records handed in for other reasons do not change the page."
+  [{:keys [failures failure-index] :as records} from]
+  (let [index    (or failure-index
+                     (map (fn [f] {:id (:id f) :ms (some-> (:at f) instant .toEpochMilli)}) failures))
+        ms-by-id (into {} (map (juxt :id :ms)) index)
+        after    (->> (events (assoc records :ms-by-id ms-by-id))
+                      (filter #(after? (:key %) from))
+                      (sort-by :key #(compare %2 %1)))
+        page     (vec (take page-size after))
+        total    (+ (count (remove #(= :failure-kept (:kind %)) after))
+                    (count (filter #(after? (failure-key %) from) index)))]
     {:from   from
      :events page
-     :next   (when (> (count after) page-size) (:key (peek page)))}))
+     :next   (when (> total page-size) (:key (peek page)))}))
+
+(defn ^{:malli/schema [:=> [:cat :map :any] :boolean]}
+  shown?
+  "Whether recovery workstream `r` is shown as of `now`: open, or closed within
+   the window. A reader gathering what the overview needs reads the failures of
+   these and no others."
+  [r now]
+  (or (not (:closed r))
+      (boolean (since? (-> r :closed :at)
+                       (.minus ^java.time.Instant now (java.time.Duration/ofDays window-days))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   overview
   "The session-recovery overview: counts, one row per cause worth showing, and the
    activity feed.
 
-   `failures` are kept failure records, each carrying its :cause; `recoveries`
-   are the recovery source's readings of recovery workstreams, each carrying the
-   ledger entries it holds under :entries by kind. `now` is an Instant.
-   `feed-from` is the feed position to page from, nil for the newest.
+   `failures` are kept failure records, each carrying its :cause — at least every
+   undischarged one, the `row-sample` of every shown recovery's named failures,
+   and every one `page-failure-ids` names for the page; `failure-index` is every kept failure's
+   :id and :ms, without its record. `recoveries` are the recovery source's
+   readings of recovery workstreams, each carrying the ledger entries it holds
+   under :entries by kind. `now` is an Instant. `feed-from` is the feed position
+   to page from, nil for the newest.
 
    A cause is shown when it has an owed failure or an open recovery workstream,
    or when its latest recovery closed within the window. The feed is not
    windowed: every recovery fact is reachable a page at a time."
-  [{:keys [failures recoveries now pacing feed-from]}]
-  (let [since   (.minus ^java.time.Instant now (java.time.Duration/ofDays window-days))
-        owed    (sf/owed (vec failures) (vec recoveries))
+  [{:keys [failures failure-index recoveries now pacing feed-from]}]
+  (let [owed    (sf/owed (vec failures) (vec recoveries))
         ctx     {:owed owed :recoveries (vec recoveries) :now now :pacing pacing
-                 :failures-by-id (into {} (map (juxt :id identity)) failures)}
+                 :failures-by-id (into {} (map (juxt :id identity)) failures)
+                 :ms-by-id (into {} (map (juxt :id :ms))
+                                 (or failure-index
+                                     (map (fn [f] {:id (:id f) :ms (some-> (:at f) instant .toEpochMilli)})
+                                          failures)))}
         causes  (distinct
                  (concat (map :cause owed)
                          (map :cause (remove :closed recoveries))
-                         (map :cause (filter #(since? (-> % :closed :at) since) recoveries))))
+                         (map :cause (filter #(and (:closed %) (shown? % now)) recoveries))))
         rows    (->> causes
                      (map #(row % ctx))
                      (sort-by (juxt #(state-order (:state %))
@@ -213,4 +280,5 @@
                 :waiting    (n :waiting)
                 :restored   (n :restored)}
      :causes   rows
-     :feed     (feed-page {:failures failures :recoveries recoveries} feed-from)}))
+     :feed     (feed-page {:failures failures :failure-index failure-index :recoveries recoveries}
+                          feed-from)}))

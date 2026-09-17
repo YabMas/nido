@@ -50,7 +50,8 @@
     (is (= :needs-you (state-of ov "c-park")))
     (is (= :waiting (state-of ov "c-wait")))
     (is (= 4 (count (:causes ov))) "one row per cause, however many failures")
-    (is (= ["brian/feat" "brian/other"] (:sessions (first (filter #(= "c-owed" (:cause %)) (:causes ov))))))
+    (is (= ["brian/other" "brian/feat"] (:sessions (first (filter #(= "c-owed" (:cause %)) (:causes ov)))))
+        "the session that failed most recently first")
     (is (= "ws-park" (:gate-ws (first (filter #(= "c-park" (:cause %)) (:causes ov)))))
         "a parked recovery names the workstream whose gate asks the person")
     (is (= {:owed 5 :recovering 1 :needs-you 1 :waiting 1 :restored 0} (:counts ov))
@@ -131,3 +132,43 @@
     (is (apply distinct? (map :key (apply concat pages))) "and none is reached twice, though times repeat")
     (is (= (map :key (apply concat pages)) (sort #(compare %2 %1) (map :key (apply concat pages))))
         "newest first across page boundaries")))
+
+(deftest a-page-needs-only-the-records-it-shows
+  ;; The trail is never pruned and each record carries its log tails, so a page
+  ;; that needed every record would cost more with every failure ever kept.
+  (let [index    (vec (for [i (range 500)]
+                        {:id (format "F%03d" i) :ms (+ 1789000000000 (* 1000 (quot i 3)))}))
+        record   (fn [{:keys [id ms]}]
+                   (assoc (failure id "c" :at (str (java.time.Instant/ofEpochMilli ms))) :id id))
+        closed   (recovery "ws" "c" :named (map :id index) :closed {:at "2026-09-17T11:00:00Z" :outcome :done})
+        page-of  (fn [from]
+                   (let [need (set (concat (rv/page-failure-ids index from)
+                                           (rv/row-sample (map :id index))))]
+                     (:feed (rv/overview {:failures (vec (keep #(when (need (:id %)) (record %)) index))
+                                          :failure-index index :recoveries [closed]
+                                          :now now :pacing pacing :feed-from from}))))
+        pages    (loop [from nil, acc []]
+                   (let [{:keys [events next]} (page-of from)
+                         acc (conj acc events)]
+                     (if next (recur next acc) acc)))
+        failures-shown (->> pages (apply concat) (filter #(= :failure-kept (:kind %))) (map :failure))]
+    (is (= 80 (count (rv/page-failure-ids index nil))) "a page asks for at most eighty records")
+    (is (= (set (map :id index)) (set failures-shown))
+        "reading only each page's records still reaches every failure")
+    (is (apply distinct? failures-shown))))
+
+(deftest a-row-counts-every-failure-and-reads-a-few
+  (let [index (vec (for [i (range 300)] {:id (format "F%03d" i) :ms (+ 1789000000000 (* 60000 i))}))
+        newest (rv/row-sample (map :id index))
+        ov    (rv/overview {:failures (vec (for [id newest] (failure id "c" :session id)))
+                            :failure-index index
+                            :recoveries [(recovery "ws" "c" :named (map :id index)
+                                                   :closed {:at "2026-09-17T11:00:00Z" :outcome :done})]
+                            :now now :pacing pacing})
+        row   (first (:causes ov))]
+    (is (= 10 (count newest)))
+    (is (= 300 (count (:failures row))) "the count comes from the ids")
+    (is (= "F299" (first (map #(last (clojure.string/split % #"/")) (:sessions row))))
+        "the sessions come from the newest records read")
+    (is (= (str (java.time.Instant/ofEpochMilli 1789000000000)) (:first-at row))
+        "first and last times come from the ids, not from records nobody read")))

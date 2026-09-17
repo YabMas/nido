@@ -33,10 +33,16 @@
     "Keep one failed start. Returns the record, or nil when it could not be written. Never throws:
      a failure to keep the record must not replace the failure it records."
     {:signature [:=> [:catn [:attempt :map] [:t :any]] [:maybe :map]]})
+  (Operation ids
+    "Every kept failure's id, oldest first, from filenames alone — so a reader that needs a few
+     records does not open all of them."
+    {:signature [:=> [:catn] [:vector :string]]})
+  (Operation id-ms "The epoch millisecond a failure's id carries — the same as its :at — or nil."
+    {:signature [:=> [:catn [:id :string]] [:maybe :int]]})
   (Operation failure "One kept failure by id, or nil."
     {:signature [:=> [:catn [:id :string]] [:maybe :map]]})
-  (Operation failures "Every kept failure, oldest first."
-    {:signature [:=> [:catn] [:vector :map]]})
+  (Operation failures "Every kept failure, oldest first. Reads every record."
+    {:signature [:=> [:catn] [:vector :map]] :delegates [ids failure]})
   (Operation cause
     "The key two failures share when their errors differ only in paths, ports, ids and counts."
     {:signature [:=> [:catn [:failure :map]] :string]}))

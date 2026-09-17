@@ -63,7 +63,9 @@
   (let [[_ opts] (task-args/split-args args)
         cause    (some-> (:cause opts) str)
         recs     (start-failures/recoveries :nido)
-        all      (failure/failures)
+        ;; Settled records are opened only when asked for: the trail is never
+        ;; pruned and each record carries its log tails.
+        all      (if (:all opts) (failure/failures) (start-failures/undischarged-failures recs))
         owed-ids (set (map :id (start-failures/owed all recs)))
         shown    (cond->> all
                    (not (:all opts)) (filter #(owed-ids (:id %)))

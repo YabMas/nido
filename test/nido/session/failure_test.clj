@@ -89,3 +89,19 @@
     (testing "the same error in another project is another cause"
       (is (not= (failure/cause (f "a" "boom"))
                 (failure/cause (assoc (f "a" "boom") :project "nido")))))))
+
+(deftest a-failures-id-carries-its-time
+  (with-homes
+   (fn [_ _]
+    (let [kept (failure/record! attempt (ex-info "boom" {}))]
+      (is (= (.toEpochMilli (java.time.Instant/parse (:at kept))) (failure/id-ms (:id kept)))
+          "a reader can order and page failures by id without opening them")
+      (is (= [(:id kept)] (failure/ids)))
+      (is (nil? (failure/id-ms "not-an-id")))))))
+
+(deftest ids-are-listed-without-reading-records
+  (with-homes
+   (fn [failures-dir _]
+    (spit (str (fs/path failures-dir "20260917T100000000-aaaaaaaa.edn")) "{:id \"torn")
+    (is (= ["20260917T100000000-aaaaaaaa"] (failure/ids))
+        "an unreadable record is still an id; reading it is the caller's choice"))))

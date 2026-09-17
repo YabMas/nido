@@ -48,9 +48,17 @@
     "The failures still owed a recovery: not named by a closed recovery workstream, and not the
      start of a recovery Run."
     {:signature [:=> [:catn [:failures [:vector :map]] [:recoveries [:vector :map]]] [:vector :map]]})
+  (Operation discharged-ids
+    "The ids of every failure a closed recovery workstream named — settled, known without
+     opening a record."
+    {:signature [:=> [:catn [:recoveries [:vector :map]]] [:set :string]]})
+  (Operation undischarged-failures
+    "Every kept failure no closed recovery named, read from disk; settled records stay unopened."
+    {:signature [:=> [:catn [:recoveries [:vector :map]]] [:vector :map]]
+     :delegates [discharged-ids]})
   (Operation owed-failures "The failures a project's recoveries still owe, read now."
     {:signature [:=> [:catn [:project ProjectName]] [:vector :map]]
-     :delegates [recoveries owed]})
+     :delegates [recoveries undischarged-failures owed]})
   (Operation in-flight?
     "Whether a recovery of a cause is in flight: queued, preprocessing or running on any of its
      workstreams, or parked on an open one."
@@ -70,7 +78,7 @@
     "One iteration: derive the owed failures, emit the due causes' events, return the state to
      persist."
     {:signature [:=> [:catn [:source-config :map] [:emit-fn :any]] :map]
-     :delegates [recoveries owed recovery-events]})
+     :delegates [recoveries undischarged-failures owed recovery-events]})
   (Operation start-instance!
     "Start one configured instance, answering with its poll and stop functions."
     {:signature [:=> [:catn [:source-config :map] [:emit-fn :any]] :map]

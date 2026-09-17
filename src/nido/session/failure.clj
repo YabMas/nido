@@ -39,13 +39,25 @@
 (defn- failure-path [id]
   (str (fs/path (failures-dir) (str id ".edn"))))
 
+(def ^:private id-time
+  (.withZone (java.time.format.DateTimeFormatter/ofPattern "yyyyMMdd'T'HHmmssSSS")
+             java.time.ZoneOffset/UTC))
+
 (defn- new-id
-  "Sortable by when it failed, then unique: failures are listed oldest first by
-   id alone, without reading them."
-  []
-  (str (-> (java.time.LocalDateTime/now java.time.ZoneOffset/UTC)
-           (.format (java.time.format.DateTimeFormatter/ofPattern "yyyyMMdd'T'HHmmssSSS")))
-       "-" (subs (str (random-uuid)) 0 8)))
+  "The id of a failure kept at `instant`: that instant to the millisecond, then a
+   random suffix. Sorting ids sorts failures by when they failed, so a reader can
+   order and page them by listing filenames, without reading a record."
+  [^java.time.Instant instant]
+  (str (.format id-time instant) "-" (subs (str (random-uuid)) 0 8)))
+
+(defn ^{:malli/schema [:=> [:cat :string] [:maybe :int]]}
+  id-ms
+  "The epoch millisecond a failure with this id was kept at — the same millisecond
+   as its :at — or nil for an id that does not carry one."
+  [id]
+  (try
+    (.toEpochMilli (java.time.Instant/from (.parse id-time (subs (str id) 0 18))))
+    (catch Exception _ nil)))
 
 (defn- capped [s]
   (if (> (count s) text-cap)
@@ -125,11 +137,12 @@
   [attempt t]
   (try
     (let [chain  (error-of t)
-          id     (new-id)
+          now    (java.time.Instant/now)
+          id     (new-id now)
           record (merge (plain (select-keys attempt [:verb :session :project :instance-id
                                                      :opts :worktree-existed? :origin]))
                         {:id    id
-                         :at    (core/now-iso)
+                         :at    (str now)
                          :error chain
                          :logs  (into {}
                                       (keep (fn [p] (when-let [s (tail p)] [p s])))
@@ -149,11 +162,11 @@
   (try (io/read-edn (failure-path id))
        (catch Exception _ nil)))
 
-(defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
-  failures
-  "Every kept failure, oldest first. A record that no longer reads is skipped
-   rather than failing the listing — one torn file must not blind recovery to
-   every other failure."
+(defn ^{:malli/schema [:=> [:cat] [:vector :string]]}
+  ids
+  "The id of every kept failure, oldest first, read from filenames alone. The
+   records grow without bound and each carries its log tails, so a reader that
+   needs a few of them lists these and reads only those."
   []
   (let [dir (failures-dir)]
     (if-not (fs/directory? dir)
@@ -161,8 +174,15 @@
       (->> (fs/glob dir "*.edn")
            (map #(str (fs/strip-ext (fs/file-name %))))
            sort
-           (keep failure)
            vec))))
+
+(defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
+  failures
+  "Every kept failure, oldest first. A record that no longer reads is skipped
+   rather than failing the listing — one torn file must not blind recovery to
+   every other failure. Reads every record: prefer `ids` where a few will do."
+  []
+  (vec (keep failure (ids))))
 
 (defn- whole-word
   "`s` matched only where it stands alone, so a short session name does not
