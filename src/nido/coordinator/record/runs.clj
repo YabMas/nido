@@ -317,6 +317,27 @@
     (fs/create-dirs (cstate/run-artifacts-dir run-id))
     (write-run! run)))
 
+(defn ^{:malli/schema [:=> [:cat :Run] :boolean]}
+  recovery?
+  "Whether `run` is a recovery of failed session starts — fired by the
+   :session-failure source. Its brakes and its terminal state differ from every
+   other Run's, and its own failed start is never recovered."
+  [run]
+  (= :session-failure (-> run :source :type)))
+
+(defn ^{:malli/schema [:=> [:cat :Run] :boolean]}
+  diagnosed-while-running?
+  "Whether a :session-diagnosis was appended to `run`'s workstream since the Run
+   last started running. A recovery may finish only on its own diagnosis: an
+   earlier recovery's, on the same workstream, is not this one's judgement."
+  [run]
+  (let [since (->> (:state-history run) (filter #(= :running (:state %))) last :at)]
+    (boolean
+     (and since (:workstream-id run)
+          (some #(not (neg? (compare (java.time.Instant/parse (:at %))
+                                     (java.time.Instant/parse since))))
+                (cws/entries-of (:project run) (:workstream-id run) :session-diagnosis))))))
+
 (defn ^{:malli/schema [:=> [:cat :Run] :map]}
   run-origin
   "On whose behalf a Run's session is started, as a failed start keeps it: the

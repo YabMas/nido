@@ -73,6 +73,14 @@
      that governs its area."
     {:signature [:=> [:catn [:request :map] [:meta :map]] Run]
      :delegates [write-run! triggers/render-payload workstream/latest-entry state/run-dir]})
+  (Operation recovery?
+    "Whether a run recovers failed session starts. Its brakes and terminal state differ, and its
+     own failed start is never recovered."
+    {:signature [:=> [:catn [:run Run]] :boolean]})
+  (Operation diagnosed-while-running?
+    "Whether a diagnosis was appended to the run's workstream since it last started running — the
+     condition a recovery may finish on."
+    {:signature [:=> [:catn [:run Run]] :boolean]})
   (Operation run-origin
     "On whose behalf a run's session is started, as a failed start keeps it."
     {:signature [:=> [:catn [:run Run]] :map]})

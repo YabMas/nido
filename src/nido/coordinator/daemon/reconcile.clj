@@ -84,6 +84,17 @@
                  :error {:reason :orphaned-from-restart}})
 
               (= :triage-bug (:skill run)) (triage-reconciled-state run)
+
+              ;; A recovery finishes only on a diagnosis it made while it ran —
+              ;; the same rule its execution applies, or a restart would let one
+              ;; through that the daemon would have failed.
+              (runs/recovery? run)
+              (let [derived (derive-terminal-state run-id)]
+                (if (and (#{:done :awaiting-review} (:state derived))
+                         (not (runs/diagnosed-while-running? run)))
+                  {:state :failed :error {:reason :undiagnosed}}
+                  derived))
+
               :else                        (derive-terminal-state run-id))]
         ;; no-op if state unchanged (e.g. parked → parked)
         (when (not= state (:state run))

@@ -2651,6 +2651,48 @@
              [:baseline [:map {:closed true} [:seq int?]]]
              [:design   [:map {:closed true} [:seq int?]]]]]])
 
+(def SessionDiagnosis
+  "Why a recovery's session starts failed, and what the recovery does about it.
+
+   Written by the recovery agent before it acts, and what both recovery verbs
+   refuse without: restoring or landing an undiagnosed failure is repair by
+   guesswork, and a recovery Run that ends without one is failed. :verdict is
+   the class the repair follows — a nido defect lands on nido's main, a project
+   defect becomes a PR in that project, a one-off is remediated and restored.
+
+   :failures names the kept failures it is about by id; :evidence is what the
+   verdict rests on, so a later recovery of the same cause can tell a real
+   one-off from a defect called one three times."
+  [:map {:closed true}
+   [:format   [:= :session-diagnosis]]
+   [:failures [:vector {:min 1} string?]]
+   [:verdict  [:enum :nido-defect :project-defect :one-off]]
+   [:cause    string?]
+   [:evidence [:vector {:min 1} string?]]
+   [:remedy   string?]])
+
+(def SessionRestored
+  "What one restore did with each kept failure it covered.
+
+   Written by `bb nido:recovery:restore`, never by the agent: an outcome is a
+   fact the verb observed. :restored means the session's start returned and
+   whatever the failure interrupted was handed to the daemon — :continuation
+   says what. :withdrawn means the workstream the failure's origin names was
+   closed after the failure, so there is no work left to continue. :not-restored
+   names, under :failure-left, the failure its own attempt kept.
+
+   A failure named :restored or :withdrawn here is settled once this workstream
+   closes; one named only :not-restored is still owed."
+  [:map {:closed true}
+   [:format   [:= :session-restored]]
+   [:outcomes [:vector {:min 1}
+               [:map {:closed true}
+                [:failure      string?]
+                [:outcome      [:enum :restored :withdrawn :not-restored]]
+                [:continuation {:optional true} [:map-of keyword? any?]]
+                [:failure-left {:optional true} string?]
+                [:note         {:optional true} string?]]]]])
+
 (def event-schemas
   "Entry :kind → its Malli schema. Drives ledger-boundary validation + rendering.
    A :kind absent here is stored as verbatim markdown (legacy / freeform)."
@@ -2680,7 +2722,9 @@
    :proposed-ticket          ProposedTicket
    :retraction               Retraction
    :design-approved          DesignApproved
-   :design-cleared           DesignCleared})
+   :design-cleared           DesignCleared
+   :session-diagnosis        SessionDiagnosis
+   :session-restored         SessionRestored})
 
 (def read-schemas
   "Kinds whose READ contract is wider than their write contract, because records

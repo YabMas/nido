@@ -252,6 +252,21 @@
    :doc "Refuse a landing whose design does not stand: retracted, never decided, or decided on a survey retracted since. Exits non-zero and prints the way out. [:cwd <dir>]"
    :task (apply nido-land/cmd *command-line-args*)}
 
+  nido:recovery:failures
+  {:requires ([tasks.nido-recovery :as nido-recovery])
+   :doc "Kept session-start failures with their evidence: the ones owed a recovery, or all of them; for a cause, also the recovery workstreams that tried it. [:cause <key>] [:all true]"
+   :task (apply nido-recovery/failures *command-line-args*)}
+
+  nido:recovery:restore
+  {:requires ([tasks.nido-recovery :as nido-recovery])
+   :doc "Restore the owed failures of a recovery workstream's cause: start each session here, hand the daemon what it interrupted, record each outcome, close the workstream when all came back. Refuses without a :session-diagnosis. [:ws-id <id>] [:cwd <dir>]"
+   :task (apply nido-recovery/restore-cmd *command-line-args*)}
+
+  nido:recovery:land
+  {:requires ([tasks.nido-recovery :as nido-recovery])
+   :doc "Land a recovery's nido fix: refuses unless the diagnosis names a nido defect and bb nido:test and bb nido:land:check pass at the worktree's tip on origin's main; then fast-forwards main and records the :merged. [:cwd <dir>]"
+   :task (apply nido-recovery/land-cmd *command-line-args*)}
+
   nido:land:record
   {:requires ([tasks.nido-land :as nido-land])
    :doc "Record that the worktree's tip landed, once origin's main holds it: close the workstream and append a :merged naming the commit and the design that stands. The landing recipe's step after jj git push -b main; a re-run completes what an earlier run left undone. [:cwd <dir>]"

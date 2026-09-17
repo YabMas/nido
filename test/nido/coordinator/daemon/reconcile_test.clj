@@ -232,3 +232,39 @@
               "error reason should be :orphaned-from-restart")
           (is (= :parked (get-in s [:autonomy :phase]))
               "session autonomy phase must mirror to :parked"))))))
+
+(deftest a-restart-fails-a-recovery-that-never-diagnosed
+  ;; The daemon fails a recovery that exits without its own diagnosis; a restart
+  ;; mid-recovery must not let one through on a :complete status file instead.
+  (with-tmp
+    (fn [_]
+      (let [w   (ws/create! :test {:stage :triaging :external-refs []})
+            run (assoc base-run
+                       :id "2026-09-17-test-recovery-aaaaaaaa"
+                       :source {:type :session-failure :fired-at "T" :fired-by "u"}
+                       :workstream-id (:id w)
+                       :state-history [{:at "2026-09-17T00:00:00Z" :state :queued}
+                                       {:at "2026-09-17T00:00:01Z" :state :running}])]
+        (seed-run! run)
+        (io/write-edn! (cstate/run-status-path (:id run)) {:phase :complete})
+        (reconcile/reconcile!)
+        (is (= :failed (:state (runs/read-run (:id run)))))
+        (is (= :undiagnosed (-> (runs/read-run (:id run)) :error :reason)))))))
+
+(deftest a-restart-finishes-a-recovery-that-diagnosed
+  (with-tmp
+    (fn [_]
+      (let [w   (ws/create! :test {:stage :triaging :external-refs []})
+            run (assoc base-run
+                       :id "2026-09-17-test-recovery-bbbbbbbb"
+                       :source {:type :session-failure :fired-at "T" :fired-by "u"}
+                       :workstream-id (:id w)
+                       :state-history [{:at "2026-09-17T00:00:00Z" :state :queued}
+                                       {:at "2026-09-17T00:00:01Z" :state :running}])]
+        (seed-run! run)
+        (ws/append-entry! :test (:id w) {:kind :session-diagnosis}
+                          (pr-str {:format :session-diagnosis :failures ["F1"] :verdict :one-off
+                                   :cause "c" :evidence ["e"] :remedy "r"}))
+        (io/write-edn! (cstate/run-status-path (:id run)) {:phase :complete})
+        (reconcile/reconcile!)
+        (is (= :done (:state (runs/read-run (:id run)))))))))

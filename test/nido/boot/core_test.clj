@@ -929,3 +929,119 @@
   (doseq [s [:waiting-on-a-human :not-mechanical :terminal :already-running]]
     (is (nil? (core/drive-log-line {:ws-id "ws-2" :at :design-approved :skipped s}))
         (str s " is a resting state, not news"))))
+
+;; ---------------------------------------------------------------------------
+;; Session recovery: its brakes, its terminal state, and a restore's continuations
+;; ---------------------------------------------------------------------------
+
+(defn- recovery-run! [id ws-id]
+  (runs/write-run! {:id id :project :brian :trigger :session-recovery
+                    :source {:type :session-failure} :event-payload {:failures "F1"}
+                    :skill :recover-session :first-message "/recover-session" :agent :claude
+                    :session-name (str "recover-" id) :workstream-id ws-id
+                    :claude-session-id nil :limits {:budget "1h"}
+                    :priority 0 :session-profile :full :uncapped? false
+                    :state :queued :state-history [{:at "2026-09-17T00:00:00Z" :state :queued}]
+                    :artifacts [] :error nil}))
+
+(deftest a-recovery-that-exits-without-its-own-diagnosis-fails
+  (gate-with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (recovery-run! "rrec" (:id w))
+        (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
+                      core/skill-resolvable?      (constantly true)
+                      agent/launch!               (fn [_] {:exit-code 0 :num-turns 12})
+                      status-file/read-status     (constantly {:phase :complete})
+                      anomaly/record-failure      (fn [det _] det)
+                      breakers/record-failure!    (fn [& _] nil)]
+          (#'core/run-blocking! "rrec"))
+        (is (= :failed (:state (runs/read-run "rrec")))
+            "a clean exit and a :complete status file are not a diagnosis")
+        (is (= :undiagnosed (-> (runs/read-run "rrec") :error :reason)))))))
+
+(deftest a-recovery-that-diagnosed-while-running-finishes
+  (gate-with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (recovery-run! "rdiag" (:id w))
+        (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
+                      core/skill-resolvable?      (constantly true)
+                      agent/launch!
+                      (fn [_]
+                        (ws/append-entry! :brian (:id w) {:kind :session-diagnosis}
+                                          (pr-str {:format :session-diagnosis :failures ["F1"]
+                                                   :verdict :one-off :cause "c" :evidence ["e"]
+                                                   :remedy "r"}))
+                        {:exit-code 0 :num-turns 12})
+                      status-file/read-status     (constantly {:phase :complete})]
+          (#'core/run-blocking! "rdiag"))
+        (is (= :done (:state (runs/read-run "rdiag"))))))))
+
+(deftest a-failed-recovery-charges-no-brake
+  (gate-with-tmp
+    (fn [_]
+      (let [w        (ws/create! :brian {:stage :triaging :external-refs []})
+            window   (atom [])
+            breakers (atom [])]
+        (recovery-run! "rfail" (:id w))
+        (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
+                      core/skill-resolvable?      (constantly true)
+                      agent/launch!               (fn [_] {:exit-code 1 :num-turns 3})
+                      anomaly/record-failure      (fn [det at] (swap! window conj at) det)
+                      breakers/record-failure!    (fn [& args] (swap! breakers conj args) nil)]
+          (#'core/run-blocking! "rfail"))
+        (is (= :failed (:state (runs/read-run "rfail"))))
+        (is (empty? @breakers)
+            "a breaker counts a trigger: one cause's failed recoveries would stop every other cause")
+        (is (empty? @window)
+            "a cause whose recoveries keep failing must not halt the coordinator")))))
+
+(deftest a-kept-start-failure-charges-its-breaker-but-not-the-window
+  (gate-with-tmp
+    (fn [_]
+      (let [window   (atom [])
+            breakers (atom [])]
+        (runs/write-run! {:id "rkept" :project :brian :trigger :triage-teacher-bugs
+                          :source {:type :notion-view} :event-payload {:id "BR-9"}
+                          :skill :triage-bug :first-message "x" :agent :claude
+                          :session-name "run-rkept" :claude-session-id nil :limits {}
+                          :priority 0 :session-profile :lite :uncapped? false
+                          :state :queued :state-history [{:at "t" :state :queued}]
+                          :artifacts [] :error nil})
+        (with-redefs [runs/spawn-session-for-run!
+                      (fn [_] (throw (ex-info "Advancing shared cluster failed" {:session-failure/id "F7"})))
+                      cstate/run-session-home-link (constantly "/tmp/nope")
+                      anomaly/record-failure       (fn [det at] (swap! window conj at) det)
+                      breakers/record-failure!     (fn [& args] (swap! breakers conj args) nil)]
+          (#'core/run-blocking! "rkept"))
+        (is (= 1 (count @breakers)) "the trigger still backs off a start that keeps failing")
+        (is (empty? @window)
+            "one environmental cause failing three Runs must not halt the coordinator that recovers it")))))
+
+(deftest a-restores-continuation-reaches-the-executor-not-the-spawn-path
+  (gate-with-tmp
+    (fn [_]
+      (let [w         (ws/create! :brian {:stage :triaging :external-refs []})
+            submitted (atom [])
+            spawns    (atom [])]
+        (runs/write-run! {:id "rcont" :project :brian :trigger :triage-new
+                          :source {:type :notion-view} :event-payload {:id "BR-2"}
+                          :skill :triage-bug :first-message "x" :agent :claude
+                          :session-name "run-rcont" :workstream-id (:id w)
+                          :claude-session-id nil :limits {} :priority 4
+                          :session-profile :full :uncapped? false
+                          :state :queued :state-history [{:at "t" :state :queued}]
+                          :artifacts [] :error nil})
+        (with-redefs [executor/submit!      (fn [& args] (swap! submitted conj args))
+                      anomaly/record-spawn  (fn [det at] (swap! spawns conj at) det)]
+          (#'core/dispatch-envelope! {:type :execute-run :run-id "rcont"}
+                                     {:brian [{:name :triage-new :max-in-flight 2}]}))
+        (is (= [["rcont" 4 false :triage-new 2]] @submitted))
+        (is (empty? @spawns) "a continuation is not a spawn the anomaly window counts")))))
+
+(deftest a-restores-reply-is-delivered-to-its-parked-session
+  (let [resumed (atom nil)]
+    (with-redefs [nido.coordinator.lane.resume/resume! (fn [& args] (reset! resumed args))]
+      (#'core/dispatch-envelope! {:type :resume-turn :project :brian :ws-id "ws-1" :input "apply it"} {}))
+    (is (= [:brian "ws-1" "apply it"] @resumed))))

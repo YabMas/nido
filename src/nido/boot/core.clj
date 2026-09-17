@@ -19,6 +19,7 @@
    [nido.coordinator.daemon.pid :as pid]
    [nido.coordinator.source.queue :as queue]
    [nido.coordinator.daemon.reconcile :as reconcile]
+   [nido.coordinator.lane.resume :as resume]
    [nido.coordinator.lane.review :as review]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
@@ -29,6 +30,7 @@
    [nido.coordinator.source.slack :as slack-source]
    [nido.coordinator.source.slack-reaction :as slack-reaction-source]
    [nido.coordinator.source.improvement :as improvement-source]
+   [nido.coordinator.source.start-failures :as start-failures-source]
    [nido.coordinator.source.sweep :as sweep-source]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.status-file :as status-file]
@@ -647,7 +649,7 @@
                          (catch Throwable t
                            (cond-> {:spawn-error true :detail (.getMessage t)}
                              (kept-failure-id t) (assoc :failure-id (kept-failure-id t))))))
-        next-state (cond
+        derived    (cond
                      ;; Provision-only failures park a BLOCKED gate instead of
                      ;; :failed — a :failed here reverts the ticket :planning→:triaged
                      ;; (bounces the board back to :ready) and hides the blocker.
@@ -674,12 +676,22 @@
                        :else
                        (status-file/derive-state-after-exit
                          (status-file/read-status run-id)))
-                     :else :failed)]
+                     :else :failed)
+        ;; A recovery finishes only on a diagnosis it made. A clean exit without
+        ;; one — whatever its status file says — would close the loop on a failure
+        ;; nobody judged, so it fails instead and its cause is fired again.
+        undiagnosed? (and (runs/recovery? run)
+                          (contains? #{:done :awaiting-review} derived)
+                          (not (runs/diagnosed-while-running? (runs/read-run run-id))))
+        next-state (if undiagnosed? :failed derived)]
     ;; (session-id was already persisted up front, above)
     (runs/transition! run-id next-state)
     (when (= :failed next-state)
       (let [r (runs/read-run run-id)]
         (runs/write-run! (assoc r :error (cond-> {:exit-code (:exit-code result)}
+                                           undiagnosed?
+                                           (assoc :reason :undiagnosed
+                                                  :detail "the recovery exited without appending a :session-diagnosis")
                                            (:spawn-error result)
                                            (assoc :reason :spawn-failed
                                                   :detail (:detail result))
@@ -737,9 +749,17 @@
           trigger-name (:trigger run)
           max-failures (or (-> run :limits :max-failures) 3)]
       (case next-state
+        ;; Neither a recovery nor a kept start failure counts in the global
+        ;; window: an environment that fails several starts at once, or a cause
+        ;; whose recoveries keep failing, must not halt the coordinator that would
+        ;; recover every other cause. A recovery charges no breaker either — its
+        ;; source paces it per cause, where a breaker would stop them all.
         :failed          (when-not (:project-unregistered result)
-                           (swap! !detector anomaly/record-failure (clock/now-iso))
-                           (breakers/record-failure! project trigger-name max-failures))
+                           (let [recovery? (runs/recovery? run)]
+                             (when-not (or recovery? (:failure-id result))
+                               (swap! !detector anomaly/record-failure (clock/now-iso)))
+                             (when-not recovery?
+                               (breakers/record-failure! project trigger-name max-failures))))
         :done            (breakers/record-success! project trigger-name)
         :awaiting-review (breakers/record-success! project trigger-name)
         nil))
@@ -820,14 +840,47 @@
       (do
         (spawn/spawn-and-submit! routed {:fired-at (clock/now-iso)
                                          :fired-by (System/getenv "USER")})
-        (swap! !detector anomaly/record-spawn (clock/now-iso))))))
+        ;; A recovery is paced per cause and held to one in flight per cause by
+        ;; its source; counting it here would let ten causes failing at once halt
+        ;; the coordinator that is about to recover them.
+        (when-not (= :session-failure (-> routed :trigger :source :type))
+          (swap! !detector anomaly/record-spawn (clock/now-iso)))))))
+
+(defn- continue-restored!
+  "Carry on what a restore brought a session back for. The restore started the
+   session in its own process; this is only the continuation, so nothing here
+   starts a session cold — and none of it is a spawn the anomaly window counts.
+
+     {:type :execute-run :run-id …}               execute a Run whose session is up
+     {:type :resume-turn :project :ws-id :input}  deliver the reply that could not start"
+  [env triggers-by-project]
+  (try
+    (case (:type env)
+      :execute-run
+      (if-let [r (runs/read-run (:run-id env))]
+        (executor/submit! (:id r) (or (:priority r) 0) (boolean (:uncapped? r)) (:trigger r)
+                          (some #(when (= (:trigger r) (:name %)) (:max-in-flight %))
+                                (get triggers-by-project (:project r))))
+        (binding [*err* *err*]
+          (.println ^java.io.PrintWriter *err*
+                    (str "WARN: restored run " (:run-id env) " not found — dropping"))))
+
+      :resume-turn
+      (resume/resume! (:project env) (:ws-id env) (:input env)))
+    (catch Throwable t
+      (binding [*err* *err*]
+        (.println ^java.io.PrintWriter *err*
+                  (str "WARN: continuing a restore failed — " (pr-str (dissoc env :input))
+                       " — " (ex-message t)))))))
 
 (defn- dispatch-envelope!
   "Route one drained envelope. A :ship envelope (from `nido ship`) goes to the
-   merge-lane handler; everything else is a source event for trigger-matching."
+   merge-lane handler, a restore's continuation to continue-restored!, and
+   everything else is a source event for trigger-matching."
   [env triggers-by-project]
-  (if (= :ship (:type env))
-    (ship/handle-ship! env)
+  (case (:type env)
+    :ship                       (ship/handle-ship! env)
+    (:execute-run :resume-turn) (continue-restored! env triggers-by-project)
     (process-envelope! env triggers-by-project)))
 
 (def execution-bodies
@@ -1028,6 +1081,7 @@
   (slack-reaction-source/register!)                   ; register Slack-reaction source plugin
   (improvement-source/register!)                      ; register the approved-improvement source
   (sweep-source/register!)                            ; register the daily improvement sweep
+  (start-failures-source/register!)                   ; register the failed-session-start source
   (loop []
     (tick!)
     (Thread/sleep poll-ms)

@@ -111,9 +111,14 @@
 
 (Band Source
   "Where work arrives from: the source plugin registry, the Notion/Slack pollers, the manual
-   envelope queue, and the routing and filtering that turns an arrival into a fire."
+   envelope queue, and the routing and filtering that turns an arrival into a fire.
+
+   It reaches `Session` because a session start that failed is an arrival too. The substrate
+   keeps the failure — it is the only place every start passes through — and cannot reach the
+   queue itself, so the source that turns kept failures into recovery fires has to read them.
+   It reads; it starts, stops and repairs nothing, which stays the lifecycle's."
   {:prefix ["nido.coordinator.source."]
-   :may-depend [Platform Integration Record Report]})
+   :may-depend [Platform Integration Session Record Report]})
 
 (Band Daemon
   "The running coordinator: its scheduler, agent launcher, pid and heartbeat files, and the
