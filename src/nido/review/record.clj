@@ -1839,6 +1839,14 @@
                (ws/entry-at-seq project ws-id))
       record))
 
+(defn- stamp-run
+  "`record` naming the run that appended it, and — for a re-survey — the design run it is nested in.
+   An outcome is not a record and is left alone."
+  [record {:keys [run-id within-run]}]
+  (cond-> record
+    (and (:format record) run-id)     (assoc :run-id (str run-id))
+    (and (:format record) within-run) (assoc :within-run (str within-run))))
+
 (defn- run-judge-stage
   [ctx]
   (let [{:keys [cwd code-cwd run-id reviewer]} (:config ctx)
@@ -1859,15 +1867,17 @@
         settled (if (and project subject)
                   (settled/settled (settled/ledgers project ws-id subject) subject reading)
                   {})
-        record (baseline-review!
-                {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
-                 :baseline subject
-                 :settled settled
-                 :listing listing
-                 :code-identity (:code-identity reading)
-                 :subject-identities (:subject-identities reading)
-                 :label (str "baseline-review-round-" (:iter ctx))
-                 :disputes (disputes-for-judge (:history ctx))})
+        record (stamp-run
+                (baseline-review!
+                 {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
+                  :baseline subject
+                  :settled settled
+                  :listing listing
+                  :code-identity (:code-identity reading)
+                  :subject-identities (:subject-identities reading)
+                  :label (str "baseline-review-round-" (:iter ctx))
+                  :disputes (disputes-for-judge (:history ctx))})
+                (:config ctx))
         ctx    (assoc ctx :settled settled)]
     (append! cwd record)
     (cond
@@ -2123,6 +2133,78 @@
             (seq disputes) (assoc :disputed (mapv :claim disputes))))
         history)))
 
+(def ^:private before-a-judge
+  "The outcomes a round reaches without launching a judge: nothing to judge, nothing checkable, no
+   ledger, a subject the declaration does not hold, a declaration fukan could not list, or a premise
+   no round has verified. A status alone does not say which happened — a run can end on
+   :premise-unverified after rounds that judged — so what counts is each round's own outcome."
+  #{"no-workstream" "no-record" "nothing-to-check" "subjects-undeclared" "declaration-unreadable"
+    "premise-unverified"})
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :int]}
+  judges-launched
+  "How many of a record run's rounds launched a judge, read off the run's report: a round whose judge
+   phase reached a verdict, or failed after a judge was launched, counts; one whose outcome is reached
+   before a judge does not. Zero means the run judged nothing, whatever status it ended in."
+  [report]
+  (count (for [round (:rounds report)
+               ph    (:phases round)
+               :when (= "judge" (some-> (:phase ph) name))
+               :when (not (before-a-judge (some-> (:outcome ph) name)))]
+           ph)))
+
+(defn- tally
+  "Per key, in how many of `rounds` it was broken, in how many it was the only thing broken, and
+   whether it was broken in the last of them. `rounds` is each round's set of broken keys, in order."
+  [rounds]
+  (let [ks (into (sorted-set) cat rounds)
+        end (or (last rounds) #{})]
+    (into (sorted-map)
+          (for [k ks]
+            [k {:broken (count (filter #(contains? % k) rounds))
+                :alone  (count (filter #(= #{k} %) rounds))
+                :at-end (contains? end k)}]))))
+
+(defn- broken-check-names
+  "The checks a design decision marks broken, in either era's shape — :status on a current one,
+   :held? false on one from before the third outcome existed."
+  [decision]
+  (into #{} (keep (fn [{:keys [check status held?]}]
+                    (when (or (= :broken status) (false? held?)) check)))
+        (:checks decision)))
+
+(defn ^{:malli/schema [:=> [:cat [:vector :map]] :map]}
+  run-figures
+  "What one record run's rounds did, from the entries it appended, in the ledger's order: its design
+   decisions give each derived check's figures, and its baseline reviews — a baseline run's own, or a
+   design run's re-survey — give each derivation's gaps and the claims found false.
+
+     {:decisions n :checks      {check {:broken n :alone n :at-end bool}}
+      :reviews   n :derivations {derivation {:broken n :alone n :at-end bool}}
+                   :falsified   {claim-id n}}
+
+   Read from the decisions rather than the run's report, because a decision holds every check's
+   status — a check a proceeding round broke included, which the report drops — and it outlives the
+   run dir. Derived on every read; nothing stores it."
+  [entries]
+  (let [decisions (filterv #(= :design-decision (:format %)) entries)
+        reviews   (filterv #(= :baseline-review (:format %)) entries)]
+    (cond-> {}
+      (seq decisions)
+      (assoc :decisions (count decisions)
+             :checks    (tally (mapv broken-check-names decisions)))
+      (seq reviews)
+      (assoc :reviews     (count reviews)
+             :derivations (tally (mapv (fn [r] (if (= :insufficient (:verdict r))
+                                                 (into #{} (keep :blocks) (:findings r))
+                                                 #{}))
+                                       reviews))
+             :falsified   (into (sorted-map)
+                                (frequencies
+                                 (for [r reviews :when (= :falsified (:verdict r))
+                                       f (:findings r) :when (:claim-id f)]
+                                   (:claim-id f))))))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   design-amend-prompt
   "Instruction to repair a design record the derivation found wanting.
@@ -2234,13 +2316,15 @@
                   (settled/settled (settled/ledgers project ws-id design) design reading
                                    (effective-design cwd design))
                   {})
-        record (design-decision!
-                {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
-                 :design design :settled settled :listing listing
-                 :code-identity (:code-identity reading)
-                 :subject-identities (:subject-identities reading)
-                 :label (str "design-decision-round-" (:iter ctx))
-                 :disputes (disputes-for-judge (:history ctx))})
+        record (stamp-run
+                (design-decision!
+                 {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
+                  :design design :settled settled :listing listing
+                  :code-identity (:code-identity reading)
+                  :subject-identities (:subject-identities reading)
+                  :label (str "design-decision-round-" (:iter ctx))
+                  :disputes (disputes-for-judge (:history ctx))})
+                (:config ctx))
         ctx    (assoc ctx :settled settled)
         traj   (trajectory (:history ctx))
         final! (fn [c] (append! cwd (cond-> record (seq traj) (assoc :trajectory traj))) c)]
@@ -2348,6 +2432,9 @@
         out (rloop/run-loop {:cwd cwd
                              :code-cwd code-cwd
                              :run-id (str run-id "-resurvey-" (inc n))
+                             ;; Named, not left in the id's suffix: its reviews are read as this
+                             ;; run's by this field, never by parsing the id they were given.
+                             :within-run run-id
                              :budget budget
                              :reviewer reviewer
                              :emit (fn [_])

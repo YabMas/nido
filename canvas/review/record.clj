@@ -99,5 +99,15 @@
     {:signature [:=> [:catn [:c :map]] :any]})
   (Operation trajectory "The run as a human reading it would want it."
     {:signature [:=> [:catn [:history :any]] :any]})
+  (Operation judges-launched
+    "How many of a record run's rounds launched a judge, read off its report; zero whatever status
+     the run ended in means it judged nothing."
+    {:signature [:=> [:catn [:report [:maybe :map]]] :int]})
+  (Operation run-figures
+    "What one record run's rounds did, per derived check or derivation, read off the decisions and
+     reviews it appended: in how many rounds each was broken, in how many it was the only thing
+     broken, and whether it was still broken when the run's last round answered. Pure over those
+     entries, so the figures are derived on every read and stored nowhere."
+    {:signature [:=> [:catn [:entries [:vector :map]]] :map]})
   (Operation design-amend-prompt "The instruction to repair a design."
     {:signature [:=> [:catn [:opts :map]] :string]}))

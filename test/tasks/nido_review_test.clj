@@ -1868,3 +1868,24 @@
                   config/read-projects (fn [] {"brian" {:reviewer :claude}})]
       (is (= :codex (reviewer-of "/tmp/elsewhere" nil))
           "outside a session there is no project to ask"))))
+
+;; ── What record runs did, read back off the ledger ───────────────────────────
+
+(deftest a-design-runs-figures-take-in-its-resurvey-by-the-run-it-names
+  (let [entries {:design-decision [{:format :design-decision :run-id "d1" :seq 3
+                                    :checks [{:check :stratified :status :broken :note "n"}]}
+                                   {:format :design-decision :run-id "d2" :seq 9
+                                    :checks [{:check :goal-served :status :broken :note "n"}]}]
+                 :baseline-review [{:format :baseline-review :run-id "d1-resurvey-1" :within-run "d1"
+                                    :verdict :insufficient :seq 4
+                                    :findings [{:blocks :stratified :cites ["a"] :claim "c" :needs "n"}]}
+                                   {:format :baseline-review :verdict :sufficient :seq 1}]}]
+    (with-redefs [ws/list-ids    (constantly ["ws-1"])
+                  ws/entries-of  (fn [_ _ kind] (get entries kind))]
+      (let [one (read-string (with-out-str (t/figures-cmd* {:project "nido" :run-id "d1"})))]
+        (is (= 1 (:decisions one)))
+        (is (= 1 (:reviews one)) "the re-survey's review is read as the design run's, by the run it names")
+        (is (= {:broken 1 :alone 1 :at-end true} (get-in one [:derivations :stratified]))))
+      (let [all (read-string (with-out-str (t/figures-cmd* {:project "nido"})))]
+        (is (= 2 (:runs all)) "a review naming no run is attributed to none")
+        (is (= {:runs 1 :rounds 1 :alone 1 :at-end 1} (get-in all [:checks :goal-served])))))))

@@ -618,6 +618,11 @@
    :doc "Loop the baseline round: judge the survey against the code, amend it, repeat until it holds. Uncapped unless :max-iters. :seq names WHICH survey when the workstream holds more than one; the default is the newest. [:cwd <dir>] [:code-cwd <dir>] [:seq <n>] [:max-iters <n>] [:budget 30m] [:dry-run? true] [:reviewer codex|claude]"
    :task (apply nido-review/baseline-cmd *command-line-args*)}
 
+  nido:review:figures
+  {:requires ([tasks.nido-review :as nido-review])
+   :doc "What record runs' rounds did, derived from the ledger: per derived check and per baseline derivation, rounds broken, rounds broken alone, broken at the end. One run with :run-id, else every attributable run summed. [:project <p>] [:run-id <id>]"
+   :task (apply nido-review/figures-cmd *command-line-args*)}
+
   nido:review:design
   {:requires ([tasks.nido-review :as nido-review])
    :doc "Loop the decision round over the latest design record: derive, amend, re-survey if the premise is wrong, escalate only the ask. [:cwd <dir>] [:code-cwd <dir>] [:max-iters <n>] [:budget 30m] [:dry-run? true] [:reviewer codex|claude]"

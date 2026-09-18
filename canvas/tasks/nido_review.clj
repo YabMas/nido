@@ -143,6 +143,13 @@
   (Operation design-cmd
     "The `design-cmd` entry point."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation figures-cmd*
+    "Print what record runs' rounds did, derived from the ledger: one run's figures, or every
+     attributable run's summed per check and per derivation."
+    {:signature [:=> [:catn [:opts :map]] :any]})
+  (Operation figures-cmd
+    "The `figures-cmd` entry point."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation run-context
     "What this run can and cannot reach, as {:has [..] :missing [..]}. A run outside a session
      silently loses the cache and the ledger; this is what says so before it starts."

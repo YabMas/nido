@@ -2293,7 +2293,13 @@
                 ;; `nido.review.settled/subject-identities` names them. Present only in a project
                 ;; that declares a design, and only beside a :code-identity — the tree that did not
                 ;; move is what makes these the identities the judge read throughout.
-                [:subject-identities {:optional true} [:map-of string? string?]]]
+                [:subject-identities {:optional true} [:map-of string? string?]]
+                ;; The run whose round appended this, and — for a design run's re-survey — the
+                ;; design run it was nested in. What a run's rounds did is read back by these
+                ;; (`nido.review.record/run-figures`); a review appended before they existed
+                ;; names neither.
+                [:run-id     {:optional true} string?]
+                [:within-run {:optional true} string?]]
         shape  (fn [verdict & extra]
                  (into [:map {:closed true}]
                        (concat common [[:verdict [:= verdict]]] extra)))]
@@ -2421,7 +2427,10 @@
                 ;; it: the tree, when it did not move under the judge, and beside it each declared
                 ;; element's identity in a project that declares a design.
                 [:code-identity      {:optional true} string?]
-                [:subject-identities {:optional true} [:map-of string? string?]]]
+                [:subject-identities {:optional true} [:map-of string? string?]]
+                ;; The run whose round appended this decision, by which that run's rounds are read
+                ;; back; a decision appended before it existed names none.
+                [:run-id             {:optional true} string?]]
         shape  (fn [recommend & extra]
                  (into [:map {:closed true}]
                        (concat common [[:recommend [:= recommend]]] extra)))]

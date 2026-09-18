@@ -828,3 +828,68 @@
     (is (str/includes? p "Declared against the baseline: within\n"))
     (is (not (str/includes? p "breaks:")))
     (is (not (str/includes? p "at:")))))
+
+;; ── A round names the run that appended it ───────────────────────────────────
+
+(deftest a-decision-names-the-run-that-appended-it
+  (let [appended (atom [])]
+    (with-redefs [record/design-decision! (fn [_] (decision :amend :checks [(check :goal-served :broken)]
+                                                            :findings [{:cites ["c"] :claim "x" :check :goal-served}]))
+                  record/append! (fn [_ r] (swap! appended conj r) nil)]
+      (run record/design-judge-stage (ctx))
+      (is (= ["r1"] (mapv :run-id @appended)))
+      (is (not-any? :within-run @appended) "a design run is nested in nothing"))))
+
+(deftest a-rounds-outcome-is-left-unnamed
+  ;; An outcome is why there is no record; it is not appended as one, and stamping it would make it
+  ;; look like a decision.
+  (let [appended (atom [])]
+    (with-redefs [record/design-decision! (fn [_] {:outcome :codex-failed :detail "d"})
+                  record/append! (fn [_ r] (swap! appended conj r) nil)]
+      (run record/design-judge-stage (ctx))
+      (is (every? #(not (contains? % :run-id)) @appended)))))
+
+(deftest a-resurvey-is-told-the-design-run-it-is-nested-in
+  (let [seen (atom nil)]
+    (with-redefs [stages/project+ws-from-cwd (constantly [:nido "ws-1"])
+                  ws/latest-entry            (constantly a-design)
+                  stages/discover-baseline   (constantly {:format :baseline})
+                  rloop/run-loop             (fn [cfg] (reset! seen cfg) {:status :no-progress})]
+      (#'record/resurvey! (ctx :config {:cwd "/w" :run-id "design-loop-7"}))
+      (is (= "design-loop-7" (:within-run @seen)))
+      (is (str/starts-with? (:run-id @seen) "design-loop-7-resurvey-")))))
+
+;; ── What a run's rounds did ──────────────────────────────────────────────────
+
+(deftest the-figures-are-read-off-the-decisions-a-run-appended
+  (let [d  (fn [& checks] {:format :design-decision :checks (vec checks)})
+        es [(d (check :relation-honest :broken) (check :stratified :broken))
+            ;; a round that proceeds: the report drops this, the decision keeps it
+            (d (check :decomposable :broken) (check :goal-served :held))
+            (d (check :stratified :broken))]
+        f  (record/run-figures es)]
+    (is (= 3 (:decisions f)))
+    (is (= {:broken 2 :alone 1 :at-end true} (get-in f [:checks :stratified])))
+    (is (= {:broken 1 :alone 1 :at-end false} (get-in f [:checks :decomposable]))
+        "a check a proceeding round broke is counted")
+    (is (= {:broken 1 :alone 0 :at-end false} (get-in f [:checks :relation-honest])))
+    (is (not (contains? (:checks f) :goal-served)) "a check never broken has no figures")))
+
+(deftest a-baseline-runs-figures-count-gaps-and-falsified-claims
+  (let [es [{:format :baseline-review :verdict :insufficient
+             :findings [{:blocks :relation-honest :cites ["a"] :claim "c" :needs "n"}]}
+            {:format :baseline-review :verdict :falsified
+             :findings [{:cites ["a"] :claim "c" :claim-id "one-gate"}]}
+            {:format :baseline-review :verdict :sufficient}]
+        f  (record/run-figures es)]
+    (is (= 3 (:reviews f)))
+    (is (= {:broken 1 :alone 1 :at-end false} (get-in f [:derivations :relation-honest])))
+    (is (= {"one-gate" 1} (:falsified f)))))
+
+(deftest a-run-that-launched-no-judge-counts-none
+  (let [round (fn [outcome] {:phases [{:phase :judge :outcome outcome} {:phase :amend}]})]
+    (is (= 2 (record/judges-launched {:rounds [(round nil) (round "codex-failed")]}))
+        "a verdict and a failed judge were both launched")
+    (is (= 1 (record/judges-launched {:rounds [(round nil) (round "premise-unverified")]})))
+    (is (= 0 (record/judges-launched {:rounds [(round "subjects-undeclared")]})))
+    (is (= 0 (record/judges-launched nil)))))

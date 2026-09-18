@@ -1955,3 +1955,57 @@
   [& args]
   (let [[_ opts] (task-args/split-args args)]
     (design-cmd* opts)))
+
+;; ── What record runs did, read back off the ledger ──────────────────────────
+
+(defn- runs-on-ledgers
+  "Every baseline review and design decision on `project`'s ledgers that names a run, grouped by the
+   run it is read as: its own, or — for a design run's re-survey — the design run it was nested in.
+   Each group is in ledger order, kind by kind, which is all `record/run-figures` reads order from."
+  [project]
+  (group-by #(or (:within-run %) (:run-id %))
+            (for [id   (ws/list-ids project)
+                  kind [:design-decision :baseline-review]
+                  e    (ws/entries-of project id kind)
+                  :when (:run-id e)]
+              e)))
+
+(defn- summed
+  "Many runs' figures, per check and per derivation: in how many runs it was broken, in how many
+   rounds, in how many of those alone, and in how many runs it was still broken at the end."
+  [figures]
+  (letfn [(add [acc tallies]
+            (reduce-kv (fn [a k {:keys [broken alone at-end]}]
+                         (update a k (fn [m]
+                                       (-> (or m {:runs 0 :rounds 0 :alone 0 :at-end 0})
+                                           (update :runs inc)
+                                           (update :rounds + broken)
+                                           (update :alone + alone)
+                                           (update :at-end + (if at-end 1 0))))))
+                       acc tallies))]
+    {:runs        (count figures)
+     :checks      (reduce add (sorted-map) (keep :checks figures))
+     :derivations (reduce add (sorted-map) (keep :derivations figures))}))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  figures-cmd*
+  "Print what record runs' rounds did, derived from the ledger on every call and stored nowhere: one
+   run's figures with :run-id, or every attributable run on the project's ledgers summed per check
+   and per derivation. Only entries that name their run are read; a run appended before rounds
+   named theirs is not attributed, and its figures are the ones counted by hand."
+  [{:keys [project run-id]}]
+  (let [project (keyword (or project (some-> (stages/project+ws-from-cwd (System/getProperty "user.dir"))
+                                             first name)
+                             "nido"))
+        runs    (runs-on-ledgers project)]
+    (if run-id
+      (if-let [es (get runs (str run-id))]
+        (prn (record/run-figures (vec es)))
+        (println (str "no entry on " (name project) "'s ledgers names run " run-id)))
+      (prn (summed (map (comp record/run-figures vec) (vals runs)))))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  figures-cmd
+  [& args]
+  (let [[_ opts] (task-args/split-args args)]
+    (figures-cmd* opts)))
