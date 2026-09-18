@@ -84,6 +84,10 @@
      and the gate offering a grant. A reader testing `:recommend` itself parks an advisory-only
      design for a person whose grant nothing then accepts."
     {:signature [:=> [:catn [:decision [:maybe :map]]] :boolean]})
+  (Operation derivations-of
+    "The derivations a baseline or design is judged by, read off the record: `stratified` in place
+     of `decomposable` for one that names its strata, and the set it was written under otherwise."
+    {:signature [:=> [:catn [:record [:maybe :map]]] [:vector :keyword]]})
   (Operation entry-payload
     "For a ledger append: given an entry `kind` and raw `content`, the [extension payload] pair
      to write. A registered kind parses and validates; an unregistered one is markdown."

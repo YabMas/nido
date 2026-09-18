@@ -6,7 +6,7 @@
    [nido.coordinator.report.model :as model]))
 
 (def ^:private model-baseline
-  {:format :baseline
+  {:format :baseline :strata []
    :model  {:elements [{:id "canvas.order/aggregate" :sort :module :hides "summing order"}
                        {:id "canvas.order/total" :sort :operation}]
             :claims   [{:id "one-summing-path" :about ["canvas.order/aggregate"]
@@ -92,6 +92,29 @@
             baseline {:elements [{:id "writer" :sort :module :hides "storage"} {:id "total" :sort :module}]
                       :claims   []}))
         "an added module, and an operation restated as one, say what they hide and what they expose")))
+
+(deftest a-design-describes-the-strata-it-adds
+  (let [level    [{:lens :stratified/level :verdict :sound :because "one vocabulary"}]
+        baseline {:elements [{:id "records" :sort :stratum :interface "typed records" :readings level}]
+                  :claims   []}]
+    (is (= [] (model/undescribed-strata
+               baseline {:elements [{:id "records" :sort :stratum}
+                                    {:id "ledger" :sort :stratum :interface "entries" :readings level}]
+                         :claims   []}))
+        "a stratum the baseline describes is named by id alone, and an added one that says both passes")
+    (is (= ["ledger" "views"]
+           (model/undescribed-strata
+            baseline {:elements [{:id "ledger" :sort :stratum :interface "entries"}
+                                 {:id "views" :sort :stratum :readings level}]
+                      :claims   []}))
+        "an added stratum says what it provides and reads its level")))
+
+(deftest the-strata-of-a-model-are-its-stratum-elements-in-order
+  (is (= ["records" "ledger"]
+         (model/strata-of {:elements [{:id "records" :sort :stratum} {:id "agg" :sort :module}
+                                      {:id "ledger" :sort :stratum}]
+                           :claims   []})))
+  (is (= [] (model/strata-of nil))))
 
 (deftest an-element-whose-sort-a-design-changes-carries-nothing-of-what-it-was
   (let [claim    {:id "c1" :about ["r"] :statement "s" :falsified-by "f" :evidence {:by :round}}

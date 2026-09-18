@@ -37,7 +37,7 @@
   (is (= [] (retreat/baseline-retreats base-baseline base-baseline))))
 
 (def model-baseline
-  {:format :baseline :area "a" :bounded-by "b" :shape "s"
+  {:format :baseline :strata [] :area "a" :bounded-by "b" :shape "s"
    :model {:elements [{:id "canvas.x/m" :sort :module :hides "h"}]
            :claims   [{:id "k1" :about ["canvas.x/m"] :statement "one" :falsified-by "f1"
                        :evidence {:by :round} :read-at ["src/a.clj:1"]}
@@ -55,7 +55,7 @@
       "a claim reworded under its id is not a loss"))
 
 (deftest a-model-design-that-drops-a-claim-names-it
-  (let [d  {:format :design :effort :M :standing {:relation :conforms}
+  (let [d  {:format :design :strata [] :effort :M :standing {:relation :conforms}
             :baseline {:seq 1 :relation :within}
             :model {:elements [{:id "canvas.x/m" :sort :module}]
                     :claims   [{:id "k1" :about ["canvas.x/m"] :statement "one" :falsified-by "f"

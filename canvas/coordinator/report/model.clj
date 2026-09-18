@@ -81,6 +81,14 @@
     "The modules a design adds to its baseline without saying what they hide and what the rest may
      assume of them. A baseline derived from the two would list a module that hides nothing."
     {:signature [:=> [:catn [:baseline Model] [:design Model]] [:vector :string]]})
+  (Operation undescribed-strata
+    "The strata a design adds to its baseline without saying what they provide or reading their
+     level. A baseline derived from the two would list a stratum it could not survey."
+    {:signature [:=> [:catn [:baseline Model] [:design Model]] [:vector :string]]})
+  (Operation strata-of
+    "The ids of the stratum elements a model lists, in its order: the :strata a record carrying
+     that model states, for a record whose model is derived rather than authored."
+    {:signature [:=> [:catn [:model [:maybe Model]]] [:vector :string]]})
   (Operation overlay
     "A design's effective model: the model it leaves when laid over its baseline's, by id. An id
      it neither states nor removes is carried unchanged, one it states as removed is dropped, a

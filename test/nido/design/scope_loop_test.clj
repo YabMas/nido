@@ -25,7 +25,7 @@
   "The smallest record the ledger will accept as a baseline — `latest-entry` reads entries back
    through `report/parse-event`, so an invalid one is not a bad baseline, it is no baseline."
   [scope]
-  (cond-> {:format       :baseline
+  (cond-> {:format       :baseline :strata []
            ;; Entry 1 on every ledger `baselined-workstream!` builds: the survey
            ;; names the goal it was scoped for, and the boundary resolves it.
            :intent       {:seq 1}

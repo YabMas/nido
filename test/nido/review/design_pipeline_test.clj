@@ -279,7 +279,7 @@
                 (count (:entries (ws/read-ws :brian id))))
          _    (add! :intent {:format :intent :goal "g" :done-when ["d"]})
          b    (add! :baseline
-                    {:format :baseline :intent {:seq 1}
+                    {:format :baseline :strata [] :intent {:seq 1}
                      :area "a" :bounded-by "b" :shape "s"
                      :model {:elements [{:id "m" :sort :module :hides "h" :interface "i"}]
                              :claims [{:id "c1" :about ["m"] :statement "p" :falsified-by "f"
@@ -287,7 +287,7 @@
                      :read ["src/a.clj"]})
          _    (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                       :baseline-seq b :reason "holds"})
-         d    (add! :design {:format :design :summary "s" :shape "sh"
+         d    (add! :design {:format :design :strata [] :summary "s" :shape "sh"
                              :model {:elements [{:id "m" :sort :module}]
                                      :claims [{:id "one-path" :about ["m"] :statement "one path"
                                                :falsified-by "a second path"

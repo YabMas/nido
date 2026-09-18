@@ -20,7 +20,7 @@
       (finally (fs/delete-tree tmp)))))
 
 (def ^:private a-baseline
-  {:format :baseline :intent {:seq 1}
+  {:format :baseline :strata [] :intent {:seq 1}
    :area "order totalling" :bounded-by "money on an order" :shape "one summing path"
    :model {:elements [{:id "agg" :sort :module :hides "the summing order" :interface "an order's total"}
                       {:id "total" :sort :operation}]
@@ -33,7 +33,7 @@
    :read ["src/a.clj"]})
 
 (defn- a-design [baseline-seq]
-  {:format :design :summary "s" :shape "sh" :effort :S
+  {:format :design :strata [] :summary "s" :shape "sh" :effort :S
    :standing {:relation :conforms}
    :baseline {:seq baseline-seq :relation :within}
    :intent {:seq 1}
@@ -88,6 +88,8 @@
               {pb :baseline pd :design} (fork/parent-records :brian (fork/lineage child))]
           (testing "its model is the parent design laid over the parent baseline"
             (is (= (model/overlay (:model pb) (:model pd)) (:model derived)))
+            (is (= (model/strata-of (:model derived)) (:strata derived))
+                "and it names the strata that model lists, as a baseline written now does")
             (is (= ["c1" "c3"] (mapv :id (get-in derived [:model :claims])))))
           (testing "it cites the :fork entry and its own goal, never the parent's"
             (is (= {:seq 2} (:fork derived)))
@@ -165,6 +167,21 @@
             (is (= ["ledger"] (:modules (ex-data e))))
             (is (str/includes? (ex-message e) "entry 9"))
             (is (str/includes? (ex-message e) "adds ledger without saying what each hides"))))))))
+
+(deftest a-design-adding-a-stratum-it-does-not-describe-is-refused-by-entry
+  (with-tmp
+    (fn [_]
+      (let [p (parent)]
+        (with-redefs [ws/latest-entry    (fn [_ _ _] (-> (a-design 2)
+                                                         (assoc :seq 9)
+                                                         (update-in [:model :elements] conj
+                                                                    {:id "ledger" :sort :stratum})))
+                      standing/of-design (fn [& _] {:cleared? true})]
+          (let [e (try (fork/fork! :brian p goal) nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+            (is (= :fork (:refused (ex-data e))))
+            (is (= ["ledger"] (:strata (ex-data e))))
+            (is (str/includes? (ex-message e) "provides"))))))))
 
 (deftest a-child-record-the-ledger-would-refuse-says-why
   (with-tmp

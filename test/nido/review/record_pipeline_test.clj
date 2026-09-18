@@ -175,7 +175,7 @@
 ;; ── What a claim is about ───────────────────────────────────────────────────
 
 (def ^:private a-model-baseline
-  {:format :baseline :area "order totalling" :bounded-by "money amounts on an order"
+  {:format :baseline :strata [] :area "order totalling" :bounded-by "money amounts on an order"
    :model {:elements [{:id "canvas.order/aggregate" :sort :module}
                       {:id "canvas.order/total" :sort :operation}]
            :claims   [{:id "one-summing-path"
@@ -897,7 +897,7 @@
         claim    {:id "summers-sum-once" :about ["canvas.order/summers"]
                   :statement "whatever sums lines sums each once"
                   :falsified-by "a summer that visits a line twice" :evidence {:by :round}}
-        design   {:format :design :seq 1 :baseline {:seq 0} :model {:elements [] :claims [claim]}}
+        design   {:format :design :strata [] :seq 1 :baseline {:seq 0} :model {:elements [] :claims [claim]}}
         ids      {"canvas.order/aggregate" "agg-1" "canvas.order/summers" "role-1"}
         ledger   {:ws-id "ws-1" :reviews [] :baselines [] :retractions [] :designs [design]
                   :decisions [{:format :design-decision :seq 2 :design-seq 1 :recommend :proceed
@@ -1037,7 +1037,7 @@
                       "composition"))))
 
 (deftest a-model-baseline-names-its-claims-and-elements-as-subjects
-  (let [ids (settled/subjects {:format :baseline :shape "s"
+  (let [ids (settled/subjects {:format :baseline :strata [] :shape "s"
                                :model {:elements [{:id "canvas.x/m" :sort :module}]
                                        :claims   [{:id "k1" :about ["canvas.x/m"] :statement "s"
                                                    :falsified-by "f" :evidence {:by :round}}]}})]

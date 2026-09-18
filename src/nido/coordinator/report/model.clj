@@ -129,6 +129,30 @@
                 (map :id))
           (:elements design))))
 
+(defn ^{:malli/schema [:=> [:cat :Model :Model] [:vector :string]]}
+  undescribed-strata
+  "The ids of the strata `design` adds to `baseline` that do not say what they provide or carry a
+   reading of their level, in the design's order.
+
+   The same obligation `undescribed-modules` holds a module to, for the same reason: a baseline
+   derived from the two would list a stratum that says nothing about itself, which no baseline may."
+  [baseline design]
+  (let [strata (into #{} (keep #(when (= :stratum (:sort %)) (:id %))) (:elements baseline))]
+    (into []
+          (comp (filter #(= :stratum (:sort %)))
+                (remove #(contains? strata (:id %)))
+                (remove #(and (:interface %) (some (fn [r] (= :stratified/level (:lens r))) (:readings %))))
+                (map :id))
+          (:elements design))))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :Model]] [:vector :string]]}
+  strata-of
+  "The ids of the stratum elements `model` lists, in its order — the :strata a record carrying this
+   model states. A record whose model is derived (a fork's first baseline, a merged design) states
+   these rather than authoring its own list, so the two cannot disagree."
+  [model]
+  (into [] (comp (filter #(= :stratum (:sort %))) (map :id)) (:elements model)))
+
 (defn ^{:malli/schema [:=> [:cat :Model :Model] :Model]}
   overlay
   "The model `design` leaves when laid over `baseline`, by id — a design's EFFECTIVE model.

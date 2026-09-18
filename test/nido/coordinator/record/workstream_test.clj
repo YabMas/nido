@@ -363,7 +363,7 @@
 ;; exactly like a real one — the design would look judged when it was not.
 
 (def ^:private a-baseline
-  {:format       :baseline
+  {:format       :baseline :strata []
    ;; Entry 1 on every ledger here: `seed-baseline!` appends the goal before the
    ;; survey, which is the order the append boundary requires of a citation.
    :intent       {:seq 1}
@@ -405,7 +405,7 @@
    seeds at seq 1 — `seed-baseline!` writes the goal before the survey."
   ([n] (design-citing n 1))
   ([n intent-seq]
-   (cond-> {:format     :design
+   (cond-> {:format     :design :strata []
             :summary    "Round on the total."
             :shape      "One rounding boundary at the aggregate."
             :model      {:elements [{:id "order-aggregate" :sort :module
@@ -760,7 +760,7 @@
    shape as design-citing, one axis over: the ledger has to check a claim inside
    the record against another field of it, which Malli cannot express."
   [n phase]
-  {:format     :design
+  {:format     :design :strata []
    :summary    "The address moves to its own column."
    :shape      "Two writers during the migration; one reader throughout."
    :model      {:elements [{:id "address-column" :sort :module

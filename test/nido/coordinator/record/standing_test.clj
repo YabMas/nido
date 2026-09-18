@@ -20,7 +20,7 @@
 (def ^:private a-baseline
   ;; :intent names entry 1, which `ledger` appends before anything else — the
   ;; survey says which goal it was scoped for, and the append boundary checks it.
-  {:format :baseline :intent {:seq 1}
+  {:format :baseline :strata [] :intent {:seq 1}
    :area "order totalling" :bounded-by "money on an order"
    :shape "one summing path"
    :model {:elements [{:id "agg" :sort :module :hides "the summing order"
@@ -32,7 +32,7 @@
    :read ["src/a.clj"]})
 
 (defn- a-design [baseline-seq]
-  {:format :design :summary "s" :shape "sh"
+  {:format :design :strata [] :summary "s" :shape "sh"
    :model {:elements [{:id "agg" :sort :module}]
            :claims [{:id "one-summing-path" :about ["agg"]
                      :statement "one summing path"

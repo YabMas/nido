@@ -48,14 +48,16 @@
 
 (defn- derived-baseline
   "A child's first baseline: the parent baseline as it reads, with the parent design laid over its
-   model, less the health observations that design routed :fix-here. The design answers those, and
-   a child does not inherit what its parent committed to fixing."
+   model and naming the strata that model lists, less the health observations that design routed
+   :fix-here. The design answers those, and a child does not inherit what its parent committed to
+   fixing."
   [baseline design]
   (let [fixed  (into #{} (keep #(when (= :fix-here (:to %)) (:health-id %))) (:routes design))
-        health (into [] (remove #(contains? fixed (:id %))) (:health baseline))]
+        health (into [] (remove #(contains? fixed (:id %))) (:health baseline))
+        laid   (model/overlay (:model baseline) (:model design))]
     (cond-> (-> (ws/unstamp baseline)
                 (dissoc :supersedes :health :intent :fork)
-                (assoc :model (model/overlay (:model baseline) (:model design))))
+                (assoc :model laid :strata (model/strata-of laid)))
       (seq health) (assoc :health health))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Workstream]}
@@ -70,7 +72,7 @@
    Refuses — throwing with `:refused :fork` and writing nothing anywhere — a parent with no design;
    a design that does not stand, because nothing cleared or granted it or something blocks it; a
    design or baseline written before the shared model, or before a role named its players, named by
-   entry; a design adding a module it does not describe, naming the modules; and child records the
+   entry; a design adding a module or a stratum it does not describe, naming them; and child records the
    ledger would not accept, with why. All of it is decided before the child is minted, so a refused
    fork leaves no workstream behind."
   [project parent {:keys [goal done-when context]}]
@@ -99,6 +101,12 @@
                                  " rest may assume of it, so the child's baseline would list a module"
                                  " that hides nothing — amend the design to describe them first")
                             {:parent parent :seq (:seq design) :modules (vec bare)}))
+        _        (when-let [bare (seq (model/undescribed-strata (:model baseline) (:model design)))]
+                   (refuse! (str "The design at entry " (:seq design) " on " parent " adds "
+                                 (str/join ", " bare) " without saying what each provides and reading"
+                                 " its level, so the child's baseline would list a stratum it could"
+                                 " not survey — amend the design to describe them first")
+                            {:parent parent :seq (:seq design) :strata (vec bare)}))
         intent   (cond-> {:format :intent :goal goal :done-when (vec done-when)}
                    context (assoc :context context))
         derived  (derived-baseline baseline design)

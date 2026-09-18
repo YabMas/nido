@@ -28,7 +28,7 @@
 (def ^:private c1    (claim "c1" ["agg"] "the aggregate is the only summing path"))
 
 (def ^:private a-baseline
-  {:format :baseline :intent {:seq 1}
+  {:format :baseline :strata [] :intent {:seq 1}
    :area "order totalling" :bounded-by "money on an order" :shape "one summing path"
    :model {:elements [agg total]
            :claims   [c1 (claim "c2" ["total"] "a total is rounded once")]}
@@ -38,7 +38,7 @@
 (defn- a-design
   "A design stating `model` over the baseline at `bseq`."
   [bseq model & {:as more}]
-  (merge {:format :design :summary "s" :shape "sh" :effort :S
+  (merge {:format :design :strata [] :summary "s" :shape "sh" :effort :S
           :standing {:relation :conforms}
           :baseline {:seq bseq :relation :within}
           :intent {:seq 1}

@@ -23,7 +23,7 @@
 (def ^:private a-baseline
   ;; :intent names entry 1: these fixtures append the goal to a fresh
   ;; workstream before the survey, which is the order the boundary now requires.
-  {:format :baseline :intent {:seq 1}
+  {:format :baseline :strata [] :intent {:seq 1}
    :area "a" :bounded-by "b" :shape "s"
    :model {:elements [{:id "m" :sort :module :hides "h" :interface "i"}]
            :claims [{:id "c1" :about ["m"] :statement "p" :falsified-by "f"
@@ -175,7 +175,7 @@
                           (pr-str {:format :baseline-review :baseline-seq 2
                                    :verdict :sufficient :reason "r"}))
         (ws/append-entry! :brian id {:kind :design}
-                          (pr-str {:format :design :summary "s" :shape "sh"
+                          (pr-str {:format :design :strata [] :summary "s" :shape "sh"
                                    :model {:elements [{:id "m" :sort :module}]
                                            :claims [{:id "i" :about ["m"] :statement "i"
                                                      :falsified-by "f" :evidence {:by :round}}]}

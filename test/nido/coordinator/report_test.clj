@@ -123,19 +123,28 @@
    :intent     {:seq 2}
    :rejected   [{:alternative "round at render time"
                  :why-not     "moves money math into the view layer"}]
-   :layers     [{:claim "extract the total aggregate" :mode :judgment}
-                {:claim "drop per-line rounding at all 12 call sites" :mode :mechanical}]
+   ;; The levels the change touches, in the model — here none is declared. A design names these
+   ;; and no cut; `layered-design` is the shape that stated its layers.
+   :strata     []
    :seams      [{:what "the legacy per-line path stays for invoices"
                  :visible-how "old fn kept, marked deprecated, both callers listed"
                  :closed-by :spun-out :ref "FU-12"}]
    :open       ["whether invoices should follow in the same arc"]
    :effort     :M})
 
+(def ^:private layered-design
+  "`valid-design` as a design wrote it before strata: the shared model, no :strata, and the cut it
+   intended as :layers. Refused on write and read through DesignVisionAny."
+  (-> valid-design
+      (dissoc :strata)
+      (assoc :layers [{:claim "extract the total aggregate" :mode :judgment}
+                      {:claim "drop per-line rounding at all 12 call sites" :mode :mechanical}])))
+
 (def ^:private invariants-design
-  "`valid-design` as the invariants shape wrote it: plain-string invariants where the model is.
+  "`layered-design` as the invariants shape wrote it: plain-string invariants where the model is.
    Refused on write and read through DesignVisionAny, so it is what the tests of reading and
    rendering that era's records use."
-  (-> valid-design
+  (-> layered-design
       (dissoc :model)
       (assoc :invariants ["a total is rounded exactly once"
                           "no line item carries a rounded amount"])))
@@ -172,6 +181,7 @@
                             :statement "exactly one writer maintains the address"
                             :falsified-by "two write paths that both update the address"
                             :evidence {:by :round}}]}
+   :strata     []
    :holds      {"no-orphan-read" :always
                 "one-writer"     :on-completion}
    :standing   {:relation :conforms}
@@ -944,14 +954,16 @@
    :governing    ["two registers of data — values in motion vs state at rest"]
    :drift        ["most of this area parses at the DB edge; order/invoice re-parses"]
    :read         ["src/order/calc.clj" "src/order/aggregate.clj" "src/order/invoice.clj"]
-   :unknowns     ["whether the legacy CSV importer bypasses the aggregate"]})
+   :unknowns     ["whether the legacy CSV importer bypasses the aggregate"]
+   ;; No stratum is declared over this area; a baseline says so rather than leaving it unsaid.
+   :strata       []})
 
 (def ^:private survey-baseline
   "`valid-baseline` as the survey shape wrote it: modules, a composition and load-bearing
    properties where the model is. Refused on write and read through BaselineAny, so it is what the
    tests of reading and rendering that era's records use."
   (-> valid-baseline
-      (dissoc :model)
+      (dissoc :model :strata)
       (assoc :modules      [{:id "mod-calc" :module "calc"
                              :hides "how a money amount is represented and rounded"
                              :interface "exact amounts in, exact amounts out"}
@@ -1160,7 +1172,7 @@
 (deftest every-registered-lens-declares-what-it-reads-and-where-it-came-from
   (doseq [[lens spec] report/lenses]
     (is (qualified-keyword? lens) "a lens names its source in its namespace")
-    (is (contains? #{:claim :module} (:applies-to spec)))
+    (is (contains? #{:claim :module :stratum} (:applies-to spec)))
     (is (string? (:source spec)) (str lens " must say where it was borrowed from"))
     (is (seq (:verdicts spec)) (str lens " must close its vocabulary"))))
 
@@ -1770,7 +1782,7 @@
            :model {:elements [{:id "m" :sort :module :hides "h" :interface "i"}]
                    :claims   [{:id "c1" :about ["m"] :statement "p" :falsified-by "f"
                                :evidence {:by :round} :read-at ["src/a.clj:1"]}]}
-           :read ["src/a.clj"]}]
+           :read ["src/a.clj"] :strata []}]
     (is (some? (report/entry-payload :baseline (pr-str b))))
     (is (some? (report/entry-payload
                 :baseline (pr-str (assoc b :supersedes {:seq 9 :why "corrected"})))))
@@ -1943,3 +1955,89 @@
   (is (true? (report/owes-a-person? {:standing {:relation :conforms}
                                      :baseline {:relation :revisit}}))
       "and so is asking the core to move"))
+
+;; ── Strata ──────────────────────────────────────────────────────────────────
+;; A record written since strata entered the model names the levels it touches in :strata, and a
+;; design states no cut. The field is also the era marker: a record without it is read and judged
+;; as it was when written.
+
+(def ^:private a-stratum
+  {:id "canvas.order.strata/totals" :sort :stratum
+   :interface "an order's total, summed from exact lines"
+   :readings [{:lens :stratified/level :verdict :sound
+               :because "the aggregate is the only module, and the invoice uses the total alone"}]})
+
+(def ^:private stratified-baseline
+  (-> valid-baseline
+      (update-in [:model :elements] conj a-stratum)
+      (assoc :strata ["canvas.order.strata/totals"])))
+
+(deftest a-design-states-no-cut
+  (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :design layered-design))
+      "the shape that stated layers is refused on write")
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :design (assoc valid-design :layers (:layers layered-design))))
+      "and so is a design naming strata that also states its cut")
+  (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :design (dissoc valid-design :strata)))
+      "a design names its strata, even when there are none"))
+
+(deftest a-design-written-before-strata-still-reads
+  (is (= layered-design (report/parse-event :design layered-design))
+      "the cut it stated is read back as it was written"))
+
+(deftest the-strata-a-record-names-are-the-strata-its-model-lists
+  (is (report/validate-event :baseline stratified-baseline))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :baseline (assoc stratified-baseline :strata [])))
+      "a stratum the model lists but :strata leaves out")
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :baseline (assoc valid-baseline :strata ["canvas.order.strata/totals"])))
+      "a stratum :strata names but the model does not list"))
+
+(deftest a-survey-reads-every-stratum-it-lists
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :baseline (assoc-in stratified-baseline [:model :elements 3] (dissoc a-stratum :readings))))
+      "a stratum with no reading of its level")
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :baseline (assoc-in stratified-baseline [:model :elements 3] (dissoc a-stratum :interface))))
+      "a stratum that does not say what it provides")
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :baseline (assoc-in stratified-baseline [:model :elements 3 :readings 0 :verdict] :fine)))
+      "a verdict outside the lens's closed vocabulary")
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :baseline (assoc-in stratified-baseline [:model :elements 0 :readings]
+                                    [{:lens :stratified/level :verdict :sound :because "b"}])))
+      "a module read as though it were a level"))
+
+(deftest a-health-observation-names-a-stratum-the-baseline-lists
+  (let [h {:id "h1" :axis :design :observation "the invoice reaches past the total"
+           :evidence ["src/order/invoice.clj:88"]}]
+    (is (report/validate-event :baseline (assoc stratified-baseline :health
+                                                [(assoc h :about ["canvas.order.strata/totals"])])))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :baseline (assoc stratified-baseline :health
+                                                         [(assoc h :about ["canvas.order.strata/other"])]))))))
+
+(deftest a-tension-a-reading-finds-reaches-health
+  (let [mixed (assoc-in stratified-baseline [:model :elements 3 :readings 0 :verdict] :mixed)
+        h     {:id "h-mixed" :axis :design :observation "the aggregate and the reader are two levels"
+               :evidence ["src/order/invoice.clj:88"]}]
+    (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :baseline mixed))
+        "a tension left in a reading alone is seen and never decided")
+    (is (report/validate-event :baseline (assoc mixed :health [(assoc h :about ["canvas.order.strata/totals"])]))
+        "named by a health observation, the design has to route it")))
+
+(deftest the-derivations-a-record-is-judged-by-are-read-off-the-record
+  (is (= report/strata-derivations (report/derivations-of valid-design)))
+  (is (= report/derivations (report/derivations-of layered-design)))
+  (is (some #{:stratified} (report/derivations-of stratified-baseline)))
+  (is (not-any? #{:decomposable} (report/derivations-of stratified-baseline))))
+
+(deftest report->markdown-names-the-strata
+  (is (str/includes? (report/report->markdown stratified-baseline)
+                     "**Strata:** `canvas.order.strata/totals`"))
+  (is (str/includes? (report/report->markdown valid-design) "**Strata:** touches no declared stratum")))

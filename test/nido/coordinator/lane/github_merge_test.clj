@@ -70,7 +70,7 @@
                  (dissoc (ws/latest-entry :brian (:id w) :merged) :seq :at))))))))
 
 (def ^:private a-baseline
-  {:format       :baseline
+  {:format       :baseline :strata []
    :intent       {:seq 1}
    :area         "order totalling"
    :bounded-by   "everything that reads or writes a money amount on an order"
@@ -88,7 +88,7 @@
    :read         ["src/order/aggregate.clj"]})
 
 (def ^:private a-design
-  {:format     :design
+  {:format     :design :strata []
    :summary    "Round on the total."
    :shape      "One rounding boundary at the aggregate."
    :model      {:elements [{:id "mod-the-order-aggregate" :sort :module}]

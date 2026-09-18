@@ -270,7 +270,7 @@
 
 (defn- check-modules-described!
   "A design adding a module to the baseline it cites says what that module hides and what the rest
-   may assume of it. A module the baseline describes the design names by id alone, and keeps that
+   may assume of it, and one adding a stratum says what it provides and reads its level. A module the baseline describes the design names by id alone, and keeps that
    description; one it adds has none to keep, and a child forked from the design would take it
    into a baseline that lists a module hiding nothing. Records from before the shared model are
    left to the readers that refuse them."
@@ -279,7 +279,11 @@
     (when-let [bare (seq (report-model/undescribed-modules (:model baseline) (:model record)))]
       (throw (ex-info (str "Design adds " (str/join ", " bare) " to baseline entry " (:seq baseline)
                            " without saying what each hides and what the rest may assume of it")
-                      {:seq (:seq baseline) :modules (vec bare)})))))
+                      {:seq (:seq baseline) :modules (vec bare)})))
+    (when-let [bare (seq (report-model/undescribed-strata (:model baseline) (:model record)))]
+      (throw (ex-info (str "Design adds " (str/join ", " bare) " to baseline entry " (:seq baseline)
+                           " without saying what each provides and reading its level")
+                      {:seq (:seq baseline) :strata (vec bare)})))))
 
 (defn- check-baseline-citation!
   "A :design record's :baseline names the entry it was judged against, its

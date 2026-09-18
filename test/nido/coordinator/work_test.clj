@@ -881,7 +881,7 @@
 
 (def ^:private approvable-baseline
   ;; :intent names entry 1 — the goal is appended before the survey it scopes.
-  {:format :baseline :intent {:seq 1} :area "a" :bounded-by "b" :shape "s"
+  {:format :baseline :strata [] :intent {:seq 1} :area "a" :bounded-by "b" :shape "s"
    :model {:elements [{:id "m" :sort :module :hides "h" :interface "i"}]
            :claims [{:id "c1" :about ["m"] :statement "p" :falsified-by "f"
                      :evidence {:by :round} :read-at ["src/a.clj:1"]}]}
@@ -899,7 +899,7 @@
     (let [b (add :baseline approvable-baseline)
           _ (add :baseline-review {:format :baseline-review :verdict :sufficient
                                    :baseline-seq b :reason "ok"})
-          d (add :design {:format :design :summary "s" :shape "sh"
+          d (add :design {:format :design :strata [] :summary "s" :shape "sh"
                           :model {:elements [{:id "m" :sort :module}]
                                   :claims [{:id "one-path" :about ["m"] :statement "one path"
                                             :falsified-by "a second path" :evidence {:by :round}}]}
@@ -1492,7 +1492,7 @@
   (workstream/append-entry! :brian id {:kind :intent}
     (pr-str {:format :intent :goal "the goal" :done-when ["it is done"]}))
   (workstream/append-entry! :brian id {:kind :baseline}
-    (pr-str {:format :baseline :intent {:seq 1}
+    (pr-str {:format :baseline :strata [] :intent {:seq 1}
              :area "the area" :bounded-by "the bound" :shape "the shape"
              :model {:elements [{:id "mod-m" :sort :module
                                  :hides "how p is stored" :interface "p"}]
@@ -1507,7 +1507,7 @@
    amending entry `amends`."
   ([summary] (design-entry summary nil))
   ([summary amends]
-   (pr-str (cond-> {:format     :design
+   (pr-str (cond-> {:format     :design :strata []
                     :summary    summary
                     :shape      "the shape"
                     :standing   {:relation :conforms}
@@ -2859,7 +2859,7 @@
             row  #(first (filter (comp #{id} :ws-id) (work/list-workstreams :brian)))]
         (add! :intent {:format :intent :goal "g" :done-when ["d"]})
         (let [b (add! :baseline
-                      {:format :baseline :intent {:seq 1}
+                      {:format :baseline :strata [] :intent {:seq 1}
                        :area "a" :bounded-by "b" :shape "s"
                        :model {:elements [{:id "m" :sort :module :hides "h" :interface "i"}]
                                :claims [{:id "c1" :about ["m"] :statement "p" :falsified-by "f"
@@ -2873,7 +2873,7 @@
           ;; :challenges, so a person IS owed the grant — a design owing nobody
           ;; goes to the clearance stage, which is nido's own move.
           (let [d (add! :design
-                        {:format :design :summary "s" :shape "sh"
+                        {:format :design :strata [] :summary "s" :shape "sh"
                          :model {:elements [{:id "m" :sort :module}]
                                  :claims [{:id "one-path" :about ["m"] :statement "one path"
                                            :falsified-by "a second path" :evidence {:by :round}}]}

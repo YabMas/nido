@@ -305,8 +305,8 @@
   ;; A merged design writes out its whole combination, claims it only carries from a baseline
   ;; included, and holding it to everything it states refused every landing after a merge.
   (let [claim  (fn [id] {:id id :about ["canvas.a/m"] :statement (str id " holds") :evidence {:by :round}})
-        parent {:format :design :seq 7 :model {:elements [] :claims [(claim "parent-claim")]}}
-        child  {:format :design :seq 3 :model {:elements [] :claims [(claim "child-claim")]}}
+        parent {:format :design :strata [] :seq 7 :model {:elements [] :claims [(claim "parent-claim")]}}
+        child  {:format :design :strata [] :seq 3 :model {:elements [] :claims [(claim "child-claim")]}}
         merged (assoc a-design :seq 8 :supersedes {:seq 7} :merges {:ws-id "ws-child" :design {:seq 3}}
                       :model {:elements [{:id "canvas.a/m" :sort :module}]
                               :claims   [(claim "parent-claim") (claim "child-claim")

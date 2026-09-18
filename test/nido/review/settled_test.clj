@@ -132,7 +132,7 @@
                          :falsified-by "a second path" :evidence {:by :round}})
 
 (defn- model-baseline [seq-n & claims]
-  {:format :baseline :seq seq-n :model {:elements [agg] :claims (vec claims)}})
+  {:format :baseline :strata [] :seq seq-n :model {:elements [agg] :claims (vec claims)}})
 
 (deftest a-model-claim-is-keyed-on-its-subjects-not-on-the-tree
   (let [l [(ledger :baselines [(model-baseline 1 one-path)]
@@ -153,7 +153,7 @@
   (let [role   {:id "canvas.a/summers" :sort :role :plays ["canvas.a/agg"]}
         claim  {:id "summers-once" :about ["canvas.a/summers"] :statement "each sums once"
                 :falsified-by "a double sum" :evidence {:by :round}}
-        record (fn [n] {:format :baseline :seq n :model {:elements [agg role] :claims [claim]}})
+        record (fn [n] {:format :baseline :strata [] :seq n :model {:elements [agg role] :claims [claim]}})
         ids    {"canvas.a/agg" "agg-1" "canvas.a/summers" "role-1"}
         l      [(ledger :baselines [(record 1)]
                         :reviews [(review 2 1 :confirmed ["summers-once"] :subject-identities ids)])]]
@@ -165,7 +165,7 @@
   (let [role      {:id "canvas.a/summers" :sort :role :plays ["canvas.a/agg"]}
         claim     {:id "summers-once" :about ["canvas.a/summers"] :statement "each sums once"
                    :falsified-by "a double sum" :evidence {:by :round}}
-        design    (fn [n] {:format :design :seq n :model {:claims [claim]}})
+        design    (fn [n] {:format :design :strata [] :seq n :model {:claims [claim]}})
         effective (fn [n] (assoc (design n) :model {:elements [agg role] :claims [claim]}))
         ids       {"canvas.a/agg" "agg-1" "canvas.a/summers" "role-1"}
         l         [(ledger :designs [(design 1)]
@@ -178,7 +178,7 @@
         "a player's code moving unsettles it, though the design never restated the role")))
 
 (deftest a-model-records-whole-record-fields-rest-on-the-whole-tree
-  (let [design (fn [n] {:format :design :seq n :shape "the aggregate sums" :composition "only it sees lines"
+  (let [design (fn [n] {:format :design :strata [] :seq n :shape "the aggregate sums" :composition "only it sees lines"
                         :model {:elements [agg] :claims [one-path]}})
         ids    {"canvas.a/agg" "agg-1"}
         l      [(ledger :designs [(design 1)]
@@ -194,7 +194,7 @@
         "a field of the whole record is keyed on the whole tree, a claim on its subjects")))
 
 (deftest a-design-decision-confirms-as-a-review-does
-  (let [design   (fn [n] {:format :design :seq n
+  (let [design   (fn [n] {:format :design :strata [] :seq n
                           :model {:elements [{:id "canvas.a/agg" :sort :module}] :claims [one-path]}})
         decision {:format :design-decision :seq 2 :design-seq 1 :recommend :proceed
                   :confirmed ["one-path"] :subject-identities {"canvas.a/agg" "agg-1"}}

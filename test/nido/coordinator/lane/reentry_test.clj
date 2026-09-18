@@ -18,7 +18,7 @@
 (def ^:private a-baseline
   ;; :intent names entry 1: these fixtures append the goal to a fresh
   ;; workstream before the survey, which is the order the boundary now requires.
-  {:format :baseline :intent {:seq 1}
+  {:format :baseline :strata [] :intent {:seq 1}
    :area "order totalling" :bounded-by "money on an order"
    :shape "one summing path"
    :model {:elements [{:id "agg" :sort :module :hides "the summing order"
@@ -30,7 +30,7 @@
    :read ["src/a.clj"]})
 
 (defn- a-design [b & [sup]]
-  (cond-> {:format :design :summary "s" :shape "sh"
+  (cond-> {:format :design :strata [] :summary "s" :shape "sh"
            :model {:elements [{:id "agg" :sort :module}]
                    :claims [{:id "one-summing-path" :about ["agg"]
                              :statement "one summing path"

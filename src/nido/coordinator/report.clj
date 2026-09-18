@@ -516,10 +516,11 @@
    here, and none of them names a lens.
 
    Deliberately small to begin with. A lens nobody uses is noise in every prompt,
-   and the four here are the ones with the sharpest verdicts: two for what the
-   parts hold and do, one for the quality of a boundary, one for the arrangement —
-   because state, control and depth are all properties of a PART, and a baseline
-   that never judges the arrangement has described a list."
+   and the five here are the ones with the sharpest verdicts: two for what the
+   parts hold and do, one for the quality of a boundary, one for the arrangement,
+   and one for the LEVEL — because state, control and depth are all properties of
+   a PART, a baseline that never judges the arrangement has described a list, and
+   one that never judges how the parts stack has described a plan view."
   {:tarpit/state
    {:source     "Out of the Tar Pit (Moseley & Marks)"
     :applies-to :claim
@@ -552,7 +553,21 @@
     :question   "does the caller depend on the interface, or on the secret behind it?"
     :verdicts   {:on-interface "the caller depends only on what the module publishes"
                  :on-secret    "the caller depends on a decision the module was supposed to hide"
-                 :cyclic       "the dependency runs both ways, so neither module hides anything from the other"}}})
+                 :cyclic       "the dependency runs both ways, so neither module hides anything from the other"}}
+
+   ;; The one lens a survey OWES rather than may offer: every stratum a baseline lists is read
+   ;; through it, which is what makes looking for structural tension an obligation with a fixed
+   ;; point — one reading per stratum — instead of an audit with none.
+   :stratified/level
+   {:source     (str "Lisp: A Language for Stratified Design (Abelson & Sussman); "
+                     "Grokking Simplicity, ch. 8-9 (Normand)")
+    :applies-to :stratum
+    :question   (str "is this one level — a vocabulary the strata resting on it are written in, "
+                     "and use through its interface alone?")
+    :verdicts   {:sound    "one vocabulary, used through its interface alone by what rests on it"
+                 :mixed    "more than one level: some of its modules are written in what others of its modules provide"
+                 :bypassed "code resting on it reaches past it into what it rests on, whether or not an edge declares the reach"
+                 :wide     "its interface offers what nothing above is written in, or what the level above could build by combining what it already provides"}}})
 
 (defn- reading-schema
   "The Reading shape for a subset of the registry. Built from the data rather
@@ -572,6 +587,12 @@
 
 (def ClaimReading  (reading-schema (lenses-for :claim)))
 (def ModuleReading (reading-schema (lenses-for :module)))
+
+(def ElementReading
+  "A reading an element of the shared model may carry: a module's depth, or a stratum's level.
+   One schema over both subjects, because an element's sort is a sibling field the reading cannot
+   see; the survey prompt names which lens reads which sort."
+  (reading-schema (merge (lenses-for :module) (lenses-for :stratum))))
 
 (def Module
   "One module of the area's decomposition, in Parnas's sense: a module is what it
@@ -669,13 +690,18 @@
    stated here without the record crossing into routing.
 
    :id is how a design record names this observation when it routes it, so it
-   has to be unique within the baseline."
+   has to be unique within the baseline.
+
+   :about names the strata the observation is about, by the ids the baseline's
+   model lists. A tension a stratification reading finds carries it, so the
+   observations one stratum gathers can be read together across workstreams."
   [:map {:closed true}
    [:id          string?]
    [:observation string?]
    [:axis        [:enum :design :implementation]]
    [:evidence    [:vector {:min 1} string?]]
-   [:invisibly-incomplete? {:optional true} boolean?]])
+   [:invisibly-incomplete? {:optional true} boolean?]
+   [:about       {:optional true} [:vector {:min 1} string?]]])
 
 (defn- distinct-record-ids?
   "Ids are unique within a baseline, per kind. A duplicate makes `which claim did
@@ -717,14 +743,17 @@
 
    A role states who plays it under :plays, and only a role does: its players are authored, never
    derived, so the record carries the membership a claim about the role binds, and a later
-   combination can see it change."
+   combination can see it change.
+
+   A stratum is a level of the code, and its :interface is the vocabulary it provides to the
+   strata written in it — the claim a level makes. Its readings are of its level."
   [:map {:closed true}
    [:id        string?]
-   [:sort      [:enum :module :operation :kind :role]]
+   [:sort      [:enum :module :operation :kind :role :stratum]]
    [:hides     {:optional true} string?]
    [:interface {:optional true} string?]
    [:plays     {:optional true} [:vector {:min 1} string?]]
-   [:readings  {:optional true} [:vector ModuleReading]]])
+   [:readings  {:optional true} [:vector ElementReading]]])
 
 (def Claim
   "One claim about the area, the same in a baseline and a design.
@@ -805,6 +834,68 @@
    before membership was authored carries none, and the read contracts go on reading it."
   [:fn {:error/message "a role names its players, each a module, operation or kind the model lists, and no other element names any"}
    #(roles-state-players? (:model %))])
+
+;; ── Strata ──────────────────────────────────────────────────────────────────
+;;
+;; A record written since strata entered the model says which levels it touches, in :strata —
+;; possibly none. The field is also what marks the era: a record without it was written before, and
+;; is read and judged as it was then. Absence of :layers could not mark it, since most designs of
+;; every era carry none.
+
+(defn- strata-listed?
+  "The strata a record names are exactly the stratum elements its model lists, each once. :strata
+   is the record's statement of which levels it touches and :model is where each is described, so
+   the two may not say different things."
+  [{:keys [strata model]}]
+  (and (or (< (count strata) 2) (apply distinct? strata))
+       (= (set strata)
+          (into #{} (comp (filter #(= :stratum (:sort %))) (map :id)) (:elements model)))))
+
+(defn- readings-fit-strata?
+  "A stratum is read only through a lens about a level, and such a lens reads only a stratum. A
+   reading cannot see the sort of the element it is on, so the pairing is held here."
+  [{:keys [model]}]
+  (let [level? #(= :stratum (:applies-to (get lenses (:lens %))))]
+    (every? (fn [{:keys [sort readings]}]
+              (if (= :stratum sort) (every? level? readings) (not-any? level? readings)))
+            (:elements model))))
+
+(def ^:private strata-checks
+  "What every record naming its strata is held to, baseline or design."
+  [[:fn {:error/message "the strata a record names are exactly the stratum elements its model lists, each once"}
+    strata-listed?]
+   [:fn {:error/message "a stratum is read only through a lens about a level, and such a lens reads only a stratum"}
+    readings-fit-strata?]])
+
+(defn- strata-read-as-levels?
+  "Every stratum a baseline lists says what it provides, and carries a reading of its level. The
+   reading is owed rather than offered: it is the one place a survey is obliged to look for
+   structural tension, and one reading per stratum is what keeps that obligation from becoming an
+   audit with no end."
+  [{:keys [model]}]
+  (every? (fn [{:keys [sort interface readings]}]
+            (or (not= :stratum sort)
+                (and interface (some #(= :stratified/level (:lens %)) readings))))
+          (:elements model)))
+
+(defn- health-about-listed-strata?
+  "A health observation about a stratum names one the baseline lists."
+  [{:keys [health strata]}]
+  (let [listed (set strata)]
+    (every? #(every? listed (:about %)) health)))
+
+(defn- tensions-reach-health?
+  "A stratum read as anything but sound is named by a health observation. The reading is where a
+   survey finds a structural tension; health is the only thing a design is obliged to route, so a
+   tension left in a reading alone would be seen and never decided — today's levels kept by
+   default, which is the one outcome looking was meant to stop."
+  [{:keys [model health]}]
+  (let [named (into #{} (mapcat :about) health)]
+    (every? (fn [{:keys [id sort readings]}]
+              (or (not= :stratum sort)
+                  (every? #(or (not= :stratified/level (:lens %)) (= :sound (:verdict %))) readings)
+                  (contains? named id)))
+            (:elements model))))
 
 (def ^:private baseline-fields
   "The fields a :baseline carries in every era from the decomposition onward.
@@ -917,6 +1008,33 @@
   [:map {:closed true}
    [:seq int?]])
 
+(def ^:private baseline-model-fields
+  "The fields a baseline in the shared model carries in either tier. Spliced rather than repeated,
+   so the tier before strata and the tier with them differ only in :strata."
+  [[:format           [:= :baseline]]
+   [:intent           IntentRelation]
+   [:area             string?]
+   [:bounded-by       string?]
+   [:scope            {:optional true} [:vector any?]]
+   [:shape            string?]
+   [:model            Model]
+   [:extension-points {:optional true} [:vector ExtensionPoint]]
+   [:health           {:optional true} [:vector HealthObservation]]
+   [:governing        {:optional true} [:vector string?]]
+   [:drift            {:optional true} [:vector string?]]
+   [:read             [:vector {:min 1} string?]]
+   [:unknowns         {:optional true} [:vector string?]]
+   [:supersedes       {:optional true} Supersedes]
+   [:fork             {:optional true} ForkRelation]])
+
+(def ^:private baseline-model-checks
+  [[:fn {:error/message "health observation ids must be unique within a baseline"}
+    distinct-health-ids?]
+   [:fn {:error/message "every module a baseline lists must say what it hides and what the rest may assume of it"}
+    modules-say-what-they-hide?]
+   [:fn {:error/message "a baseline's model is laid over nothing, so it states no removals"}
+    #(nil? (get-in % [:model :removed]))]])
+
 (def BaselineModel
   "A baseline in the shared model: the area as declared elements and the claims it relies on,
    beside what only a baseline says — its area and boundary, its shape, where the design admits
@@ -930,36 +1048,35 @@
 
    :fork is present on a baseline derived when its unit was forked, and names that :fork entry; a
    surveyed baseline names none. A baseline's model is laid over nothing, so it states no
-   removals."
-  [:and
-   [:map {:closed true}
-    [:format           [:= :baseline]]
-    [:intent           IntentRelation]
-    [:area             string?]
-    [:bounded-by       string?]
-    [:scope            {:optional true} [:vector any?]]
-    [:shape            string?]
-    [:model            Model]
-    [:extension-points {:optional true} [:vector ExtensionPoint]]
-    [:health           {:optional true} [:vector HealthObservation]]
-    [:governing        {:optional true} [:vector string?]]
-    [:drift            {:optional true} [:vector string?]]
-    [:read             [:vector {:min 1} string?]]
-    [:unknowns         {:optional true} [:vector string?]]
-    [:supersedes       {:optional true} Supersedes]
-    [:fork             {:optional true} ForkRelation]]
-   [:fn {:error/message "health observation ids must be unique within a baseline"}
-    distinct-health-ids?]
-   [:fn {:error/message "every module a baseline lists must say what it hides and what the rest may assume of it"}
-    modules-say-what-they-hide?]
-   [:fn {:error/message "a baseline's model is laid over nothing, so it states no removals"}
-    #(nil? (get-in % [:model :removed]))]])
+   removals.
+
+   READ SHAPE since strata entered the model: a baseline written now also carries :strata, and is
+   `BaselineStrata`."
+  (into [:and (into [:map {:closed true}] baseline-model-fields)] baseline-model-checks))
+
+(def BaselineStrata
+  "A baseline in the shared model that says which levels its bound reaches: :strata names the
+   declared strata the area's modules belong to — floor first, and empty where none is declared —
+   and each is a stratum element its model lists, saying what it provides and read through the
+   stratification lens. Its health observations may name the strata they are about.
+
+   The record that is judged by the stratified derivation rather than decomposable, because it
+   carries :strata; one written before is judged as it was then."
+  (into [:and (into [:map {:closed true}] (conj baseline-model-fields [:strata [:vector string?]]))]
+        (concat baseline-model-checks
+                strata-checks
+                [[:fn {:error/message "every stratum a baseline lists says what it provides and carries a reading of its level"}
+                  strata-read-as-levels?]
+                 [:fn {:error/message "a health observation about a stratum names one the baseline lists"}
+                  health-about-listed-strata?]
+                 [:fn {:error/message "a stratum read as anything but sound is named by a health observation, so the design has to route it"}
+                  tensions-reach-health?]])))
 
 (def BaselineWrite
-  "The WRITE contract for :baseline: the shared model, in every project. The survey shape it
-   replaced is read and never written — a record in it is refused on append, and one already on a
-   ledger reads through `BaselineAny`. A role it records names its players; reads do not ask."
-  [:and BaselineModel roles-state-players])
+  "The WRITE contract for :baseline: the shared model with its strata, in every project. The shapes
+   before it are read and never written — a record in one is refused on append, and one already on
+   a ledger reads through `BaselineAny`. A role it records names its players; reads do not ask."
+  [:and BaselineStrata roles-state-players])
 
 (def LoadBearingLegacy
   "READ SHAPE — a property from before the baseline moved up a level, carrying a
@@ -1102,27 +1219,29 @@
     distinct-health-ids?]])
 
 (def BaselineAny
-  "The READ contract for :baseline — four eras.
+  "The READ contract for :baseline — every era.
 
-   Dispatch reads the record rather than trusting a version marker: a
-   decomposition means it is not the oldest shape, a :kind on any property means
+   Dispatch reads the record rather than trusting a version marker: :strata marks the newest,
+   a decomposition means it is not the oldest shape, a :kind on any property means
    it predates readings, and an absent :intent means it predates the citation.
 
-   The :intent clause is LAST of the four because it is the only one that asks
+   The :intent clause is LAST of the survey-shape tests because it is the only one that asks
    after a field the newer shape adds rather than one an older shape still
    carries: a legacy baseline has no :intent either, and testing for it first
    would read every one of them as merely pre-intent and then fail on the
    decomposition it has never had."
   [:multi {:dispatch (fn [b]
                        (cond
-                         ;; FIRST, and not for recency: a model baseline carries no :modules,
-                         ;; so the legacy test below would claim it.
+                         (contains? b :strata)                   :strata
+                         ;; Before the survey shapes, and not for recency: a model baseline
+                         ;; carries no :modules, so the legacy test below would claim it.
                          (contains? b :model)                    :model
                          (not (contains? b :modules))            :legacy
                          (some :kind (:load-bearing b))          :kind-era
                          (not-every? :id (:load-bearing b))      :no-ids
                          (not (contains? b :intent))             :pre-intent
                          :else                                   :current))}
+   [:strata     BaselineStrata]
    [:model      BaselineModel]
    [:current    Baseline]
    [:pre-intent BaselinePreIntent]
@@ -1265,10 +1384,47 @@
 
 (def DesignModel
   "A design in the shared model, phased or not. Dispatched on :phases for the reason the survey
-   shapes are: the two make different claims about when the design is true."
+   shapes are: the two make different claims about when the design is true.
+
+   READ SHAPE since strata entered the model: a design written now names its strata instead of
+   its cut, and is `DesignStrata`."
   [:multi {:dispatch (fn [r] (if (contains? r :phases) :phased :unphased))}
    [:phased   PhasedDesignModel]
    [:unphased UnphasedDesignModel]])
+
+(def ^:private design-strata-fields
+  "What a design naming its strata carries in either phasing: the shared-model design's fields,
+   less :layers, plus :strata.
+
+   :layers goes because it is the one field that described something a landing destroys — the cut
+   is collapsed before the stack merges, so a judgement about it was a judgement nothing could
+   inherit. The strata it touches are what survives, and /stack draws its cut from them."
+  (concat (remove #(= :layers (first %)) design-model-fields)
+          [[:strata [:vector string?]]]))
+
+(def UnphasedDesignStrata
+  "A design naming its strata that lands once."
+  (into [:map {:closed true}] design-strata-fields))
+
+(def PhasedDesignStrata
+  "A design naming its strata, with a phase plan; when each claim holds is keyed by claim id, as in
+   `PhasedDesignModel`."
+  [:and
+   (into [:map {:closed true}]
+         (concat design-strata-fields
+                 [[:phases [:vector {:min 2} Phase]]
+                  [:holds  [:map-of string? [:enum :always :on-completion]]]]))
+   [:fn {:error/message "a phased design says when every claim holds, and names no claim it does not make"}
+    holds-cover-claims?]])
+
+(def DesignStrata
+  "A design that names the strata its change touches — floor first, empty where it touches none
+   declared — each a stratum element its model lists, and states no cut. The record the design
+   round judges by the stratified check; one without :strata is judged as it was when written."
+  (into [:and [:multi {:dispatch (fn [r] (if (contains? r :phases) :phased :unphased))}
+               [:phased   PhasedDesignStrata]
+               [:unphased UnphasedDesignStrata]]]
+        strata-checks))
 
 (def DesignVision
   "The high-level design one workstream commits to — authored by the impl session
@@ -1302,11 +1458,13 @@
    a lenient case to wave through — it is a phase plan whose author has not said
    which of its claims survive the middle of it.
 
-   THIS IS THE WRITE CONTRACT, in every project. The invariants shapes it replaced,
-   PhasedDesign and UnphasedDesign, are refused on append; records written in them,
-   and records from before :baseline existed, read through DesignVisionAny. A role
-   it records names its players; reads do not ask."
-  [:and DesignModel roles-state-players])
+   THIS IS THE WRITE CONTRACT, in every project, and it is `DesignStrata`: a design
+   names its strata and states no cut. The shapes before it — the shared model with
+   :layers, and the invariants shapes PhasedDesign and UnphasedDesign — are refused
+   on append; records written in them, and records from before :baseline existed,
+   read through DesignVisionAny. A role it records names its players; reads do not
+   ask."
+  [:and DesignStrata roles-state-players])
 
 (def DesignVisionLegacy
   "LEGACY READ SHAPE — a :design record from before the baseline event existed:
@@ -1374,16 +1532,17 @@
    record through the branch it was WRITTEN by would mean re-deriving the era it
    was written in from the fields it happens to carry.
 
-   Three tiers now, because :design has been tightened twice. :intent is the
-   newest and is dispatched on first; :baseline is the older one. The pre-intent
-   tier is DesignVisionRead UNCHANGED — the era before a tightening is exactly
-   the read shape that preceded it, so a tightening adds a tier rather than
-   rewriting one."
+   Each tightening added a tier, dispatched newest first on the field it
+   introduced: :strata, then :model, then :intent, then :baseline. A tier is
+   the read shape that preceded the next tightening, UNCHANGED — so a tightening
+   adds a tier rather than rewriting one."
   [:multi {:dispatch (fn [r] (cond
+                               (contains? r :strata)   :strata
                                (contains? r :model)    :model
                                (contains? r :intent)   :current
                                (contains? r :baseline) :pre-intent
                                :else                   :legacy))}
+   [:strata     DesignStrata]
    [:model      DesignModel]
    [:current    DesignVisionReadCurrent]
    [:pre-intent DesignVisionRead]
@@ -2064,8 +2223,25 @@
 (def derivations
   "What a baseline exists to let the decision round work out. A baseline is
    SUFFICIENT when these can be derived against it — not when nothing true is
-   left to say about the area, which is never."
+   left to say about the area, which is never.
+
+   The set for a record written before strata; `derivations-of` picks a record's."
   [:relation-honest :goal-served :decomposable :routing-coherent])
+
+(def strata-derivations
+  "The derivations for a record that names its strata. `stratified` stands where
+   `decomposable` stood: it asks where the change sits among levels that survive a
+   landing, where `decomposable` asked how the change would be cut into layers that
+   do not."
+  [:relation-honest :goal-served :stratified :routing-coherent])
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:vector :keyword]]}
+  derivations-of
+  "The derivations `record` — a baseline or a design — is judged by, read off the record: one that
+   carries :strata is judged by `strata-derivations`, and one written before by `derivations`, as it
+   was then."
+  [record]
+  (if (contains? record :strata) strata-derivations derivations))
 
 (def BlockedFinding
   "A gap in a baseline, named by the derivation it blocks.
@@ -2082,7 +2258,7 @@
    finding here — at most it is a health observation, and more often it is the
    next baseline's business."
   [:map {:closed true}
-   [:blocks   (into [:enum] derivations)]
+   [:blocks   (into [:enum] (distinct (concat derivations strata-derivations)))]
    [:cites    [:vector {:min 1} string?]]
    [:claim    string?]
    [:needs    string?]
@@ -2158,7 +2334,11 @@
      :goal-served      — the goal is met by a strictly smaller design the record
                          already rejected, for a reason that no longer holds
      :decomposable     — the layering cannot be stated, so there is nothing to
-                         approve yet
+                         approve yet (a design written before strata)
+     :stratified       — a part of the change sits in the wrong level, widens a
+                         level's interface without saying why, or ignores a
+                         levelling that would make it markedly simpler (a design
+                         naming its strata)
      :routing-coherent — the health routes make this two stories rather than one
 
    :status has three values, not two. A round that COULD NOT derive a check is
@@ -2170,7 +2350,7 @@
    not reduce anything, and handing a human an unreduced question is the rubber
    stamp this round exists to avoid."
   [:map {:closed true}
-   [:check  [:enum :relation-honest :goal-served :decomposable :routing-coherent]]
+   [:check  [:enum :relation-honest :goal-served :decomposable :stratified :routing-coherent]]
    [:status [:enum :held :broken :underivable]]
    [:note   string?]])
 
@@ -2974,8 +3154,10 @@
   (mapcat (fn [[axis label]]
             (when-let [items (seq (filter #(= axis (:axis %)) health))]
               (cons (str "\n### " label)
-                    (for [{:keys [id observation evidence invisibly-incomplete?]} items]
+                    (for [{:keys [id observation evidence invisibly-incomplete? about]} items]
                       (str "- `" id "` " observation
+                           (when (seq about)
+                             (str " *(about " (str/join ", " (map #(str "`" % "`") about)) ")*"))
                            " — " (str/join ", " (map #(str "`" % "`") evidence))
                            (when invisibly-incomplete?
                              "\n  - invisibly incomplete: deferring this leaves the branch untrue"))))))
@@ -3029,9 +3211,15 @@
           (when (seq read-at) (str "\n  - " (str/join ", " (map #(str "`" % "`") read-at))))
           (when drift (str "\n  - drift from the stance: " drift))))))
 
+(defn- strata->markdown
+  "The strata a record names, floor first. Present only on a record that names them — possibly
+   none — so an empty vector says something a missing one does not."
+  [strata none]
+  (str "**Strata:** " (if (seq strata) (str/join " → " (map #(str "`" % "`") strata)) none)))
+
 (defn- baseline->markdown
   [{:keys [area bounded-by shape modules composition load-bearing extension-points
-           health governing drift read unknowns model]}]
+           health governing drift read unknowns model strata]}]
   (str/join
    "\n"
    (concat
@@ -3040,6 +3228,7 @@
      (str "*Bounded by: " bounded-by "*")]
     (when (seq governing)
       [(str "**Governed by:** " (str/join ", " governing))])
+    (when strata [(strata->markdown strata "none declared within its bound")])
     ["" "## Shape" shape ""]
     (when model (model->markdown model nil))
     (when (seq modules)
@@ -3087,7 +3276,7 @@
 
 (defn- design->markdown
   [{:keys [summary shape invariants standing baseline intent assumes routes
-           rejected layers phases seams open supersedes effort model holds]}]
+           rejected layers phases seams open supersedes effort model holds strata]}]
   (str/join
    "\n"
    (concat
@@ -3099,6 +3288,7 @@
     (when-let [n (:note standing)] [(str "> " n)])
     (when baseline [(baseline-relation->markdown baseline)])
     (when intent [(str "**For:** entry " (:seq intent))])
+    (when strata [(strata->markdown strata "touches no declared stratum")])
     (when supersedes
       [(str "*Supersedes entry " (:seq supersedes) " — " (:why supersedes) "*")])
     ["" summary "" "## Shape" shape ""]

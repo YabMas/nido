@@ -46,6 +46,11 @@
                     (str/join ", " bare) " without saying what each hides and what the rest may"
                     " assume of it — amend it to describe them before merging")
                {:ws-id ws-id :seq (:seq design) :modules (vec bare)}))
+    (when-let [bare (seq (model/undescribed-strata (:model baseline) (:model design)))]
+      (refuse! (str "The " whose " design at entry " (:seq design) " on " ws-id " adds "
+                    (str/join ", " bare) " without saying what each provides and reading its level"
+                    " — amend it to describe them before merging")
+               {:ws-id ws-id :seq (:seq design) :strata (vec bare)}))
     {:baseline baseline
      :model    (model/overlay (:model baseline) (:model design))}))
 
@@ -130,9 +135,9 @@
   "Append to the parent the merged design whose own fields `authored` carries, when no conflict
    stands. Returns `{:proposal p :appended <path>}`, or `{:proposal p}` having appended nothing.
 
-   The proposal supplies what a merged design is not free to author: its model, the baseline and
-   intent the parent's current design cites, that it supersedes that design, and the child design it
-   combined, under :merges. `authored` supplies the rest — summary, shape, standing, the relation to
+   The proposal supplies what a merged design is not free to author: its model and the strata that
+   model lists, the baseline and intent the parent's current design cites, that it supersedes that
+   design, and the child design it combined, under :merges. `authored` supplies the rest — summary, shape, standing, the relation to
    the baseline, routes, effort — and a :supersedes :why when it has one. The append boundary holds
    the model to the combination again, whoever appends."
   [project child-ws worktree authored]
@@ -143,6 +148,7 @@
             record (assoc authored
                           :format     :design
                           :model      (:model p)
+                          :strata     (model/strata-of (:model p))
                           :intent     intent
                           :merges     (:child p)
                           :baseline   (assoc (:baseline authored) :seq (:seq baseline))
