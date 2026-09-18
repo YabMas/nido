@@ -3868,6 +3868,18 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   {:name :fix
    :run  run-fix-stage})
 
+(def diff-pipeline
+  "The diff loop's program: review (fan out) -> warden (fan in) -> reshape -> fix
+   (serial). The engine runs it because the diff loop's caller passes it; the
+   engine names no program of its own.
+
+   The warden is the round barrier: no fix runs until every finding has an
+   owner, so a fixer never starts against a layer the warden is about to
+   reassign work to. Reshape sits between the two because it rewrites the layers
+   a fixer is about to be positioned on — the other order lands a fix on a layer
+   that is about to move."
+  [review-stage warden-stage reshape-stage fix-stage])
+
 (defn ^{:malli/schema [:=> [:cat :map :any] :boolean]}
   round-changed?
   "Whether the round before this one moved the code, read off the two records it

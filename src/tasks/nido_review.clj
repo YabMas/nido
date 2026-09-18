@@ -1539,7 +1539,9 @@
                     ;; decided must not go on to spend fixer launches and land
                     ;; commits that no round will ever review — which is exactly
                     ;; what the last round of an :unfixable run was doing.
-                    :judged-after :warden}
+                    :judged-after :warden
+                    ;; The diff loop's own program. The engine names none.
+                    :pipeline     stages/diff-pipeline}
         report-atom (atom (report/init {:run-id run-id :cwd cwd :base base
                                         :started-at (str (clock))
                                         :context context

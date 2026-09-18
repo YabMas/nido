@@ -4,8 +4,6 @@
    until terminal, emitting typed lifecycle events to an injected `emit` fn.
    Pure control logic; stages and emit are injectable for tests. The engine
    never prints and never builds the report — it only emits."
-  (:require
-   [nido.review.stages :as stages])
   (:import
    [java.time Instant]))
 
@@ -47,15 +45,6 @@
    not the other would emit an error the report keeps and then crash the loop out
    from under it."
   #{:review-failed :reviewer-unavailable :stack-unmovable})
-
-(def default-pipeline
-  "review (fan out) -> warden (fan in) -> reshape -> fix (serial).
-   The warden is the round barrier: no fix runs until every finding has an
-   owner, so a fixer never starts against a layer the warden is about to
-   reassign work to. Reshape sits between the two because it rewrites the layers
-   a fixer is about to be positioned on — the other order lands a fix on a layer
-   that is about to move."
-  [stages/review-stage stages/warden-stage stages/reshape-stage stages/fix-stage])
 
 (defn ^{:malli/schema [:=> [:cat :Finding] :any]}
   default-finding-key
@@ -283,11 +272,13 @@
   run-loop
   "Drive the pipeline until terminal. config:
    {:cwd :base :run-id :max-iters :pipeline :emit :clock :budget :dry-run?}.
+   :pipeline is REQUIRED: the engine runs what its caller passes and names no
+   program of its own — the diff loop's is `nido.review.stages/diff-pipeline`.
    :max-iters is OPTIONAL and has no default — nil means run until the loop
    terminates on its own merits (converged / escalated / clean / no-progress /
    error). A round that changes nothing still ends the run via `no-progress?`,
    so unbounded does not mean non-terminating. Pass :max-iters only to cap it.
-   :pipeline / :emit / :clock / :finding-key / :attempt-key / :attempted? /
+   :emit / :clock / :finding-key / :attempt-key / :attempted? /
    :open? are injection seams.
    :finding-key decides what \"the same finding again\" means and so what
    no-progress? can detect; it defaults to the diff review's
@@ -323,7 +314,8 @@
            attempted? (constantly true)
            open? (constantly false)
            changed? (constantly false)}}]
-  (let [pipeline (or pipeline default-pipeline)
+  (let [pipeline (or pipeline
+                     (throw (ex-info "run-loop needs a :pipeline — the engine runs what its caller passes and names no program of its own" {})))
         ;; Defaults to the identity itself, which is what a pipeline with no
         ;; notion of routing wants: every appearance is an attempt.
         attempt-key (or attempt-key finding-key)

@@ -18,7 +18,8 @@
   (:require [fukan.canvas.core.structure :refer [defstructure]]
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [fukan.common.vocab.code.kind :refer [Kind]]))
+            [fukan.common.vocab.code.kind :refer [Kind]]
+            [fukan.common.vocab.code.stratum :refer [Stratum]]))
 
 (defstructure Role
   "A named set of declared elements a claim may speak about as one. Its players are authored;
@@ -26,7 +27,8 @@
   {:plays [:+ Module Operation Kind]})
 
 (defstructure Claim
-  "One statement about the declared design, about the elements or roles it names. Its instance
+  "One statement about the declared design, about the elements, roles or strata it names — a
+   claim about a level is as much a claim about the design as one about a module. Its instance
    name is its id — the id a baseline or design record carries for it — and its docstring is its
    statement. `:evidence` says what checks it: a round's judgement, named tests, or a named law.
 
@@ -34,7 +36,7 @@
    holds for every other sort, because a record carries a claim by that name alone. This law is
    the one place that holds it; a reader of the declared elements keys claims by name and
    guards nothing."
-  {:about    [:+ Module Operation Kind Role]
+  {:about    [:+ Module Operation Kind Role Stratum]
    :evidence [:enum "round" "test" "law"]}
   (law "one Claim per name — a claim id names exactly one Claim anywhere in the declaration"
     {:offenders [?claim]

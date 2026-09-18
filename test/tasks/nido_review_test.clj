@@ -80,6 +80,8 @@
       (is (string? (:run-id @seen)))
       (is (fn? (:emit @seen)) "engine is given an emit fn")
       (is (fn? (:clock @seen)) "engine is given a clock")
+      (is (= stages/diff-pipeline (:pipeline @seen))
+          "the diff loop passes its own program; the engine names none")
       ;; The engine never looks inside a finding, so this half of the give-up
       ;; counter only works if the diff loop hands it over. Dropped from the
       ;; config, a parked round silently counts as a failed repair again.

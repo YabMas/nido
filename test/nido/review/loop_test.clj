@@ -553,3 +553,9 @@
   ;; The record loops answer no such question: they have no patch to hash and no
   ;; fixes to count, so the default must leave the set equality standing alone.
   (is (= :no-progress (:status (narrowing-run)))))
+
+(deftest the-engine-names-no-program-of-its-own
+  ;; It runs what its caller passes; a caller that passes nothing is told so rather than handed
+  ;; the diff loop's stages.
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"needs a :pipeline"
+                        (rloop/run-loop {:run-id "r1" :emit (fn [_])}))))
