@@ -996,4 +996,26 @@
                                 :strata-read [{:stratum "s" :verdict :widens :reason "r"}]}
                                {:format :design-decision :checks []
                                 :strata-read [{:stratum "s" :outcome :codex-failed}]}])]
-    (is (= {"s" {:read 2 :fits 0 :widens 1 :misplaced 0 :failed 1}} (:strata f)))))
+    (is (= {"s" {:read 2 :fits 0 :widens 1 :misplaced 0 :not-a-level 0 :failed 1}} (:strata f)))))
+
+(deftest a-level-judge-asks-first-whether-its-stratum-is-a-level
+  (let [{:keys [calls]} (decide a-stratified-design {:outcome :no-output :detail "d"})
+        p (:prompt (first calls))]
+    (is (str/includes? p "0. Is this a level at all?"))
+    (is (str/includes? p "Verdict — the FIRST that holds: not-a-level"))))
+
+(deftest a-level-judge-can-say-its-stratum-is-no-level
+  (is (= {:stratum "s" :verdict :not-a-level :reason "nothing rests on it; it is an output sink"}
+         (record/parse-stratum-reading
+          (json/generate-string {:verdict "not-a-level" :reason "nothing rests on it; it is an output sink"
+                                 :cites []})
+          "s")))
+  (is (= {"s" {:read 1 :fits 0 :widens 0 :misplaced 0 :not-a-level 1 :failed 0}}
+         (:strata (record/run-figures [{:format :design-decision :checks []
+                                        :strata-read [{:stratum "s" :verdict :not-a-level :reason "r"}]}])))))
+
+(deftest the-stratified-check-asks-whether-declared-strata-are-levels
+  (let [{:keys [calls]} (decide a-stratified-design {:outcome :no-output :detail "d"})
+        p (:prompt (second calls))]
+    (is (str/includes? p "LEVEL — every stratum the design declares or restates is"))
+    (is (str/includes? p "Four\n                      questions of the COMMITMENT"))))

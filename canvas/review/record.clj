@@ -55,8 +55,8 @@
      :delegates [settled-block disputes-block lens-block]})
   (Operation stratum-prompt
     "The prompt for one stratum's judge: that level's declared vocabulary, its modules, the strata
-     it rests on and those resting on it, and what the design asks of it — and three questions only
-     that level can answer."
+     it rests on and those resting on it, and what the design asks of it — asked first whether it is
+     a level at all, then three questions only that level can answer."
     {:signature [:=> [:catn [:opts :map]] :string]})
   (Operation parse-stratum-reading
     "A stratum judge's answer as the reading a decision records, or nil when it is unusable."

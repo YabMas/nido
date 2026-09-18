@@ -1900,5 +1900,5 @@
                  :baseline-review []}]
     (with-redefs [ws/list-ids   (constantly ["ws-1"])
                   ws/entries-of (fn [_ _ kind] (get entries kind))]
-      (is (= {"s" {:read 2 :fits 1 :widens 1 :misplaced 0 :failed 0}}
+      (is (= {"s" {:read 2 :fits 1 :widens 1 :misplaced 0 :not-a-level 0 :failed 0}}
              (:strata (read-string (with-out-str (t/figures-cmd* {:project "nido"})))))))))

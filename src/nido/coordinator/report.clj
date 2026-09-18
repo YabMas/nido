@@ -567,7 +567,8 @@
     :verdicts   {:sound    "one vocabulary, used through its interface alone by what rests on it"
                  :mixed    "more than one level: some of its modules are written in what others of its modules provide"
                  :bypassed "code resting on it reaches past it into what it rests on, whether or not an edge declares the reach"
-                 :wide     "its interface offers what nothing above is written in, or what the level above could build by combining what it already provides"}}})
+                 :wide     "its interface offers what nothing above is written in, or what the level above could build by combining what it already provides"
+                 :not-a-level "nothing resting on it is written in its vocabulary, and it is not the one level the program is written at: a feature split off that level, a helper, an output sink, or a cut made only to satisfy a law"}}})
 
 (defn- reading-schema
   "The Reading shape for a subset of the registry. Built from the data rather
@@ -2402,12 +2403,14 @@
                 grows with a stated reason
      :widens    the design asks the level for something outside its vocabulary, unargued
      :misplaced a part placed in the level belongs in another
+     :not-a-level nothing resting on the stratum is written in its vocabulary, and it is not the
+                one level the program is written at
 
    Evidence the deciding judge weighed, never a decision of its own."
   [:or
    [:map {:closed true}
     [:stratum string?]
-    [:verdict [:enum :fits :widens :misplaced]]
+    [:verdict [:enum :fits :widens :misplaced :not-a-level]]
     [:reason  string?]]
    [:map {:closed true}
     [:stratum string?]

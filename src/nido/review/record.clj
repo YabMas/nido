@@ -437,7 +437,7 @@
    a reasoned rejection settles it, so it asks for a decision about restructuring, never for the
    restructuring itself."
   (str
-   "  stratified        — does the change sit where its levels say it should? Three\n"
+   "  stratified        — does the change sit where its levels say it should? Four\n"
    "                      questions of the COMMITMENT, none of how the work will be\n"
    "                      cut into layers:\n"
    "                      PLACEMENT — each part of the change is written in the\n"
@@ -460,6 +460,13 @@
    "                      a defect. Only a levelling that bears on THIS change\n"
    "                      counts: the area's other tensions are the baseline's\n"
    "                      health, and the routes above already answer them.\n"
+   "                      LEVEL — every stratum the design declares or restates is\n"
+   "                      a level: something resting on it is written in its\n"
+   "                      vocabulary, or it is the one level the program is written\n"
+   "                      at. A feature split off the top level, a helper, an\n"
+   "                      output sink, or a cut made only to satisfy a dependency\n"
+   "                      law is no level, and declaring it one is broken. A level\n"
+   "                      judge's not-a-level is evidence you weigh here.\n"
    "                      A design touching no declared stratum is judged on FIT\n"
    "                      alone. Temporally, IF the design is phased: each phase a\n"
    "                      state the system can be left in, with an exit criterion\n"
@@ -488,9 +495,10 @@
        "Each is an element above, saying what it provides and read through\n"
        "stratified/level. That reading is refutable like any other: `sound` is\n"
        "refuted by one of its modules written in another's vocabulary (mixed), by code\n"
-       "resting on it that reaches past it (bypassed), or by an interface offering\n"
-       "what nothing above is written in, or could build by combining (wide). Any\n"
-       "verdict but sound is a tension, and a health observation names that stratum\n"
+       "resting on it that reaches past it (bypassed), by an interface offering\n"
+       "what nothing above is written in, or could build by combining (wide), or by\n"
+       "nothing resting on it being written in it at all when it is not the level the\n"
+       "program is written at (not-a-level). Any verdict but sound is a tension, and a health observation names that stratum\n"
        "under :about so the design has to route it. A declared stratum holding a\n"
        "module this area lists, which the survey does not list, blocks stratified.\n"))
 
@@ -1361,28 +1369,33 @@
                              (map #(str "[" (:id %) "] " (:statement %)) claims)))
             "\n\n")
        "  nothing of this level is named in the design's model; read its shape for what touches it\n\n")
-     "ANSWER THREE QUESTIONS OF THIS LEVEL, AND ONLY THIS LEVEL:\n"
+     "ANSWER FOUR QUESTIONS OF THIS LEVEL, AND ONLY THIS LEVEL, IN THIS ORDER:\n"
+     "  0. Is this a level at all? Name what the strata resting on it are written in — which of\n"
+     "     its operations they compose. If nothing rests on it, is it the one level the program\n"
+     "     is written at, or a feature split off that level? A helper everything calls, an output\n"
+     "     sink the program emits into, or a cut made only to satisfy a dependency law is no\n"
+     "     level, however clean its edges.\n"
      "  1. Can what the change needs from this level be built from what it already provides —\n"
      "     by combining its primitives — or does it need something new?\n"
      "  2. If it needs something new, does the design say why combining what the level provides\n"
      "     could not do? A level's vocabulary grows only for a stated reason.\n"
      "  3. Does each part the design places in this level belong here — or is it written in the\n"
      "     vocabulary of a level above, or does it reach past the level below?\n\n"
-     "Verdict: fits (the need is built from what the level provides, or it grows with a stated\n"
-     "reason), widens (it asks the level for something outside its vocabulary, unargued), or\n"
-     "misplaced (a part placed here belongs in another level). Say why in the level's own terms,\n"
-     "and cite the design's ids and the code you read. How the change will be cut into layers is\n"
-     "not yours to judge.")))
+     "Verdict — the FIRST that holds: not-a-level (question 0 fails), misplaced (a part placed\n"
+     "here belongs in another level), widens (it asks the level for something outside its\n"
+     "vocabulary, unargued), or fits (the need is built from what the level provides, or it\n"
+     "grows with a stated reason). Say why in the level's own terms, and cite the design's ids and\n"
+     "the code you read. How the change will be cut into layers is not yours to judge.")))
 
 (defn ^{:malli/schema [:=> [:cat :string :string] [:maybe :map]]}
   parse-stratum-reading
   "A stratum judge's JSON as the reading a decision records, or nil when its verdict is outside the
-   closed three or it gives no reason."
+   closed four or it gives no reason."
   [json-str stratum]
   (try
     (let [m (json/parse-string json-str true)
           v (keyword (str (:verdict m)))]
-      (when (and (#{:fits :widens :misplaced} v) (not (str/blank? (str (:reason m)))))
+      (when (and (#{:fits :widens :misplaced :not-a-level} v) (not (str/blank? (str (:reason m)))))
         {:stratum stratum :verdict v :reason (str (:reason m))}))
     (catch Exception _ nil)))
 
@@ -2310,7 +2323,7 @@
    design run's re-survey — give each derivation's gaps and the claims found false.
 
      {:decisions n :checks      {check {:broken n :alone n :at-end bool}}
-                   :strata      {stratum {:read n :fits n :widens n :misplaced n :failed n}}
+                   :strata      {stratum {:read n :fits n :widens n :misplaced n :not-a-level n :failed n}}
       :reviews   n :derivations {derivation {:broken n :alone n :at-end bool}}
                    :falsified   {claim-id n}}
 
@@ -2328,7 +2341,7 @@
       (some :strata-read decisions)
       (assoc :strata (reduce (fn [acc {:keys [stratum verdict]}]
                                (update acc stratum
-                                       #(-> (or % {:read 0 :fits 0 :widens 0 :misplaced 0 :failed 0})
+                                       #(-> (or % {:read 0 :fits 0 :widens 0 :misplaced 0 :not-a-level 0 :failed 0})
                                             (update :read inc)
                                             (update (or verdict :failed) inc))))
                              (sorted-map)

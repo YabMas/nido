@@ -2031,6 +2031,13 @@
     (is (report/validate-event :baseline (assoc mixed :health [(assoc h :about ["canvas.order.strata/totals"])]))
         "named by a health observation, the design has to route it")))
 
+(deftest a-stratum-read-as-no-level-reaches-health
+  (let [none (assoc-in stratified-baseline [:model :elements 3 :readings 0 :verdict] :not-a-level)
+        h    {:id "h-none" :axis :design :observation "nothing is written in it" :evidence ["canvas/strata.clj"]}]
+    (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :baseline none))
+        "a stratum that is no level is a tension, and a tension is routed")
+    (is (report/validate-event :baseline (assoc none :health [(assoc h :about ["canvas.order.strata/totals"])])))))
+
 (deftest the-derivations-a-record-is-judged-by-are-read-off-the-record
   (is (= report/strata-derivations (report/derivations-of valid-design)))
   (is (= report/derivations (report/derivations-of layered-design)))

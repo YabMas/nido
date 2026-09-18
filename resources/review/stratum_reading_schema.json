@@ -10,11 +10,12 @@
     "verdict": {
       "type": "string",
       "enum": [
-        "fits",
+        "not-a-level",
+        "misplaced",
         "widens",
-        "misplaced"
+        "fits"
       ],
-      "description": "fits: what the design needs from this level is built from what it provides, or the level grows with a stated reason. widens: the design asks this level for something outside its vocabulary without saying why combining what it provides could not do. misplaced: a part the design places in this level belongs in another one."
+      "description": "The FIRST that holds. not-a-level: nothing resting on this stratum is written in its vocabulary, and it is not the one level the program is written at. misplaced: a part the design places in this level belongs in another one. widens: the design asks this level for something outside its vocabulary without saying why combining what it provides could not do. fits: what the design needs from this level is built from what it provides, or the level grows with a stated reason."
     },
     "reason": {
       "type": "string",

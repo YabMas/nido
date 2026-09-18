@@ -546,7 +546,7 @@ The seeded lenses:
 
 **What counts as a module's interface**: what is *depended on from outside* — Parnas's "what others may assume" — not what the namespace makes public. A var published and called by nobody outside is a visibility choice, not interface. Two live rounds were spent on this exact disagreement, one side counting callers and the other counting `defn`s, both correct about different things.
 | `:parnas/dependency` | a claim about a dependency | `:on-interface` `:on-secret` `:cyclic` | *On the Criteria…* (Parnas) |
-| `:stratified/level` | a stratum — owed for every one listed | `:sound` `:mixed` `:bypassed` `:wide` | *Lisp: A Language for Stratified Design* (Abelson & Sussman); *Grokking Simplicity* (Normand) |
+| `:stratified/level` | a stratum — owed for every one listed | `:sound` `:mixed` `:bypassed` `:wide` `:not-a-level` | *Lisp: A Language for Stratified Design* (Abelson & Sussman); *Grokking Simplicity* (Normand) |
 
 Three rules the ledger enforces:
 
@@ -591,19 +591,30 @@ own. `[]` where none is declared says so — it is not an omission. Each is a
 owed, not offered.** It is the one place a survey is obliged to LOOK for
 structural tension rather than record what it ran into — and it stays bounded,
 because the obligation is one reading per stratum, not an audit. A verdict other
-than `:sound` — `:mixed`, `:bypassed`, `:wide` — is a tension, and the record is
-refused until a health observation names that stratum under `:about`. That is
-what turns seeing a structural problem into DECIDING it: the design has to route
-every health observation, so each tension ends as fixed here, spun out with a
-ref, or declined with a reason — never silently kept.
+than `:sound` — `:mixed`, `:bypassed`, `:wide`, `:not-a-level` — is a tension,
+and the record is refused until a health observation names that stratum under
+`:about`. That is what turns seeing a structural problem into DECIDING it: the
+design has to route every health observation, so each tension ends as fixed
+here, spun out with a ref, or declined with a reason — never silently kept.
+
+**`:not-a-level` is the reading the others assume away.** A stratum is a level
+only if something resting on it is written in its vocabulary, or it is the one
+level the program is written at. A feature split off that top level, a helper
+everything calls, an output sink, a cut made only to break a cycle — each can sit
+in a dependency graph exactly where a level would, and each reads `:sound` to a
+question that starts from the graph. Ask what the strata above it are written
+in; if the answer is "nothing of this", the declaration is wrong, not the code.
 
 The design round closes the other half. Its `stratified` check asks where the
-change sits among these levels, and its FIT question asks whether a levelling
-the judge can state concretely would make THIS change markedly simpler. A design
-answers that by adopting it, rejecting it with a reason (`:rejected`), or
-deferring it with a ref (`:seams`). It asks for a decision about restructuring,
-never for the restructuring — which is how a change neither snowballs into a
-refactor nor accepts today's levels by default.
+change sits among these levels, whether every stratum it declares or restates is
+a level at all, and — its FIT question — whether a levelling the judge can state
+concretely would make THIS change markedly simpler. A design answers FIT by
+adopting it, rejecting it with a reason (`:rejected`), or deferring it with a ref
+(`:seams`). It asks for a decision about restructuring, never for the
+restructuring — which is how a change neither snowballs into a refactor nor
+accepts today's levels by default. The level judges ask the same first question
+of every stratum they read, so a stratum declared badly is questioned each time
+a design touches it, not only on the day it was declared.
 
 ### Health — and why it is still an `is`
 
