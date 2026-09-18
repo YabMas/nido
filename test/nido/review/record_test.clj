@@ -438,7 +438,8 @@
                             (fn [lb] (mapv #(dissoc % :readings) lb)))
         p (record/baseline-prompt {:baseline no-readings})]
     (is (str/includes? p "READS NOTHING THROUGH ANY PERSPECTIVE"))
-    (is (str/includes? p "Report that as UNDERSCOPED"))
+    (is (str/includes? p "Report that as INSUFFICIENT, blocking relation-honest")
+        "in a verdict the answer can carry, naming a derivation it blocks")
     (is (str/includes? p "THE PERSPECTIVES THIS BASELINE IS READ THROUGH")
         "the vocabulary is shown, because this record could carry it")
     (is (not (str/includes? p "A READING IS A CLAIM TOO"))
@@ -549,3 +550,77 @@
   (let [p (record/baseline-prompt {:baseline {:format :baseline}})]
     (is (str/includes? p "IDS of what you actually went and checked"))
     (is (str/includes? p "cannot be\nmatched to the claim"))))
+
+;; ── a record that names its strata ───────────────────────────────────────────
+;; The era a record was written in is read off :strata, and it picks the yardstick: the stratified
+;; check and derivation for a record that names its strata, decomposable as before for one that
+;; does not.
+
+(def ^:private a-stratum
+  {:id "canvas.order.strata/totals" :sort :stratum
+   :interface "an order's total, summed from exact lines"
+   :readings [{:lens :stratified/level :verdict :sound :because "one vocabulary"}]})
+
+(def ^:private strata-baseline
+  (-> model-baseline
+      (update-in [:model :elements] conj a-stratum)
+      (assoc :strata ["canvas.order.strata/totals"])))
+
+(def ^:private strata-design
+  (-> design
+      (dissoc :invariants)
+      (assoc :model {:elements [{:id "canvas.order/aggregate" :sort :module}
+                                {:id "canvas.order.strata/totals" :sort :stratum}]
+                     :claims   [{:id "rounded-once" :about ["canvas.order/aggregate"]
+                                 :statement "a total is rounded exactly once"
+                                 :falsified-by "two rounding calls reached for one total"
+                                 :evidence {:by :round}}]}
+             :strata ["canvas.order.strata/totals"])))
+
+(deftest a-baseline-naming-its-strata-is-asked-for-the-stratified-derivation
+  (let [p (record/baseline-prompt {:baseline strata-baseline})]
+    (is (str/includes? p "  stratified        does each part of the change sit in the level"))
+    (is (not (str/includes? p "  decomposable      can its cut be stated")))
+    (is (str/includes? p "STRATA — the levels this area declares"))
+    (is (str/includes? p "a health observation names that stratum"))
+    (is (str/includes? p "reads: a STRATUM (never a module or a claim)")))
+  (testing "one written before names the cut it was judged by then"
+    (is (str/includes? (record/baseline-prompt {:baseline model-baseline})
+                       "  decomposable      can its cut be stated"))))
+
+(deftest a-design-naming-its-strata-is-judged-on-its-levels-not-its-cut
+  (let [p (record/design-prompt {:design strata-design :baseline strata-baseline})]
+    (is (str/includes? p "STRATA THIS CHANGE TOUCHES, floor first"))
+    (is (str/includes? p "  stratified        — does the change sit where its levels say"))
+    (doseq [q ["PLACEMENT" "BARRIER" "FIT"]]
+      (is (str/includes? p q) (str "the stratified check asks " q)))
+    (is (str/includes? p "This check blocks like the others."))
+    (is (not (str/includes? p "AND IT NEVER BLOCKS")) "the cut's advisory rule is not this check's")
+    (is (not (str/includes? p "CLAIMED DECOMPOSITION, VERTICAL"))))
+  (testing "a design written with a cut is judged by decomposable, as it was"
+    (let [layered (assoc design :layers [{:claim "extract the aggregate" :mode :judgment}])
+          p       (record/design-prompt {:design layered :baseline baseline})]
+      (is (str/includes? p "CLAIMED DECOMPOSITION, VERTICAL"))
+      (is (str/includes? p "AND IT NEVER BLOCKS"))
+      (is (not (str/includes? p "  stratified        —"))))))
+
+(deftest a-stratified-check-is-read-back-and-holds-a-design
+  (let [r (record/parse-design-decision
+           (json/generate-string {:recommend "amend" :reason "r" :asks "a"
+                                  :checks [{:check "stratified" :status "broken" :note "misplaced"}
+                                           {:check "goal_served" :status "held" :note "n"}]
+                                  :findings [{:cites ["x"] :claim "y" :check "stratified" :claim_id ""}]})
+           12)]
+    (is (= [:stratified :goal-served] (mapv :check (:checks r))))
+    (is (= :stratified (:check (first (:findings r)))))
+    (is (false? (report/proceeds? r))
+        "unlike the cut it replaced, a broken stratified check alone holds the design")))
+
+(deftest the-strata-a-record-names-resolve-against-the-declaration
+  (let [listing {:status :listed
+                 :elements [{:id "canvas.order/aggregate" :sort :fukan.common.vocab.code.module/Module}
+                            {:id "canvas.order.strata/totals" :sort :fukan.common.vocab.code.stratum/Stratum}]}]
+    (is (= [] (record/unresolved-subjects strata-design listing)))
+    (is (= ["canvas.order.strata/totals"]
+           (record/unresolved-subjects strata-design (update listing :elements pop)))
+        "a named stratum the declaration does not hold is undeclared, whether or not a claim is about it")))

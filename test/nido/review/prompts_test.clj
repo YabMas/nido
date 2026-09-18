@@ -637,6 +637,17 @@ layers, it is not yours"))
     (is (str/includes? out "the ledger holds a decision"))
     (is (str/includes? out "A layer the design NEVER NAMED is a finding"))))
 
+(deftest the-warden-holds-no-stack-to-a-design-that-names-its-strata
+  ;; A design naming its strata states no cut, so there is no layering to hold the stack to — and a
+  ;; warden left to the layered rule would read every layer as one the design never named.
+  (let [out (prompts/warden-prompt
+             {:findings findings :history [] :toc a-toc
+              :design (assoc design :strata ["canvas.order.strata/totals"])})]
+    (is (str/includes? out "THE STRATA THIS CHANGE TOUCHES"))
+    (is (str/includes? out "canvas.order.strata/totals"))
+    (is (str/includes? out "no layer is a finding for not being named in it"))
+    (is (not (str/includes? out "A layer the design NEVER NAMED is a finding")))))
+
 (deftest the-fixer-is-told-what-the-warden-wrote-for-it
   ;; :because is addressed to this reader — why the finding is real, or which
   ;; layer it was moved to and why. It was produced every round and rendered to

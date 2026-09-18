@@ -888,7 +888,8 @@
      "where EVERY layer pushed the same thing away — that one is yours, below.\n\n"     "MODULE BOUNDARIES ARE NOT YOUR SUBJECT. Whether a module boundary sits in\n"
      "the right place — whether the lock protocol belongs with the schema or the\n"
      "API, whether two things that hide one decision are one module — is judged\n"
-     "BEFORE any code exists, by the design round's `decomposable` check, which\n"
+     "BEFORE any code exists, by the design round's decomposition check — the\n"
+     "stratified check, or decomposable for a design from before strata — which\n"
      "reads the area's surveyed modules. You have neither that survey nor that\n"
      "question. A finding of yours phrased as `X belongs in a Y layer` is almost\n"
      "always this mistake wearing a layer's clothes, and what happens to it is\n"
@@ -1498,6 +1499,10 @@
    can reach. `record.clj` already renders it this way for the record judge; the
    warden was the reader that needed it and did not get it.
 
+   A design that names its strata states no cut, so there is no claimed layering
+   to hold the stack to: the warden is shown the strata and told the cut is not
+   judged, rather than left to treat every layer as one the design never named.
+
    :seams is the record's OTHER kind of answer, and it belongs here for the same
    reason :rejected does. A rejected alternative says a remedy was considered and
    refused; a seam says a gap was noticed and left, with what closes it. Either
@@ -1505,7 +1510,7 @@
    cannot see the seams rules `fix` on a gap the record argued for, and the fixer
    builds the machinery the record decided against, which the next round then
    reviews as new code."
-  [{:keys [shape rejected standing layers seams model] :as design}]
+  [{:keys [shape rejected standing layers seams model strata] :as design}]
   (str "THE DESIGN THIS CHANGE COMMITTED TO — judge the findings against this:\n"
        "Shape: " shape "\n"
        (if model "Claims:\n" "Invariants:\n") (claim-lines design) "\n"
@@ -1520,6 +1525,12 @@
        "how an invariant gets WIDER: \"inside the method's own form\" restated as\n"
        "\"in the file that writes the method\" is a different rule, and the fixer\n"
        "obeys the one you wrote, not the one you were holding.\n\n"
+       (when (contains? design :strata)
+         (str "THE STRATA THIS CHANGE TOUCHES, floor first. The design states no cut:\n"
+              "how this stack is layered was drawn from these after the design, and\n"
+              "no layer is a finding for not being named in it.\n"
+              (if (seq strata) (bullets strata) "  none declared\n")
+              "\n"))
        (when (seq layers)
          (str "CLAIMED DECOMPOSITION — one claim per layer, bottom to top. The stack\n"
               "you are judging should correspond to these, and a mismatch splits\n"

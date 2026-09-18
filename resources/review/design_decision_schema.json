@@ -41,6 +41,7 @@
               "relation_honest",
               "goal_served",
               "decomposable",
+              "stratified",
               "routing_coherent"
             ]
           },
@@ -83,6 +84,7 @@
               "relation_honest",
               "goal_served",
               "decomposable",
+              "stratified",
               "routing_coherent",
               ""
             ],

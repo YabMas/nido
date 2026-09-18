@@ -49,9 +49,10 @@
               "relation-honest",
               "goal-served",
               "decomposable",
+              "stratified",
               "routing-coherent"
             ],
-            "description": "Which derivation this gap blocks. 'none' for a FALSIFIED finding, which refutes a claim rather than reporting a gap. On an INSUFFICIENT finding it must name one of the four, because a gap blocking none of them is not a finding. relation-honest: whether a change stands where it says it stands, against this area's modules and load-bearing properties. goal-served: whether a change serves the goal and only the goal. decomposable: whether the change's cut can be stated and follows the levels of abstraction this area's modules compose into. routing-coherent: whether this area's health observations belong to one story."
+            "description": "Which derivation this gap blocks. 'none' for a FALSIFIED finding, which refutes a claim rather than reporting a gap. On an INSUFFICIENT finding it must name one of the four, because a gap blocking none of them is not a finding. relation-honest: whether a change stands where it says it stands, against this area's modules and load-bearing properties. goal-served: whether a change serves the goal and only the goal. decomposable (a baseline naming no :strata): whether the change's cut can be stated and follows the levels of abstraction this area's modules compose into. stratified (a baseline naming :strata, in place of decomposable): whether each part of a change can be placed in the level whose vocabulary expresses it, against the strata this area declares and the reading of each. routing-coherent: whether this area's health observations belong to one story."
           },
           "cites": {
             "type": "array",

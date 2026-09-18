@@ -220,8 +220,9 @@
                ;; refused: a claim lens on a module is an invalid dispatch, not a
                ;; bad field.
                "    reads: " (case applies-to
-                               :claim  "a LOAD-BEARING CLAIM (never a module)"
-                               :module "a MODULE (never a claim)"
+                               :claim   "a LOAD-BEARING CLAIM (never a module)"
+                               :module  "a MODULE (never a claim)"
+                               :stratum "a STRATUM (never a module or a claim)"
                                (name applies-to)) "\n"
                "    from " source "\n"
                (str/join "\n"
@@ -374,6 +375,123 @@
       (ids "shape")                    (dissoc :shape)
       (ids "composition")              (dissoc :composition))))
 
+(def ^:private decomposable-check
+  "The decomposition check put to a design written before strata: the cut it states, held to the
+   level test, and never blocking — the cut does not survive the landing."
+  (str
+   "  decomposable      — can the cut be stated, and does it follow the levels\n"
+   "                      of abstraction? A layer is a LEVEL: it provides\n"
+   "                      something — a function, a type, a schema — that the\n"
+   "                      layers above are written in, by its interface alone,\n"
+   "                      and the baseline's modules and composition say which\n"
+   "                      levels the area already has. For each layer, name what\n"
+   "                      it provides to a layer above. Three boundaries are\n"
+   "                      legitimate although they are not levels: removing what\n"
+   "                      a new abstraction replaces (always on top), a\n"
+   "                      behaviour-preserving refactor below the change it\n"
+   "                      enables, and a mechanical sweep kept apart from\n"
+   "                      judgment. Any other split — by size, by review mode,\n"
+   "                      by pipeline stage, or one module's secret across two\n"
+   "                      layers — is a cut against the grain of the area.\n"
+   "                      Vertically: layers ordered by dependency, one claim\n"
+   "                      each with no \"and\". Temporally, IF the design is\n"
+   "                      phased: each phase a state the system can be left in,\n"
+   "                      with an exit criterion that is an observation rather\n"
+   "                      than a to-do.\n"
+   "                      A design whose cut cannot be stated is not decomposed\n"
+   "                      yet, and there is nothing to approve. A design with no\n"
+   "                      phase plan is the ordinary case and is NOT a finding.\n"
+   "                      Hold the layers to the level test BOTH ways. A layer\n"
+   "                      that provides nothing — one that only forwards what\n"
+   "                      the layer below already accepts — or a level cut in\n"
+   "                      two is a defect in the cut, not a small layer; a large\n"
+   "                      layer that builds a level AND writes the program in it\n"
+   "                      has hidden a boundary. The test does not ratchet the\n"
+   "                      way `can it be separated?` does, so if the layer count\n"
+   "                      rose while the levels did not, say so.\n"
+   "                      AND IT NEVER BLOCKS. Layers are a development-time\n"
+   "                      device: the stack is collapsed into one commit before\n"
+   "                      it lands, and the code lands whole whichever way it\n"
+   "                      was cut, so a cut that misreads the levels costs only\n"
+   "                      the reading it was drawn for.\n"
+   "                      So whatever you conclude here, it does not change your\n"
+   "                      recommendation: say it in `asks`, mark the check, and\n"
+   "                      recommend on the other three. `amend` and `recut` are\n"
+   "                      for a defect in the COMMITMENT. There is no exception\n"
+   "                      for a cut you cannot state at all — `:layers` is an\n"
+   "                      optional field, a record without it is valid, and what\n"
+   "                      you are approving is the commitment, not the\n"
+   "                      packaging. Two soft bars against over-splitting have\n"
+   "                      already failed here; this one is not a matter of\n"
+   "                      degree.\n"))
+
+(def ^:private stratified-check
+  "The decomposition check put to a design that names its strata. It judges where the change sits
+   among levels that survive the landing, so unlike the cut it replaced it can hold a design: a
+   misplaced change is what trunk keeps.
+
+   FIT is the question that keeps a round from accepting today's levels by default. It is bounded
+   twice — to a levelling the judge can state concretely, and to one that bears on THIS change — and
+   a reasoned rejection settles it, so it asks for a decision about restructuring, never for the
+   restructuring itself."
+  (str
+   "  stratified        — does the change sit where its levels say it should? Three\n"
+   "                      questions of the COMMITMENT, none of how the work will be\n"
+   "                      cut into layers:\n"
+   "                      PLACEMENT — each part of the change is written in the\n"
+   "                      vocabulary of the stratum it sits in. A part that has to\n"
+   "                      reach past the stratum below it, or that says in one\n"
+   "                      level what belongs to another, is placed wrong.\n"
+   "                      BARRIER — a stratum's interface grows only where the\n"
+   "                      design says why combining what it already provides could\n"
+   "                      not express the need. Compare each stratum the design\n"
+   "                      restates with the baseline's; growth with no such reason\n"
+   "                      is broken.\n"
+   "                      FIT — is there a levelling of this area that would make\n"
+   "                      THIS change markedly simpler? If you can state one\n"
+   "                      concretely — which strata, what each would provide, what\n"
+   "                      in this change it removes — the design must already have\n"
+   "                      answered it: adopted it, rejected it with a reason that\n"
+   "                      still holds, or deferred it as a seam with a ref. If it\n"
+   "                      has not, the check is broken; if it has, it is held — a\n"
+   "                      reasoned decision not to restructure is a decision, not\n"
+   "                      a defect. Only a levelling that bears on THIS change\n"
+   "                      counts: the area's other tensions are the baseline's\n"
+   "                      health, and the routes above already answer them.\n"
+   "                      A design touching no declared stratum is judged on FIT\n"
+   "                      alone. Temporally, IF the design is phased: each phase a\n"
+   "                      state the system can be left in, with an exit criterion\n"
+   "                      that is an observation rather than a to-do; a design with\n"
+   "                      no phase plan is the ordinary case and is NOT a finding.\n"
+   "                      This check blocks like the others.\n"))
+
+(defn- strata-era?
+  "Whether `record` names its strata — the field that marks a record written since strata entered
+   the model, and so the one a round reads to pick the yardstick it holds the record to."
+  [record]
+  (contains? record :strata))
+
+(defn- about-strata
+  "The strata a health observation names, as the suffix a judge reads it with; empty for one that
+   names none."
+  [{:keys [about]}]
+  (if (seq about) (str " [about " (str/join ", " about) "]") ""))
+
+(defn- strata-block
+  "The strata a baseline lists, with what the round checks of each: the reading of its level is a
+   claim like any other, and a tension it finds has to reach the design as health."
+  [strata]
+  (str "\nSTRATA — the levels this area declares, floor first"
+       (if (seq strata) (str ":\n" (bullets strata)) ": none declared within the bound.\n")
+       "Each is an element above, saying what it provides and read through\n"
+       "stratified/level. That reading is refutable like any other: `sound` is\n"
+       "refuted by one of its modules written in another's vocabulary (mixed), by code\n"
+       "resting on it that reaches past it (bypassed), or by an interface offering\n"
+       "what nothing above is written in, or could build by combining (wide). Any\n"
+       "verdict but sound is a tension, and a health observation names that stratum\n"
+       "under :about so the design has to route it. A declared stratum holding a\n"
+       "module this area lists, which the survey does not list, blocks stratified.\n"))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   baseline-prompt
   "The verification prompt.
@@ -403,8 +521,12 @@
    "                    this area's modules and load-bearing properties?\n"
    "  goal-served       does it serve the goal and only the goal — would a\n"
    "                    smaller change do?\n"
-   "  decomposable      can its cut be stated, and does it follow the levels\n"
-   "                    this area's modules compose into?\n"
+   (if (strata-era? full)
+     (str "  stratified        does each part of the change sit in the level whose\n"
+          "                    vocabulary expresses it, against the strata this area\n"
+          "                    declares and the reading of each?\n")
+     (str "  decomposable      can its cut be stated, and does it follow the levels\n"
+          "                    this area's modules compose into?\n"))
    "  routing-coherent  do this area's health observations belong to one story?\n\n"
    "The baseline is ENOUGH when those can be derived against it. It does not have\n"
    "to be everything true about the area, and it never will be: measured against\n"
@@ -450,8 +572,9 @@
                  "A decomposition recorded with no reading of it is structure without\n"
                  "analysis: it says what the parts are and never says whether the problem\n"
                  "required them, whether an ordering was imposed, or whether a boundary pays.\n"
-                 "Report that as UNDERSCOPED, and name the claims most worth reading and\n"
-                 "through which lens.\n"))
+                 "Report that as INSUFFICIENT, blocking relation-honest — whether a change\n"
+                 "stands where it says cannot be derived from structure nobody has read —\n"
+                 "and name the claims most worth reading and through which lens.\n"))
           (lens-block)))
    "AREA: " (:area baseline) "\n"
    "BOUNDED BY: " (:bounded-by baseline) "\n"
@@ -477,6 +600,8 @@
                    "counterexample, so none of them do. Judge the claims as stated, and treat\n"
                    "a claim you cannot see any way to refute as a finding in its own right.\n"))
             (claim-block (:load-bearing baseline)) "\n")))
+   (when (strata-era? full)
+     (strata-block (:strata full)))
    (when-let [h (seq (:health baseline))]
      (str "\nHEALTH — claimed about whether what holds is sound. :design means a\n"
           "weak design cleanly executed; :implementation means a strong design\n"
@@ -486,7 +611,8 @@
           ;; a health observation at all.
           (bullets (map #(str (when (:id %) (str "[" (:id %) "] "))
                               "[" (name (:axis %)) "] " (:observation %)
-                              " [" (str/join ", " (:evidence %)) "]")
+                              " [" (str/join ", " (:evidence %)) "]"
+                              (about-strata %))
                         h))
           "\n"))
    (when-let [u (seq (:unknowns baseline))]
@@ -536,8 +662,8 @@
 
    Three of the four derivations are made AGAINST this record: relation-honest
    reads the modules and the extension points, decomposable reads the module
-   boundaries, routing-coherent reads the health observations the design's routes
-   cite by id. So it is printed the way the baseline round prints it, rather than
+   boundaries — stratified the strata and their readings — and routing-coherent
+   reads the health observations the design's routes cite by id. So it is printed the way the baseline round prints it, rather than
    summarised.
 
    It used to print :bounded-by and the load-bearing properties and nothing else,
@@ -576,10 +702,11 @@
                 "branch that touches it:\n"
                 (str/join
                  "\n"
-                 (map (fn [{:keys [id observation axis evidence invisibly-incomplete?]}]
+                 (map (fn [{:keys [id observation axis evidence invisibly-incomplete?] :as h}]
                         (str "- " id
                              (when axis (str " [" (name axis) "]"))
-                             (when invisibly-incomplete? " [invisibly incomplete]") "\n"
+                             (when invisibly-incomplete? " [invisibly incomplete]")
+                             (about-strata h) "\n"
                              "    " observation
                              (when (seq evidence)
                                (str "\n    read from: " (str/join ", " evidence)))))
@@ -676,10 +803,15 @@
      (str "\nALREADY REJECTED. A finding re-proposing one of these is ANSWERED,\n"
           "not evidence — unless you can show the stated reason no longer holds:\n"
           (bullets (map #(str (:alternative %) " — because " (:why-not %)) r)) "\n"))
-   (when-let [l (seq (:layers design))]
-     (str "\nCLAIMED DECOMPOSITION, VERTICAL — one claim per layer, ordered by\n"
-          "dependency; all of it lands in one go:\n"
-          (bullets (map #(str (:claim %) " (" (name (:mode %)) ")") l)) "\n"))
+   (if (strata-era? design)
+     (str "\nSTRATA THIS CHANGE TOUCHES, floor first — the levels it is written in or\n"
+          "adds to, each an element above. It states no cut: how the work is split\n"
+          "into layers is drawn from these later, and is not yours to judge.\n"
+          (if (seq (:strata design)) (bullets (:strata design)) "  none declared\n") "\n")
+     (when-let [l (seq (:layers design))]
+       (str "\nCLAIMED DECOMPOSITION, VERTICAL — one claim per layer, ordered by\n"
+            "dependency; all of it lands in one go:\n"
+            (bullets (map #(str (:claim %) " (" (name (:mode %)) ")") l)) "\n")))
    (when-let [ph (seq (:phases design))]
      (str "\nCLAIMED DECOMPOSITION, TEMPORAL — each of these is a separate landing\n"
           "the running system has to live in, so judge them as states rather than\n"
@@ -707,51 +839,7 @@
    "                      individually defensible. Check whether a strictly\n"
    "                      smaller design would do, including one already\n"
    "                      rejected for a reason that no longer holds.\n"
-   "  decomposable      — can the cut be stated, and does it follow the levels\n"
-   "                      of abstraction? A layer is a LEVEL: it provides\n"
-   "                      something — a function, a type, a schema — that the\n"
-   "                      layers above are written in, by its interface alone,\n"
-   "                      and the baseline's modules and composition say which\n"
-   "                      levels the area already has. For each layer, name what\n"
-   "                      it provides to a layer above. Three boundaries are\n"
-   "                      legitimate although they are not levels: removing what\n"
-   "                      a new abstraction replaces (always on top), a\n"
-   "                      behaviour-preserving refactor below the change it\n"
-   "                      enables, and a mechanical sweep kept apart from\n"
-   "                      judgment. Any other split — by size, by review mode,\n"
-   "                      by pipeline stage, or one module's secret across two\n"
-   "                      layers — is a cut against the grain of the area.\n"
-   "                      Vertically: layers ordered by dependency, one claim\n"
-   "                      each with no \"and\". Temporally, IF the design is\n"
-   "                      phased: each phase a state the system can be left in,\n"
-   "                      with an exit criterion that is an observation rather\n"
-   "                      than a to-do.\n"
-   "                      A design whose cut cannot be stated is not decomposed\n"
-   "                      yet, and there is nothing to approve. A design with no\n"
-   "                      phase plan is the ordinary case and is NOT a finding.\n"
-   "                      Hold the layers to the level test BOTH ways. A layer\n"
-   "                      that provides nothing — one that only forwards what\n"
-   "                      the layer below already accepts — or a level cut in\n"
-   "                      two is a defect in the cut, not a small layer; a large\n"
-   "                      layer that builds a level AND writes the program in it\n"
-   "                      has hidden a boundary. The test does not ratchet the\n"
-   "                      way `can it be separated?` does, so if the layer count\n"
-   "                      rose while the levels did not, say so.\n"
-   "                      AND IT NEVER BLOCKS. Layers are a development-time\n"
-   "                      device: the stack is collapsed into one commit before\n"
-   "                      it lands, and the code lands whole whichever way it\n"
-   "                      was cut, so a cut that misreads the levels costs only\n"
-   "                      the reading it was drawn for.\n"
-   "                      So whatever you conclude here, it does not change your\n"
-   "                      recommendation: say it in `asks`, mark the check, and\n"
-   "                      recommend on the other three. `amend` and `recut` are\n"
-   "                      for a defect in the COMMITMENT. There is no exception\n"
-   "                      for a cut you cannot state at all — `:layers` is an\n"
-   "                      optional field, a record without it is valid, and what\n"
-   "                      you are approving is the commitment, not the\n"
-   "                      packaging. Two soft bars against over-splitting have\n"
-   "                      already failed here; this one is not a matter of\n"
-   "                      degree.\n"
+   (if (strata-era? design) stratified-check decomposable-check)
    "  routing-coherent  — do the routed health observations keep this ONE story?\n"
    "                      Observations routed to fix-here that belong to a\n"
    "                      different story make this two changes.\n\n"
@@ -782,6 +870,11 @@
   {:baseline-review "review/baseline_review_schema.json"
    :design-decision "review/design_decision_schema.json"})
 
+(def ^:private derivation-keys
+  "Every derivation a round may answer about, of either era. What an answer names is kept only if it
+   is one of these; which of them a round asks about is the record's era."
+  (into #{} (concat report/derivations report/strata-derivations)))
+
 (defn- normalize-findings
   [raw]
   (into [] (keep (fn [f]
@@ -799,14 +892,14 @@
                      ;; underscore spelling is the same check; anything else ties the finding
                      ;; to nothing, and is dropped rather than kept as a check no round derives.
                      (some #{(keyword (str/replace (str/trim (str (:check f))) "_" "-"))}
-                           report/derivations)
+                           derivation-keys)
                      (assoc :check (keyword (str/replace (str/trim (str (:check f))) "_" "-")))
                          (seq (:evidence f))
                          (assoc :evidence (mapv str (:evidence f))))))))
         raw))
 
 (def ^:private derivation-names
-  (into #{} (map name) report/derivations))
+  (into #{} (map name) derivation-keys))
 
 (defn- normalize-blocked
   "An insufficient finding, kept only if it names a derivation it blocks and what
@@ -874,8 +967,7 @@
           r (keyword (str (:recommend m)))
           checks (into [] (keep (fn [c]
                                   (let [k (keyword (str/replace (str (:check c)) "_" "-"))]
-                                    (when (#{:relation-honest :goal-served
-                                             :decomposable :routing-coherent} k)
+                                    (when (derivation-keys k)
                                       {:check  k
                                        :status (let [st (keyword (str (:status c)))]
                                                  (if (#{:held :broken :underivable} st)
@@ -971,6 +1063,9 @@
    id would drop the others silently, and a subject declared as exactly what the record says would
    read as undeclared.
 
+   The strata a record names are subjects too, after its claims' — a record saying which levels it
+   touches names levels the declaration has to hold, whether or not a claim is about them.
+
    Given the listing rather than reading it, so the round that reads it once can say why when it
    could not be read. A listing that is not `:listed` holds nothing, so nothing resolves against it."
   [record listing]
@@ -981,10 +1076,9 @@
                              (update m id (fnil conj #{}) (keyword (str/lower-case (name s)))))
                            {} (:elements listing)))]
     (into []
-          (comp (mapcat :about)
-                (distinct)
+          (comp (distinct)
                 (remove #(contains? (get declared % #{}) (recorded %))))
-          claims)))
+          (concat (mapcat :about claims) (:strata record)))))
 
 (defn ^{:malli/schema [:=> [:cat :map :DeclaredElements] [:vector :string]]}
   misplayed-roles
@@ -2030,9 +2124,13 @@
    "A read-only judge derived what could be derived about this DESIGN record,\n"
    "before any code is written, and it did not come out clean.\n\n"
    (case recommend
-     :recut (str "It says the DECOMPOSITION does not hold. Re-cut it. The claims may be\n"
-                 "right; how the change is split into layers or phases is what is wrong,\n"
-                 "and restating the claims will not fix it.\n\n")
+     :recut (if (strata-era? design)
+              (str "It says the DECOMPOSITION does not hold. Re-place it. The claims may be\n"
+                   "right; which strata the change sits in, or what it adds to them, is what\n"
+                   "is wrong, and restating the claims will not fix it.\n\n")
+              (str "It says the DECOMPOSITION does not hold. Re-cut it. The claims may be\n"
+                   "right; how the change is split into layers or phases is what is wrong,\n"
+                   "and restating the claims will not fix it.\n\n"))
      :resurvey (str "It said the PREMISE was wrong — and the baseline has since been\n"
                     "re-run and now holds against the code. The corrected baseline is\n"
                     "below.\n\n"
@@ -2056,7 +2154,7 @@
                     "the design still stands on a premise nobody has re-checked it\n"
                     "against, which is the failure this whole round exists to catch.\n\n")
      (str "It says the RECORD has a derivable defect. Repair the record — the\n"
-          "commitment may well be sound, and the layering with it.\n\n"))
+          "commitment may well be sound, and its decomposition with it.\n\n"))
    "Your job is to make the record TRUE and coherent. It is NOT to make the\n"
    "checks pass. Lowering the effort, softening :revisit to :within, dropping\n"
    "invariants or routing work away from :fix-here all quiet a check without\n"
