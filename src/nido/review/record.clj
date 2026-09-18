@@ -750,10 +750,26 @@
             [(str "\n    principles: " (str/join "; " p))])
           (when-let [n (:note m)] [(str "\n    because: " n)]))))
 
+(defn- levels-block
+  "What each named stratum's own judge concluded, for the deciding judge: the level's declared
+   vocabulary beside its verdict, or the outcome that stood in for one. Evidence, never the decision."
+  [levels]
+  (when (seq levels)
+    (str "WHAT EACH LEVEL SAID — before you, each declared stratum above was read by a judge given\n"
+         "only that level: its vocabulary, its modules, its neighbours, and what this design asks of\n"
+         "it. Weigh these under the stratified check; they are evidence, not verdicts you inherit, and\n"
+         "a level judge that failed tells you nothing about its level:\n"
+         (bullets (for [{:keys [stratum vocabulary reading]} levels]
+                    (str stratum " — provides: " (str/replace (str vocabulary) #"\s+" " ")
+                         (if (:verdict reading)
+                           (str "\n    its judge: " (name (:verdict reading)) " — " (:reason reading))
+                           (str "\n    its judge did not answer (" (name (:outcome reading)) ")")))))
+         "\n")))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   design-prompt
   "The decision prompt. Derives what can be derived; hands the rest over."
-  [{:keys [design baseline stance intent disputes settled]}]
+  [{:keys [design baseline stance intent disputes settled levels]}]
   (let [design   (judged-alone design)
         baseline (judged-alone baseline)]
    (str
@@ -809,7 +825,8 @@
      (str "\nSTRATA THIS CHANGE TOUCHES, floor first — the levels it is written in or\n"
           "adds to, each an element above. It states no cut: how the work is split\n"
           "into layers is drawn from these later, and is not yours to judge.\n"
-          (if (seq (:strata design)) (bullets (:strata design)) "  none declared\n") "\n")
+          (if (seq (:strata design)) (bullets (:strata design)) "  none declared\n") "\n"
+          (levels-block levels))
      (when-let [l (seq (:layers design))]
        (str "\nCLAIMED DECOMPOSITION, VERTICAL — one claim per layer, ordered by\n"
             "dependency; all of it lands in one go:\n"
@@ -869,7 +886,8 @@
 ;; ── Running a round ─────────────────────────────────────────────────────────
 
 (def ^:private schema-resources
-  {:baseline-review "review/baseline_review_schema.json"
+  {:stratum-reading "review/stratum_reading_schema.json"
+   :baseline-review "review/baseline_review_schema.json"
    :design-decision "review/design_decision_schema.json"})
 
 (def ^:private derivation-keys
@@ -1292,12 +1310,116 @@
       (assoc design :model (model/overlay (:model baseline) (:model design)))
       design)))
 
+(defn- stratum-row? [row] (= "stratum" (some-> (:sort row) name str/lower-case)))
+
+(defn- level-of
+  "One declared stratum as the listing describes it: its vocabulary, its modules, the strata it rests
+   on and those resting on it. nil for an id the listing holds as no stratum."
+  [listing id]
+  (let [strata (filter stratum-row? (:elements listing))]
+    (when-let [row (some #(when (= id (:id %)) %) strata)]
+      {:id         id
+       :vocabulary (:doc row)
+       :modules    (vec (get-in row [:refs :provided-by]))
+       :rests-on   (vec (get-in row [:refs :rests-on]))
+       :resting    (into [] (comp (filter #(some #{id} (get-in % [:refs :rests-on]))) (map :id)) strata)})))
+
+(defn- touching
+  "The parts of `design` that touch `level`: its elements that are the stratum or one of its modules,
+   and its claims about any of them."
+  [design {:keys [id modules]}]
+  (let [ids    (into #{id} modules)
+        {:keys [elements claims]} (:model design)]
+    {:elements (filterv #(ids (:id %)) elements)
+     :claims   (filterv #(some ids (:about %)) claims)}))
+
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  stratum-prompt
+  "The prompt for one stratum's judge. It is shown that level and nothing wider — its declared
+   vocabulary, its modules, the strata it rests on and those resting on it — with the design's summary
+   and the parts of it that touch the level, and asked the three questions only that level can answer.
+   Read-only, like every record judge: it reads code to answer, and writes nothing."
+  [{:keys [level design]}]
+  (let [{:keys [id vocabulary modules rests-on resting]} level
+        {:keys [elements claims]} (touching design level)]
+    (str
+     "You are ONE LEVEL of a codebase, judging a proposed change from where you sit. You are not\n"
+     "deciding whether it should be built — another judge does that, and will read what you say as\n"
+     "evidence. You answer only what this level can.\n\n"
+     "THE LEVEL: " id "\n"
+     "What it provides, as declared: " (str/replace (str vocabulary) #"\s+" " ") "\n"
+     "Its modules: " (if (seq modules) (str/join ", " modules) "none listed") "\n"
+     "It rests on: " (if (seq rests-on) (str/join ", " rests-on) "nothing declared") "\n"
+     "Resting on it: " (if (seq resting) (str/join ", " resting) "nothing declared") "\n\n"
+     "THE CHANGE: " (:summary design) "\n"
+     "Shape: " (:shape design) "\n\n"
+     "WHAT IT ASKS OF THIS LEVEL:\n"
+     (if (or (seq elements) (seq claims))
+       (str (bullets (concat (map #(str "[" (:id %) "] " (name (:sort %))
+                                        (when-let [i (:interface %)] (str " — provides: " i)))
+                                  elements)
+                             (map #(str "[" (:id %) "] " (:statement %)) claims)))
+            "\n\n")
+       "  nothing of this level is named in the design's model; read its shape for what touches it\n\n")
+     "ANSWER THREE QUESTIONS OF THIS LEVEL, AND ONLY THIS LEVEL:\n"
+     "  1. Can what the change needs from this level be built from what it already provides —\n"
+     "     by combining its primitives — or does it need something new?\n"
+     "  2. If it needs something new, does the design say why combining what the level provides\n"
+     "     could not do? A level's vocabulary grows only for a stated reason.\n"
+     "  3. Does each part the design places in this level belong here — or is it written in the\n"
+     "     vocabulary of a level above, or does it reach past the level below?\n\n"
+     "Verdict: fits (the need is built from what the level provides, or it grows with a stated\n"
+     "reason), widens (it asks the level for something outside its vocabulary, unargued), or\n"
+     "misplaced (a part placed here belongs in another level). Say why in the level's own terms,\n"
+     "and cite the design's ids and the code you read. How the change will be cut into layers is\n"
+     "not yours to judge.")))
+
+(defn ^{:malli/schema [:=> [:cat :string :string] [:maybe :map]]}
+  parse-stratum-reading
+  "A stratum judge's JSON as the reading a decision records, or nil when its verdict is outside the
+   closed three or it gives no reason."
+  [json-str stratum]
+  (try
+    (let [m (json/parse-string json-str true)
+          v (keyword (str (:verdict m)))]
+      (when (and (#{:fits :widens :misplaced} v) (not (str/blank? (str (:reason m)))))
+        {:stratum stratum :verdict v :reason (str (:reason m))}))
+    (catch Exception _ nil)))
+
+(defn- read-levels!
+  "Read each declared stratum `design` names through a judge of its own, concurrently, before the
+   deciding judge runs. Returns one `{:stratum :vocabulary :reading}` per named stratum the listing
+   declares, in the design's order; a judge that did not answer leaves its outcome as the reading, so
+   the round decides without it and says so. Nothing here writes."
+  [{:keys [code-cwd run-id label reviewer design listing]}]
+  (let [levels (keep #(level-of listing %) (:strata design))]
+    (->> levels
+         (mapv (fn [{:keys [id] :as level}]
+                 (future
+                   (let [n      (last (str/split id #"/"))
+                         result (judged (run-round! {:cwd code-cwd :run-id run-id :kind :stratum-reading
+                                                     :label (str (or label "design-decision") "-stratum-" n)
+                                                     :reviewer reviewer
+                                                     :prompt (stratum-prompt {:level level :design design})})
+                                        #(parse-stratum-reading % id))]
+                     {:stratum    id
+                      :vocabulary (:vocabulary level)
+                      :reading    (if (:verdict result)
+                                    result
+                                    (cond-> {:stratum id :outcome (:outcome result)}
+                                      (:detail result) (assoc :detail (:detail result))))}))))
+         (mapv deref))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   design-decision!
   "Run the decision round over this workstream's latest design record. Returns
    the ledger record, or {:outcome <kw> :detail <str>} saying why there is none.
 
    Single-pass on purpose: it emits a decision, not findings to iterate on.
+
+   One judge decides. Before it, each declared stratum the design names is read by a judge of its
+   own (`read-levels!`), whose conclusion the deciding judge is shown and the decision records under
+   :strata-read — evidence from each level, never a second decision.
 
    Two of the no-verdict outcomes are read out of the records before a judge is
    launched, and cost nothing: no design, and a design standing on a baseline
@@ -1331,6 +1453,12 @@
                 before   (if (contains? opts :code-identity)
                            (:code-identity opts)
                            (settled/code-identity code-cwd))
+                ;; Each named stratum read by a judge of its own, before the deciding one, so what
+                ;; each level concluded is in front of it. A design naming none reads none.
+                levels   (when (seq (:strata design))
+                           (read-levels! {:code-cwd code-cwd :run-id run-id :label label
+                                          :reviewer reviewer :design design
+                                          :listing  (or listing (design-check/elements project code-cwd))}))
                 result   (judged (run-round!
                                   {:cwd code-cwd :run-id run-id :kind :design-decision
                                    :label label :reviewer reviewer
@@ -1340,7 +1468,8 @@
                                              :stance   (stages/read-stance project)
                                              :intent   (discover-intent cwd design)
                                              :disputes disputes
-                                             :settled  settled})})
+                                             :settled  settled
+                                             :levels   levels})})
                                  #(parse-design-decision % (:seq design)))
                 after    (settled/code-identity code-cwd)
                 one-tree (when (= before after) before)
@@ -1356,6 +1485,7 @@
 
               :else
               (cond-> result
+                (seq levels)                            (assoc :strata-read (mapv :reading levels))
                 (:confirmed result)                     (update :confirmed #(filterv checks %))
                 one-tree                                (assoc :code-identity one-tree)
                 (and one-tree (seq subject-identities)) (assoc :subject-identities subject-identities)))))
@@ -2180,6 +2310,7 @@
    design run's re-survey — give each derivation's gaps and the claims found false.
 
      {:decisions n :checks      {check {:broken n :alone n :at-end bool}}
+                   :strata      {stratum {:read n :fits n :widens n :misplaced n :failed n}}
       :reviews   n :derivations {derivation {:broken n :alone n :at-end bool}}
                    :falsified   {claim-id n}}
 
@@ -2193,6 +2324,15 @@
       (seq decisions)
       (assoc :decisions (count decisions)
              :checks    (tally (mapv broken-check-names decisions)))
+
+      (some :strata-read decisions)
+      (assoc :strata (reduce (fn [acc {:keys [stratum verdict]}]
+                               (update acc stratum
+                                       #(-> (or % {:read 0 :fits 0 :widens 0 :misplaced 0 :failed 0})
+                                            (update :read inc)
+                                            (update (or verdict :failed) inc))))
+                             (sorted-map)
+                             (mapcat :strata-read decisions)))
       (seq reviews)
       (assoc :reviews     (count reviews)
              :derivations (tally (mapv (fn [r] (if (= :insufficient (:verdict r))

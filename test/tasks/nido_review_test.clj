@@ -1889,3 +1889,14 @@
       (let [all (read-string (with-out-str (t/figures-cmd* {:project "nido"})))]
         (is (= 2 (:runs all)) "a review naming no run is attributed to none")
         (is (= {:runs 1 :rounds 1 :alone 1 :at-end 1} (get-in all [:checks :goal-served])))))))
+
+(deftest the-level-judges-readings-sum-across-runs
+  (let [entries {:design-decision [{:format :design-decision :run-id "d1" :seq 3 :checks []
+                                    :strata-read [{:stratum "s" :verdict :widens :reason "r"}]}
+                                   {:format :design-decision :run-id "d2" :seq 9 :checks []
+                                    :strata-read [{:stratum "s" :verdict :fits :reason "r"}]}]
+                 :baseline-review []}]
+    (with-redefs [ws/list-ids   (constantly ["ws-1"])
+                  ws/entries-of (fn [_ _ kind] (get entries kind))]
+      (is (= {"s" {:read 2 :fits 1 :widens 1 :misplaced 0 :failed 0}}
+             (:strata (read-string (with-out-str (t/figures-cmd* {:project "nido"})))))))))

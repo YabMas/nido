@@ -2008,7 +2008,8 @@
 
 (defn- summed
   "Many runs' figures, per check and per derivation: in how many runs it was broken, in how many
-   rounds, in how many of those alone, and in how many runs it was still broken at the end."
+   rounds, in how many of those alone, and in how many runs it was still broken at the end; and per
+   stratum, its level judges' readings summed."
   [figures]
   (letfn [(add [acc tallies]
             (reduce-kv (fn [a k {:keys [broken alone at-end]}]
@@ -2021,7 +2022,9 @@
                        acc tallies))]
     {:runs        (count figures)
      :checks      (reduce add (sorted-map) (keep :checks figures))
-     :derivations (reduce add (sorted-map) (keep :derivations figures))}))
+     :derivations (reduce add (sorted-map) (keep :derivations figures))
+     :strata      (reduce (fn [acc t] (merge-with #(merge-with + %1 %2) acc t))
+                          (sorted-map) (keep :strata figures))}))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   figures-cmd*

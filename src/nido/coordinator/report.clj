@@ -2394,6 +2394,26 @@
    [:weakened {:optional true} [:vector string?]]
    [:disputed {:optional true} [:vector string?]]])
 
+(def StratumReading
+  "What one declared stratum's judge concluded about a design, as the decision records it: a closed
+   verdict and its reason, or the outcome that stood in for one when the judge did not answer.
+
+     :fits      what the design needs from the level is built from what it provides, or the level
+                grows with a stated reason
+     :widens    the design asks the level for something outside its vocabulary, unargued
+     :misplaced a part placed in the level belongs in another
+
+   Evidence the deciding judge weighed, never a decision of its own."
+  [:or
+   [:map {:closed true}
+    [:stratum string?]
+    [:verdict [:enum :fits :widens :misplaced]]
+    [:reason  string?]]
+   [:map {:closed true}
+    [:stratum string?]
+    [:outcome keyword?]
+    [:detail  {:optional true} string?]]])
+
 (def DesignDecision
   "The pre-implementation decision round — the only point in the lifecycle where
    'don't build this' is still cheap, and the one round that is a DECISION rather
@@ -2430,7 +2450,10 @@
                 [:subject-identities {:optional true} [:map-of string? string?]]
                 ;; The run whose round appended this decision, by which that run's rounds are read
                 ;; back; a decision appended before it existed names none.
-                [:run-id             {:optional true} string?]]
+                [:run-id             {:optional true} string?]
+                ;; What each declared stratum the design names concluded, read by a judge of its own
+                ;; before the deciding one — present when the design named any.
+                [:strata-read        {:optional true} [:vector StratumReading]]]
         shape  (fn [recommend & extra]
                  (into [:map {:closed true}]
                        (concat common [[:recommend [:= recommend]]] extra)))]

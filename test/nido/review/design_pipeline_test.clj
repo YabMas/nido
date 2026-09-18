@@ -5,6 +5,7 @@
    is only the judgement that cannot be. Both agents are seams."
   (:require
    [babashka.fs :as fs]
+   [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
    [nido.platform.core :as core]
@@ -16,6 +17,7 @@
    [nido.design.check :as design-check]
    [nido.review.loop :as rloop]
    [nido.review.record :as record]
+   [nido.review.settled :as settled]
    [nido.review.stages :as stages]))
 
 (defn- with-tmp-nido-root
@@ -893,3 +895,105 @@
     (is (= 1 (record/judges-launched {:rounds [(round nil) (round "premise-unverified")]})))
     (is (= 0 (record/judges-launched {:rounds [(round "subjects-undeclared")]})))
     (is (= 0 (record/judges-launched nil)))))
+
+;; ── Each named stratum read by a judge of its own ────────────────────────────
+
+(def ^:private a-listing
+  {:status :listed
+   :elements [{:id "canvas.coordinator.report/coordinator-report" :sort :fukan.common.vocab.code.module/Module}
+              {:id "canvas.strata/record-vocabulary" :sort :fukan.common.vocab.code.stratum/Stratum
+               :doc "Typed ledger records: what each kind may carry."
+               :refs {:provided-by ["canvas.coordinator.report/coordinator-report"]}}
+              {:id "canvas.strata/record-model" :sort :fukan.common.vocab.code.stratum/Stratum
+               :doc "Any record read as one model."
+               :refs {:provided-by ["canvas.coordinator.report.model/report-model"]
+                      :rests-on ["canvas.strata/record-vocabulary"]}}]})
+
+(def ^:private a-stratified-design
+  (-> a-design
+      (dissoc :invariants)
+      (assoc :model {:elements [{:id "canvas.coordinator.report/coordinator-report" :sort :module}
+                                {:id "canvas.review.record/review-record" :sort :module}
+                                {:id "canvas.strata/record-vocabulary" :sort :stratum}]
+                     :claims [{:id "decision-records-levels" :about ["canvas.coordinator.report/coordinator-report"]
+                               :statement "a decision records each level's reading" :falsified-by "f"
+                               :evidence {:by :round}}
+                              {:id "elsewhere" :about ["canvas.review.record/review-record"]
+                               :statement "a claim about another module" :falsified-by "f"
+                               :evidence {:by :round}}]}
+             :strata ["canvas.strata/record-vocabulary"])))
+
+(def ^:private a-proceeding-answer
+  (json/generate-string {:recommend "proceed" :reason "r" :asks "worth it?" :findings [] :confirmed []
+                         :checks (for [c ["relation_honest" "goal_served" "stratified" "routing_coherent"]]
+                                   {:check c :status "held" :note "n"})}))
+
+(defn- decide [design stratum-answer]
+  (let [calls (atom [])]
+    (with-redefs [stages/project+ws-from-cwd  (fn [_] [:nido "ws-1"])
+                  ws/latest-entry             (fn [_ _ k] (when (= :design k) design))
+                  standing/of-design          (constantly {:decidable? true})
+                  record/undeclared-subjects  (constantly nil)
+                  settled/code-identity       (constantly "tree")
+                  stages/read-stance          (constantly nil)
+                  stages/discover-baseline    (constantly nil)
+                  record/discover-intent      (constantly nil)
+                  record/run-round!           (fn [{:keys [kind prompt]}]
+                                                (swap! calls conj {:kind kind :prompt prompt})
+                                                (if (= :stratum-reading kind)
+                                                  stratum-answer
+                                                  {:ok a-proceeding-answer}))]
+      {:decision (record/design-decision! {:cwd "/w" :run-id "r1" :label "l" :listing a-listing})
+       :calls    @calls})))
+
+(deftest each-named-stratum-is-read-before-the-deciding-judge
+  (let [{:keys [decision calls]}
+        (decide a-stratified-design
+                {:ok (json/generate-string {:verdict "widens" :reason "no primitive for a judge's evidence"
+                                            :cites []})})]
+    (is (= [:stratum-reading :design-decision] (mapv :kind calls)) "one level judge, then the one that decides")
+    (is (str/includes? (:prompt (second calls)) "WHAT EACH LEVEL SAID"))
+    (is (str/includes? (:prompt (second calls))
+                       "canvas.strata/record-vocabulary — provides: Typed ledger records: what each kind may carry.")
+        "the deciding judge sees the level's declared vocabulary")
+    (is (str/includes? (:prompt (second calls)) "its judge: widens — no primitive for a judge's evidence"))
+    (is (= [{:stratum "canvas.strata/record-vocabulary" :verdict :widens
+             :reason "no primitive for a judge's evidence"}]
+           (:strata-read decision)))
+    (is (= :proceed (:recommend decision)) "the recommendation is the deciding judge's alone")))
+
+(deftest a-level-judge-sees-only-its-level
+  (let [{:keys [calls]} (decide a-stratified-design {:outcome :no-output :detail "d"})
+        p (:prompt (first calls))]
+    (is (str/includes? p "THE LEVEL: canvas.strata/record-vocabulary"))
+    (is (str/includes? p "Its modules: canvas.coordinator.report/coordinator-report"))
+    (is (str/includes? p "Resting on it: canvas.strata/record-model"))
+    (is (str/includes? p "[decision-records-levels]") "a claim about one of its modules")
+    (is (not (str/includes? p "[elsewhere]")) "not a claim about a module outside it")
+    (is (not (str/includes? p "Any record read as one model")) "nor another level's vocabulary")))
+
+(deftest a-failed-level-judge-leaves-the-round-to-decide-without-it
+  (let [{:keys [decision calls]} (decide a-stratified-design {:outcome :codex-failed :detail "exit 1"})]
+    (is (= :proceed (:recommend decision)))
+    (is (= [{:stratum "canvas.strata/record-vocabulary" :outcome :codex-failed :detail "exit 1"}]
+           (:strata-read decision)))
+    (is (str/includes? (:prompt (second calls)) "its judge did not answer (codex-failed)"))))
+
+(deftest a-design-naming-no-stratum-reads-no-level
+  (let [{:keys [decision calls]} (decide (assoc a-stratified-design :strata []) {:ok "{}"})]
+    (is (= [:design-decision] (mapv :kind calls)))
+    (is (not (contains? decision :strata-read)))))
+
+(deftest a-level-judges-answer-is-closed
+  (is (= {:stratum "s" :verdict :fits :reason "r"}
+         (record/parse-stratum-reading (json/generate-string {:verdict "fits" :reason "r" :cites []}) "s")))
+  (is (nil? (record/parse-stratum-reading (json/generate-string {:verdict "proceed" :reason "r"}) "s")))
+  (is (nil? (record/parse-stratum-reading (json/generate-string {:verdict "fits" :reason " "}) "s")))
+  (is (nil? (record/parse-stratum-reading "not json" "s"))))
+
+(deftest a-runs-level-figures-are-read-off-its-decisions
+  (let [f (record/run-figures [{:format :design-decision :checks []
+                                :strata-read [{:stratum "s" :verdict :widens :reason "r"}]}
+                               {:format :design-decision :checks []
+                                :strata-read [{:stratum "s" :outcome :codex-failed}]}])]
+    (is (= {"s" {:read 2 :fits 0 :widens 1 :misplaced 0 :failed 1}} (:strata f)))))

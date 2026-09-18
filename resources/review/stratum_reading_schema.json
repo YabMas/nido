@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict",
+    "reason",
+    "cites"
+  ],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "fits",
+        "widens",
+        "misplaced"
+      ],
+      "description": "fits: what the design needs from this level is built from what it provides, or the level grows with a stated reason. widens: the design asks this level for something outside its vocabulary without saying why combining what it provides could not do. misplaced: a part the design places in this level belongs in another one."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Why, in this level's terms: which of its primitives the need is or is not built from, or which level the misplaced part belongs in."
+    },
+    "cites": {
+      "type": "array",
+      "description": "What the reason rests on: the design's element or claim ids, and file:line where you read the code.",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}
