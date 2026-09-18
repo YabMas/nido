@@ -1,7 +1,7 @@
 (ns nido.review.codex-test
   (:require
    [clojure.string :as str]
-   [clojure.test :refer [deftest is use-fixtures]]
+   [clojure.test :refer [deftest is testing use-fixtures]]
    [nido.review.claude :as claude]
    [nido.review.codex :as codex]
    [nido.review.prompts :as prompts]
@@ -482,7 +482,9 @@
                 (try (codex/review! {:cwd "/w" :from "BASEREV" :run-id "r1"})
                      nil
                      (catch clojure.lang.ExceptionInfo e e))))]
-    (let [e (run usage-limit-log)]
+    ;; A credential failure rather than codex's quota: a quota is stood in for
+    ;; (see `run-reviewer!`), so it would reach claude before it reached here.
+    (let [e (run "stream error: unexpected status 401 Unauthorized\n")]
       (is (= :reviewer-unavailable (:reason (ex-data e))))
       (is (= (:message (:unavailable (ex-data e))) (ex-message e))
           "the message is the channel: it is what reaches the phase in the
@@ -565,6 +567,30 @@
     (is (= [[:codex "stack-round-1.log"]] calls))
     (is (= {:reviewer :codex} judged-by))))
 
+(deftest a-codex-out-of-quota-hands-the-review-to-claude
+  (let [{:keys [exit log-path judged-by calls]}
+        (judged {:codex {:log usage-limit-log} :claude {:answers? true}})]
+    (is (= [[:codex "stack-round-1.log"] [:claude "stack-round-1-claude.log"]] calls)
+        "beside codex's log, never over it — that log holds why claude ran")
+    (is (zero? exit))
+    (is (str/ends-with? log-path "stack-round-1-claude.log")
+        "a failure is classified from whoever ran last")
+    (is (= :claude (:reviewer judged-by)))
+    (is (= :codex (:instead-of judged-by)))
+    (is (str/includes? (:because judged-by) "hit your usage limit"))))
+
+(deftest only-a-quota-is-stood-in-for
+  (testing "a credential is answered by logging in; a stand-in would hide the broken login"
+    (let [{:keys [exit calls]}
+          (judged {:codex {:log "stream error: unexpected status 401 Unauthorized\n"}
+                   :claude {:answers? true}})]
+      (is (= [[:codex "stack-round-1.log"]] calls))
+      (is (= 1 exit))))
+  (testing "a failure nothing classifies is this run breaking, not codex being absent"
+    (let [{:keys [calls]} (judged {:codex {:log "ERROR: model stream closed\n"}
+                                   :claude {:answers? true}})]
+      (is (= [[:codex "stack-round-1.log"]] calls)))))
+
 (deftest a-project-configured-for-claude-never-runs-codex
   (let [{:keys [judged-by calls]}
         (judged {:reviewer :claude
@@ -573,3 +599,42 @@
     (is (= [[:claude "stack-round-1.log"]] calls)
         "codex is never asked, whatever claude's log says")
     (is (= {:reviewer :claude} judged-by))))
+
+(defn- review-with
+  "`review!` over a one-file diff with both reviewers stubbed as in `judged`."
+  [{:keys [codex claude]}]
+  (let [tmp  (str (fs/create-temp-dir))
+        stub (fn [{:keys [log answers?]}]
+               (fn [{:keys [log-path out-path]}]
+                 (when log (spit log-path log))
+                 (when answers? (spit out-path sample-output))
+                 {:exit (if answers? 0 1)}))]
+    (with-redefs [jj/jj!             (fn [_ & _] {:exit 0 :out "diff --git a/x b/x" :err ""})
+                  cstate/run-dir     (fn [_] tmp)
+                  codex/run-codex!   (stub codex)
+                  claude/run-claude! (stub claude)]
+      (try (codex/review! {:cwd "/w" :from "BASEREV" :run-id "r1"})
+           (catch clojure.lang.ExceptionInfo e e)))))
+
+(deftest a-stand-ins-findings-say-whose-they-are
+  (let [r (review-with {:codex {:log usage-limit-log} :claude {:answers? true}})]
+    (is (= 1 (count (:findings r))))
+    (is (= :claude (get-in r [:judged-by :reviewer])))
+    (is (= :codex (get-in r [:judged-by :instead-of])))))
+
+(deftest a-stand-in-that-breaks-is-a-failed-review-naming-both
+  ;; codex's quota is why claude ran, not why the review failed — so the reason
+  ;; is the one that sends a reader to the stand-in's log, and the message keeps
+  ;; the quota line that explains why there was a stand-in at all.
+  (let [e (review-with {:codex {:log usage-limit-log}
+                        :claude {:log "API Error: 500 Internal Server Error\n"}})]
+    (is (= :review-failed (:reason (ex-data e))))
+    (is (str/starts-with? (ex-message e) "claude review failed — standing in for codex:"))
+    (is (str/includes? (ex-message e) "hit your usage limit"))))
+
+(deftest a-stand-in-out-of-quota-too-leaves-the-reviewer-unavailable
+  (let [e (review-with {:codex {:log usage-limit-log}
+                        :claude {:log "Claude AI usage limit reached|1790000000\n"}})]
+    (is (= :reviewer-unavailable (:reason (ex-data e))))
+    (is (str/includes? (ex-message e) "Claude AI usage limit reached")
+        "the line from the stand-in's log: it is the one that ended the run")))

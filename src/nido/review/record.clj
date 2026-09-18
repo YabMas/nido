@@ -1004,9 +1004,10 @@
     (catch Exception _ nil)))
 
 (defn- run-round!
-  "One read-only reviewer pass over a record — `:reviewer`, or codex (see
-   `codex/run-reviewer!`). Returns {:ok <json-string>} or
-   {:outcome <kw> :detail <str>} — never nil, and never throws.
+  "One read-only reviewer pass over a record — `:reviewer`, or codex, with
+   codex's stand-in when codex has run out of quota (`codex/run-reviewer!`).
+   Returns {:ok <json-string>} or {:outcome <kw> :detail <str>} — never nil, and
+   never throws.
 
    The outcome is tagged rather than collapsed because a judgment surface cannot
    afford one confusion above all others: a round that never ran must not read

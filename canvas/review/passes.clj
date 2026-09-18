@@ -22,7 +22,7 @@
 
 (Module review-codex
   "Running a reviewer over a range and reading what it said — codex unless a run or its project
-   names claude.
+   names claude, and claude in codex's place when codex has run out of quota.
 
    Findings are identified by WHAT they are about — file, line, title — not by when they were
    found, so the same finding raised by two passes is one finding and a finding that survives a
@@ -62,9 +62,10 @@
      is no reviewer is refused, never read as the default."
     {:signature [:=> [:catn [:override :any] [:configured :any]] :keyword]})
   (Operation run-reviewer!
-    "Run the chosen reviewer, saying which one judged."
+    "Run the chosen reviewer, and when codex could not be run for want of quota, claude in its
+     place on the same prompt — saying which one judged."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [run-codex! run-claude!]})
+     :delegates [run-codex! run-claude! unavailability]})
   (Operation review! "Review one range and answer with its findings."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [run-reviewer! schema-json safe-label unavailability]}))

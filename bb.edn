@@ -609,7 +609,7 @@
 
   nido:review:loop
   {:requires ([tasks.nido-review :as nido-review])
-   :doc "Run the review loop on the session's branch diff. Runs until it converges/stops progressing unless capped. The reviewer is codex unless :reviewer or the project's :reviewer in projects.edn names claude. [:base main] [:max-iters <n>] [:cwd <dir>] [:dry-run? false] [:fixer-model sonnet|opus|<full name>] [:reviewer codex|claude]"
+   :doc "Run the review loop on the session's branch diff. Runs until it converges/stops progressing unless capped. The reviewer is codex unless :reviewer or the project's :reviewer in projects.edn names claude; a codex out of quota hands its reviews to claude opus. [:base main] [:max-iters <n>] [:cwd <dir>] [:dry-run? false] [:fixer-model sonnet|opus|<full name>] [:reviewer codex|claude]"
    :task (System/exit (nido-review/exit-code
                         (apply nido-review/loop-cmd *command-line-args*)))}
 

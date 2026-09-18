@@ -174,6 +174,15 @@
     "error"               "✗"
     "✓"))
 
+(defn- stand-in-text
+  "Who judged a row in place of the configured reviewer, or \"\" when nobody
+   stood in. Only a stand-in is named: the configured reviewer is the run's
+   choice and says nothing a reader did not already decide."
+  [{:keys [instead-of reviewer]}]
+  (if instead-of
+    (str " · by " (name reviewer) ", " (name instead-of) " unavailable")
+    ""))
+
 (defn- layer-text
   [{:keys [status findings]}]
   (case status
@@ -237,7 +246,7 @@
   [ph layers now]
   (block-lines (:layers ph) layers
                #(layer-glyph (:status %) now)
-               layer-text))
+               #(str (layer-text %) (stand-in-text (:judged-by %)))))
 
 (defn- reshape-lines
   "One indented line per recut the reshape stage held, plus its reason.

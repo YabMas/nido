@@ -3,8 +3,9 @@
    normalized findings. nido worktrees are non-colocated jj workspaces, so
    git-coupled `codex review` cannot run there.
 
-   Also where the REVIEWER is chosen: codex unless a run or its project names
-   claude — see `run-reviewer!`."
+   Also where the REVIEWER is chosen. codex judges unless a run or its project
+   names claude, and a codex that has run out of quota hands the same prompt to
+   claude rather than ending the run — see `run-reviewer!`."
   (:require
    [nido.platform.process :as nprocess]
    [babashka.fs :as fs]
@@ -316,23 +317,61 @@
                           {:reason :unknown-reviewer :reviewer chosen}))))
     default-reviewer))
 
+(def ^:private fallbacks
+  "Who judges instead when a reviewer could not be run, and on which of
+   `unavailability`'s signals.
+
+   Only codex's quota. A quota does not lift until a date, often days out, and
+   the review it blocks is one another vendor's model can do. A credential is
+   answered by logging in, and switching judges over one would keep a broken
+   login hidden behind reviews that go on succeeding. A 429 is codex's own
+   transient throttling and passes in minutes."
+  {:codex {:reviewer :claude :on #{:usage-limit}}})
+
 (defn- run-one!
   [reviewer opts]
   (case reviewer
     :codex  (run-codex! opts)
     :claude (claude/run-claude! opts)))
 
+(defn- stand-in-log
+  "Where a stand-in writes its stream: beside the log of the reviewer it replaced,
+   never over it. That log holds the line saying why the stand-in ran."
+  [log-path stand-in]
+  (str (str/replace log-path #"\.log$" "") "-" (name stand-in) ".log"))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   run-reviewer!
   "Run `:reviewer` (`default-reviewer` when absent) over the rest of `opts`, the
-   keys `run-codex!` takes.
+   keys `run-codex!` takes. When it could not be run for a reason `fallbacks`
+   names, run its stand-in on the same prompt and schema, writing the same
+   :out-path.
 
-   Returns {:exit <int> :log-path <str> :judged-by {:reviewer <kw>}}. :log-path
-   is the log to classify a failure from."
-  [{:keys [reviewer log-path] :as opts}]
+   Returns {:exit <int> :log-path <str> :judged-by <map>}. :exit and :log-path are
+   the LAST run's — the log to classify a failure from, since the stand-in's is a
+   different file. :judged-by says who that was: {:reviewer <kw>}, plus
+   :instead-of and :because (the line that made it stand in) when it was a
+   stand-in.
+
+   The primary runs first every time, including on a round after one it could not
+   run in. A quota can lift mid-run, and nothing in the log says when codex's
+   will except a date in the vendor's own wording."
+  [{:keys [reviewer out-path log-path] :as opts}]
   (let [reviewer (or reviewer default-reviewer)
-        {:keys [exit]} (run-one! reviewer opts)]
-    {:exit exit :log-path log-path :judged-by {:reviewer reviewer}}))
+        {:keys [exit]} (run-one! reviewer opts)
+        ran      {:exit exit :log-path log-path :judged-by {:reviewer reviewer}}
+        stand-in (get fallbacks reviewer)
+        u        (when (and stand-in (or (not (zero? exit)) (not (fs/exists? out-path))))
+                   (unavailability (log-tail log-path unavailability-tail-chars)))]
+    (if (contains? (:on stand-in) (:signal u))
+      (let [log' (stand-in-log log-path (:reviewer stand-in))
+            {:keys [exit]} (run-one! (:reviewer stand-in) (assoc opts :log-path log'))]
+        {:exit      exit
+         :log-path  log'
+         :judged-by {:reviewer   (:reviewer stand-in)
+                     :instead-of reviewer
+                     :because    (:message u)}})
+      ran)))
 
 (defn ^{:malli/schema [:=> [:cat :any] :string]}
   safe-label
@@ -357,9 +396,10 @@
   review!
   "Git-free review of ONE revision range. See ns doc.
 
-   `reviewer` is who judges it, `default-reviewer` when nil. The answer carries
-   `:judged-by`: codex is no longer the only reviewer, and a reader of the report
-   is owed which one read the range.
+   `reviewer` is who judges it, `default-reviewer` when nil; `run-reviewer!`
+   says what happens when it cannot be run. The answer carries `:judged-by`,
+   because a stand-in's findings are not codex's and a reader of the report is
+   owed the difference.
 
    `from`/`to` aim it: `merge-base(@,base)`→`@` for the whole stack, or a single
    layer's `<lower-tip>`→`<own-tip>`. `from` must be a FORK POINT rather than the
@@ -464,11 +504,16 @@
             ;; classified failure is a condition outside the branch that must be
             ;; waited out or authenticated past; an unclassified one is this run
             ;; failing, and the diff is where to look. See `unavailability`.
+            ;; Read from the log of whoever ran LAST: a stand-in that broke is
+            ;; this run failing, whatever the reviewer it replaced ran out of.
             (if-let [u (unavailability (log-tail ran-log unavailability-tail-chars))]
               (throw (ex-info (:message u)
                               {:reason :reviewer-unavailable :unavailable u
                                :exit exit :cwd cwd :label label :judged-by judged-by}))
-              (throw (ex-info (str (name (:reviewer judged-by)) " review failed")
+              (throw (ex-info (str (name (:reviewer judged-by)) " review failed"
+                                   (when-let [why (:because judged-by)]
+                                     (str " — standing in for "
+                                          (name (:instead-of judged-by)) ": " why)))
                               {:reason :review-failed :exit exit :cwd cwd :label label
                                :judged-by judged-by}))))
           (assoc (parse-output (slurp out-path))

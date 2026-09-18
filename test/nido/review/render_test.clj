@@ -106,6 +106,23 @@
     (is (str/includes? s "1 layer converged"))
     (is (str/includes? s "Composition") "the whole-stack pass is named for what it is")))
 
+(deftest a-layer-a-stand-in-judged-says-so-and-no-other-does
+  ;; Read back out of report.json, so the reviewers are strings by now.
+  (let [r {:target {:cwd "/x/feat/thing" :base "main" :layers 2 :files ["a"]}
+           :rounds [{:round 1
+                     :phases [{:phase "review" :status "ok" :started-at "2026-01-01T00:00:00Z"
+                               :findings [{}]
+                               :layers [{:label "one" :index 1 :status "reviewed" :findings 1
+                                         :judged-by {:reviewer "claude" :instead-of "codex"
+                                                     :because "usage limit"}}
+                                        {:label "two" :index 2 :status "reviewed" :findings 0
+                                         :judged-by {:reviewer "codex"}}]}]}]}
+        lines (str/split-lines (render/frame r (java.time.Instant/parse "2026-01-01T00:00:10Z")))
+        line  (fn [label] (first (filter #(str/includes? % label) lines)))]
+    (is (str/includes? (line "Layer 1 · one") "1 finding · by claude, codex unavailable"))
+    (is (not (str/includes? (line "Layer 2 · two") " · by "))
+        "the configured reviewer is the run's own choice, and naming it says nothing")))
+
 (deftest a-converged-layer-keeps-its-place-in-the-stack
   ;; Rows used to arrive reviewed-first, skipped-after, so a layer appeared to
   ;; drop out of the stack in the round it stopped changing. Its number and its

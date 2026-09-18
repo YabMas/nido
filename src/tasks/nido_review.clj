@@ -1503,7 +1503,8 @@
                     ;; reviewers are codex and the warden answers in one turn.
                     :fixer-model fixer-model
                     ;; Who judges each target: codex unless the run or its
-                    ;; project says otherwise. See `codex/run-reviewer!`.
+                    ;; project says otherwise, with claude standing in for a
+                    ;; codex out of quota. See `codex/run-reviewer!`.
                     :reviewer  (reviewer-of cwd reviewer)
                     :run-id    run-id
                     :clock     clock
