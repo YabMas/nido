@@ -51,11 +51,14 @@
 
 (defn- nrepl-eval-error?
   "Heuristic: clj-nrepl-eval's exit code is 0 even when the eval threw.
-   It returns the nREPL session's stdout, which for an exception typically
-   contains strings like `Execution error`, `Syntax error`, or an error map
-   with `:cause`. Detect those so we can surface a proper failure."
-  [out]
-  (let [s (or out "")]
+   `output` is both of its streams: the eval's own printing arrives on stdout,
+   but a thrown exception arrives on STDERR — `Execution error (X) at …` or
+   `Syntax error compiling at …` from a JVM nREPL — while an error the app
+   catches and prints itself (`DATABASE STARTUP FAILED`, an error map with
+   `:cause`) stays on stdout. Matching signatures rather than any stderr at all
+   is deliberate: a healthy boot writes JVM warnings there too."
+  [output]
+  (let [s (or output "")]
     (some #(str/includes? s %)
           ["Execution error" "Syntax error" ":cause" "FATAL ERROR"
            "DATABASE STARTUP FAILED" "could not start [#'" "permission denied for schema"])))
@@ -151,7 +154,11 @@
                       "--timeout" (str timeout-ms)
                       form)
         out (:out result)
-        err (:err result)]
+        err (:err result)
+        ;; A thrown exception arrives on stderr. Read stdout alone and a boot
+        ;; that threw passes as one that returned, and start-app! waits out
+        ;; its health check on an app that will never listen.
+        output (str out "\n" err)]
     (append-eval-log! instance-id
                       (str "eval on :" nrepl-port
                            " (exit=" (:exit result) ")")
@@ -165,10 +172,10 @@
                          :error err
                          :output out
                          :error-msg (or detail err)}))))
-    (when (nrepl-eval-error? out)
+    (when (nrepl-eval-error? output)
       (let [project-name (some-> instance-id (str/split #"--") first)
-            divergence   (flyway-divergence-message out project-name)
-            detail       (first-meaningful-line out)
+            divergence   (flyway-divergence-message output project-name)
+            detail       (first-meaningful-line output)
             ;; Self-describing message: a recognised divergence gives the exact
             ;; remedy; otherwise weave the actual cause into the message itself
             ;; (the TUI failure panel renders only ex-message), never the opaque
@@ -180,8 +187,41 @@
         (throw (ex-info msg
                         {:port nrepl-port
                          :output out
+                         :error err
                          :error-msg (or divergence detail)}))))
     out))
+
+(defn- stale-working-copy?
+  "True when `project-dir` is a jj workspace whose working copy is stale:
+   another workspace rewrote its commit — a restack of the layers it sits on —
+   and its files on disk were never updated. The REPL then loads code that is
+   no longer the branch, and the failure it reports is that code's, not the
+   branch's.
+
+   Same signature `lifecycle/workspace-stale?` reads, which this namespace
+   cannot reach: lifecycle requires the engine, which requires this. Asking
+   runs one ordinary jj command in the workspace, so a live one gets the
+   snapshot any jj command there would take."
+  [project-dir]
+  (boolean
+   (when (and project-dir (fs/exists? (fs/path project-dir ".jj")))
+     (let [r (shell {:continue true :out :string :err :string :dir (str project-dir)}
+                    "jj" "log" "-r" "@" "--no-graph" "-T" "\"\"")]
+       (and (not (zero? (:exit r)))
+            (str/includes? (str (:err r)) "working copy is stale"))))))
+
+(defn- stale-working-copy-note
+  "The sentence that goes ahead of an eval failure in a stale workspace. It
+   comes FIRST because it changes what the rest means: a Flyway checksum
+   mismatch there compares the shared cluster with migration files the branch
+   may already have renumbered, so its remedy — a cluster reset — would wipe
+   shared data and fix nothing."
+  [project-dir]
+  (str "This worktree's jj working copy is stale — its files are not the branch"
+       " (another workspace rewrote the commits it sits on), and the failure below"
+       " may be theirs alone. Run `jj workspace update-stale` in " project-dir
+       " and start again; edits made since it went stale are kept as a divergent"
+       " copy of the working-copy commit rather than left on disk. "))
 
 (defn- wait-for-app-port! [host app-port timeout-ms]
   (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
@@ -228,7 +268,18 @@
             local-ctx (assoc session-ctx :app {:port app-port})
             resolved-start-form (ctx/substitute-value local-ctx start-form)]
         (core/log-step (str "Starting app on " host ":" app-port " (via nREPL eval)..."))
-        (eval-on-repl! instance-id nrepl-port eval-timeout-ms resolved-start-form)
+        (try
+          (eval-on-repl! instance-id nrepl-port eval-timeout-ms resolved-start-form)
+          (catch clojure.lang.ExceptionInfo e
+            (let [project-dir (get-in session-ctx [:session :project-dir])]
+              (throw (if (stale-working-copy? project-dir)
+                       (let [note (stale-working-copy-note project-dir)]
+                         (ex-info (str note (ex-message e))
+                                  (-> (ex-data e)
+                                      (assoc :stale-working-copy? true)
+                                      (update :error-msg #(str note %)))
+                                  e))
+                       e)))))
         (let [ready? (wait-for-app-port! host app-port health-check-timeout-ms)]
           (when-not ready?
             (println "warning: app port did not open before timeout, still starting"))

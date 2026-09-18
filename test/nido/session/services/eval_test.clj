@@ -1,8 +1,10 @@
 (ns nido.session.services.eval-test
   (:require
+   [babashka.fs :as fs]
    [babashka.process]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
+   [nido.platform.process]
    [nido.session.services.eval :as eval]))
 
 ;; The shape clj-nrepl-eval returns (exit 0) when brian's app boot fails because
@@ -138,3 +140,100 @@
     (is (some? msg))
     (is (str/includes? msg "shared"))
     (is (str/includes? msg "bb nido:session:isolate :project brian"))))
+
+;; The shape clj-nrepl-eval actually returns when brian's boot throws: exit 0,
+;; the app's JSON log lines on stdout, and the exception on STDERR. Nine of nine
+;; kept boot failures looked like this — Flyway, compile errors, an OOM — and
+;; none carried a signature on stdout.
+
+(def ^:private flyway-err
+  (str "Execution error (FlywayValidateException) at org.flywaydb.core.Flyway/lambda$migrate$0 (Flyway.java:146).\n"
+       "Validate failed: Migrations have failed validation\n"
+       "Migration checksum mismatch for migration version 20260912093236\n"
+       "-> Applied to database : 1377953232\n"
+       "-> Resolved locally    : -1202459325\n"
+       "Either revert the changes to the migration, or run repair to update the schema history.\n"))
+
+(def ^:private boot-log-out
+  "{\"level\":\"INFO\",\"message\":\"Running Flyway migrations\",\"ns\":\"brian.server-components.migrations\"}")
+
+(deftest eval-on-repl!-reads-a-thrown-exception-from-stderr
+  (with-redefs [babashka.process/shell
+                (fn [_opts & _args] {:exit 0 :out boot-log-out :err flyway-err})]
+    (let [ex (try (#'eval/eval-on-repl! "brian--feat-x" 12345 1000 "(start)")
+                  nil
+                  (catch clojure.lang.ExceptionInfo e e))]
+      (is ex "an exception on stderr is a failed eval, whatever the exit code")
+      (is (str/includes? (ex-message ex) "20260912093236")
+          "the divergence is read from stderr too")
+      (is (= flyway-err (:error (ex-data ex)))
+          "stderr travels with the failure"))))
+
+(deftest eval-on-repl!-passes-a-healthy-boot-that-warns-on-stderr
+  (with-redefs [babashka.process/shell
+                (fn [_opts & _args]
+                  {:exit 0
+                   :out ":started"
+                   :err "WARNING: A terminally deprecated method in sun.misc.Unsafe has been called\n"})]
+    (is (= ":started" (#'eval/eval-on-repl! "brian--feat-x" 12345 1000 "(start)"))
+        "stderr without a failure signature is not a failure")))
+
+;; start-app! in a stale jj working copy: the files the REPL loaded are not the
+;; branch, so whatever failed is said to be suspect FIRST — ahead of a remedy
+;; (here a cluster reset) that would act on the stale files' behalf.
+
+(def ^:private jj-stale-err
+  (str "Error: The working copy is stale (not updated since operation 60d5875a1a03).\n"
+       "Hint: Run `jj workspace update-stale` to update it.\n"))
+
+(defn- start-app-failure
+  "Run start-app! against an nREPL whose boot throws the Flyway mismatch, with
+   `jj-result` as the answer to any jj command. Returns [thrown jj-called?]."
+  [project-dir jj-result]
+  (let [jj-called? (atom false)]
+    (with-redefs [babashka.process/shell
+                  (fn [_opts cmd & _args]
+                    (case cmd
+                      "clj-nrepl-eval" {:exit 0 :out boot-log-out :err flyway-err}
+                      "jj" (do (reset! jj-called? true) jj-result)))
+                  nido.platform.process/tcp-open? (fn [port] (= port 2))]
+      [(try (eval/start-app! {:start-form "(start)" :health-check-timeout-ms 1}
+                             {:app-port 1 :nrepl-port 2 :host "h"
+                              :instance-id "brian--feat-x"}
+                             {:session {:project-dir project-dir}})
+            nil
+            (catch clojure.lang.ExceptionInfo e e))
+       @jj-called?])))
+
+(deftest start-app!-puts-a-stale-working-copy-ahead-of-the-failure
+  (let [dir (str (fs/create-temp-dir))]
+    (try
+      (fs/create-dir (fs/path dir ".jj"))
+      (let [[ex] (start-app-failure dir {:exit 1 :out "" :err jj-stale-err})]
+        (is (str/starts-with? (ex-message ex) "This worktree's jj working copy is stale")
+            "the stale working copy is said first")
+        (is (str/includes? (ex-message ex) (str "`jj workspace update-stale` in " dir)))
+        (is (str/includes? (ex-message ex) "20260912093236")
+            "the failure itself is still there")
+        (is (str/starts-with? (:error-msg (ex-data ex)) "This worktree's jj working copy is stale"))
+        (is (:stale-working-copy? (ex-data ex))))
+      (finally (fs/delete-tree dir)))))
+
+(deftest start-app!-leaves-a-current-working-copy-failure-alone
+  (let [dir (str (fs/create-temp-dir))]
+    (try
+      (fs/create-dir (fs/path dir ".jj"))
+      (let [[ex jj-called?] (start-app-failure dir {:exit 0 :out "" :err ""})]
+        (is jj-called? "a jj workspace is asked")
+        (is (str/starts-with? (ex-message ex) "Database migration failed")
+            "a current working copy adds nothing to the message")
+        (is (not (:stale-working-copy? (ex-data ex)))))
+      (finally (fs/delete-tree dir)))))
+
+(deftest start-app!-asks-jj-nothing-outside-a-jj-workspace
+  (let [dir (str (fs/create-temp-dir))]
+    (try
+      (let [[ex jj-called?] (start-app-failure dir nil)]
+        (is ex "the failure still throws")
+        (is (not jj-called?) "a plain-git or non-repo worktree runs no jj command"))
+      (finally (fs/delete-tree dir)))))
