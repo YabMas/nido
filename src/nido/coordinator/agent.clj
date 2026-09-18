@@ -143,7 +143,7 @@
    \"Unknown command: /<skill>\". Callers use this to distinguish a real
    completion from a no-op exit (which must not be treated as success)."
   [{:keys [run-id cwd first-message system-prompt claude-bin env budget claude-session-id resume?
-           mcp-config add-dirs tools err-file out-file]
+           mcp-config add-dirs tools model err-file out-file]
     :or   {claude-bin "claude"}}]
   (let [;; BEFORE the spawn, and that ordering is the whole point. Parsed where
         ;; it used to be — beside the timer it arms — the refusal would fire with
@@ -154,7 +154,7 @@
         cmd       (build-cmd {:claude-bin claude-bin :first-message first-message
                               :system-prompt system-prompt :claude-session-id claude-session-id
                               :resume? resume? :mcp-config mcp-config :add-dirs add-dirs
-                              :tools tools})
+                              :tools tools :model model})
         proc      (p/process cmd (cond-> {:dir cwd
                                           :env (merge (into {} (System/getenv)) (or env {}))
                                           ;; Close stdin so claude doesn't wait for input

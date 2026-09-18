@@ -253,3 +253,25 @@
     (is (= "hi" (last cmd)) "the prompt is still the trailing positional"))
   (is (not (some #{"--model"} (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"})))
       "no key, no flag"))
+
+(deftest launch!-runs-claude-on-the-model-it-was-given
+  ;; build-cmd has always honoured :model; this pins that launch! hands it on.
+  ;; It did not, so every :fixer-model a caller named was dropped on the way to
+  ;; the command line and the fixer ran on the CLI's default.
+  (let [tmp (fs/create-temp-dir)
+        argv-of (fn [opts]
+                  (let [f (str (fs/path tmp (str (random-uuid) ".argv")))]
+                    (agent/launch! (merge {:run-id "r-model" :cwd (str tmp)
+                                           :first-message "/x" :claude-bin fake-claude
+                                           :budget "5m"
+                                           :env {"FAKE_CLAUDE_ARGV_FILE" f}}
+                                          opts))
+                    (str/split-lines (slurp f))))]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (fs/create-dirs (cstate/run-dir "r-model"))
+        (is (= ["--model" "opus"]
+               (->> (argv-of {:model "opus"}) (drop-while #(not= % "--model")) (take 2))))
+        (is (not (some #{"--model"} (argv-of {})))
+            "a launch naming no model still leaves the CLI's choice alone"))
+      (finally (fs/delete-tree tmp)))))

@@ -9,6 +9,8 @@
 #                             (used by budget-timeout tests)
 #   FAKE_CLAUDE_NUM_TURNS   — num_turns to emit in the result event (default 3)
 #   FAKE_CLAUDE_RESULT_TEXT — result text to emit in the result event (optional)
+#   FAKE_CLAUDE_ARGV_FILE   — if set, path to write the arguments it was run
+#                             with, one per line
 
 set -euo pipefail
 SESSION_ID="${FAKE_CLAUDE_SESSION_ID:-fake-session-001}"
@@ -17,6 +19,10 @@ DELAY_MS="${FAKE_CLAUDE_DELAY_MS:-50}"
 HANG_MS="${FAKE_CLAUDE_HANG_MS:-}"
 NUM_TURNS="${FAKE_CLAUDE_NUM_TURNS:-3}"
 RESULT_TEXT="${FAKE_CLAUDE_RESULT_TEXT:-}"
+
+if [ -n "${FAKE_CLAUDE_ARGV_FILE:-}" ]; then
+  printf '%s\n' "$@" > "$FAKE_CLAUDE_ARGV_FILE"
+fi
 
 # init event
 printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$SESSION_ID"
