@@ -6,7 +6,8 @@
    watching whether IT works. This enqueues one coordinator envelope per
    terminated run, targeting nido's own `:review-analysis` trigger, so a session
    on nido's side reads the run afterwards and says what the loop did well and
-   what it got wrong.
+   what it got wrong. A baseline or design loop is handed over the same way, once
+   a round of it has launched a judge.
 
    Two boundaries make this safe to fire from inside a review:
 
@@ -24,6 +25,7 @@
    `tasks.nido-review/append-review-entry!` does for the ledger."
   (:require
    [babashka.fs :as fs]
+   [clojure.string :as str]
    [nido.coordinator.control :as control]
    [nido.coordinator.record.state :as cstate]))
 
@@ -33,9 +35,15 @@
    every review loop, whatever it reviewed, is analysed nido-side."
   {:project :nido :trigger :review-analysis})
 
+(declare record-payload diff-payload)
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   payload
-  "Pure: the envelope payload for one terminated run.
+  "Pure: the envelope payload for one terminated run — a diff run's, described below, or a baseline
+   or design run's (`record-payload`). Every envelope carries a :headline, rendered here for its
+   kind of run, and the trigger template renders that line whole rather than naming any kind's
+   fields; a diff envelope still carries each field below, so a template that names them renders a
+   diff run as it always did.
 
    `:adapter`/`:id` form the external ref the coordinator dedups workstreams on.
    The adapter is named explicitly because `spawn/external-ref` defaults it to
@@ -130,11 +138,21 @@
    run the loop closed on a throw names its own, as the report's errored phase
    (`report/errored`) — without which a run whose `fix` phase threw under three
    fixers is titled like one that ended on a judgement."
+  [{:keys [loop] :as run}]
+  (if (#{:baseline :design} loop)
+    (record-payload run)
+    (diff-payload run)))
+
+(defn- reviewed-line
+  [{:keys [reviewed-project reviewed-session]} tail]
+  (str "Reviewed: " (some-> reviewed-project name) " / " reviewed-session tail))
+
+(defn- diff-payload
   [{:keys [run-id report-path status rounds fix-attempts defects-settled
            findings-remaining findings-kept remaining-handed remaining-parked
            targets-reviewed targets-skipped unfixable parked standing
            drift base in-flight errored design-verdict verdict-implementation
-           reviewed-project reviewed-session reviewed-ws-id]}]
+           reviewed-project reviewed-session reviewed-ws-id] :as run}]
   ;; `:in-flight` is the reconciler's reading of an orphan's report and is the
   ;; same value `worth-analysing?` gates on; the phase is the half of it that
   ;; means something to a reader, so it is published and the round is not.
@@ -162,7 +180,15 @@
              :findings-remaining (or findings-remaining 0)
              :findings-kept      (or findings-kept 0)
              :targets-reviewed   (or targets-reviewed 0)
-             :targets-skipped    (or targets-skipped 0)}
+             :targets-skipped    (or targets-skipped 0)
+             :headline           (str "Status: " (name (or status :unknown)) " · " (or rounds 0)
+                                      " rounds · " (or defects-settled 0) " defects settled ("
+                                      (or fix-attempts 0) " repairs dispatched) · "
+                                      (or findings-remaining 0) " still open · "
+                                      (or findings-kept 0) " kept\n"
+                                      "Coverage: " (or targets-reviewed 0) " targets read this run, "
+                                      (or targets-skipped 0) " carried from an earlier run\n"
+                                      (reviewed-line run (str " (base " base ")")))}
       (pos? (or remaining-handed 0)) (assoc :remaining-handed remaining-handed)
       (pos? (or remaining-parked 0)) (assoc :remaining-parked remaining-parked)
       (seq unfixable)  (assoc :unfixable (mapv str unfixable))
@@ -173,6 +199,39 @@
       died-in          (assoc :died-in died-in)
       verdict          (assoc :design-verdict verdict
                               :verdict-implementation (or verdict-implementation 0))
+      reviewed-project (assoc :reviewed-project (name reviewed-project))
+      reviewed-session (assoc :reviewed-session reviewed-session)
+      reviewed-ws-id   (assoc :reviewed-ws-id reviewed-ws-id))))
+
+(defn- record-payload
+  "The envelope for a baseline or design run. Its headline says what a record run DID — how many of
+   its rounds judged, amended, gave something up, or were argued with — and, for a design run, which
+   checks were still broken when it ended; the figures per check are the ledger's, read by
+   `bb nido:review:figures`, never carried here."
+  [{:keys [loop run-id report-path status rounds judged amended weakened disputed record-seq
+           still-broken reviewed-project reviewed-session reviewed-ws-id] :as run}]
+  (let [kind   (name loop)
+        broken (seq (map name still-broken))]
+    (cond-> {:adapter     :review-run
+             :id          (str run-id)
+             :loop        kind
+             :title       (str kind "-loop " (name (or status :unknown))
+                               (when reviewed-session (str " · " reviewed-session))
+                               " · " (or rounds 0) " round" (when (not= 1 rounds) "s")
+                               (when broken (str " · " (str/join ", " broken) " still broken")))
+             :run-id      (str run-id)
+             :run-dir     (cstate/run-dir (str run-id))
+             :report-path report-path
+             :status      (name (or status :unknown))
+             :rounds      (or rounds 0)
+             :headline    (str "Status: " (name (or status :unknown)) " · " (or rounds 0) " rounds, "
+                               (or judged 0) " judged · " (or amended 0) " amended · "
+                               (or weakened 0) " weakenings · " (or disputed 0) " disputed\n"
+                               "Record: the " kind (when record-seq (str " at entry " record-seq))
+                               (when broken (str " · broken at the end: " (str/join ", " broken)))
+                               " · figures: bb nido:review:figures :run-id " run-id "\n"
+                               (reviewed-line run (when reviewed-ws-id (str " (workstream " reviewed-ws-id ")"))))}
+      record-seq       (assoc :record-seq record-seq)
       reviewed-project (assoc :reviewed-project (name reviewed-project))
       reviewed-session (assoc :reviewed-session reviewed-session)
       reviewed-ws-id   (assoc :reviewed-ws-id reviewed-ws-id))))
@@ -199,8 +258,9 @@
 (defn ^{:malli/schema [:=> [:cat :map :boolean] :boolean]}
   worth-analysing?
   "Pure. Every terminal outcome is worth a look EXCEPT a dry run, a run that
-   reviewed nothing, an orphan that stopped before it read anything, and a run
-   that left no report to read.
+   reviewed nothing, an orphan that stopped before it read anything, a record
+   run none of whose rounds launched a judge, and a run that left no report to
+   read.
 
    `:nothing-to-review` is the cheapest of all to exclude and the most obviously
    right: no reviewer read anything, so there is no loop behaviour in the run to
@@ -243,13 +303,18 @@
    `reconcile/settle-one!` and a finished one through `tasks.nido-review`, and a
    second gate at either call site is a second place for the list above to be
    incomplete."
-  [{:keys [status dry-run?] :as run} report?]
+  [{:keys [status dry-run? loop judged] :as run} report?]
   (boolean (and status
                 (not (#{:nothing-to-review :stack-conflicted} (keyword status)))
                 (not dry-run?)
                 report?
                 (or (not= :orphaned (keyword status))
-                    (orphan-worth-reading? run)))))
+                    (orphan-worth-reading? run))
+                ;; A record run that launched no judge has nothing a loop did to read. Its count
+                ;; decides, never its status: :premise-unverified ends runs that judged and runs
+                ;; that never started alike.
+                (or (not (#{:baseline :design} loop))
+                    (pos? (long (or judged 0)))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :any]]}
   enqueue!

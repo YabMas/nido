@@ -39,6 +39,10 @@
   (Operation queue-analysis!
     "Queue this run for nido-side analysis. Best-effort, for the same reason"
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation queue-record-analysis!
+    "Queue a finished baseline or design run for analysis through the gate a diff run passes, with
+     how many of its rounds launched a judge and what it amended, gave up and argued."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
   (Operation verdict-worth-running?
     "Whether the verdict pass has anything to judge."
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})

@@ -49,6 +49,27 @@ bb nido:workstream:show :project <reviewed-project> :ws-id <reviewed-ws-id>
 
 The `:review` entry it holds is what the loop reported about itself; the `:design`/`:design-verdict` entries are the yardstick it judged against.
 
+## 2a. A record loop reads differently
+
+A run titled `baseline-loop …` or `design-loop …` — its run id starts the same way, and its headline names the record it judged — is a **record loop**: it judged a baseline or a design record before any code existed, and amended the record between rounds. Everything in §1 still holds (never the reviewed tree; the ledger through the CLI), but the arc is different and §3's table is not the one to build.
+
+Its report has one `judge` and, when the round amended, one `amend` phase per round. A judge phase carries the verdict or the outcome that stood in for one; for a design round, its `:findings` are the broken checks it handed on — **not every check**: a round that proceeds drops what it found broken, and the report never lists a held check. So do not count checks off the report. The ledger holds every round's decision whole, each naming the run that appended it:
+
+```bash
+bb nido:review:figures :project <reviewed-project> :run-id <run-id>
+```
+
+That prints, per derived check (and per baseline derivation, for a baseline run or a design run's re-survey), in how many rounds it was broken, in how many it was the only thing broken, and whether it was still broken when the run ended; and, for a baseline run, which claims were found false and how often. Quote it; do not recount it. `bb nido:review:figures :project <p>` without a run id sums every attributable run, which is how one check's behaviour across runs is read.
+
+Build this table instead of §3's: **every check or claim, against every round** — broken or refuted, what the amender changed for it, what it gave up (`:retreats`, the weakenings), whether it objected (`:disputes`), and whether the next round found it again. Then read:
+
+- **Convergence.** A healthy run narrows: each round refutes less, and the record ends `sufficient` or `cleared`. A claim refuted again after every correction, each time by a different counterexample, is a claim no rewording will settle — say so, and say whether the claim or the round was wrong.
+- **The cost of converging.** Weakenings are the amender making a finding go away by claiming less. One with a reason the judge gave is the loop working; one with none is a retreat, and it is a finding here even on a run that cleared.
+- **Which check carried the run.** A check broken alone round after round, or still broken at the end, is either a real defect the record kept or a check the round cannot answer. The figures say which check it was; the decisions' notes say which of the two.
+- **Resurveys.** A design round that sent its premise back is a baseline loop inside the design run; its reviews are read as this run's by the run they name.
+
+The machinery a record run exercised: `src/nido/review/record.clj` (both rounds' prompts, pipelines and amenders), `src/nido/review/retreat.clj` (what counts as a weakening), `src/nido/review/settled.clj` (what a round was not asked to check), and `src/nido/review/loop.clj` (the terminal status). Read them at `:machinery.rev`, as §4 says.
+
 ## 3. Reconstruct the arc — do this before anything else
 
 Everything holistic falls out of one table, so build it first: **every finding id, against every round**, and what happened to it.

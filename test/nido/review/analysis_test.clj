@@ -296,3 +296,44 @@
     (with-redefs [queue/enqueue! (fn [_] (reset! called true) "/q/1")]
       (with-report a-run #(is (nil? (analysis/enqueue! (assoc % :dry-run? true)))))
       (is (false? @called)))))
+
+;; ── record runs ─────────────────────────────────────────────────────────────
+;; A baseline or design loop is handed over through the same gate. What decides whether it is worth
+;; reading is whether any round launched a judge — never the status it ended on.
+
+(def a-design-run
+  {:loop :design :run-id "design-loop-1" :report-path "/r/report.json" :status :cleared
+   :rounds 2 :judged 2 :amended 1 :weakened 3 :disputed 0 :record-seq 14
+   :still-broken [:stratified]
+   :reviewed-project :nido :reviewed-session "record-round-analysis" :reviewed-ws-id "ws-9"})
+
+(deftest a-record-run-is-analysed-once-a-round-judged
+  (is (analysis/worth-analysing? a-design-run true))
+  (is (analysis/worth-analysing? (assoc a-design-run :status :premise-unverified) true)
+      "a status reached after rounds that judged is not a run that judged nothing")
+  (is (not (analysis/worth-analysing? (assoc a-design-run :judged 0) true))
+      "no round launched a judge, so there is no loop behaviour to read")
+  (is (not (analysis/worth-analysing? (assoc a-design-run :judged 0 :status :cleared) true))
+      "whatever status it ended in"))
+
+(deftest a-record-runs-envelope-says-what-the-run-did
+  (let [p (analysis/payload a-design-run)]
+    (is (= :review-run (:adapter p)))
+    (is (= "design-loop-1" (:id p)))
+    (is (= "design" (:loop p)))
+    (is (= "design-loop cleared · record-round-analysis · 2 rounds · stratified still broken" (:title p)))
+    (is (str/includes? (:headline p) "2 rounds, 2 judged · 1 amended · 3 weakenings · 0 disputed"))
+    (is (str/includes? (:headline p) "Record: the design at entry 14 · broken at the end: stratified"))
+    (is (str/includes? (:headline p) "bb nido:review:figures :run-id design-loop-1"))
+    (is (not (contains? p :fix-attempts)) "a record run dispatches no repairs to count")))
+
+(deftest a-diff-runs-envelope-keeps-its-fields-and-gains-a-headline
+  (let [p (analysis/payload a-run)]
+    (is (= (str "Status: converged · 3 rounds · 3 defects settled (5 repairs dispatched) · 1 still open · 0 kept\n"
+                "Coverage: 3 targets read this run, 5 carried from an earlier run\n"
+                "Reviewed: brian / fix/thing (base main)")
+           (:headline p))
+        "the line the template used to assemble, rendered here instead")
+    (doseq [k [:fix-attempts :defects-settled :findings-remaining :findings-kept
+               :targets-reviewed :targets-skipped :base :reviewed-project :reviewed-session]]
+      (is (contains? p k) (str "a template that still names " k " renders a diff run as before")))))

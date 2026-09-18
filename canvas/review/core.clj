@@ -35,9 +35,9 @@
   (Operation worth-analysing?
     "Whether a terminated run is worth an analysis session at all. Pure.
 
-     Takes the run rather than its status alone, because two of the exclusions are facts about
-     what the run DID: a dry run, and an orphan that stopped before a reviewer answered for any
-     target."
+     Takes the run rather than its status alone, because three of the exclusions are facts about
+     what the run DID: a dry run, an orphan that stopped before a reviewer answered for any
+     target, and a record run none of whose rounds launched a judge."
     {:signature [:=> [:catn [:run :map] [:report? :boolean]] :boolean]})
   (Operation enqueue! "Queue one run's analysis."
     {:signature [:=> [:catn [:run :map]] [:maybe :any]]

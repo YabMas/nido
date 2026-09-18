@@ -1686,6 +1686,39 @@
         (some #(when (keyword? %) (name %)) (rest parts))
         (pr-str k))))
 
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  queue-record-analysis!
+  "Queue a finished baseline or design run for nido-side analysis, through the gate a diff run
+   passes. Best-effort, as `queue-analysis!` is.
+
+   What it tells the analysis is what the run DID, counted off its report and final state: how many
+   rounds launched a judge — the gate refuses a run with none — how many amended, what was given up
+   and argued, the record it judged and, for a design run, the checks its last decision still marks
+   broken. The figures per check are not counted here: `bb nido:review:figures` derives them from
+   the ledger, which holds what this run's report drops."
+  [cwd kind final report report-path {:keys [run-id dry-run?]}]
+  (let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd) {})
+        [_ ws-id] (stages/project+ws-from-cwd cwd)
+        history   (:history final)
+        rec       (:record final)]
+    (analysis/enqueue!
+     {:loop             (keyword kind)
+      :run-id           run-id
+      :report-path      report-path
+      :status           (:status final)
+      :dry-run?         (boolean dry-run?)
+      :rounds           (or (get-in report [:summary :rounds]) 0)
+      :judged           (record/judges-launched report)
+      :amended          (count (filter :amended? history))
+      :weakened         (count (mapcat :retreats history))
+      :disputed         (count (mapcat :disputes history))
+      :record-seq       (or (:design-seq rec) (:baseline-seq rec))
+      :still-broken     (when (= :design-decision (:format rec))
+                          (sort (keep #(when (= :broken (:status %)) (:check %)) (:checks rec))))
+      :reviewed-project project
+      :reviewed-session session
+      :reviewed-ws-id   ws-id})))
+
 (defn- record-loop-body
   "One record round, from the engine to the last printed line. Split out of
    `record-loop-cmd*` only so the claim can wrap it — everything here is what the
@@ -1725,6 +1758,9 @@
                    (println (render/record-final @report-atom {:title title}))))
         status (:status final)]
     (println (str kind "-loop: " (name status) " · report " report-path))
+    ;; Before anything below can throw: the run is over, and how it went is worth reading whatever
+    ;; the rest of this prints.
+    (queue-record-analysis! cwd kind final @report-atom report-path {:run-id run-id :dry-run? dry-run?})
     ;; :amend-error is one of two ways a run explains itself. The other is the
     ;; :detail on a no-verdict outcome, and it was never printed — so a run that
     ;; stopped because the design cites an unverified baseline said which status it
