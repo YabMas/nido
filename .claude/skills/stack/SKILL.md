@@ -22,9 +22,14 @@ commits — by then the work is a heap.
 
 **And invoke `/design` before this.** Layers are the levels of the design's
 shape, so you cannot cut them before you have said what the shape is. The design
-record's `:layers` is where the intended cut is stated; this skill is how it gets
-built. If the record has no `:layers`, the design is not decomposed yet — go back
-and finish it rather than inventing a cut here.
+record names the **strata** the change touches — the levels of the code, which
+survive the landing — and states no cut: the cut dies at `/land`, so it is drawn
+here, at stack time, from those strata. **The default cut is one layer per
+stratum the change writes in, floor first**, plus §2's three boundaries where they
+apply. A design written before strata states its cut in `:layers`; read that
+instead. If the design names no strata and the change still spans several levels,
+the levels are not declared yet — say so in the brief rather than inventing a
+level here.
 
 ## 0. Should this be a stack at all?
 
@@ -88,18 +93,20 @@ firing on both axes at once, not thoroughness.
 ## 1. Levels — where a boundary goes
 
 A layer is a **level of abstraction**, in the sense of stratified design
-(Abelson & Sussman, *Structure and Interpretation of Computer Programs* §2.2.4):
-a system built as a sequence of levels, each described in a language made from
-the primitives of the level below it, each providing the primitives the next
-level is written in.
+(Abelson & Sussman, *Lisp: A Language for Stratified Design*; *Structure and
+Interpretation of Computer Programs* §2.2.4): a system built as a sequence of
+levels, each described in a language made from the primitives of the level below
+it, each providing the primitives the next level is written in. The design names
+them as strata; a layer reads one.
 
 > **The level test: name what this layer provides that the layer above is
 > written in.**
 
 What a level provides is vocabulary — a function, a type, a schema, a protocol,
 a table — that the layer above uses by its interface, without reading its body.
-Nothing to name, no boundary. That is also why the cut is stated in the design
-record before it is cut in jj: the levels are a fact about the design's shape.
+Nothing to name, no boundary. That is also why the design names its strata
+before anything is cut in jj: the levels are a fact about the code's shape, and
+the cut only reads them.
 
 - **A level is a vocabulary, not a helper.** One function called once is not
   something a layer is written in; it belongs to the layer that calls it.
@@ -206,10 +213,11 @@ disproved.
 - **The title names what the layer provides.** One sentence, no "and". A title
   that needs "and" is listing the layer's parts — name the level instead, or the
   §2 boundary it is. If there is no one thing to name, it is two layers.
-- **Every layer's claim traces to the design record.** A layer whose `Claims:`
-  is not a line in `:layers` is a signal, and a useful one in both directions:
-  either the design is incomplete, or the layer is smuggling a decision nobody
-  stated. Cheap to check, and it catches the failure §2 warns about — a real
+- **Every layer's claim traces to the design record.** A layer's `Claims:` is
+  what its stratum provides, as the record's claims about that stratum say it, or
+  one of §2's boundaries. A claim the record does not contain is a signal, and a
+  useful one in both directions: either the design is incomplete, or the layer is
+  smuggling a decision nobody stated. Cheap to check, and it catches the failure §2 warns about — a real
   decision hidden in a diff the reviewer was about to skim.
 - **Independent correctness.** The build passes and tests are green at every
   layer, not only the top. Stopping after any layer leaves a working system.
@@ -612,9 +620,9 @@ a reviewer's first question is what state the system is being left in:
 
 - **Claims** — what this layer asserts about itself: for a level, what it
   provides to the layers above; for a §2 boundary, that the removal, refactor or
-  sweep is exactly that. It should be the `:claim` from the design record's
-  `:layers`, verbatim or close to it; if you find yourself writing something the
-  record doesn't contain, one of the two is wrong. A layer's claim is about the
+  sweep is exactly that. It should be what the design record says of the
+  stratum the layer writes in, close to its words; if you find yourself writing
+  something the record doesn't contain, one of the two is wrong. A layer's claim is about the
   **diff**; if it is about the running system, you are describing a phase
   (`/phase` §2).
 - **Verify** — concrete checks, never "review this".

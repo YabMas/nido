@@ -27,7 +27,7 @@ The same thing the shipping doctrine optimises: **change landed per unit of
 reviewer attention, at constant-or-rising trust.** This skill serves it from the
 other end. `/spin-out` bounds how much arrives at once and `/phase` bounds how
 much is at risk in one landing; a design record makes what arrives **evaluable**
-— and states the levels of abstraction `/stack` cuts along, which is layering's
+— and names the strata, the levels `/stack` draws its cut from, which is layering's
 own criterion rather than this one.
 
 The failure it exists to prevent: *a finding is only meaningful relative to an
@@ -54,10 +54,11 @@ resolves from any session:
 cat .claude/skills/design/stances/default.md
 ```
 
-`default.md` governs every project. It is the common one — Out of the Tar Pit,
-Parnas, Ousterhout, Hickey — and its convictions about essential versus
-accidental state, about what a module hides, and about where parsing belongs do
-not stop at a project boundary. Where a project genuinely diverges it adds its
+`default.md` governs every project. It is the common one — Out of the Tar Pit as
+the yardstick; Wlaschin, Parnas, Ousterhout, stratified design (Abelson & Sussman,
+Normand), *How to Design Programs* and King as the means — and its convictions
+about essential versus accidental state, about what a module hides, about how
+levels stack and about where parsing belongs do not stop at a project boundary. Where a project genuinely diverges it adds its
 own `<project>.md`, which wins outright; read that instead. **A project's own
 file is a declaration that it diverges**, so adding one is a design act, not
 setup — and a project with none is declaring that the common stance governs it.
@@ -99,7 +100,7 @@ One `:design` event per workstream, appended to the ledger:
               :breaks   ["load-bearing property that cannot survive"]  ; REQUIRED for :revisit
               :note     "REQUIRED for :extends / :revisit"}
  :rejected   [{:alternative "…" :why-not "…"}]
- :layers     [{:claim "one sentence, no \"and\"" :mode :judgment}]
+ :strata     ["the strata this change touches, floor first"]  ; [] where none is declared
  :phases     [{:claim     "what is true of the RUNNING system once this lands"
                 :habitable "what is true of it while this phase is live"
                 :exit      {:kind :observation :criterion "what must be observed first"}
@@ -163,12 +164,15 @@ what survives the session.
   other. `:revisit` must name what it breaks — otherwise "the design needs
   revisiting" is a feeling, and deriving it instead of feeling it is the entire
   point of surveying first.
-- **`:layers` is the design's decomposition claim** — `/stack` realises it. Each
-  claim names what that layer provides to the ones above it, or which of
-  `/stack` §2's three boundaries it is; `:mode` says whether it is a mechanical
-  sweep. Bookmarks, slugs and ordering are mechanics.
+- **`:strata` is the design's decomposition claim** — the levels of the code the
+  change is written in or adds to, each a `:stratum` element of its model (§4). It
+  states no cut: the cut dies at `/land`, so `/stack` draws it at stack time from
+  these, one layer per stratum by default. The design round judges where the
+  change sits among them — and that judgement can hold a design, because strata
+  survive. Required, and `[]` where the change touches no declared stratum; a
+  record without it was written before strata and carries `:layers` instead.
 - **`:phases` is the design's *other* decomposition claim** — `/phase` realises
-  it, as `/stack` realises `:layers`. Present only when the change cannot reach
+  it. Like `:strata` it survives the landing: a phase is a deploy. Present only when the change cannot reach
   production in one landing. Each phase claims something about the running
   system, says what is true of it while that phase is live, and names the
   observation that lets the next one start.
@@ -206,11 +210,13 @@ A claim, a test, and the failure mode it prevents.
    *about* them.
    *Failure:* an implementation sketch that cannot survive the first surprise in
    the code, so it is abandoned rather than amended.
-8. **The layering is read off the design.** A layer is a level of abstraction,
-   so the layers are the levels the shape already has — plus, where they apply,
+8. **The strata are read off the code; the cut is read off the strata.** A
+   design names the levels its change is written in, and states nothing about how
+   the work will be split — `/stack` draws that later, one layer per stratum plus
    the removal of an old path, a refactor before the change, a mechanical sweep.
-   If the layers cannot be stated from the design, the design is not decomposed
-   yet. *Test:* every layer's `Claims:` traces to a line in the record.
+   *Test:* every layer's `Claims:` traces to what the record says of a stratum.
+   *Failure:* a design that argues its packaging, judged on something the landing
+   throws away.
 9. **Visible incompleteness is a design decision; invisible incompleteness is a
    defect; incompleteness nothing will close is a wish.** A design may leave a
    seam — then say so in `:seams`, with what makes it visible *and* what closes
@@ -540,6 +546,7 @@ The seeded lenses:
 
 **What counts as a module's interface**: what is *depended on from outside* — Parnas's "what others may assume" — not what the namespace makes public. A var published and called by nobody outside is a visibility choice, not interface. Two live rounds were spent on this exact disagreement, one side counting callers and the other counting `defn`s, both correct about different things.
 | `:parnas/dependency` | a claim about a dependency | `:on-interface` `:on-secret` `:cyclic` | *On the Criteria…* (Parnas) |
+| `:stratified/level` | a stratum — owed for every one listed | `:sound` `:mixed` `:bypassed` `:wide` | *Lisp: A Language for Stratified Design* (Abelson & Sussman); *Grokking Simplicity* (Normand) |
 
 Three rules the ledger enforces:
 
@@ -571,6 +578,32 @@ detector all derive from it.
 One bit, derived rather than judged, and **the same bit for a bug and a
 feature**. That symmetry is the point — it is what makes this a way of working
 rather than a bug-triage nicety.
+
+### Strata — the levels the area is written in
+
+A survey says which levels its bound reaches, in `:strata`, floor first: in a
+project with a `canvas/`, the declared `Stratum`s that hold the area's modules
+(`[(Stratum ?n)]` lists them); elsewhere, levels the record names with ids of its
+own. `[]` where none is declared says so — it is not an omission. Each is a
+`:stratum` element of the model whose `:interface` says what the level provides.
+
+**Every stratum listed is read through `:stratified/level`, and the reading is
+owed, not offered.** It is the one place a survey is obliged to LOOK for
+structural tension rather than record what it ran into — and it stays bounded,
+because the obligation is one reading per stratum, not an audit. A verdict other
+than `:sound` — `:mixed`, `:bypassed`, `:wide` — is a tension, and the record is
+refused until a health observation names that stratum under `:about`. That is
+what turns seeing a structural problem into DECIDING it: the design has to route
+every health observation, so each tension ends as fixed here, spun out with a
+ref, or declined with a reason — never silently kept.
+
+The design round closes the other half. Its `stratified` check asks where the
+change sits among these levels, and its FIT question asks whether a levelling
+the judge can state concretely would make THIS change markedly simpler. A design
+answers that by adopting it, rejecting it with a reason (`:rejected`), or
+deferring it with a ref (`:seams`). It asks for a decision about restructuring,
+never for the restructuring — which is how a change neither snowballs into a
+refactor nor accepts today's levels by default.
 
 ### Health — and why it is still an `is`
 
@@ -883,7 +916,8 @@ cat > /tmp/baseline.edn <<'EDN'
  :governing    ["refs into the stance"]
  :drift        ["…"]
  :read         ["src/…"]
- :unknowns     ["…"]}
+ :unknowns     ["…"]
+ :strata       ["…"]}          ; the strata the bound reaches, floor first; [] where none is declared
 EDN
 bb nido:ticket:append :project brian :br <BR-####> :kind baseline \
   :session <session> :run-id <run-id> :file /tmp/baseline.edn
@@ -938,6 +972,7 @@ cat > /tmp/design.edn <<'EDN'
  :intent     {:seq 1}
  :routes     [{:health-id "short-slug" :to :spin-out
                :why "…" :ref "FU-##"}]
+ :strata     []                ; the strata this change touches, floor first
  :effort     :M}
 EDN
 bb nido:ticket:append :project brian :br <BR-####> :kind design \
@@ -1036,5 +1071,12 @@ Read back what is there with `bb nido:workstream:show :project <p> :ref <ref>`.
   `land:check` refuses both. Declare it with the design, or supersede the design
   so it states what the declaration does (§4).
 - **A design longer than its diff.** It is a plan; cut it back to claims.
-- **Layers that do not appear in the record** — either the design is incomplete
-  or the layer is smuggling a decision nobody stated (`/stack` §2).
+- **Stating a cut in the design.** The write contract refuses `:layers`: the cut
+  dies at `/land`, and a design is judged on what survives. Name the strata;
+  `/stack` draws the layers from them.
+- **A stratum read as `:sound` because nobody looked.** The reading is a claim a
+  round refutes like any other — by a module written in another's vocabulary, a
+  caller reaching past the level, or an interface wider than anything above uses.
+- **Reading FIT as a demand to restructure.** It asks for a decision. A reasoned
+  `:rejected` entry settles it, and a restructure you choose is a refactor-before-
+  change layer, not a rewrite of the story.

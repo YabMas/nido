@@ -82,6 +82,14 @@
                         "Mechanical sweep apart"]]
         (is (str/includes? doc boundary)
             (str "a boundary that is not a level is named: " boundary))))
+    (testing "the cut is drawn from the design's strata at stack time, never stated in the design"
+      (is (str/includes? doc "The design names the **strata** a change touches"))
+      (is (str/includes? doc "one layer per stratum the change writes in, floor first"))
+      (is (str/includes? doc "the design states no cut"))
+      (is (str/includes? doc "| **stratum** |")
+          "the surviving word has its row beside the cut, which does not survive")
+      (is (not (str/includes? doc "the intended layer cut"))
+          "a design record is no longer told to carry the cut"))
     (testing "all four destinations are named"
       (is (str/includes? doc "this layer"))
       (is (str/includes? doc "another layer"))

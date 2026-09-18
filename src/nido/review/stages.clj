@@ -1550,7 +1550,11 @@
           (remove :inherited)
           (:open (ws/latest-entry project ws-id :review)))))
 
-(def ^:private stance-char-cap 12000)
+(def ^:private stance-char-cap
+  "The most of a stance a judge is shown. A guard against a runaway file blowing up a prompt, never a
+   budget a shipped stance is written to: a stance past it reaches a judge cut off from its end,
+   where the stance says it is amendable, so nido's tests refuse any shipped stance longer than this."
+  16000)
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
   stance-path

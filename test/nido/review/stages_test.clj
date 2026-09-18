@@ -3041,6 +3041,17 @@
       (is (str/starts-with? (stages/read-stance :stance-override-probe) "# diverges"))
       (finally (fs/delete-if-exists own)))))
 
+(deftest every-shipped-stance-reaches-a-judge-whole
+  ;; The cap guards a prompt against a runaway file; it is not a budget to write a stance to. Past
+  ;; it a judge reads the stance cut off from its end — where it says it is amendable — so the
+  ;; build refuses a shipped stance that has outgrown it rather than a judge reading less of it.
+  (let [cap    @#'stages/stance-char-cap
+        stances (fs/glob (fs/path ".claude" "skills" "design" "stances") "*.md")]
+    (is (seq stances) "the stances ship in this tree")
+    (doseq [f stances]
+      (is (<= (count (slurp (str f))) cap)
+          (str (fs/file-name f) " is longer than the " cap " characters a judge is shown")))))
+
 (defn- stack-targets
   "A two-layer round's targets: `one`, `two`, and the composition over both.
    `revs` gives each of the three ranges, so a caller can rewrite the commit ids

@@ -81,7 +81,7 @@ something a line of code can violate and it never adjudicates a diff; the lanes
 and `docs/reference/` do that (`/design` §1). Measure the design against it, not
 the code.
 
-## The five that say how
+## The six that say how
 
 The yardstick says what to minimise. These say how it gets built in a Clojure
 system, and each earns its place by materialising one part of it:
@@ -95,6 +95,13 @@ system, and each earns its place by materialising one part of it:
   hiding are the ones most likely to change.
 - ***A Philosophy of Software Design*** (Ousterhout) — **what a boundary has to
   be worth.** Deep modules are the restriction of power applied at the boundary.
+- ***Lisp: A Language for Stratified Design*** (Abelson & Sussman), worked
+  through in ***Grokking Simplicity*** (Normand, ch. 8–9) — **how boundaries
+  stack.** A system is a sequence of levels, each a language — primitives, means
+  of combination, means of abstraction — that the level above is written in.
+  Normand makes it a practice: read the call graph by level, write a body at one
+  level of detail, keep a barrier's interface minimal, stop when the layers are
+  comfortable.
 - ***How to Design Programs*** (Felleisen et al.) — how a single function is
   written once its data is defined. Derivation from the shape of the data, at the
   leaf.
@@ -102,16 +109,18 @@ system, and each earns its place by materialising one part of it:
   becomes trusted, past which nothing re-checks. Unparsed input is accidental
   complexity admitted into the core.
 
-Assume familiarity with all six. Nothing here is a summary of any of them — it
+Assume familiarity with all seven. Nothing here is a summary of any of them — it
 is a treatment of how to hold them together as one method, and how to resolve the
 calls they individually leave open.
 
-**Parnas and Ousterhout are one idea at two stages, and reading them as
-interchangeable loses the useful half.** Parnas answers *where the boundary goes* —
-find the decisions that will change, and put one on each side. Ousterhout answers
-*whether that boundary pays* — an interface that costs about what it hides bought
-nothing, however principled its placement. Parnas first: a deep module around the
-wrong secret is still the wrong module.
+**Parnas, Ousterhout and stratified design are one idea at three stages, and
+reading them as interchangeable loses the useful part.** Parnas answers *where the
+boundary goes* — find the decisions that will change, and put one on each side.
+Ousterhout answers *whether that boundary pays* — an interface that costs about
+what it hides bought nothing, however principled its placement. Stratified design
+answers *how boundaries stack* — which ones the others are written in, and so
+where a change belongs: in the level whose vocabulary can say it. Parnas first: a
+deep module around the wrong secret is still the wrong module.
 
 **The failure Parnas actually names is worth carrying around, because it looks
 like good design.** His counter-example decomposes a system by its processing
@@ -122,6 +131,18 @@ decomposition.** Handler → service → repository, or parse → transform → 
 are stages of one computation sharing one representation, not modules hiding
 decisions from each other. When a decomposition can be read off the order things
 happen in, it almost certainly hides nothing.
+
+**Stratified design is held to Ousterhout's test, or it reads as a licence for
+layers.** A level is one only if it provides a *different* abstraction from the
+level below (*A Philosophy of Software Design*, ch. 7); one that forwards what
+the level below already offers is a pass-through, a boundary that buys nothing.
+That is also why **a stratum is not a tier**: handler → service → repository over
+one representation is the pipeline above, not three languages. What the
+stratified view adds that neither of the others says is *placement*. Abelson and
+Sussman's claim for the method — a small change in the problem is a small change
+in the program — holds only when each change lands in the level whose vocabulary
+expresses it. A change no level can say is a finding about the levels, and the
+moment to decide whether to redraw them — never a reason to reach past one.
 
 **Where it meets the yardstick.** The two criteria are on different axes, and
 both are needed. The Tar Pit asks *did the problem require this* — necessity.

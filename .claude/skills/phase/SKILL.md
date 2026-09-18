@@ -247,8 +247,9 @@ delivered in instalments, and it has all of the cost and none of the benefit.
 
 One design record governs every landing of one story — that is what makes a phase
 different from a follow-up, which resumes cold against nothing. `:phases` sits
-beside `:layers`: the temporal cut and the vertical one are two claims of one
-design, and both are stated before either is built.
+beside `:strata`: the landings and the levels are two claims of one design, both
+stated before either is built — and unlike the vertical cut, which `/stack` draws
+from the strata and `/land` collapses, both survive.
 
 ```clojure
 {:format     :design

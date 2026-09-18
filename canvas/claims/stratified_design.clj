@@ -8,7 +8,17 @@
             [canvas.coordinator.report :refer [coordinator-report proceeds?]]
             [canvas.coordinator.report.model :refer [report-model]]
             [canvas.review.core :refer [review-prompts]]
-            [canvas.review.record :refer [baseline-prompt design-prompt review-record]]))
+            [canvas.review.passes :refer [read-stance]]
+            [canvas.review.record :refer [baseline-prompt design-prompt review-record]]
+            [canvas.session.briefing :refer [session-launcher]]))
+
+(Claim stance-names-stratified-design
+  "The stance read-stance delivers names Abelson & Sussman's 'Lisp: A Language for Stratified Design' and Normand's Grokking Simplicity as the third stage after Parnas and Ousterhout — how boundaries stack, each level a vocabulary the level above is written in — and holds that stage to Ousterhout's test that a level provides a different abstraction from the one below it."
+  {:about [read-stance] :evidence "round"})
+
+(Claim stance-read-whole
+  "Every judge the stance reaches reads it whole: no stance nido ships is longer than read-stance's cap, and a stance grown past it fails nido's tests instead of reaching a judge truncated."
+  {:about [read-stance] :evidence "round"})
 
 (Claim record-machinery-stratified
   "The record machinery is declared as three strata — record vocabulary, record model, ledger — each written only in those below it, and design:check refuses a code dependency between members of two strata that no :rests-on edge declares, a module in two strata, and a :rests-on cycle."
@@ -37,6 +47,10 @@
 (Claim survey-reads-every-stratum
   "A baseline reads every stratum its model lists through the stratification lens, whose verdicts are closed — sound, mixed, bypassed, wide — and whose reason is required; a listed stratum with no such reading leaves the stratified derivation blocked, and a tension a reading finds reaches the design as a health observation naming that stratum, which the design must route like any other."
   {:about [baseline-prompt coordinator-report] :evidence "round"})
+
+(Claim doctrine-cuts-from-strata
+  "The doctrine a session is briefed with has /stack draw a stack's default cut at stack time from the strata the design names, bottom-up, plus the three boundaries that are not levels; it never has a design state its layers."
+  {:about [session-launcher] :evidence "round"})
 
 (Claim warden-judges-no-cut
   "Against a design that states no cut, the warden raises no finding about which layers the design did or did not name; against an earlier design carrying :layers it judges them as it does today."
