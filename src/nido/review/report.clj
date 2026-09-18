@@ -21,8 +21,8 @@
    `:machinery` is the counterpart of `:target`: the target pins the code under
    review, this pins the code that did the reviewing. Beside rather than inside,
    because a run over nido's own repo would otherwise read as one fact where
-   there are two. Not `:reviewer` — that word is already the codex process, and
-   `:reviewer-unavailable` is a status about it. Supplied by the caller — see
+   there are two. Not `:reviewer` — that word is already the process that judges
+   a range, codex or claude, and `:reviewer-unavailable` is a status about it. Supplied by the caller — see
    `nido.review.provenance/loaded-from` — because this namespace is pure and
    answering it means reading the classpath and asking jj."
   [{:keys [run-id cwd base started-at context machinery]}]
@@ -298,8 +298,11 @@
                  ;; most needs them apart is the one asking why a run was free.
                  (if (= :nothing-to-review (:status r))
                    (row target {:status "nothing-to-review"})
-                   (row target {:status   "reviewed"
-                                :findings (get counts (:label target) 0)})))
+                   ;; Who judged it. A row naming nobody reads as codex, and
+                   ;; on a project configured for claude that reading is wrong.
+                   (row target (cond-> {:status   "reviewed"
+                                        :findings (get counts (:label target) 0)}
+                                 (:judged-by r) (assoc :judged-by (:judged-by r))))))
                (:reviews ctx))
          ;; On top of the patch every row carries, a skipped row says WHEN the
          ;; convergence it is standing on was recorded — a timestamp, and often

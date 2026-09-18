@@ -609,18 +609,18 @@
 
   nido:review:loop
   {:requires ([tasks.nido-review :as nido-review])
-   :doc "Run the codex review loop on the session's branch diff. Runs until it converges/stops progressing unless capped. [:base main] [:max-iters <n>] [:cwd <dir>] [:dry-run? false] [:fixer-model sonnet|opus|<full name>]"
+   :doc "Run the review loop on the session's branch diff. Runs until it converges/stops progressing unless capped. The reviewer is codex unless :reviewer or the project's :reviewer in projects.edn names claude. [:base main] [:max-iters <n>] [:cwd <dir>] [:dry-run? false] [:fixer-model sonnet|opus|<full name>] [:reviewer codex|claude]"
    :task (System/exit (nido-review/exit-code
                         (apply nido-review/loop-cmd *command-line-args*)))}
 
   nido:review:baseline
   {:requires ([tasks.nido-review :as nido-review])
-   :doc "Loop the baseline round: judge the survey against the code, amend it, repeat until it holds. Uncapped unless :max-iters. :seq names WHICH survey when the workstream holds more than one; the default is the newest. [:cwd <dir>] [:code-cwd <dir>] [:seq <n>] [:max-iters <n>] [:budget 30m] [:dry-run? true]"
+   :doc "Loop the baseline round: judge the survey against the code, amend it, repeat until it holds. Uncapped unless :max-iters. :seq names WHICH survey when the workstream holds more than one; the default is the newest. [:cwd <dir>] [:code-cwd <dir>] [:seq <n>] [:max-iters <n>] [:budget 30m] [:dry-run? true] [:reviewer codex|claude]"
    :task (apply nido-review/baseline-cmd *command-line-args*)}
 
   nido:review:design
   {:requires ([tasks.nido-review :as nido-review])
-   :doc "Loop the decision round over the latest design record: derive, amend, re-survey if the premise is wrong, escalate only the ask. [:cwd <dir>] [:code-cwd <dir>] [:max-iters <n>] [:budget 30m] [:dry-run? true]"
+   :doc "Loop the decision round over the latest design record: derive, amend, re-survey if the premise is wrong, escalate only the ask. [:cwd <dir>] [:code-cwd <dir>] [:max-iters <n>] [:budget 30m] [:dry-run? true] [:reviewer codex|claude]"
    :task (apply nido-review/design-cmd *command-line-args*)}
 
   nido:boundary

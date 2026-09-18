@@ -2,6 +2,7 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is use-fixtures]]
+   [nido.review.claude :as claude]
    [nido.review.codex :as codex]
    [nido.review.prompts :as prompts]
    [nido.vsdd.jj :as jj]
@@ -523,3 +524,52 @@
                            :label "lower" :design nil})
            (catch Throwable _ nil)))
     (is (not (str/includes? @captured "THE DESIGN THIS CHANGE COMMITTED TO")))))
+
+;; ── Which reviewer judges ───────────────────────────────────────────────────
+
+(deftest a-run-names-its-reviewer-before-its-project-does
+  (is (= :codex (codex/reviewer-for nil nil)) "codex when nobody says")
+  (is (= :claude (codex/reviewer-for nil :claude)) "the project's :reviewer")
+  (is (= :codex (codex/reviewer-for "codex" :claude)) "the run's own choice wins")
+  (is (= :claude (codex/reviewer-for 'claude nil)) "however a command line spells it"))
+
+(deftest a-misspelled-reviewer-is-refused-rather-than-read-as-codex
+  (let [e (try (codex/reviewer-for nil :cladue) nil
+               (catch clojure.lang.ExceptionInfo e e))]
+    (is (= :unknown-reviewer (:reason (ex-data e))))
+    (is (str/includes? (ex-message e) "claude, codex") "and says what it would accept")))
+
+(defn- judged
+  "`run-reviewer!` with both reviewers stubbed. Each stub writes `:log` to the
+   log path it was handed and answers when `:answers?`. Returns the result and
+   who ran, with the log each one wrote to."
+  [{:keys [reviewer codex claude]}]
+  (let [dir   (str (fs/create-temp-dir))
+        calls (atom [])
+        stub  (fn [who {:keys [log answers?]}]
+                (fn [{:keys [log-path out-path]}]
+                  (swap! calls conj [who (str (fs/file-name log-path))])
+                  (when log (spit log-path log))
+                  (when answers? (spit out-path sample-output))
+                  {:exit (if answers? 0 1)}))]
+    (with-redefs [codex/run-codex!   (stub :codex codex)
+                  claude/run-claude! (stub :claude claude)]
+      (assoc (codex/run-reviewer! {:reviewer reviewer :cwd dir :prompt "p"
+                                   :schema-path (str dir "/stack-round-1-schema.json")
+                                   :out-path (str dir "/stack-round-1-out.json")
+                                   :log-path (str dir "/stack-round-1.log")})
+             :calls @calls))))
+
+(deftest a-run-that-names-no-reviewer-is-judged-by-codex
+  (let [{:keys [judged-by calls]} (judged {:codex {:answers? true} :claude {:answers? true}})]
+    (is (= [[:codex "stack-round-1.log"]] calls))
+    (is (= {:reviewer :codex} judged-by))))
+
+(deftest a-project-configured-for-claude-never-runs-codex
+  (let [{:keys [judged-by calls]}
+        (judged {:reviewer :claude
+                 :codex {:answers? true}
+                 :claude {:log "Claude AI usage limit reached|1790000000\n"}})]
+    (is (= [[:claude "stack-round-1.log"]] calls)
+        "codex is never asked, whatever claude's log says")
+    (is (= {:reviewer :claude} judged-by))))

@@ -22,6 +22,7 @@
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.report.model :as claim-model]
    [nido.review.analysis :as analysis]
+   [nido.review.codex :as codex]
    [nido.review.frontend :as frontend]
    [nido.review.layers :as layers]
    [nido.review.record :as record]
@@ -34,6 +35,7 @@
    [nido.review.report :as report]
    [nido.review.verdict :as verdict]
    [nido.session.lifecycle :as lifecycle]
+   [nido.platform.config :as config]
    [nido.platform.task-args :as task-args])
   (:import
    [java.time Instant]))
@@ -1462,11 +1464,23 @@
     (queue-analysis! cwd final @report-atom report-path config ws-id)
     status))
 
+(defn- reviewer-of
+  "Who judges this run's rounds: `override`, else the `:reviewer` of the
+   project `cwd` is a session of — see `codex/reviewer-for`.
+
+   Once, as the run starts, and carried on its config from there. Read per round,
+   a projects.edn edited mid-run would put two reviewers on one run. A cwd in no
+   nido session has no project to ask, and the default stands."
+  [cwd override]
+  (codex/reviewer-for override
+                      (some->> (lifecycle/session-from-cwd cwd) :project
+                               (get (config/read-projects)) :reviewer)))
+
 (defn- loop-cmd-run!
   "The diff loop proper, on a cwd `no-yardstick` has already cleared. Split from
    `loop-cmd*` so the refusal reads as one branch rather than as a guard buried
    inside a forty-line binding."
-  [{:keys [cwd base max-iters dry-run? budget fixer-model]}]
+  [{:keys [cwd base max-iters dry-run? budget fixer-model reviewer]}]
   (let [base       (or base "main")
         run-id     (str "review-" (random-uuid))
         clock      #(Instant/now)
@@ -1488,6 +1502,9 @@
                     ;; thinking. Nothing else in the loop has that shape — the
                     ;; reviewers are codex and the warden answers in one turn.
                     :fixer-model fixer-model
+                    ;; Who judges each target: codex unless the run or its
+                    ;; project says otherwise. See `codex/run-reviewer!`.
+                    :reviewer  (reviewer-of cwd reviewer)
                     :run-id    run-id
                     :clock     clock
                     ;; What the engine cannot ask for itself: it never looks
@@ -1557,7 +1574,7 @@
                :refused)))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  loop-cmd* [{:keys [cwd base max-iters dry-run? budget fixer-model]}]
+  loop-cmd* [{:keys [cwd base max-iters dry-run? budget fixer-model reviewer]}]
   (let [;; Through the home-aware resolution WHETHER OR NOT a cwd was named. A
         ;; session home is a place an agent legitimately stands, and passing one
         ;; explicitly used to skip worktree-from-cwd entirely — so the run
@@ -1577,7 +1594,7 @@
           (:reason refusal))
       (loop-cmd-run! {:cwd cwd :base base :max-iters max-iters
                       :dry-run? dry-run? :budget budget
-                      :fixer-model fixer-model}))))
+                      :fixer-model fixer-model :reviewer reviewer}))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   loop-cmd [& args]
@@ -1674,7 +1691,7 @@
    command always did."
   [{:keys [cwd code-cwd kind run-id clock title report-path report-atom
            plain emit pipeline finding-key max-iters dry-run? budget baseline
-           remedies epilogue]}]
+           remedies epilogue reviewer]}]
   (let [final  (try
                  (frontend/with-live-frame
                    {:frame-fn #(render/record-frame @report-atom % {:title title})
@@ -1693,6 +1710,7 @@
                                  :max-iters max-iters
                                  :dry-run? (boolean dry-run?)
                                  :budget budget
+                                 :reviewer reviewer
                                  :clock clock :emit emit
                                  :pipeline pipeline
                                  ;; Both record pipelines judge in their first
@@ -1767,7 +1785,7 @@
   [{:keys [kind pipeline finding-key remedies epilogue]}
    ;; `seq-n`, not `seq` — see baseline-cmd*. Read here only to publish it as
    ;; the claim's target; which entry it names is baseline-at's business.
-   {:keys [cwd code-cwd max-iters dry-run? budget baseline] seq-n :seq
+   {:keys [cwd code-cwd max-iters dry-run? budget baseline reviewer] seq-n :seq
     :or   {budget default-launch-budget}}]
   (let [;; Through the home-aware union whether the caller named a directory or
         ;; not. A session home is a place an agent legitimately stands — it is
@@ -1778,6 +1796,7 @@
         ;; :no-workstream, advising the caller to go somewhere they already were.
         given  (or cwd (System/getProperty "user.dir"))
         cwd    (or (lifecycle/worktree-from-cwd given) given)
+        reviewer (reviewer-of cwd reviewer)
         run-id (str kind "-loop-" (random-uuid))
         clock  #(Instant/now)
         title  (record-loop-title cwd kind)
@@ -1816,6 +1835,7 @@
          :title title :report-path report-path :report-atom report-atom
          :plain plain :emit emit :pipeline pipeline :finding-key finding-key
          :max-iters max-iters :dry-run? dry-run? :budget budget
+         :reviewer reviewer
          :baseline baseline :remedies remedies :epilogue epilogue})))))
 
 (def ^:private baseline-remedies

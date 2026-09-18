@@ -17,9 +17,11 @@
 
    Three properties hold of both, and each is enforced rather than requested:
 
-   1. NO WRITES. Both run through `codex exec -s read-only`, the same sandbox the
-      diff review uses. A pre-implementation round producing edits would make it
-      a fix loop, which is the thing the design round must not be.
+   1. NO WRITES. Both run through the diff review's reviewer, under its
+      read-only posture — `codex exec -s read-only`, or claude restricted to
+      reading (see `nido.review.claude`). A pre-implementation round producing
+      edits would make it a fix loop, which is the thing the design round must
+      not be.
 
    2. EVERY FINDING CITES. The schema requires :cites non-empty. A round with no
       diff to be wrong about will otherwise produce fluent, unfalsifiable
@@ -1002,7 +1004,8 @@
     (catch Exception _ nil)))
 
 (defn- run-round!
-  "One read-only codex pass over a record. Returns {:ok <json-string>} or
+  "One read-only reviewer pass over a record — `:reviewer`, or codex (see
+   `codex/run-reviewer!`). Returns {:ok <json-string>} or
    {:outcome <kw> :detail <str>} — never nil, and never throws.
 
    The outcome is tagged rather than collapsed because a judgment surface cannot
@@ -1010,7 +1013,7 @@
    like a round that ran and found nothing to say. Silence from a judge is
    evidence; silence from a missing binary is not, and a reader who cannot tell
    them apart draws the wrong conclusion from the same blank line."
-  [{:keys [cwd run-id kind prompt label]}]
+  [{:keys [cwd run-id kind prompt label reviewer]}]
   (try
     (let [dir (cstate/run-dir run-id)
           _   (fs/create-dirs dir)
@@ -1024,14 +1027,19 @@
           out-path    (str (fs/path dir (str n "-out.json")))
           log-path    (str (fs/path dir (str n ".log")))]
       (spit schema-path (slurp (jio/resource (schema-resources kind))))
-      (let [{:keys [exit]} (codex/run-codex! {:cwd cwd :schema-path schema-path
-                                              :out-path out-path :log-path log-path
-                                              :prompt prompt})]
+      (let [{:keys [exit judged-by] ran-log :log-path}
+            (codex/run-reviewer! {:reviewer reviewer :cwd cwd :schema-path schema-path
+                                  :out-path out-path :log-path log-path
+                                  :prompt prompt})
+            who (name (:reviewer judged-by))]
+        ;; :codex-failed names the outcome whichever reviewer ran: it is the
+        ;; lanes' vocabulary for a judge that did not answer, and the detail is
+        ;; where the reviewer is named.
         (cond
           (not (zero? exit))          {:outcome :codex-failed
-                                       :detail (str "codex exited " exit " — see " log-path)}
+                                       :detail (str who " exited " exit " — see " ran-log)}
           (not (fs/exists? out-path)) {:outcome :no-output
-                                       :detail (str "codex wrote no answer to " out-path)}
+                                       :detail (str who " wrote no answer to " out-path)}
           :else                       {:ok (slurp out-path)})))
     (catch Throwable t
       {:outcome :round-crashed :detail (or (ex-message t) (str (class t)))})))
@@ -1198,7 +1206,8 @@
    Its claims' subjects are resolved against the declared design at the tree the
    judge reads before a judge is launched, and before either identity is read —
    see `undeclared-subjects`."
-  [{:keys [cwd code-cwd run-id label disputes baseline settled listing subject-identities] :as opts}]
+  [{:keys [cwd code-cwd run-id label disputes baseline settled listing subject-identities
+           reviewer] :as opts}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [baseline (or baseline (ws/latest-entry project ws-id :baseline))]
       (if (baseline-round-worth-running? baseline)
@@ -1209,7 +1218,7 @@
                              (:code-identity opts)
                              (settled/code-identity code-cwd))
                   result   (judged (run-round! {:cwd code-cwd :run-id run-id :kind :baseline-review
-                                                :label label
+                                                :label label :reviewer reviewer
                                                 :prompt (baseline-prompt {:baseline baseline
                                                                           :disputes disputes
                                                                           :settled settled
@@ -1310,7 +1319,8 @@
    as the judge launched is the tree read as it returned — and a round holding
    settled claims whose tree moved appends nothing, answering
    {:outcome :code-moved :answer <the decision>}."
-  [{:keys [cwd code-cwd run-id label disputes design settled listing subject-identities] :as opts}]
+  [{:keys [cwd code-cwd run-id label disputes design settled listing subject-identities
+           reviewer] :as opts}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [design (or design (ws/latest-entry project ws-id :design))]
       (or (unverified-premise project ws-id design)
@@ -1322,7 +1332,7 @@
                            (settled/code-identity code-cwd))
                 result   (judged (run-round!
                                   {:cwd code-cwd :run-id run-id :kind :design-decision
-                                   :label label
+                                   :label label :reviewer reviewer
                                    :prompt (design-prompt
                                             {:design   design
                                              :baseline (stages/discover-baseline cwd design)
@@ -1830,7 +1840,7 @@
 
 (defn- run-judge-stage
   [ctx]
-  (let [{:keys [cwd code-cwd run-id]} (:config ctx)
+  (let [{:keys [cwd code-cwd run-id reviewer]} (:config ctx)
         counts (dispute-counts (:history ctx))
         ;; The record this run is repairing: the one it was pointed at, then
         ;; each amendment it makes itself. Never re-read as "the latest",
@@ -1849,7 +1859,7 @@
                   (settled/settled (settled/ledgers project ws-id subject) subject reading)
                   {})
         record (baseline-review!
-                {:cwd cwd :code-cwd code-cwd :run-id run-id
+                {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
                  :baseline subject
                  :settled settled
                  :listing listing
@@ -2210,7 +2220,7 @@
 
 (defn- run-design-judge-stage
   [ctx]
-  (let [{:keys [cwd code-cwd run-id]} (:config ctx)
+  (let [{:keys [cwd code-cwd run-id reviewer]} (:config ctx)
         counts (dispute-counts (:history ctx))
         ;; What the judge is not asked to check, read at the tree it is about to read, from
         ;; every ledger the design's unit reaches — never this run's history. A role's players
@@ -2224,7 +2234,7 @@
                                    (effective-design cwd design))
                   {})
         record (design-decision!
-                {:cwd cwd :code-cwd code-cwd :run-id run-id
+                {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
                  :design design :settled settled :listing listing
                  :code-identity (:code-identity reading)
                  :subject-identities (:subject-identities reading)
@@ -2325,7 +2335,7 @@
    stopped getting anywhere. A count would stop it while it was still making
    progress, which is the one thing a convergence loop must not do."
   [ctx]
-  (let [{:keys [cwd code-cwd run-id budget]} (:config ctx)
+  (let [{:keys [cwd code-cwd run-id budget reviewer]} (:config ctx)
         [project ws-id] (stages/project+ws-from-cwd cwd)
         n   (count (filter :resurveyed (:history ctx)))
         ;; The baseline the design was JUDGED against, which is the only one whose
@@ -2338,6 +2348,7 @@
                              :code-cwd code-cwd
                              :run-id (str run-id "-resurvey-" (inc n))
                              :budget budget
+                             :reviewer reviewer
                              :emit (fn [_])
                              :baseline    cited
                              :pipeline    baseline-pipeline

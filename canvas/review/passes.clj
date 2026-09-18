@@ -8,8 +8,21 @@
             [canvas.review.core :refer [Finding]]
             [fukan.common.typing.malli]))
 
+(Module review-claude
+  "Claude as a read-only reviewer, behind the contract codex's runner keeps: a prompt and a
+   schema in, the structured answer in a file, the stream in a log.
+
+   Read-only comes from the CLI — restricted mode, a shell allowlist of the two jj reads and grep
+   beside what the CLI itself runs as read-only, and everything else denied — never from the
+   prompt, and never from the user's settings, which it ignores."
+  (Operation claude-argv "The argument vector for one claude review."
+    {:signature [:=> [:catn [:opts :map]] :any]})
+  (Operation run-claude! "Run claude as a reviewer and keep its answer."
+    {:signature [:=> [:catn [:opts :map]] :map] :delegates [claude-argv]}))
+
 (Module review-codex
-  "Running codex over a range and reading what it said.
+  "Running a reviewer over a range and reading what it said — codex unless a run or its project
+   names claude.
 
    Findings are identified by WHAT they are about — file, line, title — not by when they were
    found, so the same finding raised by two passes is one finding and a finding that survives a
@@ -35,7 +48,7 @@
   (Operation safe-label "A label made safe to put in a path."
     {:signature [:=> [:catn [:label :any]] :string]})
   (Operation unavailability
-    "Why no reviewer ran, out of the log codex streamed — or nothing, when the log does not say
+    "Why no reviewer ran, out of the log the reviewer streamed — or nothing, when the log does not say
      the reviewer was unavailable.
 
      The distinction the review path exists to draw at all: a review that BROKE is evidence
@@ -44,9 +57,17 @@
      line verbatim, because the remedy and the reset hour are in the vendor's words and nowhere
      else."
     {:signature [:=> [:catn [:tail [:maybe :string]]] [:maybe :map]]})
+  (Operation reviewer-for
+    "The reviewer a run is judged by: its own choice, else its project's, else codex. A name that
+     is no reviewer is refused, never read as the default."
+    {:signature [:=> [:catn [:override :any] [:configured :any]] :keyword]})
+  (Operation run-reviewer!
+    "Run the chosen reviewer, saying which one judged."
+    {:signature [:=> [:catn [:opts :map]] :map]
+     :delegates [run-codex! run-claude!]})
   (Operation review! "Review one range and answer with its findings."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [run-codex! schema-json safe-label unavailability]}))
+     :delegates [run-reviewer! schema-json safe-label unavailability]}))
 
 (Module review-verdict
   "The pass that decides whether the round is done.

@@ -1,7 +1,10 @@
 (ns nido.review.codex
-  "Git-free codex review driver: jj diff --git -> codex exec --output-schema
-   -> normalized findings. nido worktrees are non-colocated jj workspaces, so
-   git-coupled `codex review` cannot run there."
+  "Git-free review driver: jj diff --git -> a structured-output reviewer ->
+   normalized findings. nido worktrees are non-colocated jj workspaces, so
+   git-coupled `codex review` cannot run there.
+
+   Also where the REVIEWER is chosen: codex unless a run or its project names
+   claude — see `run-reviewer!`."
   (:require
    [nido.platform.process :as nprocess]
    [babashka.fs :as fs]
@@ -10,6 +13,7 @@
    [clojure.java.io :as io]
    [clojure.string :as str]
    [nido.coordinator.record.state :as cstate]
+   [nido.review.claude :as claude]
    [nido.review.digest :as digest]
    [nido.review.prompts :as prompts]
    [nido.vsdd.jj :as jj]))
@@ -249,8 +253,11 @@
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :string]] [:maybe :map]]}
   unavailability
-  "Why no reviewer ran, read out of the tail of the log codex streamed — or nil
-   when nothing in it says the reviewer was unavailable.
+  "Why no reviewer ran, read out of the tail of the log the reviewer streamed —
+   or nil when nothing in it says the reviewer was unavailable. The phrases are
+   codex's. A claude reviewer ends a failed log on its own words (see
+   `claude/run-claude!`), which are classified only where they happen to share
+   one; otherwise its failure reads as a failed review.
 
    {:signal :usage-limit|:rate-limited|:unauthorized
     :message <the line codex printed>
@@ -278,6 +285,55 @@
                     when-back (assoc :retry-at when-back)))))
             unavailability-signatures))))
 
+;; ── Which reviewer judges ───────────────────────────────────────────────────
+
+(def reviewers
+  "Every reviewer a round can be judged by. Each is run through `run-one!`, and
+   each keeps `run-codex!`'s contract, so nothing past `run-reviewer!` knows
+   which one ran."
+  #{:codex :claude})
+
+(def default-reviewer
+  "The reviewer when neither the run nor its project names one."
+  :codex)
+
+(defn ^{:malli/schema [:=> [:cat :any :any] :keyword]}
+  reviewer-for
+  "The reviewer a run is judged by: `override`, the run's own choice, else
+   `configured`, its project's `:reviewer` in projects.edn, else
+   `default-reviewer`. Either may be spelled as a keyword, a string or a symbol,
+   which is how an EDN file and a command line spell it.
+
+   A name that is no reviewer THROWS rather than falling back to the default. A
+   misspelled `:reviewer` that quietly ran codex would look exactly like the
+   setting working."
+  [override configured]
+  (if-let [chosen (or override configured)]
+    (let [k (keyword (name chosen))]
+      (or (reviewers k)
+          (throw (ex-info (str "unknown reviewer " (pr-str chosen) " — expected one of "
+                               (str/join ", " (map name (sort reviewers))))
+                          {:reason :unknown-reviewer :reviewer chosen}))))
+    default-reviewer))
+
+(defn- run-one!
+  [reviewer opts]
+  (case reviewer
+    :codex  (run-codex! opts)
+    :claude (claude/run-claude! opts)))
+
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  run-reviewer!
+  "Run `:reviewer` (`default-reviewer` when absent) over the rest of `opts`, the
+   keys `run-codex!` takes.
+
+   Returns {:exit <int> :log-path <str> :judged-by {:reviewer <kw>}}. :log-path
+   is the log to classify a failure from."
+  [{:keys [reviewer log-path] :as opts}]
+  (let [reviewer (or reviewer default-reviewer)
+        {:keys [exit]} (run-one! reviewer opts)]
+    {:exit exit :log-path log-path :judged-by {:reviewer reviewer}}))
+
 (defn ^{:malli/schema [:=> [:cat :any] :string]}
   safe-label
   "A label made safe to put in a filename. Layer labels come from bookmarks, and
@@ -299,7 +355,11 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   review!
-  "Git-free codex review of ONE revision range. See ns doc.
+  "Git-free review of ONE revision range. See ns doc.
+
+   `reviewer` is who judges it, `default-reviewer` when nil. The answer carries
+   `:judged-by`: codex is no longer the only reviewer, and a reader of the report
+   is owed which one read the range.
 
    `from`/`to` aim it: `merge-base(@,base)`→`@` for the whole stack, or a single
    layer's `<lower-tip>`→`<own-tip>`. `from` must be a FORK POINT rather than the
@@ -345,7 +405,7 @@
    one layer at a time, and the flat union is the range in which the cut it is
    here to judge cannot be seen."
   [{:keys [cwd from to run-id iter label brief composition prior-fixes standing
-           prior-open design]}]
+           prior-open design reviewer]}]
   (let [to       (or to "@")
         {:keys [exit out err]} (diff-name-only cwd from to)
         _        (when-not (zero? exit)
@@ -395,19 +455,22 @@
                                prompts/composition-manifest-note
                                (prompts/manifest-block manifest)))]
         (spit schema-path (schema-json (some? composed)))
-        (let [{:keys [exit]} (run-codex! {:cwd cwd :schema-path schema-path
-                                          :out-path out-path :log-path log-path
-                                          :prompt prompt})]
+        (let [{:keys [exit judged-by] ran-log :log-path}
+              (run-reviewer! {:reviewer reviewer :cwd cwd :schema-path schema-path
+                              :out-path out-path :log-path log-path
+                              :prompt prompt})]
           (when (or (not (zero? exit)) (not (fs/exists? out-path)))
             ;; Two reasons, because they ask opposite things of a reader. A
             ;; classified failure is a condition outside the branch that must be
             ;; waited out or authenticated past; an unclassified one is this run
             ;; failing, and the diff is where to look. See `unavailability`.
-            (if-let [u (unavailability (log-tail log-path unavailability-tail-chars))]
+            (if-let [u (unavailability (log-tail ran-log unavailability-tail-chars))]
               (throw (ex-info (:message u)
                               {:reason :reviewer-unavailable :unavailable u
-                               :exit exit :cwd cwd :label label}))
-              (throw (ex-info "codex review failed"
-                              {:reason :review-failed :exit exit :cwd cwd :label label}))))
+                               :exit exit :cwd cwd :label label :judged-by judged-by}))
+              (throw (ex-info (str (name (:reviewer judged-by)) " review failed")
+                              {:reason :review-failed :exit exit :cwd cwd :label label
+                               :judged-by judged-by}))))
           (assoc (parse-output (slurp out-path))
-                 :status nil :manifest manifest :base-rev from))))))
+                 :status nil :manifest manifest :base-rev from
+                 :judged-by judged-by))))))

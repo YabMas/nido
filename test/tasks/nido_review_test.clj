@@ -5,6 +5,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
    [malli.core :as m]
+   [nido.platform.config :as config]
    [nido.platform.core :as core]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.report :as report]
@@ -1855,3 +1856,15 @@
     (let [{:keys [reason lines]} (gate "/w")]
       (is (= :no-workstream reason))
       (is (some #(str/includes? % "session worktree") lines)))))
+
+(deftest a-run-is-judged-by-its-projects-reviewer-unless-it-names-one
+  (let [reviewer-of #'t/reviewer-of]
+    (with-redefs [lifecycle/session-from-cwd (fn [_] {:project "brian" :session "s1"})
+                  config/read-projects (fn [] {"brian" {:reviewer :claude}
+                                               "nido"  {}})]
+      (is (= :claude (reviewer-of "/w" nil)) "the :reviewer of the project the cwd is a session of")
+      (is (= :codex (reviewer-of "/w" "codex")) "a run's own :reviewer overrides it"))
+    (with-redefs [lifecycle/session-from-cwd (fn [_] nil)
+                  config/read-projects (fn [] {"brian" {:reviewer :claude}})]
+      (is (= :codex (reviewer-of "/tmp/elsewhere" nil))
+          "outside a session there is no project to ask"))))

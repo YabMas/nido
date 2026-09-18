@@ -1214,11 +1214,11 @@
    rethrows what it catches, so nothing above here sees a different exception
    than it did before."
   [ctx t]
-  (let [{:keys [cwd run-id]} (:config ctx)]
+  (let [{:keys [cwd run-id reviewer]} (:config ctx)]
     (announce-target! ctx "running" t nil)
     (try
       (let [r (assoc (codex/review!
-                      {:cwd cwd :run-id run-id :iter (:iter ctx)
+                      {:cwd cwd :run-id run-id :iter (:iter ctx) :reviewer reviewer
                        :from (:from t) :to (:to t)
                        :label (:label t) :brief (:brief t)
                        :design (:design ctx)

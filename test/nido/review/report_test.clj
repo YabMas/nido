@@ -560,6 +560,16 @@
       (is (= "reported" (:status (get by "design")))
           "reported, not reviewed — it looked at no range"))))
 
+(deftest a-reviewed-row-says-who-judged-it
+  ;; A row naming nobody reads as codex, which is wrong on a project configured
+  ;; for claude.
+  (let [judged {:reviewer :claude}
+        [row]  (report/review-layers
+                {:reviews  [{:target {:label "stack" :stack? true} :judged-by judged}]
+                 :skipped  []
+                 :findings []})]
+    (is (= judged (:judged-by row)))))
+
 (deftest a-skipped-layer-is-not-duplicated-as-a-reporter
   (let [rows (report/review-layers
               {:reviews  []
