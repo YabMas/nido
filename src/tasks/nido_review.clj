@@ -1526,7 +1526,7 @@
                     ;; Without this the give-up counter reads three attempts at
                     ;; the wrong layer as three failures and stops the run on
                     ;; the round that first aimed it correctly.
-                    :attempt-key (rloop/default-attempt-key rloop/default-finding-key)
+                    :attempt-key (stages/default-attempt-key stages/default-finding-key)
                     ;; And a park aims no repair anywhere, so the round it was
                     ;; ruled in is not an attempt at all. Without this the
                     ;; counter gives up on a defect the loop tried once and then
@@ -1540,8 +1540,12 @@
                     ;; commits that no round will ever review — which is exactly
                     ;; what the last round of an :unfixable run was doing.
                     :judged-after :warden
-                    ;; The diff loop's own program. The engine names none.
-                    :pipeline     stages/diff-pipeline}
+                    ;; The diff loop's own program, how its findings are told
+                    ;; apart, and the refusal of its stack that ends a run. The
+                    ;; engine names none of them.
+                    :pipeline     stages/diff-pipeline
+                    :finding-key  stages/default-finding-key
+                    :terminal-reasons stages/terminal-reasons}
         report-atom (atom (report/init {:run-id run-id :cwd cwd :base base
                                         :started-at (str (clock))
                                         :context context

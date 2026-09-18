@@ -10,6 +10,13 @@
   (let [events (atom [])]
     [events (fn [e] (swap! events conj e))]))
 
+(defn- run-loop
+  "`rloop/run-loop` told its findings apart by the whole finding, which is what
+   these pipelines' findings are: each is one value, repeated or not. A test
+   about identity passes its own :finding-key, which wins."
+  [config]
+  (rloop/run-loop (merge {:finding-key identity} config)))
+
 (deftest stops-when-warden-says-stop
   (let [calls (atom [])
         [_ emit] (capturing)
@@ -18,7 +25,7 @@
               (stage :warden  (fn [c] (swap! calls conj :warden)
                                (assoc c :control :stop)))
               (stage :fix    (fn [c] (swap! calls conj :fix) c))]
-        out (rloop/run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit})]
+        out (run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit})]
     (is (= :converged (:status out)))
     (is (not (some #{:fix} @calls)))))
 
@@ -28,7 +35,7 @@
               (stage :warden  (fn [c] (assoc c :control :escalate
                                             :warden {:reason "redesign"})))
               (stage :fix    (fn [c] c))]
-        out (rloop/run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit})]
+        out (run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit})]
     (is (= :escalated (:status out)))))
 
 (deftest caps-at-max-iters
@@ -36,7 +43,7 @@
         pipe [(stage :review (fn [c] (assoc c :findings [{:title (str (:iter c))}])))
               (stage :warden  (fn [c] (assoc c :control :continue :warden {:fix-findings nil})))
               (stage :fix    (fn [c] (update c :history (fnil conj []) {:iter (:iter c)})))]
-        out (rloop/run-loop {:run-id "r1" :max-iters 3 :pipeline pipe :emit emit})]
+        out (run-loop {:run-id "r1" :max-iters 3 :pipeline pipe :emit emit})]
     (is (= :max-iters (:status out)))
     (is (= 3 (count (:history out))))))
 
@@ -51,7 +58,7 @@
                                         (>= (:iter c) 9) (assoc :control :stop)
                                         (< (:iter c) 9)  (assoc :control :continue))))
               (stage :fix (fn [c] (update c :history (fnil conj []) {:iter (:iter c)})))]
-        out (rloop/run-loop {:run-id "r1" :pipeline pipe :emit emit})]
+        out (run-loop {:run-id "r1" :pipeline pipe :emit emit})]
     (is (= :converged (:status out)))
     (is (= 9 (:iter out)))))
 
@@ -60,7 +67,7 @@
         pipe [(stage :review (fn [c] (assoc c :findings [{:title "same"}])))
               (stage :warden  (fn [c] (assoc c :control :continue :warden {:fix-findings nil})))
               (stage :fix    (fn [c] (update c :history (fnil conj []) {:iter (:iter c)})))]
-        out (rloop/run-loop {:run-id "r1" :max-iters 10 :pipeline pipe :emit emit})]
+        out (run-loop {:run-id "r1" :max-iters 10 :pipeline pipe :emit emit})]
     (is (= :no-progress (:status out)))))
 
 (deftest review-clean-terminates
@@ -68,7 +75,7 @@
         pipe [(stage :review (fn [c] (assoc c :findings [] :control :stop :status :clean)))
               (stage :warden  (fn [c] c))
               (stage :fix    (fn [c] c))]
-        out (rloop/run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit})]
+        out (run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit})]
     (is (= :clean (:status out)))))
 
 (deftest review-failed-is-terminal
@@ -76,7 +83,7 @@
         pipe [(stage :review (fn [_] (throw (ex-info "codex review failed" {:reason :review-failed}))))
               (stage :warden (fn [c] c))
               (stage :fix (fn [c] c))]
-        out (rloop/run-loop {:run-id "r1" :max-iters 3 :pipeline pipe :emit emit})]
+        out (run-loop {:run-id "r1" :max-iters 3 :pipeline pipe :emit emit})]
     (is (= :review-failed (:status out)))))
 
 (deftest an-unavailable-reviewer-is-its-own-terminal-and-keeps-what-it-was-told
@@ -91,7 +98,7 @@
         pipe [(stage :review (fn [_] (throw (ex-info (:message u)
                                                      {:reason :reviewer-unavailable
                                                       :unavailable u}))))]
-        out  (rloop/run-loop {:run-id "r1" :max-iters 3 :pipeline pipe :emit emit})]
+        out  (run-loop {:run-id "r1" :max-iters 3 :pipeline pipe :emit emit})]
     (is (= :reviewer-unavailable (:status out)))
     (is (= u (:unavailable out))
         "the sentence and the reset hour reach the ledger from here — the run
@@ -103,7 +110,7 @@
         pipe [(stage :review (fn [c] (assoc c :findings [{:title "x"}])))
               (stage :warden  (fn [c] (assoc c :control :stop :warden {:decision :stop})))
               (stage :fix    (fn [c] c))]
-        _ (rloop/run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit
+        _ (run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit
                            :cwd "/w" :base "main"})
         kinds (map :event @events)]
     (is (= :run-started (first kinds)))
@@ -116,7 +123,7 @@
 (deftest emit-narrates-phase-error
   (let [[events emit] (capturing)
         pipe [(stage :review (fn [_] (throw (ex-info "boom" {:reason :review-failed}))))]
-        _ (rloop/run-loop {:run-id "r1" :max-iters 2 :pipeline pipe :emit emit
+        _ (run-loop {:run-id "r1" :max-iters 2 :pipeline pipe :emit emit
                            :cwd "/w" :base "main"})]
     (is (some #(= :phase-errored (:event %)) @events))
     (is (= :review-failed (:status (last (filter #(= :run-finalized (:event %)) @events)))))))
@@ -148,7 +155,8 @@
                                  (throw (ex-info "could not return the working copy to the top"
                                                  {:reason :stack-unmovable
                                                   :ctx (merge c left)})))))
-        out  (rloop/run-loop {:run-id "r1" :pipeline pipe :emit emit})]
+        out  (run-loop {:run-id "r1" :pipeline pipe :emit emit
+                        :terminal-reasons #{:stack-unmovable}})]
     (is (= :stack-unmovable (:status out))
         "a status of its own: the review this round ran is not one that failed")
     (is (= ["h1" "h2"] (mapv :handle (:findings out)))
@@ -169,7 +177,8 @@
   (let [[events emit] (capturing)
         pipe (conj (ruled-round)
                    (stage :fix (fn [_] (throw (ex-info "refused" {:reason :stack-unmovable})))))
-        out  (rloop/run-loop {:run-id "r1" :pipeline pipe :emit emit})]
+        out  (run-loop {:run-id "r1" :pipeline pipe :emit emit
+                        :terminal-reasons #{:stack-unmovable}})]
     (is (= :stack-unmovable (:status out)))
     (is (= [:fix :fix] (mapv :disposition (:findings out)))
         "the warden's rulings survive a fix stage that said nothing")
@@ -185,7 +194,7 @@
                    (stage :fix (fn [c] (throw (ex-info "bug" {:reason :something-else
                                                                :ctx c})))))]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"bug"
-                          (rloop/run-loop {:run-id "r1" :pipeline pipe})))))
+                          (run-loop {:run-id "r1" :pipeline pipe})))))
 
 ;; ── The injected finding identity ──────────────────────────────────────────
 
@@ -198,7 +207,7 @@
         findings [{:cites ["a"] :claim "one"}]
         pipe [(stage :judge (fn [c] (assoc c :findings findings)))
               (stage :amend (fn [c] (assoc c :control :continue)))]
-        out (rloop/run-loop {:run-id "r1" :max-iters 10 :pipeline pipe :emit emit
+        out (run-loop {:run-id "r1" :max-iters 10 :pipeline pipe :emit emit
                              :finding-key (juxt :cites :claim)})]
     (is (= :no-progress (:status out))
         "the same record finding twice is a stall")))
@@ -208,7 +217,7 @@
         pipe [(stage :judge (fn [c] (assoc c :findings [{:cites ["a"]
                                                          :claim (str "round " (:iter c))}])))
               (stage :amend (fn [c] (assoc c :control :continue)))]
-        out (rloop/run-loop {:run-id "r1" :max-iters 4 :pipeline pipe :emit emit
+        out (run-loop {:run-id "r1" :max-iters 4 :pipeline pipe :emit emit
                              :finding-key (juxt :cites :claim)})]
     (is (= :max-iters (:status out))
         "a different finding each round is progress, so only the cap ends it")))
@@ -220,7 +229,7 @@
   (let [[_ emit] (capturing)
         pipe [(stage :review (fn [c] (assoc c :findings [{:title "x" :done? false}])))
               (stage :warden (fn [c] (assoc c :control :stop)))]
-        out (rloop/run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit
+        out (run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit
                              :open? (complement :done?)})]
     (is (= :unresolved (:status out)))))
 
@@ -228,7 +237,7 @@
   (let [[_ emit] (capturing)
         pipe [(stage :review (fn [c] (assoc c :findings [{:title "x" :done? true}])))
               (stage :warden (fn [c] (assoc c :control :stop)))]
-        out (rloop/run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit
+        out (run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit
                              :open? (complement :done?)})]
     (is (= :converged (:status out)))))
 
@@ -238,33 +247,8 @@
   (let [[_ emit] (capturing)
         pipe [(stage :review (fn [c] (assoc c :findings [{:title "x"}])))
               (stage :warden (fn [c] (assoc c :control :stop)))]
-        out (rloop/run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit})]
+        out (run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit})]
     (is (= :converged (:status out)))))
-
-(deftest default-finding-key-is-the-handle-the-warden-filed-a-finding-under
-  (is (= "h-7"
-         (rloop/default-finding-key {:file "a.clj" :line-start 4 :line-end 9
-                                     :title "t" :priority 1 :handle "h-7"})))
-  (is (= "h-7"
-         (rloop/default-finding-key {:file "moved.clj" :line-start 91
-                                     :title "the same defect, said differently"
-                                     :handle "h-7"}))
-      "a restatement at a new place under a new title is one finding"))
-
-(deftest default-finding-key-falls-back-to-the-diff-triple
-  ;; A finding that never reached the warden has no handle. Falling back means
-  ;; an unrecognised repeat, which costs a round; the alternative is every such
-  ;; finding colliding on nil, which ends a run that was still working.
-  (is (= ["a.clj" 4 "t"]
-         (rloop/default-finding-key {:file "a.clj" :line-start 4 :line-end 9
-                                     :title "t" :priority 1}))))
-
-(deftest record-findings-all-collide-under-the-default-key
-  ;; Not a wish — the reason the seam is not optional. Two unrelated record
-  ;; findings are one key under the default, so an uncapped record loop would
-  ;; stop on its second round no matter what the judge said.
-  (is (= (rloop/default-finding-key {:cites ["a"] :claim "one"})
-         (rloop/default-finding-key {:cites ["b"] :claim "two"}))))
 
 ;; ── A finding nothing can fix ───────────────────────────────────────────────
 
@@ -278,7 +262,7 @@
         pipe [(stage :judge (fn [c] (assoc c :findings [stuck {:id (str "fresh-" (:iter c))}])))
               (stage :amend (fn [c] (update c :history (fnil conj [])
                                             {:iter (:iter c) :findings (:findings c)})))]
-        out (rloop/run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
+        out (run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
     (is (= :unfixable (:status out)))
     (is (= ["cannot-fix"] (:unfixable out))
         "and it names the finding, not the round")))
@@ -289,7 +273,7 @@
               (stage :amend (fn [c] (cond-> (update c :history (fnil conj [])
                                                     {:iter (:iter c) :findings (:findings c)})
                                       (>= (:iter c) 6) (assoc :control :stop))))]
-        out (rloop/run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
+        out (run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
     (is (= :converged (:status out)) "every finding was different, so nothing is stuck")))
 
 (deftest two-rounds-of-the-same-finding-is-not-yet-unfixable
@@ -300,7 +284,7 @@
               (stage :amend (fn [c] (cond-> (update c :history (fnil conj [])
                                                     {:iter (:iter c) :findings (:findings c)})
                                       (>= (:iter c) 2) (assoc :control :stop))))]
-        out (rloop/run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
+        out (run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
     (is (= :converged (:status out)))))
 
 (deftest a-finding-in-two-rounds-does-not-end-the-run
@@ -316,7 +300,7 @@
                               (cond-> (update c :history (fnil conj [])
                                               {:iter (:iter c) :findings (:findings c)})
                                 (>= (:iter c) 2) (assoc :control :stop))))]
-        out (rloop/run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
+        out (run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
     (is (= :converged (:status out)) "two rounds of the same finding is not a wall")
     (is (= 2 @rounds))))
 
@@ -326,7 +310,7 @@
                                                         {:id (str "fresh-" (:iter c))}])))
               (stage :amend (fn [c] (update c :history (fnil conj [])
                                             {:iter (:iter c) :findings (:findings c)})))]
-        out (rloop/run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
+        out (run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
     (is (= :unfixable (:status out)))
     (is (= ["stuck"] (:unfixable out)) "one entry, not one per raising")))
 
@@ -339,7 +323,7 @@
         pipe [(stage :judge (fn [c] (assoc c :findings [{:id "immovable"}])))
               (stage :amend (fn [c] (update c :history (fnil conj [])
                                             {:iter (:iter c) :findings (:findings c)})))]
-        out (rloop/run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
+        out (run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
     (is (= :no-progress (:status out))
         "an identical set trips the stall check at round two, before three rounds pass")
     (is (= ["immovable"] (:unfixable out))
@@ -355,7 +339,7 @@
               (stage :amend (fn [c]
                               (assoc-in c [:carry :under-repair]
                                         (str "record-" (:iter c)))))]
-        out (rloop/run-loop {:run-id "carry" :max-iters 3 :pipeline pipe
+        out (run-loop {:run-id "carry" :max-iters 3 :pipeline pipe
                              :finding-key :title})]
     (is (= [nil "record-1" "record-2"] @seen))
     ;; and it is still there for whoever reads the terminal ctx
@@ -372,7 +356,7 @@
               (stage :amend (fn [c]
                               (assoc-in c [:carry :under-repair]
                                         (str "record-" (:iter c)))))]
-        out (rloop/run-loop {:run-id "carry2" :max-iters 4 :pipeline pipe
+        out (run-loop {:run-id "carry2" :max-iters 4 :pipeline pipe
                              :finding-key :title})]
     (is (= :converged (:status out)))
     (is (= "record-1" (:under-repair (:carry out))))))
@@ -399,7 +383,7 @@
                               (update c :history (fnil conj [])
                                       {:iter (:iter c) :findings (:findings c)
                                        :amended? true})))]
-        out (rloop/run-loop (merge {:run-id "j" :max-iters 12 :pipeline pipe
+        out (run-loop (merge {:run-id "j" :max-iters 12 :pipeline pipe
                                     :judged-after :judge :finding-key :title}
                                    extra))]
     [out @judges @amends]))
@@ -437,7 +421,7 @@
               (stage :fix (fn [c] (swap! fixes inc)
                             (update c :history (fnil conj [])
                                     {:iter (:iter c) :findings (:findings c)})))]
-        out (rloop/run-loop {:run-id "nj" :max-iters 12 :pipeline pipe
+        out (run-loop {:run-id "nj" :max-iters 12 :pipeline pipe
                              :finding-key :title})]
     (is (= :unfixable (:status out)))
     (is (= 4 @fixes) "every round ran its last stage, as before")))
@@ -451,7 +435,7 @@
   ;; check cannot fire — which is the situation `unfixable` exists for: a loop
   ;; still fixing things while one defect refuses to move.
   (let [fk    (fn [f] (:handle f))
-        at    (rloop/default-attempt-key fk)
+        at    (fn [f] [(fk f) (:owner-layer f)])
         run   (fn [layers]
                 (let [[_ emit] (capturing)
                       pipe [(stage :judge
@@ -465,7 +449,7 @@
                                                            {:iter (:iter c)
                                                             :findings (:findings c)})
                                              (>= (:iter c) 8) (assoc :control :stop))))]]
-                  (rloop/run-loop {:run-id "r" :pipeline pipe :emit emit
+                  (run-loop {:run-id "r" :pipeline pipe :emit emit
                                    :finding-key fk :attempt-key at})))
         stuck (run ["core" "core" "core" "core"])
         moved (run ["core" "core" "core" "wiring"])]
@@ -500,7 +484,7 @@
                                                          {:iter (:iter c)
                                                           :findings (:findings c)})
                                            (>= (:iter c) 8) (assoc :control :stop))))]]
-                (rloop/run-loop (merge {:run-id "r" :pipeline pipe :emit emit
+                (run-loop (merge {:run-id "r" :pipeline pipe :emit emit
                                         :finding-key :handle}
                                        extra))))
         tried  (run [:fix :fix :fix :fix] :attempted? attempted?)
@@ -530,7 +514,7 @@
         pipe [(stage :review (fn [c] (assoc c :findings [{:handle "class"}])))
               (stage :fix (fn [c] (update c :history (fnil conj [])
                                           {:iter (:iter c) :findings (:findings c)})))]]
-    (rloop/run-loop (merge {:run-id "r" :max-iters 6 :pipeline pipe :emit emit
+    (run-loop (merge {:run-id "r" :max-iters 6 :pipeline pipe :emit emit
                             :finding-key :handle :judged-after :review}
                            extra))))
 
@@ -553,6 +537,29 @@
   ;; The record loops answer no such question: they have no patch to hash and no
   ;; fixes to count, so the default must leave the set equality standing alone.
   (is (= :no-progress (:status (narrowing-run)))))
+
+(deftest the-engine-tells-findings-apart-only-by-what-its-caller-passes
+  ;; No default: a default identity is some program's, and the engine is every program's.
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"needs a :finding-key"
+                        (rloop/run-loop {:run-id "r1" :emit (fn [_])
+                                         :pipeline [(stage :review identity)]}))))
+
+(deftest a-programs-refusal-ends-the-run-only-when-its-caller-names-it
+  ;; The engine's own terminal reasons are about the judge. A refusal of one
+  ;; program's own — the diff review's stack — is that program's to name.
+  (let [pipe [(stage :fix (fn [_] (throw (ex-info "refused" {:reason :stack-unmovable}))))]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"refused"
+                          (run-loop {:run-id "r1" :pipeline pipe}))
+        "unnamed, it is a defect, and finalizing on it would publish a verdict nobody reached")
+    (is (= :stack-unmovable
+           (:status (run-loop {:run-id "r1" :pipeline pipe
+                               :terminal-reasons #{:stack-unmovable}}))))
+    (is (= :reviewer-unavailable
+           (:status (run-loop {:run-id "r1"
+                               :pipeline [(stage :review
+                                                 (fn [_] (throw (ex-info "quota"
+                                                                         {:reason :reviewer-unavailable}))))]})))
+        "while the judge's own end a run whichever program runs")))
 
 (deftest the-engine-names-no-program-of-its-own
   ;; It runs what its caller passes; a caller that passes nothing is told so rather than handed

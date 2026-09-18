@@ -38,10 +38,67 @@
    `:unresolved` is in both for the same shape of reason — the engine reaches it
    when a round stops holding something, and the review stage reaches it over a
    round that found nothing while the last run's `:open` list still names a
-   layer nobody answered for."
+   layer nobody answered for. `:stack-unmovable` is reached by a throw rather
+   than returned — see `terminal-reasons`."
   #{:stack-conflicted :nothing-to-review :clean :warden-indeterminate :unfixable
     :dry-run :workspace-drifted :fix-unrouted :fix-conflicted :fix-rolled-back
-    :fix-declined :fix-timed-out :fix-launch-failed :unresolved})
+    :fix-declined :fix-timed-out :fix-launch-failed :unresolved :stack-unmovable})
+
+(def terminal-reasons
+  "The `:reason`s a diff stage throws with that end the run on that status
+   rather than crash it, beside the engine's own two about the judge. Passed to
+   `nido.review.loop/run-loop` as :terminal-reasons.
+
+   `:stack-unmovable` is jj refusing a step the loop needed on the stack AFTER
+   the reviewers had read it and the warden had ruled — see
+   `nido.review.layers/refusal`. That round's review stands; filed under
+   `:review-failed` it would read as one that never happened, and send its
+   reader to check a quota first. It is thrown rather than returned because the
+   throw is what records the phase that met the refusal as errored, with jj's
+   words."
+  #{:stack-unmovable})
+
+(defn ^{:malli/schema [:=> [:cat :Finding] :any]}
+  default-finding-key
+  "How the DIFF review tells one finding from another: the handle the warden
+   filed it under.
+
+   Not the place in the code plus the title, which is what a reviewer reports
+   and therefore what a fresh reviewer rewrites. A fix moves the code, so the
+   file and line move with it; the title is prose, and the same defect described
+   again next round is described in different words. Identity derived from any
+   of the three is stable only while nothing is happening — and a defect the loop
+   cannot move is exactly the one that gets restated, so the check that exists to
+   notice it was blind in the one case it was for.
+
+   The handle is assigned once per round, by the only reader that can tell two
+   findings are the same defect, and carried forward. The triple survives as the
+   fallback for a finding that never reached that reader — an unrecognised repeat
+   costs a round, which is the cheaper failure.
+
+   Still wrong for a pass that judges a RECORD: those findings carry no file, no
+   line and no handle, and the text they do carry is the very text their fixer
+   rewrites — so a record pipeline injects its own, keyed on something its
+   amender cannot move. See `nido.review.loop/run-loop`'s :finding-key."
+  [f]
+  (or (:handle f) [(:file f) (:line-start f) (:title f)]))
+
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  default-attempt-key
+  "How the engine's give-up counter tells one ATTEMPT at a diff finding from
+   another: its identity paired with the layer the last ruling aimed the repair
+   at.
+
+   The counter counts how many times the loop has tried and failed, and a
+   finding re-attributed to a different layer has not been tried there yet: the
+   three prior rounds worked on the wrong code. Counting bare appearances gave up
+   on exactly the round that first routed a finding correctly — the run ended one
+   round before the fix it was set up to make.
+
+   The record loops route nothing, pass no attempt key, and are counted by their
+   finding identity alone, which is the right reading where nothing is routed."
+  [finding-key]
+  (fn [f] [(finding-key f) (:owner-layer f)]))
 
 (def ^:private fenced-json-re #"(?s)```json\s*(\{.*?\})\s*```")
 

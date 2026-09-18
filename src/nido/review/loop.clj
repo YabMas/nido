@@ -18,58 +18,32 @@
    refused the `:review` entry of every run that ended on it, and refusing a
    best-effort side record costs nothing a reader can see.
 
-   The diff pipeline's stages end on their own statuses beside these; see
-   `nido.review.stages/stage-statuses`. The record pipelines end on statuses of
+   A pipeline's stages end on their own statuses beside these, and so do the
+   reasons its caller passes as `run-loop`'s :terminal-reasons; for the diff
+   review both are `nido.review.stages/stage-statuses`. The record pipelines end on statuses of
    their own too, and those are NOT here: they reach a different ledger event,
    under no enum this one can drift from."
   #{:converged :unresolved :escalated :unfixable :no-progress :max-iters
-    :review-failed :reviewer-unavailable :stack-unmovable})
+    :review-failed :reviewer-unavailable})
 
 (def ^:private terminal-reasons
   "The `:reason`s a stage throws with that END the run rather than crash it —
-   each of which is also the status the run ends on.
+   each of which is also the status the run ends on — whichever pipeline runs.
 
-   Split first by whether a review happened. `:review-failed` and
-   `:reviewer-unavailable` are a review stage that produced none, split again by
+   Both are about the judge: a review stage that produced no review, split by
    whether the REVIEWER could be run at all, which is the difference between a
    diff someone should open and a quota or a credential they must clear first;
    `nido.review.codex/unavailability` derives the second and carries the
-   sentence that said so. `:stack-unmovable` is jj refusing a step the loop
-   needed on the stack AFTER the reviewers had read it and the warden had ruled
-   — see `nido.review.layers/refusal`. That round's review stands; filed under
-   `:review-failed` it would read as one that never happened, and send its
-   reader to check a quota first.
+   sentence that said so. A refusal that belongs to one program — the diff
+   review's `:stack-unmovable` — is that program's to name, and its caller
+   passes it as `run-loop`'s :terminal-reasons.
 
    Read at two moments for one throw — the phase event that records what stopped
    the round, and the run's own terminal status — so a reason admitted by one and
    not the other would emit an error the report keeps and then crash the loop out
-   from under it."
-  #{:review-failed :reviewer-unavailable :stack-unmovable})
-
-(defn ^{:malli/schema [:=> [:cat :Finding] :any]}
-  default-finding-key
-  "How the DIFF review tells one finding from another: the handle the warden
-   filed it under.
-
-   Not the place in the code plus the title, which is what a reviewer reports
-   and therefore what a fresh reviewer rewrites. A fix moves the code, so the
-   file and line move with it; the title is prose, and the same defect described
-   again next round is described in different words. Identity derived from any
-   of the three is stable only while nothing is happening — and a defect the loop
-   cannot move is exactly the one that gets restated, so the check that exists to
-   notice it was blind in the one case it was for.
-
-   The handle is assigned once per round, by the only reader that can tell two
-   findings are the same defect, and carried forward. The triple survives as the
-   fallback for a finding that never reached that reader — an unrecognised repeat
-   costs a round, which is the cheaper failure.
-
-   Still wrong for a pass that judges a RECORD: those findings carry no file, no
-   line and no handle, and the text they do carry is the very text their fixer
-   rewrites — so a record pipeline injects its own, keyed on something its
-   amender cannot move. See `run-loop`'s :finding-key."
-  [f]
-  (or (:handle f) [(:file f) (:line-start f) (:title f)]))
+   from under it. Both read the one set `run-loop` builds from this and the
+   caller's."
+  #{:review-failed :reviewer-unavailable})
 
 (defn- no-progress?
   "The same findings again, by whatever identity this pipeline keys on, on a
@@ -108,22 +82,6 @@
    convergence loop must not stop while it is still making progress, and the
    evidence says the third attempt is often where progress is."
   4)
-
-(defn ^{:malli/schema [:=> [:cat :any] :any]}
-  default-attempt-key
-  "How the give-up counter tells one ATTEMPT at a defect from another.
-
-   The finding's identity paired with the layer the last ruling aimed the repair
-   at. `unfixable` counts how many times the loop has tried and failed, and a
-   finding re-attributed to a different layer has not been tried there yet: the
-   three prior rounds worked on the wrong code. Counting bare appearances gave up
-   on exactly the round that first routed a finding correctly — the run ended one
-   round before the fix it was set up to make.
-
-   A pipeline whose findings have no owner (the record loops) gets the identity
-   alone, which is the old behaviour and the right one where nothing is routed."
-  [finding-key]
-  (fn [f] [(finding-key f) (:owner-layer f)]))
 
 (defn- unfixable
   "Findings raised in `unfixable-after` consecutive rounds and never resolved.
@@ -221,13 +179,13 @@
    repair — so every repair it reports as failed was actually tested, and it
    spends no round repairing a finding it is about to report as immovable.
 
-   A throw on one of `terminal-reasons` leaves carrying the round it was in, as
+   A throw on one of `ends-run?` leaves carrying the round it was in, as
    `:ctx` on its ex-data: the ctx the stage put there itself, or else the one
    the stage was handed — which holds everything the stages before it did this
    round. Only the first reaches the phase event, because it is the stage's own
    account of itself and the second is not: folded as one, it would overwrite
    what the phase had already recorded with what the phase was given."
-  [ctx pipeline emit clock judged-after end? open?]
+  [ctx pipeline emit clock judged-after end? open? ends-run?]
   (reduce
    (fn [ctx stage]
      (emit {:event :phase-started :iter (:iter ctx) :phase (:name stage)
@@ -236,7 +194,7 @@
                   ((:run stage) ctx)
                   (catch clojure.lang.ExceptionInfo e
                     (let [data (ex-data e)]
-                      (if (terminal-reasons (:reason data))
+                      (if (ends-run? (:reason data))
                         (do (emit (cond-> {:event :phase-errored :iter (:iter ctx)
                                            :phase (:name stage) :error (ex-message e)
                                            :at (str (clock))}
@@ -271,18 +229,19 @@
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   run-loop
   "Drive the pipeline until terminal. config:
-   {:cwd :base :run-id :max-iters :pipeline :emit :clock :budget :dry-run?}.
-   :pipeline is REQUIRED: the engine runs what its caller passes and names no
-   program of its own — the diff loop's is `nido.review.stages/diff-pipeline`.
+   {:cwd :base :run-id :max-iters :pipeline :finding-key :emit :clock :budget
+    :dry-run?}.
+   :pipeline and :finding-key are REQUIRED: the engine runs what its caller
+   passes and names no program of its own — the diff loop's are
+   `nido.review.stages/diff-pipeline` and `nido.review.stages/default-finding-key`.
    :max-iters is OPTIONAL and has no default — nil means run until the loop
    terminates on its own merits (converged / escalated / clean / no-progress /
    error). A round that changes nothing still ends the run via `no-progress?`,
    so unbounded does not mean non-terminating. Pass :max-iters only to cap it.
-   :emit / :clock / :finding-key / :attempt-key / :attempted? /
-   :open? are injection seams.
+   :emit / :clock / :attempt-key / :attempted? / :open? are injection seams.
    :finding-key decides what \"the same finding again\" means and so what
-   no-progress? can detect; it defaults to the diff review's
-   default-finding-key. :attempt-key decides what \"we already tried this\"
+   no-progress? can detect; only the program knows what its findings are.
+   :attempt-key decides what \"we already tried this\"
    means, which is a different question — a finding re-routed to another layer
    is the same finding and a fresh attempt — and it defaults to :finding-key,
    the reading a pipeline that routes nothing wants. :attempted? decides
@@ -304,18 +263,23 @@
    has to reach the next round, and it survives onto the terminal ctx too — see
    the comment on ctx0.
 
-   A stage that throws on one of `terminal-reasons` ends the run on that status
-   and on the round as far as it got: the ctx it puts on the ex-data as `:ctx`,
-   if it has an account of its own partial work to give — see `run-pipeline`."
+   A stage that throws on one of `terminal-reasons`, or on one of the set its
+   caller passes as :terminal-reasons, ends the run on that status and on the
+   round as far as it got: the ctx it puts on the ex-data as `:ctx`, if it has
+   an account of its own partial work to give — see `run-pipeline`. Any other
+   throw crashes the run, because finalizing on it would publish a verdict
+   nobody reached."
   [{:keys [run-id max-iters pipeline emit clock finding-key attempt-key
            attempted? judged-after open? changed?] :as config
     :or   {emit (fn [_]) clock #(Instant/now)
-           finding-key default-finding-key
            attempted? (constantly true)
            open? (constantly false)
            changed? (constantly false)}}]
   (let [pipeline (or pipeline
                      (throw (ex-info "run-loop needs a :pipeline — the engine runs what its caller passes and names no program of its own" {})))
+        finding-key (or finding-key
+                        (throw (ex-info "run-loop needs a :finding-key — only the program knows what makes two of its findings one" {})))
+        ends-run? (into terminal-reasons (:terminal-reasons config))
         ;; Defaults to the identity itself, which is what a pipeline with no
         ;; notion of routing wants: every appearance is an attempt.
         attempt-key (or attempt-key finding-key)
@@ -346,10 +310,10 @@
                   :iter iter :max-iters max-iters}
             end? (fn [c prior] (terminal cfg c prior))
             ctx  (try
-                   (run-pipeline ctx0 pipeline emit clock judged-after end? open?)
+                   (run-pipeline ctx0 pipeline emit clock judged-after end? open? ends-run?)
                    (catch clojure.lang.ExceptionInfo e
                      (let [{:keys [reason] :as data} (ex-data e)]
-                       (if (terminal-reasons reason)
+                       (if (ends-run? reason)
                          ;; On the round the throw came out of, not on ctx0.
                          ;; ctx0 is this round before any stage ran: finalized
                          ;; on it, a fix stage that throws after three fixers

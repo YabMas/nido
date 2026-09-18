@@ -4525,3 +4525,30 @@
         :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "lower"}]})
       (is (= [nil] (mapv :model @launches))
           "unnamed, the launch is exactly what it was before the key existed"))))
+
+;; ── How the diff review tells its findings apart ────────────────────────────
+
+(deftest default-finding-key-is-the-handle-the-warden-filed-a-finding-under
+  (is (= "h-7"
+         (stages/default-finding-key {:file "a.clj" :line-start 4 :line-end 9
+                                      :title "t" :priority 1 :handle "h-7"})))
+  (is (= "h-7"
+         (stages/default-finding-key {:file "moved.clj" :line-start 91
+                                      :title "the same defect, said differently"
+                                      :handle "h-7"}))
+      "a restatement at a new place under a new title is one finding"))
+
+(deftest default-finding-key-falls-back-to-the-diff-triple
+  ;; A finding that never reached the warden has no handle. Falling back means
+  ;; an unrecognised repeat, which costs a round; the alternative is every such
+  ;; finding colliding on nil, which ends a run that was still working.
+  (is (= ["a.clj" 4 "t"]
+         (stages/default-finding-key {:file "a.clj" :line-start 4 :line-end 9
+                                      :title "t" :priority 1}))))
+
+(deftest record-findings-all-collide-under-the-diff-key
+  ;; Why a record pipeline passes its own. Two unrelated record findings are
+  ;; one key under the diff review's, so an uncapped record loop run on it would
+  ;; stop on its second round no matter what the judge said.
+  (is (= (stages/default-finding-key {:cites ["a"] :claim "one"})
+         (stages/default-finding-key {:cites ["b"] :claim "two"}))))

@@ -304,15 +304,9 @@
 
    Capped, for the same reason every agent loop is: convergence decided by the thing being
    judged is not convergence."
-  (Operation default-finding-key "How the diff review tells two findings apart."
-    {:signature [:=> [:catn [:f Finding]] :any]})
-  (Operation default-attempt-key
-    "How the give-up counter tells one ATTEMPT at a defect from another.
-
-     The finding key alone counts APPEARANCES, so a finding re-routed to a layer that can
-     actually fix it spends the counter on the round that first aimed it correctly."
-    {:signature [:=> [:catn [:finding-key :any]] :any]})
-  (Operation run-loop "Drive one review to convergence or to its cap."
+  (Operation run-loop
+    "Drive one review to convergence or to its cap — on the pipeline, the finding identity and
+     any refusals of its own that the program's caller passes."
     {:signature [:=> [:catn [:opts :map]] :map]}))
 
 (Module review-prompts

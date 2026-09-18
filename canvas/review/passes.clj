@@ -265,6 +265,14 @@
    `to-review` against the cache is what makes a re-run cheap: a target whose patch already
    converged is skipped, and announcing the skip is what stops that looking like a pass that
    silently did nothing."
+  (Operation default-finding-key "How the diff review tells two findings apart."
+    {:signature [:=> [:catn [:f Finding]] :any]})
+  (Operation default-attempt-key
+    "How the engine's give-up counter tells one ATTEMPT at a diff finding from another.
+
+     The finding key alone counts APPEARANCES, so a finding re-routed to a layer that can
+     actually fix it spends the counter on the round that first aimed it correctly."
+    {:signature [:=> [:catn [:finding-key :any]] :any]})
   (Operation settled? "Whether a finding has been decided."
     {:signature [:=> [:catn [:f Finding]] :boolean]})
   (Operation kept?

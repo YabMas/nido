@@ -82,6 +82,10 @@
       (is (fn? (:clock @seen)) "engine is given a clock")
       (is (= stages/diff-pipeline (:pipeline @seen))
           "the diff loop passes its own program; the engine names none")
+      (is (= stages/default-finding-key (:finding-key @seen))
+          "and how its findings are told apart, which the engine has no default for")
+      (is (= #{:stack-unmovable} (:terminal-reasons @seen))
+          "and the refusal of its stack, which unnamed would crash the run rather than end it")
       ;; The engine never looks inside a finding, so this half of the give-up
       ;; counter only works if the diff loop hands it over. Dropped from the
       ;; config, a parked round silently counts as a failed repair again.
@@ -779,6 +783,8 @@
                                            {:exit 0 :out "" :err ""}))]
       (let [final (rloop/run-loop {:run-id run-id :cwd "/w" :base "main"
                                    :pipeline [review warden stages/fix-stage]
+                                   :finding-key stages/default-finding-key
+                                   :terminal-reasons stages/terminal-reasons
                                    :open? (complement stages/settled?)
                                    :emit (fn [ev] (swap! rpt rreport/apply-event ev nil))})]
         [final @rpt]))))
