@@ -309,7 +309,7 @@
 
    Priority is a FIELD, and this line renders it from that field — so a title
    that also carries it reads `[P2] [P2] …`. The rule is held at ingest, by
-   `nido.review.codex/normalize-finding`; this survives a tagged title anyway,
+   `nido.review.pass/normalize-finding`; this survives a tagged title anyway,
    because a report.json is rendered long after the run that wrote it, by a
    loop that need not be the one that parsed its findings."
   [title]

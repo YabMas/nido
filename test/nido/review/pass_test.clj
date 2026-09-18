@@ -1,0 +1,503 @@
+(ns nido.review.pass-test
+  (:require
+   [clojure.string :as str]
+   [clojure.test :refer [deftest is use-fixtures]]
+   [nido.review.claude :as claude]
+   [nido.review.codex :as codex]
+   [nido.review.pass :as pass]
+   [nido.review.prompts :as prompts]
+   [nido.vsdd.jj :as jj]
+   [nido.coordinator.record.state :as cstate]
+   [nido.platform.core :as core]
+   [babashka.fs :as fs]
+   [cheshire.core :as json]
+   [clojure.java.io :as io]))
+(defn- strict-mode-violations
+  "Every object node whose `properties` are not all listed in its `required`.
+   Codex/gpt strict structured-output mode rejects such a schema with a 400
+   invalid_json_schema, so the review turn never starts — fatal for the loop."
+  [schema]
+  (let [violations (atom [])]
+    (letfn [(walk [node path]
+              (when (map? node)
+                (when-let [props (:properties node)]
+                  (let [req     (set (map keyword (:required node)))
+                        missing (remove req (keys props))]
+                    (when (seq missing)
+                      (swap! violations conj {:path path :missing (vec missing)}))))
+                (doseq [[k v] node]
+                  (walk v (conj path k)))))]
+      (walk schema []))
+    @violations))
+
+(deftest findings-schema-is-strict-output-compatible
+  (is (= [] (strict-mode-violations
+             (json/parse-string
+              (slurp (io/resource "review/findings_schema.json")) true)))
+      "every object property must be listed in \"required\" (strict mode)"))
+
+(deftest composition-schema-is-strict-output-compatible
+  ;; The composition variant adds two properties, and adding a property without
+  ;; adding it to "required" is the same fatal 400 — on the pass that has the
+  ;; least chance of anyone noticing, since a stack of one layer never runs it.
+  (is (= [] (strict-mode-violations
+             (json/parse-string (pass/schema-json true) true)))))
+
+(deftest composition-schema-demands-the-kind-the-remedy-and-the-span
+  (let [item (get-in (json/parse-string (pass/schema-json true) true)
+                     [:properties :findings :items])]
+    (is (= (mapv :kind prompts/composition-kinds)
+           (get-in item [:properties :kind :enum]))
+        "the enum is the taxonomy the primer teaches — a kind the prompt names
+         but the schema refuses is a 400 on every round")
+    (is (= (mapv :remedy prompts/remedy-vocabulary)
+           (get-in item [:properties :remedy :enum]))
+        "and the remedies are the ones it is offered — a reviewer that cannot say
+         `split` has to answer with a move the loop will then perform")
+    (is (= "array" (get-in item [:properties :layers :type])))
+    (is (every? (set (:required item)) ["kind" "remedy" "layers"]))))
+
+(deftest every-move-a-kind-is-reshaped-by-can-be-asked-for
+  ;; The reshape stage refuses a finding whose remedy is not its kind's, so a
+  ;; move the taxonomy routes to but the reviewer cannot name is a kind that can
+  ;; never be recut — silently, on every finding of it.
+  (doseq [r (keep :remedy prompts/composition-kinds)]
+    (is (some #(= (name r) (:remedy %)) prompts/remedy-vocabulary)
+        (str (name r) " is a remedy no composition finding can ask for"))))
+
+(defn- with-tmp-nido-root
+  "`review!` writes its schema, output and log under the run dir before it ever
+   reaches `codex/run-codex!`, so a prompt-assembly test that does not move the root
+   creates directories in the real ~/.nido/runs — named for whatever run id the
+   test invented, beside the user's actual runs. Same hazard, and the same fix,
+   as `tasks.nido-review-test/with-tmp-nido-root`: redirect the root rather than
+   stub the one call that writes, because the next thing `review!` grows will
+   write there too."
+  [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (f))
+      (finally (fs/delete-tree tmp)))))
+
+(use-fixtures :each with-tmp-nido-root)
+
+(deftest schema-json-without-a-composition-is-the-plain-findings-schema
+  (is (= (json/parse-string (slurp (io/resource "review/findings_schema.json")) true)
+         (json/parse-string (pass/schema-json false) true))))
+
+(def sample-output
+  (str "{\"findings\":[{\"title\":\"[P1] Remove the extra accumulation\","
+       "\"body\":\"Overcharges every payment.\",\"confidence_score\":0.9,"
+       "\"priority\":1,\"reach\":\"structural\","
+       "\"code_location\":{\"absolute_file_path\":\"/w/pay.js\","
+       "\"line_range\":{\"start\":4,\"end\":4}}}],"
+       "\"overall_correctness\":\"incorrect\"}"))
+
+(deftest parse-output-normalizes-findings
+  (let [{:keys [findings overall-correctness]} (pass/parse-output sample-output)]
+    (is (= "incorrect" overall-correctness))
+    (is (= 1 (count findings)))
+    (is (= {:title "Remove the extra accumulation"
+            :body "Overcharges every payment."
+            :priority 1 :reach :structural :confidence 0.9
+            :file "/w/pay.js" :line-start 4 :line-end 4
+            :id (pass/finding-id {:file "/w/pay.js" :line-start 4
+                                   :title "Remove the extra accumulation"})}
+           (first findings)))))
+
+(deftest parse-output-drops-the-priority-the-title-repeats
+  ;; The reviewer states its priority twice — `[P1]` on the title and the
+  ;; `priority` field — and every reader renders the field. A title that keeps
+  ;; its tag reaches the fixer as `- [P1] [P1] Remove the extra accumulation`,
+  ;; which is the prompt telling it the loop cannot read its own findings.
+  (let [f (first (:findings (pass/parse-output sample-output)))]
+    (is (= "Remove the extra accumulation" (:title f))
+        "the title is the finding's sentence; the priority is the priority field")
+    (is (= 1 (:priority f))
+        "stripping the tag must not lose the priority — the field is what says it")
+    (is (= 1 (count (re-seq #"\[P\d\]" (prompts/fix-prompt {:findings [f]}))))
+        "the fixer sees the priority once")))
+
+(deftest parse-output-keeps-a-title-that-is-not-a-priority-tag
+  ;; The strip is anchored and shaped, so a title that legitimately opens with a
+  ;; bracket keeps it. A finding about `[Pn]` parsing would otherwise be renamed
+  ;; by the loop that reported it.
+  (let [out (str "{\"findings\":[{\"title\":\"[PATCH] guard the empty range\","
+                 "\"body\":\"b\",\"confidence_score\":0.5,\"priority\":2,"
+                 "\"reach\":\"local\",\"code_location\":{\"absolute_file_path\":\"/w/a.clj\","
+                 "\"line_range\":{\"start\":1,\"end\":2}}}],"
+                 "\"overall_correctness\":\"incorrect\"}")]
+    (is (= "[PATCH] guard the empty range"
+           (:title (first (:findings (pass/parse-output out))))))))
+
+(deftest finding-id-is-stable-and-position-independent
+  ;; Indices into "this round's findings" cannot survive re-attribution across
+  ;; layers, and leave a report that cannot say WHY a finding was dropped.
+  (let [f {:file "a.clj" :line-start 3 :title "t"}]
+    (is (= (pass/finding-id f) (pass/finding-id (assoc f :body "different"))))
+    (is (not= (pass/finding-id f) (pass/finding-id (assoc f :line-start 4))))))
+
+(deftest parse-output-handles-no-findings
+  (let [{:keys [findings overall-correctness]}
+        (pass/parse-output "{\"findings\":[],\"overall_correctness\":\"correct\"}")]
+    (is (= [] findings))
+    (is (= "correct" overall-correctness))))
+
+(deftest review!-empty-diff-is-nothing-to-review-not-clean
+  ;; :clean is a reviewer's verdict on code it read. An empty manifest means no
+  ;; reviewer ran at all, and this is the last point the two can be told apart —
+  ;; past here both are a target carrying no findings.
+  (with-redefs [jj/jj! (fn [_dir & args]
+                         (if (= "diff" (first args))
+                           {:exit 0 :out "" :err ""}            ; empty manifest
+                           {:exit 0 :out "BASEREV\n" :err ""}))] ; merge-base
+    (is (= {:status :nothing-to-review :findings [] :base-rev "BASEREV" :manifest ""}
+           (pass/review! {:cwd "/w" :from "BASEREV" :run-id "r1"})))))
+
+(deftest review!-parses-codex-output
+  (let [tmp (str (fs/create-temp-dir))]
+    (with-redefs [jj/jj!         (fn [_dir & args]
+                                   (if (= "diff" (first args))
+                                     {:exit 0 :out "diff --git a/x b/x\n+bug" :err ""}
+                                     {:exit 0 :out "BASEREV\n" :err ""}))  ; merge-base
+                  cstate/run-dir (fn [_] tmp)
+                  codex/run-codex! (fn [_opts]
+                                     (spit (str (fs/path tmp "stack-round-1-out.json"))
+                                           sample-output)
+                                     {:exit 0})]
+      (let [{:keys [status findings overall-correctness]}
+            (pass/review! {:cwd "/w" :from "BASEREV" :run-id "r1"})]
+        (is (nil? status))
+        (is (= 1 (count findings)))
+        (is (= "incorrect" overall-correctness))))))
+
+(deftest review!-throws-on-codex-failure
+  (let [tmp (str (fs/create-temp-dir))]
+    (with-redefs [jj/jj!           (fn [_ & _] {:exit 0 :out "diff --git a/x b/x" :err ""})
+                  cstate/run-dir   (fn [_] tmp)
+                  codex/run-codex! (fn [_] {:exit 1})]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (pass/review! {:cwd "/w" :from "BASEREV" :run-id "r1"}))))))
+
+(deftest review!-fails-loud-on-jj-diff-error
+  ;; A non-zero `jj diff` (e.g. cwd isn't a jj workspace, or a bad base) must
+  ;; NOT read as a clean diff — that would silently pass review for code that
+  ;; was never looked at. Fail loud as :review-failed instead.
+  (with-redefs [jj/jj! (fn [& _]
+                         {:exit 1 :out "" :err "Error: There is no jj repo in \".\""})]
+    (let [reason (try (pass/review! {:cwd "/not-a-repo" :from "BASEREV" :run-id "r1"})
+                      nil
+                      (catch clojure.lang.ExceptionInfo e (:reason (ex-data e))))]
+      (is (= :review-failed reason)))))
+
+(deftest review!-gives-the-composition-pass-no-flat-manifest
+  ;; The union of the layers' files is the one range in which no cut is visible,
+  ;; and the shared prompt's "pull each changed file's diff" is a MUST that beat
+  ;; the composition primer's narrowing clause — 40% of that pass's jj diff calls
+  ;; swept the whole branch. Each layer's files are on its own row instead.
+  (let [tmp      (str (fs/create-temp-dir))
+        captured (atom nil)]
+    (with-redefs [jj/jj!           (fn [_dir & args]
+                                     (if (= "diff" (first args))
+                                       {:exit 0 :out "src/a.clj\nsrc/b.clj" :err ""}
+                                       {:exit 0 :out "BASEREV\n" :err ""}))
+                  cstate/run-dir   (fn [_] tmp)
+                  codex/run-codex! (fn [opts]
+                                     (reset! captured (:prompt opts))
+                                     (spit (str (fs/path tmp "stack-round-1-out.json"))
+                                           sample-output)
+                                     {:exit 0})]
+      (pass/review! {:cwd "/w" :from "BASEREV" :run-id "r1" :label "stack"
+                      :composition {:layers [{:label "a" :from "F" :tip "cA"
+                                              :files ["src/a.clj"]}
+                                             {:label "b" :from "cA" :tip "cB"
+                                              :files ["src/b.clj"]}]}})
+      (is (str/includes? @captured "THIS IS THE COMPOSITION PASS")
+          "primed as a composition pass, not a wide layer review")
+      (is (not (str/includes? @captured "Changed files:"))
+          "no flat branch manifest")
+      (is (not (str/includes? @captured "MUST actually pull each changed file"))
+          "and not the mandate over one")
+      ;; The files are still there — one layer at a time, on that layer's row.
+      (is (str/includes? @captured "src/a.clj"))
+      (is (str/includes? @captured "src/b.clj")))))
+
+(deftest review!-explores-via-manifest-not-inlined-diff
+  ;; The whole concatenated diff overflows codex's 1 MiB input limit. Instead the
+  ;; prompt carries only the CHANGED-FILE MANIFEST (`jj diff --name-only`) plus
+  ;; the base ref, and codex pulls per-file diffs itself. Assert the manifest is
+  ;; built name-only and the changed files reach the prompt.
+  (let [tmp      (str (fs/create-temp-dir))
+        captured (atom nil)]
+    (with-redefs [jj/jj!           (fn [_dir & args]
+                                     (if (= "diff" (first args))
+                                       (do (is (some #{"--name-only"} args)
+                                               "manifest is built with --name-only")
+                                           {:exit 0 :out "src/a.clj\nsrc/b.clj" :err ""})
+                                       ;; merge-base resolution
+                                       {:exit 0 :out "BASEREV\n" :err ""}))
+                  cstate/run-dir   (fn [_] tmp)
+                  codex/run-codex! (fn [opts]
+                                     (reset! captured (:prompt opts))
+                                     (spit (str (fs/path tmp "stack-round-1-out.json"))
+                                           sample-output)
+                                     {:exit 0})]
+      (pass/review! {:cwd "/w" :from "BASEREV" :run-id "r1"})
+      (is (re-find #"src/a\.clj" @captured) "changed files appear in the prompt")
+      (is (re-find #"src/b\.clj" @captured)))))
+
+(deftest merge-base-resolves-the-fork-point
+  ;; `jj diff --from main --to @` is a 2-way tree diff: when main has advanced
+  ;; since the branch forked, all of main's parallel work shows up as spurious
+  ;; deletions (180 files instead of the PR's 29). The comparison point must be
+  ;; the MERGE BASE (fork point) of @ and the base — matching what the PR's
+  ;; "Files changed" shows. review! is now AIMED by its caller, so this is the
+  ;; fn the caller uses to aim it.
+  (let [revset (atom nil)]
+    (with-redefs [jj/jj! (fn [_dir & args]
+                           (reset! revset (second (drop-while #(not= "-r" %) args)))
+                           {:exit 0 :out "MERGEBASE123\n" :err ""})]
+      (is (= "MERGEBASE123" (pass/merge-base "/w" "main")))
+      (is (= "heads(::@ & ::main)" @revset)))))
+
+(deftest review!-aims-the-diff-and-the-prompt-at-the-given-range
+  (let [tmp      (str (fs/create-temp-dir))
+        diff-args (atom nil)
+        captured (atom nil)]
+    (with-redefs [jj/jj!           (fn [_dir & args]
+                                     (reset! diff-args (vec args))
+                                     {:exit 0 :out "src/a.clj" :err ""})
+                  cstate/run-dir   (fn [_] tmp)
+                  codex/run-codex! (fn [opts]
+                                     (reset! captured (:prompt opts))
+                                     (spit (str (fs/path tmp "drop-legacy-round-2-out.json"))
+                                           sample-output)
+                                     {:exit 0})]
+      (pass/review! {:cwd "/w" :from "LOWTIP" :to "OWNTIP" :run-id "r1"
+                      :iter 2 :label "drop-legacy"})
+      (is (= "LOWTIP" (second (drop-while #(not= "--from" %) @diff-args))))
+      (is (= "OWNTIP" (second (drop-while #(not= "--to" %) @diff-args))))
+      (is (re-find #"Head revision \(use this exact value as <head>\): OWNTIP" @captured)
+          "codex is told which revision to read file content at"))))
+
+(deftest review!-scopes-its-artifacts-by-label-so-parallel-layers-cannot-collide
+  ;; With one shared out-path the last layer to finish wins and every layer
+  ;; reports its findings — silently, since nothing errors.
+  (let [tmp   (str (fs/create-temp-dir))
+        paths (atom [])]
+    (with-redefs [jj/jj!           (fn [& _] {:exit 0 :out "src/a.clj" :err ""})
+                  cstate/run-dir   (fn [_] tmp)
+                  codex/run-codex! (fn [opts]
+                                     (swap! paths conj (:out-path opts))
+                                     (spit (:out-path opts) sample-output)
+                                     {:exit 0})]
+      (pass/review! {:cwd "/w" :from "A" :to "B" :run-id "r" :iter 1 :label "l1"})
+      (pass/review! {:cwd "/w" :from "B" :to "C" :run-id "r" :iter 1 :label "l2"})
+      (is (= 2 (count (distinct @paths))) "each layer writes its own output file"))))
+
+(deftest parse-output-tolerates-a-finding-with-no-reach
+  (let [out (str "{\"findings\":[{\"title\":\"t\",\"body\":\"b\","
+                 "\"confidence_score\":0.5,\"priority\":2,"
+                 "\"code_location\":{\"absolute_file_path\":\"/w/a.clj\","
+                 "\"line_range\":{\"start\":1,\"end\":2}}}],"
+                 "\"overall_correctness\":\"correct\"}")
+        f   (first (:findings (pass/parse-output out)))]
+    (is (nil? (:reach f))
+        "the schema requires it, but a stale or hand-made payload must still parse")))
+
+
+(deftest parse-output-carries-a-composition-findings-kind-and-span
+  (let [out (str "{\"findings\":[{\"title\":\"t\",\"body\":\"b\","
+                 "\"confidence_score\":0.5,\"priority\":2,\"reach\":\"structural\","
+                 "\"kind\":\"misplaced-cut\",\"layers\":[\"series\",\"banner\"],"
+                 "\"code_location\":{\"absolute_file_path\":\"/w/a.clj\","
+                 "\"line_range\":{\"start\":1,\"end\":2}}}],"
+                 "\"overall_correctness\":\"correct\"}")
+        f   (first (:findings (pass/parse-output out)))]
+    (is (= :misplaced-cut (:kind f)))
+    (is (= ["series" "banner"] (:layers f)))))
+
+(deftest parse-output-leaves-a-layer-finding-without-the-composition-keys
+  ;; Stamping every finding with two nils would put the composition vocabulary
+  ;; on findings that have no claim to it — and give the warden a `kind` field
+  ;; to read on rows where it means nothing.
+  (let [f (first (:findings (pass/parse-output sample-output)))]
+    (is (not (contains? f :kind)))
+    (is (not (contains? f :layers)))))
+
+(def ^:private stack-of-two
+  {:layers [{:label "series" :from "FORK" :tip "cA" :claim "the entity"}
+            {:label "banner" :from "cA" :tip "cB" :claim "the UI"}]})
+
+(deftest review!-primes-the-composition-pass-with-the-stack-and-its-revisions
+  (let [tmp      (str (fs/create-temp-dir))
+        captured (atom nil)
+        schema   (atom nil)]
+    (with-redefs [jj/jj!           (fn [& _] {:exit 0 :out "src/a.clj" :err ""})
+                  cstate/run-dir   (fn [_] tmp)
+                  codex/run-codex! (fn [opts]
+                                     (reset! captured (:prompt opts))
+                                     (reset! schema (slurp (:schema-path opts)))
+                                     (spit (:out-path opts) sample-output)
+                                     {:exit 0})]
+      (pass/review! {:cwd "/w" :from "FORK" :to "@" :run-id "r" :iter 1
+                      :label "stack" :composition stack-of-two})
+      (is (re-find #"COMPOSITION PASS" @captured))
+      (is (re-find #"--from cA --to cB" @captured) "the intermediate revisions")
+      (is (re-find #"misplaced-cut" @captured) "the taxonomy")
+      (is (re-find #"misplaced-cut" @schema)
+          "the schema follows the primer: a reviewer taught the taxonomy is
+           asked for it"))))
+
+(deftest review!-of-one-layer-gets-neither-the-primer-nor-the-composition-schema
+  ;; The two are exclusive by construction — a target is one layer or the
+  ;; composition of several — and asking a reviewer that was never taught the
+  ;; taxonomy to classify by it is a contract nothing can meet.
+  (let [tmp      (str (fs/create-temp-dir))
+        captured (atom nil)
+        schema   (atom nil)]
+    (with-redefs [jj/jj!           (fn [& _] {:exit 0 :out "src/a.clj" :err ""})
+                  cstate/run-dir   (fn [_] tmp)
+                  codex/run-codex! (fn [opts]
+                                     (reset! captured (:prompt opts))
+                                     (reset! schema (slurp (:schema-path opts)))
+                                     (spit (:out-path opts) sample-output)
+                                     {:exit 0})]
+      (pass/review! {:cwd "/w" :from "cA" :to "cB" :run-id "r" :iter 1
+                      :label "banner"
+                      :brief {:claims "renders the banner"
+                              :out-of-scope "the export"}})
+      (is (re-find #"BOUNDED TO ONE LAYER" @captured))
+      (is (nil? (re-find #"COMPOSITION PASS" @captured)))
+      (is (nil? (re-find #"misplaced-cut" @schema))))))
+
+(deftest review!-carries-the-standing-verdicts-unanswered-item
+  ;; The one reader that can turn a verdict into work: it reads code against a
+  ;; range, and a finding is what a fixer can be handed. Nothing else between
+  ;; the verdict and the next run is able to.
+  (let [tmp      (str (fs/create-temp-dir))
+        captured (atom nil)]
+    (with-redefs [jj/jj!           (fn [& _] {:exit 0 :out "src/a.clj" :err ""})
+                  cstate/run-dir   (fn [_] tmp)
+                  codex/run-codex! (fn [opts]
+                                     (reset! captured (:prompt opts))
+                                     (spit (:out-path opts) sample-output)
+                                     {:exit 0})]
+      (pass/review! {:cwd "/w" :from "cA" :to "cB" :run-id "r" :iter 1
+                      :label "banner"
+                      :standing {:round 4 :verdict :strained
+                                 :needs "close-turn! still tests (empty? open)"}})
+      (is (re-find #"close-turn! still tests" @captured))
+
+      ;; And a run with no standing item carries none of the block.
+      (pass/review! {:cwd "/w" :from "cA" :to "cB" :run-id "r" :iter 1
+                      :label "banner"})
+      (is (nil? (re-find #"LEFT THIS OUTSTANDING" @captured))))))
+
+(def usage-limit-log
+  "The tail of a real review log that died on codex's billing quota. The whole
+   remedy — where to buy credits, and the hour the window lifts — is in the one
+   line, and this is the only place it exists."
+  (str "thinking\n"
+       "exec jj diff --name-only in /w\n"
+       "ERROR: You've hit your usage limit. Visit"
+       " https://chatgpt.com/codex/settings/usage to purchase more credits or"
+       " try again at Sep 7th, 2026 9:42 AM.\n"))
+
+(deftest review!-tells-an-unavailable-reviewer-from-a-failed-review
+  (let [tmp (str (fs/create-temp-dir))
+        run (fn [log]
+              (with-redefs [jj/jj!           (fn [_ & _] {:exit 0 :out "diff --git a/x b/x"
+                                                          :err ""})
+                            cstate/run-dir   (fn [_] tmp)
+                            codex/run-codex! (fn [_]
+                                               (spit (str (fs/path tmp "stack-round-1.log")) log)
+                                               {:exit 1})]
+                (try (pass/review! {:cwd "/w" :from "BASEREV" :run-id "r1"})
+                     nil
+                     (catch clojure.lang.ExceptionInfo e e))))]
+    ;; A credential failure rather than codex's quota: a quota is stood in for
+    ;; (see `run-reviewer!`), so it would reach claude before it reached here.
+    (let [e (run "stream error: unexpected status 401 Unauthorized\n")]
+      (is (= :reviewer-unavailable (:reason (ex-data e))))
+      (is (= (:message (:unavailable (ex-data e))) (ex-message e))
+          "the message is the channel: it is what reaches the phase in the
+           report and the printed line, and ex-data reaches neither"))
+    (is (= :review-failed (:reason (ex-data (run "ERROR: model stream closed\n"))))
+        "an unclassifiable failure keeps the old reading rather than guessing")))
+
+(deftest the-assembled-review-prompt-carries-the-design-above-the-layer-brief
+  ;; A layer's claims are what one slice of the change asserts about ITSELF; the
+  ;; design is what the whole change committed to. A reviewer reading the
+  ;; narrower one first reads the wider one as a qualification of it — so the
+  ;; design goes above, and this is the assembly that puts it there.
+  (let [captured (atom nil)]
+    (with-redefs [pass/diff-name-only (fn [_ _ _] {:exit 0 :out "src/a.clj\n" :err ""})
+                  codex/run-codex! (fn [m] (reset! captured (:prompt m)) {:exit 1})]
+      (try
+        (pass/review! {:cwd "/w" :from "a" :to "b" :run-id "r-prompt" :iter 1
+                        :label "lower"
+                        :brief {:subject "lower" :claims "carries the timeline"}
+                        :design {:shape "one recorder owns the timeline"
+                                 :invariants ["a caller never holds a connection across a reconnect"]}})
+        (catch Throwable _ nil)))
+    (let [p @captured]
+      (is (some? p) "the reviewer was assembled a prompt")
+      (is (str/includes? p "a caller never holds a connection across a reconnect")
+          "the design reached the reviewer at all")
+      (is (< (.indexOf p "THE DESIGN THIS CHANGE COMMITTED TO")
+             (.indexOf p "THIS REVIEW IS BOUNDED TO ONE LAYER"))
+          "and it is above the layer brief, not below it"))))
+
+(deftest a-review-with-no-design-record-assembles-without-a-yardstick
+  ;; `tasks.nido-review/no-yardstick` refuses such a run outright, so this is a
+  ;; second reader of the same fact rather than the one that has to cope with it
+  ;; — but it must not render an empty heading either.
+  (let [captured (atom nil)]
+    (with-redefs [pass/diff-name-only (fn [_ _ _] {:exit 0 :out "src/a.clj\n" :err ""})
+                  codex/run-codex! (fn [m] (reset! captured (:prompt m)) {:exit 1})]
+      (try (pass/review! {:cwd "/w" :from "a" :to "b" :run-id "r-nod" :iter 1
+                           :label "lower" :design nil})
+           (catch Throwable _ nil)))
+    (is (not (str/includes? @captured "THE DESIGN THIS CHANGE COMMITTED TO")))))
+
+(defn- review-with
+  "`review!` over a one-file diff with both reviewers stubbed as in `judged`."
+  [{:keys [codex claude]}]
+  (let [tmp  (str (fs/create-temp-dir))
+        stub (fn [{:keys [log answers?]}]
+               (fn [{:keys [log-path out-path]}]
+                 (when log (spit log-path log))
+                 (when answers? (spit out-path sample-output))
+                 {:exit (if answers? 0 1)}))]
+    (with-redefs [jj/jj!             (fn [_ & _] {:exit 0 :out "diff --git a/x b/x" :err ""})
+                  cstate/run-dir     (fn [_] tmp)
+                  codex/run-codex!   (stub codex)
+                  claude/run-claude! (stub claude)]
+      (try (pass/review! {:cwd "/w" :from "BASEREV" :run-id "r1"})
+           (catch clojure.lang.ExceptionInfo e e)))))
+
+(deftest a-stand-ins-findings-say-whose-they-are
+  (let [r (review-with {:codex {:log usage-limit-log} :claude {:answers? true}})]
+    (is (= 1 (count (:findings r))))
+    (is (= :claude (get-in r [:judged-by :reviewer])))
+    (is (= :codex (get-in r [:judged-by :instead-of])))))
+
+(deftest a-stand-in-that-breaks-is-a-failed-review-naming-both
+  ;; codex's quota is why claude ran, not why the review failed — so the reason
+  ;; is the one that sends a reader to the stand-in's log, and the message keeps
+  ;; the quota line that explains why there was a stand-in at all.
+  (let [e (review-with {:codex {:log usage-limit-log}
+                        :claude {:log "API Error: 500 Internal Server Error\n"}})]
+    (is (= :review-failed (:reason (ex-data e))))
+    (is (str/starts-with? (ex-message e) "claude review failed — standing in for codex:"))
+    (is (str/includes? (ex-message e) "hit your usage limit"))))
+
+(deftest a-stand-in-out-of-quota-too-leaves-the-reviewer-unavailable
+  (let [e (review-with {:codex {:log usage-limit-log}
+                        :claude {:log "Claude AI usage limit reached|1790000000\n"}})]
+    (is (= :reviewer-unavailable (:reason (ex-data e))))
+    (is (str/includes? (ex-message e) "Claude AI usage limit reached")
+        "the line from the stand-in's log: it is the one that ended the run")))

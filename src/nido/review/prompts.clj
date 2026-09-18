@@ -672,7 +672,7 @@
    A closed set, deliberately. This pass's whole difficulty is that its findings
    are easy to confuse with ordinary ones, and a kind a reviewer has to name is a
    kind it cannot drift into: there is no bucket here for a vague unease about
-   the stack. `nido.review.codex/composition-schema` builds its `kind` enum from
+   the stack. `nido.review.pass/composition-schema` builds its `kind` enum from
    this same list — a taxonomy the prompt teaches but the schema will not accept
    is not a soft mismatch, it is a 400 on every round."
   [{:kind "broken-intermediate" :asks :wiring :costs :false-premise

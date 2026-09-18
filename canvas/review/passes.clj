@@ -1,6 +1,6 @@
 (ns canvas.review.passes
-  "Self-spec: the review passes themselves — codex, the verdict, the layer stack, the stage
-   orchestration, and the record rounds."
+  "Self-spec: the review passes themselves — reviewer launch, the diff pass, the verdict, the layer
+   stack, the stage orchestration, and the record rounds."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.state :refer [Path WorkstreamId]]
@@ -21,32 +21,15 @@
     {:signature [:=> [:catn [:opts :map]] :map] :delegates [claude-argv]}))
 
 (Module review-codex
-  "Running a reviewer over a range and reading what it said — codex unless a run or its project
-   names claude, and claude in codex's place when codex has run out of quota.
+  "Launching a reviewer: codex unless a run or its project names claude, and claude in codex's
+   place when codex has run out of quota — and, when none could be run, why, in the vendor's words.
 
-   Findings are identified by WHAT they are about — file, line, title — not by when they were
-   found, so the same finding raised by two passes is one finding and a finding that survives a
-   fix is recognisably the same one."
-  (Operation finding-id "A finding's identity, derived from what it is about."
-    {:signature [:=> [:catn [:f Finding]] :string]})
-  (Operation normalize-finding "A native codex finding in nido's shape."
-    {:signature [:=> [:catn [:raw :map]] Finding]})
-  (Operation parse-output "Codex's structured output as findings."
-    {:signature [:=> [:catn [:json-str :string]] :any] :delegates [normalize-finding]})
+   Everything that judges is launched through `run-reviewer!` with a prompt and an answer schema,
+   and nothing past it knows which reviewer ran except by the `:judged-by` it answers with."
   (Operation codex-argv "The argument vector for one codex run."
     {:signature [:=> [:catn [:opts :map]] :any]})
   (Operation run-codex! "Run codex and read its output."
     {:signature [:=> [:catn [:opts :map]] :map] :delegates [codex-argv]})
-  (Operation composition-schema "The findings schema for the whole-stack pass."
-    {:signature [:=> [:catn [:base :any]] :any]})
-  (Operation schema-json "The output schema to hand codex."
-    {:signature [:=> [:catn [:composition? :boolean]] :string] :delegates [composition-schema]})
-  (Operation merge-base "The merge base a range is measured from."
-    {:signature [:=> [:catn [:cwd Path] [:base :any]] :string]})
-  (Operation changed-files "The files a range touches."
-    {:signature [:=> [:catn [:cwd Path] [:from :any] [:to :any]] :any]})
-  (Operation safe-label "A label made safe to put in a path."
-    {:signature [:=> [:catn [:label :any]] :string]})
   (Operation unavailability
     "Why no reviewer ran, out of the log the reviewer streamed — or nothing, when the log does not say
      the reviewer was unavailable.
@@ -63,12 +46,37 @@
     {:signature [:=> [:catn [:override :any] [:configured :any]] :keyword]})
   (Operation run-reviewer!
     "Run the chosen reviewer, and when codex could not be run for want of quota, claude in its
-     place on the same prompt — saying which one judged."
+     place on the same prompt — saying which one judged, and, when the last run could not be run
+     at all, why."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [run-codex! run-claude! unavailability]})
+     :delegates [run-codex! run-claude! unavailability]}))
+
+(Module review-pass
+  "The diff review pass: one revision range reviewed against the design, and what the reviewer
+   said read back as findings.
+
+   Findings are identified by WHAT they are about — file, line, title — not by when they were
+   found, so the same finding raised by two passes is one finding and a finding that survives a
+   fix is recognisably the same one."
+  (Operation finding-id "A finding's identity, derived from what it is about."
+    {:signature [:=> [:catn [:f Finding]] :string]})
+  (Operation normalize-finding "A reviewer's native finding in nido's shape."
+    {:signature [:=> [:catn [:raw :map]] Finding]})
+  (Operation parse-output "A reviewer's structured output as findings."
+    {:signature [:=> [:catn [:json-str :string]] :any] :delegates [normalize-finding]})
+  (Operation composition-schema "The findings schema for the whole-stack pass."
+    {:signature [:=> [:catn [:base :any]] :any]})
+  (Operation schema-json "The answer schema to hand a reviewer."
+    {:signature [:=> [:catn [:composition? :boolean]] :string] :delegates [composition-schema]})
+  (Operation merge-base "The merge base a range is measured from."
+    {:signature [:=> [:catn [:cwd Path] [:base :any]] :string]})
+  (Operation changed-files "The files a range touches."
+    {:signature [:=> [:catn [:cwd Path] [:from :any] [:to :any]] :any]})
+  (Operation safe-label "A label made safe to put in a path."
+    {:signature [:=> [:catn [:label :any]] :string]})
   (Operation review! "Review one range and answer with its findings."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [run-reviewer! schema-json safe-label unavailability]}))
+     :delegates [run-reviewer! schema-json safe-label]}))
 
 (Module review-verdict
   "The pass that decides whether the round is done.

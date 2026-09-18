@@ -10,7 +10,7 @@
    [nido.coordinator.record.workstream :as ws]
    [nido.platform.core :as core]
    [nido.review.cache :as cache]
-   [nido.review.codex :as codex]
+   [nido.review.pass :as pass]
    [nido.review.conformance :as conformance]
    [nido.review.layers :as layers]
    [nido.review.prompts :as prompts]
@@ -114,8 +114,8 @@
 
 (deftest review-stage-sets-findings
   (with-redefs [layers/patch-hash (fn [& _] nil)
-                codex/merge-base (fn [& _] "BASEREV")
-                codex/review! (fn [_] {:status nil :findings [{:title "x"}]
+                pass/merge-base (fn [& _] "BASEREV")
+                pass/review! (fn [_] {:status nil :findings [{:title "x"}]
                                        :overall-correctness "incorrect"})]
     (let [ctx ((:run stages/review-stage)
                {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
@@ -129,8 +129,8 @@
             owner layer, a disposition and a fixer, and the convergence machinery can then see a
             violation the loop is failing to shift"
     (with-redefs [layers/patch-hash (fn [& _] nil)
-                  codex/merge-base (fn [& _] "BASEREV")
-                  codex/review! (fn [_] {:status nil :findings [{:title "x"}]})
+                  pass/merge-base (fn [& _] "BASEREV")
+                  pass/review! (fn [_] {:status nil :findings [{:title "x"}]})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   cache/read-cache (fn [& _] {})
                   conformance/findings (fn [& _] [{:title "design: no undeclared edge" :id "d1"}])]
@@ -142,8 +142,8 @@
   (testing "and a broken design alone keeps the round going — a clean diff over a tree that no
             longer obeys its own design is not a clean round"
     (with-redefs [layers/patch-hash (fn [& _] nil)
-                  codex/merge-base (fn [& _] "BASEREV")
-                  codex/review! (fn [_] {:status :clean :findings []})
+                  pass/merge-base (fn [& _] "BASEREV")
+                  pass/review! (fn [_] {:status :clean :findings []})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   cache/read-cache (fn [& _] {})
                   conformance/findings (fn [& _] [{:title "design: no undeclared edge" :id "d1"}])]
@@ -154,8 +154,8 @@
 
   (testing "a project declaring no design leaves the round exactly as it was"
     (with-redefs [layers/patch-hash (fn [& _] "h")
-                  codex/merge-base (fn [& _] "BASEREV")
-                  codex/review! (fn [_] {:status :clean :findings []})
+                  pass/merge-base (fn [& _] "BASEREV")
+                  pass/review! (fn [_] {:status :clean :findings []})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   cache/read-cache (fn [& _] {})
                   cache/write! (fn [& _] true)
@@ -175,8 +175,8 @@
   ;; by twenty minutes an answer the same revset call gives in a second.
   (let [launched (atom 0)]
     (with-redefs [layers/conflicted (fn [_ _] ["xlortuwzrtlu" "spxkmpurtnms"])
-                  codex/merge-base  (fn [& _] "BASEREV")
-                  codex/review!     (fn [_] (swap! launched inc) {:findings []})]
+                  pass/merge-base  (fn [& _] "BASEREV")
+                  pass/review!     (fn [_] (swap! launched inc) {:findings []})]
       (let [ctx ((:run stages/review-stage)
                  {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
         (is (= :stack-conflicted (:status ctx)))
@@ -193,8 +193,8 @@
   (let [emitted (atom [])]
     (with-redefs [layers/conflicted (fn [_ _] [])
                   layers/patch-hash (fn [& _] nil)
-                  codex/merge-base  (fn [& _] "BASEREV")
-                  codex/review!     (fn [_] {:status nil :findings []})]
+                  pass/merge-base  (fn [& _] "BASEREV")
+                  pass/review!     (fn [_] {:status nil :findings []})]
       (let [ctx ((:run stages/review-stage)
                  {:config {:cwd "/w" :base "main" :run-id "r1"
                            :emit #(swap! emitted conj %)}
@@ -212,8 +212,8 @@
   (let [emitted (atom [])]
     (with-redefs [layers/conflicted (fn [_ _] (throw (ex-info "no workspace" {})))
                   layers/patch-hash (fn [& _] nil)
-                  codex/merge-base  (fn [& _] "BASEREV")
-                  codex/review!     (fn [_] {:status nil :findings [{:title "x"}]})]
+                  pass/merge-base  (fn [& _] "BASEREV")
+                  pass/review!     (fn [_] {:status nil :findings [{:title "x"}]})]
       (let [ctx ((:run stages/review-stage)
                  {:config {:cwd "/w" :base "main" :run-id "r1"
                            :emit #(swap! emitted conj %)}
@@ -224,8 +224,8 @@
 
 (deftest review-stage-clean-diff-stops
   (with-redefs [layers/patch-hash (fn [& _] "h")
-                codex/merge-base (fn [& _] "BASEREV")
-                codex/review! (fn [_] {:status :clean :findings []})]
+                pass/merge-base (fn [& _] "BASEREV")
+                pass/review! (fn [_] {:status :clean :findings []})]
     ;; Second quiet round: one pass over a range is a sample, not a verdict.
     (let [ctx ((:run stages/review-stage)
                {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 2
@@ -1280,7 +1280,7 @@
     (is (false? (:sweep f))
         "a promoted sibling is what a sweep already left; ordering another asks
          for the search that produced it")
-    (is (= (codex/finding-id f) (:id f) (:handle f))
+    (is (= (pass/finding-id f) (:id f) (:handle f))
         "identified by what it points at, exactly as a reviewer's finding is")))
 
 (deftest a-promotion-the-loop-cannot-place-is-not-a-finding
@@ -1292,7 +1292,7 @@
     ;; ids, and the warden's job on it is to rule rather than to raise.
     (let [reported (assoc (select-keys (promotion {}) [:title :file])
                           :line-start 288)
-          id (codex/finding-id reported)]
+          id (pass/finding-id reported)]
       (is (= [] (promoted {} [(assoc reported :id id)]
                           [(promotion {})])))))
   (testing "and the same sibling promoted twice in one answer is one finding"
@@ -1647,8 +1647,8 @@
 
 (deftest review-stage-surfaces-base-rev-and-manifest
   (with-redefs [layers/patch-hash (fn [& _] nil)
-                codex/merge-base (fn [& _] "BASEREV")
-                codex/review! (fn [_] {:status nil :findings [{:title "x"}]
+                pass/merge-base (fn [& _] "BASEREV")
+                pass/review! (fn [_] {:status nil :findings [{:title "x"}]
                                        :overall-correctness "incorrect"
                                        :base-rev "BASE" :manifest "src/a.clj\nsrc/b.clj"})]
     (let [ctx ((:run stages/review-stage)
@@ -1846,8 +1846,8 @@
 (deftest review-stage-passes-iter-to-codex
   (let [seen (atom nil)]
     (with-redefs [layers/patch-hash (fn [& _] nil)
-                  codex/merge-base (fn [& _] "BASEREV")
-                  codex/review! (fn [opts] (reset! seen opts)
+                  pass/merge-base (fn [& _] "BASEREV")
+                  pass/review! (fn [opts] (reset! seen opts)
                                   {:status :clean :findings []})]
       ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 3})
       (is (= 3 (:iter @seen)) "review! is told which round it is (for the log name)"))))
@@ -1857,8 +1857,8 @@
   ;; point, or main's parallel work reappears as spurious deletions.
   (let [seen (atom nil)]
     (with-redefs [layers/patch-hash (fn [& _] nil)
-                  codex/merge-base (fn [_cwd base] (str "FORK-OF-" base))
-                  codex/review!    (fn [opts] (reset! seen opts)
+                  pass/merge-base (fn [_cwd base] (str "FORK-OF-" base))
+                  pass/review!    (fn [opts] (reset! seen opts)
                                      {:status nil :findings []})]
       ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})
       (is (= "FORK-OF-main" (:from @seen)))
@@ -1870,7 +1870,7 @@
   ;; into the opts the reviewer is launched with.
   (let [seen (atom nil)]
     (with-redefs [layers/patch-hash (fn [& _] nil)
-                  codex/merge-base  (fn [& _] "FORK")
+                  pass/merge-base  (fn [& _] "FORK")
                   cache/read-cache  (fn [& _] {})
                   conformance/findings (fn [& _] [])
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
@@ -1881,7 +1881,7 @@
                                                        :round 4 :reason "pressure"
                                                        :needs "close-turn! still tests (empty? open)"}
                                       nil))
-                  codex/review! (fn [opts] (reset! seen opts)
+                  pass/review! (fn [opts] (reset! seen opts)
                                   {:status :clean :findings []})]
       ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})
       (is (= "close-turn! still tests (empty? open)"
@@ -1907,8 +1907,8 @@
 
 (deftest review-targets-cover-each-layer-and-the-whole-stack
   (with-redefs [layers/patch-hash (fn [& _] nil)
-                codex/merge-base    (fn [& _] "FORK")
-                codex/changed-files  (fn [& _] [])
+                pass/merge-base    (fn [& _] "FORK")
+                pass/changed-files  (fn [& _] [])
                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                 {:bookmark "s--b" :slug "b" :tip "cB"}])
                 layers/brief         (fn [_ rev] {:claims (str "claim of " rev)})]
@@ -1926,22 +1926,22 @@
   ;; A composition defect needs two layers to compose. With one layer the stack
   ;; pass is the same diff twice.
   (with-redefs [layers/patch-hash (fn [& _] nil)
-                codex/merge-base     (fn [& _] "FORK")
+                pass/merge-base     (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [{:bookmark "s" :slug nil :tip "cA"}])
                 layers/brief         (fn [& _] nil)]
     (is (= ["stack"] (map :label (stages/review-targets "/w" "main")))))
   (with-redefs [layers/patch-hash (fn [& _] nil)
-                codex/merge-base     (fn [& _] "FORK")
+                pass/merge-base     (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [])]
     (is (= ["stack"] (map :label (stages/review-targets "/w" "main"))))))
 
 (deftest review-stage-stamps-each-finding-with-the-layer-that-reported-it
   (with-redefs [layers/patch-hash (fn [& _] nil)
-                codex/merge-base     (fn [& _] "FORK")
+                pass/merge-base     (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                 {:bookmark "s--b" :slug "b" :tip "cB"}])
                 layers/brief         (fn [& _] nil)
-                codex/review!        (fn [{:keys [label]}]
+                pass/review!        (fn [{:keys [label]}]
                                        {:status nil
                                         :findings [{:title (str "f-" label) :file "x.clj"
                                                     :line-start 1}]})]
@@ -1950,11 +1950,11 @@
 
 (deftest review-stage-drops-a-finding-two-targets-report-identically
   (with-redefs [layers/patch-hash (fn [& _] nil)
-                codex/merge-base     (fn [& _] "FORK")
+                pass/merge-base     (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                 {:bookmark "s--b" :slug "b" :tip "cB"}])
                 layers/brief         (fn [& _] nil)
-                codex/review!        (fn [_] {:status nil
+                pass/review!        (fn [_] {:status nil
                                               :findings [{:title "same" :file "x.clj"
                                                           :line-start 7}]})]
     (let [ctx ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})]
@@ -1969,12 +1969,12 @@
   ;; "incorrect". The two fields on one row then contradicted each other with
   ;; nothing to say which was lying.
   (with-redefs [layers/patch-hash    (fn [& _] nil)
-                codex/merge-base     (fn [& _] "FORK")
-                codex/changed-files  (fn [& _] [])
+                pass/merge-base     (fn [& _] "FORK")
+                pass/changed-files  (fn [& _] [])
                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                 {:bookmark "s--b" :slug "b" :tip "cB"}])
                 layers/brief         (fn [& _] nil)
-                codex/review!        (fn [{:keys [label]}]
+                pass/review!        (fn [{:keys [label]}]
                                        (if (= "stack" label)
                                          {:status nil :findings []
                                           :overall-correctness "correct"}
@@ -1994,12 +1994,12 @@
   ;; it found nothing in is the only trace of a doubt the loop is about to end on.
   (let [answers (fn [by-label]
                   (with-redefs [layers/patch-hash    (fn [_ _ to] (str "h-" to))
-                                codex/merge-base     (fn [& _] "FORK")
-                                codex/changed-files  (fn [& _] [])
+                                pass/merge-base     (fn [& _] "FORK")
+                                pass/changed-files  (fn [& _] [])
                                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                                 {:bookmark "s--b" :slug "b" :tip "cB"}])
                                 layers/brief         (fn [& _] nil)
-                                codex/review!        (fn [{:keys [label]}]
+                                pass/review!        (fn [{:keys [label]}]
                                                        {:status nil :findings []
                                                         :overall-correctness (by-label label)})]
                     ;; The SECOND quiet round over the same content, since that
@@ -2039,14 +2039,14 @@
   ;; layer does not exist exactly when it has gone quiet, and a quiet layer is
   ;; still in the stack and still owns its files.
   (with-redefs [layers/patch-hash    (fn [_ _ to] (str "h-" to))
-                codex/merge-base     (fn [& _] "FORK")
-                codex/changed-files  (fn [_ _ to] [(str to ".clj")])
+                pass/merge-base     (fn [& _] "FORK")
+                pass/changed-files  (fn [_ _ to] [(str to ".clj")])
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                 cache/read-cache     (fn [& _] {"h-cA" {:status :converged :round 1}})
                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                 {:bookmark "s--b" :slug "b" :tip "cB"}])
                 layers/brief         (fn [& _] nil)
-                codex/review!        (fn [{:keys [label]}]
+                pass/review!        (fn [{:keys [label]}]
                                        {:status nil
                                         :findings [{:title (str "f-" label) :file "x.clj"
                                                     :line-start 1}]})]
@@ -2085,9 +2085,9 @@
   ;; the round that missed a change's only P1 found one of three pre-existing
   ;; defects and reported clean.
   (with-redefs [layers/patch-hash    (fn [& _] "h")
-                codex/merge-base     (fn [& _] "FORK")
+                pass/merge-base     (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [])
-                codex/review!        (fn [_] {:status :clean :findings []})]
+                pass/review!        (fn [_] {:status :clean :findings []})]
     (let [first-pass  ((:run stages/review-stage)
                        {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})
           second-pass ((:run stages/review-stage)
@@ -2105,12 +2105,12 @@
   ;; on one quiet round therefore closes on a single reading of every layer —
   ;; the sample a second quiet round exists to refuse.
   (with-redefs [layers/patch-hash    (fn [_ _ to] (str "h-" to))
-                codex/merge-base     (fn [& _] "FORK")
+                pass/merge-base     (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                 {:bookmark "s--b" :slug "b" :tip "cB"}])
                 layers/brief         (fn [& _] nil)
-                codex/changed-files  (fn [& _] [])
-                codex/review!        (fn [_] {:status :clean :findings []})]
+                pass/changed-files  (fn [& _] [])
+                pass/review!        (fn [_] {:status :clean :findings []})]
     (let [first-pass  ((:run stages/review-stage)
                        {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})
           second-pass ((:run stages/review-stage)
@@ -2130,9 +2130,9 @@
   (let [content (atom "before")
         answer  (atom [])]
     (with-redefs [layers/patch-hash    (fn [& _] @content)
-                  codex/merge-base     (fn [& _] "FORK")
+                  pass/merge-base     (fn [& _] "FORK")
                   stages/session-stack (fn [& _] [])
-                  codex/review!        (fn [_] {:status nil :findings @answer})]
+                  pass/review!        (fn [_] {:status nil :findings @answer})]
       (let [round #((:run stages/review-stage)
                     {:config {:cwd "/w" :base "main" :run-id "r"} :iter %1 :carry %2})
             quiet  (round 1 nil)
@@ -2174,7 +2174,7 @@
   ;; cache stamps a single quiet reading `:converged` at the warden's end.
   (let [written (atom [])]
     (with-redefs [layers/patch-hash          (fn [& _] "h")
-                  codex/merge-base           (fn [& _] "FORK")
+                  pass/merge-base           (fn [& _] "FORK")
                   stages/session-stack       (fn [& _] [])
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   stages/discover-design-record (fn [_] nil)
@@ -2182,7 +2182,7 @@
                   cache/read-cache           (fn [& _] {})
                   cache/write!               (fn [_ _ c] (swap! written conj c) true)
                   conformance/findings       (fn [& _] [])
-                  codex/review!              (fn [_] {:status nil :findings []})
+                  pass/review!              (fn [_] {:status nil :findings []})
                   agent/launch!              (fn [_] {:num-turns 1 :result-error? false
                                                       :result-text "```json\n{\"decision\":\"stop\",\"reason\":\"nothing\"}\n```"})]
       (let [ctx    {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1}
@@ -2594,8 +2594,8 @@
   ;; re-derives every layer it was supposed to trust, which is the exact cost
   ;; the layering was built to avoid.
   (with-redefs [layers/patch-hash    (fn [& _] nil)
-                codex/merge-base     (fn [& _] "FORK")
-                codex/changed-files  (fn [_ from _to] [(str "touched-since-" from)])
+                pass/merge-base     (fn [& _] "FORK")
+                pass/changed-files  (fn [_ from _to] [(str "touched-since-" from)])
                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                 {:bookmark "s--b" :slug "b" :tip "cB"}])
                 layers/brief         (fn [_ rev] {:claims       (str "claim of " rev)
@@ -2611,8 +2611,8 @@
 (deftest review-targets-carry-no-composition-below-two-layers
   ;; With nothing to compose the whole-stack target IS the branch review.
   (with-redefs [layers/patch-hash    (fn [& _] nil)
-                codex/merge-base     (fn [& _] "FORK")
-                codex/changed-files  (fn [& _] [])
+                pass/merge-base     (fn [& _] "FORK")
+                pass/changed-files  (fn [& _] [])
                 stages/session-stack (fn [& _] [{:bookmark "s" :slug nil :tip "cA"}])
                 layers/brief         (fn [& _] nil)]
     (is (nil? (:composition (first (stages/review-targets "/w" "main")))))))
@@ -2620,12 +2620,12 @@
 (deftest review-stage-hands-the-stack-pass-its-composition
   (let [seen (atom {})]
     (with-redefs [layers/patch-hash    (fn [& _] nil)
-                  codex/merge-base     (fn [& _] "FORK")
-                  codex/changed-files  (fn [& _] [])
+                  pass/merge-base     (fn [& _] "FORK")
+                  pass/changed-files  (fn [& _] [])
                   stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                   {:bookmark "s--b" :slug "b" :tip "cB"}])
                   layers/brief         (fn [& _] {:claims "c"})
-                  codex/review!        (fn [{:keys [label composition]}]
+                  pass/review!        (fn [{:keys [label composition]}]
                                          (swap! seen assoc label (boolean composition))
                                          {:findings [] :manifest "m" :base-rev "FORK"})]
       ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})
@@ -3466,16 +3466,16 @@
   (let [written (atom nil)
         events  (atom [])]
     (with-redefs [layers/patch-hash    (fn [_ from to] (str "h-" from "-" to))
-                  codex/merge-base     (fn [& _] "FORK")
+                  pass/merge-base     (fn [& _] "FORK")
                   layers/resolve-rev   (fn [& _] "AT")
                   layers/brief         (fn [& _] nil)
-                  codex/changed-files  (fn [& _] [])
+                  pass/changed-files  (fn [& _] [])
                   stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                   {:bookmark "s--b" :slug "b" :tip "cB"}])
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   cache/read-cache     (fn [& _] {})
                   cache/write!         (fn [_ _ c] (reset! written c) true)
-                  codex/review!        (fn [{:keys [label]}]
+                  pass/review!        (fn [{:keys [label]}]
                                          (if (= "b" label)
                                            (throw (ex-info "You've hit your usage limit."
                                                            {:reason :reviewer-unavailable}))
@@ -3669,8 +3669,8 @@
 (deftest the-reviewer-is-handed-what-a-fixer-landed-on-its-target
   (let [seen (atom nil)]
     (with-redefs [layers/patch-hash (fn [& _] nil)
-                  codex/merge-base (fn [& _] "BASEREV")
-                  codex/review! (fn [opts] (reset! seen opts)
+                  pass/merge-base (fn [& _] "BASEREV")
+                  pass/review! (fn [opts] (reset! seen opts)
                                   {:status :clean :findings []})]
       ((:run stages/review-stage)
        {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 2
@@ -3686,8 +3686,8 @@
   ;; call site passes it nothing is the same silence with more code.
   (let [seen (atom nil)]
     (with-redefs [layers/patch-hash (fn [& _] nil)
-                  codex/merge-base (fn [& _] "BASEREV")
-                  codex/review! (fn [opts] (reset! seen opts)
+                  pass/merge-base (fn [& _] "BASEREV")
+                  pass/review! (fn [opts] (reset! seen opts)
                                   {:status :clean :findings []})]
       ((:run stages/review-stage)
        {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 2
@@ -3708,8 +3708,8 @@
   ;; firing on the very case its finding described.
   (let [seen (atom nil)]
     (with-redefs [layers/patch-hash (fn [& _] nil)
-                  codex/merge-base (fn [& _] "BASEREV")
-                  codex/review! (fn [opts] (reset! seen opts)
+                  pass/merge-base (fn [& _] "BASEREV")
+                  pass/review! (fn [opts] (reset! seen opts)
                                   {:status :clean :findings []})]
       ((:run stages/review-stage)
        {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 4
@@ -3953,12 +3953,12 @@
   ;; silence with more code.
   (let [seen (atom {})]
     (with-redefs [layers/patch-hash    (fn [& _] nil)
-                  codex/merge-base     (fn [& _] "FORK")
-                  codex/changed-files  (fn [& _] [])
+                  pass/merge-base     (fn [& _] "FORK")
+                  pass/changed-files  (fn [& _] [])
                   stages/session-stack (fn [& _] [{:bookmark "s--lower" :slug "lower" :tip "cL"}
                                                   {:bookmark "s--upper" :slug "upper" :tip "cU"}])
                   layers/brief         (fn [& _] nil)
-                  codex/review!        (fn [opts]
+                  pass/review!        (fn [opts]
                                          (swap! seen assoc (:label opts) opts)
                                          {:status :clean :findings []})]
       ((:run stages/review-stage)
@@ -4265,14 +4265,14 @@
              :carry {:quiet-once #{"h"}
                      :inherited-open [{:id "a" :layer "core" :title "t"}]}}]
     (with-redefs [layers/patch-hash (fn [& _] "h")
-                  codex/merge-base  (fn [& _] "FORK")
+                  pass/merge-base  (fn [& _] "FORK")
                   cache/read-cache  (fn [& _] {})
                   cache/write!      (fn [& _] true)
                   conformance/findings (fn [& _] [])
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (review-ledger [{:id "a" :layer "core" :title "t"
                                                    :disposition :fix}])
-                  codex/review! (fn [_] {:status nil :findings []})]
+                  pass/review! (fn [_] {:status nil :findings []})]
       (is (= :unresolved (:status ((:run stages/review-stage) ctx)))
           "a quiet round is evidence about what the reviewers read, never
            evidence that a defect somebody already ruled :fix has gone")
@@ -4324,11 +4324,11 @@
                  {:id "e9" :title "a vendored copy" :where "/w/vendor/lib.clj:2"
                   :disposition :fix}]]
     (with-redefs [layers/patch-hash    (fn [_ _ to] (str "h-" to))
-                  codex/merge-base     (fn [& _] "FORK")
+                  pass/merge-base     (fn [& _] "FORK")
                   stages/session-stack (fn [& _] [{:bookmark "s--drop" :slug "resume-on-drop" :tip "cA"}
                                                   {:bookmark "s--sched" :slug "resume-on-schedule" :tip "cB"}])
                   layers/brief         (fn [& _] nil)
-                  codex/changed-files  (fn [_ _ to] (case to
+                  pass/changed-files  (fn [_ _ to] (case to
                                                       "cA" ["src/babel/speech.clj"]
                                                       "cB" ["src/babel/schedule.clj"]
                                                       []))
@@ -4337,7 +4337,7 @@
                   cache/read-cache     (fn [& _] {})
                   cache/write!         (fn [_ _ c] (reset! written c) true)
                   conformance/findings (fn [& _] [])
-                  codex/review!        (fn [{:keys [label prior-open]}]
+                  pass/review!        (fn [{:keys [label prior-open]}]
                                          (swap! handed assoc label (mapv :id prior-open))
                                          {:status nil :findings []})]
       (let [round  #((:run stages/review-stage)
@@ -4413,8 +4413,8 @@
   ;; What the next round compares against. Without it on the ctx there is no
   ;; second reading to take, and the fix stage has nothing to put in history.
   (with-redefs [layers/patch-hash (fn [_ _ to] (str "hash-" to))
-                codex/merge-base (fn [& _] "BASEREV")
-                codex/review! (fn [_] {:status :ok :findings [{:title "x" :file "a.clj"}]})]
+                pass/merge-base (fn [& _] "BASEREV")
+                pass/review! (fn [_] {:status :ok :findings [{:title "x" :file "a.clj"}]})]
     (let [out ((:run stages/review-stage)
                {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
       (is (seq (:patch-hashes out)))
@@ -4487,7 +4487,7 @@
   ;; put two reviewers of the same change on two yardsticks — and this is where
   ;; it reaches the reviewer.
   (let [seen (atom [])]
-    (with-redefs [codex/review! (fn [m] (swap! seen conj (:design m))
+    (with-redefs [pass/review! (fn [m] (swap! seen conj (:design m))
                                   {:findings [] :status nil})]
       (#'stages/review-target!
        {:config {:cwd "/w" :run-id "r1"} :iter 1 :design {:invariants ["x"]}}

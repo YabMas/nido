@@ -98,7 +98,7 @@
    verdict about this range survives the fold.
 
    The bottom layer's `from` is `base-rev`, which must be the FORK POINT and not
-   the tip of base (see `nido.review.codex/merge-base`): diffing from a base
+   the tip of base (see `nido.review.pass/merge-base`): diffing from a base
    that has moved on turns everything base gained into spurious deletions."
   [stack base-rev]
   (into []

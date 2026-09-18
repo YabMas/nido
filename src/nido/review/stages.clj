@@ -15,7 +15,7 @@
    [nido.coordinator.report.model :as claim-model]
    [nido.platform.core :as core]
    [nido.review.cache :as cache]
-   [nido.review.codex :as codex]
+   [nido.review.pass :as pass]
    [nido.review.conformance :as conformance]
    [nido.review.digest :as digest]
    [nido.review.layers :as layers]
@@ -522,7 +522,7 @@
                 :tip          to
                 :claim        (:claims brief)
                 :out-of-scope (:out-of-scope brief)
-                :files        (codex/changed-files cwd from to)}))
+                :files        (pass/changed-files cwd from to)}))
         targets))
 
 (defn ^{:malli/schema [:=> [:cat :Path :any] :any]}
@@ -548,7 +548,7 @@
    and the findings that are genuinely its own come back indistinguishable from
    the ones the layer reviews already hold."
   [cwd base]
-  (let [base-rev (codex/merge-base cwd base)
+  (let [base-rev (pass/merge-base cwd base)
         stack    (session-stack cwd base)
         whole    {:label stack-label :from base-rev :to "@" :brief nil :stack? true}]
     (if (< (count stack) 2)
@@ -1067,7 +1067,7 @@
                      {:label        label
                       :claim        (:claims brief)
                       :out-of-scope (:out-of-scope brief)
-                      :files        (codex/changed-files cwd from to)})))
+                      :files        (pass/changed-files cwd from to)})))
         targets))
 
 (def ^:private cleared-verdict
@@ -1131,7 +1131,7 @@
                :iter     (:iter ctx)
                :at       (str (java.time.Instant/now))
                :base-rev base-rev
-               :files    (if base-rev (codex/changed-files cwd base-rev "@") [])
+               :files    (if base-rev (pass/changed-files cwd base-rev "@") [])
                :targets  (into (mapv (partial row "pending") review)
                                (mapv (partial row "skipped") skipped))}))
       (catch Throwable _ nil))))
@@ -1217,7 +1217,7 @@
   (let [{:keys [cwd run-id reviewer]} (:config ctx)]
     (announce-target! ctx "running" t nil)
     (try
-      (let [r (assoc (codex/review!
+      (let [r (assoc (pass/review!
                       {:cwd cwd :run-id run-id :iter (:iter ctx) :reviewer reviewer
                        :from (:from t) :to (:to t)
                        :label (:label t) :brief (:brief t)
@@ -1865,7 +1865,7 @@
    twice. What is left is the case the read exists for — a defect the last run
    ruled on, that this run's reviewers were told about and did not report.
 
-   Joined on the finding id, which `codex/finding-id` derives from file, line
+   Joined on the finding id, which `pass/finding-id` derives from file, line
    and title, so one defect at one site carries the same id whichever run raised
    it. `merge-answered` joins the settled half of the same history the same way."
   [inherited rounds]
@@ -1918,7 +1918,7 @@
 (defn- merge-answered
   "One row per finding, out of the two sources of answers about a target.
 
-   Deduped on the finding id, which `codex/finding-id` derives from the file,
+   Deduped on the finding id, which `pass/finding-id` derives from the file,
    the line and the title — so one defect at one site carries the same id
    whichever run raised it, and the two sources can be joined on it. Where they
    collide `in-run` wins, being the later decision.
@@ -2227,7 +2227,7 @@
                    :line-start line
                    :line-end   line
                    :from-layer promoted-by}
-            id    (codex/finding-id f)
+            id    (pass/finding-id f)
             named (:owner_layer p)
             owner (if (seq toc) (placed-on cwd toc named file) named)]
         (cond
@@ -3232,7 +3232,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   [run-id label iter suffix]
   (str (fs/path (cstate/run-dir run-id)
                 (format "fix-%s-round-%d%s"
-                        (codex/safe-label label)
+                        (pass/safe-label label)
                         (or iter 1)
                         suffix))))
 
