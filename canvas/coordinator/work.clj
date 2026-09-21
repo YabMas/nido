@@ -172,6 +172,14 @@
      kept failures, the recovery workstreams of every project declaring a :session-failure trigger
      with their entries, and that trigger's pacing, and hands them to the recovery read model."
     {:signature [:=> [:catn [:opts [:? [:maybe :map]]]] :map]})
+  (Operation improvement-holds
+    "What holds each project's improvement sweep, and whether anyone is working on it. The
+     open :improvement workstreams are the hold itself — the sweep polls on nothing else — so
+     this reads them rather than the copy the poll writes to its state file, and pairs each with
+     what its sessions say: a hold no live session works on is one nothing will ever release."
+    {:signature [:=> [:catn] [:vector :map]]
+     :delegates [triggers/load-for-project workstream/list-ids workstream/read-ws
+                 session/list-sessions session/engagement-state]})
   (Operation proposals "Every proposal this project's review analyses have made."
     {:signature [:=> [:catn [:project ProjectName]] [:vector :map]]
      :delegates [workstream/list-ids]})

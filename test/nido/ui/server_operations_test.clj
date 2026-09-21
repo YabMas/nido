@@ -213,3 +213,54 @@
         (is (str/includes? body "0 awaiting you"))
         (is (str/includes? body "no change needed")
             "settled by a plan rather than by anything landing, and the chip says which")))))
+
+;; ── what holds the sweep ────────────────────────────────────────────────────
+
+(def ^:private stuck
+  {:project "nido" :ws-id "ws-20260911-b365db" :address "ws-p/1#8"
+   :title "improve: stop re-reading a layer" :state :stuck
+   :started-at "2026-09-11T09:07:51Z" :ended-at "2026-09-11T09:47:21Z"})
+
+(defn- page [uri]
+  (str (:body (server/handle-request {:request-method :get :uri uri :query-string "scope=nido"}))))
+
+(deftest a-stuck-sweep-is-said-on-the-page
+  (with-one-proposal
+    (fn [_id]
+      (with-redefs [work/improvement-holds (constantly [stuck])]
+        (doseq [body [(board) (page "/operations")]]
+          (is (str/includes? body "id=\"sweep\"") "patched under its own id, on the page and the poll")
+          (is (str/includes? body "sweep stuck"))
+          (is (str/includes? body "ws-20260911-b365db") "naming what holds it")
+          (is (str/includes? body "nothing is planned or implemented until it is closed"))
+          (is (str/includes? body "its last session ended") "and since when")
+          (is (str/includes? body "the clean path forgets") "with the backlog still beneath it"))))))
+
+(deftest a-sweep-someone-is-working-on-is-not-called-stuck
+  (with-one-proposal
+    (fn [_id]
+      (with-redefs [work/improvement-holds (constantly [(assoc stuck :state :working :ended-at nil)
+                                                        (assoc stuck :ws-id "ws-g" :state :waiting-on-you
+                                                               :ended-at nil)])]
+        (let [body (board)]
+          (is (not (str/includes? body "sweep stuck")))
+          (is (str/includes? body "Sweep working on"))
+          (is (str/includes? body "sweep waiting on you"))
+          (is (str/includes? body "/?sel=nido:ws-g") "pointing at the gate"))))))
+
+(deftest a-free-sweep-shows-nothing
+  (with-one-proposal
+    (fn [_id]
+      (with-redefs [work/improvement-holds (constantly [])]
+        (let [body (board)]
+          (is (not (str/includes? body "sweep stuck")))
+          (is (not (str/includes? body "Sweep working on"))))))))
+
+(deftest an-unreadable-hold-says-so-and-keeps-the-backlog
+  (with-one-proposal
+    (fn [_id]
+      (with-redefs [work/improvement-holds (fn [] (throw (ex-info "boom" {})))]
+        (let [body (binding [*err* (java.io.StringWriter.)] (board))]
+          (is (str/includes? body "could not be read")
+              "an empty section would read as a free sweep")
+          (is (str/includes? body "the clean path forgets")))))))

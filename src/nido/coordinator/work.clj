@@ -777,6 +777,63 @@
        :feed-from  feed-from
        :pacing     (start-failures/pacing (-> declaring first second :source))})))))
 
+(defn- hold-state
+  "What a hold's engagement means for the sweep it holds. `:idle` is the one
+   that matters: an open workstream with no live session is one nothing will
+   ever close, and a close is the only thing that releases the sweep."
+  [engagement]
+  (case engagement
+    :idle           :stuck
+    :parked-at-gate :waiting-on-you
+    (:active :queued) :working))
+
+(defn- last-session-change
+  "The latest phase or substrate change any of `sessions` recorded, or nil when
+   there is no session. For an idle workstream that is when its last session
+   ended. Compared as strings: session history is ISO-8601 UTC by construction."
+  [sessions]
+  (->> sessions
+       (mapcat #(concat (map :at (:substrate-history %))
+                        (map :at (get-in % [:autonomy :phase-history]))))
+       (remove nil?)
+       sort
+       last))
+
+(defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
+  improvement-holds
+  "What holds each project's improvement sweep, as one map per open improvement
+   workstream: `:project :ws-id :address :title :state :started-at`, and
+   `:ended-at` on a `:stuck` one. Empty when nothing holds any sweep.
+
+   `:state` is `:working`, `:waiting-on-you` (a session is parked at a gate) or
+   `:stuck` (no live session, so nothing will close it). The sweep never tells
+   these apart — it waits on a close whatever the session is doing — so a hold
+   whose session died reads, from the sweep, exactly like one mid-edit.
+
+   Reads the open workstreams rather than the `:held-by` the sweep's poll
+   writes: those workstreams ARE the hold, and the poll's copy is up to an hour
+   stale and says nothing about whether anyone is still working. Only projects
+   whose triggers declare an :improvement-sweep source are read. Read on every
+   call."
+  []
+  (vec (for [[pname _] (project/list-projects)
+             :let  [pk (keyword pname)]
+             :when (some #(= :improvement-sweep (-> % :source :type))
+                         (triggers/load-for-project pk))
+             {:keys [ws-id address open?]} (proposal/attempts pk)
+             :when open?
+             :let  [w        (cws/read-ws pk ws-id)
+                    sessions (csession/list-sessions pk ws-id)
+                    state    (hold-state (csession/engagement-state nil sessions))]]
+         (cond-> {:project    pname
+                  :ws-id      ws-id
+                  :address    address
+                  :title      (some #(when (= proposal/improvement-adapter (:adapter %)) (:title %))
+                                    (:external-refs w))
+                  :state      state
+                  :started-at (:created-at w)}
+           (= :stuck state) (assoc :ended-at (last-session-change sessions))))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
   proposals
   "Every proposal this project's review-loop analyses have made, newest analysis

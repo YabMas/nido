@@ -359,6 +359,8 @@
         .rec-owed { background:#26262b; color:#cfd8e3; }
         .rec-restored { background:#1a3a2a; color:#4ade80; }
         .rec-dismissed { background:#26262b; color:#9aa3ad; }
+        /* Red like needs-you: a stuck sweep is released only by a person. */
+        .sweep-stuck { background:#3a1a1a; color:#f87171; }
         .rec-did { font-size:12px; color:#a8b4c0; margin:0 0 8px; }
         .rec-feed { font-size:12px; margin-top:8px; }
         .rec-evt { display:flex; gap:10px; padding:3px 0; border-bottom:1px solid #1f1f1f; }
@@ -2653,6 +2655,50 @@
                (when (:next feed) [:a {:href (feed-href (:next feed))} "older →"])]]))))
        [:h3.rec-title "Improvement backlog"]]))))
 
+(defn- hold-row
+  [{:keys [project ws-id title state started-at ended-at]}]
+  (let [ws-link [:a {:href (str "/workstreams?sel=" project ":" ws-id)} ws-id]]
+    (case state
+      :stuck
+      [:div.prop
+       [:div.prop-head
+        [:span.prop-verdict.sweep-stuck "sweep stuck"]
+        [:span.prop-where title]]
+       [:p.prop-sum "No session is working on " ws-link
+        (if ended-at
+          (str " — its last session ended " (ago ended-at) ".")
+          " — no session was ever started for it.")
+        " It holds the improvement sweep, so nothing is planned or implemented until it is closed."]
+       [:p.prop-fix "Close it to release the sweep: "
+        [:code (str "bb nido:workstream:close :project " project " :ws-id " ws-id " :outcome dropped")]
+        " — or " [:code ":outcome vetoed"] " to return the proposals it covered to the backlog."]]
+      :waiting-on-you
+      [:div.prop
+       [:div.prop-head
+        [:span.prop-verdict.prop-waiting "sweep waiting on you"]
+        [:span.prop-where title]]
+       [:p.prop-sum ws-link " is parked at a gate, and the sweep waits until it is answered. "
+        [:a {:href (str "/?sel=" project ":" ws-id)} "open the gate"]]]
+      :working
+      [:p.meta "Sweep working on " ws-link " — " title
+       (when started-at (str " · started " (ago started-at)))])))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe [:vector :map]]] :string]}
+  sweep-fragment
+  "What holds the improvement sweep, patched under #sweep by the page's poll.
+   Sits under the backlog heading because the backlog is what a hold stops.
+
+   Nothing is rendered when nothing holds it: a free sweep needs no one, and the
+   backlog's own counts say what it has to do. `holds` nil means the holds could
+   not be read — said, because an empty section would read as a free sweep."
+  [holds]
+  (str
+   (h/html
+    [:div {:id "sweep"}
+     (if (nil? holds)
+       [:p.ops-empty "What holds the improvement sweep could not be read — see the dashboard log."]
+       (map hold-row holds))])))
+
 ;; ---------------------------------------------------------------------------
 ;; Operations — nido's own improvement backlog
 
@@ -2819,7 +2865,7 @@
                   [:summary (str (count settled) " settled")]
                   (for [p settled] (proposal-card p))])))]))))
 
-(defn ^{:malli/schema [:=> [:cat :map :any [:maybe :map]] :any]}
+(defn ^{:malli/schema [:=> [:cat :map :any [:maybe :map] [:maybe [:vector :map]]] :any]}
   operations-page
   "Every proposal nido's review-loop analyses have made, and what was decided.
 
@@ -2836,8 +2882,9 @@
    a proposal carries its own evidence and nothing opens beside it.
 
    Session recovery sits above the backlog: it is what is happening now, and the
-   part of it that needs a person must not scroll away under ninety proposals."
-  [ctx proposals recovery]
+   part of it that needs a person must not scroll away under ninety proposals.
+   What holds the improvement sweep sits between them, for the same reason."
+  [ctx proposals recovery holds]
   (shell
    (assoc ctx :active :operations :title "Operations")
    ;; The poll asks for the feed page the reader is on, so reading an older page
@@ -2851,6 +2898,7 @@
     ;; the poll is a refresh, and a surface that is blank until it fires reads
     ;; as a surface with nothing on it.
     (h/raw (recovery-fragment recovery))
+    (h/raw (sweep-fragment holds))
     (h/raw (operations-fragment proposals))]))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :any]}

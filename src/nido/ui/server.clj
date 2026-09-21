@@ -246,8 +246,19 @@
            (println (str "[nido] reading session recovery failed: " (ex-message t))))
          nil)))
 
+(defn- improvement-holds
+  "What holds each improvement sweep, or nil when it could not be read — like
+   recovery, a broken reading must not take the backlog down with it."
+  []
+  (try (work/improvement-holds)
+       (catch Throwable t
+         (binding [*out* *err*]
+           (println (str "[nido] reading improvement holds failed: " (ex-message t))))
+         nil)))
+
 (defn- operations-fragment-response [feed-from]
   (sse-response (sse-fragment (str (views/recovery-fragment (session-recovery feed-from))
+                                   (views/sweep-fragment (improvement-holds))
                                    (views/operations-fragment (all-proposals))))))
 
 (defn- ops-fragment-response
@@ -627,7 +638,8 @@
       (html-response 200 (views/operations-page
                           (rail-ctx :operations (derive-screen (view-state/parse req)))
                           (all-proposals)
-                          (session-recovery (feed-position req))))
+                          (session-recovery (feed-position req))
+                          (improvement-holds)))
 
       ;; GET /_fragment/operations — SSE proposal-list refresh
       ["_fragment" "operations"]

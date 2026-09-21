@@ -41,12 +41,13 @@
 (deftest an-older-page-keeps-its-position-across-polls
   (let [html (str (views/operations-page {:active :operations} []
                                          (assoc empty-overview :feed {:from "0001789000000000~failure-kept~F9"
-                                                                      :events [] :next nil})))]
+                                                                      :events [] :next nil})
+                                         []))]
     (is (str/includes? html "_fragment/operations?feed=0001789000000000%7Efailure-kept%7EF9")
         "the poll asks for the page being read, not the newest")
     (is (str/includes? html "href=\"/operations\"") "and there is a way back to the newest")))
 
 (deftest the-operations-page-carries-recovery-above-the-backlog
-  (let [html (str (views/operations-page {:active :operations} [] empty-overview))]
+  (let [html (str (views/operations-page {:active :operations} [] empty-overview []))]
     (is (< (str/index-of html "id=\"recovery\"") (str/index-of html "id=\"operations\""))
         "what is happening now sits above the backlog")))

@@ -3204,3 +3204,61 @@
         (is (= :nothing-to-acknowledge
                (:decision (work/resolve-gate! :brian id :redesign a)))
             "the click is current, and the question is gone")))))
+
+;; ── what holds the improvement sweep ────────────────────────────────────────
+
+(defn- improvement-ws!
+  "An :improvement workstream in `project`, the kind the sweep holds on."
+  [project address]
+  (:id (workstream/create! project {:stage :triaging
+                                    :external-refs [{:adapter :improvement :id address
+                                                     :title (str "improve: " address)}]})))
+
+(defn- with-sweep-declared-on-nido [f]
+  (with-redefs [nido.platform.project/list-projects (constantly {"nido" {} "other" {}})
+                nido.coordinator.record.triggers/load-for-project
+                (fn [pk] (if (= :nido pk)
+                           [{:name :improvement-sweep :source {:type :improvement-sweep :project :nido}}]
+                           []))]
+    (f)))
+
+(deftest improvement-holds-are-the-open-improvement-workstreams
+  (with-tmp
+    (fn [_]
+      (with-sweep-declared-on-nido
+        (fn []
+          (let [held   (improvement-ws! :nido "ws-p/1#0")
+                closed (improvement-ws! :nido "ws-p/1#1")
+                _      (workstream/close! :nido closed :done)
+                _      (workstream/create! :nido {:stage :triaging :external-refs []})
+                _      (improvement-ws! :other "ws-q/1#0")]
+            (session/create! :nido held {:name "s" :weight :light :autonomy nil})
+            (is (= [{:project "nido" :ws-id held :address "ws-p/1#0" :title "improve: ws-p/1#0"
+                     :state :working
+                     :started-at (:created-at (workstream/read-ws :nido held))}]
+                   (work/improvement-holds))
+                "only the open one, only where a sweep is declared, and a live session is working")))))))
+
+(deftest a-hold-no-live-session-works-on-is-stuck
+  ;; The wedge this exists for: a claim session ended its turn without closing
+  ;; its workstream, and the sweep waited ten days on a close nothing would write.
+  (with-tmp
+    (fn [_]
+      (with-sweep-declared-on-nido
+        (fn []
+          (let [ended   (improvement-ws! :nido "ws-p/1#0")
+                parked  (improvement-ws! :nido "ws-p/1#1")
+                never   (improvement-ws! :nido "plan/2026-09-21")
+                _       (session/create! :nido ended {:name "e" :weight :light :autonomy nil})
+                archived (session/archive! :nido ended "e")
+                _       (session/create! :nido parked {:name "g" :weight :heavy
+                                                       :autonomy parked-autonomy})
+                by-ws   (into {} (map (juxt :ws-id identity)) (work/improvement-holds))]
+            (is (= :stuck (:state (by-ws ended))))
+            (is (= (:at (last (:substrate-history archived))) (:ended-at (by-ws ended)))
+                "and says when its last session ended")
+            (is (= :waiting-on-you (:state (by-ws parked)))
+                "a session parked at a gate is waiting on a person, not stuck")
+            (is (nil? (:ended-at (by-ws parked))))
+            (is (= :stuck (:state (by-ws never))))
+            (is (nil? (:ended-at (by-ws never))) "no session, so no end to report")))))))
