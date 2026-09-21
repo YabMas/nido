@@ -1,6 +1,7 @@
 ;; test/nido/review/verdict_test.clj
 (ns nido.review.verdict-test
   (:require
+   [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.report :as report]
@@ -308,6 +309,62 @@
         ":baseline is a classification the judge can now actually record")
     (is (report/validate-event :design-verdict (dissoc v :seq))
         "and the widened schema accepts it")))
+
+(def ^:private template-answer
+  "What a judge that answered every question the prompt's JSON template asks
+   returns, minus \"verdict\" itself, which each case below supplies.
+
+   Every list is non-empty on purpose. `parse` attaches a list field only when
+   the judge sent something in it, so a field left empty here would reach the
+   schema as an absent key — and a key the branch did not expect, present, is
+   the only thing that has ever refused a verdict."
+  {"reason"              "the rounding boundary held; the break is local"
+   "invariants_held"     ["a total is rounded exactly once"]
+   "invariants_broken"   [{"invariant" "a total is rounded exactly once"
+                           "finding"   "the invoice reader re-rounds"}]
+   "load_bearing_held"   ["a line item's amount is never rounded in place"]
+   "load_bearing_broken" [{"invariant" "the aggregate is the only summing path"
+                           "finding"   "invoice.clj sums lines directly"}]
+   "findings_classified" [{"finding" "the invoice reader re-rounds"
+                           "as"      "implementation"}]
+   "needs"               "move the sum back behind the aggregate"})
+
+(defn- template-fields
+  "The fields verdict.clj's JSON template asks a judge to fill, read off a built
+   prompt. Top-level keys only: the nested \"invariant\", \"finding\" and \"as\"
+   are parts of a value, not fields of the answer."
+  [prompt]
+  (->> (str/split (subs prompt (str/index-of prompt "Return EXACTLY one fenced"))
+                  #"\n\n")
+       first
+       (re-seq #"(?m)^[{ ]\"([a-z_]+)\":")
+       (map second)
+       set))
+
+(deftest every-field-the-template-offers-is-kept-on-every-verdict
+  ;; Three verdicts were lost to one class, not three keys: a judge answered the
+  ;; template exactly, and the branch it reached refused a field the template had
+  ;; asked for, which a closed map turns into a refusal of the whole entry.
+  (let [prompt (verdict/build-prompt {:design design :findings [] :history [] :rounds 1})]
+    (is (= (conj (set (keys template-answer)) "verdict")
+           (template-fields prompt))
+        "the answer above IS the template — a field added to the prompt and not
+         filled here would leave the class half closed, which is how it opened")
+    (doseq [v ["sound" "strained" "invalidated" "standing_challenged"]]
+      (testing v
+        (let [parsed (verdict/parse
+                      (fenced (json/generate-string (assoc template-answer "verdict" v)))
+                      2 3)]
+          (is (= #{:format :verdict :round :design-seq :reason
+                   :invariants-held :invariants-broken
+                   :load-bearing-held :load-bearing-broken
+                   :findings-classified :needs}
+                 (set (keys parsed)))
+              "parse keeps every field the template asked for, whatever the
+               verdict — it is not the place a branch's vocabulary is applied")
+          (is (= parsed (report/validate-event :design-verdict parsed))
+              "and the ledger takes it: which verdict was reached decides what a
+               verdict REQUIRES, never what it may carry"))))))
 
 (deftest an-unknown-classification-is-still-dropped
   (let [v (verdict/parse

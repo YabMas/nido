@@ -2128,6 +2128,43 @@
    [:invariant string?]
    [:finding   string?]])
 
+(def ^:private design-verdict-fields
+  "What a design verdict may carry, in the order the prompt's JSON template asks
+   a judge for it. Every one of these reaches every branch of `DesignVerdict`,
+   and the list is held once so that it cannot stop being true of one of them.
+
+   Each branch naming its own fields is how three verdicts were lost. The sets
+   drifted — :sound admitted no break, :invalidated no held invariant — and a
+   closed map turns one unasked-for key into a refusal of the WHOLE entry, so a
+   judge answering exactly what the template asked for had four minutes of
+   reading code thrown away at the ledger and left only in its run dir."
+  [[:round int?]
+   [:design-seq {:optional true} [:maybe int?]]
+   ;; The entry an agent actually reached this judgment at, present exactly when
+   ;; no agent ran for it: the pass is skipped when the run gave a standing
+   ;; verdict nothing to revisit. It is what stops a held position reading as
+   ;; repeated independent confirmation — six unmarked identical verdicts claim
+   ;; six readings of the code, and only the first of them is one.
+   [:carried-from {:optional true} int?]
+   [:reason string?]
+   [:invariants-held {:optional true} [:vector string?]]
+   [:invariants-broken {:optional true} [:vector BrokenInvariant]]
+   [:load-bearing-held {:optional true} [:vector string?]]
+   [:load-bearing-broken {:optional true} [:vector BrokenInvariant]]
+   [:findings-classified {:optional true} [:vector ClassifiedFinding]]
+   [:needs {:optional true} string?]])
+
+(defn- design-verdict-branch
+  "One verdict's branch of `DesignVerdict`: every field, with `required` naming
+   the ones this verdict cannot be written without and the schema each takes
+   there. What a verdict REQUIRES is the only thing that tells it from another."
+  [verdict required]
+  (into [:map {:closed true}
+         [:format  [:= :design-verdict]]
+         [:verdict [:= verdict]]]
+        (map (fn [[k :as field]] (if-let [s (get required k)] [k s] field)))
+        design-verdict-fields))
+
 (def DesignVerdict
   "Whether a review round's findings were the ironing-out of implementation
    details of a sound design, or evidence the design itself is wrong. Emitted
@@ -2140,65 +2177,33 @@
    :standing-challenged are decisions, not fixes, so both REQUIRE :needs — the
    question put to the human.
 
-   :needs is optional on the other two rather than absent. The prompt asks for
-   it unconditionally, and a :strained verdict's needs is the most actionable
-   paragraph the pass produces: it is what says where the pressure is and what
-   to do about it. Refusing the field there did not omit it — it rejected the
-   whole verdict at the ledger boundary, and append-design-verdict! swallows a
-   rejection to one stderr line, so the pass ran for four minutes with tools and
-   left no record on any channel.
+   The verdict WORD is the judge's conclusion about whether the design can hold.
+   The lists beside it are what it found standing and not standing AS WRITTEN,
+   which is a different question — a judge reaches :sound over a named break by
+   classifying the break as implementation, and :invalidated over invariants
+   that mostly held. So every list reaches every branch: one that refused a list
+   would refuse the verdict, not the list.
 
-   :carried-from names the entry an agent actually reached this judgment at,
-   and is present exactly when no agent ran for it: the pass is skipped when the
-   run gave a standing verdict nothing to revisit. It is what stops a held
-   position reading as repeated independent confirmation — six unmarked
-   identical verdicts claim six readings of the code, and only the first of them
-   is one."
+   Nothing rewrites the word to agree with the lists either. Raising a :sound
+   verdict that names an undeclared load-bearing break to :strained would put a
+   reading in the record that no judge made — :strained claims a boundary is
+   under visible pressure, where both such verdicts say in :reason why the
+   design is unaffected and give the repair in :needs.
+
+   :needs is optional on :sound and :strained rather than absent. The prompt asks
+   for it unconditionally, and a :strained verdict's needs is the most actionable
+   paragraph the pass produces: it is what says where the pressure is and what to
+   do about it."
   [:multi {:dispatch :verdict}
-   [:sound
-    [:map {:closed true}
-     [:format [:= :design-verdict]] [:verdict [:= :sound]]
-     [:round int?] [:design-seq {:optional true} [:maybe int?]]
-     [:carried-from {:optional true} int?]
-     [:reason string?]
-     [:invariants-held {:optional true} [:vector string?]]
-     [:load-bearing-held {:optional true} [:vector string?]]
-     [:findings-classified {:optional true} [:vector ClassifiedFinding]]
-     [:needs {:optional true} string?]]]
-   [:strained
-    [:map {:closed true}
-     [:format [:= :design-verdict]] [:verdict [:= :strained]]
-     [:round int?] [:design-seq {:optional true} [:maybe int?]]
-     [:carried-from {:optional true} int?]
-     [:reason string?]
-     [:invariants-held {:optional true} [:vector string?]]
-     [:invariants-broken {:optional true} [:vector BrokenInvariant]]
-     [:load-bearing-held {:optional true} [:vector string?]]
-     [:load-bearing-broken {:optional true} [:vector BrokenInvariant]]
-     [:findings-classified {:optional true} [:vector ClassifiedFinding]]
-     [:needs {:optional true} string?]]]
-   [:invalidated
-    [:map {:closed true}
-     [:format [:= :design-verdict]] [:verdict [:= :invalidated]]
-     [:round int?] [:design-seq {:optional true} [:maybe int?]]
-     [:carried-from {:optional true} int?]
-     [:reason string?]
-     [:invariants-broken [:vector {:min 1} BrokenInvariant]]
-     [:load-bearing-held {:optional true} [:vector string?]]
-     [:load-bearing-broken {:optional true} [:vector BrokenInvariant]]
-     [:findings-classified {:optional true} [:vector ClassifiedFinding]]
-     [:needs string?]]]
-   [:standing-challenged
-    [:map {:closed true}
-     [:format [:= :design-verdict]] [:verdict [:= :standing-challenged]]
-     [:round int?] [:design-seq {:optional true} [:maybe int?]]
-     [:carried-from {:optional true} int?]
-     [:reason string?]
-     [:invariants-broken {:optional true} [:vector BrokenInvariant]]
-     [:load-bearing-held {:optional true} [:vector string?]]
-     [:load-bearing-broken {:optional true} [:vector BrokenInvariant]]
-     [:findings-classified {:optional true} [:vector ClassifiedFinding]]
-     [:needs string?]]]])
+   [:sound               (design-verdict-branch :sound nil)]
+   [:strained            (design-verdict-branch :strained nil)]
+   [:invalidated         (design-verdict-branch
+                          :invalidated
+                          {:invariants-broken [:vector {:min 1} BrokenInvariant]
+                           :needs             string?})]
+   [:standing-challenged (design-verdict-branch
+                          :standing-challenged
+                          {:needs string?})]])
 
 (def RecordFinding
   "One finding from a judgment over a RECORD rather than over a diff.
