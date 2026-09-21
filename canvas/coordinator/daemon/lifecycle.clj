@@ -5,6 +5,7 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.clock :as clock]
             [canvas.coordinator.record.runs :as runs]
+            [canvas.coordinator.record.session :as session]
             [canvas.coordinator.record.state :as state :refer [Path]]
             [fukan.common.typing.malli]))
 
@@ -79,14 +80,19 @@
      :delegates [label]}))
 
 (Module daemon-reconcile
-  "Startup repair: force every non-terminal Run to a terminal state.
+  "Startup repair: force every non-terminal Run to a terminal state, and leave each Run's own
+   session as the executor would have left it for that state.
 
    Runs on startup because a Run left mid-flight by a crash is indistinguishable from one still
-   going, and the daemon that could have told them apart is the one that died."
+   going, and the daemon that could have told them apart is the one that died. The session half
+   is part of the same repair: the executor ends a session when it ends the Run, so a Run ended
+   here with its session left :live is a record claiming work nothing is doing."
   (Operation reconcile!
-    "Settle every Run the last daemon left in flight."
+    "Settle every Run the last daemon left in flight, and every session a settled Run still holds."
     {:signature [:=> [:catn] :any]
-     :delegates [runs/read-run runs/write-run! state/runs-dir]}))
+     :delegates [runs/read-run runs/write-run! state/runs-dir session/read-session
+                 runs/owns-session? runs/teardown-session-for-run!
+                 runs/stop-session-for-parked-run!]}))
 
 (Module daemon-notify
   "Best-effort outbound notification on a Run's lifecycle events.

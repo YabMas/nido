@@ -746,3 +746,29 @@
 
 (deftest a-failed-stop-never-throws-into-the-run
   (is (= [] (:downed (stop-with {:down! (fn [_ _] (throw (ex-info "worktree gone" {})))})))))
+
+;; ── which run owns a session ────────────────────────────────────────────────
+
+(deftest a-session-a-later-run-of-its-trigger-re-created-is-not-the-earlier-runs
+  ;; A trigger that names its sessions stably per ref — a recovery's retries for
+  ;; one cause — writes a fresh record at the same path on every spawn. The
+  ;; record there is the newest run's; an older run sharing the trigger must not
+  ;; read as its owner, or reclaiming the old run tears down the retry.
+  (with-tmp
+    (fn [_]
+      (let [w     (workstream/create! :brian {:stage :triaging})
+            run   (fn [id at state]
+                    (let [r (assoc example-run :id id :state state :workstream-id (:id w)
+                                   :session-name "recover-cause-1"
+                                   :state-history [{:at at :state :queued}])]
+                      (fs/create-dirs (cstate/run-dir id))
+                      (runs/write-run! r)
+                      r))
+            older (run "r-old" "2026-09-20T10:00:00Z" :failed)
+            later (run "r-new" "2026-09-21T10:00:00Z" :queued)]
+        (session/create! :brian (:id w) {:name "recover-cause-1" :weight :light
+                                         :autonomy (assoc parked-autonomy :trigger :investigate-bug)})
+        (is (runs/owns-session? later) "the newest run of the trigger owns the record at its path")
+        (is (not (runs/owns-session? older)) "an earlier one sharing the trigger owns nothing")
+        (is (not (runs/owns-session? (assoc later :trigger :merge)))
+            "and a run of another trigger borrows, whatever its age")))))

@@ -1,6 +1,8 @@
 (ns nido.coordinator.daemon.reconcile
   "On daemon startup, force any non-terminal Run to a terminal state by
-   reading observable evidence (artifacts, _run-status.edn, agent.log).
+   reading observable evidence (artifacts, _run-status.edn, agent.log), and
+   leave each Run's own session as the executor would have left it for that
+   state.
 
    See spec §The coordinator daemon / Crash recovery."
   (:require
@@ -15,6 +17,10 @@
 
 (def ^:private non-terminal-states
   (set (keys runs/allowed-transitions)))
+
+(def ^:private resolved-states
+  "The Run states at which the executor tears a Run's session down."
+  #{:done :failed :halted})
 
 (defn- agent-log-reached-result?
   "True iff the last non-blank line of agent.log contains a `result` event.
@@ -59,11 +65,39 @@
         {:state :awaiting-review :error nil}
         {:state :failed :error {:reason :orphaned-from-restart}}))))
 
+(defn- settle-session!
+  "Leave the session `run` owns as the executor would have left it at `state`:
+   torn down once the Run is resolved, its services stopped when this start has
+   just parked it (`parked-now?`). Anything else — a Run left parked, a session
+   the Run borrowed, a record no longer :live — is left alone, which is what
+   makes a second start a no-op.
+
+   Never throws: one Run's session must not keep the rest from being settled."
+  [run state parked-now?]
+  (try
+    (let [{:keys [project workstream-id session-name]} run
+          s (when workstream-id (session/read-session project workstream-id session-name))]
+      ;; :live first: owns-session? reads every Run record, and only a handful
+      ;; of sessions are still live at any start.
+      (when (and s (session/live? s) (runs/owns-session? run))
+        (cond
+          (resolved-states state) (runs/teardown-session-for-run! run)
+          parked-now?             (runs/stop-session-for-parked-run! run))))
+    (catch Throwable e
+      (binding [*out* *err*]
+        (println (str "nido coordinator: reconcile could not settle the session of "
+                      (:id run) " — " (ex-message e)))))))
+
 (defn- reconcile-one!
-  "Read run.edn, decide a terminal/parked state if non-terminal, write it back.
+  "Read run.edn, decide a terminal/parked state if non-terminal, write it back,
+   then settle the Run's session for the state it ends at. A Run already
+   resolved has its session settled too: a restart between a Run's state and
+   its session leaves nothing else that would ever reach it.
    :queued runs are pending work — they are left intact for re-submission."
   [run-id]
   (when-let [run (runs/read-run run-id)]
+    (when (resolved-states (:state run))
+      (settle-session! run (:state run) false))
     (when (and (contains? non-terminal-states (:state run))
                (not= :queued (:state run)))
       ;; Back-fill the resumable id onto the session regardless of state change,
@@ -104,12 +138,15 @@
             (runs/write-run! updated)
             (runs/mirror-run-phase! updated)
             ;; Keep the ticket record honest: an orphaned triage Run clears a stale :investigating.
-            (tickets/on-run-terminal! updated state)))))))
+            (tickets/on-run-terminal! updated state)
+            (settle-session! updated state (= :awaiting-review state))))))))
 
 (defn ^{:malli/schema [:=> [:cat] :any]}
   reconcile!
-  "Scan every Run directory under ~/.nido/runs/ and force any non-terminal
-   Run to a terminal state. Idempotent — already-terminal Runs are left alone."
+  "Scan every Run directory under ~/.nido/runs/, force any non-terminal Run to
+   a terminal state, and settle the session each Run owns for the state it ends
+   at. Idempotent — an already-terminal Run's state is never rewritten, and a
+   session is settled only while its record is still :live."
   []
   (let [d (cstate/runs-dir)]
     (when (fs/exists? d)

@@ -480,18 +480,45 @@
         worktree    (session-lifecycle/worktree-path pname project-dir (:session-name run))]
     {:worktree worktree :instance-id (engine/resolve-instance-id worktree)}))
 
-(defn- owns-session?
-  "Did `run` spawn the session it names? Its session record says so when that
-   record's autonomy facet carries the run's trigger. A merge or drive Run
-   BORROWS the workstream's session — often the human's own — so a positive
-   claim is required: a session with no autonomy facet, or another trigger's,
-   is never this run's to stop."
+(defn- created-at
+  "When `run` was minted: the first entry of its state history, which no later
+   state change moves. ISO-8601 by construction, so it compares as a string."
+  [run]
+  (:at (first (:state-history run))))
+
+(defn- superseded?
+  "Has a Run of `run`'s trigger minted after it named the same workstream and
+   session? Reads every Run record, so ask it last."
+  [{:keys [id trigger workstream-id session-name] :as run}]
+  (let [mine (created-at run)]
+    (boolean
+     (some (fn [other-id]
+             (when (not= other-id id)
+               (when-let [r (read-run other-id)]
+                 (and (= trigger (:trigger r))
+                      (= workstream-id (:workstream-id r))
+                      (= session-name (:session-name r))
+                      (pos? (compare (created-at r) mine))))))
+           (list-run-ids)))))
+
+(defn ^{:malli/schema [:=> [:cat :Run] :boolean]}
+  owns-session?
+  "Did `run` spawn the session record now at the path it names? The record must
+   carry the run's trigger: a merge or drive Run BORROWS the workstream's
+   session — often the human's own — so a session with no autonomy facet, or
+   another trigger's, is never this run's to stop or reclaim.
+
+   The trigger alone is not enough. A trigger that names its sessions stably per
+   ref — a recovery's retries for one cause, a restore successor — writes a
+   fresh record at the same path on every spawn, so the record there belongs to
+   the newest such Run, and an older one sharing its trigger owns nothing."
   [run]
   (let [{:keys [project workstream-id session-name trigger]} run]
     (boolean (and workstream-id
                   (some-> (session/read-session project workstream-id session-name)
                           (get-in [:autonomy :trigger])
-                          (= trigger))))))
+                          (= trigger))
+                  (not (superseded? run))))))
 
 (def ^:private park-settle-ms
   "Pause between presence probes when a parked session reads occupied. Its agent

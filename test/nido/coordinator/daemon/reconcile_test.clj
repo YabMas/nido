@@ -268,3 +268,122 @@
         (io/write-edn! (cstate/run-status-path (:id run)) {:phase :complete})
         (reconcile/reconcile!)
         (is (= :done (:state (runs/read-run (:id run)))))))))
+
+;; ── the session a settled Run holds ─────────────────────────────────────────
+;; The executor ends a Run's session when it ends the Run. A Run ended here, at
+;; startup, used to keep its session :live — a record claiming work nothing was
+;; doing, read as :queued on the board and as a working hold on Operations.
+
+(defn- autonomy [trigger phase]
+  {:skill :foo :first-message "x" :agent :claude :claude-session-id nil :trigger trigger
+   :limits {} :priority 0 :uncapped? false :on-promote nil
+   :phase phase :phase-history [{:at "t" :phase phase}] :error nil})
+
+(defn- with-session!
+  "Seed `run` with a :live session in a fresh workstream, carrying `trigger` on
+   its autonomy facet (the Run's own by default, so the Run owns it). Returns
+   the run as seeded."
+  [run & {:keys [trigger] :or {trigger (:trigger run)} :as opts}]
+  (let [w   (ws/create! :test {:stage :triaging :external-refs []})
+        run (assoc run :workstream-id (:id w))]
+    (session/create! :test (:id w) {:name (:session-name run) :weight :light
+                                    :autonomy (when-not (contains? opts :human?)
+                                                (autonomy trigger :running))})
+    (seed-run! run)
+    run))
+
+(defn- settling
+  "Run reconcile `times` with both settle verbs stubbed. The teardown stub
+   archives the record, as the real one does. Returns {:torn [ids] :stopped [ids]}."
+  [& {:keys [times throw-for] :or {times 1}}]
+  (let [torn (atom []) stopped (atom [])]
+    (with-redefs [runs/teardown-session-for-run!
+                  (fn [r]
+                    (when (= throw-for (:id r)) (throw (ex-info "boom" {})))
+                    (swap! torn conj (:id r))
+                    (session/archive! (:project r) (:workstream-id r) (:session-name r)))
+                  runs/stop-session-for-parked-run! (fn [r] (swap! stopped conj (:id r)))]
+      (binding [*err* (java.io.StringWriter.)]
+        (dotimes [_ times] (reconcile/reconcile!))))
+    {:torn @torn :stopped @stopped}))
+
+(deftest an-orphaned-runs-own-session-is-torn-down
+  (with-tmp
+    (fn [_]
+      (let [run (with-session! base-run)
+            {:keys [torn stopped]} (settling)]
+        (is (= :failed (:state (runs/read-run (:id run)))))
+        (is (= [(:id run)] torn) "settled as the executor settles a failed Run")
+        (is (= [] stopped))))))
+
+(deftest a-run-already-resolved-with-a-live-session-is-settled-once
+  ;; Nothing else ever reaches it: the review sweep takes only parked Runs.
+  (with-tmp
+    (fn [_]
+      (let [run (with-session! (assoc base-run :state :failed
+                                      :state-history [{:at "T1" :state :queued}
+                                                      {:at "T2" :state :failed}]))]
+        (is (= [(:id run)] (:torn (settling :times 2)))
+            "and a second start finds the record archived and settles nothing")
+        (is (= :failed (:state (runs/read-run (:id run)))) "its state is not rewritten")))))
+
+(deftest a-run-reconcile-parks-has-its-services-stopped
+  (with-tmp
+    (fn [_]
+      (let [run (with-session! base-run)]
+        (io/write-edn! (cstate/run-status-path (:id run)) {:phase :awaiting-input :note "?"})
+        (let [{:keys [torn stopped]} (settling)]
+          (is (= :awaiting-review (:state (runs/read-run (:id run)))))
+          (is (= [(:id run)] stopped) "as the executor stops a Run it parks")
+          (is (= [] torn) "and nothing a reply needs is reclaimed"))))))
+
+(deftest a-run-left-parked-is-not-settled-again
+  (with-tmp
+    (fn [_]
+      (let [run (with-session! (assoc base-run :state :awaiting-review))]
+        (io/write-edn! (cstate/run-status-path (:id run)) {:phase :awaiting-input :note "?"})
+        (is (= {:torn [] :stopped []} (settling))
+            "the executor stopped it when it parked; a start has nothing to add")))))
+
+(deftest a-borrowed-session-is-never-settled
+  (with-tmp
+    (fn [_]
+      (with-session! (assoc base-run :state :done) :trigger :merge)
+      (with-session! (assoc base-run :id "2026-05-13-test-foo-yyyyyyyy" :state :done
+                            :session-name "human-one")
+                     :human? true)
+      (is (= {:torn [] :stopped []} (settling))
+          "another trigger's session, or a human's, is not this Run's to end"))))
+
+(deftest an-older-run-never-settles-the-session-a-later-run-re-created
+  ;; A recovery's retries for one cause share a session name: the record at that
+  ;; path is the newest retry's, and it is still queued.
+  (with-tmp
+    (fn [_]
+      (let [old (with-session! (assoc base-run :state :failed
+                                      :state-history [{:at "2026-09-20T10:00:00Z" :state :queued}
+                                                      {:at "2026-09-20T10:05:00Z" :state :failed}]))]
+        (seed-run! (assoc base-run :id "2026-05-13-test-foo-newer000" :state :queued
+                          :workstream-id (:workstream-id old)
+                          :state-history [{:at "2026-09-21T10:00:00Z" :state :queued}]))
+        (is (= {:torn [] :stopped []} (settling)))
+        (is (= :live (:substrate (session/read-session :test (:workstream-id old)
+                                                       (:session-name old)))))))))
+
+(deftest a-settle-that-throws-does-not-stop-the-rest
+  (with-tmp
+    (fn [_]
+      (let [a (with-session! (assoc base-run :id "2026-05-13-test-foo-aaaaaaaa" :state :failed
+                                    :session-name "run-a"))
+            b (with-session! (assoc base-run :id "2026-05-13-test-foo-bbbbbbbb" :state :failed
+                                    :session-name "run-b"))]
+        (is (= [(:id b)] (:torn (settling :throw-for (:id a)))))))))
+
+(deftest a-provision-only-session-outlives-reconcile
+  ;; The real teardown: a :plan-bug session is handed to a person at provision.
+  (with-tmp
+    (fn [_]
+      (let [run (with-session! (assoc base-run :skill :plan-bug :state :done))]
+        (binding [*err* (java.io.StringWriter.)] (reconcile/reconcile!))
+        (is (= :live (:substrate (session/read-session :test (:workstream-id run)
+                                                       (:session-name run)))))))))

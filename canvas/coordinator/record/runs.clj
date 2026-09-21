@@ -102,6 +102,15 @@
     "Reclaim the session a run spawned, once it has reached a resolved state."
     {:signature [:=> [:catn [:run Run]] :any]
      :delegates [session/archive!]})
+  (Operation owns-session?
+    "Did this run spawn the session record now at the path it names? The record must carry the
+     run's trigger — a merge or drive run borrows the workstream's session, often the human's own
+     — and no run of that trigger created after this one may name the same workstream and
+     session: a trigger that names sessions stably per ref writes a fresh record at the same path
+     on every spawn, so the record there is the newest such run's. A record that cannot be read
+     answers false."
+    {:signature [:=> [:catn [:run Run]] :boolean]
+     :delegates [session/read-session list-run-ids read-run]})
   (Operation stop-session-for-parked-run!
     "Stop the services of the session a parked run spawned, keeping everything a reply or an open
      needs to bring it back. A parked run waits on a human, and nothing obliges one to come — so
@@ -111,7 +120,7 @@
      the human's own), never a provision-only run's, only with a service process running, and
      only when the presence probe answers vacant — a probe that cannot answer keeps it up."
     {:signature [:=> [:catn [:run Run]] :any]
-     :delegates [fleet/occupancy lifecycle/down!]})
+     :delegates [owns-session? fleet/occupancy lifecycle/down!]})
   (Operation launch-context
     "The worktree and injected context an agent for this run launches into."
     {:signature [:=> [:catn [:run Run]] :map]}))
