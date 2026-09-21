@@ -110,7 +110,9 @@
   (let [[_ st] (poll :attempts [(attempt "ws-old/1.1" :open? true)]
                      :plans [] :proposals [{:ws-id "ws-a" :analysis-seq 1 :observation 0}])]
     (is (nil? (:emitted st)))
-    (is (= "ws-ws-old/1.1" (:held-by st)) "the state file says who holds it")))
+    (is (= "ws-ws-old/1.1" (:held-by st)) "the state file says who holds it")
+    (is (= 1 (:owed st))
+        "and what is piling up behind it — a held sweep owes exactly what a free one would")))
 
 (deftest a-day-with-no-plan-and-something-owed-fires-a-plan
   (let [[_ st] (poll :attempts [] :plans []

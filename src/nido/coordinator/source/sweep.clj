@@ -59,7 +59,7 @@
   [plans day]
   (first (filter #(= day (:date %)) plans)))
 
-(defn ^{:malli/schema [:=> [:cat :map [:vector :map] [:vector :map]] [:maybe :map]]}
+(defn ^{:malli/schema [:=> [:cat :map :string [:vector :map]] [:maybe :map]]}
   next-claim
   "The next :land claim of `plan` that has not been attempted, with its index, or
    nil when the plan is discharged.
@@ -123,10 +123,12 @@
         day      (day-of (clock/now-iso))
         plans    (proposal/plans-of project)
         today    (plan-for plans day)
-        owed     (when-not open
-                   (proposal/owed (proposal/of-project project)
-                                  plans
-                                  (proposal/claim-attempts project)))
+        ;; Derived held or not: the hold stops the poll firing, not the backlog
+        ;; growing, and a state file reading :owed 0 during a wedge says the
+        ;; opposite of what is happening.
+        owed     (proposal/owed (proposal/of-project project)
+                                plans
+                                (proposal/claim-attempts project))
         pick     (when-not open
                    (if today
                      (when-let [c (next-claim today (:ws-id today) attempts)]
