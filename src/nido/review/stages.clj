@@ -1293,6 +1293,43 @@
         (announce-target! ctx "error" t {:error (ex-message e)})
         {:target t :failure e}))))
 
+(defn- aborted-round
+  "The round a fan-out that lost a reviewer leaves behind: the reviews that came
+   back and what they found, unruled, beside the targets whose reviewer did not.
+
+   `ctx` already holds the design the reviewers were given, and that is what the
+   `:review` entry must cite — ended on the ctx before it, the run has none, and
+   a workstream holding a design refuses an entry citing nothing. The findings
+   are a reviewer's word with no warden behind them, so they are carried as owed
+   and ruled on by nobody. They are the only copy of what the surviving
+   reviewers found: a round that drops them reports a P1 it was handed as
+   nothing found.
+
+   `:review-aborted?` is what keeps the round from reading as a check on the one
+   before it — see `nido.review.verdict/fold-rulings`. Only a round a reviewer
+   was lost from carries it: a throw after the reviews stood, like
+   `:stack-unmovable`, ends a round that did read the branch."
+  [ctx results failed skipped toc]
+  (assoc ctx
+         :findings (cite-invariants (collect-findings results) (:design ctx))
+         :reviews results
+         :skipped skipped
+         ;; Rowed by the report as `error`: the phase is rebuilt from this ctx,
+         ;; and a target named nowhere in it would vanish from the round.
+         :failed (mapv :target failed)
+         :toc toc
+         :review-aborted? true))
+
+(defn- with-aborted-round
+  "`e` rethrown carrying `round` as `:ctx`, the channel
+   `nido.review.loop/run-pipeline` ends a run on — `with-round-carried`'s idiom
+   for the fix stage. A throwable that is no ExceptionInfo is returned as it is:
+   it crashes the run, and has no ex-data to carry anything on."
+  [e round]
+  (if (instance? clojure.lang.ExceptionInfo e)
+    (ex-info (ex-message e) (assoc (ex-data e) :ctx round) e)
+    e))
+
 (defn- fan-out-reviews
   [ctx]
   (let [{:keys [cwd base]} (:config ctx)
@@ -1348,7 +1385,8 @@
         _        (when (seq failed)
                    (record-statuses! cwd (assoc ctx :cache cached)
                                      (salvaged-statuses results) nil)
-                   (throw (:failure (first failed))))
+                   (throw (with-aborted-round (:failure (first failed))
+                            (aborted-round ctx results failed skipped toc))))
         ;; The whole-range target, and only what is a fact about that range:
         ;; where the review started from and which files it covered. NOT where a
         ;; round-level answer comes from — on a layered stack this target is the

@@ -461,11 +461,20 @@
    That last condition is exactly the evidence a defect was removed, which is
    why the two halves come out of one fold rather than two: `:standing` is what
    the run is still holding and `:repaired` is what it settled, and a finding
-   double-counted or dropped between them would make the pair not add up."
-  [{:keys [history findings]}]
+   double-counted or dropped between them would make the pair not add up.
+
+   A final round whose review ABORTED (`:review-aborted?`) is no round after
+   anything: the reviewer that would have re-reported a repair that did not
+   take may be the one that never ran, so its silence is not evidence. The
+   round before it is then the last that read the branch, and its repairs stay
+   owed. What the aborted round's surviving reviewers did raise is still
+   folded in, unruled, and so owed."
+  [{:keys [history findings review-aborted?]}]
   (let [rounds    (conj (vec (map :findings history)) (vec findings))
         repaired  (mapv #(repairs-aimed-at (:fixes %)) history)
-        last-idx  (dec (count rounds))
+        ;; The last round that READ the branch, which is what a repair has to be
+        ;; before to have been checked.
+        last-idx  (cond-> (dec (count rounds)) review-aborted? dec)
         latest    (reduce (fn [acc [idx round-findings]]
                             (reduce (fn [a f]
                                       (assoc a (finding-identity f)
@@ -588,9 +597,15 @@
    touched. `repairs-aimed-at` is why the final round's own `:fixes` is the
    whole record — a rolled-back repair and a plan the round never reached are
    both absent from it, and in both cases the code is exactly what the reviewers
-   read."
+   read.
+
+   A final round whose review aborted read nothing whole and ran no fixer, so
+   the round with the unread repairs is the one before it — the last in the
+   history, as `fold-rulings` reads it."
   [final]
-  (repairs-aimed-at (:fixes final)))
+  (repairs-aimed-at (:fixes (if (:review-aborted? final)
+                              (last (:history final))
+                              final))))
 
 (defn ^{:malli/schema [:=> [:cat :any :any] :boolean]}
   handed?

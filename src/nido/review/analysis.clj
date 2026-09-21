@@ -118,6 +118,11 @@
    analysis asked whether the loop stopped for the right reason is the reader
    that most needs it, and the reader least able to go and look.
 
+   `:unavailable` is the fifth, on a run no reviewer could be run for: the
+   reviewer's own sentence and nido's reading of it. It goes in the headline as
+   well, because the headline is the whole of the analysis session's briefing
+   and the log that sentence came from is in the run dir.
+
    `:design-verdict` and `:verdict-implementation` are the design judge's answer,
    and they are here on the counts' own argument carried further. The pass judges
    the whole run, so it answers AFTER the status is fixed and nothing the loop
@@ -151,7 +156,7 @@
   [{:keys [run-id report-path status rounds fix-attempts defects-settled
            findings-remaining findings-kept remaining-handed remaining-parked
            targets-reviewed targets-skipped unfixable parked standing
-           drift base in-flight errored design-verdict verdict-implementation
+           drift unavailable base in-flight errored design-verdict verdict-implementation
            reviewed-project reviewed-session reviewed-ws-id] :as run}]
   ;; `:in-flight` is the reconciler's reading of an orphan's report and is the
   ;; same value `worth-analysing?` gates on; the phase is the half of it that
@@ -188,13 +193,16 @@
                                       (or findings-kept 0) " kept\n"
                                       "Coverage: " (or targets-reviewed 0) " targets read this run, "
                                       (or targets-skipped 0) " carried from an earlier run\n"
-                                      (reviewed-line run (str " (base " base ")")))}
+                                      (reviewed-line run (str " (base " base ")"))
+                                      (when unavailable
+                                        (str "\nReviewer unavailable: " (:message unavailable))))}
       (pos? (or remaining-handed 0)) (assoc :remaining-handed remaining-handed)
       (pos? (or remaining-parked 0)) (assoc :remaining-parked remaining-parked)
       (seq unfixable)  (assoc :unfixable (mapv str unfixable))
       (seq parked)     (assoc :parked (vec parked))
       (seq standing)   (assoc :standing (vec standing))
       drift            (assoc :drift drift)
+      unavailable      (assoc :unavailable unavailable)
       base             (assoc :base base)
       died-in          (assoc :died-in died-in)
       verdict          (assoc :design-verdict verdict

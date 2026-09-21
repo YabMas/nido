@@ -70,6 +70,16 @@
                                     :why-no-finding "not a fixer's work"}]))]
     (is (= ["bb format is red on seven blocks"] (mapv :what (:standing p))))))
 
+(deftest the-payload-says-why-no-reviewer-could-be-run
+  ;; The headline is the analysis session's whole briefing. With the status
+  ;; alone, the session recovered the cause by tailing a reviewer log.
+  (let [u {:signal :usage-limit :retry-at "Sep 15th, 2026 8:35 AM"
+           :message "You've hit your usage limit. Try again at Sep 15th, 2026 8:35 AM."}
+        p (analysis/payload (assoc a-run :status :reviewer-unavailable :unavailable u))]
+    (is (= u (:unavailable p)))
+    (is (str/includes? (:headline p) (:message u))
+        "in the one line the session is briefed with, not only in a key it has to know to read")))
+
 (deftest a-run-that-stopped-on-nothing-says-nothing
   ;; Carried only when there is something to carry, like :remaining-handed —
   ;; a converged run's payload should not assert an empty handover.
@@ -77,6 +87,8 @@
     (is (not (contains? p :unfixable)))
     (is (not (contains? p :parked)))
     (is (not (contains? p :standing)))
+    (is (not (contains? p :unavailable)))
+    (is (not (str/includes? (:headline p) "unavailable")))
     (is (not (contains? p :remaining-parked)))))
 
 (deftest the-reviewed-branch-is-named-never-located

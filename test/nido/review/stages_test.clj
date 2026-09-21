@@ -3503,6 +3503,58 @@
             "the report names the reviewer that died, not just the phase — an
              aborted round used to leave every unfinished row reading `running`")))))
 
+(deftest an-aborted-fan-out-ends-the-run-on-the-round-it-reached
+  ;; The engine ends a run on the ctx a terminal throw carries, and without one
+  ;; on the ctx the stage was handed — which holds no design, so a workstream
+  ;; with one refused the run's :review entry, and no finding a surviving
+  ;; reviewer returned, so a P1 at confidence 1.0 reached no report body.
+  (let [u {:signal :usage-limit :message "You've hit your usage limit."}]
+    (with-redefs [layers/patch-hash    (fn [_ from to] (str "h-" from "-" to))
+                  pass/merge-base     (fn [& _] "FORK")
+                  layers/resolve-rev   (fn [& _] "AT")
+                  layers/brief         (fn [& _] nil)
+                  pass/changed-files  (fn [& _] [])
+                  stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
+                                                  {:bookmark "s--b" :slug "b" :tip "cB"}])
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  stages/discover-design-record (fn [_] {:seq 7 :claims []})
+                  stages/prior-open    (fn [_] nil)
+                  stages/standing-needs (fn [_] nil)
+                  cache/read-cache     (fn [& _] {})
+                  cache/write!         (fn [& _] true)
+                  pass/review!        (fn [{:keys [label]}]
+                                         (case label
+                                           "b" (throw (ex-info (:message u)
+                                                               {:reason :reviewer-unavailable
+                                                                :unavailable u}))
+                                           "a" {:status nil :manifest "x"
+                                                :findings [{:id "p1" :title "Pin the speech impl"
+                                                            :file "a.clj" :line-start 3}]}
+                                           {:status nil :findings [] :manifest "x"}))]
+      (let [thrown (try ((:run stages/review-stage)
+                         {:config {:cwd "/w" :base "main" :run-id "r"}
+                          :iter 2 :history []})
+                        nil
+                        (catch clojure.lang.ExceptionInfo e e))
+            data   (ex-data thrown)
+            round  (:ctx data)]
+        (is (= :reviewer-unavailable (:reason data)) "the round still ends on the failure")
+        (is (= u (:unavailable data)) "carrying what the reviewer said, unread")
+        (is (= 7 (get-in round [:design :seq]))
+            "the design the reviewers were given — the one citation the :review
+             entry may carry")
+        (is (= [["Pin the speech impl" "a"]] (mapv (juxt :title :from-layer) (:findings round)))
+            "what a surviving reviewer found, attributed to the layer that read it")
+        (is (every? (complement :disposition) (:findings round))
+            "and ruled on by nobody: no warden ran")
+        (is (= ["b"] (mapv :label (:failed round)))
+            "the target the round lost, so the report can still row it")
+        (is (= #{"a" "stack"} (set (map (comp :label :target) (:reviews round)))))
+        (is (= ["a" "b"] (mapv :label (:toc round))))
+        (is (true? (:review-aborted? round))
+            "marked, so the fold does not read the round as a check on the one
+             before it")))))
+
 (deftest a-layer-is-told-what-a-fixer-already-landed-on-it
   ;; :handed has recorded the join since it was added and no reviewer used it,
   ;; so nobody was ever asked whether a fix closed what it was handed — a swept

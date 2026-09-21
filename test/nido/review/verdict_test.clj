@@ -501,6 +501,35 @@
         "and owed as work to DO, not work to check — no fixer was launched in
          the round that stopped, whatever an earlier round landed")))
 
+(deftest a-round-whose-review-aborted-checks-no-repair-before-it
+  ;; Round 2's reviewers hit a quota. Folded as a round that read the branch and
+  ;; was silent, it made round 1's repair `settled` — published as `1 defect
+  ;; settled · 0 still open` about a commit no reviewer ever read.
+  (let [history [{:iter 1 :fixed-count 1
+                  :fixes [{:layer "opening-turn" :commit "c1" :handed ["h1"]}]
+                  :findings [{:handle "h1" :title "assert-context! reclassified"
+                              :disposition :fix}]}]
+        aborted {:status :reviewer-unavailable :review-aborted? true
+                 :history history
+                 :findings [{:id "p1" :title "a P1 a surviving reviewer returned"
+                             :from-layer "voice-speech-contract"}]}
+        handed  (verdict/handed-to-a-fixer aborted)
+        open    (verdict/open-across-run aborted)]
+    (is (empty? (verdict/settled-by-fixing aborted))
+        "a repair is settled by a round that read it, and this one read nothing whole")
+    (is (= ["assert-context! reclassified" "a P1 a surviving reviewer returned"]
+           (mapv :title open))
+        "the unread repair is still owed, and so is what the survivors found")
+    (is (= ["assert-context! reclassified"]
+           (mapv :title (filter #(verdict/handed? handed %) open)))
+        "owed as a repair to CHECK — it is in the branch — where the P1 is work
+         nobody has started")
+    (is (= ["assert-context! reclassified"]
+           (mapv :title (verdict/settled-by-fixing
+                         (assoc aborted :review-aborted? false :findings []))))
+        "the same history under a round that did read the branch settles it,
+         which is the reading the mark exists to withhold")))
+
 (deftest a-rolled-back-repair-leaves-a-finding-as-untouched-as-any-other
   ;; The commit is gone, so the code is exactly what the reviewers read. Counting
   ;; it as repaired would tell a reader to go and check a fix that is not there.

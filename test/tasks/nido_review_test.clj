@@ -15,6 +15,7 @@
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.review.layers :as layers]
    [nido.review.loop :as rloop]
+   [nido.review.pass :as pass]
    [nido.review.record :as record]
    [nido.review.report :as rreport]
    [nido.review.stages :as stages]
@@ -817,6 +818,96 @@
         "and the ledger renders it rather than holding it")
     (is (str/includes? (:title (analysis-payload-for final rpt)) "died in fix")
         "the analysis is titled as a run that crashed mid-rewrite, which it is")))
+
+(defn- a-second-round-whose-reviewer-runs-out
+  "Drive the real engine and the real review stage over two rounds of a two-layer
+   stack. Round 1 reads everything; `a` reports a defect, the warden rules it
+   `fix` and a fixer lands a repair on it. In round 2 `a`'s reviewer returns a
+   new P1 and `b`'s is refused by the vendor. Answers `[final report]`.
+
+   The warden and the fix stage are stubs: what is under test is what the
+   aborted round leaves behind, and the round before it only has to have landed
+   a repair nobody has read."
+  [u]
+  (let [rpt    (atom (rreport/init {:run-id "review-q" :cwd "/w" :base "main" :started-at "t0"}))
+        warden {:name :warden
+                :run  (fn [c] (-> c
+                                  (update :findings
+                                          (partial mapv #(assoc % :handle (:id %) :disposition :fix
+                                                                  :owner-layer (:from-layer %))))
+                                  (assoc :control :continue :warden {:decision :continue})))}
+        fix    {:name :fix
+                :run  (fn [c] (update c :history (fnil conj [])
+                                      {:iter (:iter c) :fixed-count 1 :findings (:findings c)
+                                       :fixes [{:layer "a" :commit "c1"
+                                                :handed (mapv :handle (:findings c))}]}))}]
+    (with-redefs [layers/patch-hash    (fn [_ from to] (str "h-" from "-" to))
+                  pass/merge-base      (fn [& _] "FORK")
+                  layers/resolve-rev   (fn [& _] "AT")
+                  layers/brief         (fn [& _] nil)
+                  pass/changed-files   (fn [& _] [])
+                  stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
+                                                  {:bookmark "s--b" :slug "b" :tip "cB"}])
+                  stages/project+ws-from-cwd (fn [_] nil)
+                  stages/discover-design-record (fn [_] {:seq 7 :claims []})
+                  stages/prior-open    (fn [_] nil)
+                  stages/standing-needs (fn [_] nil)
+                  pass/review!         (fn [{:keys [label iter]}]
+                                         (cond
+                                           (and (= 2 iter) (= "b" label))
+                                           (throw (ex-info (:message u)
+                                                           {:reason :reviewer-unavailable
+                                                            :unavailable u}))
+                                           (= "a" label)
+                                           {:status nil :manifest "x"
+                                            :findings [(if (= 1 iter)
+                                                         {:id "f1" :title "the lease is leaked"
+                                                          :file "a.clj" :line-start 9}
+                                                         {:id "p1" :title "pin the speech impl"
+                                                          :file "a.clj" :line-start 3})]}
+                                           :else {:status nil :findings [] :manifest "x"}))]
+      (let [final (rloop/run-loop {:run-id "review-q" :cwd "/w" :base "main"
+                                   :pipeline [stages/review-stage warden fix]
+                                   :finding-key stages/default-finding-key
+                                   :terminal-reasons stages/terminal-reasons
+                                   :open? (complement stages/settled?)
+                                   :emit (fn [ev] (swap! rpt rreport/apply-event ev nil))})]
+        [final @rpt]))))
+
+(deftest a-round-whose-reviewer-runs-out-still-publishes-itself
+  ;; Four runs on design-holding workstreams ended reviewer-unavailable and left
+  ;; no :review entry — the round ended on the ctx its review stage was handed,
+  ;; which held no design, and the attribution guard refused it. One published
+  ;; `1 defect settled · 0 still open` over a repair no reviewer had read; one
+  ;; lost a P1 a surviving reviewer had returned; all had `reason: null`.
+  (let [u           {:signal :usage-limit :retry-at "Sep 22nd, 2026 1:14 PM"
+                     :message "You've hit your usage limit. Try again at Sep 22nd, 2026 1:14 PM."}
+        [final rpt] (a-second-round-whose-reviewer-runs-out u)
+        ev          (t/review-event final rpt "/runs/r/report.json")
+        appended    (atom nil)]
+    (is (= :reviewer-unavailable (:status final)))
+    (is (= 7 (get-in final [:design :seq]))
+        "the run ends holding the design its reviewers were given")
+    (with-redefs [lifecycle/session-from-cwd (fn [_] {:project "brian" :session "s1"})
+                  csession/workstream-id-for (fn [_ _] "ws-1")
+                  ws/read-ws (fn [_ _] {:id "ws-1" :entries [{:kind :design :seq 7}]})
+                  ws/append-entry! (fn [_ _ _ content] (reset! appended content) "/path")]
+      (is (= "ws-1" (t/append-review-entry! "/w" final rpt "/runs/r/report.json"))
+          "so the guard's premise holds and the entry is written, not refused")
+      (is (str/includes? @appended ":design {:seq 7}")))
+    (is (= ev (report/validate-event :review ev)))
+    (is (= u (:unavailable ev)))
+    (is (= 0 (:defects-settled ev))
+        "round 1's repair was read by no one, so it settled nothing")
+    (is (= #{"the lease is leaked" "pin the speech impl"} (set (map :title (:open ev))))
+        "both are owed: the unread repair, and the P1 a surviving reviewer found")
+    (is (= 1 (:remaining-handed ev))
+        "and the repair is owed as one to check, not as work nobody started")
+    (is (= u (get-in rpt [:reason :unavailable])) "report.json's reason is no longer null")
+    (let [p (analysis-payload-for final rpt)]
+      (is (= u (:unavailable p)))
+      (is (= 2 (:findings-remaining p)))
+      (is (= 1 (:remaining-handed p))))))
 
 (deftest the-entry-counts-defects-removed-apart-from-repairs-dispatched
   ;; The two are different sizes and the entry published only the larger, under

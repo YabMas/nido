@@ -78,13 +78,21 @@
    `nido.review.stages/placed-on`. The loop's own entries rather than a
    warden's, because no warden is shown those rows, and a run that ends on a
    quiet round has no warden at all; they are still counted open, and without
-   them here a row counted open would be named nowhere a person reads."
+   them here a row counted open would be named nowhere a person reads.
+
+   `:unavailable` is why no reviewer could be run, as the reviewer said it —
+   `nido.review.codex/unavailability`'s `{:signal :message :retry-at}`. The
+   status names the condition; this is the remedy and the hour to come back,
+   whose only other copies are the `:review` entry and a log in the run dir."
   [ctx]
   (let [parks    (get-in ctx [:carry :parks])
         standing (into [] (distinct) (concat (get-in ctx [:warden :standing])
                                              (:unplaced ctx)))]
     (not-empty
      (cond-> {}
+       (:unavailable ctx)
+       (assoc :unavailable (:unavailable ctx))
+
        (seq (:unfixable ctx))
        (assoc :unfixable (vec (:unfixable ctx)))
 
@@ -275,9 +283,9 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   review-layers
-  "One entry per review target this round: what it found, or that it was not
-   looked at because its patch had already converged. This is what makes the
-   round legible per layer instead of as one number.
+  "One entry per review target this round: what it found, that its reviewer
+   failed, or that it was not looked at because its patch had already converged.
+   This is what makes the round legible per layer instead of as one number.
 
    A reporter that contributed findings but is no layer of the stack — the
    mechanical design reviewer — gets a row too. It is not in `:reviews`,
@@ -289,7 +297,7 @@
   (let [counts   (frequencies (keep :from-layer (:findings ctx)))
         reviewed (into #{} (map (comp :label :target)) (:reviews ctx))
         skipped  (into #{} (map :label) (:skipped ctx))
-        accounted (into reviewed skipped)]
+        accounted (-> reviewed (into skipped) (into (map :label) (:failed ctx)))]
     (in-stack-order
      (-> (mapv (fn [{:keys [target] :as r}]
                  ;; A target whose diff was empty is rowed as what it was, not
@@ -314,6 +322,9 @@
          (into (mapv (fn [t] (row t (cond-> {:status "skipped"}
                                       (:converged-at t) (assoc :converged-at (:converged-at t)))))
                      (:skipped ctx)))
+         ;; A round that aborted names the targets it lost a reviewer on, and
+         ;; they are rowed as the fan-out already moved them.
+         (into (mapv #(row % {:status "error"}) (:failed ctx)))
          (into (for [[label n] counts
                      :when (and label (not (contains? accounted label)))]
                  (row {:label label} {:status "reported" :findings n})))))))

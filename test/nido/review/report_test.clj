@@ -414,6 +414,38 @@
     (is (= ["lower"] (mapv :label (:layers ph))))
     (is (= {:round 1 :phase "review" :message "codex review failed"} (report/errored r)))))
 
+(deftest an-aborted-review-phase-keeps-what-its-survivors-found
+  ;; The review stage now gives an account of a round it lost a reviewer in.
+  ;; Folded as a finished phase, the account is what the rows are rebuilt from,
+  ;; so the target that failed has to be in it or the round forgets it had one.
+  (let [u  {:signal :usage-limit :message "You've hit your usage limit."
+            :retry-at "Sep 22nd, 2026 1:14 PM"}
+        r  (drive
+            [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+             {:event :phase-started :iter 1 :phase :review :at "t1"}
+             {:event :targets-resolved :iter 1 :base-rev "B" :files ["a.clj"]
+              :targets [{:label "lower" :index 1 :status "pending"}
+                        {:label "upper" :index 2 :status "pending"}]}
+             {:event :target-moved :iter 1 :label "lower" :status "reviewed" :findings 1}
+             {:event :target-moved :iter 1 :label "upper" :status "error"}
+             {:event :phase-errored :iter 1 :phase :review :at "t2"
+              :error (:message u)
+              :ctx {:findings [{:id "p1" :title "Pin the speech impl" :from-layer "lower"}]
+                    :reviews  [{:target {:label "lower" :index 1} :findings [{:id "p1"}]}]
+                    :failed   [{:label "upper" :index 2}]
+                    :review-aborted? true}}
+             {:event :run-finalized :status :reviewer-unavailable
+              :ctx {:unavailable u} :at "t3"}])
+        ph (first (:phases (first (:rounds r))))]
+    (is (= [["lower" "reviewed"] ["upper" "error"]] (mapv (juxt :label :status) (:layers ph)))
+        "the lost target is still rowed as the one the reviewer died on")
+    (is (= ["Pin the speech impl"] (mapv :title (:findings ph)))
+        "the finding's body, where the row alone said `findings: 1`")
+    (is (= "error" (:status ph)) "and the phase is still the one that failed")
+    (is (= {:unavailable u} (:reason r))
+        "the remedy and the reset hour, on the one key every reader of a finished
+         run is sent to — it was null")))
+
 (deftest a-run-no-phase-of-which-threw-names-no-error
   (is (nil? (report/errored
              (drive [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
