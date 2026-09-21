@@ -17,6 +17,10 @@
      an unparseable budget is how agents came to run with no wall clock at all."
     {:signature [:=> [:catn [:s :string]] :int]})
   (Operation launch!
-    "Run an agent headlessly to completion, killed at its budget. Blocks."
+    "Run an agent headlessly to completion, killed at its budget. Blocks.
+
+     Nothing the agent starts may outlive its turn — nobody is left to come back to a headless
+     run — so it is offered no background tasks and no self-scheduling, and claude's own idle
+     ceiling on pending work is lifted: the budget is the one clock."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [parse-budget-ms]}))

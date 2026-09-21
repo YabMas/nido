@@ -57,6 +57,24 @@
     (* (Long/parseLong n)
        (case unit "s" 1000 "m" 60000 "h" 3600000 "d" 86400000))))
 
+(def ^:private headless-env
+  "What every headless claude runs with, merged over the caller's :env so no
+   caller can undo it. Nobody is left to come back to a headless run once its
+   agent returns its result, and `claude --print` then decides what happens to
+   work still in flight — a background subagent is waited on for ten idle
+   minutes and dropped, background Bash is killed seconds after the result. So
+   nothing is backgrounded (no run_in_background on Bash or Agent), no cron is
+   offered, and claude's own ceiling is lifted: the budget is the one clock."
+  {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" "1"
+   "CLAUDE_CODE_DISABLE_CRON"             "1"
+   "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS" "0"})
+
+(def ^:private headless-disallowed-tools
+  "Tools removed from every headless agent that the settings above leave in
+   place. ScheduleWakeup survives CLAUDE_CODE_DISABLE_CRON (claude 2.1.278 still
+   offers it) and would schedule a wakeup nothing can deliver."
+  ["ScheduleWakeup"])
+
 (defn- build-cmd
   "Assemble the claude command vector. With :claude-session-id, the run is
    addressed by id: :resume? true CONTINUES that transcript (--resume) — a
@@ -64,13 +82,17 @@
    first-message is the trailing positional argument."
   [{:keys [claude-bin first-message system-prompt claude-session-id resume?
            mcp-config add-dirs tools model]}]
-  (cond-> [claude-bin
-           "--print"
-           ;; Stream-json output requires --verbose per claude-code's
-           ;; --print mode validation; without it claude refuses to run.
-           "--verbose"
-           "--output-format=stream-json"
-           "--dangerously-skip-permissions"]
+  (cond-> (into [claude-bin
+                 "--print"
+                 ;; Stream-json output requires --verbose per claude-code's
+                 ;; --print mode validation; without it claude refuses to run.
+                 "--verbose"
+                 "--output-format=stream-json"
+                 "--dangerously-skip-permissions"
+                 ;; Variadic: the next option ends its list, and the `--`
+                 ;; terminator below keeps it off the prompt.
+                 "--disallowedTools"]
+                headless-disallowed-tools)
     ;; --resume is dormant until gate-reply turns start passing :resume? true;
     ;; reactivates the moment a caller resumes a parked agent with new input.
     ;; Omitted by default, which is not the same as naming the default: a launch
@@ -116,7 +138,8 @@
      :first-message — message passed as the positional argument
      :system-prompt — optional --append-system-prompt content
      :claude-bin    — path/name of the claude binary (override for tests)
-     :env           — extra env vars to merge into the child's environment
+     :env           — extra env vars to merge into the child's environment;
+                      the headless settings are merged over them and win
      :budget        — REQUIRED. String like \"30m\" / \"2h\"; absent or
                       unreadable is refused before anything is spawned, rather
                       than silently meaning no budget at all.
@@ -156,7 +179,8 @@
                               :resume? resume? :mcp-config mcp-config :add-dirs add-dirs
                               :tools tools :model model})
         proc      (p/process cmd (cond-> {:dir cwd
-                                          :env (merge (into {} (System/getenv)) (or env {}))
+                                          :env (merge (into {} (System/getenv)) (or env {})
+                                                      headless-env)
                                           ;; Close stdin so claude doesn't wait for input
                                           ;; (it emits a "no stdin in 3s" warning otherwise).
                                           :in  ""

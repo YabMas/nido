@@ -22,14 +22,16 @@
 
 (deftest build-cmd-resume-uses-resume-flag
   (is (= ["claude" "--print" "--verbose" "--output-format=stream-json"
-          "--dangerously-skip-permissions" "--resume" "sid-1" "--" "hi"]
+          "--dangerously-skip-permissions" "--disallowedTools" "ScheduleWakeup"
+          "--resume" "sid-1" "--" "hi"]
          (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"
                              :claude-session-id "sid-1" :resume? true}))
       "resume? routes the recorded id through --resume"))
 
 (deftest build-cmd-without-resume-uses-session-id
   (is (= ["claude" "--print" "--verbose" "--output-format=stream-json"
-          "--dangerously-skip-permissions" "--session-id" "sid-1" "--" "hi"]
+          "--dangerously-skip-permissions" "--disallowedTools" "ScheduleWakeup"
+          "--session-id" "sid-1" "--" "hi"]
          (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"
                              :claude-session-id "sid-1"}))
       "the original burst still records under --session-id"))
@@ -274,4 +276,39 @@
                (->> (argv-of {:model "opus"}) (drop-while #(not= % "--model")) (take 2))))
         (is (not (some #{"--model"} (argv-of {})))
             "a launch naming no model still leaves the CLI's choice alone"))
+      (finally (fs/delete-tree tmp)))))
+
+;; ── nothing a headless agent starts may outlive its turn ────────────────────
+
+(deftest a-headless-agent-is-offered-no-way-to-schedule-itself
+  ;; CLAUDE_CODE_DISABLE_CRON removes the Cron tools but not ScheduleWakeup, and
+  ;; a wakeup scheduled by a headless agent has no session left to wake.
+  (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi" :tools ""})]
+    (is (= ["--disallowedTools" "ScheduleWakeup"]
+           (take 2 (drop-while #(not= "--disallowedTools" %) cmd))))
+    (is (= ["--" "hi"] (take-last 2 cmd))
+        "and the variadic flag cannot swallow the prompt")))
+
+(deftest a-headless-agent-runs-everything-in-the-foreground-whatever-the-caller-asks
+  ;; The 2026-09-11 claim run ended its turn waiting on a background review;
+  ;; --print dropped the review at its ten-minute idle ceiling and the run never
+  ;; finished. A caller cannot opt back in: the settings are merged last.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (fs/create-dirs (cstate/run-dir "r1"))
+        (let [env-file (str (fs/path tmp "env"))]
+          (agent/launch! {:run-id "r1" :cwd (str tmp) :first-message "/x"
+                          :claude-bin fake-claude :budget "5m"
+                          :env {"FAKE_CLAUDE_ENV_FILE" env-file
+                                "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" "0"
+                                "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS" "600000"}})
+          (let [lines (set (str/split-lines (slurp env-file)))]
+            (is (contains? lines "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1")
+                "no run_in_background on Bash or Agent, whatever :env said")
+            (is (contains? lines "CLAUDE_CODE_DISABLE_CRON=1") "no cron tools")
+            (is (contains? lines "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0")
+                "claude sets no ceiling of its own — the budget is the one clock")
+            (is (contains? lines (str "FAKE_CLAUDE_ENV_FILE=" env-file))
+                "and the caller's other variables still reach the child"))))
       (finally (fs/delete-tree tmp)))))

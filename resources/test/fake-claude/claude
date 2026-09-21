@@ -11,6 +11,8 @@
 #   FAKE_CLAUDE_RESULT_TEXT — result text to emit in the result event (optional)
 #   FAKE_CLAUDE_ARGV_FILE   — if set, path to write the arguments it was run
 #                             with, one per line
+#   FAKE_CLAUDE_ENV_FILE    — if set, path to write its environment, one
+#                             NAME=value per line
 
 set -euo pipefail
 SESSION_ID="${FAKE_CLAUDE_SESSION_ID:-fake-session-001}"
@@ -22,6 +24,9 @@ RESULT_TEXT="${FAKE_CLAUDE_RESULT_TEXT:-}"
 
 if [ -n "${FAKE_CLAUDE_ARGV_FILE:-}" ]; then
   printf '%s\n' "$@" > "$FAKE_CLAUDE_ARGV_FILE"
+fi
+if [ -n "${FAKE_CLAUDE_ENV_FILE:-}" ]; then
+  env > "$FAKE_CLAUDE_ENV_FILE"
 fi
 
 # init event
