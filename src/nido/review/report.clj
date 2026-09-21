@@ -166,6 +166,14 @@
       ;; Before "clean", because the two are indistinguishable by findings
       ;; alone — both have none — and only this one had no reviewer read a line.
       (and review (= "ok" (:status review)) (nil? warden) nothing?) "nothing-to-review"
+
+      ;; Before "clean" for the same reason and the other direction: a round
+      ;; that read a patch nothing had read quiet before found nothing AND
+      ;; settled nothing, because convergence is earned by two such readings.
+      ;; Called clean, it is a round that went back for a second reading
+      ;; reported as the round that ended the run.
+      (and review (= "ok" (:status review)) (nil? warden)
+           (seq (:read-once review)))                              "read-once"
       (and review (= "ok" (:status review))
            (empty? (:findings review)) (nil? warden))              "clean"
 
@@ -183,6 +191,12 @@
       ;; and the fixers above the conflict were never launched.
       (seq (:conflicted fix))                                      "fix-conflicted"
       (and fix (seq (:fixes fix)))                                "continued"
+
+      ;; Before "stopped", which is what the warden said and not what became of
+      ;; it: a stop over a layer on its first reading ends the round and sends
+      ;; the run back for the second. The run did not stop here, and this is the
+      ;; only phase that holds both halves of why.
+      (seq (:read-once warden))                                    "read-once"
       (= "stop" (:decision warden))                                "stopped"
       :else                                                       "ended")))
 
@@ -297,6 +311,12 @@
   (let [counts   (frequencies (keep :from-layer (:findings ctx)))
         reviewed (into #{} (map (comp :label :target)) (:reviews ctx))
         skipped  (into #{} (map :label) (:skipped ctx))
+        ;; Which rows the round left at ONE reading of their patch. A layer
+        ;; that reported nothing and one that has been read quiet twice both
+        ;; row as `reviewed · 0 findings`, and only the second is a layer this
+        ;; run is done with — establishing that from a report took a reader
+        ;; through three rounds of reviewer prompts and the workstream cache.
+        read-once (set (:read-once ctx))
         accounted (-> reviewed (into skipped) (into (map :label) (:failed ctx)))]
     (in-stack-order
      (-> (mapv (fn [{:keys [target] :as r}]
@@ -310,7 +330,9 @@
                    ;; on a project configured for claude that reading is wrong.
                    (row target (cond-> {:status   "reviewed"
                                         :findings (get counts (:label target) 0)}
-                                 (:judged-by r) (assoc :judged-by (:judged-by r))))))
+                                 (:judged-by r) (assoc :judged-by (:judged-by r))
+                                 (contains? read-once (:label target))
+                                 (assoc :read-once true)))))
                (:reviews ctx))
          ;; On top of the patch every row carries, a skipped row says WHEN the
          ;; convergence it is standing on was recorded — a timestamp, and often
@@ -417,10 +439,16 @@
       ;; no layer — handed to no reviewer, so it is in none of the rows above.
       ;; Per round for the reason the warden's `standing` is: the terminal
       ;; round's is what the run leaves, and the stack can move under the rest.
+      ;; :read-once is the layers this round left at one reading of their patch,
+      ;; which is what a second reading is owed of. It is on the phase as well
+      ;; as on the rows because it is what the ROUND did: a round that found
+      ;; nothing and did not end the run is otherwise a clean round the report
+      ;; cannot explain.
       :review (cond-> (assoc ph :overall-correctness (:overall-correctness ctx)
                              :findings (vec (:findings ctx))
                              :layers (review-layers ctx))
                 (seq (:conflicted ctx)) (assoc :conflicted (vec (:conflicted ctx)))
+                (seq (:read-once ctx))  (assoc :read-once (vec (:read-once ctx)))
                 (seq (:unplaced ctx))   (assoc :unplaced (vec (:unplaced ctx))))
       ;; :cause as well as :reason, and they are not alternatives: a reason says
       ;; what was wrong with the answer, a cause says whether there WAS one. A
@@ -450,7 +478,13 @@
                    ;; what the run leaves behind, and a reader asking why an item
                    ;; stopped being named needs the round it was last named in.
                    (seq (:standing a)) (assoc :standing (vec (:standing a)))
-                   (seq (:unfixable ctx)) (assoc :unfixable (vec (:unfixable ctx)))))
+                   (seq (:unfixable ctx)) (assoc :unfixable (vec (:unfixable ctx)))
+                   ;; The stage overruling the warden the other way: a stop over
+                   ;; a layer on its first reading ends the round and sends the
+                   ;; run back for the second. Here for the reason :unfixable is
+                   ;; — the phase is the only place the decision and what became
+                   ;; of it both sit.
+                   (seq (:read-once ctx)) (assoc :read-once (vec (:read-once ctx)))))
       ;; The finding ids a fixer was handed, not only how many. It is the join
       ;; every cross-round question needs — did this fix stop that finding coming
       ;; back — and the report held one side of it and threw the other away.

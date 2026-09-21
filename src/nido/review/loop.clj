@@ -171,7 +171,14 @@
 (defn- run-pipeline
   "Run stages in order over ctx, emitting phase-started before each stage and
    phase-finished (or phase-errored) after. Short-circuits (reduced) on a
-   terminal :status or terminal :control.
+   terminal :status or terminal :control — and on `:control :next-round`, which
+   ends the round without ending the run: the stages after it are skipped, and
+   `run-loop` carries on from the ctx it returns as it would from a pipeline
+   that ran out. That is what lets a stage say `there is nothing more to do
+   here, and something still to do next round` — the diff loop's review stage
+   says it of a layer whose patch has been read quiet only once, where the round
+   has no findings to rule on and no repair to make, and the run may not end
+   until a second reading has paired with the first.
 
    Stage-agnostic still: it never names a stage, it is TOLD one. `judged-after`
    is the pipeline saying which of its stages produces the judgement a run may
@@ -216,13 +223,27 @@
                                         :converged)))
          (= :escalate (:control ctx')) (reduced (assoc ctx' :status :escalated))
 
+         :else
          ;; The history here does not yet count this round — the stage that
          ;; appends it has not run — so it is already the `prior` the check
          ;; wants.
-         (and judged-after (= judged-after (:name stage)))
-         (if-let [final (end? ctx' (:history ctx'))] (reduced final) ctx')
+         (let [final (when (and judged-after (= judged-after (:name stage)))
+                       (end? ctx' (:history ctx')))]
+           (cond
+             final (reduced final)
 
-         :else                         ctx')))
+             ;; This ROUND is over and the run is not: a stage with nothing
+             ;; further to do here and something still to do next round. The
+             ;; stages after it are skipped and the round's carry is what the
+             ;; next one starts from, exactly as if the pipeline had run out.
+             ;;
+             ;; Asked after the terminal check rather than before it, because a
+             ;; run at its cap or going nowhere ends however much a stage would
+             ;; like another round — a control that could outrank `end?` would
+             ;; be an uncapped loop with one more way in.
+             (= :next-round (:control ctx')) (reduced ctx')
+
+             :else ctx')))))
    ctx
    pipeline))
 

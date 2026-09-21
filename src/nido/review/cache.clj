@@ -2,8 +2,8 @@
 (ns nido.review.cache
   "What the review already knows, keyed by content.
 
-   A layer that was reviewed and needed no fix is `converged`. The mark is NOT
-   granted by an agent and cannot be revoked by one: it is the hash of the
+   A layer TWO readings each found nothing owed of is `converged`. The mark is
+   NOT granted by an agent and cannot be revoked by one: it is the hash of the
    layer's patch, recorded next to the workstream. A later run recomputes the
    hash and either finds it — in which case that layer is genuinely unchanged
    and skipping it is safe — or does not, in which case the layer is reviewed
@@ -17,6 +17,16 @@
    look at again, so nothing ever read the second. An entry that still owes
    something is the one whose answers a next round actually needs — it is the
    entry that gets reviewed.
+
+   Which is why `:status` has a MIDDLE value. A reviewer is not deterministic at
+   a byte-identical patch — across five analysed runs a second read at an
+   unchanged hash found a P1 or P2 the first had missed — so one reading that
+   owes nothing is a sample rather than a verdict, and `:read-once` is what such
+   a sample is recorded as. It grants no skip: the patch is read again, which is
+   the point of recording it. What it buys is that the two readings need not
+   happen in one run. A layer nobody is touching is read once, kept, and paired
+   by whatever run next reaches it — so the rule costs one extra reading per
+   patch ever rather than one per run.
 
    Keying on the PATCH is what makes this survive the trip to merge. Commit ids
    die at `/align`'s rebase and change ids die at `/squash`'s fold, but the patch
@@ -61,15 +71,36 @@
         {}))
     (catch Throwable _ {})))
 
+(def quiet-statuses
+  "The statuses that record a reading of the patch which left nothing owed: the
+   first one, and the pair it earns.
+
+   Named because two questions read it — whether a patch may be paired with, and
+   what a round writes down about the patches it read quiet — and a set spelled
+   twice is two rules the day one of them gains a member."
+  #{:read-once :converged})
+
 (defn ^{:malli/schema [:=> [:cat :map :string] :boolean]}
   converged?
   "Has this exact patch already been reviewed to convergence?
 
    The only question that grants a skip, so it is asked of `:status` exactly:
-   any other value — a patch reviewed and still owing something, an entry from a
-   writer that did not say — means review it."
+   any other value — a patch reviewed and still owing something, a patch one
+   reading owed nothing of, an entry from a writer that did not say — means
+   review it."
   [cache patch-hash]
   (= :converged (:status (get cache patch-hash))))
+
+(defn ^{:malli/schema [:=> [:cat :map :string] :boolean]}
+  read-quiet?
+  "Is a reading of this exact patch that left nothing owed already on record?
+
+   What a run asks before it GRANTS convergence, as `converged?` is what it asks
+   before it skips. `:converged` answers yes too — that entry says two such
+   readings happened — although a converged patch is skipped rather than read
+   again, so what this finds in practice is `:read-once`."
+  [cache patch-hash]
+  (contains? quiet-statuses (:status (get cache patch-hash))))
 
 (defn ^{:malli/schema [:=> [:cat :map :string] :any]}
   answered
@@ -104,7 +135,7 @@
 
    `entry` supplies its own `:status`, and one that omits it is a patch nothing
    will skip. There was a `:converged` default here, from when convergence was
-   the only thing recorded; with two statuses to write, defaulting to the one
+   the only thing recorded; with three statuses to write, defaulting to the one
    that grants a skip means a caller that forgets ships unreviewed code — the
    single failure this namespace leans away from."
   [cache patch-hash entry]
@@ -125,9 +156,10 @@
    stay true of it, and a reopen that rewrote the entry would make the next round
    re-argue everything an earlier one settled.
 
-   Only a converged entry is touched. A `:partial` one already owes something,
-   and an absent one is a patch this store has never seen — writing a status for
-   it would claim a review that nobody ran."
+   Only a converged entry is touched — it is the only one holding a skip to
+   revoke. A `:partial` one already owes something and a `:read-once` one is
+   read again whatever this says, and an absent one is a patch this store has
+   never seen, where writing a status would claim a review that nobody ran."
   [cache patch-hash at]
   (cond-> cache
     (converged? cache patch-hash)

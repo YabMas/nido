@@ -1019,28 +1019,6 @@
   [targets]
   (into #{} (keep :patch-hash) targets))
 
-(defn ^{:malli/schema [:=> [:cat :any :any] :boolean]}
-  quiet-again?
-  "Whether a quiet round is the second reading of what the FIRST quiet round
-   read: `carried` is that round's `content-hashes`, `targets` this round's,
-   skipped ones included.
-
-   The pair of quiet rounds `clean` is earned by is a claim that two independent
-   readings of one content found nothing. So a round that read anything else is
-   a first reading, however many quiet rounds came before it — whatever moved
-   the code in between, a repair the warden promoted out of a quiet round or a
-   round that found and fixed, left nobody but this round reading the result.
-
-   Unknown content matches nothing. `content-hashes` drops a target it could not
-   hash, which is the safe reading for asking whether the code moved and the
-   unsafe one for asking whether it stayed: two readings that could each hash
-   only part of the branch agree about that part and nothing else. A round with
-   any unhashed target, or with no targets, is a first reading."
-  [carried targets]
-  (boolean (and (seq targets)
-                (every? :patch-hash targets)
-                (= carried (content-hashes targets)))))
-
 (defn ^{:malli/schema [:=> [:cat :map :any] :map]}
   to-review
   "Split targets into those this round must review and those already converged
@@ -1253,7 +1231,10 @@
 ;; Defined below, beside the cache reasoning they belong with. `record-review!`
 ;; is called from both stages that can end a round — see its docstring — and
 ;; `record-statuses!` from the fan-out, for a round that ends by aborting.
-(declare record-review! record-statuses! salvaged-statuses unanswered-of)
+;; `read-once-targets` and `with-quiet-reads` read what the write resolved, so
+;; they belong to the same reasoning and are called from the same two stages.
+(declare record-review! record-statuses! salvaged-statuses unanswered-of
+         read-once-targets with-quiet-reads)
 
 (defn- review-target!
   "One target's review, as a VALUE: the reviewer's result, or `{:target …
@@ -1425,32 +1406,14 @@
       ;; patch has no content to remember.
       ;;
       ;; Otherwise something was genuinely reviewed and reported nothing, so
-      ;; nothing is owed anywhere, and on the second such reading every target
-      ;; reviewed at this patch has converged. Recorded here when this branch is
-      ;; terminal: the engine stops on :control :stop, so the warden — which is
-      ;; where convergence is otherwise written — never runs for a round that
-      ;; ends clean. A first quiet round does not end here, and the warden
-      ;; records it under the withholding this branch puts on the ctx.
+      ;; nothing is owed anywhere — and every target whose patch a reading had
+      ;; already found nothing owed of has now been read the twice convergence
+      ;; is earned by. Recorded here rather than at the warden: the engine stops
+      ;; on :control :stop, so a round that ends clean never reaches the stage
+      ;; convergence is otherwise written at, and a round still owed a second
+      ;; reading has nothing for a warden to rule on.
       (let [nothing? (and (seq results)
                           (every? #(= :nothing-to-review (:status %)) results))
-            ;; ONE pass over a range is a sample rather than a verdict: the
-            ;; round that missed a change's only P1 reported one of three
-            ;; pre-existing defects and called it clean. So `clean` is earned by
-            ;; producing nothing TWICE over the same content, and the two are
-            ;; independent readings — a first quiet round records no
-            ;; convergence, so the second re-reads every target the first one
-            ;; read. The carry holds what the first one read; `quiet-again?`
-            ;; says whether this round read the same.
-            ;;
-            ;; A LAYERED stack is no exception. Each layer's code is read by
-            ;; exactly one layer reviewer, and the only other pass over that
-            ;; range is the composition reviewer — asked whether the cut holds
-            ;; and told not to report what the layer reviews already hold (see
-            ;; `round-correctness` and `nido.review.prompts`). There is no
-            ;; cross-check between layers to stand in for the second round.
-            first-quiet-round? (and (not nothing?)
-                                    (not (quiet-again? (get-in ctx [:carry :quiet-once])
-                                                       all)))
             ;; The last run left something owed, this run's reviewers were
             ;; handed it, and nobody has said a word about it. A quiet round is
             ;; evidence about what the reviewers read; it is not evidence that a
@@ -1461,30 +1424,48 @@
             ;; code by the same reviewers would produce the same silence, so
             ;; what changes is the answer, not the effort.
             unanswered (unanswered-of (get-in ctx [:carry :inherited-open]) rounds)
-            ctx'     (cond-> (assoc ctx :findings [] :reviews results :skipped skipped
-                                    :reviewed-at at :patch-hashes (content-hashes all)
-                                    :toc toc :unplaced unplaced
-                                    :control (if first-quiet-round? :continue :stop)
-                                    :status (cond
-                                              nothing?           :nothing-to-review
-                                              first-quiet-round? nil
-                                              (seq unanswered)   :unresolved
-                                              :else              :clean))
-                       first-quiet-round?
-                       (-> (assoc-in [:carry :quiet-once] (content-hashes all))
-                           ;; On the ctx rather than the carry: it governs THIS
-                           ;; round's record, which the warden writes after this
-                           ;; stage has returned. See `record-statuses!`.
-                           (assoc :withhold-convergence? true))
-                       ;; The round's correctness verdict, on the one branch
-                       ;; that used to drop it. A terminal clean round is the
-                       ;; round whose verdict is most worth keeping — it is the
-                       ;; only evidence that anyone looked — and it was the only
-                       ;; round the report had none for. Absent for a round that
-                       ;; read nothing, because no reviewer reached a verdict.
-                       (not nothing?)
-                       (assoc :overall-correctness (round-correctness results)))]
-        (when-not (or nothing? first-quiet-round?) (record-review! cwd ctx'))
+            reading  (assoc ctx :findings [] :reviews results :skipped skipped
+                            :reviewed-at at :patch-hashes (content-hashes all)
+                            :cache cached :toc toc :unplaced unplaced)
+            ;; Written before the round decides anything, because what the write
+            ;; RESOLVES is the decision: a patch no earlier reading found
+            ;; nothing owed of comes back `:read-once`, and a target left there
+            ;; is one this run may not end over. Nothing is written for a round
+            ;; that read nothing — convergence is a memory of content having
+            ;; been reviewed, and an empty patch has no content to remember.
+            ;;
+            ;; ONE pass over a range is a sample rather than a verdict: the
+            ;; round that missed a change's only P1 reported one of three
+            ;; pre-existing defects and called it clean. A LAYERED stack is no
+            ;; exception — each layer's code is read by exactly one layer
+            ;; reviewer, and the only other pass over that range is the
+            ;; composition reviewer, asked whether the cut holds and told not to
+            ;; report what the layer reviews already hold (see
+            ;; `round-correctness` and `nido.review.prompts`). There is no
+            ;; cross-check between layers to stand in for the second reading.
+            statuses (when-not nothing? (record-review! cwd reading))
+            sampled  (read-once-targets statuses)
+            ctx'     (-> (with-quiet-reads reading statuses)
+                         (assoc :control (if (seq sampled) :next-round :stop)
+                                :status (cond
+                                          nothing?         :nothing-to-review
+                                          (seq sampled)    nil
+                                          (seq unanswered) :unresolved
+                                          :else            :clean))
+                         (cond->
+                          ;; What the round is going back for, by layer. The
+                          ;; report reads it to say why a round that found
+                          ;; nothing did not end the run.
+                          (seq sampled) (assoc :read-once (mapv :label sampled))
+                          ;; The round's correctness verdict, on the one branch
+                          ;; that used to drop it. A terminal clean round is the
+                          ;; round whose verdict is most worth keeping — it is
+                          ;; the only evidence that anyone looked — and it was
+                          ;; the only round the report had none for. Absent for
+                          ;; a round that read nothing, because no reviewer
+                          ;; reached a verdict.
+                          (not nothing?)
+                          (assoc :overall-correctness (round-correctness results))))]
         ctx')
       (assoc ctx
              :findings findings
@@ -1495,11 +1476,11 @@
              ;; round compares its own against it to tell a stall from a class
              ;; still being narrowed; see `round-changed?`.
              :patch-hashes (content-hashes all)
-             ;; A reading that found something ends any pair of quiet ones, so
-             ;; the carried reading is only ever the round before's. Matching
-             ;; content alone would let a repair that is later reverted put a
-             ;; quiet reading from before it beside one from after.
-             :carry (dissoc (:carry ctx) :quiet-once)
+             ;; The carry passes through untouched. What this round read of each
+             ;; patch is folded into it by the stage that ENDS the round, which
+             ;; on this branch is never this one — a round with findings has a
+             ;; warden to run, and `with-quiet-reads` is what drops the patches
+             ;; this round found something owed of.
              :cache cached
              :toc toc
              :unplaced unplaced
@@ -1849,6 +1830,12 @@
    at: `:converged` when the target owes nothing — `converged-targets` is that
    rule — and `:partial` when it still does.
 
+   What this reading owed, which is not yet what the entry says. A `:converged`
+   here is one reading finding nothing owed, and convergence is earned by two:
+   `record-statuses!` turns the first one down to `:read-once` — see
+   `pair-quiet-readings` — so what is written is what the CONTENT has earned
+   rather than what this round alone saw.
+
    Only `:converged` grants a skip, so a `:partial` entry is re-reviewed, which
    is correct: something is owed of it. What the entry buys is the other half of
    what the cache holds. Answers were recorded only against converged patches,
@@ -1878,7 +1865,9 @@
    asked here. What CAN be asked is what each reviewer that returned said about
    its own patch, and a reviewer that read a manifest and reported nothing has
    issued a clean bill on that exact content — a bill a sibling's quota does not
-   retract.
+   retract. What the bill earns is one READING of that patch rather than a skip:
+   `record-statuses!` pairs it like any other, so a patch with no earlier
+   reading behind it is recorded `:read-once` and is read again.
 
    The composition target never converges here, whatever it reported. It
    converges on `nothing anywhere is open`, and a round holding a target nobody
@@ -2010,6 +1999,91 @@
                 pair))
             statuses))))
 
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  pair-quiet-readings
+  "Pure: the same `[target status]` pairs with a `:converged` that is only its
+   patch's FIRST quiet reading turned down to `:read-once`. `known` is the
+   patches a quiet reading is already on record for.
+
+   A reviewer is not deterministic at a byte-identical patch. Across five
+   analysed runs a second read at an unchanged hash found a P1 or P2 the first
+   had missed, and every one of those second reads happened by accident — an
+   inherited row nobody could answer was holding the layer open, and the layers
+   with no such row converged on their single reading and were never read again.
+   So convergence is earned by two readings that each left nothing owed, and
+   this is where the first one is refused it.
+
+   Per TARGET, which is what makes the two readings pairable at all. The pair
+   used to be two whole quiet ROUNDS over identical branch content, so a layer
+   read quiet twice at an unchanged hash had its second reading discarded
+   whenever any other layer moved in between: one run ended `converged` having
+   recorded convergence for none of the four layers it had just read.
+
+   A target whose patch could not be hashed is in no store and can pair with
+   nothing. It is recorded nowhere and holds nothing open — `reviewed-statuses`
+   drops it before this sees it — so unknown content costs the next run a review
+   rather than costing this one a round it could never finish."
+  [statuses known]
+  (mapv (fn [[t status :as pair]]
+          (if (and (= :converged status) (not (contains? known (:patch-hash t))))
+            [t :read-once]
+            pair))
+        statuses))
+
+(defn- quiet-before
+  "The patches a reading that left nothing owed is already on record for, out of
+   the two channels that can hold one.
+
+   The CACHE is the durable half, and the one that matters between runs: a first
+   quiet reading is written there as `:read-once`, so a later run at identical
+   content pairs with it instead of paying for a second fan-out of its own.
+   That is what makes the rule affordable on a layer nobody is touching — the
+   second reading is owed once per patch rather than once per run.
+
+   The CARRY is this run's own rounds, and it covers what the cache cannot: a
+   cache write is best-effort and a review outside a workstream has no cache at
+   all, so a run that could pair only through the cache would re-read a quiet
+   layer every round and never converge."
+  [ctx]
+  (into (get-in ctx [:carry :quiet-reads] #{})
+        (keep (fn [[h _]] (when (cache/read-quiet? (:cache ctx) h) h)))
+        (:cache ctx)))
+
+(defn ^{:malli/schema [:=> [:cat :map :any] :map]}
+  with-quiet-reads
+  "ctx with what this round read of each patch folded into the carry: the
+   patches a reading left owing nothing added, and the patches a reading found
+   something owed of dropped.
+
+   The round that most needs this channel at all is the one whose cache write
+   failed — see `quiet-before`.
+
+   The DROP is the other half of the pair rule, and the case it is for is
+   content that comes back. A reading that owed something is counter-evidence
+   about that exact patch, so it ends any pair standing at it: without this, a
+   repair the stack later refused would return a layer to the patch an earlier
+   round read quiet, and that round's reading would pair with one taken after a
+   defect had been found in between. The cache says the same by writing
+   `:partial` over the entry; the carry has to be told."
+  [ctx statuses]
+  (let [hashes (fn [quiet?]
+                 (into #{} (keep (fn [[t status]]
+                                   (when (= quiet? (contains? cache/quiet-statuses status))
+                                     (:patch-hash t))))
+                       statuses))
+        quiet  (hashes true)
+        owed   (hashes false)]
+    (cond-> ctx
+      (or (seq quiet) (seq owed))
+      (update-in [:carry :quiet-reads]
+                 #(into (into #{} (remove owed) %) quiet)))))
+
+(defn- read-once-targets
+  "The targets this round left at one quiet reading: what a second reading is
+   still owed of, and so what no round may end the run over."
+  [statuses]
+  (into [] (comp (filter #(= :read-once (second %))) (map first)) statuses))
+
 (defn- merge-answered
   "One row per finding, out of the two sources of answers about a target.
 
@@ -2090,9 +2164,11 @@
    finds nothing is the loop's best outcome, and it was the only outcome it
    forgot, so re-reviewing an untouched patch cost a full fan-out every time.
 
-   Whichever of them calls it, a round the review stage ruled a first quiet
-   reading grants no convergence: it is the warden that records that round, and
-   `record-statuses!` honours the ruling off the ctx.
+   Whichever of them calls it, a patch this run has no earlier quiet reading of
+   is left at `:read-once` rather than `:converged`; `record-statuses!` resolves
+   that and hands back what it wrote, so the calling stage can see which targets
+   are still owed a second reading before it decides whether the round may end
+   the run.
 
    The SKIPPED targets are written about too, and only when the round has
    something to say about them: `reopened-patches` revokes the convergence of any
@@ -2102,9 +2178,8 @@
    again.
 
    Safe to call from either stage because it reads only `:reviews`, `:skipped`,
-   `:findings`, the round history, the carry and `:withhold-convergence?`, all
-   of which are set by then, and because `reviewed-statuses` and
-   `reopened-patches` are pure.
+   `:findings`, `:cache`, the round history and the carry, all of which are set
+   by then, and because `reviewed-statuses` and `reopened-patches` are pure.
 
    Best-effort — a cache that cannot be written costs the next run some
    duplicated review and nothing else."
@@ -2128,19 +2203,21 @@
    what it is given. The fix stage appends a round to the history and the warden
    runs before it, so the two never overlap.
 
-   The inherited denial lands here rather than in `reviewed-statuses` because
-   both derivations pass through it — a salvaged round grants `:converged` on a
-   reviewer's clean bill alone, which is exactly the bill an unanswered
-   inheritance says is not the whole story.
+   Two denials land here rather than in `reviewed-statuses`, because both
+   derivations pass through this and a salvaged round grants `:converged` on a
+   reviewer's clean bill alone. An unanswered inheritance says that bill is not
+   the whole story about the layer; `pair-quiet-readings` says one bill is not
+   the whole story about the content. Both downgrade and neither drops: the
+   entry and its answers are still written, and the patch is simply read again.
+   The reopens are untouched by either — revoking a convergence is never what an
+   unearned one is held back from.
 
-   So does `:withhold-convergence?`, the review stage's ruling that this round is
-   a first quiet reading: one sample, and not yet the pair `clean` is earned by.
-   That round continues to the warden, which is the stage that records it and
-   knows nothing of the ruling but what the ctx carries — so it is honoured
-   where every write passes, whichever stage made it. Every `:converged` becomes
-   `:partial`, as the inherited denial does it: the entry and its answers are
-   still written, and it is simply read again. The reopens are untouched —
-   revoking a convergence is never what a sample is withheld from.
+   Returns the pairs it resolved, which is how the stage that called it learns
+   what it wrote. A target left at `:read-once` is one the run may not end over,
+   and re-deriving that from the same inputs is how a second rule grows where
+   there is one. The pairs come back whether or not they could be persisted:
+   what the run owes a second reading of is a fact about the round, not about
+   the write.
 
    `reopen` is the patches of targets the round did NOT read and has nonetheless
    learnt something about: their content has not moved, so there is no entry to
@@ -2148,14 +2225,12 @@
    passes none — no warden ruled on anything, so nothing is attributed to a layer
    at all."
   [cwd ctx statuses reopen]
-  (when-let [[project ws-id] (project+ws-from-cwd cwd)]
-    (let [rounds   (conj (mapv :findings (:history ctx)) (vec (:findings ctx)))
-          statuses (cond->> (deny-inherited-convergence
-                             statuses
-                             (unanswered-of (get-in ctx [:carry :inherited-open]) rounds))
-                     (:withhold-convergence? ctx)
-                     (mapv (fn [[t status]]
-                             [t (if (= :converged status) :partial status)])))]
+  (let [rounds   (conj (mapv :findings (:history ctx)) (vec (:findings ctx)))
+        statuses (-> statuses
+                     (deny-inherited-convergence
+                      (unanswered-of (get-in ctx [:carry :inherited-open]) rounds))
+                     (pair-quiet-readings (quiet-before ctx)))]
+    (when-let [[project ws-id] (project+ws-from-cwd cwd)]
       (when (or (seq statuses) (seq reopen))
         (let [now (str (java.time.Instant/now))
               c   (reduce (fn [c [t status]]
@@ -2168,7 +2243,8 @@
                           (or (:cache ctx) (cache/read-cache project ws-id))
                           statuses)
               c   (reduce (fn [c h] (cache/reopen c h now)) c reopen)]
-          (cache/write! project ws-id c))))))
+          (cache/write! project ws-id c))))
+    statuses))
 
 (defn ^{:malli/schema [:=> [:cat :any :Finding] :any]}
   resolve-handle
@@ -2630,11 +2706,31 @@
             ctx' (if stale
                    (assoc ctx' :control :stop :status :unfixable
                           :unfixable (vec stale))
-                   ctx')]
-        ;; Unguarded on purpose: a first quiet round is recorded HERE, and the
-        ;; review stage's withholding rides on ctx' to `record-statuses!`.
-        (record-review! cwd ctx')
-        ctx'))))
+                   ctx')
+            ;; What the round leaves each patch at, and the only reading of it:
+            ;; the write is what resolves a reading into a status, so the stop
+            ;; below is decided off what was written rather than off a second
+            ;; derivation of the same rule.
+            statuses (record-review! cwd ctx')
+            sampled  (read-once-targets statuses)
+            ;; A stop over a layer read quiet once ends the ROUND and not the
+            ;; run. The warden is never told which layers are on their first
+            ;; reading — it rules on findings, and this is a fact about content
+            ;; — so its stop used to overwrite the review stage's `continue`,
+            ;; and the engine published the single sample as `converged`. What
+            ;; the run goes back for is one review-only round over those
+            ;; layers: they are the only targets `to-review` will not skip, so
+            ;; it costs the one fan-out the rule is about and nothing else.
+            ;;
+            ;; Only a stop, and only one the stage did not already end the run
+            ;; on. `escalate` puts a design question to a human and a stale
+            ;; park has nothing further to offer; neither is waiting on another
+            ;; reading. A round that is CONTINUING anyway leaves this alone —
+            ;; its layers are about to be repaired or read again regardless,
+            ;; and the round did not go back for them.
+            hold?    (and (seq sampled) (= :stop (:control ctx')) (not (:status ctx')))]
+        (cond-> (with-quiet-reads ctx' statuses)
+          hold? (assoc :read-once (mapv :label sampled) :control :next-round))))))
 
 (def warden-stage
   "The one reader with a view across layers, so attribution is its job.

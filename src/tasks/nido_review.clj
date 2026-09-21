@@ -1251,8 +1251,8 @@
    `:review-failed` all end a run reporting no finding, and they mean a verdict,
    an empty diff and no verdict at all."
   {;; ── the run reached the end of what it can do ──
-   :converged "the warden stopped with nothing still owed — every finding was fixed, closed or declined"
-   :clean "a reviewer read the diff and reported nothing"
+   :converged "the warden stopped with nothing still owed and every layer read quiet twice — every finding was fixed, closed or declined"
+   :clean "two readings of the same diff each reported nothing"
    :dry-run "nothing was fixed"
 
    ;; ── it stopped holding something only you can settle ──

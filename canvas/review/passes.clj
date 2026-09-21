@@ -322,14 +322,6 @@
      A target nothing could hash contributes nothing, so a round jj could not diff produces the
      empty set rather than a false reading."
     {:signature [:=> [:catn [:targets :any]] :any]})
-  (Operation quiet-again?
-    "Whether a quiet round is the second reading of what the first quiet round read — the pair
-     `clean` is earned by is two readings of ONE content, so a round that read anything else is
-     a first reading however many quiet rounds came before it. Unknown content matches nothing:
-     a round with a target it could not hash is a first reading, because the part that hashed
-     agreeing says nothing about the part that did not."
-    {:signature [:=> [:catn [:carried :any] [:targets :any]] :boolean]
-     :delegates [content-hashes]})
   (Operation announce-targets! "Publish what this round is reviewing and what it skipped."
     {:signature [:=> [:catn [:ctx :map] [:split :map]] :any]})
   (Operation round-correctness
@@ -411,6 +403,22 @@
      cannot be revoked by one, so a layer that takes it while a known defect stands in it is
      exempt from the code lane until somebody happens to edit the file."
     {:signature [:=> [:catn [:statuses :any] [:unanswered :any]] :any]})
+  (Operation pair-quiet-readings
+    "The same pairs with a :converged that is only its patch's FIRST quiet reading turned down
+     to :read-once. Pure. A reviewer is not deterministic at a byte-identical patch — across
+     five analysed runs a second read at an unchanged hash found a P1 or P2 the first had
+     missed — so convergence is earned by two readings that each left nothing owed. Paired per
+     TARGET: pairing whole ROUNDS by branch content discarded a layer's second reading whenever
+     any other layer moved in between."
+    {:signature [:=> [:catn [:statuses :any] [:known :any]] :any]})
+  (Operation with-quiet-reads
+    "The ctx with what this round read of each patch folded into the carry — the patches a
+     reading left owing nothing added, the patches a reading found something owed of dropped.
+     The carry covers what the cache cannot: a cache write is best-effort, and a review outside
+     a workstream has no cache at all. The drop is what stops a reading from before a defect
+     was found pairing with one from after, where a refused repair returns the layer to content
+     an earlier round read quiet."
+    {:signature [:=> [:catn [:ctx :map] [:statuses :any]] :map]})
   (Operation stance-path "Where a project's stance text lives."
     {:signature [:=> [:catn [:project ProjectName]] Path]})
   (Operation read-stance "A project's stance text."
@@ -453,12 +461,13 @@
   (Operation record-review!
     "Write what this round left each target at into the cache: for the ones a reviewer read,
      its status and what the run has settled about it; for the ones it skipped, the revocation
-     of any convergence the round has since falsified. A round the review stage ruled a first
-     quiet reading grants no convergence, whichever stage records it — the ruling rides on the
-     ctx, because the stage that records that round is the warden."
+     of any convergence the round has since falsified. A patch with no earlier quiet reading
+     behind it is left at :read-once rather than :converged, whichever stage records the round.
+     Returns the pairs it resolved, which is how the stage that called it learns which targets
+     are still owed a second reading before it decides whether the round may end the run."
     {:signature [:=> [:catn [:cwd Path] [:ctx :map]] :any]
      :delegates [reviewed-statuses reopened-patches answered-for
-                 deny-inherited-convergence unanswered-of]})
+                 deny-inherited-convergence pair-quiet-readings unanswered-of]})
   (Operation resolve-handle "The identity a finding is filed under."
     {:signature [:=> [:catn [:handles :any] [:f Finding]] :any]})
   (Operation apply-rulings "The warden's per-finding rulings, merged in."

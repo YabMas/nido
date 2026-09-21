@@ -184,7 +184,7 @@
     ""))
 
 (defn- layer-text
-  [{:keys [status findings]}]
+  [{:keys [status findings read-once]}]
   (case status
     "skipped" "converged"
     "pending" "queued"
@@ -199,7 +199,12 @@
     ;; No count: there is no finding tally to report on a target nobody read,
     ;; and "0 findings" beside a ✓ is the reading this status exists to prevent.
     "nothing-to-review" "empty diff"
-    (str findings " finding" (when (not= 1 findings) "s"))))
+    ;; `read once` beside the count, because the two rows it separates are
+    ;; otherwise the same two words: a layer nothing was found in on its first
+    ;; reading of this patch, and one two readings have now found nothing in.
+    ;; Only the second is a layer the run is done with.
+    (str findings " finding" (when (not= 1 findings) "s")
+         (when read-once " · read once"))))
 
 (defn- block-lines
   "Render rows into aligned lines: the numbered layers, then the composition

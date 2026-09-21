@@ -52,13 +52,21 @@
 
    An entry holds two things and only one of them is the skip: `:status`, of which `:converged`
    alone means do not look again, and `:answered`, what was decided about that patch. The second
-   is worth recording at either status — the patch a next round comes back to is precisely the
-   one that still owes something."
+   is worth recording whatever the status — the patch a next round comes back to is precisely
+   the one that still owes something.
+
+   `:status` has a middle value because convergence is earned by TWO readings that each left
+   nothing owed: `:read-once` is one such reading, recorded so that a later run at identical
+   content pairs with it rather than paying for a second fan-out of its own. It grants no skip."
   (Operation path "Where a workstream's review cache lives."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Path]})
   (Operation read-cache "A workstream's cache, or an empty one."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map] :delegates [path]})
   (Operation converged? "Whether this exact patch has already converged — the only skip."
+    {:signature [:=> [:catn [:cache :map] [:patch-hash :string]] :boolean]})
+  (Operation read-quiet?
+    "Whether a reading of this exact patch that left nothing owed is already on record — what a
+     run asks before it GRANTS convergence, as `converged?` is what it asks before it skips."
     {:signature [:=> [:catn [:cache :map] [:patch-hash :string]] :boolean]})
   (Operation answered "The findings already settled against this patch."
     {:signature [:=> [:catn [:cache :map] [:patch-hash :string]] :any]})
@@ -322,7 +330,14 @@
    judged is not convergence."
   (Operation run-loop
     "Drive one review to convergence or to its cap — on the pipeline, the finding identity and
-     any refusals of its own that the program's caller passes."
+     any refusals of its own that the program's caller passes.
+
+     A stage ends the RUN by saying stop or escalate and ends the ROUND by saying next-round:
+     the stages below it are skipped and the run carries on from the ctx it returns. That is
+     how a program says `nothing more to do here, and something still to do next round` — the
+     diff review says it of a layer whose patch has been read quiet only once, where the round
+     has no finding to rule on and no repair to make. The terminal check is asked first, so a
+     run at its cap ends however much a stage would like another round."
     {:signature [:=> [:catn [:opts :map]] :map]}))
 
 (Module review-prompts

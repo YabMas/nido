@@ -38,6 +38,26 @@
     (is (= ["aa11"] (map :id (cache/answered c "hash-a")))
         "and reviewing it is exactly when its answers are read")))
 
+(deftest one-reading-that-owed-nothing-is-recorded-and-grants-no-skip
+  ;; A reviewer is not deterministic at a byte-identical patch, so one reading
+  ;; is a sample. Recording it is what lets a LATER run pair with it instead of
+  ;; paying for a second fan-out of its own — the alternative to publishing
+  ;; convergence on one sample, and the reason the rule is affordable on a
+  ;; layer nobody is touching.
+  (let [c (cache/record {} "hash-a" {:status :read-once :label "drop-legacy"})]
+    (is (not (cache/converged? c "hash-a"))
+        "the patch is read again, which is the point of recording it")
+    (is (cache/read-quiet? c "hash-a")
+        "and the reading it already had is what the next one pairs with")))
+
+(deftest a-patch-nothing-has-read-quiet-pairs-with-nothing
+  (is (not (cache/read-quiet? {} "hash-a")))
+  (is (not (cache/read-quiet? (cache/record {} "hash-a" {:status :partial}) "hash-a"))
+      "a patch that still owes something has had no reading that owed nothing")
+  (is (cache/read-quiet? (cache/record {} "hash-a" {:status :converged}) "hash-a")
+      "a converged entry says two such readings happened, so it answers this
+       too — though nothing re-reads a patch it has decided to skip"))
+
 (deftest an-entry-that-names-no-status-is-reviewed
   ;; The default used to be :converged, which made forgetting to say cost a
   ;; skipped review rather than a duplicated one — the one direction this store

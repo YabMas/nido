@@ -519,7 +519,7 @@
 (deftest a-run-with-no-particulars-says-the-status-and-what-it-asks
   ;; Two lines, and the second is the whole of what most runs ask of a reader.
   (is (= ["review-loop: clean · report /runs/r/report.json"
-          "  → a reviewer read the diff and reported nothing"]
+          "  → two readings of the same diff each reported nothing"]
          (t/outcome-lines {:status :clean} {:rounds []} "/runs/r/report.json"))))
 
 (deftest an-unavailable-reviewer-says-what-it-wants-before-what-it-asks

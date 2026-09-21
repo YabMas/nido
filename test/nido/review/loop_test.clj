@@ -566,3 +566,46 @@
   ;; the diff loop's stages.
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"needs a :pipeline"
                         (rloop/run-loop {:run-id "r1" :emit (fn [_])}))))
+
+(deftest next-round-ends-the-round-and-not-the-run
+  ;; The only control that is neither terminal nor a hand-on to the next stage.
+  ;; A quiet round with nothing to rule on and nothing to repair still has a
+  ;; second reading to take, and it is the stages BELOW the one that said so
+  ;; which must not run — a fix stage handed an empty plan ends the run
+  ;; :fix-unrouted, which is the round after this one never happening.
+  (let [calls (atom [])
+        [_ emit] (capturing)
+        pipe [(stage :review (fn [c] (swap! calls conj [:review (:iter c)])
+                               (cond-> (assoc c :findings [])
+                                 (= 1 (:iter c)) (assoc :control :next-round))))
+              (stage :warden (fn [c] (swap! calls conj [:warden (:iter c)]) c))
+              (stage :fix    (fn [c] (swap! calls conj [:fix (:iter c)])
+                               (assoc c :control :stop)))]
+        out (run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit})]
+    (is (= :converged (:status out)))
+    (is (= [[:review 1] [:review 2] [:warden 2] [:fix 2]] @calls)
+        "round 1 ends at the stage that asked for another reading, and round 2
+         runs the pipeline out")))
+
+(deftest a-run-at-its-cap-ends-however-much-a-stage-wants-another-round
+  ;; A control that could outrank the terminal check would be an uncapped loop
+  ;; with one more way in: a stage that asks for another reading every round
+  ;; would never be told no.
+  (let [[_ emit] (capturing)
+        pipe [(stage :review (fn [c] (assoc c :findings [] :control :next-round)))
+              (stage :warden (fn [c] c))]
+        out (run-loop {:run-id "r1" :max-iters 3 :pipeline pipe :emit emit})]
+    (is (= :max-iters (:status out)))))
+
+(deftest a-round-that-ends-early-still-hands-its-carry-on
+  ;; The carry is the only channel between rounds, and the round asking for a
+  ;; second reading is the one whose carry says which patches it has read.
+  (let [[_ emit] (capturing)
+        pipe [(stage :review (fn [c]
+                               (if (= 1 (:iter c))
+                                 (assoc c :findings [] :control :next-round
+                                        :carry {:quiet-reads #{"h"}})
+                                 (assoc c :findings [] :control :stop))))
+              (stage :fix (fn [c] c))]
+        out (run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit})]
+    (is (= #{"h"} (get-in out [:carry :quiet-reads])))))

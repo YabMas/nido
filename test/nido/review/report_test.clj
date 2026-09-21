@@ -277,6 +277,50 @@
     (is (= "nothing-to-review" (:status row)))
     (is (nil? (:findings row)) "no finding tally on a target nobody read")))
 
+(deftest a-round-that-went-back-for-a-second-reading-is-not-clean
+  ;; A round that read a patch nothing had read quiet before found nothing AND
+  ;; settled nothing: convergence is earned by two such readings, so the run
+  ;; went back for the other one. Reported clean, it is the round that ended the
+  ;; run — and the report is the only place a reader can tell the two apart,
+  ;; since both hold an empty finding list and no warden.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings []
+                   :read-once ["core"]
+                   :reviews [{:target {:label "core" :index 1} :status :clean}]}}
+            {:event :phase-started :iter 2 :phase :review :at "t3"}
+            {:event :phase-finished :iter 2 :phase :review :at "t4"
+             :ctx {:findings []
+                   :reviews [{:target {:label "core" :index 1} :status :clean}]}}
+            {:event :run-finalized :status :clean :ctx {} :at "t5"}])
+        [one two] (:rounds r)
+        row (first (:layers (first (:phases one))))]
+    (is (= "read-once" (:status one)))
+    (is (= "clean" (:status two)) "the round that paired it is the clean one")
+    (is (true? (:read-once row))
+        "and the layer row says which reading it was, beside the count that
+         reads the same on both rounds")
+    (is (= ["core"] (:read-once (first (:phases one)))))))
+
+(deftest a-warden-stop-over-a-layer-read-once-is-not-a-stopped-round
+  ;; The warden rules on findings and is never told which layers are on their
+  ;; first reading, so its stop is about the findings and not about the run. The
+  ;; round holds both halves of that, and only this status says so.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings [{:id "aa11" :title "x"}]}}
+            {:event :phase-started :iter 1 :phase :warden :at "t3"}
+            {:event :phase-finished :iter 1 :phase :warden :at "t4"
+             :ctx {:warden {:decision :stop :reason "all settled"}
+                   :read-once ["core"]
+                   :findings [{:id "aa11" :title "x" :disposition :closed}]}}
+            {:event :run-finalized :status :clean :ctx {} :at "t5"}])]
+    (is (= "read-once" (:status (first (:rounds r)))))))
+
 (deftest one-empty-layer-among-several-is-still-a-clean-round
   ;; The gate is EVERY read target, not any: a stack routinely holds one layer
   ;; whose diff a rebase emptied, and calling that round unreviewed would hide a
