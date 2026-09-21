@@ -782,6 +782,11 @@
    :proceed              :escalate  ; the design round's ask, when a person IS owed one
    :disputed             :escalate  ; judge and amender deadlocked
    :underivable          :escalate  ; no yardstick to derive against
+   ;; A design round that would not proceed, derived every check, broke none, and made no
+   ;; finding an amender could act on. Not :retry: the decision is already on the ledger,
+   ;; and re-running the round re-reads the same record to the same end. What a person is
+   ;; being asked is whether the judge or the record is the thing that is wrong.
+   :nothing-to-amend     :escalate
    ;; A claim names something the declared design does not hold. Not :route-back: the
    ;; refusal writes nothing, so the next tick reads the position that fired this round
    ;; and fires it again. The record or the declaration has to move, and which one is an

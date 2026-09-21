@@ -488,7 +488,7 @@
   ;; The record pipelines' statuses and the outcomes a round that could not run
   ;; reports in their place. Gathered from what the loops actually set.
   (doseq [s [:sufficient :proceed :cleared :clearance-contended :nothing-to-clear
-             :disputed :underivable :retreated
+             :disputed :underivable :nothing-to-amend :retreated
              :amend-noop :amend-invalid :amend-touched-code :amend-unreadable
              :codex-failed :no-output :round-crashed :unusable-answer
              :nothing-to-check :no-record :no-workstream

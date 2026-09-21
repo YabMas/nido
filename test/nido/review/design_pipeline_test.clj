@@ -6,6 +6,7 @@
   (:require
    [babashka.fs :as fs]
    [cheshire.core :as json]
+   [clojure.java.io :as jio]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
    [nido.platform.core :as core]
@@ -210,12 +211,33 @@
                                                             :findings [{:cites ["c"] :claim "x" :check :relation-honest
                                                                         :claim-id "merge-combines-by-id"}
                                                                        {:cites ["d"] :claim "y" :check :goal-served
-                                                                        :claim-id "fork-writes-nothing-on-parent"}
-                                                                       {:cites ["e"] :claim "z"}]))
+                                                                        :claim-id "fork-writes-nothing-on-parent"}]))
                   record/append! (fn [_ _] nil)]
       (let [out (run record/design-judge-stage (ctx))]
-        (is (= [["merge-combines-by-id"]] (mapv :claim-ids (:findings out)))
+        (is (= [["merge-combines-by-id"]]
+               (mapv :claim-ids (filter :check (:findings out))))
             "a claim found against another check moves this finding's identity not at all")))))
+
+(deftest a-finding-that-breaks-no-check-is-told-apart-by-its-claim
+  ;; :amend is "a derivable defect in the record itself" and :resurvey is "the premise is
+  ;; wrong" — neither has a check a finding could name — so the claim is the only handle
+  ;; such a finding has, and without one it could be neither disputed nor called stalled.
+  (let [about #(hash-map :claim-ids %)]
+    (is (not= (record/design-finding-base-key (about ["consistency-reported"]))
+              (record/design-finding-base-key (about ["reconnect-invisible"]))))
+    (is (not= (record/design-finding-base-key (about ["consistency-reported"]))
+              (record/design-finding-base-key
+               (assoc (check :goal-served :broken) :claim-ids ["consistency-reported"])))
+        "the same claim under a broken check is a different finding: one names a derivation"))
+  (testing "the judge stage keys a check-less finding on the claim it is about"
+    (with-redefs [record/design-decision!
+                  (fn [_] (decision :amend
+                                    :checks [(check :goal-served :held)]
+                                    :findings [{:cites ["c"] :claim "z" :claim-id "consistency-reported"}]))
+                  record/append! (fn [_ _] nil)]
+      (let [out (run record/design-judge-stage (ctx))]
+        (is (= [[:check nil :claims ["consistency-reported"]]]
+               (mapv record/design-finding-base-key (:findings out))))))))
 
 ;; ── The judge stage ─────────────────────────────────────────────────────────
 
@@ -421,12 +443,14 @@
             "owed nobody, so what is owed is the clearance write")
         (is (not= :escalate (:control out)))))))
 
-(deftest only-broken-checks-become-findings
+(deftest a-held-check-is-never-what-a-round-hands-over
+  ;; A check that held and a check with no yardstick are both things an amender must not
+  ;; be sent to repair. What it IS sent is every finding the round made.
   (with-redefs [record/design-decision!
                 (fn [_] (decision :amend :checks [(check :relation-honest :broken)
                                                   (check :goal-served :held)
                                                   (check :decomposable :underivable)]
-                                  :findings [{:cites ["c"] :claim "x"}]))
+                                  :findings [{:cites ["c"] :claim "x" :check :relation-honest}]))
                 record/append! (fn [_ _] nil)]
     (let [out (run record/design-judge-stage (ctx))]
       (is (= [:relation-honest] (mapv :check (:findings out))))
@@ -439,12 +463,77 @@
   (with-redefs [record/design-decision!
                 (fn [_] (decision :amend :checks [(check :relation-honest :underivable)
                                                   (check :goal-served :held)]
-                                  :findings [{:cites ["c"] :claim "x"}]))
+                                  :findings [{:cites ["c"] :claim "x" :check :relation-honest}]))
                 record/append! (fn [_ _] nil)]
     (let [out (run record/design-judge-stage (ctx))]
       (is (= :underivable (:status out)))
       (is (= :escalate (:control out)))
       (is (= [] (:findings out))))))
+
+(deftest a-defect-under-no-check-reaches-the-amender-rather-than-a-human
+  ;; Six design runs ended :underivable holding a real, repairable record defect and no
+  ;; underivable check. Reading "nothing broke" as "nothing to repair" is what did it: an
+  ;; amend or a resurvey has no check its findings could name, so those findings named
+  ;; none — and one of the six forced a hand-written design that no amender and no retreat
+  ;; check ever saw.
+  (doseq [r [:amend :recut :resurvey]]
+    (with-redefs [record/design-decision!
+                  (fn [_] (decision r :checks [(check :goal-served :held)
+                                               (check :routing-coherent :held)]
+                                    :findings [{:cites ["canvas/claims.clj:47"] :claim "the record says both"
+                                                :claim-id "lens-can-say-no-level"}]))
+                  record/append! (fn [_ _] nil)]
+      (let [out (run record/design-judge-stage (ctx))]
+        (is (nil? (:status out)) (str "recommended " r ": another round, not a terminal"))
+        (is (= ["lens-can-say-no-level"] (mapcat :claim-ids (:findings out)))
+            "and the finding is what the amender is handed")))))
+
+(deftest a-round-with-nothing-to-repair-and-no-missing-yardstick-says-so
+  ;; :underivable is a claim about the CHECKS — one of them had no yardstick — so a round
+  ;; with none of those may not end there. What is left when a round will not proceed,
+  ;; breaks nothing, and makes no finding an amender could act on is the judge
+  ;; contradicting itself, and a person is told that rather than told a yardstick is
+  ;; missing.
+  (with-redefs [record/design-decision!
+                (fn [_] (decision :amend :checks [(check :goal-served :held)]
+                                  ;; names a check the same decision says held
+                                  :findings [{:cites ["c"] :claim "x" :check :routing-coherent}]))
+                record/append! (fn [_ _] nil)]
+    (let [out (run record/design-judge-stage (ctx))]
+      (is (= :nothing-to-amend (:status out)))
+      (is (= :escalate (:control out)))
+      (is (= [] (:findings out))))))
+
+(deftest a-check-less-finding-is-handed-over-even-beside-a-missing-yardstick
+  ;; The two are independent: a yardstick nobody could reach does not make the defect the
+  ;; round DID find unrepairable, and the amender is handed the finding without being
+  ;; asked to do anything about the check.
+  (with-redefs [record/design-decision!
+                (fn [_] (decision :amend :checks [(check :relation-honest :underivable)
+                                                  (check :goal-served :held)]
+                                  :findings [{:cites ["c"] :claim "x" :claim-id "benchmark-writes-only-its-own-state"}]))
+                record/append! (fn [_ _] nil)]
+    (let [out (run record/design-judge-stage (ctx))]
+      (is (nil? (:status out)) "there is something to repair, so the round goes on")
+      (is (= ["benchmark-writes-only-its-own-state"] (mapcat :claim-ids (:findings out))))
+      (is (= [:relation-honest] (mapv :check (:underivable out)))
+          "the missing yardstick still travels to the human the run ends at"))))
+
+(deftest a-check-less-finding-restated-after-two-objections-goes-to-a-human
+  ;; The appeal channel is what makes a finding answerable rather than merely visible, and
+  ;; it runs on the identity key. A finding that had none could be disputed forever.
+  (let [k (record/design-finding-base-key {:claim-ids ["consistency-reported"]})
+        objection {:key k :claim "the record says both" :because "b"}]
+    (with-redefs [record/design-decision!
+                  (fn [_] (decision :amend :checks [(check :goal-served :held)]
+                                    :findings [{:cites ["c"] :claim "the record says both"
+                                                :claim-id "consistency-reported"}]))
+                  record/append! (fn [_ _] nil)]
+      (is (nil? (:status (run record/design-judge-stage
+                              (ctx :history [{:disputes [objection]}])))))
+      (is (= :disputed
+             (:status (run record/design-judge-stage
+                           (ctx :history (vec (repeat 2 {:disputes [objection]}))))))))))
 
 (deftest a-check-restated-after-two-objections-goes-to-a-human
   (let [k (record/design-finding-base-key (check :relation-honest :broken))]
@@ -734,20 +823,35 @@
 (deftest the-design-amend-prompt-names-the-cheap-wrong-answer-in-its-own-vocabulary
   (let [p (record/design-amend-prompt
            {:design a-design :recommend :amend :reason "r"
-            :checks [(check :relation-honest :broken)]
+            :raised [(check :relation-honest :broken)]
             :findings [{:cites ["c"] :claim "x"}]
             :out-path "/run/a.edn"})]
     (is (str/includes? p "make the record TRUE"))
     (is (str/includes? p "It is NOT to make the\nchecks pass"))
     (is (str/includes? p "softening :revisit to :within"))
     (is (str/includes? p "1. relation-honest"))
-    (is (str/includes? p "IF A CHECK IS WRONGLY MARKED BROKEN"))))
+    (is (str/includes? p "IF A NUMBERED LINE IS WRONG ABOUT THE CODE"))))
+
+(deftest the-design-amender-numbers-a-defect-that-broke-no-check
+  ;; Disputes are made BY NUMBER against the lines as they were listed, so a finding left
+  ;; out of the numbering is one the amender can neither answer nor object to — and the
+  ;; line has to say which claim it is about, since that is the finding's whole identity.
+  (let [p (record/design-amend-prompt
+           {:design a-design :recommend :amend :reason "r"
+            :raised [(check :relation-honest :broken)
+                     {:claim-ids ["consistency-reported"]
+                      :claim "the record reports a consistency it also says it cannot reach"}]
+            :out-path "/run/a.edn"})]
+    (is (str/includes? p "1. relation-honest"))
+    (is (str/includes? p "2. consistency-reported — the record reports a consistency"))
+    (is (str/includes? p "breaks none of them")
+        "the amender is told which kind of line it is reading")))
 
 (deftest the-design-amender-is-given-the-baseline-amenders-rule-for-an-elements-id
   (doseq [declared? [true false]]
     (is (str/includes? (record/design-amend-prompt
                         {:design a-design :recommend :amend :reason "r"
-                         :checks [(check :relation-honest :broken)]
+                         :raised [(check :relation-honest :broken)]
                          :out-path "/run/a.edn" :declared? declared?})
                        (#'record/element-id-rule declared?))
         (str "declared? " declared?))))
@@ -764,6 +868,21 @@
                    (assoc (ctx :findings []) :record (decision :resurvey)))]
       (is (= :resurvey-amend-invalid (:status out)))
       (is (= "{:at [\"disallowed key\"]}" (:amend-error out))))))
+
+(deftest the-judge-prompt-and-its-schema-agree-about-a-finding-with-no-check
+  ;; Two documents the same judge reads in one call, and they disagreed: the schema's
+  ;; check enum admits "" for a finding bearing on none of the four, while the prompt said
+  ;; every finding names the check it shows broken. The judge produced check-less findings
+  ;; anyway — the settled-claims block asks for exactly that shape — so what the
+  ;; contradiction bought was a prompt nobody could follow.
+  (let [enum (->> (json/parse-string
+                   (slurp (jio/resource "review/design_decision_schema.json")) true)
+                  :properties :findings :items :properties :check :enum)
+        p    (record/design-prompt {:design a-design})]
+    (is (contains? (set enum) "") "the schema is the half that was right")
+    (is (not (str/includes? p "every\nfinding names the check it shows broken")))
+    (is (str/includes? p "leaves check empty")
+        "and the prompt now says what the schema admits")))
 
 ;; ── What a declared relation actually says ──────────────────────────────────
 

@@ -1249,6 +1249,7 @@
   (doseq [[status marker]
           {:proceed            "only you can answer"
            :underivable        "no yardstick"
+           :nothing-to-amend   "named nothing an amender could repair"
            :disputed           "neither can settle it"
            :retreated          "below what its own round would check"
            :no-record          "author the design first"

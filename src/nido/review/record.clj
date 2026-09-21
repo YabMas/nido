@@ -879,8 +879,10 @@
    "             instructions and saying the wrong one is worse than saying\n"
    "             nothing.\n\n"
    "Every finding MUST cite what it falsifies. A finding that cites nothing is\n"
-   "not a finding. A finding about one claim names its id in claim-id, and every\n"
-   "finding names the check it shows broken in check.\n\n"
+   "not a finding. A finding about one claim names its id in claim-id. A finding\n"
+   "that shows one of the four broken names it in check; one that bears on none\n"
+   "of them leaves check empty — a record contradicting itself or a claim it\n"
+   "rests on is a defect under no derivation, and it is repaired like any other.\n\n"
    "Populate confirmed with the IDS of the claims you checked and found to hold —\n"
    "the bracketed slugs, without the brackets. Leave it empty when the design lists\n"
    "invariants with no ids. Ids, not sentences: a confirmation worded differently\n"
@@ -2253,13 +2255,31 @@
    and then against another is two findings rather than a stalled loop, and the same claim found
    again under the same check is one.
 
-   A finding names the check it shows broken, so each broken check carries the claim ids of the
-   findings naming it, as `:claim-ids` — never a claim another check was broken against, whose
+   A finding that shows a check broken is carried under that check, which holds the claim ids of
+   every finding naming it, as `:claim-ids` — never a claim another check was broken against, whose
    withdrawal would otherwise move this finding's identity and reset its disputes. Order and
-   repetition among them mean nothing."
+   repetition among them mean nothing.
+
+   A finding may break NONE of the four — a record that contradicts itself or a claim it rests on
+   is a defect under no derivation — and such a finding is carried under no check, so the claim it
+   is about is the whole of its identity. That is why nil is a legal check here rather than an
+   accident: a record whose only defect is check-less would otherwise have no handle at all, and a
+   finding with no handle cannot be disputed, counted as stalled, or given up on."
   [c]
   [:check (:check c) :claims (vec (sort (distinct (:claim-ids c))))])
 (def design-finding-key (dispute-aware design-finding-base-key))
+
+(defn- design-finding-label
+  "What to call one of a round's findings in a line a person or an amender reads.
+
+   The check it broke, when it broke one — four closed values, and the vocabulary the whole round
+   is conducted in. A finding that broke none is named by the claim it is about, which is the only
+   handle it has; one about no single claim has nothing left but the record itself."
+  [{:keys [check claim-ids]}]
+  (cond
+    check           (name check)
+    (seq claim-ids) (str/join ", " claim-ids)
+    :else           "the record"))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   trajectory
@@ -2270,7 +2290,7 @@
   (vec (map-indexed
         (fn [i {:keys [findings retreats disputes amended?]}]
           (cond-> {:round (inc i)}
-            (seq findings) (assoc :found (mapv #(name (:check %)) findings))
+            (seq findings) (assoc :found (mapv design-finding-label findings))
             (some? amended?) (assoc :amended (boolean amended?))
             (seq retreats) (assoc :weakened (mapv #(str (name (:what %)) " — " (:detail %)) retreats))
             (seq disputes) (assoc :disputed (mapv :claim disputes))))
@@ -2364,8 +2384,14 @@
 
    :recut and :amend are given different jobs, because saying the wrong one is
    worse than saying nothing: a decomposition that does not hold is not fixed by
-   restating claims, and a claim that is wrong is not fixed by re-cutting layers."
-  [{:keys [design baseline recommend reason checks findings out-path declared?]}]
+   restating claims, and a claim that is wrong is not fixed by re-cutting layers.
+
+   `:raised` is what the round hands over, numbered — a broken derivation, or a
+   finding that broke none of the four and is about a claim instead. Both are
+   answerable and both are disputable, and the number is how: the amender
+   objects by ordinal and never by matching text. `:findings` is the judge's own
+   prose beneath them, which says more and is keyed to nothing."
+  [{:keys [design baseline recommend reason raised findings out-path declared?]}]
   (str
    "A read-only judge derived what could be derived about this DESIGN record,\n"
    "before any code is written, and it did not come out clean.\n\n"
@@ -2410,12 +2436,14 @@
    "THE CURRENT DESIGN:\n\n" (pr-str (ws/unstamp design))
    (when baseline
      (str "\n\nTHE BASELINE IT CITES:\n\n" (pr-str (ws/unstamp baseline))))
-   "\n\nWHAT FAILED TO DERIVE — numbered, and you answer them by number:\n\n"
+   "\n\nWHAT THE ROUND FOUND WANTING — numbered, and you answer them by number.\n"
+   "A line naming one of the four derivations is that derivation failing; any\n"
+   "other line is a defect in the record that breaks none of them:\n\n"
    (str/join
     "\n"
-    (map-indexed (fn [i {:keys [check note]}]
-                   (str (inc i) ". " (name check) " — " note))
-                 checks))
+    (map-indexed (fn [i {:keys [note claim] :as f}]
+                   (str (inc i) ". " (design-finding-label f) " — " (or note claim)))
+                 raised))
    (when (seq findings)
      (str "\n\nWHAT THE DERIVATION FOUND:\n\n"
           (str/join
@@ -2438,13 +2466,13 @@
    "fresh chance for a check that held to stop holding. Rounds have gone by\n"
    "watching one derivation get answered while a rewritten neighbour became the\n"
    "next one to fail. Fix what failed; leave the rest exactly as it stands.\n"
-   "\n\nIF A CHECK IS WRONGLY MARKED BROKEN, SAY SO INSTEAD OF AMENDING FOR IT.\n"
-   "You do not settle it — the judge is asked again with your objection in front\n"
-   "of it. An objection with no reason is dropped.\n\n"
+   "\n\nIF A NUMBERED LINE IS WRONG ABOUT THE CODE, SAY SO INSTEAD OF AMENDING\n"
+   "FOR IT. You do not settle it — the judge is asked again with your objection\n"
+   "in front of it. An objection with no reason is dropped.\n\n"
    "Write EDN to:\n\n  " out-path "\n\n"
    "  {:record   <the COMPLETE superseding design — every field, not a diff>\n"
    "   :disputes [{:finding 1 :because \"...\" :evidence [\"src/x.clj:41\"]}]}\n\n"
-   "Omit :record if every check is disputed and the design needs no change.\n\n"
+   "Omit :record if you dispute every line and the design needs no change.\n\n"
    "Write it in the shared model — :model {:elements :claims} in place of\n"
    ":invariants, with :holds keyed by claim id when the design is phased — whatever\n"
    "shape the current one is in. An invariant becomes a claim with an id, the\n"
@@ -2517,40 +2545,71 @@
                         (into [] (comp (filter #(= c (:check %)))
                                        (keep #(not-empty (str (:claim-id %)))))
                               (:findings record)))
-            findings  (mapv #(let [f (assoc % :claim-ids (claims-of %))]
-                               (assoc f :disputed-n (get counts (design-finding-base-key f) 0)))
-                            (broken-checks record))]
+            handle    (fn [f] (assoc f :disputed-n (get counts (design-finding-base-key f) 0)))
+            ;; A finding that broke none of the four, carried under the claim it is about.
+            ;; `amend` is `a derivable defect in the record itself` and `resurvey` is `the
+            ;; PREMISE is wrong`, and neither has a check a finding could name, so every
+            ;; finding motivating one names none BY CONSTRUCTION — which is also the shape
+            ;; `settled-block` asks the judge for when a settled claim turns out false. A
+            ;; round that carried only its broken checks would hand an amender nothing on
+            ;; exactly the two recommendations that mean repair the record.
+            claim-findings (into [] (comp (remove :check)
+                                          (map #(handle (assoc % :claim-ids
+                                                               (into [] (keep (comp not-empty str))
+                                                                     [(:claim-id %)])))))
+                                 (:findings record))
+            findings  (into (mapv #(handle (assoc % :claim-ids (claims-of %)))
+                                  (broken-checks record))
+                            claim-findings)]
         (cond
           (some #(>= (:disputed-n %) 2) findings)
           (final! (assoc ctx :record record :findings findings
                          :underivable (underivable-checks record)
                          :control :escalate :status :disputed))
 
-          ;; Nothing derivable failed, yet the round will not say proceed —
-          ;; so what is left is a yardstick it could not reach. An amender
-          ;; asked to fix that would amend a true record until the complaint
-          ;; stopped.
-          (empty? findings)
+          (seq findings)
+          (do (append! cwd record)
+              (assoc ctx :record record :findings findings
+                     :underivable (underivable-checks record)))
+
+          ;; Nothing an amender could repair, and a check the round could not derive at
+          ;; all: what is left is the missing yardstick. An amender told to fix one would
+          ;; amend a true record until the complaint stopped. Read off the CHECKS and
+          ;; never off the absence of findings — a round can find nothing for reasons
+          ;; that have nothing to do with a yardstick, and this status is a claim about
+          ;; the yardstick.
+          (seq (underivable-checks record))
           (final! (assoc ctx :record record :findings []
                          :underivable (underivable-checks record)
                          :control :escalate :status :underivable))
 
+          ;; The round will not proceed, derived every check, broke none, and every finding
+          ;; it made names a check it says held. It has contradicted itself, so there is
+          ;; nothing to hand an amender and no yardstick to blame. The decision is appended
+          ;; and its reason is what the person reads.
           :else
-          (do (append! cwd record)
-              (assoc ctx :record record :findings findings
-                     :underivable (underivable-checks record))))))))
+          (final! (assoc ctx :record record :findings []
+                         :underivable []
+                         :control :escalate :status :nothing-to-amend)))))))
 
 (def design-judge-stage
   "Derive everything derivable, and stop the moment nothing is left.
 
-   Four ways to end here and only one of them is convergence-shaped. :proceed
+   Five ways to end here and only one of them is convergence-shaped. :proceed
    escalates because the ask is the point — unless nobody is owed one: a design
    the round cleared advances, and one whose clearance is still unwritten ends
    :clearance-contended, which the clearance stage finishes without re-running
-   this round. A run whose only remaining checks are
-   underivable also escalates, because there is nothing an amender could do about
-   a missing yardstick. A finding stated a third time after two objections
-   escalates. Everything else is another round."
+   this round. A round holding nothing to repair and a check it could not derive
+   ends :underivable, because there is nothing an amender could do about a
+   missing yardstick. One holding nothing to repair and no such check ends
+   :nothing-to-amend: it would not proceed and named nothing, which is the judge
+   contradicting itself. A finding stated a third time after two objections
+   escalates. Everything else is another round.
+
+   What reaches the amender is every finding the round made, whether it broke one
+   of the four derivations or none. `Nothing broke` is not `nothing to repair`:
+   an amend or a resurvey has no check its findings could name, so on exactly the
+   recommendations that mean repair the record, the checks say nothing."
   {:name :judge
    :run
    run-design-judge-stage})
@@ -2642,7 +2701,7 @@
                        :baseline baseline
                        :recommend recommend
                        :reason (get-in ctx [:record :reason])
-                       :checks (:findings ctx)
+                       :raised (:findings ctx)
                        :findings (get-in ctx [:record :findings])
                        :out-path out-path
                        :declared? (some? (design-check/design-of project code-cwd))})
