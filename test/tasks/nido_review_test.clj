@@ -150,6 +150,18 @@
         "and it is not OWED — routing it into the remainder would ask the next
          run to repair something nobody ruled on")))
 
+(deftest the-analysis-is-told-whether-the-run-reached-a-ledger
+  ;; Read off the report for the verdict's reason: it is the copy that survives
+  ;; a ledger which would not take the entry. Without it the analysis grades the
+  ;; next run's inherited open list as this loop's judgement.
+  (let [p (analysis-payload-for {:status :converged :history [] :findings []}
+                                {:summary {:rounds 1 :fix-attempts 0}
+                                 :target {:base "main"}
+                                 :review-entry {:ledger "refused" :ws-id "ws-1"
+                                                :because "the enum does not admit :unfixable"}})]
+    (is (= "refused" (get-in p [:review-entry :ledger])))
+    (is (str/includes? (:title p) "not recorded"))))
+
 (deftest a-judged-remainder-adds-to-the-rounds-own-rather-than-replacing-it
   (let [final  {:status :converged
                 :history [{:iter 1 :findings [{:handle "h1" :title "the shipped defect"
@@ -892,7 +904,8 @@
                   csession/workstream-id-for (fn [_ _] "ws-1")
                   ws/read-ws (fn [_ _] {:id "ws-1" :entries [{:kind :design :seq 7}]})
                   ws/append-entry! (fn [_ _ _ content] (reset! appended content) "/path")]
-      (is (= "ws-1" (t/append-review-entry! "/w" final rpt "/runs/r/report.json"))
+      (is (= {:ledger :appended :ws-id "ws-1"}
+             (t/append-review-entry! "/w" final rpt "/runs/r/report.json"))
           "so the guard's premise holds and the entry is written, not refused")
       (is (str/includes? @appended ":design {:seq 7}")))
     (is (= ev (report/validate-event :review ev)))
@@ -1005,7 +1018,7 @@
                                         {:summary {:rounds 1 :fix-attempts 0}
                                          :target {:base "main" :base-rev "abc"}}
                                         "/runs/r/report.json")]
-        (is (= "ws-1" ret))
+        (is (= {:ledger :appended :ws-id "ws-1"} ret))
         (is (= :brian (:p @appended)))
         (is (= :review (:kind (:entry @appended))))
         (is (str/includes? (:content @appended) ":review-report"))))))
@@ -1019,18 +1032,21 @@
                   csession/workstream-id-for (fn [_ _] "ws-1")
                   ws/read-ws (fn [_ _] {:id "ws-1" :entries [{:kind :design :seq 3}]})
                   ws/append-entry! (fn [_ _ _ content] (swap! appended conj content) "/path")]
-      (binding [*err* (java.io.StringWriter.)]
-        (is (nil? (t/append-review-entry! "/w" {:status :converged :findings []}
-                                          {:summary {:rounds 1 :fix-attempts 0}
-                                           :target {:base "main" :base-rev "abc"}}
-                                          "/runs/r/report.json"))
-            "nil, so the caller reports that no entry reached the ledger"))
+      (let [out (t/append-review-entry! "/w" {:status :converged :findings []}
+                                        {:summary {:rounds 1 :fix-attempts 0}
+                                         :target {:base "main" :base-rev "abc"}}
+                                        "/runs/r/report.json")]
+        (is (= :no-design (:ledger out))
+            "a distinct answer, so the report says why no entry reached the ledger")
+        (is (= "ws-1" (:ws-id out)) "and names the workstream that holds none")
+        (is (str/includes? (:because out) "no design this judgement was made under")))
       (is (empty? @appended) "nothing filed under the newest design")
-      (is (= "ws-1" (t/append-review-entry! "/w" {:status :converged :findings []
-                                                  :design {:seq 3}}
-                                            {:summary {:rounds 1 :fix-attempts 0}
-                                             :target {:base "main" :base-rev "abc"}}
-                                            "/runs/r/report.json")))
+      (is (= {:ledger :appended :ws-id "ws-1"}
+             (t/append-review-entry! "/w" {:status :converged :findings []
+                                           :design {:seq 3}}
+                                     {:summary {:rounds 1 :fix-attempts 0}
+                                      :target {:base "main" :base-rev "abc"}}
+                                     "/runs/r/report.json")))
       (is (str/includes? (first @appended) ":design {:seq 3}")
           "the design the run captured is the citation"))))
 
@@ -1038,19 +1054,70 @@
   (let [called (atom false)]
     (with-redefs [lifecycle/session-from-cwd (fn [_] nil)
                   ws/append-entry! (fn [& _] (reset! called true) "/path")]
-      (is (nil? (t/append-review-entry! "/w" {:status :clean :findings []}
-                                        {:target {:base "main"}} nil)))
+      (is (= {:ledger :no-workstream}
+             (t/append-review-entry! "/w" {:status :clean :findings []}
+                                     {:target {:base "main"}} nil))
+          "no ledger was reachable, which is not the same as one that refused")
       (is (false? @called) "no append when cwd resolves to no session"))))
 
-(deftest append-review-entry-swallows-append-failure
+(def ^:private two-deviations
+  {:status  :converged
+   :history [{:iter 1 :findings [{:handle "h1" :id "h1" :disposition :deviation
+                                  :owner-layer "voice-core" :title "the claim is too strong"}
+                                 {:handle "h2" :id "h2" :disposition :deviation
+                                  :owner-layer "voice-api" :title "so is this one"}]}]
+   :findings []})
+
+(deftest record-deviations-says-which-layers-took-the-stamp
+  ;; The stamp rewrites a commit on the REVIEWED branch — the one place an
+  ;; analysis of the run may not go and look — and it decides what the next
+  ;; run's reviewer is shown about a claim this run agreed was too strong. A
+  ;; `jj describe` that fails drops its layer and changes nothing else, so the
+  ;; two lists are what make a partial stamp legible at all.
+  (with-redefs [stages/session-stack (fn [_ _] [{:slug "voice-core"} {:slug "voice-api"}])
+                layers/record-deviations! (fn [_ _ _] ["voice-core"])]
+    (let [out (#'t/record-deviations! "/w" {:base "main"} two-deviations)]
+      (is (= ["voice-core" "voice-api"] (:owed out)))
+      (is (= ["voice-core"] (:stamped out))
+          "voice-api ships a claim the run agreed is too strong, and the difference
+           is the only place that shows")
+      (is (not (contains? out :because)) "nothing failed outright"))))
+
+(deftest record-deviations-keeps-what-was-owed-when-the-stamp-throws
+  ;; The warning was the whole record. Which layers were owed a line is what a
+  ;; reader has to know to write them by hand.
+  (with-redefs [stages/session-stack (fn [_ _] (throw (ex-info "jj is unwell" {})))]
+    (let [out (binding [*out* (java.io.StringWriter.)]
+                (#'t/record-deviations! "/w" {:base "main"} two-deviations))]
+      (is (= ["voice-core" "voice-api"] (:owed out)))
+      (is (= [] (:stamped out)))
+      (is (= "jj is unwell" (:because out))))))
+
+(deftest a-dry-run-owes-no-deviation
+  ;; It stamps nothing by design, so `0 of 2 stamped` would read as a failure.
+  (let [out (#'t/record-deviations! "/w" {:base "main" :dry-run? true} two-deviations)]
+    (is (= {:owed [] :stamped []} out))))
+
+(deftest append-review-entry-reports-the-refusal-it-used-to-swallow
+  ;; The loop's memory is this entry: the next run reads its open list, its
+  ;; standing needs and the design verdict beside it. A refusal that goes only
+  ;; to stderr leaves every durable artifact of a run whose entry was refused
+  ;; identical to one whose entry landed — and the run dir does not keep stderr.
   (with-redefs [lifecycle/session-from-cwd (fn [_] {:project "brian" :session "s1"})
                 csession/workstream-id-for (fn [_ _] "ws-1")
-                ws/append-entry! (fn [& _] (throw (ex-info "disk boom" {})))]
-    (is (nil? (t/append-review-entry! "/w" {:status :converged :findings []}
+                ws/append-entry! (fn [& _]
+                                   (throw (ex-info "Invalid event review"
+                                                   {:explain {:errors [{:in [:status]
+                                                                        :type :malli.core/invalid-type}]}})))]
+    (let [out (t/append-review-entry! "/w" {:status :converged :findings []}
                                       {:summary {:rounds 1 :fix-attempts 0}
                                        :target {:base "main" :base-rev "abc"}}
-                                      "/runs/r/report.json"))
-        "a ledger-write failure is swallowed — returns nil, does not throw")))
+                                      "/runs/r/report.json")]
+      (is (= :refused (:ledger out)) "swallowed as an exit code, not as a fact")
+      (is (= "ws-1" (:ws-id out))
+          "and names the workstream, which is where an analysis has to go and look")
+      (is (str/includes? (:because out) "[:status] :malli.core/invalid-type")
+          "the path and the error type together identify the bug as nido's"))))
 
 ;; ── The baseline loop ───────────────────────────────────────────────────────
 

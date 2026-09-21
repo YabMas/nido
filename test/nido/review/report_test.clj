@@ -1123,6 +1123,61 @@
     (is (= {:design-verdict "strained" :verdict-implementation 1}
            (report/verdict-summary (json/parse-string (slurp path) true))))))
 
+;; ---- the rest of what the run's tail wrote --------------------------------
+
+(deftest the-review-entrys-fate-is-in-the-report-beside-the-verdicts
+  ;; The `:review` entry is the loop's memory: the next run reads its open list,
+  ;; its standing needs and the verdict filed beside it. A refusal went to the
+  ;; stderr of whoever ran the loop, which the run dir does not keep, so a run
+  ;; whose entry never landed left artifacts identical to one whose did — while
+  ;; the next run silently inherited the run before it.
+  (let [r (report/with-review-entry
+            (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+            {:ledger :refused :ws-id "ws-1"
+             :because "Invalid event review — [:status] :malli.core/invalid-type"})]
+    (is (= "refused" (get-in r [:review-entry :ledger])))
+    (is (= "ws-1" (get-in r [:review-entry :ws-id]))
+        "named, because the workstream is where an analysis has to go and look")
+    (is (str/includes? (get-in r [:review-entry :because]) "invalid-type")))
+  (let [r (report/with-review-entry
+            (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+            {:ledger :appended :ws-id "ws-1"})]
+    (is (= "appended" (get-in r [:review-entry :ledger])))
+    (is (not (contains? (:review-entry r) :because))
+        "an entry that landed owes no reason")))
+
+(deftest the-review-entrys-fate-survives-the-round-trip-through-json
+  (let [path (str (fs/path (str (fs/create-temp-dir)) "report.json"))]
+    (report/persist! (report/with-review-entry
+                       (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+                       {:ledger :no-workstream})
+                     path)
+    (is (= {:ledger "no-workstream"}
+           (:review-entry (json/parse-string (slurp path) true)))
+        "report.json is what a reader of the run opens")))
+
+(deftest a-deviation-stamp-says-which-layers-took-it
+  ;; The stamp rewrites a commit on the reviewed branch, which an analysis of
+  ;; the run may not go and read. It is best-effort per layer, so a partial
+  ;; stamp shows only as the difference between the two lists.
+  (let [r (report/with-deviations
+            (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+            {:owed ["voice-core" "voice-api"] :stamped ["voice-core"]})]
+    (is (= ["voice-core" "voice-api"] (get-in r [:deviations :owed])))
+    (is (= ["voice-core"] (get-in r [:deviations :stamped]))
+        "voice-api ships an unqualified claim, and nothing else in the run says so"))
+  (let [r (report/with-deviations
+            (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+            {:owed ["voice-core"] :stamped [] :because "jj is unwell"})]
+    (is (= "jj is unwell" (get-in r [:deviations :because])))))
+
+(deftest a-run-with-no-deviation-says-nothing-about-stamping
+  ;; Absence rather than two empty lists: `0 of 0 stamped` reads like a failure.
+  (is (not (contains? (report/with-deviations
+                        (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+                        {:owed [] :stamped []})
+                      :deviations))))
+
 ;; ── What an abort leaves in the report ──────────────────────────────────────
 
 (deftest a-drift-refusal-reaches-the-reports-reason

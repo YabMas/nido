@@ -201,6 +201,22 @@
      for whom a run that published `converged · 0 still open` over a `strained` verdict naming
      two unrepaired implementation defects was indistinguishable from one that was finished."
     {:signature [:=> [:catn [:report ReviewReport]] [:maybe :map]]})
+  (Operation with-review-entry
+    "The report carrying what became of the run's own `:review` ledger entry.
+
+     `with-verdict`'s sibling and learned at the same moment, after :run-finalized. The verdict
+     is what the run CONCLUDED; this entry is the run's memory — the next run reads its open
+     list, its standing needs and the verdict filed beside it — so an entry the ledger would
+     not take costs the loop a whole run of history. Its only account was one line on the
+     stderr of whoever ran the loop, which the run dir does not keep."
+    {:signature [:=> [:catn [:report ReviewReport] [:outcome :map]] ReviewReport]})
+  (Operation with-deviations
+    "The report carrying which layers the run stamped a `Deviation:` onto.
+
+     The one write of the run's tail that lands on the REVIEWED branch, which is the one place
+     a reader of the run may not go and look. What was owed is carried beside what was stamped,
+     because the stamp is best-effort per layer: a partial one shows nowhere else."
+    {:signature [:=> [:catn [:report ReviewReport] [:outcome :map]] ReviewReport]})
   (Operation persist! "Write the report atomically, so a reader never sees half of one."
     {:signature [:=> [:catn [:report ReviewReport] [:path Path]] :any]}))
 

@@ -1,46 +1,55 @@
-Refuse a registry match outside the project's worktrees-dir
+Record what became of the run's own :review entry
 
-A `:lite` session's worktree is a symlink to the project checkout, so
-it canonicalizes to the checkout root — a path that prefixes every
-worktree the project owns and is identical for every lite session
-running at once. session-from-cwd matched such an entry on prefix
-alone, so the bare ~/Code/brian and ~/Code/nido checkouts, and
-everything under them, each resolved to a session picked arbitrarily
-from the ones that tied, under a name that escaped the worktrees-dir
-it was relativized against: 10 of the 19 live registry entries answer
-to ".." or "../nido".
+The `:review` ledger entry is the review loop's memory: the next run on the
+branch reads its open list, its standing needs and the design verdict filed
+beside it. When an append was refused, the loop said so on the stderr of
+whoever ran it, which the run dir does not keep — so every durable artifact
+of a run whose entry never landed was identical to one whose did, while the
+next run silently inherited the open list of the run BEFORE it
+(`prior-open`'s one-hop bound reads the latest `:review` ENTRY, so a skipped
+run makes it two hops). Three analyses reconstructed that by evaluating the
+ledger's own checks by hand; one run's verdict, which had found three
+invariant breaches no reviewer raised, was lost with it.
 
-Such a name keys no workstream, no state dir and no session home, so
-every write made under it lands nowhere and reports success — each
-caller's when-let sees a truthy map and passes. It cost one review run
-all four of its ledger writes, the parked finding that was its only
-handover to a human among them. worktree-from-cwd inherits the answer
-and review:loop uses it to CHOOSE the tree to review, so a loop
-started at a checkout root reviews a worktree somewhere else.
+`append-review-entry!` now answers what happened, and the report carries it
+beside `design-verdict.ledger`, where the verdict's own outcome has been
+since a refusal cost a pass nobody could diagnose. The analysis payload
+carries it too, so a run the workstream does not hold is titled `not
+recorded` rather than graded on counts nothing downstream will read.
 
-Containment is asked of each candidate rather than of the winner: an
-entry whose canonical path is not under its project's worktrees-dir is
-not a match at all, so a lite entry steps aside instead of outranking
-the real worktree an agent stands in. Rejected: rejecting the derived
-NAME after the match. It answers one step too late — a lite entry that
-won would null the whole resolution rather than yield — and it treats
-".." as a spelling rather than as what it means.
+The `Deviation:` stamp gets the same treatment. It rewrites a commit on the
+reviewed branch — the one place an analysis may not go and look — and its
+only account was a println. What was owed is recorded beside what was
+stamped, because the stamp is best-effort per layer and a partial one shows
+nowhere else.
+
+The refusal these analyses were written about is already gone: 57d48717 let
+a record inherit the goals it cites, and both wedged workstreams have
+written a `:review` and a `:design-verdict` since. What was left is that
+nothing durable said which of the two had happened.
+
+The tail write persists only over a report the run itself wrote. Minting one
+would hand `analysis/enqueue!`'s report gate a report of a run that did
+nothing, which is the case that gate exists to refuse.
 
 Layer: behavioral
 
-Claims: a registry entry canonicalizing outside its project's
-  worktrees-dir never resolves a cwd, so session-from-cwd is nil
-  rather than wrong wherever it cannot name the session the caller
-  stands in.
-Verify: bb nido:test — the two lite-worktree cases fail on the parent
-  revision, naming ".." and "../nido"; the third holds a real worktree
-  resolving while a lite entry is registered beside it.
-Lane: none
-Out of scope: reaching a lite run's own workstream at all. Its cwd
-  canonicalizes to the shared checkout, so the identity is gone before
-  nido sees it and no derivation can recover it — FU-93 carries the
-  alternative, which is to carry the coordinates rather than derive
-  them.
+Claims: A run says in its report and in its analysis envelope whether the
+  workstream took its :review entry, and which layers took a Deviation.
+Verify: bb nido:test — 3415 tests, 9328 assertions, 0 failures.
+  bb nido:land:check — ok.
+  the-review-entrys-fate-is-in-the-report-beside-the-verdicts,
+  append-review-entry-reports-the-refusal-it-used-to-swallow,
+  record-deviations-says-which-layers-took-the-stamp,
+  the-title-says-when-the-workstream-holds-no-record-of-the-run.
+Lane: judgment — what a run publishes about its own records.
+Out of scope: the `:blocker` append and the analysis enqueue still account
+  for themselves in a println alone — FU filed. Re-rooting the chains that
+  reached several goals before 3fbb6b07 is the record layer's, and needs no
+  new record.
 
-Covers: ws-20260907-a78539/1.0 (miss · session-from-cwd / the four
-  ledger writes in tasks.nido-review)
+Closes the proposals at ws-20260914-290d01/1.0, ws-20260914-290d01/1.1,
+ws-20260915-537eca/1.0, ws-20260915-277814/1.4, ws-20260915-9a2744/1.2 and
+ws-20260915-3ffe15/1.4.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>

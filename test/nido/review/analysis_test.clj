@@ -156,6 +156,39 @@
       "a `sound` verdict agrees with the status, and the title is read by someone
        scanning for the runs where the two came apart"))
 
+(deftest the-title-says-when-the-workstream-holds-no-record-of-the-run
+  ;; An unrecorded run is invisible from the workstream while its successor
+  ;; inherits the open list of the run BEFORE it — so every count the analysis
+  ;; is given describes a judgement nothing downstream will ever read. Two runs
+  ;; were graded on that inheritance before anything published the fact.
+  (let [p (analysis/payload
+           (assoc a-run :review-entry
+                  {:ledger "refused" :ws-id "ws-1"
+                   :because "Invalid event review — [:status] :malli.core/invalid-type"}))]
+    (is (str/includes? (:title p) "not recorded"))
+    (is (str/includes? (:headline p) "invalid-type")
+        "the headline is the whole of the analysis session's briefing")
+    (is (str/includes? (:headline p) "ws-1"))
+    (is (= "refused" (get-in p [:review-entry :ledger]))))
+  ;; The same answer as a keyword, which is what it is in the process that
+  ;; folded it — `report/verdict-summary`'s reason, applied to this field.
+  (is (str/includes? (:title (analysis/payload
+                              (assoc a-run :review-entry {:ledger :no-design})))
+                     "not recorded")))
+
+(deftest a-run-that-reached-a-ledger-or-had-none-is-not-titled-unrecorded
+  (is (not (str/includes? (:title (analysis/payload
+                                   (assoc a-run :review-entry
+                                          {:ledger "appended" :ws-id "ws-1"})))
+                          "not recorded")))
+  (is (not (str/includes? (:title (analysis/payload
+                                   (assoc a-run :review-entry {:ledger "no-workstream"})))
+                          "not recorded"))
+      "a review outside a session had no ledger to reach, which is not a run the
+       ledger lost — the Reviewed: line already says there is no workstream")
+  (is (not (str/includes? (:title (analysis/payload a-run)) "not recorded"))
+      "an orphan never got as far as offering an entry, so it carries no answer"))
+
 (deftest the-payload-says-which-phase-an-orphan-died-in
   ;; The one fact separating a harmless orphan from a dangerous one. A run killed
   ;; while its fixers were rewriting the branch left a tree nobody vouched for; a

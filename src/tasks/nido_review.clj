@@ -270,39 +270,60 @@
       (seq standing)  (assoc :standing (vec standing))
       (seq reshaped)  (assoc :reshaped reshaped))))
 
+(defn- refusal-reason
+  "Why the ledger would not take a record, in one line a reader can act on.
+
+   malli's :explain is the full diagnosis and cannot travel with the record — a
+   single error embeds the whole branch schema, which is larger than the report
+   it would sit in. What identifies the bug is the path and the error type
+   together: `[:needs] :malli.core/extra-key` says the writer emits a key the
+   write contract does not admit, and that is a defect in nido rather than a bad
+   record.
+
+   Shared by the run's two post-loop appends, so a `:review` entry the ledger
+   refused is diagnosed from the report exactly as a verdict is."
+  [e]
+  (let [errs (:errors (:explain (ex-data e)))]
+    (cond-> (ex-message e)
+      (seq errs)
+      (str " — "
+           (str/join ", " (map #(str (pr-str (vec (:in %))) " " (:type %)) errs))))))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   append-review-entry!
-  "Resolve cwd → session → workstream (the tasks.nido-ship path) and append one :review
-   entry. Best-effort: a ledger-write failure must never turn a completed review
-   into a failure exit — visibility is a side record, not part of the review. No-op
-   returning nil when cwd maps to no workstream, the append fails, or the run
-   captured no design on a workstream that holds one. Returns ws-id."
+  "Resolve cwd → session → workstream (the tasks.nido-ship path) and append one
+   :review entry. Answers what became of it, in the shape `report/with-review-entry`
+   records: `:ledger` (`:appended`, `:refused`, `:no-design`, `:no-workstream`),
+   `:ws-id` where one resolved, and `:because` on the two answers that owe a reason.
+
+   Best-effort: a ledger-write failure must never turn a completed review into a
+   failure exit — visibility is a side record, not part of the review. Nothing
+   here throws and nothing here prints. It used to say its own refusals on
+   stderr, which is a stream the run dir does not keep, so a run whose entry was
+   refused looked from every durable artifact exactly like one that landed —
+   while the next run inherited the open list of the run before it. The answer
+   goes back to the caller instead, which puts it in the report."
   [cwd final report report-path]
-  (try
-    (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
-      (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
-        ;; The design the run's last round JUDGED against, which it read at the
-        ;; round's start — not the newest at append time, which a design written
-        ;; mid-run would make one no reviewer saw. That is the only citation:
-        ;; attribution is read, never inferred, so a run that captured none on
-        ;; a workstream holding a design has a judgement nobody can attribute,
-        ;; and it is reported rather than filed under whichever design is newest.
-        (let [d (get-in final [:design :seq])]
-          (if (or d (not (ws/holds-design? (ws/read-ws (keyword project) ws-id))))
-            (do (ws/append-entry! (keyword project) ws-id {:kind :review}
-                                  (pr-str (cond-> (review-event final report report-path)
-                                            d (assoc :design {:seq d}))))
-                ws-id)
-            (do (binding [*out* *err*]
-                  (println (str "review-loop: not appending the :review entry to " ws-id
-                                " — the run captured no design, and the workstream holds"
-                                " one, so there is no design this judgement was made under")))
-                nil)))))
-    (catch Exception e
-      (binding [*out* *err*]
-        (println (str "review-loop: could not append :review ledger event — "
-                      (ex-message e))))
-      nil)))
+  (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+    (try
+      ;; The design the run's last round JUDGED against, which it read at the
+      ;; round's start — not the newest at append time, which a design written
+      ;; mid-run would make one no reviewer saw. That is the only citation:
+      ;; attribution is read, never inferred, so a run that captured none on
+      ;; a workstream holding a design has a judgement nobody can attribute,
+      ;; and it is reported rather than filed under whichever design is newest.
+      (let [d (get-in final [:design :seq])]
+        (if (and (nil? d) (ws/holds-design? (ws/read-ws project ws-id)))
+          {:ledger  :no-design :ws-id ws-id
+           :because (str "the run captured no design, and the workstream holds one,"
+                         " so there is no design this judgement was made under")}
+          (do (ws/append-entry! project ws-id {:kind :review}
+                                (pr-str (cond-> (review-event final report report-path)
+                                          d (assoc :design {:seq d}))))
+              {:ledger :appended :ws-id ws-id})))
+      (catch Exception e
+        {:ledger :refused :ws-id ws-id :because (refusal-reason e)}))
+    {:ledger :no-workstream}))
 
 (defn- verdict-supports
   "What this run's design verdict says about the design record, or nil when there
@@ -537,7 +558,13 @@
    the sum is made HERE and nowhere else: the `:review` ledger entry is written
    before the verdict pass runs and can only ever count the rounds. This payload
    is the one record that sees the loop and the judge together — see
-   `verdict/kept-by-the-verdict` for why a non-decision `:needs` belongs in it."
+   `verdict/kept-by-the-verdict` for why a non-decision `:needs` belongs in it.
+
+   `:review-entry` is what became of that ledger entry, read off the report for
+   the verdict's reason: the report is the copy that survives a ledger which
+   would not take it. An analysis that cannot tell a recorded run from an
+   unrecorded one grades the next run's inherited open list as the loop's
+   judgement, when it is the last run's."
   [cwd final report report-path config ws-id]
   (let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd) {})
         open   (verdict/open-across-run final)
@@ -566,7 +593,8 @@
        :errored            (report/errored report)
        :reviewed-project   project
        :reviewed-session   session
-       :reviewed-ws-id     ws-id}
+       :reviewed-ws-id     ws-id
+       :review-entry       (:review-entry report)}
       (report/stopped-on final)
       (report/verdict-summary report)))))
 
@@ -618,22 +646,6 @@
   [cwd base]
   (try (seq (layers/conflicted cwd base))
        (catch Throwable _ nil)))
-
-(defn- refusal-reason
-  "Why the ledger would not take a verdict, in one line a reader can act on.
-
-   malli's :explain is the full diagnosis and cannot travel with the verdict —
-   a single error embeds the whole branch schema, which is larger than the report
-   it would sit in. What identifies the bug is the path and the error type
-   together: `[:needs] :malli.core/extra-key` says the parser emits a key the
-   write contract does not admit, and that is a defect in nido rather than a bad
-   verdict."
-  [e]
-  (let [errs (:errors (:explain (ex-data e)))]
-    (cond-> (ex-message e)
-      (seq errs)
-      (str " — "
-           (str/join ", " (map #(str (pr-str (vec (:in %))) " " (:type %)) errs))))))
 
 (defn- append-verdict-to-ledger!
   "Offer the verdict to this cwd's workstream, and say what happened:
@@ -1369,12 +1381,16 @@
 
 (defn- record-deviations!
   "Stamp the run's deviations onto their layers — see
-   `layers/record-deviations!` — and answer the labels it wrote.
+   `layers/record-deviations!` — and answer what became of them, in the shape
+   `report/with-deviations` records: `:owed` is every layer a kept deviation
+   belongs to, `:stamped` the ones whose commit message took the line, and
+   `:because` a failure that took the whole pass.
 
    Here rather than in a stage because it REWRITES layer commits, and a stage
    doing that mid-run would move the tree out from under the round's own drift
    guard, exactly as a reshape does; the reshape stage carries a re-pin for it
-   and this needs none, because the loop has ended. A dry run stamps nothing.
+   and this needs none, because the loop has ended. A dry run stamps nothing and
+   owes nothing.
 
    Scoped to findings the warden gave an `owner-layer`: the layer whose claim it
    is, is the layer whose message says so. A deviation on an unlayered branch
@@ -1386,21 +1402,65 @@
    the loop knows is false shipping to the PR with nothing anywhere saying the
    stamp was attempted. The ledger entry is already written by this point and
    still holds the finding, so the warning names what a reader has to do by
-   hand."
+   hand.
+
+   The two lists rather than one because the stamp is best-effort PER LAYER as
+   well: a `jj describe` that fails drops its label from `:stamped` and changes
+   nothing else, so a partial stamp is legible only as the difference."
   [cwd config final]
-  (try
-    (when-not (:dry-run? config)
-      (let [devs (into [] (filter #(= :deviation (:disposition %)))
-                       (verdict/kept-across-run final))]
-        (when (seq devs)
-          (layers/record-deviations!
-           cwd (stages/session-stack cwd (:base config)) devs))))
-    (catch Throwable e
-      (println (str "review-loop: ⚠ could not record this run's deviations on their"
-                    " layers — " (ex-message e)
-                    "\n  the findings are in the :review ledger entry; the layer"
-                    " commits still carry the claims they qualify"))
-      nil)))
+  (let [devs (if (:dry-run? config)
+               []
+               (into [] (filter #(= :deviation (:disposition %)))
+                     (verdict/kept-across-run final)))
+        owed (into [] (distinct) (keep :owner-layer devs))]
+    (try
+      {:owed    owed
+       :stamped (if (seq devs)
+                  (layers/record-deviations!
+                   cwd (stages/session-stack cwd (:base config)) devs)
+                  [])}
+      (catch Throwable e
+        (println (str "review-loop: ⚠ could not record this run's deviations on their"
+                      " layers — " (ex-message e)
+                      "\n  the findings are in the :review ledger entry; the layer"
+                      " commits still carry the claims they qualify"))
+        {:owed owed :stamped [] :because (ex-message e)}))))
+
+(defn- record-post-loop-writes!
+  "Fold what the run's two post-loop writes did into report.json, and say on the
+   terminal what each of them changed or failed to.
+
+   Beside `record-verdict!` and on its argument. All three are records written
+   after the run has ended, each can fail without failing the run, and each used
+   to account for itself in a `println` alone — which the run dir does not keep,
+   so a `:review` entry the ledger refused and one it took left identical
+   evidence. What the next run inherits turns on which of the two happened."
+  [entry deviations report-atom report-path]
+  ;; Over a report the RUN wrote, never minting one. A run whose engine emitted
+  ;; no event persists nothing, and that absence is what stops `analysis/enqueue!`
+  ;; provisioning a worktree and an hour of budget to open a file that is not
+  ;; there. A tail write that created it would defeat the gate with a report of a
+  ;; run that did nothing. The value still reaches the analysis through the atom.
+  (let [r (swap! report-atom #(-> %
+                                  (report/with-review-entry entry)
+                                  (report/with-deviations deviations)))]
+    (when (and report-path (fs/exists? (str report-path)))
+      (report/persist! r report-path)))
+  (when (seq (:stamped deviations))
+    (println (str "review-loop: recorded a Deviation on "
+                  (str/join ", " (:stamped deviations))
+                  " — it ships in the layer's commit message and in the PR"
+                  " /squash generates from it")))
+  ;; A side record that fails invisibly is how a whole class of run came to
+  ;; leave no ledger entry at all: the ledger's status enum did not admit
+  ;; :unfixable, every append on that status was refused, and the refusal went
+  ;; to a stderr stream nobody keeps. Said here whether the workstream would not
+  ;; take the entry or there was no workstream to take it — either way the
+  ;; report is the only copy of this run.
+  (when-not (= :appended (:ledger entry))
+    (println (str "review-loop: ⚠ no :review entry reached a ledger"
+                  (when-let [b (:because entry)] (str " — " b))
+                  "\n  this run is recorded in " report-path " alone"))))
 
 (defn- review-branch!
   "Drive the loop over the branch and record what it found, returning the
@@ -1415,31 +1475,17 @@
                  {:report-atom report-atom :report-path report-path :clock clock}
                  (fn [emit] (rloop/run-loop (assoc config :emit emit))))
         status (:status final)
-        ws-id  (append-review-entry! cwd final @report-atom report-path)
+        entry  (append-review-entry! cwd final @report-atom report-path)
         ;; After the ledger entry, because the entry is the record everything
         ;; downstream reads and this rewrites commits. Before the outcome lines,
         ;; so what the run says it did includes it.
-        stamped (record-deviations! cwd config final)]
+        devs   (record-deviations! cwd config final)]
     ;; The status names the condition and `diff-remedies` says what it asks
     ;; of whoever ran this. A coordinator-driven round says it a second
     ;; time, through the lane's disposition and a gate entry; a round a
     ;; person ran themselves says it here or nowhere.
     (run! println (outcome-lines final @report-atom report-path))
-    (when (seq stamped)
-      (println (str "review-loop: recorded a Deviation on "
-                    (str/join ", " stamped)
-                    " — it ships in the layer's commit message and in the PR"
-                    " /squash generates from it")))
-    ;; A side record that fails invisibly is how a whole class of run came
-    ;; to leave no ledger entry at all: the ledger's status enum did not
-    ;; admit :unfixable, every append on that status was refused, and the
-    ;; refusal went to a stderr stream nobody keeps. nil here means the
-    ;; workstream holds nothing about this run, whether because there is no
-    ;; workstream or because it would not take the entry — and either way
-    ;; the report is the only copy.
-    (when-not ws-id
-      (println (str "review-loop: ⚠ no :review entry reached a ledger"
-                    " — this run is recorded in " report-path " alone")))
+    (record-post-loop-writes! entry devs report-atom report-path)
     ;; The verdict BEFORE the halt, and the order is the whole point twice over.
     ;; It is the answer to the question the halt asks, so a halt filed first is a
     ;; gate offering to decline findings the run already knew how to repair. And
@@ -1461,7 +1507,7 @@
     ;; envelope, read back off the report `record-verdict!` just folded it
     ;; into, so moving this line above that one would publish a headline
     ;; that silently drops it.
-    (queue-analysis! cwd final @report-atom report-path config ws-id)
+    (queue-analysis! cwd final @report-atom report-path config (:ws-id entry))
     status))
 
 (defn- reviewer-of

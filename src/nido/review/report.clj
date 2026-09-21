@@ -981,6 +981,57 @@
        :verdict-implementation (count (filter #(= "implementation" (some-> (:as %) name))
                                               (:findings-classified v)))})))
 
+;; ---- the rest of what the run's tail wrote -------------------------------
+
+(defn ^{:malli/schema [:=> [:cat :ReviewReport :map] :ReviewReport]}
+  with-review-entry
+  "The report, carrying what became of the `:review` ledger entry.
+
+   Beside `:design-verdict` and shaped like it, because the two are the same
+   kind of fact: a record the run writes after it has ended, which can fail
+   without the run failing, and whose whole account used to be one line on the
+   stderr of whoever ran the loop. The verdict's outcome has been here since a
+   refusal cost a pass nobody could diagnose; this one cost more, because the
+   `:review` entry is what the NEXT run reads — its prior open list, its
+   standing needs, the design verdict it inherits. Establishing that a run's
+   entry never landed meant re-deriving the ledger's own checks by hand.
+
+   `:ledger` is `:appended`, `:refused` (the ledger would not take it, and
+   `:because` says what it objected to), `:no-design` (the run captured none on
+   a workstream that holds one, so there is nothing to attribute the judgement
+   to) or `:no-workstream`. `:ws-id` names the workstream the entry went to, or
+   would have.
+
+   Keywords are written out as strings, as `with-verdict` writes its own."
+  [report {:keys [ledger ws-id because]}]
+  (assoc report :review-entry
+         (cond-> {:ledger (name ledger)}
+           ws-id   (assoc :ws-id ws-id)
+           because (assoc :because because))))
+
+(defn ^{:malli/schema [:=> [:cat :ReviewReport :map] :ReviewReport]}
+  with-deviations
+  "The report, carrying which layers the run stamped a `Deviation:` onto.
+
+   The stamp rewrites a commit on the REVIEWED branch, which is the one place
+   an analysis of the run may not go and look — and it decides what the next
+   run's reviewer is shown about a claim this run agreed was too strong. Its
+   only record was a `println`.
+
+   `:owed` is every layer a kept deviation belongs to; `:stamped` is the layers
+   whose commit message took the line. The stamp is best-effort per layer, so a
+   partial one is legible only as the difference between the two lists, and
+   `:because` carries a failure that took the whole pass.
+
+   Absent, rather than empty, for a run with no deviation to stamp: a report
+   that says nothing about them is a run that had none."
+  [report {:keys [owed stamped because]}]
+  (if (and (empty? owed) (empty? stamped) (not because))
+    report
+    (assoc report :deviations
+           (cond-> {:owed (vec owed) :stamped (vec stamped)}
+             because (assoc :because because)))))
+
 ;; ---- persistence ---------------------------------------------------------
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport :Path] :any]}

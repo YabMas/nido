@@ -90,7 +90,7 @@
    `verdict/kept-by-the-verdict` is the reading; the `:review` ledger entry
    cannot make it, because it is written before the pass runs.
 
-   The title carries three of these out of all of it, and each one changes what
+   The title carries four of these out of all of it, and each one changes what
    the rest of them MEAN. It is what a human reads off the board without opening
    anything. A park is the one count that asks them for something. `died in fix`
    says the branch may have been left mid-rewrite, which nothing else in an
@@ -99,7 +99,8 @@
    `converged · 0 still open · design strained` is a run whose own headline the
    judge went on to contradict. A `sound` verdict is left off because it agrees
    with the status, and this line is read by someone scanning for the ones that
-   do not.
+   do not. `not recorded` is the fourth, and it qualifies every count before it:
+   they describe a run the workstream does not hold.
 
    `:unfixable` and `:parked` are what the run stopped ON, and they are here for
    the same reason the counts are: a status names the KIND of ending, and an
@@ -134,6 +135,15 @@
    zero, because a `sound` verdict over no implementation findings is the
    sentence that says the run is genuinely done.
 
+   `:review-entry` is what became of the run's own `:review` ledger entry —
+   `report/with-review-entry`'s answer, carried whole. It is the one field here
+   that is about the RECORD rather than about the run, and it is in the title
+   because an unrecorded run is invisible from the workstream while its
+   successor inherits the open list of the run before it: the loop's memory
+   skips a run, and every count the analysis is given describes a judgement
+   nothing downstream will ever read. `no-workstream` is not that — a review
+   outside a session had no ledger to reach, which the `Reviewed:` line says.
+
    `:died-in` is the phase a run stopped in without finishing it, and it is the
    whole of what separates a harmless stop from a dangerous one: a run stopped
    while its fixers were rewriting the branch left a tree nobody vouched for,
@@ -157,13 +167,23 @@
            findings-remaining findings-kept remaining-handed remaining-parked
            targets-reviewed targets-skipped unfixable parked standing
            drift unavailable base in-flight errored design-verdict verdict-implementation
-           reviewed-project reviewed-session reviewed-ws-id] :as run}]
+           review-entry reviewed-project reviewed-session reviewed-ws-id] :as run}]
   ;; `:in-flight` is the reconciler's reading of an orphan's report and is the
   ;; same value `worth-analysing?` gates on; the phase is the half of it that
   ;; means something to a reader, so it is published and the round is not.
   ;; `:errored` is the same half of a finished run's own report.
   (let [died-in (or (:phase in-flight) (:phase errored))
-        verdict (some-> design-verdict name)]
+        verdict (some-> design-verdict name)
+        ;; Shape-agnostic for `verdict-summary`'s reason: the same value is a
+        ;; keyword in the process that folded it and a string once the report
+        ;; has been through JSON.
+        ledger  (some-> (:ledger review-entry) name)
+        ;; A ledger that was there and did not take this run's `:review` entry.
+        ;; `no-workstream` is not an unrecorded run — there was no ledger for it
+        ;; to reach, which the `Reviewed:` line already says — and an orphan
+        ;; never got as far as offering one, so it carries no answer at all.
+        unrecorded (when (and ledger (not (#{"appended" "no-workstream"} ledger)))
+                     review-entry)]
     (cond-> {:adapter            :review-run
              :id                 (str run-id)
              :title              (str "review-loop " (name (or status :unknown))
@@ -174,7 +194,8 @@
                                       (when (and verdict (not= "sound" verdict))
                                         (str " · design " verdict))
                                       (when (pos? (or remaining-parked 0))
-                                        (str " · " remaining-parked " parked")))
+                                        (str " · " remaining-parked " parked"))
+                                      (when unrecorded " · not recorded"))
              :run-id             (str run-id)
              :run-dir            (cstate/run-dir (str run-id))
              :report-path        report-path
@@ -195,7 +216,14 @@
                                       (or targets-skipped 0) " carried from an earlier run\n"
                                       (reviewed-line run (str " (base " base ")"))
                                       (when unavailable
-                                        (str "\nReviewer unavailable: " (:message unavailable))))}
+                                        (str "\nReviewer unavailable: " (:message unavailable)))
+                                      (when unrecorded
+                                        (str "\nNot recorded: this run's :review entry did not"
+                                             " reach the ledger (" ledger ")"
+                                             (when-let [b (:because unrecorded)] (str " — " b))
+                                             "; the next run on "
+                                             (or reviewed-ws-id "this workstream")
+                                             " inherits the one before it")))}
       (pos? (or remaining-handed 0)) (assoc :remaining-handed remaining-handed)
       (pos? (or remaining-parked 0)) (assoc :remaining-parked remaining-parked)
       (seq unfixable)  (assoc :unfixable (mapv str unfixable))
@@ -203,6 +231,7 @@
       (seq standing)   (assoc :standing (vec standing))
       drift            (assoc :drift drift)
       unavailable      (assoc :unavailable unavailable)
+      review-entry     (assoc :review-entry review-entry)
       base             (assoc :base base)
       died-in          (assoc :died-in died-in)
       verdict          (assoc :design-verdict verdict
