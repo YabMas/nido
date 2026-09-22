@@ -1,6 +1,6 @@
 ---
 name: drive-home
-description: Take the current nido session's stack home by composing /align (rebase + trivial-conflict resolution), /local-ci (CI + autonomous fix of every failure it can settle), /squash (fold each layer to one commit + regenerate every PR title/description) and /land (ready for review, answer Codex + the PR checks, collapse the stack to one PR, merge and watch it land), then record completion on the ticket ledger. Halts for human judgement on semantic conflicts, on CI findings that resisted /local-ci's attempts, and on review findings /land could neither fix nor defensibly decline. Usage: /drive-home
+description: Take the current nido session's stack home by composing /align (rebase + trivial-conflict resolution), /local-ci (CI + autonomous fix of every failure it can settle), /squash (fold each layer to one commit + regenerate every PR title/description) and /land (ready for review, answer the PR checks, collapse the stack to one PR, merge and watch it land), then record completion on the ticket ledger. Halts for human judgement on semantic conflicts, on CI findings that resisted /local-ci's attempts, and on PR findings /land could neither fix nor defensibly decline. Usage: /drive-home
 ---
 
 # drive-home
@@ -22,9 +22,8 @@ on the ticket ledger:
    halt only on what resisted or needs a decision,
 3. `/squash` — fold each layer into one coherent commit and regenerate every
    layer's PR title/description from it,
-4. `/land` — mark every layer ready, answer the Codex review and the PR checks
-   that readiness starts, then collapse the stack into one PR, merge that and
-   watch it land.
+4. `/land` — mark every layer ready, answer the PR checks that readiness
+   starts, then collapse the stack into one PR, merge that and watch it land.
 
 It is **autonomous within a safe boundary** and **stops for a human** the moment
 real judgement is required. It assumes the nido invariant — **one session, one
@@ -189,9 +188,9 @@ title/description. It is mechanical and never halts.
 
 Reached **only** on green CI with no unresolved conflicts. `cd worktree`, then
 invoke **`/land`**. It marks every layer ready for review — which is what starts
-Codex and the PR's own GitHub checks, neither of which `/local-ci` ran — answers
-what comes back, collapses the reviewed stack into its top PR, merges that one
-PR and watches it until it lands.
+the PR's own GitHub checks, which `/local-ci` did not run — answers what comes
+back, collapses the reviewed stack into its top PR, merges that one PR and
+watches it until it lands.
 
 It returns a report with `Fixed` / `Declined` / `Unresolved` / `Checks` sections
 and an `Outcome:` line. **`Unresolved` empty ⇒ continue to §7**, whether the
@@ -204,9 +203,8 @@ is where a human gets to see them. If you halt, the blocker should say what was
 already settled so the human does not re-derive it.
 
 **Do not un-ready the PRs on a halt.** `/land` deliberately leaves the layers
-ready and the review threads open — that is what lets a human read the review on
-GitHub. Reverting to draft would discard Codex's verdict and re-trigger the whole
-review on the next run.
+ready and any review threads open — that is what lets a human read the state on
+GitHub. Reverting to draft only makes the next run start over.
 
 ## 7. Record completion on the ticket ledger
 
@@ -220,7 +218,7 @@ is the `:event-payload :id` in `./run-link/run.edn` (run from the session home;
 ```bash
 cat > /tmp/impl-completed.edn <<'EDN'
 {:format    :implementation-completed
- :summary   "<one-line: what shipped; CI green; Codex answered; landed / on the queue>"
+ :summary   "<one-line: what shipped; CI green; checks answered; landed / on the queue>"
  :artifacts [{:kind :pr :ref "<owner>/<repo>#<number>" :url "<pr-url>"}]
  :design       {:seq <seq of the design this work was done under>}
  :design-delta {:held? true}}
@@ -293,8 +291,9 @@ merge lane classifies a Run by the *latest* ledger kind
 this one would hide the `:implementation-completed` fingerprint and park a
 perfectly healthy branch as blocked.
 
-Report: the PR URL(s), what was rebased/auto-fixed, **what Codex found and what
-you did about each finding** — fixed, or declined and why — that the stack was
+Report: the PR URL(s), what was rebased/auto-fixed, **what the PR's checks and
+any review thread turned up, and what you did about each finding** — fixed, or
+declined and why — that the stack was
 folded (one commit per layer) with every PR description regenerated, and whether
 it landed or is still on the queue.
 
@@ -319,7 +318,7 @@ continues rather than redoing:
   has one commit with a real message) → the squash fold is a no-op.
 - PR description regen is a deterministic overwrite from the final state → safe to
   repeat (no append-drift).
-- Everything on the GitHub side — already ready, already reviewed, already
+- Everything on the GitHub side — already ready, already checked, already
   merged — is `/land`'s own precondition set; it re-runs clean. See its
   Idempotency section.
 - Already merged → `/land` returns immediately; §7 still runs, because the ledger
@@ -337,11 +336,10 @@ drive-home leaves the worktree exactly as it is, reports **what** blocks and
 **how to resume** (resolve conflict X / fix test Y / rule on finding Z, then
 re-run `/drive-home`), and stops. It makes no `merge` call on a halted journey.
 
-**A `/land` halt leaves the layers ready and reviewed, which is the point.** Unlike
-an §3 or §4 halt, the work is published and a human can read the open threads on
-GitHub. Say which finding is unresolved and what was tried; do not un-ready the
-PRs to "clean up" — that discards Codex's verdict and re-triggers the whole
-review on the next run.
+**A `/land` halt leaves the layers ready and checked, which is the point.** Unlike
+an §3 or §4 halt, the work is published and a human can read the checks and any
+open thread on GitHub. Say which finding is unresolved and what was tried; do
+not un-ready the PRs to "clean up" — that only makes the next run start over.
 
 **A `landing` outcome from `/land` is not a halt.** The stack is on the queue
 and the `github-merge` poller owns it from there; finish §7 and report it as
@@ -399,8 +397,8 @@ stops and makes no `ready`/`merge` calls.
   is still accepted and does nothing.
 - **Discarding `/land`'s `Declined` entries** — they are judgements made on the
   reviewer's behalf, and §7's report is the only place a human sees them (§6).
-- **Un-readying the PRs after a `/land` halt** — that throws away Codex's verdict
-  and re-triggers the whole review next run (§6).
+- **Un-readying the PRs after a `/land` halt** — it hides the published state a
+  human is meant to read and makes the next run start over (§6).
 - **Treating a `landing` outcome as a halt** — the stack is on the queue and the
   `github-merge` poller owns it; file §7 and report it as shipped (§6).
 - **Parsing the session as the last path segment** — slash-namespaced sessions

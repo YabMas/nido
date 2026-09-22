@@ -25,7 +25,7 @@ That is the whole difference, and it is worth stating before anything else:
 > **A layer boundary is dissolved by the merge. A phase boundary *is* the
 > deploy.**
 
-A stack lands as ONE pull request, because `/land` §8 collapses the reviewed
+A stack lands as ONE pull request, because `/land` §6 collapses the reviewed
 stack into its top PR before merging it — so no intermediate layer state is ever
 observed by a running system. (Not `gh stack merge`, which `/land` and `/stack`
 both forbid on a queue-protected repo: a merge queue takes its entries one at a

@@ -1,6 +1,6 @@
 ---
 name: land
-description: Land the current session's stack — mark every layer ready for review, answer the Codex review and the PR checks that readiness triggers (fixing what it can, declining what it can defensibly decline), collapse the stack into its top PR and merge that one PR, watching it until it lands. No ledger events. Run from a session worktree. Usage: /land
+description: Land the current session's stack — mark every layer ready for review, answer the PR checks that readiness triggers and any review thread a human left (fixing what it can, declining what it can defensibly decline), collapse the stack into its top PR and merge that one PR, watching it until it lands. No ledger events. Run from a session worktree. Usage: /land
 ---
 
 # /land
@@ -14,13 +14,19 @@ description: Land the current session's stack — mark every layer ready for rev
 
 The branch's meeting with GitHub. Everything before this happened on your
 machine: `/align` reconciled with trunk, `/local-ci` ran the Docker CI, `/squash`
-shaped the commits. **Marking ready is what starts the review** — Codex reads the
-diff, and the PR's own checks (e2e, integration shards, staging deploy) run for
-the first time. This skill marks ready, answers what comes back, **collapses the reviewed
-stack into a single PR**, merges that, and watches the result land. The
+shaped the commits, and the **review rounds** (`bb nido:review:loop`) already
+judged the diff — the code arrives here reviewed. **Marking ready is what starts
+the PR's own checks** (e2e, integration shards, staging deploy), which run for
+the first time. This skill marks ready, answers what comes back, **collapses the
+reviewed stack into a single PR**, merges that, and watches the result land. The
 collapse is not tidiness: a merge queue merges its entries one at a time, so
 a stack that enters it as n pull requests lands in pieces the moment anything
-fails mid-arc (§8).
+fails mid-arc (§6).
+
+**The GitHub-side review is not this skill's business.** Codex reviews nido's
+work in the review rounds, against the branch diff, before anything is marked
+ready — so `/land` waits on no reviewer and parses no bot. A thread on a PR here
+is a person's, and §3 says what to do with one.
 
 It is **autonomous within a safe boundary**: it fixes what it can, declines what
 it can defensibly decline, and halts on what needs a human. It writes **no ledger
@@ -82,7 +88,7 @@ gh pr list -R "$SLUG" --state open --limit 50 \
   --jq '.[] | select(.headRefName == "<session>" or (.headRefName | startswith("<session>--")))'
 ```
 
-Keep every layer's `number` and `url` in bottom-to-top order — §2 and §8 need
+Keep every layer's `number` and `url` in bottom-to-top order — §2 and §6 need
 them and nothing else produces them. **Both empty** ⇒ the branch was never
 published: stop and run `/prepare-draft-pr`, which also wires the correlation
 links the merge poller needs. Never hand-roll `gh pr create` here.
@@ -146,7 +152,7 @@ protect (`/stack` §4).
 **stderr** — stdout is empty — and exits **5** on a partial failure that it does
 not roll back. A non-zero exit here means the stack shape on GitHub is wrong,
 most often a layer inserted below the top during the work (GitHub locks a stacked
-PR's base, so this call cannot rewire one). **Do not proceed to §8's collapse
+PR's base, so this call cannot rewire one). **Do not proceed to §6's collapse
 on a non-zero exit** — merging a mis-shaped stack lands a mid-stack PR whose diff
 swallows the layer below it. Report the stderr text and point at `/stack` §6 case
 B: unstack, then one link. Then re-run `/land`.
@@ -156,87 +162,78 @@ For a single-PR session, `gh pr ready <number> -R "$SLUG"` — **both** the numb
 exits `argument required when using the --repo flag`, and bare `gh pr ready`
 cannot resolve a repo from this worktree.
 
-Marking ready is what fires Codex (`chatgpt-codex-connector`) and starts
-the PR's GitHub Actions checks. **Neither ran during `/local-ci`** — that was the
-local Docker CI, and the PR adds e2e, integration shards and a staging deploy on
-top of it. This is where the branch first meets everything that will actually
-gate it.
+Marking ready is what starts the PR's GitHub Actions checks. **They did not run
+during `/local-ci`** — that was the local Docker CI, and the PR adds e2e,
+integration shards and a staging deploy on top of it. This is where the branch
+first meets everything that will actually gate it.
 
-Do this for **every layer**. A stack of three gets three Codex reviews and three
-check rollups, and a finding on layer 2 is layer 2's to fix (§5).
+Do this for **every layer**. A stack of three gets three check rollups, and a
+failure on layer 2 is layer 2's to fix (§4). The top PR has to be out of draft
+for the queue to take it at all (§6); the layers beneath are marked ready so each
+stands as a readable record beside the commit that lands it.
 
-### 3. Wait for Codex — it has two ways of answering
+### 3. Wait for the checks
 
-**A clean review leaves no review.** Codex's own about-box says so: *"If Codex
-has suggestions, it will comment; otherwise it will react with 👍."* Two terminal
-signals, then — and polling for only the first hangs forever on exactly the PRs
-that had nothing wrong with them:
-
-| outcome | signal |
-|---|---|
-| findings | a review by `chatgpt-codex-connector` |
-| clean | a `+1` reaction by `chatgpt-codex-connector[bot]` on the PR |
-| not finished yet | neither |
+Readiness started them, and they are what this phase waits on. Poll the rollup
+on a slow cadence — a minute or more apart — until nothing is still running:
 
 ```bash
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
-gh api repos/"$SLUG"/issues/<n>/reactions \
-  --jq '[.[] | select(.user.login=="chatgpt-codex-connector[bot]" and .content=="+1")] | length'
-gh pr view <n> -R "$SLUG" --json reviews \
-  --jq '[.reviews[] | select(.author.login=="chatgpt-codex-connector")] | length'
+gh pr view <n> -R "$SLUG" --json statusCheckRollup \
+  --jq '[.statusCheckRollup[]
+        | select((.status // "COMPLETED") != "COMPLETED" or (.state // "") == "PENDING")
+        | (.name // .context)]'
 ```
 
-**Read the reaction through the REST endpoint, not `reactionGroups`.**
-`gh pr view --json reactionGroups` reports `THUMBS_UP` without saying who left
-it, so a human thumbs-up on the PR would read as a clean Codex verdict and send
-the branch to the queue unreviewed. The REST endpoint carries `.user.login` —
-filter on it, and keep the `[bot]` suffix: the reaction is left by
-`chatgpt-codex-connector[bot]` while the review is authored by
-`chatgpt-codex-connector`, and the two do not match each other.
+**The two defaults in that filter are load-bearing.** The rollup mixes two node
+types: a `CheckRun` carries `status`/`conclusion`/`name`, a `StatusContext`
+carries `state`/`context` and no `status` at all. Without `// "COMPLETED"` every
+status context reads as forever-pending and the poll never terminates; without
+`// ""` every check run does, against the `PENDING` test.
 
-**On round two and after, a `+1` needs a timestamp check.** The review body
-stamps the commit it reviewed (§4); the reaction does not — it carries
-`created_at` and nothing else. So once you have pushed a fix, the `+1` sitting on
-the PR is the verdict on the code *before* that fix, and reading it as a clean
-result would send an unreviewed commit to the queue. Compare `created_at` against
-the push, and treat anything older as "not finished yet":
+Then read what failed:
 
 ```bash
-gh api repos/"$SLUG"/issues/<n>/reactions \
-  --jq '.[] | select(.user.login=="chatgpt-codex-connector[bot]" and .content=="+1") | .created_at'
+gh pr view <n> -R "$SLUG" --json statusCheckRollup \
+  --jq '[.statusCheckRollup[] | select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT")
+       | {name: (.name//.context), url: (.detailsUrl//.targetUrl)}]'
 ```
 
-Poll on a slow cadence, a minute or more apart. Codex is not a required check —
-nothing on GitHub is waiting for it, and nothing breaks if you are unhurried.
+A check concluding `FAILURE` or `TIMED_OUT` is a finding like any other. Attempt
+them through `/local-ci`'s protocol — read the log, dispatch the owning agent,
+verify narrowly, two attempts — with the log pulled from the run rather than the
+local Docker CI: `gh run view <run-id> --log-failed`.
 
-### 4. Read what it found
+**Do not try to work out which checks are required.** `isRequired` comes back
+null through `gh pr view` here, and branch protection is not readable without
+admin rights. Auto-merge and the merge queue already know what gates the branch,
+and §6 delegates to them. The question here is narrower: a red check is worth
+fixing whether or not it gates anything.
 
-Findings arrive as **inline review comments**, each with a severity badge in its
-body (`P1` orange, `P2` yellow):
+**Read any review thread on the PR too — and do not wait for one.** The review
+rounds judged this diff before it was ever pushed, so no reviewer is on its way;
+a thread here was left by a person, at whatever moment they looked, and none at
+all is the normal case. But §6's merge gate requires every thread on the
+collapsed PR resolved, so a thread that does exist is a finding carrying §4's
+dispositions:
 
 ```bash
 gh api repos/"$SLUG"/pulls/<n>/comments \
-  --jq '.[] | select(.user.login=="chatgpt-codex-connector[bot]")
-      | "\(.id)\t\(.path):\(.line // .original_line)\t\((.body | capture("!\\[(?<p>P[0-9])").p) // "P?")"'
+  --jq '.[] | "\(.id)\t\(.user.login)\t\(.path):\(.line // .original_line)"'
 ```
 
-The review body stamps **which commit it reviewed** — a `**Reviewed commit:**`
-line carrying the short sha. Compare it against the layer's head. A stamp that
-does not match is a review of code you have already replaced; wait for the next
-one
-rather than fixing findings that no longer apply.
-
-### 5. Attempt every finding — and land the fix in the layer that owns it
+### 4. Attempt every finding — and land the fix in the layer that owns it
 
 Same posture as `/local-ci`: attempt first, halt only on what genuinely resists.
-But **three dispositions here, not two**, and the third is what separates a
-reviewer from a test:
+But **three dispositions here, not two**, and the third exists because a person
+can be answered where a test cannot:
 
 - **Fixed** — the finding is right. Fix it.
-- **Declined** — the finding is wrong, or the code is deliberate. Reply on the
-  thread saying why. A failing test cannot be mistaken; a P2 suggestion can be,
-  and answering it *is* a response to the review rather than a dodge.
+- **Declined** — open to a *review thread* only: the comment is wrong, or the
+  code is deliberate. Reply on the thread saying why. A failing check cannot be
+  mistaken and has no thread to answer on; a person's suggestion can be, and
+  answering it *is* a response to the review rather than a dodge.
 - **Unresolved** — it resisted, or the call is not yours to make.
 
 **Decline only against something already on the record** — the layer's stated Out
@@ -271,45 +268,19 @@ Never append a fix commit on top of the stack. It lands the fix in the wrong PR,
 puts two commits in one layer, and leaves the layer it was meant for still
 carrying the finding.
 
-### 6. The checks
+### 5. Cap the rounds at three
 
-A check concluding `FAILURE` or `TIMED_OUT` is a finding like any other:
+Pushing a fix is a `synchronize`, and a `synchronize` re-fires the PR's checks on
+the new head — so every fix buys another wait and another rollup to read.
 
-```bash
-gh pr view <n> -R "$SLUG" --json statusCheckRollup \
-  --jq '[.statusCheckRollup[] | select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT")
-       | {name: (.name//.context), url: (.detailsUrl//.targetUrl)}]'
-```
+**Three rounds, then stop** and report what is left. An uncapped fix↔check loop
+is this phase's characteristic failure: every round is cheap enough to justify
+one more, and a flaky shard can always find one more thing.
 
-Attempt them through `/local-ci`'s protocol — read the log, dispatch the owning
-agent, verify narrowly, two attempts — with the log pulled from the run rather
-than the local Docker CI: `gh run view <run-id> --log-failed`.
+### 6. Collapse the stack to one PR, then merge it
 
-**Do not try to work out which checks are required.** `isRequired` comes back
-null through `gh pr view` here, and branch protection is not readable without
-admin rights. Auto-merge and the merge queue already know what gates the branch,
-and §8 delegates to them. The question here is narrower: a red check is worth
-fixing whether or not it gates anything.
-
-### 7. Cap the rounds at three
-
-Pushing a fix starts the cycle again — **observed: Codex re-reviewed a new head
-commit with no `@codex review` comment**, 36 minutes after its first review,
-stamping the new commit. (Its about-box lists only "open for review", "mark a
-draft as ready" and a `@codex review` comment as triggers, so either that list is
-incomplete or the human's inline reply re-triggered it; the two were not
-isolated. Either way: wait for a review stamped with the new head, and if none
-arrives, comment `@codex review` — that trigger is documented — and keep
-waiting.)
-
-**Three review rounds, then stop** and report what is left. An uncapped
-fix↔review loop is this phase's characteristic failure: every round is cheap
-enough to justify one more, and a reviewer can always find one more thing.
-
-### 8. Collapse the stack to one PR, then merge it
-
-Reached only with §3–§7 settled: every layer's Codex verdict answered, and no
-red checks left.
+Reached only with §3–§5 settled: no red checks left, and every review thread
+answered.
 
 **Do not enqueue the layers.** A stack that enters a merge queue as n pull
 requests lands in pieces. The layers were a review decomposition; they have done
@@ -379,18 +350,16 @@ with no way to clear it.
 one.** The top layer's branch already contains every layer beneath it, so moving
 its base to `main` makes its diff the whole arc without touching a commit.
 
-**The head SHA must not move, and that is what buys you the reviews you already
+**The head SHA must not move, and that is what buys you the checks you already
 have.** Checks are keyed to the head commit, so every green check stays green
-and nothing re-runs. Codex's triggers are "open for review", "mark a draft as
-ready", a `@codex review` comment, and — observed (§7) — a new head commit. A
-base retarget is none of them. So the layer reviews stand and no fresh review of
-the collapsed diff is requested.
+and nothing re-runs. A base retarget does not touch the head, so it fires
+nothing.
 
 **This means never pushing after the collapse.** A push is a `synchronize`, and a
-`synchronize` is a new head commit: it re-fires CI and re-fires Codex on the full
-arc, which is exactly the re-review the collapse exists to avoid. If the arc
-genuinely needs another commit, you are back in §5 — fix it in the layer that
-owns it, let that layer be reviewed, and collapse afterwards.
+`synchronize` is a new head commit: it re-fires CI on the full arc, which is
+exactly the re-run the collapse exists to avoid. If the arc genuinely needs
+another commit, you are back in §4 — fix it in the layer that owns it, and
+collapse afterwards.
 
 **Nothing gates the collapsed PR on its own, and that is fine.** brian's
 `pull_request.yml` carries `branches: [main]`, so only the bottom layer ever ran
@@ -475,7 +444,7 @@ Success returns the entry — `{"position":1,"state":"QUEUED"}` — and from the
 the watch below is unchanged.
 
 **Its refusals are the branch protection you are otherwise told not to guess
-at.** §6 says not to work out which checks are required, because `isRequired`
+at.** §3 says not to work out which checks are required, because `isRequired`
 comes back null and protection needs admin rights. This mutation answers that
 question by refusing, in one line, where `--auto` only ever says `BLOCKED`:
 
@@ -494,11 +463,11 @@ gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$
 ```
 
 **Resolving is a claim that the thread was answered, and it hides the thread from
-the reviewer's default view.** Resolve what §5 recorded as Fixed. A finding you
+the reviewer's default view.** Resolve what §4 recorded as Fixed. A finding you
 DECLINED is answered by the reply that carries its reasoning, and resolving it
 buries that reasoning behind a fold — so when a decline is what stands between
 the arc and the queue, resolve it only with the reply already posted, and say in
-§9's report which threads were declined-then-resolved. Never resolve a thread you
+§7's report which threads were declined-then-resolved. Never resolve a thread you
 neither fixed nor answered: that is not satisfying the gate, it is removing it.
 
 Only the collapsed PR's threads gate the merge. The lower layers' threads do not
@@ -521,7 +490,7 @@ gh api graphql -f query='{repository(owner:"OWNER",name:"REPO"){pullRequest(numb
   waiting.
 - **`no-entry` and not merged** → the queue **kicked it out**. Its build failed
   against the merged result — something the PR's own checks could not have
-  caught, since they never tested that combination. Treat it exactly as §6, fix,
+  caught, since they never tested that combination. Treat it exactly as §3, fix,
   and re-enqueue.
 
 **Watching `state`/`mergeStateStatus` alone cannot see an eviction, and this is
@@ -553,16 +522,17 @@ still there. Only once the top PR reads `MERGED`:
 
 ```bash
 gh pr close <layer-pr-number> -R "$SLUG" \
-  --comment "Landed in #<top-pr-number>, which carries this layer's commits. Reviewed here."
+  --comment "Landed in #<top-pr-number>, which carries this layer's commits."
 ```
 
 They close **unmerged**, and that is the honest record — their commits reached
 `main` inside the squash, not as themselves. The comment is what keeps each
-layer's review reachable from the commit that landed it.
+layer — its diff, its checks, and whatever was said on it — reachable from the
+commit that landed it.
 
 **Budget the watch, and hand off rather than hold on.** Poll every few minutes
 and give the whole watch a ceiling — an hour is generous. Past it, stop watching
-and report it as landing rather than landed (§9), because nido already has a
+and report it as landing rather than landed (§7), because nido already has a
 completion watcher: the
 `github-merge` poller runs every 5 minutes, closes the workstream, appends its
 terminal `:merged` event and nudges Notion, correlating on the `:github` external
@@ -575,7 +545,7 @@ SIGTERM→SIGKILL backstop sized for "a CI cycle or two", not for an open-ended
 queue wait. A watch that never gives up turns a slow queue into a stalled merge
 lane for every branch behind it.
 
-### 9. Report
+### 7. Report
 
 Emit this every time — landed, still landing, or halted. It is the whole output
 of this skill, and the only thing `/drive-home` sees.
@@ -587,16 +557,16 @@ PRs
 - <owner/repo#n> <url>   (bottom to top)
 
 Fixed
-- <pr#> <path>:<line> · P<n> · <the finding in one line>
+- <pr#> <check name | path:line> · <the finding in one line>
   fix: <what changed, and in which layer's commit>
 
 Declined
-- <pr#> <path>:<line> · P<n> · <the finding in one line>
+- <pr#> <path>:<line> · <the thread in one line>
   because: <what on the record says this is deliberate>
   replied: <yes — thread <comment-id>>
 
 Unresolved
-- <pr#> <path>:<line> · P<n> · <the finding in one line>
+- <pr#> <check name | path:line> · <the finding in one line>
   attempted: <what was tried, and what came back>
   needs:     <the decision a human has to make>
 
@@ -625,6 +595,9 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
   them and stamps the `:github` ref the merge poller correlates on.
 - **No rebasing, no CI run, no commit reshaping.** Those are `/align`,
   `/local-ci` and `/squash`, and this skill assumes all three already passed.
+- **No GitHub-side code review.** The review rounds (`bb nido:review:loop`) judge
+  the diff before this runs, so `/land` waits on no reviewer and parses no bot.
+  It answers the PR's checks, and whatever thread a person happened to leave.
 - **No un-readying.** A halt leaves the layers ready and the threads open —
   that is what lets a human read the review on GitHub.
 
@@ -632,87 +605,82 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
 
 - PR already `isDraft:false` → skip `gh pr ready` / the `--open` re-link.
 - Stack already linked → `gh stack link` updates rather than duplicating.
-- Codex already answered for the layer's current head — a review stamped with
-  that commit, or a `+1` left after the last push — → don't wait again, and
-  don't re-request (§3).
+- Every check already green for the layer's current head → nothing to wait for;
+  a re-run reads the same rollup and moves on (§3).
 - A finding already replied to or already fixed → skip it. Thread replies are
-  additive, so a second pass posts the same reasoning twice (§5).
-- Stack record already removed (a previous run reached §8 and halted after) →
+  additive, so a second pass posts the same reasoning twice (§4).
+- Stack record already removed (a previous run reached §6 and halted after) →
   §1's stacks endpoint returns empty, discovery falls through to `gh pr list`,
   and the layers are still found. Do not read that as "never published".
 - Top PR's base already `main` → the collapse already happened; skip it and go
-  straight to the merge (§8).
+  straight to the merge (§6).
 - Top PR already queued → `enqueuePullRequest` answers that it is already in the
   queue; no second entry, and the watch below is what you want anyway.
 - Top PR already merged or queued → `gh pr merge --auto` reports it; no second
   merge.
-- Already merged → §8's watch returns immediately; still emit the report.
+- Already merged → §6's watch returns immediately; still emit the report.
 
 ## Common mistakes
 
-- **Waiting for a Codex *review* on a clean PR** — a clean verdict is a `+1`
-  reaction and no review at all, so this waits forever on the PRs that were
-  fine. Check both signals (§3).
-- **Reading the reaction from `reactionGroups`** — it does not say who reacted,
-  so a human 👍 passes as Codex's verdict. Use the REST reactions endpoint and
-  filter on `chatgpt-codex-connector[bot]` (§3).
-- **Trusting a `+1` left before your last push** — reactions carry no commit,
-  only `created_at`, so a stale one reads as a clean verdict on code Codex never
-  saw (§3).
-- **Acting on a review whose `Reviewed commit` is not the layer's head** — those
-  findings were raised against code you have already replaced (§4).
+- **Waiting for a review on the PR** — the review rounds already judged this
+  diff, and nothing on GitHub is coming. What this phase waits on is the check
+  rollup; a thread, if one exists, is a person's and is read, not awaited (§3).
+- **Polling the rollup without the `//` defaults** — a `StatusContext` has no
+  `status` field and a `CheckRun` has no `state`, so an unguarded filter reads
+  one kind as forever-pending and never terminates (§3).
 - **Fixing a finding on top of the stack** — it lands in the wrong PR and breaks
-  one-commit-per-layer. Squash it into the owning layer (§5).
+  one-commit-per-layer. Squash it into the owning layer (§4).
 - **Silently skipping a finding you disagree with** — decline it *on the thread*,
-  against something already on the record, or fix it (§5).
-- **Marking only the top PR ready** — readiness is what fires Codex, so a layer
-  left as a draft is a layer nobody reviews. The collapse then carries it to
-  trunk unread, and unlike the old stack merge nothing refuses (§2).
+  against something already on the record, or fix it (§4).
+- **Marking only the top PR ready** — readiness is what starts a layer's checks,
+  and the top PR has to be out of draft for the queue to take it at all. The
+  collapse then carries an unchecked layer to trunk, and unlike the old stack
+  merge nothing refuses (§2).
 - **Reading `removed_from_merge_queue` as failure** — it fires on success too;
-  what distinguishes them is whether a merge landed beside it (§8).
+  what distinguishes them is whether a merge landed beside it (§6).
 - **Watching only `state`/`mergeStateStatus` for the merge** — an evicted PR
   reads `OPEN`/`CLEAN`, which is also what it reads while queued and before it
   was ever enqueued. The watch has to poll `mergeQueueEntry`; without it an
   eviction is invisible until the budget runs out and gets reported as a
-  timeout (§8).
+  timeout (§6).
 - **Watching the merge queue indefinitely** — under `nido ship` this runs on a
   cap-1 merge lane, so it blocks every other branch. Budget the watch and hand
-  off to the `github-merge` poller (§8).
+  off to the `github-merge` poller (§6).
 - **Omitting `--base "$TRUNK"` on the `gh stack link --open` re-link** —
   force-resets the bottom PR's base to the repo default branch unless given
   explicitly; observed doing this unasked against a non-trunk base (§2).
 - **Retargeting the top PR while the stack record still stands** — GitHub locks
   a stacked PR's base and refuses `gh pr edit --base`. `gh stack unstack <n>`
-  first, and before the merge, never after (§8).
+  first, and before the merge, never after (§6).
 - **Reading `gh pr merge --auto`'s refusal as a gate** — a repo can run a merge
   queue and disable auto-merge, and then `--auto` cannot reach the queue at all.
   `BLOCKED` beside `MERGEABLE` is an un-enqueued PR, not a failing check; use
-  the `enqueuePullRequest` mutation, whose refusals name the protection (§8).
+  the `enqueuePullRequest` mutation, whose refusals name the protection (§6).
 - **Resolving a review thread you neither fixed nor answered** — resolving
   claims the thread was addressed and folds it out of sight. It satisfies the
-  "all comments resolved" gate by removing the review, not by passing it (§8).
+  "all comments resolved" gate by removing the review, not by passing it (§6).
 - **`jj squash --into` without `-u`** — folding two described commits opens an
-  editor and hangs headless, silently (§5).
+  editor and hangs headless, silently (§4).
 - **Calling `gh stack link` without `jj git export`** — it pushes `$SRC`'s stale
   refs, the remote rejects them non-fast-forward, and the link aborts before
   marking anything ready (§2).
 - **Enqueueing the layers instead of collapsing them** — this is the failure this
   section exists to prevent. A queue merges its entries one at a time, so any
   failure mid-arc lands the layers below it and evicts the rest, leaving a
-  half-arc on an auto-deploying trunk (§8).
+  half-arc on an auto-deploying trunk (§6).
 - **Reading `gh stack merge`'s "all-or-nothing" as covering a queued merge** — it
   covers the direct-merge path only. On a queue-protected branch the call
-  enqueues n entries and the queue decides per entry (§8).
+  enqueues n entries and the queue decides per entry (§6).
 - **Collapsing without carrying the delivery claim onto the top PR** — its body
   is authored, not generated, so the claim is lost unless you write it. The PR
   merges, the ticket never moves, and nothing says so (§"Rewrite the top PR").
 - **Pushing after the collapse** — a `synchronize` is a new head commit, which
-  re-fires CI and re-fires Codex on the full arc. The frozen head SHA is the
-  whole reason the layer reviews still stand (§8).
+  re-fires CI on the full arc. The frozen head SHA is the whole reason the green
+  checks still stand (§6).
 - **Passing a method flag to `gh pr merge --auto`** — a merge-queue branch
-  rejects one, and the queue's own `mergeMethod` decides anyway (§8).
+  rejects one, and the queue's own `mergeMethod` decides anyway (§6).
 - **Closing the lower PRs before the top one lands** — they are the rollback if
-  the queue rejects the collapsed PR (§8).
+  the queue rejects the collapsed PR (§6).
 - **Bare `jj git push` on a stack** — it also pushes the session bookmark when
   that bookmark is tracked. Scope it: `-b 'glob:<session>--*'` (§2).
 - **Collapsing a stack whose §2 link exited non-zero** — the shape is wrong on

@@ -506,9 +506,9 @@ above; it is required here too, not just at publish time.
 shape on GitHub is wrong, and the top PR may not carry every layer. Repair with
 §6 case B first.
 
-#### Merging is not `gh stack merge` — it is `/land` §8's collapse
+#### Merging is not `gh stack merge` — it is `/land` §6's collapse
 
-**A stack is never enqueued as n pull requests.** `/land` §8 retargets the top
+**A stack is never enqueued as n pull requests.** `/land` §6 retargets the top
 layer's PR onto trunk so its diff becomes the whole arc, and merges that one PR.
 The layers are a review decomposition; they have done their work by the time
 anything merges, and carrying them into a merge queue is what puts a half-arc on
@@ -533,11 +533,11 @@ skill targets uses the second.
 
 **The method flags are moot in the flow that is actually used.** A queue applies
 its own configured `mergeMethod` (brian's is `SQUASH`), and `gh pr merge --auto`
-rejects a method flag on a queue-protected branch. `/land` §8 passes none.
+rejects a method flag on a queue-protected branch. `/land` §6 passes none.
 
 **What this costs, stated plainly:** the collapsed PR is one queue entry, so it
 lands as **one commit on trunk**, not one per layer. The layer manifest goes in
-the collapsed PR's body, which becomes that commit's body — see `/land` §8. The
+the collapsed PR's body, which becomes that commit's body — see `/land` §6. The
 per-layer PRs and their reviews stay readable; they just are not what trunk
 records.
 
@@ -940,7 +940,7 @@ cleaning up a merged stack's branches.
   explicitly anyway so the failure mode can't reappear later (§4).
 - **Enqueueing the layers as n pull requests** — a merge queue merges its
   entries one at a time, so any failure mid-arc lands the lower layers and
-  evicts the rest, leaving trunk half-migrated. Collapse first: `/land` §8 (§4).
+  evicts the rest, leaving trunk half-migrated. Collapse first: `/land` §6 (§4).
 - **Generalising `gh stack merge`'s atomicity from a repo with no merge queue** —
   it holds on the direct-merge path and says nothing about a queued one. That
   inference is exactly how this skill got it wrong (§4).
