@@ -22,6 +22,20 @@
 (defn- result-event? [event]
   (= "result" (:type event)))
 
+(defn- rate-limit-event? [event]
+  (= "rate_limit_event" (:type event)))
+
+(defn- usage-limit
+  "The account usage limit a run died on, from the LAST `rate_limit_event` it
+   saw — {:type \"five_hour\" :resets-at-ms <epoch ms>} — or nil when that event
+   did not reject. Claude emits one per request, mostly `allowed`; only the last
+   one says whether the account could still spend when the agent stopped."
+  [event]
+  (let [{:keys [status resetsAt rateLimitType]} (:rate_limit_info event)]
+    (when (= "rejected" status)
+      {:type         rateLimitType
+       :resets-at-ms (some-> resetsAt long (* 1000))})))
+
 (defn ^{:malli/schema [:=> [:cat :string] :int]}
   parse-budget-ms
   "Parse a budget string like '30m', '45m', '2h' into milliseconds, or throw.
@@ -158,13 +172,17 @@
 
    Returns:
      {:exit-code <int> :claude-session-id <str-or-nil> :timed-out? <bool>
-      :num-turns <int-or-nil> :result-error? <bool> :result-text <str-or-nil>}
+      :num-turns <int-or-nil> :result-error? <bool> :result-text <str-or-nil>
+      :usage-limit <map-or-nil>}
 
    :num-turns / :result-error? / :result-text are pulled from claude's final
    stream-json `result` event. A clean exit (exit 0) with :num-turns 0 means
    the agent did NO work — e.g. claude rejected the launch with
    \"Unknown command: /<skill>\". Callers use this to distinguish a real
-   completion from a no-op exit (which must not be treated as success)."
+   completion from a no-op exit (which must not be treated as success).
+
+   :usage-limit is non-nil when the account's usage limit rejected the agent
+   (see usage-limit) — a fact about the account, not about the Run."
   [{:keys [run-id cwd first-message system-prompt claude-bin env budget claude-session-id resume?
            mcp-config add-dirs tools model err-file out-file]
     :or   {claude-bin "claude"}}]
@@ -190,6 +208,7 @@
                                    err-file (assoc :err-file (jio/file err-file))))
         session   (atom nil)
         result-ev (atom nil)
+        limit-ev  (atom nil)
         timed-out (atom false)
         timer     (when budget-ms
                     (future
@@ -213,7 +232,9 @@
               (when-let [sid (session-id-from event)]
                 (reset! session sid))
               (when (result-event? event)
-                (reset! result-ev event))))))
+                (reset! result-ev event))
+              (when (rate-limit-event? event)
+                (reset! limit-ev event))))))
       (finally
         (when timer (future-cancel timer))))
     (let [exit (:exit @proc)
@@ -225,4 +246,5 @@
        :timed-out?        @timed-out
        :num-turns         (:num_turns rev)
        :result-error?     (boolean (:is_error rev))
-       :result-text       (:result rev)})))))
+       :result-text       (:result rev)
+       :usage-limit       (usage-limit @limit-ev)})))))

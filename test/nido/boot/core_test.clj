@@ -204,7 +204,11 @@
                     ;; Same reason as teardown: stopping a parked run's session
                     ;; reads the real instance state and probes the real machine.
                     runs/stop-session-for-parked-run! (fn [_] nil)
-                    profiles/resolve-profile (fn [_ _] {:worktree {:strategy :git-worktree}})]
+                    profiles/resolve-profile (fn [_ _] {:worktree {:strategy :git-worktree}})
+                    ;; run-blocking! counts every session start in the daemon's
+                    ;; one detector; left real, this suite's starts fill the
+                    ;; window and a later namespace's tick! auto-halts.
+                    anomaly/record-spawn (fn [det _] det)]
         (cstate/ensure-dirs!)
         (f tmp))
       (finally (fs/delete-tree tmp)))))
@@ -996,6 +1000,79 @@
             "a breaker counts a trigger: one cause's failed recoveries would stop every other cause")
         (is (empty? @window)
             "a cause whose recoveries keep failing must not halt the coordinator")))))
+
+(defn- queued-run! [id]
+  (runs/write-run! {:id id :project :brian :trigger :triage-teacher-bugs
+                    :source {:type :notion-view} :event-payload {:id "BR-9"}
+                    :skill :triage-bug :first-message "x" :agent :claude
+                    :session-name (str "run-" id) :claude-session-id nil :limits {}
+                    :priority 0 :session-profile :lite :uncapped? false
+                    :state :queued :state-history [{:at "t" :state :queued}]
+                    :artifacts [] :error nil}))
+
+(deftest a-spawn-is-counted-when-its-session-starts-not-when-its-run-is-minted
+  ;; Resuming a halted daemon drained its overnight backlog in one tick. Counted
+  ;; at mint, those 34 Runs tripped the spawn-burst brake while the executor's
+  ;; caps were starting two of them.
+  (gate-with-tmp
+    (fn [_]
+      (let [spawns (atom [])]
+        (queued-run! "rspawn")
+        (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
+                      core/skill-resolvable?      (constantly true)
+                      agent/launch!               (fn [_] {:exit-code 1 :num-turns 3})
+                      anomaly/record-spawn        (fn [det at] (swap! spawns conj at) det)
+                      anomaly/record-failure      (fn [det _] det)
+                      breakers/record-failure!    (fn [& _] nil)]
+          (#'core/run-blocking! "rspawn"))
+        (is (= 1 (count @spawns)) "starting the Run's session is the spawn")))))
+
+(deftest a-restored-run-starts-without-counting-a-spawn
+  (gate-with-tmp
+    (fn [_]
+      (let [spawns (atom [])]
+        (queued-run! "rrest")
+        (with-redefs [executor/submit!            (fn [& _] nil)
+                      runs/spawn-session-for-run! (fn [_] nil)
+                      core/skill-resolvable?      (constantly true)
+                      agent/launch!               (fn [_] {:exit-code 1 :num-turns 3})
+                      anomaly/record-spawn        (fn [det at] (swap! spawns conj at) det)
+                      anomaly/record-failure      (fn [det _] det)
+                      breakers/record-failure!    (fn [& _] nil)]
+          (#'core/dispatch-envelope! {:type :execute-run :run-id "rrest"} {})
+          (#'core/run-blocking! "rrest"))
+        (is (empty? @spawns)
+            "a restore brought the session up; running it is a continuation")))))
+
+(deftest a-usage-limited-run-holds-starts-and-charges-no-brake
+  ;; Three Runs rejected by the account's five-hour limit auto-halted the
+  ;; daemon, which then stayed halted long after the limit reset.
+  (gate-with-tmp
+    (fn [_]
+      (let [window   (atom [])
+            breakers (atom [])
+            resets   (+ (System/currentTimeMillis) 3600000)
+            hold     @#'core/!usage-hold-until-ms]
+        (queued-run! "rlimit")
+        (try
+          (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
+                        core/skill-resolvable?      (constantly true)
+                        agent/launch!               (fn [_] {:exit-code 1 :num-turns 1
+                                                             :usage-limit {:type "five_hour"
+                                                                           :resets-at-ms resets}})
+                        anomaly/record-spawn        (fn [det _] det)
+                        anomaly/record-failure      (fn [det at] (swap! window conj at) det)
+                        breakers/record-failure!    (fn [& args] (swap! breakers conj args) nil)]
+            (#'core/run-blocking! "rlimit"))
+          (let [r (runs/read-run "rlimit")]
+            (is (= :failed (:state r)))
+            (is (= :usage-limited (-> r :error :reason)) "the run record says why"))
+          (is (empty? @breakers) "a spent account is not a broken trigger")
+          (is (empty? @window) "a spent account must not auto-halt the coordinator")
+          (is (= resets @hold) "every start waits for the limit to reset")
+          (is (#'core/usage-held? (System/currentTimeMillis))
+              "tick! promotes no Run while this answers true")
+          (finally (reset! hold 0)))))))
 
 (deftest a-kept-start-failure-charges-its-breaker-but-not-the-window
   (gate-with-tmp

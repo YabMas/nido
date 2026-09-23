@@ -312,3 +312,29 @@
             (is (contains? lines (str "FAKE_CLAUDE_ENV_FILE=" env-file))
                 "and the caller's other variables still reach the child"))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest usage-limit-reads-only-a-rejection
+  (is (= {:type "five_hour" :resets-at-ms 1790077200000}
+         (#'agent/usage-limit {:type "rate_limit_event"
+                             :rate_limit_info {:status "rejected" :resetsAt 1790077200
+                                               :rateLimitType "five_hour"}})))
+  (is (nil? (#'agent/usage-limit {:type "rate_limit_event"
+                                :rate_limit_info {:status "allowed_warning" :resetsAt 1}})))
+  (is (nil? (#'agent/usage-limit nil))))
+
+(deftest launch!-surfaces-the-usage-limit-that-rejected-it
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (fs/create-dirs (cstate/run-dir "r1"))
+        (let [result (agent/launch!
+                       {:run-id "r1" :cwd (str tmp) :first-message "/x"
+                        :claude-bin fake-claude :budget "5m"
+                        :env {"FAKE_CLAUDE_EXIT_CODE" "1"
+                              "FAKE_CLAUDE_RATE_LIMIT_STATUS" "rejected"}})]
+          (is (= "five_hour" (-> result :usage-limit :type))))
+        (is (nil? (:usage-limit (agent/launch!
+                                  {:run-id "r1" :cwd (str tmp) :first-message "/x"
+                                   :claude-bin fake-claude :budget "5m"
+                                   :env {"FAKE_CLAUDE_RATE_LIMIT_STATUS" "allowed"}})))))
+      (finally (fs/delete-tree tmp)))))

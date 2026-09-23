@@ -9,6 +9,8 @@
 #                             (used by budget-timeout tests)
 #   FAKE_CLAUDE_NUM_TURNS   — num_turns to emit in the result event (default 3)
 #   FAKE_CLAUDE_RESULT_TEXT — result text to emit in the result event (optional)
+#   FAKE_CLAUDE_RATE_LIMIT_STATUS — if set, emit a rate_limit_event with this
+#                             status (allowed | allowed_warning | rejected)
 #   FAKE_CLAUDE_ARGV_FILE   — if set, path to write the arguments it was run
 #                             with, one per line
 #   FAKE_CLAUDE_ENV_FILE    — if set, path to write its environment, one
@@ -45,6 +47,10 @@ fi
 if [ -n "${FAKE_CLAUDE_STATUS_FILE:-}" ]; then
   mkdir -p "$(dirname "$FAKE_CLAUDE_STATUS_FILE")"
   echo '{:phase :awaiting-input :note "test"}' > "$FAKE_CLAUDE_STATUS_FILE"
+fi
+
+if [ -n "${FAKE_CLAUDE_RATE_LIMIT_STATUS:-}" ]; then
+  printf '{"type":"rate_limit_event","rate_limit_info":{"status":"%s","resetsAt":1790077200,"rateLimitType":"five_hour"}}\n' "$FAKE_CLAUDE_RATE_LIMIT_STATUS"
 fi
 
 # result event

@@ -57,6 +57,8 @@
         (println "Coordinator:" (some-> (:status s) name))
         (println "Heartbeat:  " (:heartbeat-at s))
         (println "Slots:      " (:slots-in-use s))
+        (when-let [until (:usage-held-until s)]
+          (println "Usage hold: " "no Run starts until" until "(account usage limit)"))
         (let [{:keys [driving queued blocked]} (ship/merge-lane-summary)]
           (println (format "Merge lane:  %d driving · %d queued · %d blocked" driving queued blocked)))
         (when-let [dport (:dashboard-port s)]

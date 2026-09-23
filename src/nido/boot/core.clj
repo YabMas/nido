@@ -96,6 +96,33 @@
 
 (defonce ^:private !detector (atom (anomaly/empty-detector)))
 
+;; Runs a restore handed back with their session already up. Their execution is
+;; a continuation, not a spawn, so run-blocking! leaves them out of the anomaly
+;; window — a recovery restoring every failed session at once must not halt the
+;; coordinator. In-memory, like the detector it exempts them from.
+(defonce ^:private !restored-runs (atom #{}))
+
+;; Epoch ms until which no Run is started, because the account's usage limit
+;; rejected an agent. Every Run started before the limit resets dies the same
+;; way, so starting them only burns the backlog into failures — and three of
+;; those in five minutes used to auto-halt the daemon, which then stayed halted
+;; long after the limit had reset. Holding is the brake that ends on its own.
+(defonce ^:private !usage-hold-until-ms (atom 0))
+
+(defn- usage-held? [now-ms] (< now-ms @!usage-hold-until-ms))
+
+(defn- hold-for-usage-limit!
+  "Hold every start until `limit` resets. A limit with no reset time holds for
+   an hour, so an unreadable event still stops the backlog burning."
+  [{:keys [type resets-at-ms] :as limit}]
+  (let [until (or resets-at-ms (+ (System/currentTimeMillis) 3600000))]
+    (when (> until @!usage-hold-until-ms)
+      (reset! !usage-hold-until-ms until)
+      (println (str "nido coordinator: usage limit" (when type (str " (" type ")"))
+                    " rejected an agent — holding every start until "
+                    (java.time.Instant/ofEpochMilli until))))
+    limit))
+
 (defonce ^:private !source-instances (atom {}))
 
 ;; Last wall-clock ms an auto-reclaim sweep ran. Starts at 0 so the first tick
@@ -528,6 +555,20 @@
    submits to the executor instead)."
   [run-id]
   (runs/transition! run-id :running)
+  ;; The anomaly window counts sessions STARTED, here, and not Runs minted. A
+  ;; Run is minted the moment its envelope drains, so resuming a halted daemon
+  ;; minted its whole overnight backlog in one tick and halted again on a
+  ;; spawn-burst while the executor's caps were starting two of them. Counted
+  ;; here, a backlog drains at the rate the caps allow and never trips; a true
+  ;; runaway — Runs that die at once and free their slot — still does.
+  ;;
+  ;; A recovery is paced per cause and held to one in flight per cause by its
+  ;; source; counting it would let ten causes failing at once halt the
+  ;; coordinator that is about to recover them. A restored Run is a continuation.
+  (let [[restored] (swap-vals! !restored-runs disj run-id)]
+    (when-not (or (contains? restored run-id)
+                  (runs/recovery? (runs/read-run run-id)))
+      (swap! !detector anomaly/record-spawn (clock/now-iso))))
   (let [;; Generate the claude session id up front and persist it to run.edn
         ;; BEFORE launch, so a restart mid-session (or any interruption) never
         ;; strands the Run without a resumable id — the resume shim reads this.
@@ -703,6 +744,9 @@
                                            (agent-no-op? result)
                                            (assoc :reason :agent-no-op
                                                   :detail (:result-text result))
+                                           (:usage-limit result)
+                                           (assoc :reason :usage-limited
+                                                  :detail (:usage-limit result))
                                            (:skill-unavailable result)
                                            (assoc :reason :skill-unavailable
                                                   :detail (str "skill /" (name (:skill result))
@@ -754,7 +798,11 @@
         ;; whose recoveries keep failing, must not halt the coordinator that would
         ;; recover every other cause. A recovery charges no breaker either — its
         ;; source paces it per cause, where a breaker would stop them all.
-        :failed          (when-not (:project-unregistered result)
+        ;; A usage-limit rejection charges neither brake either: it says the
+        ;; account is spent, not that the trigger is broken. It holds every
+        ;; start until the limit resets instead (see !usage-hold-until-ms).
+        :failed          (when-not (or (:project-unregistered result)
+                                       (:usage-limit result))
                            (let [recovery? (runs/recovery? run)]
                              (when-not (or recovery? (:failure-id result))
                                (swap! !detector anomaly/record-failure (clock/now-iso)))
@@ -762,7 +810,9 @@
                                (breakers/record-failure! project trigger-name max-failures))))
         :done            (breakers/record-success! project trigger-name)
         :awaiting-review (breakers/record-success! project trigger-name)
-        nil))
+        nil)
+      (when (and (= :failed next-state) (:usage-limit result))
+        (hold-for-usage-limit! (:usage-limit result))))
     ;; Reclaim the session once the Run is resolved-terminal. Without this every
     ;; completed/failed Run leaks its session (PG + JVM + ports + CLI list
     ;; entry) — the cap is honored but sessions pile up unboundedly. A parked
@@ -838,13 +888,10 @@
 
       :else
       (do
+        ;; Minting is not spawning: the anomaly window counts the session start,
+        ;; in run-blocking!.
         (spawn/spawn-and-submit! routed {:fired-at (clock/now-iso)
-                                         :fired-by (System/getenv "USER")})
-        ;; A recovery is paced per cause and held to one in flight per cause by
-        ;; its source; counting it here would let ten causes failing at once halt
-        ;; the coordinator that is about to recover them.
-        (when-not (= :session-failure (-> routed :trigger :source :type))
-          (swap! !detector anomaly/record-spawn (clock/now-iso)))))))
+                                         :fired-by (System/getenv "USER")})))))
 
 (defn- continue-restored!
   "Carry on what a restore brought a session back for. The restore started the
@@ -858,9 +905,11 @@
     (case (:type env)
       :execute-run
       (if-let [r (runs/read-run (:run-id env))]
-        (executor/submit! (:id r) (or (:priority r) 0) (boolean (:uncapped? r)) (:trigger r)
+        (do
+          (swap! !restored-runs conj (:id r))
+          (executor/submit! (:id r) (or (:priority r) 0) (boolean (:uncapped? r)) (:trigger r)
                           (some #(when (= (:trigger r) (:name %)) (:max-in-flight %))
-                                (get triggers-by-project (:project r))))
+                                (get triggers-by-project (:project r)))))
         (binding [*err* *err*]
           (.println ^java.io.PrintWriter *err*
                     (str "WARN: restored run " (:run-id env) " not found — dropping"))))
@@ -950,7 +999,10 @@
                          :slots-in-use 0
                          :dashboard-port @!dashboard-port})
       (do
-        (heartbeat/write! {:status :running :slots-in-use 0 :dashboard-port @!dashboard-port})
+        (heartbeat/write! (cond-> {:status :running :slots-in-use 0 :dashboard-port @!dashboard-port}
+                            (usage-held? (System/currentTimeMillis))
+                            (assoc :usage-held-until
+                                   (str (java.time.Instant/ofEpochMilli @!usage-hold-until-ms)))))
         (reconcile-sources! triggers-by-project)
         ;; Drain queue first — this consumes envelopes emitted on the PREVIOUS
         ;; tick by source polls. Keeps each tick's unit of work small.
@@ -986,7 +1038,11 @@
               in-flight (-> (reduce (fn [m p] (merge-with + m (session/gating-count-by-trigger p)))
                                     {} (registered-projects))
                             (assoc :merge (get (runs/in-progress-count-by-trigger) :merge 0)))]
-          (executor/tick! on-spawn in-flight))
+          ;; Under a usage hold the queue waits: nothing is promoted, so no Run
+          ;; starts only to be rejected. Reaping is skipped with it, which is
+          ;; harmless — a finished future is reaped on the first tick after.
+          (when-not (usage-held? (System/currentTimeMillis))
+            (executor/tick! on-spawn in-flight)))
         ;; Then poll due sources. Their emissions land in the queue and
         ;; will be picked up next tick.
         (let [now-ms (System/currentTimeMillis)]
