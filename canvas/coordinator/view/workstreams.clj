@@ -89,6 +89,10 @@
   (Operation format-session-row
     "One session row as a display line."
     {:signature [:=> [:catn [:row :map]] :string]})
+  (Operation round-progress
+    "How far a running round has got — its number, the phase running, what its judging
+     raised — read off the report it keeps as it goes."
+    {:signature [:=> [:catn [:report [:maybe :map]]] [:maybe :map]]})
   (Operation doing-label
     "One short phrase for what a workstream is doing, or nothing when nothing is. Display only
      and pure — the SAME string for every surface, which is what stops the board and the pane

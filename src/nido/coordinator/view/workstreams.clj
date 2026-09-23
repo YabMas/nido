@@ -5,6 +5,8 @@
    functions consume this. Replaces runs-view + tickets-view as the
    coordination overview."
   (:require
+   [babashka.fs :as fs]
+   [cheshire.core :as json]
    [clojure.string :as str]
    [nido.coordinator.source.notion-cache :as notion-cache]
    [nido.coordinator.record.activity :as activity]
@@ -171,6 +173,53 @@
     (assoc s :substrate :archived)
     s))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :map]]}
+  round-progress
+  "How far a running round has got, read off the report it keeps as it goes:
+   {:round n :phase <keyword or nil> :findings n}, or nil for a report with no
+   round yet.
+
+   Both loops that take a claim persist this report on every event, and share
+   its outline — rounds, each a sequence of phases — so one reading serves both.
+   `:findings` counts what the CURRENT round's judging phase raised (`review`
+   for a diff review, per layer; `judge` for a record round), which is what the
+   rest of that round is working through. `:phase` is the one still running, nil
+   between phases. While a diff review's judging is still running, `:judged` of
+   `:of` layers have been read, so a count of nothing so far is not mistaken for
+   a clean round."
+  [report]
+  (when-let [r (last (:rounds report))]
+    (let [phases (:phases r)
+          judged (filter #(#{"review" "judge"} (:phase %)) phases)
+          open   (first (filter #(and (= "running" (:status %)) (seq (:layers %))) judged))]
+      (cond->
+       {:round    (:round r)
+       :phase    (some #(when (= "running" (:status %)) (keyword (:phase %))) phases)
+       :findings (+ (reduce + (for [p judged
+                                    l (:layers p)
+                                    :let [n (:findings l)]
+                                    :when (number? n)]
+                                n))
+                    (reduce + (for [p judged
+                                    :let [f (:findings p)]
+                                    :when (sequential? f)]
+                                (count f))))}
+        open (assoc :judged (count (filter #(number? (:findings %)) (:layers open)))
+                    :of     (count (:layers open)))))))
+
+(defn- with-progress
+  "`doing` with the running round's progress beside it, when it is a claim
+   whose report can be read. A report that is missing or mid-write leaves the
+   activity as it was: the progress decorates the label and is never why a row
+   says something is running."
+  [doing]
+  (let [path (:report-path doing)]
+    (if-let [p (when (and (= :claim (:source doing)) path (fs/exists? path))
+                 (try (round-progress (json/parse-string (slurp path) true))
+                      (catch Exception _ nil)))]
+      (assoc doing :progress p)
+      doing)))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :Workstream [:? :any] [:? :any]] :WorkstreamRow]}
   workstream-row
   "One display row for a workstream: reads its sessions and projects engagement
@@ -206,11 +255,12 @@
          ;; Bound rather than inlined because the row reports it twice — once as
          ;; itself and once as the merge lane's sub-state — and two calls would
          ;; be two reads of the claim, which is two moments.
-         doing          (session/doing
-                         {:closed   (when-not notion-driven? (:closed ws))
-                          :sessions sessions
-                          :stage    (:stage proj)
-                          :claim    (activity/read-live project (:id ws))})]
+         doing          (with-progress
+                          (session/doing
+                           {:closed   (when-not notion-driven? (:closed ws))
+                            :sessions sessions
+                            :stage    (:stage proj)
+                            :claim    (activity/read-live project (:id ws))}))]
      {:ws-id           (:id ws)
       :project         project
       :br-id           br-id
@@ -443,6 +493,33 @@
    :baseline-round "checking the baseline"
    :design-round   "deciding the design"})
 
+(def ^:private claim-nouns
+  "What a round of each claim kind is called in a progress line."
+  {:diff-review    "review"
+   :baseline-round "baseline"
+   :design-round   "design"})
+
+(def ^:private phase-labels
+  "A running phase, as what the round is doing in it."
+  {:review  "reviewing"
+   :judge   "judging"
+   :warden  "weighing findings"
+   :reshape "reshaping"
+   :fix     "fixing"
+   :amend   "amending"})
+
+(defn- progress-label
+  "`review round 2 · fixing · 3 findings` — the round, the phase running in it
+   (with how many layers it has read, while judging), and what that round's
+   judging raised. The phase is left out between phases."
+  [kind {:keys [round phase findings judged of]}]
+  (str/join " · "
+            (keep identity
+                  [(str (get claim-nouns kind (some-> kind name)) " round " round)
+                   (when phase (str (get phase-labels phase (name phase))
+                                    (when of (str " " judged "/" of))))
+                   (str findings " finding" (when (not= 1 findings) "s"))])))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :string]]}
   doing-label
   "One short phrase for what a workstream is doing, or nil when nothing is.
@@ -453,11 +530,17 @@
    as `none of the things that can say so are running` rather than as `nothing is
    running`, which is the honest reading while only the review loops take a claim.
 
+   A claim carrying `:progress` (`round-progress`) reads as where its round has
+   got — `review round 2 · fixing · 3 findings` — and one without falls back to
+   the kind's name.
+
    An unrecognised kind prints its own name rather than vanishing — a claim
    written by a newer nido should degrade to something a person can act on."
-  [{:keys [source kind phase]}]
+  [{:keys [source kind phase progress]}]
   (case source
-    :claim   (or (claim-labels kind) (some-> kind name))
+    :claim   (if progress
+               (progress-label kind progress)
+               (or (claim-labels kind) (some-> kind name)))
     :merge   (str "merging" (when phase (str " · " (name phase))))
     :session (str "agent" (when phase (str " · " (name phase))))
     nil))
