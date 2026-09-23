@@ -409,6 +409,26 @@
   (let [es (kinds->entries [:intent :baseline :design :pr-opened])]
     (is (= [:done :done :done :skipped] (states es nil)))))
 
+(deftest a-running-round-rides-on-its-stage-beside-the-position
+  ;; A diff review over an implementation the latest design unseated: the round
+  ;; runs IN the implementation while the work is back AT the design. One marker
+  ;; for both would call the design done.
+  (let [review {:source :claim :kind :diff-review}]
+    (is (= :implementation (p/stage-active {:stage :design} review)))
+    (is (= :baseline (p/stage-active {:stage :design} {:source :claim :kind :baseline-round})))
+    (is (= :design (p/stage-active {:stage :design} {:source :session :phase :running}))
+        "an agent session is doing the position's next action")
+    (is (nil? (p/stage-active {:stage :design} {:source :merge :phase :queued}))
+        "a merge runs in no stage of the unit")
+    (is (nil? (p/stage-active {:stage :design} nil)))
+    (let [a (p/arc (kinds->entries [:intent :baseline :design :implementation-completed
+                                    :review :design])
+                   {:at :design :active :implementation})]
+      (is (= [:done :done :current :stale] (mapv :state (:stages a)))
+          "the position still decides every state")
+      (is (= [:implementation] (keep #(when (:active? %) (:stage %)) (:stages a)))
+          "and the running round is flagged on its own stage"))))
+
 (deftest arc-counts-entries-and-visits-separately
   ;; Nine records inside one uninterrupted stretch is one visit. The two numbers
   ;; answer different questions and collapsing them loses the loop-back.

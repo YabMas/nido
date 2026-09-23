@@ -1129,7 +1129,9 @@
         ;; reader is looking at.
         ;; The stage the work is in comes off the position read above, so the
         ;; heading and the arc under it are one reading and cannot disagree.
-        :arc          (pipeline/arc entries {:at (:stage position)})
+        ;; What is running rides beside it, on the stage it is running in.
+        :arc          (pipeline/arc entries {:at     (:stage position)
+                                             :active (pipeline/stage-active position (:doing row))})
         :holds        (holds project ws-id)
         :entries      index
         :selected-seq sel

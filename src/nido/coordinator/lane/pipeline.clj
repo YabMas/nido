@@ -271,6 +271,32 @@
    :review-implementation    :implementation
    :address-findings         :implementation})
 
+(def ^:private stage-of-claim
+  "The spine stage each round that takes a claim is work in."
+  {:diff-review    :implementation
+   :baseline-round :baseline
+   :design-round   :design})
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map] [:maybe :map]] [:maybe :keyword]]}
+  stage-active
+  "The spine stage something is running in right now, or nil: a claim-holding
+   round's own stage, or — for an agent session — the stage the position has
+   the work in, since the session is doing its next action. A merge, or nothing
+   running, names none.
+
+   A separate answer from the position's `:stage`, never folded into it. A round
+   appends its record only when it ends, so while it runs the position still
+   reads the ledger as it was: a diff review over an implementation the latest
+   design unseated runs IN the implementation while the work is back AT the
+   design, and one marker for both would call the design done.
+
+   `doing` is a workstream's activity as `view.workstreams` reports it."
+  [position doing]
+  (case (:source doing)
+    :claim   (get stage-of-claim (:kind doing))
+    :session (:stage position)
+    nil))
+
 (defn ^{:malli/schema [:=> [:cat :any [:? :map]] :any]}
   arc
   "One workstream's ledger read as the unit's arc:
@@ -305,12 +331,16 @@
    exactly that those records stand for nothing now. Deriving it here from
    anything else is how the heading and the arc under it came to disagree.
 
+   `:active` is the stage something is running in (`stage-active`); that facet
+   carries `:active? true` beside its state rather than in place of it, because
+   where the work IS and what is running are two facts that come apart.
+
    `:visits` counts how many times the workstream ENTERED a stage, across the
    spine alone so that a halt in the middle of a design does not read as having
    left design and come back. A design its decision round sent back to the
    baseline shows two visits to baseline."
   ([entries] (arc entries {}))
-  ([entries {:keys [at]}]
+  ([entries {:keys [at active]}]
    (let [staged    (keep (fn [e]
                            (when-let [st (stage-of (:kind e))]
                              (assoc e :stage st)))
@@ -329,12 +359,13 @@
      {:stages (mapv (fn [st]
                       (let [es (get held st)
                             i  (idx st)]
-                        (assoc (facet st es)
+                        (cond-> (assoc (facet st es)
                                :state (cond
                                         (= i here)                  :current
                                         (and here (> i here))       (if (seq es) :stale :ahead)
                                         (seq es)                    :done
-                                        :else                       :skipped))))
+                                        :else                       :skipped))
+                          (= st active) (assoc :active? true))))
                     unit-stages)
       :excursions (->> (remove #(on-spine? (:stage %)) staged)
                        (group-by :stage)

@@ -193,6 +193,14 @@
         .arc-row.skipped .arc-n { color:#7a6f55; }
         .arc-row.skipped .arc-m { color:#7a6f55; }
         .arc-row.ahead .arc-n { color:#5f5f78; }
+        /* Something running in a stage: a spinner in place of its glyph and
+           what is running beside its count, in the colour the pane uses for
+           activity. The stage's own state still colours its name. */
+        .arc-spin { display:inline-block; width:8px; height:8px; border:1.5px solid #bbf7d0;
+                    border-right-color:transparent; border-radius:50%;
+                    animation:arc-spin .8s linear infinite; }
+        @keyframes arc-spin { to { transform:rotate(360deg); } }
+        .arc-d { font-size:11.5px; color:#bbf7d0; }
         .arc-sub { padding:2px 0 8px; background:#141428; border-bottom:1px solid #1a1a30; }
         .hist-head { display:inline-flex; gap:7px; align-items:baseline; cursor:pointer;
                      font-size:12.5px; color:#8a8ab0; padding:3px 0; }
@@ -2028,7 +2036,7 @@
     (= :stale state) (str entries " record" (when (not= 1 entries) "s")
                           " · no longer stands")
     (pos? entries) (str entries " record" (when (not= 1 entries) "s"))
-    (= :skipped state) "not written"
+    (= :skipped state) "no record"
     :else nil))
 
 (defn- arc-row
@@ -2041,18 +2049,19 @@
    on every row would bury the case that matters: `2 visits` on a baseline means a
    later stage sent the work back to it, which is the fact the ledger index cannot
    show and a forward-only track cannot show either."
-  [pos {:keys [stage state visits] :as facet}]
+  [pos doing {:keys [stage state visits active?] :as facet}]
   (let [live? (pos? (:entries facet))
         open? (= stage (:stage pos))]
     [:div (cond-> {:class (str "arc-row " (name state)
                               (when live? " live") (when open? " open"))}
             live? (assoc "data-on:click" (pane-fragment (at-stage pos stage))))
-     [:span.arc-g (get arc-glyph state "·")]
+     [:span.arc-g (if active? [:span.arc-spin {:title doing}] (get arc-glyph state "·"))]
      [:span.arc-n (get arc-label stage (name stage))]
      (when-let [m (arc-meta facet)] [:span.arc-m m])
      (when (> visits 1)
        [:span.arc-v {:title "the work left this stage and came back"}
-        (str "· " visits " visits")])]))
+        (str "· " visits " visits")])
+     (when (and active? doing) [:span.arc-d (str "· " doing)])]))
 
 (defn- arc-entry-rows
   "The entries of one stage, newest first, as rows that open into the viewer. The
@@ -2086,11 +2095,11 @@
    it; when it does not, the entry was reached from the raw index and the viewer
    renders down there instead. One viewer either way — reading an entry twice on
    one page is worse than reaching it from two places."
-  [pos {:keys [stages excursions]} entries report report-here?]
+  [pos {:keys [stages excursions]} entries report report-here? doing]
   [:div
    (into [:div.arc]
          (mapcat (fn [{:keys [stage seqs] :as facet}]
-                   (cond-> [(arc-row pos facet)]
+                   (cond-> [(arc-row pos doing facet)]
                      (= stage (:stage pos))
                      (conj [:div.arc-sub
                             (arc-entry-rows pos entries seqs)
@@ -2265,11 +2274,15 @@
             ;; Under the position, because it answers the next question a reader
             ;; has once they know where this stands: is anything happening in it
             ;; at this moment.
-            (when-let [d (wsv/doing-label doing)] [:p.doing-line "● " d])
+            ;; On its own line only when no stage carries it — a merge runs in
+            ;; no stage of the unit. Otherwise the arc row it runs in says it.
+            (when-let [d (wsv/doing-label doing)]
+              (when-not (some :active? (:stages arc)) [:p.doing-line "● " d]))
             ;; The arc leads. The heading above states where the workstream is;
             ;; this states how it got there, and it is the one thing on the page
             ;; that can show the work having been sent back to an earlier stage.
-            (when (seq (:stages arc)) (arc-block pos arc entries report in-stage?))
+            (when (seq (:stages arc))
+              (arc-block pos arc entries report in-stage? (wsv/doing-label doing)))
             (when (seq holds) (holds-block holds))
             ;; The actions belong HERE and not under the log, because they act on
             ;; the workstream as it stands — pane-action-bar reads :action-report,

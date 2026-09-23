@@ -1398,8 +1398,22 @@
                                                  :entries 0 :visits 0}))
               {})]
     (is (str/includes? html "arc-row skipped"))
-    (is (str/includes? html "not written"))
+    (is (str/includes? html "no record"))
     (is (str/includes? html "arc-row ahead"))))
+
+(deftest a-running-round-shows-on-its-stage-not-on-a-line-of-its-own
+  (let [pane (assoc a-pane :doing {:source :claim :kind :diff-review}
+                    :arc (assoc-in an-arc [:stages 3 :active?] true))
+        html (views/workstream-pane pane {})]
+    (is (str/includes? html "arc-spin"))
+    (is (str/includes? html "· reviewing the diff"))
+    (is (not (str/includes? html "doing-line"))
+        "the arc row says it, so the standalone line does not"))
+  (let [html (views/workstream-pane
+              (assoc a-pane :doing {:source :merge :phase :queued} :arc an-arc) {})]
+    (is (str/includes? html "doing-line")
+        "while activity no stage carries keeps its own line")
+    (is (not (str/includes? html "arc-spin")))))
 
 (deftest a-stage-that-no-longer-stands-says-so
   (let [html (views/workstream-pane

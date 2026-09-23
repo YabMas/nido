@@ -25,6 +25,9 @@
     {:signature [:=> [:catn [:w Workstream] [:kinds :any]] [:maybe :keyword]]})
   (Operation stage-of "The arc stage an entry kind belongs to, or nil."
     {:signature [:=> [:catn [:kind :keyword]] [:maybe :keyword]]})
+  (Operation stage-active
+    "The spine stage something is running in right now, or nil."
+    {:signature [:=> [:catn [:position [:maybe :map]] [:doing [:maybe :map]]] [:maybe :keyword]]})
   (Operation arc "A ledger read as the arc it travelled."
     {:signature [:=> [:catn [:entries :any] [:opts [:? :map]]] :any] :delegates [stage-of]})
   (Operation baseline-verified?
