@@ -41,61 +41,54 @@
       (finally (fs/delete-tree tmp)))))
 
 (deftest stages-is-the-canonical-spine
-  ;; :incoming, not :intake — these are STORED stage names (see
-  ;; spine-is-exactly-the-stages-the-board-honors). :intake is the TAB that holds
-  ;; the :triage and :incoming bands, which is what tab-bands takes.
+  ;; STORED stage names (see spine-is-exactly-the-stages-the-board-honors).
   (is (= [:incoming :triage :ready :in-progress :shipping :done] work/stages)))
 
-(deftest tab-bands-splits-the-spine-into-two-jobs
+(deftest board-bands-is-the-driven-work
   (let [grouped {:incoming [{:ws-id "i"}]
                  :triage {:in-flight [{:ws-id "tf"}] :queued [{:ws-id "tq"}]}
                  :in-progress [{:ws-id "p"}]
                  :shipping [{:ws-id "s"}]
-                 :winding-down [{:ws-id "w"}]}]
-    (is (= [[:triage ["tf" "tq"]] [:incoming ["i"]]]
-           (for [[stage rows] (work/tab-bands :intake grouped)]
-             [stage (mapv :ws-id rows)]))
-        "intake = triage (in-flight then queued) then incoming")
+                 :winding-down [{:ws-id "w"}]
+                 :dismissed [{:ws-id "d"}]}]
     (is (= [[:shipping ["s"]] [:in-progress ["p"]] [:winding-down ["w"]]]
-           (for [[stage rows] (work/tab-bands :active grouped)]
+           (for [[stage rows] (work/board-bands grouped)]
              [stage (mapv :ws-id rows)]))
-        "active = shipping then in-progress then winding-down")))
+        "shipping then in-progress then winding-down; no intake band")))
 
-(deftest tab-bands-union-covers-every-row-exactly-once
-  ;; The guarantee this whole design exists for: nothing can be hidden by
-  ;; default again. Every row the model emits is reachable from exactly one tab.
+(deftest board-bands-covers-every-driven-row-exactly-once
+  ;; The guarantee this whole design exists for: nothing nido drives can be
+  ;; hidden by default again. Every row the model emits outside the intake
+  ;; stages is on exactly one band.
   ;;
-  ;; :analysed is the one deliberate exception and it is checked below rather
+  ;; :analysed is the other deliberate exception and it is checked below rather
   ;; than left implicit — a workstream holding a review-loop analysis is not work
   ;; and has no arc, so the board draws no row for it and the operations surface
-  ;; is where it is reachable. That is an exception to WHICH SURFACE shows it,
-  ;; never to whether something shows it.
+  ;; is where it is reachable.
   (let [grouped {:incoming [{:ws-id "i"}]
                  :triage {:in-flight [{:ws-id "tf"}] :queued [{:ws-id "tq"}]}
                  :in-progress [{:ws-id "p"}]
                  :shipping [{:ws-id "s"}]
                  :winding-down [{:ws-id "w"}]
                  :dismissed [{:ws-id "d"}]}
-        rows-of (fn [tab] (mapcat second (work/tab-bands tab grouped)))
-        intake  (set (map :ws-id (rows-of :intake)))
-        active  (set (map :ws-id (rows-of :active)))]
-    (is (= (set (map :ws-id (work/grouped-rows grouped)))
-           (into intake active))
-        "union of both tabs = every row grouped-rows emits")
-    (is (empty? (set/intersection intake active))
-        "and no row appears in both tabs")))
+        intake  #{"i" "tf" "tq" "d"}
+        board   (map :ws-id (mapcat second (work/board-bands grouped)))]
+    (is (= (set/difference (set (map :ws-id (work/grouped-rows grouped))) intake)
+           (set board))
+        "the board = every row grouped-rows emits, less intake")
+    (is (= (count board) (count (set board)))
+        "and no row appears on two bands")))
 
 (deftest analysed-rows-are-off-the-board-on-both-sides-or-neither
-  ;; The union oracle above only holds because tab-bands and grouped-rows agree
-  ;; about :analysed. If a later edit teaches one of them about the band and not
-  ;; the other, that test starts failing for a reason nobody will connect to
-  ;; this; so the agreement is asserted here, where the reason is written down.
-  (let [grouped {:incoming [{:ws-id "i"}] :analysed [{:ws-id "a"}]}]
-    (is (= #{"i"} (set (map :ws-id (work/grouped-rows grouped))))
+  ;; The coverage oracle above only holds because board-bands and grouped-rows
+  ;; agree about :analysed. If a later edit teaches one of them about the band
+  ;; and not the other, that test starts failing for a reason nobody will connect
+  ;; to this; so the agreement is asserted here, where the reason is written down.
+  (let [grouped {:in-progress [{:ws-id "p"}] :analysed [{:ws-id "a"}]}]
+    (is (= #{"p"} (set (map :ws-id (work/grouped-rows grouped))))
         "grouped-rows does not emit an analysed row")
-    (is (= #{"i"} (set (map :ws-id (mapcat second (work/tab-bands :intake grouped)))))
-        "and no tab draws one")
-    (is (empty? (mapcat second (work/tab-bands :active grouped))))
+    (is (= #{"p"} (set (map :ws-id (mapcat second (work/board-bands grouped)))))
+        "and the board draws none")
     (is (contains? @#'work/unrendered-bands :analysed)
         "so it must be an unrendered band — otherwise with-position pays to place
          a row nothing will draw")))
@@ -113,17 +106,6 @@
   (is (= :done (:stage (@#'work/to-spine {:source :review-run :stage :triaging
                                           :engagement :settled})))
       "and a closed one still reads done"))
-
-(deftest tab-bands-intake-appends-dismissed
-  (let [grouped {:incoming [{:ws-id "i"}]
-                 :triage {:in-flight [{:ws-id "tf"}] :queued []}
-                 :dismissed [{:ws-id "d"}]}]
-    (is (= [[:triage ["tf"]] [:incoming ["i"]] [:dismissed ["d"]]]
-           (for [[stage rows] (work/tab-bands :intake grouped)]
-             [stage (mapv :ws-id rows)]))
-        "dismissed is the trailing band on intake")
-    (is (= [] (work/tab-bands :intake {:dismissed []}))
-        "an empty dismissed band is dropped like any other")))
 
 (deftest winding-down-lists-closed-ws-with-live-sessions
   (with-tmp
@@ -149,7 +131,7 @@
 
 (deftest winding-down-catches-a-row-notion-finished
   ;; A ticket that reached Review (or Done) projects :done with no :closed record
-  ;; — stateless by design. Without the row carrier it lands on neither tab while
+  ;; — stateless by design. Without the row carrier it drops off the board while
   ;; its session still holds ports.
   (with-tmp
     (fn [_]
@@ -178,38 +160,22 @@
           (is (= {:downed ["live1"]} (work/bring-down! :p (:id w))))
           (is (= ["live1"] @downed)))))))
 
-(deftest tab-bands-active-appends-winding-down
-  (let [grouped {:in-progress [{:ws-id "p"}] :shipping [{:ws-id "s"}]
-                 :winding-down [{:ws-id "w"}]}]
-    (is (= [[:shipping ["s"]] [:in-progress ["p"]] [:winding-down ["w"]]]
-           (for [[stage rows] (work/tab-bands :active grouped)]
-             [stage (mapv :ws-id rows)])))))
-
 (deftest screen-marks-pending-winding-down-rows
   (let [groups [{:project "p" :grouped {:winding-down [{:ws-id "w1"} {:ws-id "w2"}]}}]
-        screen (work/screen {:scope "all" :tab :active}
+        screen (work/screen {:scope "all"}
                             {:groups groups :winddown-pending #{"p/w1"}})]
     (is (= [true false]
            (->> screen :groups first :grouped :winding-down (map (comp boolean :pending?)))))))
 
-(deftest tab-bands-drops-empty-bands-and-tolerates-absent-keys
-  (is (= [] (work/tab-bands :active {:in-progress [] :shipping []}))
+(deftest board-bands-drops-empty-bands-and-tolerates-absent-keys
+  (is (= [] (work/board-bands {:in-progress [] :shipping []}))
       "empty bands are dropped")
-  (is (= [] (work/tab-bands :active {}))
+  (is (= [] (work/board-bands {}))
       "absent keys are not an error")
-  (is (= [[:triage ["t"]]]
-         (for [[stage rows] (work/tab-bands :intake {:triage {:in-flight [{:ws-id "t"}] :queued []}})]
+  (is (= [[:in-progress ["p"]]]
+         (for [[stage rows] (work/board-bands {:in-progress [{:ws-id "p"}] :shipping []})]
            [stage (mapv :ws-id rows)]))
       "a band with rows survives while its empty sibling is dropped"))
-
-(deftest tab-bands-unknown-tab-behaves-as-intake
-  (let [grouped {:triage {:in-flight [{:ws-id "t"}] :queued []} :in-progress [{:ws-id "p"}]}]
-    (is (= (work/tab-bands :intake grouped) (work/tab-bands :bogus grouped)))))
-
-(deftest screen-passes-the-tab-through
-  (let [s (work/screen {:surface :workstreams :scope "all" :tab :active}
-                       {:groups [] :gates [] :pending #{}})]
-    (is (= :active (:tab s)))))
 
 (deftest classify-origin-delegates-to-source-classifier
   (is (= :scratch (work/classify-origin {:stage :scratch :external-refs []})))
@@ -358,9 +324,8 @@
 (deftest spine-is-exactly-the-stages-the-board-honors
   ;; work/stages is what the TUI stage picker offers and what default-target
   ;; validates a configured override against — both feed set-stage!, so every
-  ;; entry must be a stage the board actually honors. The head used to read
-  ;; :intake, a TAB name no record ever carries: picking it wrote a stage
-  ;; grouped-by-stage has no key for and the workstream left every band.
+  ;; entry must be a stage grouped-by-stage has a key for — a name it lacks
+  ;; writes a stage no band holds, and the workstream leaves the board.
   (is (= session/lifecycle-stages (set work/stages)))
   (is (= (count session/lifecycle-stages) (count work/stages)) "ordered, no dupes")
   (is (every? session/storable-stages work/stages)
@@ -1226,9 +1191,9 @@
 (deftest dismissing-a-ref-less-workstream-still-reaches-the-dismissed-band
   ;; ledger-ref is notion-or-slack only, so a ref-less coordinator workstream has
   ;; no ticket record for the veto to live on. If :closed doesn't carry it, the
-  ;; :settled fold takes over and projects :done — a band on NEITHER tab — so the
-  ;; row leaves every surface with no Restore, while the toast promises the
-  ;; opposite. That is exactly the silent loss this whole band exists to prevent.
+  ;; :settled fold takes over and projects :done, and the veto is lost: the row
+  ;; can no longer be told apart from finished work, and Restore has nothing to
+  ;; undo.
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :brian {:stage :triage :external-refs []})]
@@ -1236,10 +1201,8 @@
         (is (= {:decision :dismissed} (work/dismiss! :brian (:id w))))
         (is (= [:dismissed] (map :stage (work/list-workstreams :brian)))
             "with no ledger key the :closed outcome is the veto's only carrier")
-        (is (= [[:dismissed [(:id w)]]]
-               (for [[stage rows] (work/tab-bands :intake (work/grouped :brian))]
-                 [stage (mapv :ws-id rows)]))
-            "and it is reachable as the Intake tab's trailing band")
+        (is (= [(:id w)] (mapv :ws-id (:dismissed (work/grouped :brian))))
+            "and it is grouped as dismissed")
         (is (= {:decision :restored} (work/restore! :brian (:id w))))
         (is (= [:triage] (map :stage (work/list-workstreams :brian)))
             "Restore is the way back, with no ticket record involved either")))))

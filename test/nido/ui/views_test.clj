@@ -169,67 +169,60 @@
 
 (deftest workstreams-fragment-groups-and-links
   (let [html (views/workstreams-fragment {:groups [{:project "brian" :grouped sample-grouped}]
-                                          :selection nil :scope "all" :tab :intake})]
+                                          :selection nil :scope "all"})]
     (is (str/includes? html "id=\"workstreams\""))
-    (is (str/includes? html "triage"))
+    (is (str/includes? html "in-progress"))
     (is (not (str/includes? html "ready")) "no :ready band section")
-    (is (str/includes? html "BR-1 · a"))
-    (is (str/includes? html "sel=brian:w1"))            ; rows carry the selection in the view-state
-    (is (str/includes? html ">N<"))))
+    (is (str/includes? html "spike"))
+    (is (str/includes? html "sel=brian:w3"))))          ; rows carry the selection in the view-state
 
 (deftest screen-query-composes-the-url-contract
-  ;; screen-query is the single place scope + tab + selection are serialized —
-  ;; it also produces the 5s poll URL (see workstreams-page-poll-carries-tab
+  ;; screen-query is the single place scope + selection are serialized — it
+  ;; also produces the 5s poll URL (see workstreams-page-poll-carries-scope
   ;; below). Pin its contract directly since the poll URL is easy to silently
   ;; regress without a caller-side test noticing.
-  (is (= "" (#'views/screen-query {:scope "all" :tab :intake}))
-      "scope=all and the default tab are both omitted")
-  (is (= "?scope=brian" (#'views/screen-query {:scope "brian" :tab :intake}))
+  (is (= "" (#'views/screen-query {:scope "all"}))
+      "scope=all is omitted")
+  (is (= "?scope=brian" (#'views/screen-query {:scope "brian"}))
       "a real scope is present")
-  (is (= "?tab=active" (#'views/screen-query {:scope "all" :tab :active}))
-      "a non-default tab is present")
-  (is (= "?sel=brian:w1" (#'views/screen-query {:scope "all" :tab :intake} {:sel "brian:w1"}))
+  (is (= "?sel=brian:w1" (#'views/screen-query {:scope "all"} {:sel "brian:w1"}))
       ":sel composes with the rest")
-  (is (= "?scope=brian&tab=active&sel=brian:w1"
-         (#'views/screen-query {:scope "brian" :tab :intake} {:tab :active :sel "brian:w1"}))
-      "an explicit :tab override wins over the screen's tab, and all three compose"))
+  (is (= "?scope=brian&sel=brian:w1"
+         (#'views/screen-query {:scope "brian"} {:sel "brian:w1"}))
+      "scope and selection compose"))
 
-(deftest workstreams-page-renders-both-tabs-with-the-active-one-marked
+(deftest workstreams-page-renders-no-tab-row
   (let [html (views/workstreams-page {:active :workstreams :needs-count 0 :daemon {:state :up}
                                       :scope "all" :projects []}
-                                     {:scope "all" :tab :intake :selection nil
+                                     {:scope "all" :selection nil
                                       :groups [{:project "brian" :grouped sample-grouped}]})]
-    (is (str/includes? html "Intake"))
-    (is (str/includes? html "Active"))
-    (is (str/includes? html "tab active") "the current tab is marked")
-    (is (str/includes? html "tab=active") "the other tab is one click away")))
+    (is (not (str/includes? html "class=\"tabs\"")))
+    (is (not (str/includes? html "tab=")))
+    (is (not (str/includes? html "Intake")))))
 
-(deftest workstreams-fragment-intake-shows-triage-not-in-progress
-  (let [html (views/workstreams-fragment {:groups [{:project "brian" :grouped sample-grouped}]
-                                          :selection nil :scope "all" :tab :intake})]
-    (is (str/includes? html "triage"))
-    (is (str/includes? html "BR-1 · a"))
-    (is (not (str/includes? html "spike")) "the in-progress row belongs to the Active tab")
+(deftest workstreams-fragment-leaves-intake-off-the-board
+  (let [grouped (assoc sample-grouped
+                       :incoming  [{:ws-id "w4" :origin :slack :stage :incoming :label "slack-report"}]
+                       :dismissed [{:ws-id "w5" :origin :notion :stage :dismissed :label "BR-5 · vetoed"}])
+        html    (views/workstreams-fragment {:groups [{:project "brian" :grouped grouped}]
+                                             :selection nil :scope "all"})]
+    (is (str/includes? html "spike") "the in-progress row is on the board")
+    (is (not (str/includes? html "BR-1 · a")) "no triage band")
+    (is (not (str/includes? html "slack-report")) "no incoming band")
+    (is (not (str/includes? html "BR-5 · vetoed")) "no dismissed band")
     (is (not (str/includes? html "ready")) "no :ready band — the backlog lives in Notion")))
 
-(deftest workstreams-fragment-active-shows-in-progress-not-triage
-  (let [html (views/workstreams-fragment {:groups [{:project "brian" :grouped sample-grouped}]
-                                          :selection nil :scope "all" :tab :active})]
-    (is (str/includes? html "in-progress"))
-    (is (str/includes? html "spike") "the scratch session is reachable — the bug this fixes")
-    (is (not (str/includes? html "BR-1 · a")) "the triage row belongs to the Intake tab")))
-
-(deftest tab-links-preserve-scope-and-selection
+(deftest row-links-preserve-scope-and-selection
   (let [html (views/workstreams-page {:active :workstreams :needs-count 0 :daemon {:state :up}
                                       :scope "brian" :projects []}
-                                     {:scope "brian" :tab :intake
+                                     {:scope "brian"
                                       :selection {:project "brian" :ws-id "w1"}
                                       :groups [{:project "brian" :grouped sample-grouped}]})]
     (is (str/includes? html "scope=brian"))
     (is (str/includes? html "sel=brian:w1"))))
 
 (deftest workstreams-fragment-renders-winding-down-rows
-  (let [screen {:scope "all" :tab :active :selection nil
+  (let [screen {:scope "all" :selection nil
                 :groups [{:project "p"
                           :grouped {:winding-down
                                     [{:ws-id "w1" :origin :scratch :label "old-one"
@@ -244,22 +237,22 @@
     (is (not (str/includes? html "/workstreams/p/w2/winddown")))))
 
 (deftest winddown-row-post-url-carries-the-screen-query
-  ;; Fix 1: the button's POST url must preserve scope + tab (as query params) so
-  ;; the winddown route's derive-screen renders the SAME screen the user was on
-  ;; instead of defaulting to intake/all/deselected.
-  (let [screen {:scope "brian" :tab :active :selection nil
+  ;; Fix 1: the button's POST url must preserve scope (as a query param) so the
+  ;; winddown route's derive-screen renders the SAME screen the user was on
+  ;; instead of defaulting to all/deselected.
+  (let [screen {:scope "brian" :selection nil
                 :groups [{:project "brian"
                           :grouped {:winding-down
                                     [{:ws-id "w1" :origin :scratch :label "old-one"
                                       :outcome :done :sessions ["s1"]}]}}]}
         html (views/workstreams-fragment screen)]
-    (is (str/includes? html "/workstreams/brian/w1/winddown?scope=brian&amp;tab=active")
+    (is (str/includes? html "/workstreams/brian/w1/winddown?scope=brian")
         "the POST url is the exact winddown route plus the preserved screen query")))
 
 (deftest winddown-row-failed-shows-error-and-keeps-the-button
   ;; Fix 3: a failed bring-down! must be visible on the row AND retryable — the
   ;; button stays so clicking it again sets :stopping, self-clearing the error.
-  (let [screen {:scope "all" :tab :active :selection nil
+  (let [screen {:scope "all" :selection nil
                 :groups [{:project "p"
                           :grouped {:winding-down
                                     [{:ws-id "w1" :origin :scratch :label "old-one"
@@ -275,10 +268,10 @@
   ;; a poll refresh keeps the open row highlighted, and each row link preserves
   ;; the view-state so selecting one lands on the SAME list.
   (let [html (views/workstreams-fragment {:groups [{:project "brian" :grouped sample-grouped}]
-                                          :selection {:project "brian" :ws-id "w1"}
+                                          :selection {:project "brian" :ws-id "w3"}
                                           :scope "all"})]
     (is (str/includes? html "gate-card sel") "selected row keeps its highlight")
-    (is (str/includes? html "sel=brian:w1"))
+    (is (str/includes? html "sel=brian:w3"))
     (is (not (str/includes? html "source=")) "no source filter in row links")))
 
 (deftest workstream-pane-shows-ledger-report-and-environment
@@ -380,24 +373,23 @@
     (is (str/includes? html "rail-link active"))
     (is (str/includes? html "/_fragment/workstreams"))))
 
-(deftest workstreams-page-poll-carries-tab
+(deftest workstreams-page-poll-carries-scope
   ;; The 5s poll's @get URL is built by screen-query too (see workstreams-page,
   ;; the .inbox data-on-interval). Assert on the @get(...) substring itself —
-  ;; not merely that "tab=active" appears somewhere in the page, which the tab
-  ;; link alone would satisfy — so a regression that drops the tab from the
-  ;; poll (but not the link) fails here.
+  ;; not merely that "scope=brian" appears somewhere in the page, which the rail
+  ;; alone would satisfy — so a regression that drops the scope from the poll
+  ;; fails here.
   (let [html (views/workstreams-page {:active :workstreams :needs-count 0 :daemon {:state :up}
-                                      :scope "all" :projects []}
-                                     {:scope "all" :tab :active :selection nil
+                                      :scope "brian" :projects []}
+                                     {:scope "brian" :selection nil
                                       :groups [{:project "brian" :grouped sample-grouped}]})]
-    (is (str/includes? html "@get(&apos;/_fragment/workstreams?tab=active&apos;)")
+    (is (str/includes? html "@get(&apos;/_fragment/workstreams?scope=brian&apos;)")
         "hiccup escapes the quote to &apos; in the rendered attribute")))
 
 (deftest workstreams-page-renders-no-filter-chrome
   ;; The source + facet chips are gone: no filter row, no Source label. The
   ;; :scratch in-progress row is no longer hidden behind source=notion — it's
-  ;; reachable via the Active tab (see workstreams-fragment-active-shows-in-progress-not-triage);
-  ;; the default landing is the Intake tab, which doesn't include it.
+  ;; on the board (see workstreams-fragment-leaves-intake-off-the-board).
   (let [html (views/workstreams-page {:active :workstreams :needs-count 0 :daemon {:state :up}
                                       :scope "all" :projects []}
                                      {:scope "all" :selection nil
@@ -494,23 +486,15 @@
 
 (deftest rail-scope-link-stays-on-current-surface
   (let [html (str (h/html (#'views/rail {:active :workstreams :scope "all" :needs-count 0
-                                         :daemon {:state :up} :projects ["brian"] :tab nil})))]
+                                         :daemon {:state :up} :projects ["brian"]})))]
     (is (re-find #"/workstreams\?scope=brian" html) "a scope link stays on the current (workstreams) surface")
     (is (not (re-find #"href=\"/\?scope=brian\"" html)) "scope link does NOT jump to the home surface")))
 
 (deftest rail-surface-link-carries-current-scope
   (let [html (str (h/html (#'views/rail {:active :needs :scope "brian" :needs-count 0
-                                         :daemon {:state :up} :projects ["brian"] :tab nil})))]
+                                         :daemon {:state :up} :projects ["brian"]})))]
     (is (re-find #"/workstreams\?scope=brian" html) "the Workstreams surface link carries the current scope")
     (is (re-find #"href=\"/\?scope=brian\"" html) "the Needs-you surface link carries the current scope")))
-
-(deftest rail-scope-link-preserves-workstreams-tab
-  (let [html (str (h/html (#'views/rail {:active :workstreams :scope "brian" :tab :active
-                                         :needs-count 0 :daemon {:state :up} :projects ["brian"]})))]
-    ;; hiccup escapes "&" to "&amp;" inside a rendered attribute value (same quirk
-    ;; documented in workstreams-page-poll-carries-tab for &apos;).
-    (is (re-find #"/workstreams\?scope=brian&amp;tab=active" html)
-        "on workstreams, a scope link preserves the active tab")))
 
 (def ^:private ledger-entries
   [{:seq 2 :kind :impl   :at "2026-06-19T00:00:00Z" :title "Draft PR"}
@@ -952,7 +936,7 @@
                          :grouped {:shipping [ship-row]
                                    :triage {:in-flight [] :queued []}
                                    :incoming [] :ready [] :in-progress []}}]
-               :selection nil :scope "all" :tab :active})]
+               :selection nil :scope "all"})]
     (is (str/includes? html "merging · blocked") "blocked merge renders on the row")
     (is (str/includes? html "ship-blocked")      "loud CSS class is emitted")
     (is (= 1 (count (re-seq #"blocked<" html)))  "said once, not once per vocabulary")
@@ -972,7 +956,7 @@
                          :grouped {:shipping [ship-row]
                                    :triage {:in-flight [] :queued []}
                                    :incoming [] :ready [] :in-progress []}}]
-               :selection nil :scope "all" :tab :active})]
+               :selection nil :scope "all"})]
     (is (str/includes? html "merging · queued") "the merge queue's resting state still renders")
     (is (str/includes? html "ship-queued")      "and keeps the class it always had")))
 
@@ -1039,24 +1023,6 @@
     (is (str/includes? html "Dismiss"))
     (is (str/includes? html "/workstreams/brian/ws-1/gate/promote"))
     (is (str/includes? html "/workstreams/brian/ws-1/gate/drop"))))
-
-;; ---------------------------------------------------------------------------
-;; Dismissed band (Intake tab) — muted rows, collapsed by default, Restore
-;; ---------------------------------------------------------------------------
-
-(deftest dismissed-band-renders-a-restore-button
-  (let [screen {:scope "all" :tab :intake :selection nil
-                :groups [{:project "brian"
-                          :grouped {:dismissed [{:ws-id "ws-9" :origin :notion
-                                                 :label "BR-5711 · New Bug (Description)"
-                                                 :last-activity "2026-08-14T09:00:00Z"}]}}]}
-        html   (views/workstreams-fragment screen)]
-    (is (str/includes? html "Restore"))
-    (is (str/includes? html "/workstreams/brian/ws-9/gate/restore")
-        "posts to the generic pane gate route")
-    (is (str/includes? html "BR-5711 · New Bug (Description)"))
-    (is (str/includes? html "gate-card dismissed")
-        "muted card class")))
 
 (deftest confirm-fragment-covers-dismiss-and-restore
   (is (str/includes? (views/gate-action-confirm-fragment :restore "brian" "ws-9")
@@ -1324,7 +1290,7 @@
 ;; ── The board row says where the pipeline is ────────────────────────────────
 
 (def ^:private a-board-screen
-  {:surface :workstreams :scope "all" :tab :active :selection nil})
+  {:surface :workstreams :scope "all" :selection nil})
 
 (defn- board-row
   [position]

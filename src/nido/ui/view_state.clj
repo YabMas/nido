@@ -27,18 +27,6 @@
       (when (and (seq project) (seq ws-id))
         {:project project :ws-id ws-id}))))
 
-(def tabs
-  "The /workstreams surfaces, in display order. The FIRST entry is the default.
-   A tab is a BAND selector — which part of the stage spine is on screen (see
-   nido.coordinator.work/tab-bands) — NOT a row filter: every row in the tab renders
-   whatever its origin. They are nido's two jobs: intake via the various
-   streams, and orchestrating work in progress."
-  [:intake :active])
-
-(def default-tab
-  "The tab /workstreams opens on when none is selected — the first one."
-  (first tabs))
-
 (defn- rounds
   "`?rounds=1,3` -> #{1 3}: which review rounds the workstream pane has unfolded
    inside the open ledger entry. Non-numeric members are dropped rather than
@@ -76,12 +64,11 @@
       :entry   <long>|nil
       :rounds  #{<long>}|nil
       :stage   <arc-stage keyword>|nil
-      :history? <boolean>
-      :tab     :intake|:active}
+      :history? <boolean>}
 
-   No source/facet filtering: the board shows every origin, and its tabs select
-   BANDS rather than rows (see nido.coordinator.work/tab-bands). A legacy ?source= / facet
-   bookmark parses cleanly and constrains nothing."
+   No source/facet filtering: the board shows every origin (see
+   nido.coordinator.work/board-bands). A legacy ?source= / facet / ?tab= bookmark
+   parses cleanly and constrains nothing."
   [{:keys [uri query-string]}]
   (let [ps (pairs query-string)]
     {:surface   (surface uri)
@@ -90,6 +77,4 @@
      :entry     (some (fn [[k v]] (when (= k "entry") (parse-long v))) ps)
      :rounds    (rounds ps)
      :stage     (stage ps)
-     :history?  (history? ps)
-     :tab       (let [t (some (fn [[k v]] (when (= k "tab") (keyword v))) ps)]
-                  (if (some #{t} tabs) t default-tab))}))
+     :history?  (history? ps)}))

@@ -190,13 +190,6 @@
   [origin rows]
   (if (= :all origin) rows (filterv #(= origin (:origin %)) rows)))
 
-(def ^:private default-collapsed-bands
-  "Bands the board folds on entry — the intake queues. They can be long and
-   floody (a Slack backlog especially); you open them on demand to walk + promote.
-   Engaged-work bands (in flight / ready / in progress) start expanded. `space`
-   toggles any band — this is only the initial state."
-  #{:incoming :triage-queued})
-
 (defn- band-header
   "A foldable section divider carrying its band key (so the `space` toggle knows
    which band to flip) and a ▾/▸ fold marker. Non-actionable (no :ws-id)."
@@ -227,7 +220,7 @@
 (defn- board-rows
   "Rows for the spine board: work/grouped, filtered by `origin` and `facet-filter`,
    as foldable bands with origin badges."
-  ([project origin] (board-rows project origin default-collapsed-bands {}))
+  ([project origin] (board-rows project origin #{} {}))
   ([project origin collapsed] (board-rows project origin collapsed {}))
   ([project origin collapsed facet-filter]
    (let [g    (work/grouped project (work/live-session-names project))
@@ -239,9 +232,6 @@
          rows (concat
                (band :shipping         "Shipping"           (:shipping g))
                (band :in-progress      "In progress"        (:in-progress g))
-               (band :triage-in-flight "Triage · in flight" (get-in g [:triage :in-flight]))
-               (band :triage-queued    "Triage · queued"    (get-in g [:triage :queued]))
-               (band :incoming         "Queue"              (:incoming g))
                ;; Winding-down rows carry :origin (so the origin filter composes via
                ;; `keep`) but no :facets — an ACTIVE facet selection hides them
                ;; (facet-match? treats facet-less rows as non-matching then). Acceptable:
@@ -360,7 +350,7 @@
   [state]
   (case (:screen state)
     :board      (board-rows (:project state) (:origin state)
-                            (or (:collapsed state) default-collapsed-bands)
+                            (or (:collapsed state) #{})
                             (or (:facet-filter state) {}))
     :workstream []
     :projects   (project-rows)))
@@ -887,22 +877,10 @@
       [(assoc state :status "(no session to open yet)") nil])
     [(assoc state :status "(no workstream selected)") nil]))
 
-(defn- promote-selected
-  "Promote the highlighted workstream via work/default-target + work/set-stage!.
-   Surfaces the decision in the status line and refreshes the list."
-  [state]
-  (if-let [ws (selected-workstream state)]
-    (let [target   (work/default-target (:project state) :promote)
-          decision (:decision (work/set-stage! (:project state) (:ws-id ws) target))]
-      [(-> state (refresh-list (current-rows state))
-           (assoc :status (wsv/promote-result-message (:promote-id ws) decision)))
-       nil])
-    [(assoc state :status "(no workstream selected)") nil]))
-
 (defn- done-selected
   "Mark the highlighted workstream done via work/set-stage! :done. A bare
    (workstream-less) row no-ops — surface that honestly rather than claiming
-   success, mirroring promote-selected's :no-workstream handling."
+   success."
   [state]
   (if-let [ws (selected-workstream state)]
     (let [decision (:decision (work/set-stage! (:project state) (:ws-id ws) :done))
@@ -912,26 +890,6 @@
                              (str "no workstream yet — " label)
                              (str "marked " label " done"))))
        nil])
-    [(assoc state :status "(no workstream selected)") nil]))
-
-(defn- dismiss-selected
-  "Take the highlighted workstream off the triage radar via work/dismiss! — it
-   leaves the queue and is skipped by auto-re-triage. Dismiss is retired for Notion
-   tickets: Notion owns their lifecycle, so a local dismiss is a no-op there and we
-   refuse it honestly rather than pretend. A bare (workstream-less) row no-ops too —
-   mirroring promote-selected's :no-workstream handling."
-  [state]
-  (if-let [ws (selected-workstream state)]
-    (if (= :notion (:origin ws))
-      [(assoc state :status "dismiss doesn't apply to Notion tickets — they're owned in Notion")
-       nil]
-      (let [decision (:decision (work/dismiss! (:project state) (:ws-id ws)))
-            label    (or (:br-id ws) (:ws-id ws))]
-        [(-> state (refresh-list (current-rows state))
-             (assoc :status (if (= decision :no-workstream)
-                               (str "no workstream yet — " label)
-                               (str "dismissed " label " — off radar"))))
-         nil]))
     [(assoc state :status "(no workstream selected)") nil]))
 
 ;; ---------------------------------------------------------------------------
@@ -1000,15 +958,18 @@
 (declare open-stage-picker)
 
 (defn- open-stage-picker
-  "Open a picker over the spine stages to aim `promote` at a target (the override
-   for the default `p`). Empty when no workstream is selected."
+  "Open a picker over the spine stages to move the highlighted workstream to.
+   :incoming and :triage are left out — they are intake, which the board does
+   not offer (see work/board-bands). Empty when no workstream is selected."
   [state]
   (if-let [ws (selected-workstream state)]
     [(-> state
          (assoc :modal :stage-picker)
          (assoc :modal-target
                 {:ws-id (:ws-id ws) :promote-id (:promote-id ws)
-                 :picker (picker-list (mapv (fn [s] {:title (name s) :data s}) work/stages))}))
+                 :picker (picker-list (into [] (comp (remove #{:incoming :triage})
+                                                    (map (fn [s] {:title (name s) :data s})))
+                                              work/stages))}))
      nil]
     [(assoc state :status "(no workstream selected)") nil]))
 
@@ -1031,7 +992,7 @@
    live-refresh tick keeps it. No-op when the cursor isn't on a band header."
   [state]
   (if-let [band (selected-band state)]
-    (let [collapsed  (or (:collapsed state) default-collapsed-bands)
+    (let [collapsed  (or (:collapsed state) #{})
           collapsed' (if (contains? collapsed band) (disj collapsed band) (conj collapsed band))
           state'     (assoc state :collapsed collapsed')]
       [(refresh-list state' (current-rows state')) nil])
@@ -1046,7 +1007,6 @@
     (if-let [ws (selected-workstream state)]
       [(enter-workstream state (:ws-id ws) (:label ws)) nil] [state nil])
     (msg/key-match? msg "n") (open-create-session state (:project state))
-    (msg/key-match? msg "p") (promote-selected state)
     (msg/key-match? msg "P") (open-stage-picker state)
     (msg/key-match? msg "d")
     (let [sel (selected-workstream state)]
@@ -1060,7 +1020,6 @@
                {:type ::action-failed :verb :bring-down :subject (:label sel)
                 :error error :output output}))))
         (done-selected state)))
-    (msg/key-match? msg "x") (dismiss-selected state)
     (msg/key-match? msg "s") [(assoc state :modal :ops :status nil) nil]
     (or (msg/key-match? msg "tab") (msg/key-match? msg "right"))
     [(set-origin state (step-origin (:origin state) 1)) nil]
@@ -1408,7 +1367,7 @@
                   :ops                  "[h]alt  [c]lear breaker  [f]ire  [p]ickup  [esc] back"
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
-                    :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one/bring-down  [x] dismiss (slack)  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s] ops  [esc] back  [q]uit"
+                    :board      "[↵/o] open  [i]nspect  [n]ew  [P] promote to…  [d]one/bring-down  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s] ops  [esc] back  [q]uit"
                     :workstream "[↵] chat  [o] browser  [w]orktree  [u] start  [d] stop  [r] restart  [X] destroy  [esc] back  [q]uit"))))
 
 (defn- info-row [label value]

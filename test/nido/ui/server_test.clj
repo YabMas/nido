@@ -153,9 +153,9 @@
       (is (= 200 (:status resp)))
       (is (str/includes? (:body resp) "Workstreams")))))
 
-(deftest workstreams-route-renders-the-requested-tab-end-to-end
-  ;; parse → derive-screen → views: ?tab= flows through with no route of its own.
-  ;; Same four stubs the deleted source/facet end-to-end test used.
+(deftest workstreams-route-renders-the-driven-bands-end-to-end
+  ;; parse → derive-screen → views. A legacy ?tab=intake bookmark opens the same
+  ;; board, which never shows intake.
   (with-redefs [nido.coordinator.work/all-grouped
                 (fn [] [{:project "brian"
                          :grouped {:incoming []
@@ -168,13 +168,11 @@
                 nido.coordinator.work/all-gates (fn [] [])
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
-    (let [intake (:body (server/handle-request {:request-method :get :uri "/workstreams"}))
-          active (:body (server/handle-request {:request-method :get :uri "/workstreams"
-                                                :query-string "tab=active"}))]
-      (is (str/includes? intake "Triage-row"))
-      (is (not (str/includes? intake "Scratch-row")))
-      (is (str/includes? active "Scratch-row") "the scratch row is reachable — the bug this fixes")
-      (is (not (str/includes? active "Triage-row"))))))
+    (doseq [q [nil "tab=intake"]]
+      (let [body (:body (server/handle-request {:request-method :get :uri "/workstreams"
+                                                :query-string q}))]
+        (is (str/includes? body "Scratch-row") "the scratch row is reachable — the bug this fixes")
+        (is (not (str/includes? body "Triage-row")) "intake is off the board")))))
 
 (deftest workstream-pane-route-renders
   (with-redefs [nido.coordinator.work/grouped (fn [_] {:triage {:in-flight [] :queued []} :ready [] :in-progress [] :incoming []})
@@ -319,14 +317,12 @@
   ;; the detail (with ?sel=) render the same rows. This is the overview≡detail
   ;; invariant (the "list jumps" bug). screen no longer filters rows by origin,
   ;; so both BR-1 (notion) and BR-2 (github) render in both overview and detail.
-  ;; r1 and p1 both sit under :incoming — the point is the overview≡detail
-  ;; invariant across origins within a band, not a specific stage; :in-progress
-  ;; belongs to the Active tab (see nido.coordinator.work/tab-bands) so it would confound
-  ;; the assertion here.
-  (let [grouped {:incoming [{:ws-id "r1" :origin :notion :facets {} :stage :ready :label "BR-1" :needs-you false}
-                             {:ws-id "p1" :origin :github :facets {} :stage :incoming :label "BR-2" :needs-you false}]
+  ;; r1 and p1 both sit under :in-progress — the point is the overview≡detail
+  ;; invariant across origins within a band, not a specific stage.
+  (let [grouped {:in-progress [{:ws-id "r1" :origin :notion :facets {} :stage :in-progress :label "BR-1" :needs-you false}
+                               {:ws-id "p1" :origin :github :facets {} :stage :in-progress :label "BR-2" :needs-you false}]
                  :triage {:in-flight [] :queued []}
-                 :in-progress []
+                 :incoming []
                  :shipping []}]
     (with-redefs [nido.coordinator.work/all-grouped (fn [] [{:project "brian" :grouped grouped}])
                   nido.coordinator.work/all-gates   (fn [] [])

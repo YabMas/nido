@@ -38,8 +38,8 @@
    is derived from workstreams, sessions and the ledger, so the facade could be replaced without
    a migration."
   {:child [Gate Screen]}
-  (Operation tab-bands "The ordered stage bands a tab shows."
-    {:signature [:=> [:catn [:tab :keyword] [:grouped :map]] :any]})
+  (Operation board-bands "The ordered stage bands the board shows: the work nido drives."
+    {:signature [:=> [:catn [:grouped :map]] :any]})
   (Operation option-action? "Whether an action id names one of a blocker's options."
     {:signature [:=> [:catn [:action-id :any]] :boolean]})
   (Operation direction-action?

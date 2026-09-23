@@ -9,7 +9,6 @@
             [nido.coordinator.control :as control]
             [nido.platform.process :as process]
             [nido.ui.markdown :as md]
-            [nido.ui.view-state :as view-state]
             [nido.coordinator.work :as work]))
 
 ;; ---------------------------------------------------------------------------
@@ -77,11 +76,6 @@
         .pickup input:focus { outline:none; border-color:#3a5a7a; }
         .pickup .btn { color:#fff; }
         .pickup-result { margin-top:2px; }
-        .tabs { display:flex; gap:4px; padding:10px 16px 6px; }
-        .tab { padding:4px 10px; border-radius:4px; color:#888; font-size:12px;
-               text-transform:uppercase; border:1px solid transparent; }
-        .tab:hover { color:#ccc; text-decoration:none; }
-        .tab.active { background:#2a4a6a; color:#aee0ff; border-color:#3a5a7a; }
         .inbox { overflow:auto; flex:1; }
         .gate-card { display:block; padding:10px 16px; border-bottom:1px solid #20203a; color:inherit; }
         .gate-card:hover { background:#181830; text-decoration:none; }
@@ -311,7 +305,7 @@
      .ws-section-rows { overflow:hidden; max-height:0; opacity:0;
                         transition:max-height .28s ease, opacity .2s ease; }
      .ws-section-rows.ws-open { max-height:4000px; opacity:1; }
-     .winddown, .dismissed { opacity: 0.65; }
+     .winddown { opacity: 0.65; }
         /* Operations — the proposal is the unit, so the row is the design.
            Evidence is what a decision is actually about, so it is on the card
            rather than behind a disclosure; the proposal is what you are being
@@ -384,15 +378,12 @@
 
 (defn- rail
   "The persistent navigation rail. Scope is a sticky dimension: a scope link stays on the
-   current surface (changing only scope, preserving the workstreams tab); a surface link
-   carries the current scope. Selecting a project changes what you see, never where you are."
-  [{:keys [active needs-count daemon scope projects tab]}]
+   current surface (changing only scope); a surface link carries the current scope.
+   Selecting a project changes what you see, never where you are."
+  [{:keys [active needs-count daemon scope projects]}]
   (let [surface-path {:needs "/" :workstreams "/workstreams" :operations "/operations"}
-        q (fn [scope-val workstreams?]
-            (let [parts (cond-> []
-                          (and scope-val (not= "all" scope-val)) (conj (str "scope=" scope-val))
-                          (and workstreams? tab (not= view-state/default-tab tab)) (conj (str "tab=" (name tab))))]
-              (if (seq parts) (str "?" (str/join "&" parts)) "")))
+        q (fn [scope-val]
+            (if (and scope-val (not= "all" scope-val)) (str "?scope=" scope-val) ""))
         ;; Operations is the one destination scope does not reach — see the
         ;; comment on its link below — so it is linked bare and never carries
         ;; the scope the reader arrived with.
@@ -400,12 +391,12 @@
                [:a {:class (str "rail-link" (when (= id active) " active"))
                     :href (if (= id :operations)
                             href
-                            (str href (q scope (= id :workstreams))))}
+                            (str href (q scope)))}
                 [:span label]
                 (when (= id :needs) (rail-needs-badge needs-count))])
         scope-link (fn [scope-val label]
                      [:a {:class (when (= scope scope-val) "active")
-                          :href (str (surface-path active) (q scope-val (= active :workstreams)))}
+                          :href (str (surface-path active) (q scope-val))}
                       label])]
     [:nav.rail
      [:a.rail-brand {:href "/" :title "nido"}
@@ -566,7 +557,7 @@
 (defn ^{:malli/schema [:=> [:cat :map :any] :any]}
   shell
   "Page chrome: persistent rail + content area. Replaces `layout`. `ctx` carries
-   {:active :title :needs-count :daemon :scope :projects :tab}; `content` is hiccup.
+   {:active :title :needs-count :daemon :scope :projects}; `content` is hiccup.
    The ops poll carries the current :scope (when not \"all\") so the badge count
    the poll patches in stays scoped instead of periodically clobbering it back
    to the global count."
@@ -650,18 +641,15 @@
        label)]))
 
 (defn- screen-query
-  "Query string (leading ?) rebuilding the active scope + tab from the screen,
-   with optional overrides. `:sel` adds the selection (\"project:ws-id\"); `:tab`
-   overrides the tab (used by the tab links). The single place scope, tab and
-   selection are serialized — so a row link, a poll refresh, and a deep link all
-   carry the identical view-state. The default tab is omitted, keeping
-   /workstreams clean."
-  [{:keys [scope tab]} & [overrides]]
-  (let [tb    (get overrides :tab tab)
-        sel   (:sel overrides)
+  "Query string (leading ?) rebuilding the active scope from the screen, with
+   optional overrides. `:sel` adds the selection (\"project:ws-id\"). The single
+   place scope and selection are serialized — so a row link, a poll refresh, and
+   a deep link all carry the identical view-state. Scope \"all\" is omitted,
+   keeping /workstreams clean."
+  [{:keys [scope]} & [overrides]]
+  (let [sel   (:sel overrides)
         pairs (cond-> []
                 (and scope (not= "all" scope)) (conj (str "scope=" scope))
-                (and tb (not= view-state/default-tab tb)) (conj (str "tab=" (name tb)))
                 sel (conj (str "sel=" sel)))]
     (if (seq pairs) (str "?" (str/join "&" pairs)) "")))
 
@@ -808,7 +796,7 @@
         ;; WITHOUT resuming anybody — so the one sentence a reader got about this
         ;; button described a different button.
         :apply   "Applying the routing and recording your acceptance on the ledger."
-        :dismiss "✓ Dismissed — off your radar. Nothing written to Notion; restore it from the Dismissed band."
+        :dismiss "✓ Dismissed — off your radar. Nothing written to Notion."
         :restore "✓ Restored — back in the triage queue."
         :start-triage "Starting triage… spawning the agent to investigate."
         :drop    "✓ Dropped — not pursued."
@@ -1666,10 +1654,7 @@
 (def ^:private ws-fold-stages
   [[:shipping    "Shipping"]
    [:in-progress "InProgress"]
-   [:winding-down "WindingDown"]
-   [:triage      "Triage"]
-   [:incoming    "Incoming"]
-   [:dismissed   "Dismissed"]])
+   [:winding-down "WindingDown"]])
 
 (defn- ws-fold-signal
   "Collapsed-flag signal name for a stage, e.g. :in-progress → \"wsFoldInProgress\"."
@@ -1678,25 +1663,17 @@
 
 (def ^:private ws-fold-storage-key "nidoWsFold")
 
-(def ^:private ws-fold-default-collapsed
-  "Bands that start COLLAPSED when localStorage has no opinion. Dismissed is the
-   archive of your own vetoes — reachable on purpose, but not something to scroll
-   past on every visit."
-  #{"Dismissed"})
-
 (def ^:private ws-fold-signals-init
   "data-signals__ifmissing expression for the persistent chrome: seed each stage's
    collapsed flag from localStorage on load. `===true` coerces a missing/false key
-   to expanded (the default); a band in ws-fold-default-collapsed inverts that with
-   `!==false`. __ifmissing makes the whole thing a no-op once the signals exist — so
+   to expanded, so every band starts open. __ifmissing makes the whole thing a no-op once the signals exist — so
    a full-page reload restores state without clobbering it."
   (str "{"
        (str/join ", "
                  (for [[_ suf] ws-fold-stages]
                    (str "wsFold" suf
                         ": (JSON.parse(localStorage.getItem('" ws-fold-storage-key
-                        "')||'{}')." suf ")"
-                        (if (contains? ws-fold-default-collapsed suf) "!==false" "===true"))))
+                        "')||'{}')." suf ")===true")))
        "}"))
 
 (def ^:private ws-fold-persist-js
@@ -1706,13 +1683,12 @@
        (str/join ", " (for [[_ suf] ws-fold-stages] (str suf ":$wsFold" suf)))
        "}))"))
 
-(defn- ws-tab-sections
-  "Flatten one {:project :grouped} into [{:project :stage :rows}] for `tab`,
-   taking the band list + order from work/tab-bands — the single place the
-   band→tab mapping lives. Kept as a plain fn (not inline hiccup) so the
-   fragment's `for` stays readable."
-  [tab {:keys [project grouped]}]
-  (for [[stage rows] (work/tab-bands tab grouped)]
+(defn- board-sections
+  "Flatten one {:project :grouped} into [{:project :stage :rows}], taking the
+   band list + order from work/board-bands — the single place it lives. Kept as
+   a plain fn (not inline hiccup) so the fragment's `for` stays readable."
+  [{:keys [project grouped]}]
+  (for [[stage rows] (work/board-bands grouped)]
     {:project project :stage stage :rows rows}))
 
 (def ^:private position-label
@@ -1799,7 +1775,7 @@
   "One winding-down row: closed workstream still holding live sessions. Muted;
    one action. A :pending? row shows 'stopping…' (no re-clickable button); the
    5s poll drops the row once its sessions are down. `q` is the current
-   screen's query string (screen-query) so the POST preserves scope + tab
+   screen's query string (screen-query) so the POST preserves scope
    instead of the fragment's response resetting the view to defaults. An
    :error-msg (from a failed bring-down!) renders inline AND keeps the button —
    clicking retry sets :stopping, which overwrites the :failed entry, so retry
@@ -1820,33 +1796,12 @@
         {"data-on:click" (str "@post('/workstreams/" project "/" ws-id "/winddown" q "')")}
         "Bring down"]))]])
 
-(defn- dismissed-row
-  "One dismissed row: taken off the radar nido-side, with NOTHING written to Notion —
-   which is exactly why this band exists. The upstream ticket is still open wherever
-   it lives, so hiding these outright would be silent loss. Muted, one action:
-   Restore clears the ticket status and puts it back in the triage queue.
-   POSTs to the generic pane gate route, so no dedicated endpoint is needed.
-
-   Carries the activity badge for the same reason the winding-down band counts
-   live sessions: something still running against a workstream you took off the
-   radar is exactly what a muted row would otherwise hide."
-  [{:keys [project ws-id origin label last-activity doing]}]
-  [:div.gate-card.dismissed
-   [:div.gate-top (origin-badge origin) [:span.lbl label]]
-   [:div.gate-sub
-    [:span project]
-    (when last-activity [:span.meta last-activity])
-    (doing-badge doing)
-    [:button.btn
-     {"data-on:click" (str "@post('/workstreams/" project "/" ws-id "/gate/restore')")}
-     "Restore"]]])
-
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   workstreams-fragment
-  "The selected tab's stage-grouped selectable list across projects, rendered
-   from the screen. Selection is threaded from the screen so a poll refresh keeps
+  "The board's stage-grouped selectable list across projects, rendered from
+   the screen. Selection is threaded from the screen so a poll refresh keeps
    the open row's highlight instead of clearing it."
-  [{:keys [groups selection tab] :as screen}]
+  [{:keys [groups selection] :as screen}]
   (let [sel-id (:ws-id selection)
         wd-q   (screen-query screen)]
     (str
@@ -1856,7 +1811,7 @@
        ;; here we only re-bind the click toggle, the reactive fold marker, and the
        ;; row list's data-class reveal. These re-attach to the already-declared
        ;; signals on every 5s poll, which is harmless — the state persists.
-       (for [{:keys [project stage rows]} (mapcat #(ws-tab-sections tab %) groups)]
+       (for [{:keys [project stage rows]} (mapcat board-sections groups)]
          (let [sig (ws-fold-signal stage)]
            [:div.ws-section
             [:h3.ws-fold-header
@@ -1877,7 +1832,6 @@
              (for [r rows]
                (case stage
                  :winding-down (winddown-row (assoc r :project project) wd-q)
-                 :dismissed    (dismissed-row (assoc r :project project))
                  (ws-list-row screen sel-id project r)))]]))]))))
 
 (defn- session-dev-cell
@@ -2366,17 +2320,6 @@
                                   (when heap-max (str "max " heap-max)))]])
               [:p.empty "no runnable version yet"])])))))))
 
-(defn- tab-row
-  "The board's two tabs — Intake | Active. A tab selects BANDS, not rows: every
-   workstream in the tab renders whatever its origin, so nothing is hidden by
-   default. Switching tabs preserves scope + selection."
-  [{:keys [tab] :as screen}]
-  [:div.tabs
-   (for [id view-state/tabs]
-     [:a {:class (str "tab" (when (= id tab) " active"))
-          :href  (str "/workstreams" (screen-query screen {:tab id}))}
-      (str/capitalize (name id))])])
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
   pickup-bar
   "Paste-a-ticket bar at the top of /workstreams. Binds a `pickup` signal, POSTs
@@ -2498,7 +2441,7 @@
   workstreams-page
   "Overview + ledger pane, rendered from the screen. The list, its poll query,
    and the pane all derive from the one screen value, so overview and detail
-   never disagree and a poll preserves the selection + tab."
+   never disagree and a poll preserves the selection."
   [ctx {:keys [selection] :as screen}]
   (let [sel-id  (:ws-id selection)
         q       (screen-query screen (when sel-id {:sel (str (:project selection) ":" sel-id)}))
@@ -2513,7 +2456,6 @@
       [:div.queue-col
        (pickup-bar project)
        (intent-bar project)
-       (tab-row screen)
        [:div.inbox {:data-on-interval__duration.5s (str "@get('/_fragment/workstreams" q "')")}
         (h/raw (workstreams-fragment screen))]]
       [:div.pane (h/raw (workstream-pane (:ws selection) (:dev-states selection) (:machine selection)))]])))

@@ -39,10 +39,8 @@
     (is (not (contains? v :source)))
     (is (not (contains? v :facets)))))
 
-(deftest parse-tab
-  (is (= :intake (:tab (vs/parse {:uri "/workstreams" :query-string nil})))
-      "defaults to the first tab")
-  (is (= :intake vs/default-tab))
-  (is (= :active (:tab (vs/parse {:uri "/workstreams" :query-string "tab=active"}))))
-  (is (= :intake (:tab (vs/parse {:uri "/workstreams" :query-string "tab=bogus"})))
-      "an unknown tab falls back to the default rather than rendering an empty list"))
+(deftest parse-ignores-a-legacy-tab-bookmark
+  ;; The board has no tabs; an old ?tab=intake / ?tab=active link still opens it.
+  (let [v (vs/parse {:uri "/workstreams" :query-string "tab=intake&scope=brian"})]
+    (is (= "brian" (:scope v)))
+    (is (not (contains? v :tab)))))

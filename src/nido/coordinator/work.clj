@@ -53,50 +53,34 @@
 
    These are STORED stage names, because both readers turn them into one: the TUI
    stage picker feeds set-stage! straight from this vector, and default-target
-   validates a project's configured override against it. The head used to read
-   :intake — the name of the TAB that holds the :triage and :incoming bands
-   (tab-bands), never a stage any record carries. Picking it wrote a stage
-   grouped-by-stage has no key for, and the workstream dropped off every band."
+   validates a project's configured override against it. Every entry must be a
+   key grouped-by-stage emits: picking a name it has no key for writes a stage
+   no band holds, and the workstream drops off the board."
   [:incoming :triage :ready :in-progress :shipping :done])
 
-(defn ^{:malli/schema [:=> [:cat :keyword :map] :any]}
-  tab-bands
-  "Ordered [stage rows] pairs for `tab` out of a `grouped` map, empty bands
-   dropped. The ONE place the band→tab mapping lives, so no surface can disagree
-   about where a band belongs.
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  board-bands
+  "Ordered [stage rows] pairs the board renders out of a `grouped` map, empty
+   bands dropped: :shipping, :in-progress (most-advanced first), then
+   :winding-down — finished workstreams still holding live resources, whether
+   nido settled them or Notion did (bring-down! is their one action). The ONE
+   place the band list lives, so no surface can disagree about it.
 
-     :intake — :triage (in-flight then queued) + :incoming   — work arriving via
-               the various streams, awaiting a verdict.
-     :active — :shipping + :in-progress (most-advanced first) — work nido is
-               driving.
+   The board is work nido is driving, and nothing else. :triage, :incoming and
+   :dismissed rows are grouped but deliberately NOT banded — intake is not
+   something the surfaces offer — so a row in one of those stages is off the
+   board; it still shows on needs-you when gated. The backlog (:ready) and the archive (:done) live in Notion and are
+   never emitted by grouped-by-stage.
 
-   These are nido's two jobs. The backlog (:ready) and the archive (:done) live
-   in Notion and are never emitted by grouped-by-stage, so they are not bands
-   here. :dismissed IS a band — the nido-side veto has no Notion archive to
-   fall into, so hiding it would be the silent loss this guarantee exists to
-   prevent. It trails :intake exactly as :winding-down trails :active. Their
-   union is every row `grouped-rows` emits — a workstream is always reachable
-   from at least one tab, which is the guarantee that nothing can be hidden by
-   default (a source filter defaulting to :notion once hid every :in-progress
-   row). Exactly one, with one transient exception: a dismissed workstream still
-   holding a live session is BOTH :dismissed (projected from its row) and
-   :winding-down (computed from raw records), until the daemon's sweep tears the
-   session down. Double-reachable is the harmless direction — both bands' actions
-   are sane — and it self-heals. An unrecognized `tab` reads as :intake.
-
-   :active's trailing band is :winding-down — finished workstreams still holding
-   live resources, whether nido settled them or Notion did (bring-down! is their
-   one action)."
-  [tab grouped]
-  (->> (case tab
-         :active [[:shipping     (:shipping grouped)]
-                  [:in-progress  (:in-progress grouped)]
-                  [:winding-down (:winding-down grouped)]]
-         [[:triage   (concat (-> grouped :triage :in-flight)
-                             (-> grouped :triage :queued))]
-          [:incoming (:incoming grouped)]
-          [:dismissed (:dismissed grouped)]])
-       (into [] (keep (fn [[stage rows]] (when (seq rows) [stage (vec rows)]))))))
+   Every row `grouped-rows` emits outside those three stages is on exactly one
+   band — the guarantee that nothing nido drives can be hidden (a source filter
+   defaulting to :notion once hid every :in-progress row)."
+  [grouped]
+  (into []
+        (keep (fn [[stage rows]] (when (seq rows) [stage (vec rows)])))
+        [[:shipping     (:shipping grouped)]
+         [:in-progress  (:in-progress grouped)]
+         [:winding-down (:winding-down grouped)]]))
 
 (def ^:private workstream-less-actions
   "Gate actions that are meaningful on a bare watched-view row — one with no
@@ -643,9 +627,9 @@
    :done, which is where a Notion-driven workstream lands the moment its ticket
    reaches a terminal status — Review included. That projection is stateless by
    design (it self-heals if the ticket bounces back), so it never touches the
-   record, and keying this band on :closed alone would drop such a row off BOTH
-   tabs while its session still held ports. That is precisely the silent loss
-   tab-bands' reachability guarantee exists to prevent. Omit `rows` (or pass nil)
+   record, and keying this band on :closed alone would drop such a row off the
+   board while its session still held ports. That is precisely the silent loss
+   board-bands' reachability guarantee exists to prevent. Omit `rows` (or pass nil)
    for the :closed-only projection.
 
    A row surfaced by the projection has no :closed record to name an outcome, so
@@ -2144,8 +2128,8 @@
 
    No production caller today (views/facet-rows, its last one, is gone with the
    source/facet chips) — but it is load-bearing as a test oracle: it is the
-   independent traversal work_test.clj's tab-bands-union-covers-every-row-exactly-once
-   cross-checks tab-bands against, so a one-sided edit to either breaks that test.
+   independent traversal work_test.clj's board-bands-covers-every-driven-row-exactly-once
+   cross-checks board-bands against, so a one-sided edit to either breaks that test.
    Do not delete as 'unused'."
   [grouped]
   (concat (:incoming grouped)
@@ -2553,13 +2537,10 @@
      :winddown-pending (#{\"project/ws-id\"} optimistic bridge keys for pending bring-down!s).
    Selection detail is attached by the caller (needs work/workstream + dev-states).
 
-   NO row filtering: every workstream the model emits is reachable from the
-   surface. The board's tabs select BANDS, not rows — filtering here is what hid
-   every :in-progress row behind the source chip's `source=notion` default.
-   `:tab` is passed through verbatim for the surface to render; defaulting it is
-   view-state's job, not the core's (borrowing that default is what pulled a UI
-   require into this namespace)."
-  [{:keys [scope tab] :or {scope "all"}}
+   NO row filtering: the board selects BANDS (board-bands), never rows —
+   filtering here is what hid every :in-progress row behind the source chip's
+   `source=notion` default."
+  [{:keys [scope] :or {scope "all"}}
    {:keys [groups gates pending winddown-pending]
     :or {groups [] gates [] pending #{} winddown-pending #{}}}]
   (let [scoped     (->> (scope-keep scope groups)
@@ -2575,7 +2556,6 @@
                                              (or (boolean (:working? g))
                                                  (contains? pending (str (:project g) "/" (:ws-id g))))))))]
     {:scope       scope
-     :tab         tab
      :groups      scoped
      :gates       kept-gates
      :needs-count (count kept-gates)}))

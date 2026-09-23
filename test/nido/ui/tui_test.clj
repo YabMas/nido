@@ -58,7 +58,7 @@
   ;; The unified spine board surfaces the work verbs in one footer (no per-source
   ;; split). Coordinator levers live behind the `s` ops overlay, not inline here.
   (let [f (#'tui/footer {:screen :board :origin :all})]
-    (is (re-find #"\[p\]romote" f) "board footer surfaces promote")
+    (is (not (re-find #"\[p\]romote|\[x\] dismiss" f)) "no intake gestures on the board footer")
     (is (re-find #"\[d\]one" f) "board footer surfaces done")
     (is (re-find #"\[n\]ew" f) "board footer surfaces new")
     (is (re-find #"\[s\] ops" f) "board footer points at the ops overlay")
@@ -129,45 +129,41 @@
           ids (keep #(get-in % [:data :ws-id]) scratch-only)]
       (is (= ["p1"] (vec ids)) "origin filter keeps only scratch rows"))))
 
-(deftest board-folds-intake-queues-by-default
-  ;; The intake queues — Queue (inbox/Slack) and Triage·queued — start collapsed:
-  ;; header + count only, no selectable item rows. Engaged work stays expanded.
+(deftest board-rows-leaves-intake-off-the-board
+  ;; Queue and the two Triage bands are not on the board: only driven work is.
   (with-redefs [nido.coordinator.work/grouped
                 (fn [_ _]
-                  {:incoming  [{:ws-id "s1" :origin :slack :label "can you link it"
-                             :needs-you true :engagement :idle}]
-                   :triage {:in-flight [{:ws-id "f1" :origin :slack :label "teacher report"
-                                         :needs-you true :engagement :parked}]
-                            :queued    [{:ws-id "q1" :origin :notion :label "BR-1 · a"
-                                         :needs-you true :engagement :idle}
-                                        {:ws-id "q2" :origin :notion :label "BR-2 · b"
-                                         :needs-you true :engagement :idle}]}})
+                  {:incoming    [{:ws-id "s1" :origin :slack :label "can you link it"
+                                  :needs-you true :engagement :idle}]
+                   :triage      {:in-flight [{:ws-id "f1" :origin :slack :label "teacher report"
+                                              :needs-you true :engagement :parked}]
+                                 :queued    [{:ws-id "q1" :origin :notion :label "BR-1 · a"
+                                              :needs-you true :engagement :idle}]}
+                   :in-progress [{:ws-id "p1" :origin :scratch :label "spike"
+                                  :needs-you false :engagement :active}]})
                 nido.coordinator.work/live-session-names (constantly #{})]
     (let [rows   (#'tui/board-rows "brian" :all)
           ids    (set (keep #(get-in % [:data :ws-id]) rows))
           titles (map :title rows)]
-      (is (not (contains? ids "s1")) "inbox item hidden while Queue is folded")
-      (is (not (contains? ids "q1")) "queued item hidden while Triage·queued is folded")
-      (is (contains? ids "f1") "in-flight item stays visible (expanded)")
-      (is (some #(re-find #"▸ Queue \(1\)" %) titles) "folded Queue shows ▸ + count")
-      (is (some #(re-find #"▸ Triage · queued \(2\)" %) titles) "folded queued shows ▸ + count")
-      (is (some #(re-find #"▾ Triage · in flight \(1\)" %) titles) "expanded band shows ▾")
-      (is (some #(= {:nido.ui.tui/band :triage-queued} (:data %)) rows)
-          "the queued header carries its band key so the fold toggle can flip it"))))
+      (is (= #{"p1"} ids))
+      (is (not-any? #(re-find #"Queue|Triage" %) titles) "no intake band headers"))))
 
-(deftest board-rows-expands-a-band-when-not-collapsed
-  ;; With nothing in the collapsed set, Triage·queued renders its items as real,
-  ;; selectable workstream rows — the path that makes them promotable.
+(deftest board-rows-folds-a-collapsed-band
+  ;; A band in the collapsed set renders its header + count and no selectable rows;
+  ;; out of it, the same band renders its items.
   (with-redefs [nido.coordinator.work/grouped
                 (fn [_ _]
-                  {:triage {:in-flight []
-                            :queued [{:ws-id "q1" :origin :notion :label "BR-1 · a"
-                                      :needs-you true :engagement :idle}]}})
+                  {:in-progress [{:ws-id "p1" :origin :scratch :label "spike"
+                                  :needs-you false :engagement :active}]})
                 nido.coordinator.work/live-session-names (constantly #{})]
-    (let [rows (#'tui/board-rows "brian" :all #{})
-          ids  (keep #(get-in % [:data :ws-id]) rows)]
-      (is (= ["q1"] (vec ids)) "an expanded Triage·queued renders its item as a selectable row")
-      (is (some #(re-find #"▾ Triage · queued \(1\)" (:title %)) rows) "and marks the band expanded"))))
+    (let [folded (#'tui/board-rows "brian" :all #{:in-progress})
+          open   (#'tui/board-rows "brian" :all #{})]
+      (is (empty? (keep #(get-in % [:data :ws-id]) folded)))
+      (is (some #(re-find #"▸ In progress \(1\)" (:title %)) folded))
+      (is (some #(= {:nido.ui.tui/band :in-progress} (:data %)) folded)
+          "the header carries its band key so the fold toggle can flip it")
+      (is (= ["p1"] (vec (keep #(get-in % [:data :ws-id]) open))))
+      (is (some #(re-find #"▾ In progress \(1\)" (:title %)) open)))))
 
 (defn- board-state [origin]
   {:screen :board :origin origin :project "brian" :list (#'tui/list-component [])})
@@ -228,13 +224,16 @@
       (is (= "run-x" (::opened s')) "::rehydrated chains into enter-session once the home is back")
       (is (nil? (:busy s')) "and clears the busy spinner"))))
 
-(deftest board-promote-uses-default-target
-  (with-redefs [nido.ui.tui/selected-workstream (fn [_] {:ws-id "w1" :promote-id "BR-1"})
-                nido.coordinator.work/default-target (fn [_ action] (is (= :promote action)) :in-progress)
-                nido.coordinator.work/set-stage! (fn [_ id target] {:decision :promote :id id :target target})
-                nido.ui.tui/current-rows (constantly [])]
-    (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "p"))]
-      (is (re-find #"promoted|in progress" (:status s'))))))
+(deftest board-offers-no-intake-gestures
+  ;; p (promote) and x (dismiss) were intake gestures; the board no longer binds them.
+  (let [calls (atom [])]
+    (with-redefs [nido.ui.tui/selected-workstream (fn [_] {:ws-id "w1" :br-id "BR-1"})
+                  nido.coordinator.work/set-stage! (fn [& args] (swap! calls conj args) {:decision :promote})
+                  nido.coordinator.work/dismiss!   (fn [& args] (swap! calls conj args) {:decision :dismissed})
+                  nido.ui.tui/current-rows (constantly [])]
+      (doseq [k ["p" "x"]]
+        (#'tui/update-board (board-state :all) (msg/key-press k)))
+      (is (= [] @calls)))))
 
 (deftest board-done-sets-stage-done
   (let [calls (atom [])]
@@ -255,24 +254,6 @@
     (is (= :bring-down (get-in state' [:busy :verb])))
     (is (= "leftover" (get-in state' [:busy :subject])))))
 
-(deftest board-x-dismisses-selected-workstream
-  (let [calls (atom [])]
-    (with-redefs [nido.ui.tui/selected-workstream (fn [_] {:ws-id "w1" :br-id "BR-1"})
-                  nido.coordinator.work/dismiss! (fn [p id] (swap! calls conj [p id]) {:decision :dismissed})
-                  nido.ui.tui/current-rows (constantly [])]
-      (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "x"))]
-        (is (= [["brian" "w1"]] @calls) "x → work/dismiss!")
-        (is (re-find #"dismissed" (:status s')))))))
-
-(deftest board-x-noop-on-notion-row
-  (let [calls (atom [])]
-    (with-redefs [nido.ui.tui/selected-workstream (fn [_] {:ws-id "w1" :br-id "BR-1" :origin :notion})
-                  nido.coordinator.work/dismiss! (fn [p id] (swap! calls conj [p id]) {:decision :dismissed})
-                  nido.ui.tui/current-rows (constantly [])]
-      (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "x"))]
-        (is (= [] @calls) "x does NOT dismiss a Notion row — Notion owns it")
-        (is (re-find #"Notion" (:status s')) "status explains why")))))
-
 (deftest board-n-opens-create-session
   (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "n"))]
     (is (= :create-session (:modal s')) "n opens the new-workstream modal"))
@@ -285,22 +266,22 @@
       (is (= :notion (:origin s'))))))
 
 (deftest space-toggles-the-band-under-the-cursor
-  ;; Cursor on a folded Triage·queued header → space unfolds it (drops it from the
+  ;; Cursor on a folded In progress header → space unfolds it (drops it from the
   ;; collapsed set); space again re-folds. A no-op when the cursor isn't on a band.
-  (with-redefs [nido.ui.tui/selected-data (fn [_] {:nido.ui.tui/band :triage-queued})
+  (with-redefs [nido.ui.tui/selected-data (fn [_] {:nido.ui.tui/band :in-progress})
                 nido.ui.tui/current-rows (constantly [])]
-    (let [state  (assoc (board-state :all) :collapsed #{:incoming :triage-queued})
+    (let [state  (assoc (board-state :all) :collapsed #{:shipping :in-progress})
           [s1 _] (#'tui/update-board state (msg/key-press " "))]
-      (is (= #{:incoming} (:collapsed s1)) "space unfolds the band under the cursor")
+      (is (= #{:shipping} (:collapsed s1)) "space unfolds the band under the cursor")
       (let [[s2 _] (#'tui/update-board s1 (msg/key-press " "))]
-        (is (= #{:incoming :triage-queued} (:collapsed s2)) "space again re-folds it")))))
+        (is (= #{:shipping :in-progress} (:collapsed s2)) "space again re-folds it")))))
 
 (deftest space-on-a-non-band-row-is-a-noop
   (with-redefs [nido.ui.tui/selected-data (fn [_] {:ws-id "w1"})
                 nido.ui.tui/current-rows (constantly [])]
-    (let [state  (assoc (board-state :all) :collapsed #{:triage-queued})
+    (let [state  (assoc (board-state :all) :collapsed #{:in-progress})
           [s' _] (#'tui/update-board state (msg/key-press " "))]
-      (is (= #{:triage-queued} (:collapsed s')) "space leaves the fold set untouched on a workstream row"))))
+      (is (= #{:in-progress} (:collapsed s')) "space leaves the fold set untouched on a workstream row"))))
 
 (deftest board-footer-surfaces-the-fold-toggle
   (is (re-find #"fold" (#'tui/footer {:screen :board :origin :all}))
@@ -475,18 +456,6 @@
     (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press k))]
       (is (nil? (:modal s')) (str "board key " k " no longer opens a coordinator modal")))))
 
-(deftest board-rows-shows-queue-band
-  (with-redefs [nido.coordinator.work/grouped
-                (constantly {:incoming [{:origin :slack :stage :incoming :needs-you true
-                                         :label "the app crashed" :engagement :idle
-                                         :last-activity "2026-06-02T00:00:00Z"}]
-                             :ready [] :in-progress [] :triage {:in-flight [] :queued []}})
-                nido.coordinator.work/live-session-names (constantly #{})]
-    (let [titles (map :title (#'nido.ui.tui/board-rows :brian :all))]
-      (is (some #(str/includes? % "Queue (1)") titles))
-      (is (str/includes? (first titles) "Queue")
-          "Queue band renders first (inbox-first spec requirement)"))))
-
 (deftest board-rows-include-winding-down-band
   ;; A closed workstream still holding live sessions renders as a trailing
   ;; "Winding down" band — the one place bring-down! applies.
@@ -522,9 +491,9 @@
       ;; redef the liveness oracle so the board doesn't hit lifecycle;
       ;; pass an EMPTY collapsed set so no band is folded out of the row list.
       (with-redefs [nido.coordinator.work/live-session-names (constantly #{})]
-        (workstream/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-1"}]
+        (workstream/create! :brian {:stage :in-progress :external-refs [{:adapter :notion :id "BR-1"}]
                                     :facets {:app-domain ["Teacher"]}})
-        (workstream/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-2"}]
+        (workstream/create! :brian {:stage :in-progress :external-refs [{:adapter :notion :id "BR-2"}]
                                     :facets {:app-domain ["Student"]}})
         (let [n-ws (fn [ff] (->> (#'tui/board-rows :brian :all #{} ff)
                                  (keep :data) (filter map?) (keep :ws-id) count))]
@@ -554,10 +523,10 @@
     (fn []
       (with-redefs [nido.coordinator.work/live-session-names (constantly #{})]
         ;; Slack workstream: no facets
-        (workstream/create! :brian {:stage :triaging
+        (workstream/create! :brian {:stage :in-progress
                                     :external-refs [{:adapter :slack-message :id "slack-C-1.0"}]})
         ;; Notion workstream: has facets
-        (workstream/create! :brian {:stage :triaging
+        (workstream/create! :brian {:stage :in-progress
                                     :external-refs [{:adapter :notion :id "BR-1"}]
                                     :facets {:app-domain ["Teacher"]}})
         (let [count-ws (fn [origin ff]

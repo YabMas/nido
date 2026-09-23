@@ -149,7 +149,6 @@
   [active screen]
   {:active      active
    :scope       (:scope screen)
-   :tab         (:tab screen)
    :needs-count (:needs-count screen)
    :daemon      (read-rail-daemon)
    :projects    (mapv (comp name key) (project/list-projects))})
