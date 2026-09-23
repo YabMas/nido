@@ -2807,10 +2807,18 @@
                                  {:report-format :design-decision :seq 7
                                   :awaiting :answer-blocker :grantable? true}))
       "a blocker is a human stage too, and the question it asks is not this one")
+  (doseq [fmt [:baseline-review :design-verdict]]
+    (is (= [{:id :approve :label "Approve" :kind :mutation :style :primary :seq 7}]
+           (work/gate-actions :in-progress false nil
+                              {:report-format fmt :seq 7
+                               :awaiting :approve-design :grantable? true}))
+        (str "a " (name fmt) " appended after the decision withdraws nothing — the
+              grant is still owed, and the button carries the entry it was
+              rendered at")))
   (is (empty? (work/gate-actions :in-progress false nil
                                  {:report-format :baseline-review :seq 7
-                                  :awaiting :approve-design :grantable? true}))
-      "and the report has to be the decision the grant is about"))
+                                  :awaiting :approve-design :grantable? false}))
+      "while a design no longer grantable is offered nothing"))
 
 (deftest a-workstream-awaiting-a-person-is-a-gate
   (with-tmp

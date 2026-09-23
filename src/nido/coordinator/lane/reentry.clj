@@ -33,22 +33,16 @@
    [nido.coordinator.record.workstream :as ws]))
 
 (def ^:private stages-order
-  "Arc stage order, for picking the LOWEST owed one. A copy of the spine's order
-   rather than a require of it: `pipeline` depends on this namespace, so reaching
-   back for `workstream-stages` would make the two mutually dependent — which is
-   the cycle Parnas warns about, where neither module hides anything from the
-   other.
-
-   The copy is the workstream's spine and not the unit's, and that is the half
-   that has to hold. `arc` indexes staleness by the spine it reads with, so a
-   stage named here and absent there is one a re-entry marks nothing at: the
-   clamp goes on working in `place` while the picture stops showing it."
+  "Stage order, for picking the LOWEST owed one. Its own list rather than
+   `pipeline`'s spine: `pipeline` depends on this namespace, and the rungs a
+   re-entry can name — :approval, and the landing stages — are ones the unit's
+   spine deliberately leaves out. What reaches the arc is the position this
+   clamps, never this vocabulary."
   [:intent :baseline :design :approval :implementation :publication :shipping])
 
 (def stages
   "The arc stages re-entry can name, innermost first.
 
-   A subset of `pipeline/workstream-stages` and deliberately not all of it.
    Nothing here sends a workstream back to :intent — that is established once and only an
    explicit retraction unseats it, which `place` already reports as its own
    position. :baseline is named for one reason only: the goal the newest survey

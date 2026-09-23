@@ -332,9 +332,17 @@
          ;; exactly where it matters — a design told to proceed and later sent
          ;; back leaves a report whose recommendation is stale about what may now
          ;; be granted.
-         approving? (and (= :design-decision report-format)
-                         grantable?
-                         (or parked? (= :approve-design awaiting)))
+         ;;
+         ;; Owed is enough. When the position says a person owes the grant the
+         ;; button is offered whatever the ledger appended since the decision — a
+         ;; verdict, a baseline re-reviewed — because none of those is the
+         ;; decision being withdrawn; `grantable?` is what would say so. The
+         ;; report format is asked only of a parked agent's gate, where the
+         ;; position may be past the decision and the decision on screen is
+         ;; what a grant would answer.
+         approving? (and grantable?
+                         (or (= :approve-design awaiting)
+                             (and parked? (= :design-decision report-format))))
          ;; The other question only a person can answer, and it is asked off the
          ;; POSITION alone rather than off the report the pane happens to be
          ;; showing. `approving?` also reads a report format because a grant is
@@ -1045,6 +1053,9 @@
                              ;; the one it named.
                              :premise (:seq (:premise st))
                              :decided? (boolean (:decided? st))
+                             ;; A grant, or a round that found nobody owed one —
+                             ;; either says it may be built.
+                             :cleared? (boolean (:cleared? st))
                              :blocked (:blocked st)
                              :record design}))))
 
@@ -1116,13 +1127,9 @@
         ;; :report is: a second read is a second moment, and an arc built from a
         ;; later ledger than the index below it would disagree with the rows a
         ;; reader is looking at.
-        ;; :closed? and :re-entry are passed rather than re-derived: both are
-        ;; facts pipeline/place already read, from the same records, so the
-        ;; heading and the arc under it cannot disagree about whether this is over
-        ;; or about which stages the ledger no longer stands behind.
-        :arc          (pipeline/arc entries
-                                    {:closed?  (some? (:closed w))
-                                     :re-entry (:stage (:re-entry position))})
+        ;; The stage the work is in comes off the position read above, so the
+        ;; heading and the arc under it are one reading and cannot disagree.
+        :arc          (pipeline/arc entries {:at (:stage position)})
         :holds        (holds project ws-id)
         :entries      index
         :selected-seq sel
@@ -2568,15 +2575,10 @@
 ;; rather than behind a require of the lane that happens to implement it today.
 
 (def arc-stages
-  "The stages a workstream travels, in order. The plane naming its own spine — a surface deciding
-   whether a key is a stage should ask the work plane, not the lane that happens to compute the
-   arc today.
-
-   THE WORKSTREAM's spine, which is what every surface above here is showing: a pane renders one
-   workstream and its landings, so :publication and :shipping are stages it may expand. The unit
-   arc is a second reading of the same ledger and has no surface yet; when one arrives it asks
-   `pipeline/arc` for it by name rather than reinterpreting this."
-  pipeline/workstream-stages)
+  "The stages a unit of work travels, in order. The plane naming its own spine — a surface
+   deciding whether a key is a stage should ask the work plane, not the lane that happens to
+   compute the arc today."
+  pipeline/unit-stages)
 
 (def pickup-trigger
   "The trigger name a pickup enqueues under. Surfaces need it to ask whether a pickup would

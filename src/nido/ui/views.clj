@@ -1945,12 +1945,12 @@
                 (cond
                   (:blocked design)
                   [:span.no (or (:detail (:blocked design)) "does not stand")]
-                  (:decided? design)
-                  [:span.ok (str "✓ approved"
+                  (:cleared? design)
+                  [:span.ok (str (if (:decided? design) "✓ approved" "✓ cleared — no approval owed")
                                  (when-let [p (:premise design)]
                                    (str " · on the baseline at entry " p)))]
                   :else
-                  [:span.no "not yet approved"]))
+                  [:span.no "not yet cleared to build"]))
      [:div.hold.empty [:div.hh [:span.hk "design"]] [:div.hb "nothing committed to"]])])
 
 (defn- ledger-index
@@ -2006,10 +2006,7 @@
   {:intent         "Intent"
    :baseline       "Baseline"
    :design         "Design"
-   :approval       "Approval"
-   :implementation "Implementation"
-   :publication    "Publication"
-   :shipping       "Shipping"})
+   :implementation "Implementation"})
 
 (def ^:private arc-glyph
   "Stage state -> its mark. Five marks because there are five states, and no two
@@ -2029,7 +2026,7 @@
     ;; happened to it instead, because the records are still there and counting
     ;; them is exactly the reading that misleads.
     (= :stale state) (str entries " record" (when (not= 1 entries) "s")
-                          " · superseded")
+                          " · no longer stands")
     (pos? entries) (str entries " record" (when (not= 1 entries) "s"))
     (= :skipped state) "not written"
     :else nil))

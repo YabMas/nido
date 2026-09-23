@@ -1242,7 +1242,7 @@
                     :record {:goal "drive a workstream to a draft PR"}}
            :baseline {:seq 8 :revisions 4 :verified? true
                     :record {:area "how position is represented"}}
-           :design {:seq 10 :revisions 2 :premise 8 :decided? true
+           :design {:seq 10 :revisions 2 :premise 8 :decided? true :cleared? true
                     :record {:summary "one projection, one driver"}}}
    :entries [] :sessions [] :on-latest? true})
 
@@ -1344,17 +1344,14 @@
         "collapsed, because a record's line breaks come from the EDN a human typed")))
 
 (def ^:private an-arc
-  ;; The workstream's spine, which is the one a pane draws: intent through
-  ;; shipping, each stage's own review folded into the stage it reviews.
+  ;; The unit's spine, which is the one a pane draws: intent through
+  ;; implementation, each stage's own review folded into the stage it reviews.
   {:stages [{:stage :intent  :state :done    :entries 1  :visits 1 :last-seq 1 :seqs [1]}
             {:stage :baseline :state :done   :entries 4  :visits 2 :last-seq 8
              :seqs [2 3 7 8]}
             {:stage :design  :state :current :entries 2  :visits 1 :last-seq 10
              :seqs [9 10]}
-            {:stage :approval :state :skipped :entries 0 :visits 0}
-            {:stage :implementation :state :ahead :entries 0 :visits 0}
-            {:stage :publication :state :ahead :entries 0 :visits 0}
-            {:stage :shipping :state :ahead  :entries 0  :visits 0}]
+            {:stage :implementation :state :ahead :entries 0 :visits 0}]
    :excursions [{:stage :halt :entries 2 :last-seq 6 :seqs [5 6]}]})
 
 (deftest the-arc-leads-the-pane-and-the-log-sits-under-history
@@ -1370,9 +1367,15 @@
   ;; stages that fired would draw a shorter arc for every workstream and make the
   ;; shape unreadable across two of them.
   (let [html (views/workstream-pane (assoc a-pane :arc an-arc) {})]
-    (doseq [s ["Intent" "Baseline" "Design" "Approval" "Implementation"
-               "Publication" "Shipping"]]
+    (doseq [s ["Intent" "Baseline" "Design" "Implementation"]]
       (is (str/includes? html s) (str s " has a row")))))
+
+(deftest a-design-cleared-without-a-person-says-no-approval-was-owed
+  (let [cleared (assoc-in a-pane [:holds :design :decided?] false)]
+    (is (str/includes? (views/workstream-pane cleared {}) "no approval owed"))
+    (is (str/includes? (views/workstream-pane
+                        (assoc-in cleared [:holds :design :cleared?] false) {})
+                       "not yet cleared to build"))))
 
 (deftest a-revisited-stage-says-so-and-a-once-through-stage-does-not
   ;; The count is the arc's reason to exist. Printing it on every row would bury
@@ -1389,10 +1392,24 @@
         "one with none does not — the click would promise a section that opens empty")))
 
 (deftest a-stage-the-work-went-past-reads-differently-from-one-not-reached
-  (let [html (views/workstream-pane (assoc a-pane :arc an-arc) {})]
+  (let [html (views/workstream-pane
+              (assoc-in a-pane [:arc] (assoc-in an-arc [:stages 1]
+                                                {:stage :baseline :state :skipped
+                                                 :entries 0 :visits 0}))
+              {})]
     (is (str/includes? html "arc-row skipped"))
     (is (str/includes? html "not written"))
     (is (str/includes? html "arc-row ahead"))))
+
+(deftest a-stage-that-no-longer-stands-says-so
+  (let [html (views/workstream-pane
+              (assoc a-pane :arc (assoc-in an-arc [:stages 3]
+                                           {:stage :implementation :state :stale
+                                            :entries 2 :visits 1 :last-seq 12
+                                            :seqs [11 12]}))
+              {})]
+    (is (str/includes? html "arc-row stale"))
+    (is (str/includes? html "2 records · no longer stands"))))
 
 (deftest an-excursion-is-reported-beside-the-arc-not-in-it
   (let [html (views/workstream-pane (assoc a-pane :arc an-arc) {})]

@@ -178,9 +178,12 @@
    :design          :design
    :design-decision :design
    :design-verdict  :design
-   :design-approved :approval
-   ;; The same rung passed without a person: a round found nobody was owed.
-   :design-cleared  :approval
+   ;; A grant is part of the design's standing, not a rung of its own: most
+   ;; designs clear without one, and a person is asked only when the design's
+   ;; declarations owe them — a halt on the design, answered here.
+   :design-approved :design
+   ;; The same answer given without a person: a round found nobody was owed.
+   :design-cleared  :design
    :retraction      :retraction
    :blocker         :halt
    :blocker-answered :halt
@@ -228,159 +231,116 @@
   [kind]
   (get stage-of-kind kind))
 
-(def workstream-stages
-  "The stages a WORKSTREAM travels, in the order it travels them.
-
-   End to end, and unchanged by the unit arc beside it. A workstream is what holds
-   the landings — several of them, once `reopen!` has cleared :closed — so a pane
-   reading one shows :publication and :shipping as stage rows with a state each,
-   and `reentry` goes on clamping an outrun landing here: a picture showing a
-   landing behind a design it no longer stands on is stale whoever owns the
-   landing.
-
-   It must name every stage `reentry/stages` can, and that is a load-bearing
-   correspondence rather than a tidiness. `arc` builds its staleness index from
-   the spine it is reading with, so a stage re-entry can name and the spine cannot
-   makes NOTHING stale — the clamp survives in `place` and silently leaves the
-   picture alone, which is the one failure a reader cannot see."
-  [:intent :baseline :design :approval :implementation :publication :shipping])
-
 (def unit-stages
-  "The stages ONE UNIT OF WORK travels, from the goal to the change that serves it.
+  "The stages ONE UNIT OF WORK travels, from the goal to the change that serves it
+   — the spine the pane draws.
 
-   The same correspondence read to a different end, and that is the whole of the
-   distinction: `stage-of-kind` says which stage a record belongs to, and a spine
-   says which of those stages are its reader's business. A unit ends at the
-   implementation, each stage's own review folded into the stage it reviews,
-   because a LANDING is not one unit's — one :pr-opened and one :merged can carry
-   several units — so :publication and :shipping lie off this spine.
+   A unit ends at the implementation, each stage's own review folded into the
+   stage it reviews, because a LANDING is not one unit's — one :pr-opened and one
+   :merged can carry several units — so :publication and :shipping lie off this
+   spine. Approval is not on it either: a grant is owed only when a design's
+   declarations say a person must give one, so it is a halt on the design rather
+   than a rung every unit climbs, and its records fold into :design.
 
    What ARRIVES before a unit still reads at :intent: a ticket or a triage report
-   is the workstream's record and `unit-of` says so, but the stage it belongs to
-   is the one it produced, and there is no second place to put it until something
-   renders a unit on its own. A :triage stage of the workstream's own is what
-   would separate them, and nothing needs it yet.
+   is the workstream's record, but the stage it belongs to is the one it produced.
 
-   Nothing renders this yet; `arc` takes it and the tests read it. The pane that
-   shows a workstream one unit at a time is a later phase, and until it exists the
-   unit reading is a vocabulary with a test for a reader rather than a surface.
+   No list of what is off the spine: off is everything the spine does not name.
+   That is why this is a vector rather than the key set of `stage-of-kind` — a
+   halt is something that happens TO a unit, not a place it got to, and a line
+   that put it in sequence would say a blocked unit had advanced to blocked."
+  [:intent :baseline :design :implementation])
 
-   No list of what is off a spine, for either spine: off is everything the spine
-   does not name. That is why these are vectors rather than the key set of
-   `stage-of-kind` — a halt is something that happens TO a unit, not a place it
-   got to, and a line that put it in sequence would say a blocked unit had
-   advanced to blocked."
-  [:intent :baseline :design :approval :implementation])
+(def ^:private stage-of-next
+  "The spine stage each next action is work IN — where the unit is, read off what
+   it is owed rather than off what it last wrote.
+
+   A next action absent here has no spine stage: :publish-draft-pr is past the
+   unit, and :answer-blocker is a halt, which `of` sees through to the stage
+   underneath it."
+  {:establish-intent         :intent
+   :write-baseline           :baseline
+   :verify-baseline          :baseline
+   :rebaseline               :baseline
+   :design                   :design
+   :decide-design            :design
+   :approve-design           :design
+   :clear-design             :design
+   :acknowledge-invalidation :design
+   :implement                :implementation
+   :review-implementation    :implementation
+   :address-findings         :implementation})
 
 (defn ^{:malli/schema [:=> [:cat :any [:? :map]] :any]}
   arc
-  "One workstream's ledger read as the arc it travelled:
+  "One workstream's ledger read as the unit's arc:
 
      {:stages     [{:stage :entries :visits :state (:last-seq :last-at :seqs)} …]
       :excursions [{:stage :entries :last-seq :last-at :seqs} …]}
 
    Pure over the entry index the ledger already keeps — the same `{:kind :seq
-   :at}` maps the pane lists one per row — so it reads nothing of its own and
-   cannot come to disagree with the index it sits above. Entries of a kind this
-   vocabulary does not place are dropped rather than bucketed somewhere.
+   :at}` maps the pane lists one per row. Entries of a kind this vocabulary does
+   not place are dropped; entries whose stage `unit-stages` does not name — a
+   landing, a halt, an analysis — fall to `:excursions`.
 
-   `:stages` is WHICH SPINE to read the ledger along, and it is the one option
-   that changes what the answer is about rather than what it says. The default is
-   `workstream-stages`, which is what a pane over a workstream wants. Pass
-   `unit-stages` and the same entries read as one unit's arc: the stages it does
-   not name — a landing, a halt, an analysis — fall to `:excursions`, because off
-   the spine is defined as whatever the spine does not name rather than listed
-   separately. A spine that listed its own exclusions would have to be kept in
-   step with every other spine, and the first one to drift would report a stage
-   in neither place.
-
-   `:visits` is the field that earns this over a list. It counts how many times
-   the workstream ENTERED a stage, not how many records the stage holds, and it
-   is counted across the spine alone so that a halt in the middle of a design
-   does not read as having left design and come back. A design its decision round
-   sent back to the baseline shows two visits to baseline; nine designs and nine
-   decisions inside one uninterrupted stretch of design show one. Ordering by
-   sequence number cannot show either, and neither can anything shaped like a
-   progress bar, because both describe a walk that only goes forward.
+   `:at` is the spine stage the work is in NOW — the `:stage` of `of`'s answer —
+   and it is the whole of what decides the states. It is passed rather than read
+   off the records because the newest record is not where the work is: a verdict
+   appended after a review, or a baseline re-reviewed after a decision, would put
+   the marker on a stage the position has long left. nil means the work is past
+   the spine, or somewhere nothing on it describes.
 
    `:state` is what a stage cell renders:
 
-     :done     it holds records and is not where the trail ends
-     :current  the newest record carrying any stage belongs to it
-     :stale    it holds records the ledger no longer stands behind
-     :skipped  it holds no record and the trail is already past it
-     :ahead    it holds no record and the trail has not reached it
+     :done     below `:at`, holding records
+     :skipped  below `:at`, holding none — the work went past it without one
+     :current  `:at` itself
+     :stale    above `:at`, holding records: they happened, and the work has
+               come back beneath them, so they no longer stand
+     :ahead    above `:at`, holding none
 
-   :stale is the one a forward-only vocabulary could not say, and it is not
-   :skipped nor a variety of :done. The stage HAPPENED — it holds records, and
-   they are still in the ledger — but the thing they were made against has moved
-   under them, so a reader who sees ✓ against it is being told the work is behind
-   them when it is owed again. `re-entry` decides where that line falls; every
-   spine stage from there upward that holds records is stale.
+   :stale follows from the position rather than from a second derivation of what
+   moved: `place` reads a stage as passed only while a record of the current
+   design stands there, so a position below a stage that holds records says
+   exactly that those records stand for nothing now. Deriving it here from
+   anything else is how the heading and the arc under it came to disagree.
 
-   :skipped is neither a defect nor an error — a workstream can reach a draft PR
-   having never written an implementation-plan record — but it is a fact a reader
-   should see, and folding it into :ahead would claim a stage is still owed when
-   the work went past it. When the trail ends on an excursion no spine stage is
-   current, and nothing is skipped: what a blocked workstream was in the middle of
-   is a question the position answers, not one to guess at from a record order.
-
-   `closed?` is the one fact the arc cannot read off the ledger and cannot do
-   without. Closure lives on the workstream record, so a merged workstream whose
-   last entry was a design leaves the record trail ending mid-arc — and the arc
-   would then mark every later stage as one the work has not reached, on a
-   workstream that has finished. The pane showed exactly that: `Status — Merged`
-   above an arc claiming Shipping was still ahead. It is the same fact `place`
-   reads to answer :shipped, taken from the same place, so the two cannot come
-   apart."
+   `:visits` counts how many times the workstream ENTERED a stage, across the
+   spine alone so that a halt in the middle of a design does not read as having
+   left design and come back. A design its decision round sent back to the
+   baseline shows two visits to baseline."
   ([entries] (arc entries {}))
-  ([entries {:keys [closed? re-entry stages] :or {stages workstream-stages}}]
-  (let [staged  (keep (fn [e]
-                        (when-let [st (stage-of (:kind e))]
-                          (assoc e :stage st)))
-                      entries)
-        on-spine? (set stages)
-        spine   (filter #(on-spine? (:stage %)) staged)
-        current (:stage (last staged))
-        idx     (zipmap stages (range))
-        ;; Everything from the re-entry stage upward is behind what the ledger
-        ;; now stands on. nil re-entry — the ordinary case — makes this false
-        ;; everywhere and the four original states are exactly what they were.
-        stale?  (fn [st] (boolean (when-let [r (idx re-entry)]
-                                    (>= (idx st) r))))
-        ;; nil — never false — when the trail ends off the arc, so `past?` cannot
-        ;; report a stage as skipped on the strength of an excursion.
-        past?   (fn [st] (when-let [c (idx current)]
-                           (< (idx st) c)))
-        visits  (frequencies (map first (partition-by identity (map :stage spine))))
-        held    (group-by :stage staged)
-        facet   (fn [st es]
-                  (cond-> {:stage st :entries (count es) :visits (get visits st 0)}
-                    (seq es) (assoc :last-seq (:seq (last es))
-                                    :last-at  (:at (last es))
-                                    :seqs     (mapv :seq es))))]
-    {:stages (mapv (fn [st]
-                     (let [es (get held st)]
-                       (assoc (facet st es)
-                              ;; A closed workstream has no current stage and
-                              ;; nothing still ahead of it: it is over, whatever
-                              ;; the last record happened to be about.
-                              :state (cond
-                                       ;; A closed workstream is over, and
-                                       ;; staleness is a claim about work still
-                                       ;; owed — so closure wins, as it does for
-                                       ;; :current.
-                                       (and (seq es) (stale? st) (not closed?)) :stale
-                                       (seq es) (if (and (= st current) (not closed?))
-                                                  :current :done)
-                                       (or closed? (past? st))      :skipped
-                                       :else                        :ahead))))
-                   stages)
-     :excursions (->> (remove #(on-spine? (:stage %)) staged)
-                      (group-by :stage)
-                      (mapv (fn [[st es]] (facet st es)))
-                      (sort-by :last-seq)
-                      vec)})))
+  ([entries {:keys [at]}]
+   (let [staged    (keep (fn [e]
+                           (when-let [st (stage-of (:kind e))]
+                             (assoc e :stage st)))
+                         entries)
+         on-spine? (set unit-stages)
+         spine     (filter #(on-spine? (:stage %)) staged)
+         idx       (zipmap unit-stages (range))
+         here      (idx at)
+         visits    (frequencies (map first (partition-by identity (map :stage spine))))
+         held      (group-by :stage staged)
+         facet     (fn [st es]
+                     (cond-> {:stage st :entries (count es) :visits (get visits st 0)}
+                       (seq es) (assoc :last-seq (:seq (last es))
+                                       :last-at  (:at (last es))
+                                       :seqs     (mapv :seq es))))]
+     {:stages (mapv (fn [st]
+                      (let [es (get held st)
+                            i  (idx st)]
+                        (assoc (facet st es)
+                               :state (cond
+                                        (= i here)                  :current
+                                        (and here (> i here))       (if (seq es) :stale :ahead)
+                                        (seq es)                    :done
+                                        :else                       :skipped))))
+                    unit-stages)
+      :excursions (->> (remove #(on-spine? (:stage %)) staged)
+                       (group-by :stage)
+                       (mapv (fn [[st es]] (facet st es)))
+                       (sort-by :last-seq)
+                       vec)})))
 
 (defn- open-findings?
   "True when a findings round left items nobody has resolved.
@@ -921,8 +881,8 @@
   of
   "Where workstream `ws-id` is, and what should happen to it next.
 
-   Returns {:at <position> :next {:stage :mode (:from)} :intake <kind>
-            :read {…}} — or {:at :unplaceable :why …} when the ledger cannot be
+   Returns {:at <position> :next {:stage :mode (:from)} :stage <spine stage>
+            :intake <kind> :read {…}} — or {:at :unplaceable :why …} when the ledger cannot be
    read at all.
 
    `:read` names the sources this answer was derived from, which is the point:
@@ -946,7 +906,7 @@
           ;; the two most expensive things on this path, and the board runs this
           ;; once per rendered row.
           re     (reentry/of* w design st bst)
-          pos    (place {:closed?        (some? (:closed w))
+          facts  {:closed?        (some? (:closed w))
                          :findings-open? (open-findings? w)
                          :blocker-seq    (unanswered-blocker project ws-id w)
                          :retraction     (live-retraction project ws-id w)
@@ -964,15 +924,26 @@
                          :decided?       (design-decided? project ws-id)
                          ;; `baseline-verified?`'s answer, from the reading
                          ;; already in hand rather than a second closure.
-                         :verified?      (boolean (:verified? bst))})
-          kind   (intake-kind w ks)]
+                         :verified?      (boolean (:verified? bst))}
+          pos    (place facts)
+          kind   (intake-kind w ks)
+          next-of (fn [p]
+                    (if (and (= :design-decided p)
+                             (:decidable? st)
+                             (not (report/owes-a-person? design)))
+                      clearance
+                      (next-action p kind)))
+          nx     (next-of pos)]
       (cond->
        {:at     pos
-        :next   (if (and (= :design-decided pos)
-                         (:decidable? st)
-                         (not (report/owes-a-person? design)))
-                  clearance
-                  (next-action pos kind))
+        :next   nx
+        ;; The spine stage the work is IN, which the arc marks current. A halt
+        ;; is not one, so a blocked unit reads at the stage it halted in — the
+        ;; position the same facts place without the blocker.
+        :stage  (get stage-of-next
+                     (:stage (if (= :blocked pos)
+                               (next-of (place (dissoc facts :blocker-seq)))
+                               nx)))
         :intake kind
         ;; The re-entry point rides on the answer rather than only shaping it.
         ;; A reader shown a workstream clamped back to :design-approved has no
