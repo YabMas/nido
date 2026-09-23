@@ -65,7 +65,7 @@
 
   nido:session:up
   {:requires ([tasks.nido-session :as nido-session])
-   :doc "Bring a session up: :project <p> <session> — services start, prints session-home path"
+   :doc "Bring a session up: :project <p> <session> [:ws-id <existing workstream>] — services start, prints session-home path. :ws-id puts the session on that workstream (a fork child, say) instead of minting a one-off; refused before provisioning when it cannot join."
    :task (apply nido-session/up *command-line-args*)}
 
   nido:session:down
@@ -571,7 +571,7 @@
 
   nido:workstream:fork
   {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "Fork a unit into a child workstream, from a parent whose newest design stands. :project <p> (:ws-id <parent> | :ref <BR-####>) :goal <str> :done-when <edn vector of str> [:context <str>]. Prints the child's id; writes nothing on the parent."
+   :doc "Fork a unit into a child workstream, from a parent whose newest design stands. :project <p> (:ws-id <parent> | :ref <BR-####>) :goal <str> :done-when <edn vector of str> [:context <str>]. Prints the child's id; writes nothing on the parent. Work on the child from a session started with nido:session:up :ws-id <child>."
    :task (apply nido-workstream/fork-cmd *command-line-args*)}
 
   nido:workstream:merge

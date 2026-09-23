@@ -253,7 +253,8 @@
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   fork*
   "Fork a unit into a child workstream, from a parent whose newest design stands. Prints the
-   child's id; the parent's ledger is not written. A refusal says why and exits 1."
+   child's id on stdout, and on stderr the session:up that puts a session on it; the parent's
+   ledger is not written. A refusal says why and exits 1."
   [{:keys [project goal done-when context] :as opts}]
   (when (or (str/blank? (str goal)) (empty? done-when))
     (println "Missing :goal <str> or :done-when [\"...\"] — a child is a unit, and a unit is rooted in a goal")
@@ -265,7 +266,10 @@
                                                   (mapv str done-when)
                                                   [(str done-when)])}
                               context (assoc :context (str context))))]
-      (println (:id child)))
+      (println (:id child))
+      (binding [*out* *err*]
+        (println (str "Work on it from a session of its own: bb nido:session:up <name> :project "
+                      (name (keyword project)) " :ws-id " (:id child)))))
     (catch clojure.lang.ExceptionInfo e
       (if (= :fork (:refused (ex-data e)))
         (do (println "fork REFUSED ·" (ex-message e))

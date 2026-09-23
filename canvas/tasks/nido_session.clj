@@ -11,6 +11,9 @@
 
 (Module nido-session
   "Bb task entry points for the bundled session lifecycle. Every command"
+  (Operation exit!
+    "Redefable wrapper around System/exit, so tests capture the exit code."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
   (Operation budget-report
     "The lines shown before a session boots. Pure — takes the facts, returns"
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
@@ -21,7 +24,8 @@
     "Ask, defaulting to no. Any answer but an explicit yes leaves the fleet alone."
     {:signature [:=> [:catn] :any]})
   (Operation up
-    "Bring the named session up. Creates the worktree (if missing) + starts"
+    "Bring the named session up, on the workstream `:ws-id` names when given — refused before
+     anything is provisioned when it cannot join it."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation down
     "Stop the named session. Worktree and on-disk state are preserved."

@@ -785,6 +785,14 @@ and a baseline DERIVED from those two: the parent design laid over the parent
 baseline, by id. Verify that baseline with the ordinary round instead of
 surveying again. Nothing is written on the parent.
 
+The rounds find their workstream through the session they run in, and the
+session you forked from stays on the parent. Work the child from a session of
+its own:
+
+```bash
+bb nido:session:up <name> :project <p> :ws-id <child>
+```
+
 Design the child like any unit. A design states only what it changes: an id it
 leaves out is carried unchanged, and taking one out is said under
 `:model :removed`.

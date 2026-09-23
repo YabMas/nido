@@ -38,6 +38,13 @@
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as state]))
 
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  exit!
+  "Redefable wrapper around System/exit, so tests can capture the exit code without killing the
+   test JVM — the exit-test convention tasks.nido-ticket and tasks.nido-transcribe follow."
+  [code]
+  (System/exit code))
+
 (defn- require-project [opts]
   (or (some-> (:project opts) name)
       (throw (ex-info "Missing :project <name>"
@@ -170,25 +177,43 @@
    restart services. Kwargs like :base, :branch, :session-profile, :jvm-heap-max
    flow into `up!`.
 
+   `:ws-id <id>` puts the session on that existing workstream — how a forked
+   child gets a session — instead of on a minted one-off. A workstream the
+   session cannot join (missing, closed, or the name already another's) is
+   refused and exits 1 before anything is provisioned; otherwise the session
+   record is written first, so the name is claimed before the worktree exists.
+
    Reports what the live fleet already costs before starting anything, and asks
    first when this session is projected to push the machine past the budget.
    `:yes true` skips the question."
   [& args]
   (let [[pos opts] (task-args/split-args args)
         project (require-project opts)
-        session (require-session-name pos)]
+        session (require-session-name pos)
+        ws-id   (some-> (:ws-id opts) str)
+        opts    (dissoc opts :ws-id)
+        p       (keyword project)]
+    (when-let [why (and ws-id (scratch/joinable p session ws-id))]
+      (println (str "Refused — " session " cannot start on " ws-id ": "
+                    (case (:reason why)
+                      :no-such-workstream "no such workstream"
+                      :closed             "that workstream is closed"
+                      :name-held          (str "the name already belongs to workstream " (:holder why)))))
+      (exit! 1))
     (if-not (budget-ok? project session opts)
       ;; Declining is an ordinary outcome, not a failure — it prints one line
       ;; and stops, rather than throwing a task error at someone who said no.
       (println "Aborted — no session started.")
       (do
+        (when ws-id (scratch/birth! p session nil ws-id))
         (lifecycle/up! session opts)
         ;; Weight is read back AFTER up! — up! persists the resolved profile, so
         ;; the record describes what was really provisioned, not what was asked for.
-        (scratch/birth! (keyword project) session (lifecycle/session-weight session opts))
+        (scratch/birth! p session (lifecycle/session-weight session opts) ws-id)
         (let [home (state/session-home-dir project session)]
           (println)
-          (println (str "Session ready: " project "/" session))
+          (println (str "Session ready: " project "/" session
+                        (when ws-id (str " on workstream " ws-id))))
           (println (str "  cd " home))
           (println (str "  bb nido:session:enter :project " project " " session)))))))
 

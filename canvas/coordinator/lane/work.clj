@@ -111,8 +111,12 @@
      :delegates [resume-cwd]}))
 
 (Module lane-scratch
-  "One-off workstreams: the ones a person started by hand, for work that began from an idea
-   rather than a ticket.
+  "Which workstream a session a person started by hand belongs to: the one the start names, or
+   else a one-off minted for it — the home of work that began from an idea rather than a ticket.
+
+   Naming one is how a unit that has no ticket to spawn from, a forked child above all, gets a
+   session at all. It is also the only way a person chooses a session's workstream, and the choice
+   is made once: a session is never moved afterwards.
 
    Disposability is MARKED, not inferred. A one-off carries the `:scratch` stage `birth!` writes,
    and that marker is what says it may be discarded with its session. Ref-lessness used to stand
@@ -121,9 +125,19 @@
    the one that was always authored."
   (Operation scratch? "Whether a workstream is marked a one-off."
     {:signature [:=> [:catn [:w Workstream]] :boolean]})
-  (Operation birth! "Ensure a one-off workstream owns a named human session."
-    {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName] [:weight :keyword]] :any]
-     :delegates [workstream/create! workstream/list-ids]})
+  (Operation joinable
+    "Why a start naming this workstream may not join it — missing, closed, or its session name held
+     by another workstream — or nil when it may."
+    {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName] [:ws-id WorkstreamId]] [:maybe :map]]
+     :delegates [workstream/read-ws]})
+  (Operation birth!
+    "Ensure a workstream owns a named human session: the one named, or else whichever already holds
+     the name, or else a minted one-off. Given a workstream, it is called before the session is
+     provisioned, so the record claims the name before any worktree exists."
+    {:signature [:function
+                 [:=> [:catn [:project ProjectName] [:session-name SessionName] [:weight [:maybe :keyword]]] :any]
+                 [:=> [:catn [:project ProjectName] [:session-name SessionName] [:weight [:maybe :keyword]] [:ws-id [:maybe WorkstreamId]]] :any]]
+     :delegates [joinable workstream/create! workstream/list-ids]})
   (Operation reap!
     "Delete the one-off workstream owning a session — sparing every unmarked one, and every
      marked one that has since acquired an external ref. Two facts, not one: the marker says

@@ -1,7 +1,7 @@
 (ns nido.coordinator.lane.scratch-test
   (:require
    [babashka.fs :as fs]
-   [clojure.test :refer [deftest is]]
+   [clojure.test :refer [deftest is testing]]
    [nido.platform.core :as core]
    [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.record.session :as session]
@@ -68,12 +68,49 @@
         (is (= [:light] (mapv :weight (session/list-sessions :brian ws-id)))
             "unknown at birth ⇒ the conservative weight")))))
 
-(deftest find-ws-for-session-locates-owner
+(deftest birth-onto-a-named-workstream-mints-nothing
   (with-tmp
     (fn [_]
-      (let [ws-id (scratch/birth! :brian "refshot" :light)]
-        (is (= ws-id (#'scratch/find-ws-for-session :brian "refshot")))
-        (is (nil? (#'scratch/find-ws-for-session :brian "nope")))))))
+      (let [child (:id (workstream/create! :brian {:stage :in-progress :external-refs []}))]
+        (is (= child (scratch/birth! :brian "child-work" nil child)))
+        (is (= [child] (workstream/list-ids :brian)) "no one-off minted")
+        (is (= child (session/workstream-id-for :brian "child-work")))
+        (is (= :light (:weight (session/read-session :brian child "child-work"))))
+        (testing "run again after provisioning, it only reconciles the weight"
+          (is (= child (scratch/birth! :brian "child-work" :heavy child)))
+          (is (= :heavy (:weight (session/read-session :brian child "child-work"))))
+          (is (= [child] (workstream/list-ids :brian))))
+        (testing "an unnamed start of the same session joins its holder"
+          (is (= child (scratch/birth! :brian "child-work" :heavy))))))))
+
+(deftest a-start-that-cannot-join-is-refused-and-writes-nothing
+  (with-tmp
+    (fn [_]
+      (let [held-by (scratch/birth! :brian "taken" :light)
+            other   (:id (workstream/create! :brian {:stage :in-progress :external-refs []}))
+            closed  (:id (workstream/create! :brian {:stage :in-progress :external-refs []}))
+            refusal (fn [name ws-id]
+                      (try (scratch/birth! :brian name nil ws-id) nil
+                           (catch clojure.lang.ExceptionInfo e (ex-data e))))]
+        (workstream/close! :brian closed :done)
+        (is (= {:reason :name-held :holder held-by}
+               (select-keys (refusal "taken" other) [:reason :holder])))
+        (is (= :closed (:reason (refusal "fresh" closed))))
+        (is (= :no-such-workstream (:reason (refusal "fresh" "ws-nope"))))
+        (is (every? #(= :join (:refused (apply refusal %))) [["taken" other] ["fresh" closed]]))
+        (is (empty? (session/list-sessions :brian other)))
+        (is (empty? (session/list-sessions :brian closed)))
+        (is (nil? (scratch/joinable :brian "taken" held-by)) "the holder itself is joinable — same start again")))))
+
+(deftest a-one-off-that-loses-the-name-is-not-left-behind
+  (with-tmp
+    (fn [_]
+      (let [holder (:id (workstream/create! :brian {:stage :in-progress :external-refs []}))]
+        ;; The claim lands between birth!'s lookup and its create — as a named start's would.
+        (with-redefs [session/workstream-id-for (fn [& _] nil)]
+          (session/create! :brian holder {:name "raced" :weight :light :autonomy nil})
+          (is (= holder (scratch/birth! :brian "raced" :light))))
+        (is (= [holder] (workstream/list-ids :brian)) "the one-off minted for it is deleted")))))
 
 (deftest reap-deletes-a-bare-loose-workstream
   (with-tmp
