@@ -89,10 +89,16 @@
       (reconcile/reconcile!)
       (is (= :done (:state (runs/read-run (:id base-run))))))))
 
+(defn- agent-started!
+  "Give `run-id` the agent.log a launched agent leaves, with no result event."
+  [run-id]
+  (spit (cstate/run-agent-log run-id) "{\"type\":\"system\",\"subtype\":\"init\"}\n"))
+
 (deftest reconcile!-marks-orphan-when-no-evidence
   (with-tmp
     (fn [_]
       (seed-run! base-run)
+      (agent-started! (:id base-run))
       (reconcile/reconcile!)
       (let [r (runs/read-run (:id base-run))]
         (is (= :failed (:state r)))
@@ -154,6 +160,7 @@
       (mk-run "aw1" :awaiting-review {:id "BR-9"} :triage-bug)
       ;; orphaned running run — must be forced terminal
       (mk-run "r1" :running {} :triage-bug)
+      (agent-started! "r1")
       (reconcile/reconcile!)
       (is (= :queued          (:state (runs/read-run "q1"))) "queued backlog preserved")
       (is (= :awaiting-review (:state (runs/read-run "aw1"))) "parked-for-review preserved")
@@ -311,6 +318,7 @@
   (with-tmp
     (fn [_]
       (let [run (with-session! base-run)
+            _   (agent-started! (:id run))
             {:keys [torn stopped]} (settling)]
         (is (= :failed (:state (runs/read-run (:id run)))))
         (is (= [(:id run)] torn) "settled as the executor settles a failed Run")
@@ -387,3 +395,50 @@
         (binding [*err* (java.io.StringWriter.)] (reconcile/reconcile!))
         (is (= :live (:substrate (session/read-session :test (:workstream-id run)
                                                        (:session-name run)))))))))
+
+;; ── a Run the restart caught provisioning ───────────────────────────────────
+;; A restart while a Run's session boots used to fail it and tear the session
+;; down, and a source that dedups what it has seen never fired it again.
+
+(deftest a-run-whose-agent-never-launched-is-requeued
+  (with-tmp
+    (fn [_]
+      (let [run (with-session! base-run)
+            {:keys [torn stopped]} (settling)
+            r   (runs/read-run (:id run))]
+        (is (= :queued (:state r)) "back in the queue the daemon resubmits next")
+        (is (nil? (:error r)))
+        (is (= :queued (-> r :state-history last :state)))
+        (is (= {:torn [] :stopped []} {:torn torn :stopped stopped})
+            "its session is left for the resubmitted start to converge")
+        (is (= :live (:substrate (session/read-session :test (:workstream-id run)
+                                                       (:session-name run)))))))))
+
+(deftest an-unlaunched-triage-run-is-requeued-unless-its-ticket-settled
+  (with-tmp
+    (fn [_]
+      (mk-run "r1" :running {} :triage-bug)
+      (tickets/dismiss! :brian "BR-5")
+      (mk-run "d1" :running {:id "BR-5"} :triage-bug)
+      (reconcile/reconcile!)
+      (is (= :queued (:state (runs/read-run "r1"))))
+      (is (= :done (:state (runs/read-run "d1"))) "a settled ticket still ends the Run"))))
+
+(deftest a-run-requeued-twice-is-failed-the-third-time
+  (with-tmp
+    (fn [_]
+      (seed-run! (assoc base-run :state-history
+                        [{:at "T1" :state :queued} {:at "T2" :state :running}
+                         {:at "T3" :state :queued} {:at "T4" :state :running}
+                         {:at "T5" :state :queued} {:at "T6" :state :running}]))
+      (reconcile/reconcile!)
+      (let [r (runs/read-run (:id base-run))]
+        (is (= :failed (:state r)))
+        (is (= :orphaned-from-restart (-> r :error :reason)))))))
+
+(deftest a-parked-merge-run-is-never-requeued
+  (with-tmp
+    (fn [_]
+      (seed-run! (assoc base-run :trigger :merge :skill :drive-home))
+      (reconcile/reconcile!)
+      (is (= :awaiting-review (:state (runs/read-run (:id base-run))))))))

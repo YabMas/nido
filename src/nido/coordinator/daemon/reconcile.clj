@@ -48,6 +48,30 @@
       :else                               {:state :failed
                                            :error {:reason :orphaned-from-restart}})))
 
+(def ^:private max-requeues
+  "How many times a restart may put one Run back in the queue. A Run is only
+   requeued when its agent never launched, so the loop this bounds needs a boot
+   that itself restarts the daemon — cheap to rule out all the same."
+  2)
+
+(defn- requeue?
+  "Should this restart put `run` back in the queue instead of failing it?
+
+   Only an ORPHAN is, and only one the restart caught still provisioning its
+   session. agent.log is the evidence: the agent's first output creates it, so
+   its absence means no agent ever ran and nothing was done that a second start
+   could repeat. Failing such a Run lost the work outright — its session was
+   torn down, and a source that dedups what it has seen (a Slack reaction) never
+   fires the event again. A Run whose agent did start is failed as before: what
+   it did cannot be read back from here."
+  [run-id run {:keys [state error]}]
+  (and (#{:preprocessing :running} (:state run))         ; a parked Run has run its agent
+       (= :failed state)
+       (= :orphaned-from-restart (:reason error))
+       (not (fs/exists? (cstate/run-agent-log run-id)))
+       (< (count (filter #(= :queued (:state %)) (:state-history run)))
+          (inc max-requeues))))
+
 (defn- triage-reconciled-state
   "Reconciled state for a non-:queued triage run, derived from its ticket record.
    Ticket status drives the decision; for runs still mid-investigation at restart
@@ -93,7 +117,8 @@
    then settle the Run's session for the state it ends at. A Run already
    resolved has its session settled too: a restart between a Run's state and
    its session leaves nothing else that would ever reach it.
-   :queued runs are pending work — they are left intact for re-submission."
+   :queued runs are pending work — they are left intact for re-submission, and a
+   Run caught before its agent launched rejoins them (see requeue?)."
   [run-id]
   (when-let [run (runs/read-run run-id)]
     (when (resolved-states (:state run))
@@ -129,7 +154,11 @@
                   {:state :failed :error {:reason :undiagnosed}}
                   derived))
 
-              :else                        (derive-terminal-state run-id))]
+              :else                        (derive-terminal-state run-id))
+            {:keys [state error]}
+            (if (requeue? run-id run {:state state :error error})
+              {:state :queued :error nil}
+              {:state state :error error})]
         ;; no-op if state unchanged (e.g. parked → parked)
         (when (not= state (:state run))
           (let [history-entry {:at (clock/now-iso) :state state}
@@ -137,9 +166,13 @@
                                   (update :state-history conj history-entry))]
             (runs/write-run! updated)
             (runs/mirror-run-phase! updated)
-            ;; Keep the ticket record honest: an orphaned triage Run clears a stale :investigating.
-            (tickets/on-run-terminal! updated state)
-            (settle-session! updated state (= :awaiting-review state))))))))
+            ;; A requeued Run is not terminal: its session and ticket are left as
+            ;; they are for the start the daemon resubmits it to, and
+            ;; `session:up` converges the half-built session it finds.
+            (when-not (= :queued state)
+              ;; Keep the ticket record honest: an orphaned triage Run clears a stale :investigating.
+              (tickets/on-run-terminal! updated state)
+              (settle-session! updated state (= :awaiting-review state)))))))))
 
 (defn ^{:malli/schema [:=> [:cat] :any]}
   reconcile!
