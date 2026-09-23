@@ -215,7 +215,9 @@
                port   (.getLocalPort (:socket server))]
            (spit ".nrepl-port" (str port))
            (println (str "nREPL on 127.0.0.1:" port " (.nrepl-port written)"))
-           (deref (:future server)))}
+           ;; Block on a promise of our own, never on a key of the server map:
+           ;; its keys are babashka's internals and change between releases.
+           (deref (promise)))}
 
   nido:vsdd:run
   {:requires ([tasks.nido-vsdd :as nido-vsdd])
