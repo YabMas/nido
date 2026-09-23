@@ -4,6 +4,7 @@
    [clojure.test :refer [deftest is]]
    [malli.core :as m]
    [nido.platform.core :as core]
+   [nido.platform.io :as io]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.session :as sess]
    [nido.coordinator.record.state :as cstate]
@@ -375,6 +376,69 @@
         (sess/create! :brian (:id ws2) {:name "impl-br-2" :weight :heavy :autonomy nil})
         (is (= (:id ws2) (sess/workstream-id-for :brian "impl-br-2")))
         (is (nil? (sess/workstream-id-for :brian "nope")))))))
+
+(defn- write-behind-the-rule!
+  "A session record put on disk the way one could exist from before record-session kept a name to
+   one workstream — straight to its path, past write!."
+  [project ws-id session-name]
+  (io/write-edn! (cstate/session-edn-path project ws-id session-name)
+                 (assoc human-session :name session-name :workstream-id ws-id :project project)))
+
+(deftest create-refuses-a-name-another-workstream-holds
+  (with-tmp
+    (fn [_]
+      (let [ws1 (ws/create! :brian {:stage :triaging :external-refs []})
+            ws2 (ws/create! :brian {:stage :triaging :external-refs []})]
+        (sess/create! :brian (:id ws1) {:name "shared" :weight :light :autonomy nil})
+        (let [e (try (sess/create! :brian (:id ws2) {:name "shared" :weight :light :autonomy nil})
+                     nil
+                     (catch clojure.lang.ExceptionInfo e e))]
+          (is (= :name-held (:reason (ex-data e))))
+          (is (= (:id ws1) (:holder (ex-data e)))))
+        (is (nil? (sess/read-session :brian (:id ws2) "shared")) "nothing written on the refused workstream")
+        (is (= (:id ws1) (sess/workstream-id-for :brian "shared")))))))
+
+(deftest a-name-held-in-another-project-is-no-conflict
+  (with-tmp
+    (fn [_]
+      (let [a (ws/create! :brian {:stage :triaging :external-refs []})
+            b (ws/create! :nido {:stage :triaging :external-refs []})]
+        (sess/create! :brian (:id a) {:name "same" :weight :light :autonomy nil})
+        (is (some? (sess/create! :nido (:id b) {:name "same" :weight :light :autonomy nil})))))))
+
+(deftest rewriting-an-existing-record-is-not-a-creation
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})
+            s (sess/create! :brian (:id w) {:name "x" :weight :light :autonomy nil})]
+        (sess/write! (assoc s :weight :heavy))
+        (is (= :heavy (:weight (sess/read-session :brian (:id w) "x"))))
+        (is (some? (sess/create! :brian (:id w) {:name "x" :weight :light :autonomy nil}))
+            "re-creating on the workstream that holds it is not a second holder")))))
+
+(deftest concurrent-creations-of-one-name-leave-one-holder
+  (with-tmp
+    (fn [_]
+      (let [ids (vec (repeatedly 6 #(:id (ws/create! :brian {:stage :triaging :external-refs []}))))
+            results (->> ids
+                         (mapv (fn [id] (future (try (sess/create! :brian id {:name "race" :weight :light :autonomy nil})
+                                                     :created
+                                                     (catch clojure.lang.ExceptionInfo _ :refused)))))
+                         (mapv deref))]
+        (is (= 1 (count (filter #{:created} results))))
+        (is (string? (sess/workstream-id-for :brian "race")))))))
+
+(deftest workstream-id-for-refuses-a-name-held-twice
+  (with-tmp
+    (fn [_]
+      (let [ws1 (ws/create! :brian {:stage :triaging :external-refs []})
+            ws2 (ws/create! :brian {:stage :triaging :external-refs []})]
+        (write-behind-the-rule! :brian (:id ws1) "dup")
+        (write-behind-the-rule! :brian (:id ws2) "dup")
+        (let [e (try (sess/workstream-id-for :brian "dup") nil
+                     (catch clojure.lang.ExceptionInfo e e))]
+          (is (= :name-held-twice (:reason (ex-data e))))
+          (is (= #{(:id ws1) (:id ws2)} (set (:holders (ex-data e))))))))))
 
 (deftest ship-substate-reads-the-live-autonomous-session
   ;; archived triage session (phase :done) + live impl session (phase :running):

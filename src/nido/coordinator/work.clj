@@ -2334,20 +2334,37 @@
                      (:id w)))))
          vec)))
 
+(defn- held-twice
+  "Every session name more than one workstream of `project` holds, with its holders."
+  [project]
+  (->> (cws/list-ids project)
+       (mapcat (fn [ws-id] (map #(vector (:name %) ws-id) (csession/list-sessions project ws-id))))
+       (group-by first)
+       (keep (fn [[n pairs]] (when (< 1 (count pairs)) {:session n :holders (mapv second pairs)})))
+       (sort-by :session)
+       vec))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
   adopt-orphans!
   "Enforce the invariant: every live session is reachable from a workstream.
    Births a scratch workstream for each live orphan (idempotent — birth! no-ops
    on an owned name), then yields bare scratch duplicates to real owners.
-   Returns {:adopted [names] :yielded [ws-ids]}."
+
+   A name still held twice after that is reported under :held-twice, naming its
+   holders, and left alone: record-session refuses every write that would make
+   one, so any found is a record from before that rule and needs a person to
+   say which holder is right. Returns {:adopted [names] :yielded [ws-ids]
+   :held-twice [{:session :holders}]}."
   [project]
   (let [orphans (sort (orphan-live-sessions (live-session-names project)
                                             (owned-session-names project)))]
     (doseq [n orphans]
       (scratch/birth! (keyword (name project)) n
                       (lifecycle/session-weight n {:project (name project)})))
-    {:adopted (vec orphans)
-     :yielded (yield-duplicate-scratch! project)}))
+    (let [yielded (yield-duplicate-scratch! project)]
+      {:adopted    (vec orphans)
+       :yielded    yielded
+       :held-twice (held-twice project)})))
 
 (defn- instance-id-for [project-name session-name]
   (if (= project-name session-name)

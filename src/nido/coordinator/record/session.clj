@@ -9,6 +9,7 @@
    See spec docs/superpowers/specs/2026-06-05-workstream-session-model-design.md."
   (:require
    [babashka.fs :as fs]
+   [clojure.string :as str]
    [malli.core :as m]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.state :as cstate]
@@ -56,11 +57,67 @@
   [project ws-id session-name]
   (io/read-edn (cstate/session-edn-path project ws-id session-name)))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:sequential :Session]]}
+  list-sessions
+  "Seq of session records under one workstream's sessions/ dir. Reads each
+   session.edn directly (rather than re-deriving the path from the directory
+   name) so a session whose name was percent-encoded into the dir key — e.g.
+   'feat/foo' → 'feat%2Ffoo' — still round-trips via the record's :name."
+  [project ws-id]
+  (let [d (cstate/ws-sessions-dir project ws-id)]
+    (if (fs/exists? d)
+      (->> (fs/list-dir d)
+           (filter fs/directory?)
+           (map #(str (fs/path % "session.edn")))
+           (filter fs/exists?)
+           (keep io/read-edn))
+      [])))
+
+(defn- list-ws-ids [project]
+  (let [d (cstate/workstreams-dir project)]
+    (if (fs/exists? d)
+      (->> (fs/list-dir d) (filter fs/directory?) (mapv #(str (fs/file-name %))))
+      [])))
+
+(defn- holders
+  "Every workstream of `project` holding a session record named `session-name`."
+  [project session-name]
+  (filterv (fn [ws-id] (some #(= session-name (:name %)) (list-sessions project ws-id)))
+           (list-ws-ids project)))
+
+(defn- names-lock-path
+  "The lock every write that brings a session record into existence takes. One per project,
+   because what it guards — which workstream holds a name — spans all of that project's
+   workstreams. A hidden file, so the workstream listings, which take directories, never see it."
+  [project]
+  (str (fs/path (cstate/workstreams-dir project) ".session-names.lock")))
+
 (defn ^{:malli/schema [:=> [:cat :Session] :Session]}
-  write! [s]
+  write!
+  "Persist a session, validated first.
+
+   A write that brings a record into existence is refused — throwing `:reason :name-held`,
+   naming the holder — while another workstream of the project holds a session of that name:
+   a name has one workstream, so workstream-id-for has one answer. The check and the write are
+   one step under the project's names lock, so two creations of a name cannot both find it free.
+   A write over a record that already exists — a phase, a weight, a substrate changing — is not
+   a creation and takes no lock."
+  [s]
   (validate s)
-  (io/write-edn! (cstate/session-edn-path (:project s) (:workstream-id s) (:name s)) s)
-  s)
+  (let [{:keys [project workstream-id]} s
+        n    (:name s)
+        path (cstate/session-edn-path project workstream-id n)]
+    (if (fs/exists? path)
+      (io/write-edn! path s)
+      (io/with-file-lock (names-lock-path project)
+        (fn []
+          (when-let [held-by (first (remove #{workstream-id} (holders project n)))]
+            (throw (ex-info (str "Session " n " already belongs to workstream " held-by
+                                 " — a session name has one workstream in its project")
+                            {:reason :name-held :session n :holder held-by
+                             :ws-id workstream-id :project project})))
+          (io/write-edn! path s))))
+    s))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Session]}
   create!
@@ -77,22 +134,6 @@
              :substrate-history [{:at now :substrate :live}]
              :autonomy          (:autonomy opts)
              :created-at        now})))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:sequential :Session]]}
-  list-sessions
-  "Seq of session records under one workstream's sessions/ dir. Reads each
-   session.edn directly (rather than re-deriving the path from the directory
-   name) so a session whose name was percent-encoded into the dir key — e.g.
-   'feat/foo' → 'feat%2Ffoo' — still round-trips via the record's :name."
-  [project ws-id]
-  (let [d (cstate/ws-sessions-dir project ws-id)]
-    (if (fs/exists? d)
-      (->> (fs/list-dir d)
-           (filter fs/directory?)
-           (map #(str (fs/path % "session.edn")))
-           (filter fs/exists?)
-           (keep io/read-edn))
-      [])))
 
 (defn ^{:malli/schema [:=> [:cat :Session] :boolean]}
   live?       [s] (= :live (:substrate s)))
@@ -318,23 +359,23 @@
    a human gate, not in-flight."
   #{:preprocessing :running})
 
-(defn- list-ws-ids [project]
-  (let [d (cstate/workstreams-dir project)]
-    (if (fs/exists? d)
-      (->> (fs/list-dir d) (filter fs/directory?) (mapv #(str (fs/file-name %))))
-      [])))
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] [:maybe :WorkstreamId]]}
   workstream-id-for
-  "The workstream-id owning the session named `session-name` in `project`, or nil.
-   Scans the project's workstreams; matches on the session record's :name (which
-   round-trips a percent-encoded dir key). Used by the ship handler / CLI to map a
-   session back to its workstream."
+  "The workstream holding the session named `session-name` in `project`, or nil when none does.
+   Matches on the record's :name, which round-trips a percent-encoded directory key.
+
+   Throws `:reason :name-held-twice`, naming the holders, for a name two workstreams hold — which
+   write! leaves no way to reach, so it can only be a record written before the rule. It never
+   answers one of several: a verb acting on whichever holder happened to list first is acting on
+   a workstream nobody chose."
   [project session-name]
-  (some (fn [ws-id]
-          (when (some #(= session-name (:name %)) (list-sessions project ws-id))
-            ws-id))
-        (list-ws-ids project)))
+  (let [hs (holders project session-name)]
+    (case (count hs)
+      0 nil
+      1 (first hs)
+      (throw (ex-info (str "Session " session-name " is held by " (count hs) " workstreams: "
+                           (str/join ", " hs))
+                      {:reason :name-held-twice :session session-name :holders hs :project project})))))
 
 (def gating-phases
   "Autonomy phases that occupy a trigger's in-flight budget FOR SCHEDULING.

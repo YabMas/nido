@@ -43,11 +43,15 @@
      :delegates [state/session-edn-path]})
   (Operation write!
     "Persist a session, validated first. Writing an invalid record is refused rather than
-     deferred to whoever reads it next."
+     deferred to whoever reads it next, and so is a write that would bring a record into existence
+     while another workstream of the project holds its name: the check and the write are one step
+     under a per-project lock, which is what gives a session name one workstream whichever path
+     writes it. Rewriting a record that exists is not a creation and is not checked."
     {:signature [:=> [:catn [:s Session]] Session]
      :delegates [validate state/session-edn-path]})
   (Operation create!
-    "Mint and persist a fresh live session."
+    "Mint and persist a fresh live session — refused, through write!, when another workstream of
+     the project already holds the name."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts :map]] Session]
      :delegates [write! clock/now-iso]})
   (Operation list-sessions
@@ -102,7 +106,8 @@
     {:signature [:=> [:catn [:ctx :map]] StageProjection]
      :delegates [notion-stage]})
   (Operation workstream-id-for
-    "Which workstream owns the session with this name, or nil."
+    "Which workstream holds the session with this name, or nil. A name two workstreams hold is
+     refused naming both, never answered with one of them."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] [:maybe WorkstreamId]]
      :delegates [state/workstreams-dir list-sessions]})
   (Operation pending-session-for-trigger?

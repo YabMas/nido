@@ -158,7 +158,8 @@
     {:signature [:=> [:catn [:live :any] [:owned :any]] :any]})
   (Operation adopt-orphans!
     "Enforce the invariant that every live session is reachable from a workstream — an orphan is
-     a session doing work the board cannot show."
+     a session doing work the board cannot show — and report every session name two workstreams
+     hold that it cannot settle by yielding a bare one-off, naming the holders."
     {:signature [:=> [:catn [:project ProjectName]] :any]
      :delegates [orphan-live-sessions live-session-names lanes/birth!]})
   (Operation machine-rows "Machine facts for every worktree of one project."

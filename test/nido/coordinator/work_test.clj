@@ -2272,20 +2272,44 @@
         (with-redefs [work/live-session-names (constantly #{"left"})]
           (is (= [] (:adopted (work/adopt-orphans! :p)))))))))
 
+(defn- write-behind-the-rule!
+  "A session record put straight on its path, the way a second holder of a name could exist from
+   before record-session refused one — session/create! would refuse it now."
+  [project ws-id session-name]
+  (nido-io/write-edn! (cstate/session-edn-path project ws-id session-name)
+                      {:name session-name :workstream-id ws-id :project project :weight :light
+                       :substrate :live :substrate-history [] :autonomy nil
+                       :created-at "2026-06-05T09:00:00Z"}))
+
 (deftest adopt-orphans!-yields-a-bare-scratch-double-owner
-  ;; Adopted-then-claimed: when a REAL open ws also owns the session, the bare
-  ;; scratch ws is deleted (newest real owner wins).
+  ;; A name held twice from before the rule: the bare scratch holder is deleted
+  ;; in favour of the real open owner.
   (with-tmp
     (fn [_]
       (with-redefs [work/live-session-names (constantly #{"claimed"})]
         (work/adopt-orphans! :p)                              ; births scratch owner
         (let [real (workstream/create! :p {:stage :in-progress
                                            :external-refs [{:adapter :notion :id "BR-1"}]})]
-          (session/create! :p (:id real) {:name "claimed" :weight :light :autonomy nil})
-          (let [{:keys [yielded]} (work/adopt-orphans! :p)]
+          (write-behind-the-rule! :p (:id real) "claimed")
+          (let [{:keys [yielded held-twice]} (work/adopt-orphans! :p)]
             (is (= 1 (count yielded)))
+            (is (= [] held-twice))
             (is (= [(:id real)]
                    (map :id (keep #(workstream/read-ws :p %) (workstream/list-ids :p)))))))))))
+
+(deftest adopt-orphans!-reports-a-name-it-cannot-yield
+  ;; Two real holders — neither a bare scratch one-off — so nothing can be yielded;
+  ;; the sweep names both rather than choosing.
+  (with-tmp
+    (fn [_]
+      (with-redefs [work/live-session-names (constantly #{})]
+        (let [a (workstream/create! :p {:stage :in-progress :external-refs [{:adapter :notion :id "BR-1"}]})
+              b (workstream/create! :p {:stage :in-progress :external-refs [{:adapter :notion :id "BR-2"}]})]
+          (write-behind-the-rule! :p (:id a) "both")
+          (write-behind-the-rule! :p (:id b) "both")
+          (let [{:keys [held-twice]} (work/adopt-orphans! :p)]
+            (is (= [{:session "both" :holders (vec (sort [(:id a) (:id b)]))}]
+                   (mapv #(update % :holders (comp vec sort)) held-twice)))))))))
 
 (deftest prune-dead-registry-drops-only-dead-and-old-entries
   (let [now     1000000000000

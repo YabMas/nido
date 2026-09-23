@@ -232,7 +232,14 @@
                     (str "WARN: registry prune threw — " (ex-message t))))))
     (doseq [project (registered-projects)]
       (try
-        (let [{:keys [adopted yielded]} (work/adopt-orphans! project)]
+        (let [{:keys [adopted yielded held-twice]} (work/adopt-orphans! project)]
+          (doseq [{:keys [session holders]} held-twice]
+            (binding [*err* *err*]
+              (.println ^java.io.PrintWriter *err*
+                        (str "WARN: session " session " in " (name project)
+                             " is held by " (count holders) " workstreams ("
+                             (str/join ", " holders) ") — its workstream cannot be resolved"
+                             " until one record is removed"))))
           (when (seq adopted)
             (println (str "nido coordinator: adopted " (count adopted)
                           " orphan session(s) in " (name project) ": "
