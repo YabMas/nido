@@ -77,13 +77,9 @@
     {:signature [:=> [:catn [:project ProjectName]] :any]})
   (Operation pickup-result-fragment "What a pickup attempt swaps in."
     {:signature [:=> [:catn [:result :map] [:opts :map]] :string]})
-  (Operation intent-bar "The describe-an-intent bar."
-    {:signature [:=> [:catn [:project ProjectName]] :any]})
-  (Operation intent-result-fragment "What describing an intent swaps in."
-    {:signature [:=> [:catn [:result :map] [:opts :map]] :string]})
   (Operation workstreams-page "The overview and its ledger pane."
     {:signature [:=> [:catn [:ctx :map] [:data :map]] :any]
-     :delegates [shell workstreams-fragment workstream-pane pickup-bar intent-bar]})
+     :delegates [shell workstreams-fragment workstream-pane pickup-bar]})
   (Operation operations-fragment "The proposal list."
     {:signature [:=> [:catn [:proposals :any]] :any]})
   (Operation recovery-fragment
@@ -109,19 +105,13 @@
 (Module ui-server
   "The dashboard's HTTP surface.
 
-   `read-rail-daemon`, `read-pickup-blocker` and `read-intent-blocker` are named seams over the
-   daemon readings so a test can stub them — and the last two ask what blocks THIS envelope
-   rather than reading the rail dot, because the dot ranks a breaker above a healthy daemon and
-   reading it as go/no-go reported a healthy daemon as down whenever an unrelated trigger was
-   tripped. They are two seams and not one because a breaker is per-trigger: the intent leg and
-   the pickup leg can be blocked independently, and the intent one is consulted BEFORE anything
-   is enqueued, since a dropped intent envelope takes the only copy of the description with it."
+   `read-rail-daemon` and `read-pickup-blocker` are named seams over the daemon readings so a
+   test can stub them — and the second asks what blocks THIS envelope rather than reading the
+   rail dot, because the dot ranks a breaker above a healthy daemon and reading it as go/no-go
+   reported a healthy daemon as down whenever an unrelated trigger was tripped."
   (Operation read-rail-daemon "The rail's daemon reading. A stubbing seam."
     {:signature [:=> [:catn] :map] :delegates [control/read-daemon-health]})
   (Operation read-pickup-blocker "What would block a pickup for this project. A stubbing seam."
-    {:signature [:=> [:catn [:project ProjectName]] [:maybe :keyword]]
-     :delegates [control/read-queue-blocker]})
-  (Operation read-intent-blocker "What would block a described intent for this project. A stubbing seam."
     {:signature [:=> [:catn [:project ProjectName]] [:maybe :keyword]]
      :delegates [control/read-queue-blocker]})
   (Operation derive-screen "Gather what the screen needs and derive it."
@@ -137,7 +127,7 @@
   (Operation handle-request "One request, routed."
     {:signature [:=> [:catn [:req :map]] :map]
      :delegates [derive-screen parse-findings-lines resolve-failure-msg read-pickup-blocker
-                 read-intent-blocker work/start-intent! work/session-recovery
+                 work/session-recovery
                  work/improvement-holds]})
   (Operation start! "Start the dashboard server."
     {:signature [:=> [:catn [:opts :map]] :any] :delegates [handle-request]})
