@@ -297,13 +297,14 @@
      .dot-halted { background:#f87171; box-shadow:0 0 6px #f87171; }
      .dot-breaker { background:#fb923c; }
      .dot-down { background:#555; }
-     .doing-badge { font-size:.8em; padding:0 .4em; border-radius:.3em; background:#14532d; color:#bbf7d0; margin-left:6px; }
+     .doing-badge { color:#6b8f78; }
+     .doing-badge::before { content:'● '; }
      .doing-line { color:#bbf7d0; font-size:.9em; margin:2px 0 6px; }
      .badge-findings { color:#e0a34a; border:1px solid #4a3a20; border-radius:4px; padding:1px 6px; font-size:11px; margin-left:6px; }
-     .ship-blocked { background:#b00020; color:#fff; font-weight:600; }
-     .ship-driving { background:#1d4ed8; color:#fff; }
-     .ship-awaiting-merge { background:#555; color:#fff; }
-     .ship-queued { background:#777; color:#fff; }
+     .doing-badge.ship-blocked { color:#f87171; font-weight:600; }
+     .doing-badge.ship-driving { color:#7d9fd8; }
+     .doing-badge.ship-awaiting-merge { color:#666; }
+     .doing-badge.ship-queued { color:#666; }
      .ws-section { margin-top:2px; }
      .ws-fold-header { cursor:pointer; user-select:none; display:flex; align-items:center;
                        gap:6px; }
@@ -609,15 +610,17 @@
   [:span {:class (str "chip c-" (name stage))} (name stage)])
 
 (defn- doing-badge
-  "What a workstream is doing right now, as a badge — nothing when nothing is.
-   The ONE rendering of current activity: it superseded the merge-lane badge
-   rather than joining it, so a shipping row says `merging · driving` once
-   instead of saying it twice in two vocabularies.
+  "What a workstream is doing right now — nothing when nothing is. The ONE
+   rendering of current activity, so a shipping row says `merging · driving`
+   once rather than in two vocabularies.
 
-   A merge keeps its phase's severity class, which is what the badge it replaced
-   carried the colour on. A stuck merge going quiet green on the way through the
-   shared label would be the one thing the unification could cost a board that is
-   scanned rather than read."
+   Muted text, not a filled badge: the row's emphasis belongs to the position
+   chip lighting when the next move is a human's, and a lit slab here outshouts
+   it on rows that need nobody. The exception is a merge phase's severity class,
+   so a stuck merge still reads red on a board that is scanned rather than read.
+
+   It is often the last span of a `.gate-sub`, which flexes to fill the line —
+   a background here would paint that whole stretch."
   [doing]
   (when-let [d (wsv/doing-label doing)]
     [:span {:class (str "doing-badge"
