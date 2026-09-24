@@ -167,6 +167,12 @@
            (when (and (= :merge (:source doing)) (= :blocked (:phase doing))) "⚠ ")
            d "›"))))
 
+(defn- phase-str
+  "`  [phase 2/3]` for a phased row, nil for an unphased one — which landing of
+   the plan this is, beside where its work stands."
+  [{:keys [current of]}]
+  (when current (str "  [phase " current "/" of "]")))
+
 (defn- badged-item-row
   "One workstream row for the spine board: origin badge + the wsv display string.
    wsv/format-row and wsv/promote-result-message (below) are display-only helpers
@@ -181,8 +187,14 @@
                      ;; merge phase from here too — the projection folds
                      ;; ship-substate in, so the merge-lane tag this replaced
                      ;; would have printed the same state a second time.
-                     (doing-str r))
-   :description (or (:last-activity r) "")
+                     (doing-str r)
+                     (phase-str (:phase r)))
+   ;; A row waiting on its gate says what the gate is, where the eye already
+   ;; reads a row's second line; the gate is asserted from the dashboard or
+   ;; `bb nido:phase:advance`.
+   :description (or (when (= :awaiting-gate (:stage r))
+                      (some->> (get-in r [:phase :exit :criterion]) (str "gate: ")))
+                    (:last-activity r) "")
    :data        r})
 
 (defn- filter-origin
@@ -232,6 +244,7 @@
          rows (concat
                (band :shipping         "Shipping"           (:shipping g))
                (band :in-progress      "In progress"        (:in-progress g))
+               (band :awaiting-gate    "Awaiting gate"      (:awaiting-gate g))
                ;; Winding-down rows carry :origin (so the origin filter composes via
                ;; `keep`) but no :facets — an ACTIVE facet selection hides them
                ;; (facet-match? treats facet-less rows as non-matching then). Acceptable:

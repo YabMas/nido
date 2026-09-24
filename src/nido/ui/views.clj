@@ -134,6 +134,8 @@
         .pos .pos-nx { font-size:11px; color:#5f5f78; }
         .pos.pos-you .pos-at { color:#c9a227; }
         .pos.pos-you .pos-nx { color:#a08a4a; }
+        .phase-chip { font-size:11px; color:#8a8aa8; border:1px solid #33334a; border-radius:4px; padding:0 5px; margin-left:6px; }
+        .gate-criterion { font-size:12px; color:#c9a227; margin-top:3px; }
         .posn { margin:2px 0 10px; }
         .posn .nx { font-size:13px; color:#9a9ac0; }
         .posn .nx b { color:#cdcde0; font-weight:600; }
@@ -821,6 +823,8 @@
                           "the record as the evidence. Write the superseding design next.")
         :hold-design (str "✓ Held — recording a grant against the verdict, which is the "
                           "ledger saying you read it and stand by the design.")
+        :assert-gate (str "Recording the gate with your evidence and opening the next "
+                          "phase — its implementation is owed next.")
         "Done."))
     project ws-id pane-id)))
 
@@ -871,8 +875,19 @@
   ([project ws-id actions session] (action-bar project ws-id actions session gate-route))
   ([project ws-id actions session route]
    (let [buttons   (filter #(or (= :mutation (:kind %)) (:input %)) actions)
-         free-text (some #(and (= :resume (:kind %)) (not (:input %))) actions)]
+         free-text (some #(and (= :resume (:kind %)) (not (:input %))) actions)
+         evidence  (some #(when (= :evidence (:kind %)) %) actions)]
      (list
+      (when evidence
+        [:div.reply
+         [:div.meta {:style "text-transform:uppercase;font-size:11px"} "Assert the gate"]
+         (when-let [c (:criterion evidence)] [:p [:span.meta "Criterion: "] c])
+         [:textarea {"data-bind" "evidence"
+                     :placeholder "What you observed on the running system, and where…"}]
+         [:div {:style "margin-top:9px"}
+          [:button.btn.btn-primary
+           {"data-on:click" (str "@post('" (route project ws-id (:id evidence)) "')")}
+           (str (:label evidence) " ▸")]]])
       (when (seq buttons)
         (into [:div.actions {:style "margin-top:16px"}]
               (for [a buttons] (action-button project ws-id a route))))
@@ -1604,6 +1619,7 @@
      :design-verdict           (design-verdict-card report)
      :review-report            (review-card report pos)
      :findings                 (md/render (report/report->markdown report))
+     :phase-gate               (md/render (report/report->markdown report))
      :proposed-ticket          (md/render (report/report->markdown report))
      (md/render (:markdown report))))))
 
@@ -1665,6 +1681,7 @@
 (def ^:private ws-fold-stages
   [[:shipping    "Shipping"]
    [:in-progress "InProgress"]
+   [:awaiting-gate "AwaitingGate"]
    [:winding-down "WindingDown"]])
 
 (defn- ws-fold-signal
@@ -1716,7 +1733,7 @@
    :design-approved   "Approved"
    :implemented       "Implemented"
    :reviewed          "Reviewed"
-   :phase-landed      "Phase landed"
+   :awaiting-gate     "Awaiting gate"
    :published         "Draft PR open"
    :shipped           "Merged"
    :findings-open     "Findings open"
@@ -1741,6 +1758,7 @@
    :rebaseline            "re-do the baseline"
    :address-findings      "address findings"
    :answer-blocker        "your answer"
+   :assert-gate           "your gate"
    :acknowledge-invalidation "your call on the verdict"})
 
 (defn- position-chip
@@ -1763,11 +1781,20 @@
        (when next
          [:span.pos-nx (str "→ " (get stage-label (:stage next) (name (:stage next))))])])))
 
+(defn- phase-chip
+  "Where a phased workstream is in its plan — `phase 2/3` — or nothing for an
+   unphased one. Beside the position chip rather than inside it: the position is
+   where this landing's work stands, the phase is which landing it is."
+  [{:keys [current of]}]
+  (when current
+    [:span.phase-chip {:title "phase of the design's plan"} (str "phase " current "/" of)]))
+
 (defn- ws-list-row
   "One selectable list row. Its link carries the view-state (scope + selection),
    so selecting a workstream lands on the SAME list. `sel-id` highlights the
    open row (threaded from the screen so a poll preserves it)."
-  [screen sel-id project {:keys [ws-id origin label needs-you open-findings position] :as row}]
+  [screen sel-id project {:keys [ws-id origin label needs-you open-findings position phase stage]
+                          :as row}]
   [:a {:class (str "gate-card" (when (= sel-id ws-id) " sel"))
        :href  (str "/workstreams" (screen-query screen {:sel (str project ":" ws-id)}))}
    [:div.gate-top (origin-badge origin) [:span.lbl label]
@@ -1781,7 +1808,13 @@
     ;; ship-substate in, so a second merge-lane badge beside this one would be
     ;; the same fact in two vocabularies. It reads `queued` while the lane has
     ;; not reached it, which the projection answers rather than the badge.
-    (doing-badge (:doing row))]])
+    (doing-badge (:doing row))
+    (phase-chip phase)]
+   ;; What the gate waits on, where the person owing it will look. The exit
+   ;; criterion is the current phase's: its exit is the gate that opens the next.
+   (when (= :awaiting-gate stage)
+     (when-let [c (get-in phase [:exit :criterion])]
+       [:div.gate-criterion [:span.meta "gate: "] c]))])
 
 (defn- winddown-row
   "One winding-down row: closed workstream still holding live sessions. Muted;

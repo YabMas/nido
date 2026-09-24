@@ -21,7 +21,8 @@
   (is (= :done (phase/landing-outcome nil []))))
 
 (deftest a-plan-starts-on-its-first-phase-unlanded
-  (is (= {:current 1 :of 3 :landed? false :next (get-in plan [:phases 1])}
+  (is (= {:current 1 :of 3 :landed? false
+          :exit (get-in plan [:phases 0 :exit]) :next (get-in plan [:phases 1])}
          (phase/progress plan (rows :intent :baseline :design)))))
 
 (deftest a-merge-lands-the-current-phase-without-moving-it
@@ -37,7 +38,8 @@
   (let [p (phase/progress plan (rows :design :merged (gate "reads move to the new column")))]
     (is (= 2 (:current p)))
     (is (not (:landed? p)) "the :merged before the gate was the previous phase's landing")
-    (is (= "the old column is dropped" (:claim (:next p)))))
+    (is (= "the old column is dropped" (:claim (:next p))))
+    (is (= "a cycle" (:criterion (:exit p))) "the gate owed now is the current phase's exit"))
   (is (:landed? (phase/progress plan (rows :design :merged (gate "reads move to the new column") :merged)))))
 
 (deftest a-gate-for-a-phase-this-plan-does-not-have-is-not-counted

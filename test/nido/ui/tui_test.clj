@@ -595,3 +595,18 @@
   (let [opened (first (#'tui/open-pickup-input (board-state :all)))
         [s' _] (#'tui/update-pickup-input opened (msg/key-press "escape"))]
     (is (nil? (:modal s')) "esc cancels without calling pickup!")))
+
+(deftest board-rows-draw-the-awaiting-gate-band-with-its-gate
+  (with-redefs [nido.coordinator.work/grouped
+                (fn [_ _]
+                  {:awaiting-gate [{:ws-id "g1" :origin :scratch :label "migration" :stage :awaiting-gate
+                                    :phase {:current 1 :of 2 :landed? true
+                                            :exit {:criterion "a quiet week"}
+                                            :next {:claim "c" :exit {:criterion "nothing reads it"}}}}]
+                   :triage {:in-flight [] :queued []}})
+                nido.coordinator.work/live-session-names (constantly #{})]
+    (let [rows (#'tui/board-rows "brian" :all)
+          item (first (filter #(= "g1" (get-in % [:data :ws-id])) rows))]
+      (is (some #(re-find #"Awaiting gate" (:title %)) rows))
+      (is (str/includes? (:title item) "[phase 1/2]"))
+      (is (= "gate: a quiet week" (:description item))))))

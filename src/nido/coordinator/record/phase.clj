@@ -28,9 +28,10 @@
    when `design` carries no `:phases` (or is nil).
 
    `:current` and `:of` are 1-based. `:landed?` is whether a `:merged` row was appended
-   after the newest `:phase-gate` — after any at all, when there is none. `:next` is the
-   phase after the current one, the whole plan entry with its `:claim` and `:exit`, or nil
-   on the last phase.
+   after the newest `:phase-gate` — after any at all, when there is none. `:exit` is the
+   current phase's exit — the gate asserted to open its successor, and so the one a
+   workstream between phases awaits. `:next` is the phase after the current one, the whole
+   plan entry with its `:claim` and `:exit`, or nil on the last phase.
 
    Gates are read oldest first, each opening the first phase AFTER the one already reached
    whose `:claim` it names, so a plan that repeats a claim is read one phase per gate
@@ -49,6 +50,7 @@
       {:current current
        :of      (count phases)
        :landed? (boolean (some #(and (= :merged (:kind %)) (> (:seq %) last-gate)) entries))
+       :exit    (:exit (phases (dec current)))
        :next    (get phases current)})))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map] [:sequential :map]] :keyword]}

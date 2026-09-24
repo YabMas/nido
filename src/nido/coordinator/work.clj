@@ -1251,7 +1251,7 @@
                                   ;; a gate at all, and a second read is a second
                                   ;; moment.
                                   :awaiting      (awaiting-human (:position row))
-                                  :gate-criterion (get-in row [:phase :next :exit :criterion])
+                                  :gate-criterion (get-in row [:phase :exit :criterion])
                                   :seq           (:seq report)})
      :session      (:name psess)
      :resume-error (get-in psess [:autonomy :error])

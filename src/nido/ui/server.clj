@@ -343,6 +343,10 @@
                                  "page rendered, so this would have accepted a verdict "
                                  "you were not looking at. Re-read the gate.")
     :no-design              "Nothing to approve — this workstream holds no design."
+    ;; A gate that will not open writes nothing; the reason is the ledger's own.
+    :phase-refused          (str "The gate did not open — " because)
+    :between-phases         (str "Not restored — this workstream is between phases, not "
+                                 "dismissed. Assert its gate to open the next one.")
     :approval-stale         (str "Not approved — the ledger moved on since this page "
                                  "rendered, so this would have granted a design you "
                                  "were not looking at. Re-read the gate.")
@@ -403,8 +407,9 @@
 
 (defn- click-payload
   "What a gate click carries besides its action id, which depends on the action:
-   the reply textarea's text for :reply, and for every button that answers a
-   ledger question the :seq of the report it was rendered from — posted as
+   the reply textarea's text for :reply, the evidence textarea's for :assert-gate,
+   and for every button that answers a ledger question the :seq of the report it
+   was rendered from — posted as
    ?entry=, the same reading position every other surface rides, so the resolver
    can refuse an answer whose question the ledger has since moved past. nil for
    every other action: those resolve entirely nido-side.
@@ -419,6 +424,7 @@
   [{:keys [body] :as req} action-id]
   (cond
     (= :reply action-id)                     (:reply (parse-json-body body))
+    (= :assert-gate action-id)               (:evidence (parse-json-body body))
     (work/position-carrying-action? action-id) (:entry (view-state/parse req))))
 
 (defn- gate-action-response-fragment
