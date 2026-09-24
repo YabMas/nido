@@ -1723,6 +1723,7 @@
    :blocked           "Blocked"
    :premise-retracted "Premise retracted"
    :design-retracted  "Design retracted"
+   :intent-retracted  "Intent retracted"
    :design-invalidated "Design invalidated"
    :goal-superseded   "Goal moved"
    :unplaceable       "Cannot place"})

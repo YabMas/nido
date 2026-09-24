@@ -898,6 +898,26 @@
         (is (some? (add :baseline (assoc a-baseline :supersedes {:seq 2 :why "corrected"})))
             "a baseline correcting a baseline is")))))
 
+(deftest only-a-kind-something-supersedes-may-be-retracted
+  ;; A retraction is answered by a later record superseding what it named, and
+  ;; nothing supersedes a triage — so retracting one would hold the workstream
+  ;; at the retraction with no append that could ever release it.
+  (with-tmp
+    (fn [_]
+      (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+            id  (:id w)
+            add #(ws/append-entry! :brian id {:kind %1} %2)
+            r   #(pr-str {:format :retraction :retracts {:seq %}
+                          :because "b" :evidence ["src/a.clj:1"]})]
+        (add :triage (pr-str a-triage))                               ; seq 1
+        (add :intent (pr-str an-intent))                              ; seq 2
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"entry 1, a :triage, which nothing can supersede"
+             (add :retraction (r 1)))
+            "a triage is refused, and the refusal says why")
+        (is (some? (add :retraction (r 2)))
+            "an intent is retractable, because an intent can supersede it")))))
+
 (deftest a-citation-standing-never-reads-is-left-alone
   ;; Validating every number in the ledger is a different change, and one the
   ;; design turned down: :blocker-seq is not an edge standing follows.

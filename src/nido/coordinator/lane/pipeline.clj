@@ -40,7 +40,7 @@
 (def positions
   "Every position a workstream can be at, in the order `position` tests them.
 
-   Closed, and ordered by PRECEDENCE rather than by progress: the first six are
+   Closed, and ordered by PRECEDENCE rather than by progress: the first seven are
    halts and terminals that outrank whatever the record trail would otherwise
    say. A workstream whose baseline was retracted is at :premise-retracted even
    though it also holds a design — the retraction is the fact that matters, and
@@ -56,6 +56,7 @@
    :findings-open
    :blocked
    :design-retracted
+   :intent-retracted
    :premise-retracted
    :design-invalidated
    ;; The goal the newest survey was scoped for was replaced — the survey is
@@ -424,14 +425,14 @@
 (defn- live-retraction
   "A retraction whose subject still stands unrepaired, as {:seq :kind}, or nil.
    `:kind` is the kind of the entry it RETRACTED, which is what decides where the
-   work goes back to — a retracted design wants a new design and a retracted
-   baseline wants a new survey, and reporting both as :premise-retracted sent an
-   author off to re-survey an area nobody had questioned.
+   work goes back to — a retracted design wants a new design, a retracted
+   baseline a new survey, and a retracted intent a restated goal.
 
-   A retraction is repaired by a later record superseding what it retracted —
-   which is exactly the walk `standing` already does for a design's premise. So
-   the question asked here is narrow: is there a retraction the ledger has not
-   moved past? Anything finer is standing's business and is asked of standing."
+   A retraction is repaired by a later record superseding what it retracted, and
+   the ledger admits a retraction only of a kind something can supersede, so
+   every retraction read here has an answer an author can write. Only the newest
+   retraction is asked about: is there one the ledger has not moved past?
+   Anything finer is standing's business and is asked of standing."
   [project ws-id w]
   (when (contains? (kinds w) :retraction)
     (let [rs        (ws/entries-of project ws-id :retraction)
@@ -443,7 +444,8 @@
                  ;; means nobody has answered it yet.
                  (not (some #(= retracted (:seq (:supersedes %)))
                             (concat (ws/entries-of project ws-id :baseline)
-                                    (ws/entries-of project ws-id :design)))))
+                                    (ws/entries-of project ws-id :design)
+                                    (ws/entries-of project ws-id :intent)))))
         ;; The kind comes off the INDEX rather than by parsing the retracted
         ;; entry: the index already carries it, and standing fails closed on an
         ;; unparseable one anyway.
@@ -551,12 +553,13 @@
     findings-open?                 :findings-open
     blocker-seq                    :blocked
 
-    ;; What was retracted decides where the work goes back to. Both answered
-    ;; :premise-retracted before, whose next action is :rebaseline — so a
-    ;; retracted DESIGN sent its author off to re-survey an area nobody had said
-    ;; anything about. The retraction names its target and the index knows that
-    ;; entry's kind, so the routing is read rather than assumed.
+    ;; What was retracted decides where the work goes back to: each position's
+    ;; next stage writes the one kind that can supersede the retracted entry.
+    ;; The retraction names its target and the index knows that entry's kind,
+    ;; so the routing is read rather than assumed. A baseline, and anything
+    ;; older ledgers retracted that nothing can supersede, reads as the premise.
     (= :design (:kind retraction))   :design-retracted
+    (= :intent (:kind retraction))   :intent-retracted
     (:seq retraction)                :premise-retracted
 
     ;; A round judged the design itself wrong and nobody has answered it. A halt
@@ -659,6 +662,8 @@
    ;; A retracted DESIGN wants a new design, not a new survey. The premise was
    ;; never in question — somebody found the commitment untrue.
    :design-retracted  {:stage :design                 :mode :authoring}
+   ;; A retracted INTENT wants the goal restated: an intent superseding it.
+   :intent-retracted  {:stage :establish-intent       :mode :authoring}
    ;; Nobody but a person can answer it: the round has already said what it
    ;; found, and what happens next is a judgement about whether it is right.
    :design-invalidated {:stage :acknowledge-invalidation :mode :human}

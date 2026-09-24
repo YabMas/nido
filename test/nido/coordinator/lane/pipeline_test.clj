@@ -188,6 +188,30 @@
           (is (= :baselined (:at (p/of :brian id)))
               "the ledger moved past it, so it is no longer the fact that matters"))))))
 
+(deftest a-retracted-intent-is-answered-by-an-intent-superseding-it
+  ;; The shape brian ws-20260921-82071b was pinned by: a second intent written
+  ;; without :supersedes, then retracted. A baseline or design cannot supersede
+  ;; an intent, so the only record that can answer the retraction is an intent —
+  ;; and the position has to send the author to write one.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (let [forked (intent! add!)]
+          (add! :retraction {:format :retraction :retracts {:seq forked}
+                             :because "this goal was meant to amend the first"
+                             :evidence ["entry 1"]})
+          (let [r (p/of :brian id)]
+            (is (= :intent-retracted (:at r)))
+            (is (= {:stage :establish-intent :mode :authoring}
+                   (select-keys (:next r) [:stage :mode]))
+                "the advised stage writes the one kind that can answer it"))
+          (add! :intent {:format :intent :goal "g2" :done-when ["d"]
+                         :supersedes {:seq forked :why "restated"}})
+          (is (not (#{:intent-retracted :premise-retracted :design-retracted}
+                    (:at (p/of :brian id))))
+              "the ledger moved past it"))))))
+
 (deftest an-unanswered-blocker-halts-and-an-answered-one-does-not
   (with-tmp
     (fn [_]

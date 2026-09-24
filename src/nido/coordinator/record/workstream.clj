@@ -356,6 +356,10 @@
                                        (filter #(contains? kinds (:kind %)))
                                        (mapv (juxt :seq :kind)))}))))))
 
+(def ^:private retractable-kinds
+  "The kinds a :retraction may name: those a later record's :supersedes can name."
+  #{:baseline :design :intent})
+
 (defn- check-standing-citations!
   "Every edge `standing` walks resolves to an entry of the kind it expects.
 
@@ -367,16 +371,24 @@
    does: an :intent entry and nothing else. A derived baseline's :fork is the
    sixth, and names the :fork entry on its own ledger.
 
-   A :retraction still reaches a :triage, and that is not an exception to the
-   rule above. Retracting says a RECORD is untrue, which a triage report can be;
-   citing one as a goal says a unit is FOR it, which it cannot be."
+   A :retraction reaches exactly the kinds a :supersedes can name, because a
+   later record superseding the retracted one is the only thing that answers a
+   retraction. A kind nothing supersedes — a :triage — could be retracted but
+   never answered, and the workstream would be held at the retraction for good."
   [w kind payload]
   (when (#{:retraction :design-approved :design-cleared :design :baseline :intent} kind)
     (let [r (edn/read-string payload)]
       (case kind
-        :retraction      (cites! w r [:retracts :seq]
-                                 #{:baseline :design :intent :triage}
-                                 "Retraction")
+        :retraction      (let [n  (get-in r [:retracts :seq])
+                               ek (->> (:entries w) (filter #(= n (:seq %))) first :kind)]
+                           (when (and ek (not (contains? retractable-kinds ek)))
+                             (throw (ex-info (str "Retraction cites entry " n ", a " ek
+                                                  ", which nothing can supersede — so a"
+                                                  " retraction of it could never be answered."
+                                                  " Retractable: "
+                                                  (str/join " or " (sort (map str retractable-kinds))))
+                                             {:seq n :kind ek})))
+                           (cites! w r [:retracts :seq] retractable-kinds "Retraction"))
         :design-approved (cites! w r [:design :seq] #{:design} "Approval")
         :design          (cites! w r [:supersedes :seq] #{:design}
                                  "Design :supersedes")
