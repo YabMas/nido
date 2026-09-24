@@ -8,6 +8,7 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.record.phase :as phase]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
@@ -1544,6 +1545,26 @@
       (let [e (ws/entry-at-seq project ws-id n)]
         (when (= :baseline (:format e)) e)))))
 
+(defn- same-phase?
+  "Whether `prior` was reached in the phase of `design`'s plan the workstream is in
+   now. What a phased design owes changes at a gate: an :on-completion invariant
+   excused before the last phase is required on it, so a verdict judged under an
+   earlier phase answers a different question.
+
+   `read-entries` is a thunk over the workstream's index rows, called only for a
+   phased design. The phase `prior` stood in is read from the rows at or before
+   its :seq; a verdict is never carried across a gate, so a carried entry's phase
+   is the one its judgment was reached in. True for an unphased design; false when
+   the rows could not be read, because a position nobody could read is not one the
+   verdict is known to share."
+  [design prior read-entries]
+  (boolean
+   (or (empty? (:phases design))
+       (when-let [entries (read-entries)]
+         (= (:current (phase/progress design entries))
+            (:current (phase/progress design (filter #(<= (:seq %) (or (:seq prior) 0))
+                                                     entries))))))))
+
 (defn ^{:malli/schema [:=> [:cat :Path :map] [:maybe :map]]}
   discover-prior-verdict
   "The verdict this workstream last recorded against the SAME design record, or
@@ -1558,12 +1579,20 @@
 
    Only the latest is offered. The ones before it are the same answer at an
    earlier round, and a judge handed all of them is reading a changelog when the
-   question is what stands now."
+   question is what stands now.
+
+   And only from the phase the workstream is in now — see `same-phase?`. What a
+   phased design owes changes at a gate, so a verdict reached before it is as
+   stale a standing answer as one against a superseded record, for the verdict
+   pass and for the reviewers `standing-needs` hands its :needs to alike."
   [cwd design]
   (when-let [n (:seq design)]
     (when-let [[project ws-id] (project+ws-from-cwd cwd)]
       (let [v (ws/latest-entry project ws-id :design-verdict)]
-        (when (= n (:design-seq v)) v)))))
+        (when (and (= n (:design-seq v))
+                   (same-phase? design v #(try (:entries (ws/read-ws project ws-id))
+                                               (catch Exception _ nil))))
+          v)))))
 
 (defn ^{:malli/schema [:=> [:cat :Path] [:maybe :map]]}
   standing-needs

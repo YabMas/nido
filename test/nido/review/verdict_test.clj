@@ -6,6 +6,7 @@
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.report :as report]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.record.workstream :as ws]
    [nido.review.stages :as stages]
    [nido.review.verdict :as verdict]
    [tasks.nido-review :as nido-review]))
@@ -842,3 +843,97 @@
         (is (= :strained (:verdict v)))
         (is (nil? (:carried-from v)) "a verdict an agent reached is not marked as carried")
         (is (= 3 (:design-seq v)))))))
+
+(def ^:private phased
+  (assoc design
+         :invariants [{:invariant "a total is rounded exactly once" :holds :always}
+                      {:invariant "one writer maintains the total" :holds :on-completion}]
+         :phases [{:claim "both writers maintain the total" :habitable "h1"
+                   :exit {:kind :soak :criterion "a week"}}
+                  {:claim "the old writer is removed" :habitable "h2"
+                   :exit {:kind :completion :criterion "done"}}]))
+
+(defn- phased-prompt [progress]
+  (verdict/build-prompt {:design phased :findings [] :history [] :rounds 1 :progress progress}))
+
+(deftest a-phased-prompt-names-the-current-phase
+  (testing "before the last phase, an on-completion invariant is excused"
+    (let [p (phased-prompt {:current 1 :of 2 :landed? true :next {:claim "the old writer is removed"}})]
+      (is (str/includes? p "THIS CHANGE IS PHASE 1 OF 2 — not the last"))
+      (is (str/includes? p "NOT expected to hold yet"))))
+  (testing "on the last phase, it is owed like any other"
+    (let [p (phased-prompt {:current 2 :of 2 :landed? true :next nil})]
+      (is (str/includes? p "THIS CHANGE IS PHASE 2 OF 2 — the LAST"))
+      (is (str/includes? p "judge one marked \"holds on completion\" as required"))
+      (is (not (str/includes? p "NOT expected to hold")))))
+  (testing "when the ledger could not be read, the pass is told so"
+    (is (str/includes? (phased-prompt nil) "Which phase is current could not be read"))))
+
+(deftest an-unreadable-ledger-still-builds-the-phased-prompt
+  (let [seen (atom nil)]
+    (with-redefs [stages/discover-design-record (fn [_] phased)
+                  stages/discover-prior-verdict (fn [_ _] nil)
+                  stages/discover-baseline (fn [_ _] nil)
+                  stages/read-stance (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/read-ws (fn [& _] (throw (ex-info "malformed ledger" {})))
+                  agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! seen first-message)
+                                  {:num-turns 1
+                                   :result-text (fenced "{\"verdict\":\"sound\",\"reason\":\"r\"}")})]
+      (verdict/run! {:cwd "/w" :run-id "r" :budget "30m"
+                     :final {:status :clean :findings [] :history []}
+                     :report {:summary {:rounds 1 :fix-attempts 0}}})
+      (is (str/includes? @seen "Which phase is current could not be read")
+          "a ledger that throws is an unread position, not a lost verdict"))))
+
+(deftest a-verdict-from-an-earlier-phase-is-not-carried
+  (let [same-phase? #(#'stages/same-phase? %1 %2 (constantly %3))
+        prior   (assoc standing :seq 12)
+        gate    {:seq 14 :kind :phase-gate :opens "the old writer is removed"}
+        before  [{:seq 10 :kind :design} {:seq 12 :kind :design-verdict}]]
+    (testing "a gate opened after the verdict moved the question it answered"
+      (is (not (same-phase? phased prior (conj before gate)))))
+    (testing "within one phase, the verdict still answers"
+      (is (same-phase? phased prior before))
+      (is (same-phase? phased (assoc prior :seq 15) (conj before gate))))
+    (testing "an unread position is not one the verdict is known to share"
+      (is (not (same-phase? phased prior nil))))
+    (testing "an unphased design has no phase to move"
+      (is (same-phase? design prior nil))))
+  (let [launched (atom false)]
+    (with-redefs [stages/discover-design-record (fn [_] phased)
+                  ws/latest-entry (fn [_ _ kind]
+                                    (when (= :design-verdict kind) (assoc standing :seq 12)))
+                  ws/plan-design (fn [_ _] phased)
+                  stages/discover-baseline (fn [_ _] nil)
+                  stages/read-stance (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/read-ws (fn [& _] {:entries [{:seq 12 :kind :design-verdict}
+                                                  {:seq 14 :kind :phase-gate
+                                                   :opens "the old writer is removed"}]})
+                  agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! launched first-message)
+                                  {:num-turns 1
+                                   :result-text (fenced "{\"verdict\":\"sound\",\"reason\":\"r\"}")})]
+      (let [v (verdict/run! {:cwd "/w" :run-id "r" :budget "30m"
+                             :final {:status :clean :findings [] :history []}
+                             :report {:summary {:rounds 2 :fix-attempts 0}}})]
+        (is (str/includes? @launched "THIS CHANGE IS PHASE 2 OF 2 — the LAST")
+            "the last phase's judgment of :on-completion claims is made, not carried")
+        (is (nil? (:carried-from v)))
+        (is (not (str/includes? @launched "WHAT YOU CONCLUDED LAST TIME"))
+            "an earlier phase's verdict is not offered as the standing answer")
+        (is (nil? (stages/standing-needs "/w"))
+            "nor are its :needs handed to the next run's reviewers as outstanding")))
+    (with-redefs [stages/discover-design-record (fn [_] phased)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/read-ws (fn [& _] {:entries [{:seq 12 :kind :design-verdict}]})
+                  ws/latest-entry (fn [_ _ kind]
+                                    (when (= :design-verdict kind) (assoc standing :seq 12)))]
+      (is (= (:needs standing) (:needs (stages/standing-needs "/w")))
+          "within its own phase, the verdict's :needs still reach the reviewers"))))
+
+(deftest an-unphased-prompt-says-nothing-about-phases
+  (is (not (str/includes? (verdict/build-prompt {:design design :findings [] :history [] :rounds 1})
+                          "PHASES"))))

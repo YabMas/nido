@@ -342,7 +342,9 @@
     "The verdict this workstream last recorded against the SAME design record. Matched on
      :design-seq for the reason `discover-baseline` follows a citation rather than reading the
      newest: a verdict against a superseded record answered a different question, and offering
-     it as a standing answer would have the judge defend a yardstick nobody is using."
+     it as a standing answer would have the judge defend a yardstick nobody is using. For a
+     phased design, only a verdict reached in the phase the workstream is in now: a gate
+     changes what the design owes, so an earlier phase's verdict is as stale."
     {:signature [:=> [:catn [:cwd Path] [:design :map]] [:maybe :map]]})
   (Operation standing-needs
     "What the last verdict against this workstream's design record left outstanding, from a
