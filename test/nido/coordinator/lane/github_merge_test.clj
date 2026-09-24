@@ -7,6 +7,7 @@
    [nido.coordinator.lane.github-merge :as gm]
    [nido.coordinator.source.state :as sstate]
    [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.lane.reentry :as reentry]
    [nido.coordinator.record.workstream :as ws]
    [nido.github.client :as gh]
    [nido.notion.client :as notion]))
@@ -218,7 +219,7 @@
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
                                                   :prs [{:number 6 :url "u6" :title "t6" :merged-at "y" :base "main"}]})
                       notion/keychain-token (constantly nil)
-                      ws/append-entry! (fn [& _] (throw (ex-info "disk full" {})))]
+                      ws/append-entry-once! (fn [& _] (throw (ex-info "disk full" {})))]
           (gm/poll-and-react! :brian cfg)
           (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome))
               "the close is the important write; a failed append must not undo it"))))))
@@ -515,3 +516,88 @@
               "the merge did correlate and the workstream closed")
           (is (false? @called)
               "no property to write ⇒ no Notion request at all"))))))
+
+(def ^:private a-phased-design
+  (assoc a-design
+         :holds  {"rounded-once" :on-completion}
+         :phases [{:claim "both paths round" :habitable "h" :exit {:kind :soak :criterion "a week"}
+                   :undo {:how :revert :by "r"}}
+                  {:claim "the old path is removed" :habitable "h" :exit {:kind :completion :criterion "done"}
+                   :undo {:how :none :why "gone"}}]))
+
+(deftest a-phase-that-is-not-the-last-lands-between-phases-and-delivers-no-ticket
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [id    (:id (ws/create! :brian {:stage :in-progress
+                                           :external-refs [{:adapter :notion :id "BR-9" :page-id "PAGE9"}]}))
+            add!  #(ws/append-entry! :brian id {:kind %1} (pr-str %2))
+            nudged (atom false)]
+        (add! :intent {:format :intent :goal "g" :done-when ["d"]})
+        (add! :baseline a-baseline)
+        (add! :design a-phased-design)
+        (add! :design-approved {:format :design-approved :design {:seq 3} :at-seq 3})
+        (ws/add-ref! :brian id {:adapter :github :id "brian-study/brian#9" :url "https://gh/9" :title "p1"}
+                     {:design 3})
+        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
+                                                  :prs [{:number 9 :url "https://gh/9" :title "p1"
+                                                         :merged-at "z" :base "main"}]})
+                      notion/keychain-token (constantly "tok")
+                      notion/update-page-properties! (fn [& _] (reset! nudged true) {:ok true})
+                      notion/retrieve-page (fn [& _] {:properties {}})]
+          (gm/poll-and-react! :brian cfg)
+          (is (= :between-phases (-> (ws/read-ws :brian id) :closed :outcome)))
+          (is (ws/latest-entry :brian id :merged) "the landing is still recorded")
+          (is (not @nudged) "phase 1 of 2 moves no ticket"))))))
+
+(deftest a-phase-closes-under-the-plan-its-pr-was-opened-under
+  ;; A design appended after the PR opened is not the plan this landing is a
+  ;; phase of. Reading the newest would close :done under D2 and deliver the
+  ;; ticket on what is only phase 1 of D1.
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [id    (:id (ws/create! :brian {:stage :in-progress
+                                           :external-refs [{:adapter :notion :id "BR-9" :page-id "PAGE9"}]}))
+            add!  #(ws/append-entry! :brian id {:kind %1} (pr-str %2))
+            nudged (atom false)]
+        (add! :intent {:format :intent :goal "g" :done-when ["d"]})
+        (add! :baseline a-baseline)
+        (add! :design a-phased-design)                                               ; 3 — D1, phased
+        (add! :design-approved {:format :design-approved :design {:seq 3} :at-seq 3})
+        (ws/add-ref! :brian id {:adapter :github :id "brian-study/brian#9" :url "https://gh/9" :title "p1"}
+                     {:design 3})
+        (add! :design (assoc a-design :summary "Round per invoice line."))           ; 6 — D2, unphased
+        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
+                                                  :prs [{:number 9 :url "https://gh/9" :title "p1"
+                                                         :merged-at "z" :base "main"}]})
+                      notion/keychain-token (constantly "tok")
+                      notion/update-page-properties! (fn [& _] (reset! nudged true) {:ok true})
+                      notion/retrieve-page (fn [& _] {:properties {}})]
+          (gm/poll-and-react! :brian cfg)
+          (is (= :between-phases (-> (ws/read-ws :brian id) :closed :outcome))
+              "D1's plan, which the landing is attributed to, decides — not D2")
+          (is (= {:seq 3} (-> (ws/read-ws :brian id) :closed :design))
+              "and the close names that plan, which governs until its gate opens")
+          (is (not @nudged) "phase 1 of D1 moves no ticket"))))))
+
+(deftest a-failed-merge-record-still-closes-and-is-not-retried
+  ;; The close is the landing's record for a phase gate, so a lost :merged strands
+  ;; nothing — and a retry written later could land behind the next phase's gate.
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [w   (ws/create! :brian {:stage :in-progress
+                                    :external-refs [{:adapter :github :id "brian-study/brian#6"}]})
+            prs (fn [_] {:status :ok
+                         :prs [{:number 6 :url "u6" :title "t6" :merged-at "y" :base "main"}]})]
+        (with-redefs [gh/list-merged-prs prs
+                      notion/keychain-token (constantly nil)
+                      ws/append-entry-once! (fn [& _] (throw (ex-info "disk full" {})))]
+          (binding [*err* (java.io.PrintWriter. (java.io.StringWriter.))]
+            (gm/poll-and-react! :brian cfg)))
+        (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome)) "closed regardless")
+        (with-redefs [gh/list-merged-prs prs notion/keychain-token (constantly nil)]
+          (gm/poll-and-react! :brian cfg))
+        (is (nil? (ws/latest-entry :brian (:id w) :merged)) "and nothing retries the record")
+        (is (nil? (:unrecorded (sstate/read-state "github-brian"))))))))

@@ -55,7 +55,11 @@
    {:items [{:summary :severity (:id) (:area)} …] :staging-ref? :note? :session?}.
    Appends the immutable :findings event, seeds the tracker, reopens to
    :in-progress, and enqueues a provisioning envelope. Returns {:round n :queued p}.
-   Throws if the workstream is absent or not settled."
+   Throws if the workstream is absent or not settled.
+
+   A round filed on a workstream closed :between-phases keeps the design that close
+   named on the tracker, as :between-phases: the round is about the phase that
+   landed, and `resolve!` returns the workstream to its gate under that plan."
   [project ws-id {:keys [items staging-ref note session]}]
   (let [w (or (ws/read-ws project ws-id)
               (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
@@ -68,17 +72,43 @@
                     staging-ref (assoc :staging-ref staging-ref)
                     note        (assoc :note note))]
       (append-event! project w round session)
-      (ws/set-findings! project ws-id {:round round-n
-                                       :open (set (map :id items*))
-                                       :resolved {}})
+      (ws/set-findings! project ws-id
+                        (cond-> {:round round-n :open (set (map :id items*)) :resolved {}}
+                          (= :between-phases (get-in w [:closed :outcome]))
+                          (assoc :between-phases (get-in w [:closed :design :seq]))))
       (ws/reopen! project ws-id :in-progress)
       {:round round-n :queued (enqueue-impl! project w)})))
+
+(defn- published-since-round?
+  "Whether a :pr-opened was appended after the newest :findings — a fix for the
+   round that will land, and close the workstream, through a landing path."
+  [w]
+  (let [round (->> (:entries w) (filter #(= :findings (:kind %))) (map :seq) (reduce max 0))]
+    (some #(and (= :pr-opened (:kind %)) (> (:seq %) round)) (:entries w))))
+
+(defn- settle-between-phases!
+  "Close `ws-id` :between-phases again, under the design its round was filed against,
+   when that round was filed between phases and no fix for it was published — a fix
+   that was closes it the same way when it lands, through its landing path.
+
+   The round belonged to the landed phase: filing it wrote no gate, so that phase is
+   still current, and its end returns the workstream to its gate — never on to
+   implementing the next phase, which only `lane.phase/advance!` opens."
+  [project ws-id tracker]
+  (let [w (ws/read-ws project ws-id)]
+    (when (and (contains? tracker :between-phases)
+               (nil? (:closed w))
+               (not (published-since-round? w)))
+      (ws/close! project ws-id :between-phases (:between-phases tracker)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any :any] :map]}
   resolve!
   "Mark findings items resolved by PR/commit `by`. Moves each known id from :open
    to :resolved {id {:by by :at …}}; unknown ids are ignored. Throws when there is
-   no open findings tracker. Returns the updated tracker."
+   no open findings tracker. Returns the updated tracker.
+
+   Resolving the last open item of a round filed on a phased workstream between
+   its phases settles it between phases again (`settle-between-phases!`)."
   [project ws-id item-ids by]
   (let [w (ws/read-ws project ws-id)
         t (:findings w)]
@@ -91,6 +121,7 @@
                   (update :resolved merge
                           (into {} (map (fn [id] [id {:by by :at at}])) ids)))]
       (ws/set-findings! project ws-id t')
+      (when (empty? (:open t')) (settle-between-phases! project ws-id t'))
       t')))
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] :int]}

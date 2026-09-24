@@ -100,6 +100,20 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
      :delegates [workstream/read-ws promote! start-triage!]}))
 
+(Module lane-phase
+  "Opening a phased workstream's next phase once its gate has been met.
+
+   The same gesture as a findings round — a settled workstream put back to work — and for the same
+   reason it reopens rather than mints: one design record governs every landing of one story. A
+   gate is ASSERTED with its evidence, never checked, because nido has no production telemetry of
+   its own; the evidence is written down so a reader can tell a number from a vibe."
+  (Operation advance!
+    "Record that the current phase's gate was met, with its evidence, and put the workstream back
+     to work on the next phase of the plan its close names. Refused unless the workstream is
+     settled between phases, and refused on blank evidence."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts :map]] :map]
+     :delegates [workstream/read-ws workstream/plan-design workstream/open-phase!]}))
+
 (Module lane-resume
   "Re-engaging a parked session with a human's answer."
   (Operation resume-cwd

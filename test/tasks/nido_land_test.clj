@@ -7,6 +7,7 @@
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as cws]
    [nido.design.check :as design]
+   [nido.platform.core :as core]
    [nido.platform.project :as project]
    [nido.review.layers :as layers]
    [nido.review.stages :as stages]
@@ -45,11 +46,13 @@
 (defn- record-run
   "Drive the landing record with the repository and the ledger stubbed. `held?` is whether origin's
    main holds the tip. Returns [exit-code output calls], calls being the writes in the order made."
-  [{:keys [held? standing closed? once-result fetch-fails?]}]
+  [{:keys [held? standing closed? once-result fetch-fails? ws root append-fails?]}]
   (let [out   (java.io.StringWriter.)
-        calls (atom [])]
+        calls (atom [])
+        tmp   (or root (str (fs/create-temp-dir)))]
     (binding [*out* out]
-      (with-redefs [lifecycle/worktree-from-cwd (fn [g] g)
+      (with-redefs [core/nido-root (constantly tmp)
+                    lifecycle/worktree-from-cwd (fn [g] g)
                     stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                     jj/jj! (fn [_ & args]
                              (cond
@@ -64,9 +67,10 @@
                                                          :else nil))
                     cws/latest-entry (fn [& _] a-design)
                     standing/of-design (constantly standing)
-                    cws/read-ws (fn [& _] (cond-> {:id "ws-1"} closed? (assoc :closed {:outcome :done})))
+                    cws/read-ws (fn [& _] (or ws (cond-> {:id "ws-1"} closed? (assoc :closed {:outcome :done}))))
                     cws/close! (fn [& args] (swap! calls conj [:close args]) {})
                     cws/append-entry-once! (fn [_ _ entry content same?]
+                                             (when append-fails? (throw (ex-info "disk full" {})))
                                              (swap! calls conj [:append entry (read-string content) same?])
                                              (or once-result {:appended "/e/0009-merged.edn"}))]
         [(land/record ":cwd" "/wt") (str out) @calls]))))
@@ -91,11 +95,13 @@
     (is (str/includes? out "newest design at entry 4 does not stand"))
     (is (empty? calls))))
 
-(deftest a-recorded-landing-closes-the-workstream-then-names-its-commit
+(deftest a-recorded-landing-names-its-commit-then-closes-the-workstream
+  ;; Appended first: a landing's :merged never follows its close, so none can
+  ;; follow the gate that close lets open.
   (let [[code out calls] (record-run {:held? true :standing {:cleared? true}})
-        [[first-write] [second-write entry landing same?]] calls]
+        [[first-write entry landing same?] [second-write]] calls]
     (is (= 0 code))
-    (is (= [:close :append] [first-write second-write]) "closed first, appended after")
+    (is (= [:append :close] [first-write second-write]) "appended first, closed after")
     (is (= {:kind :merged} entry))
     (is (= {:format :merged :commit sha :url (str "https://github.com/YabMas/nido/commit/" sha)
             :title "feat: land it" :design {:seq 4}}
@@ -103,12 +109,17 @@
     (is (and (same? {:commit sha}) (not (same? {:commit "another"}))) "keyed on the commit")
     (is (str/includes? out "is recorded"))))
 
-(deftest a-re-run-completes-what-an-earlier-run-left-undone
-  (let [[code out calls] (record-run {:held? true :standing {:cleared? true} :closed? true
-                                      :once-result {:existing "/e/0009-merged.edn"}})]
+(deftest a-re-run-on-a-closed-workstream-writes-nothing
+  (let [[code out calls] (record-run {:held? true :standing {:cleared? true} :closed? true})]
     (is (= 0 code))
-    (is (= [:append] (mapv first calls)) "a closed workstream is not closed again")
-    (is (str/includes? out "already on the ledger"))))
+    (is (empty? calls) "neither closed again nor appended after its close")
+    (is (str/includes? out "already closed"))))
+
+(deftest a-failed-append-still-closes
+  (let [[code out calls] (record-run {:held? true :standing {:cleared? true} :append-fails? true})]
+    (is (= 0 code))
+    (is (= [:close] (mapv first calls)))
+    (is (str/includes? out "not recorded"))))
 
 (deftest a-standing-approved-design-lands
   (let [[code out] (run {:session? true :design a-design

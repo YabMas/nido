@@ -12,6 +12,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
+   [nido.coordinator.record.phase :as phase]
    [nido.coordinator.record.standing :as standing]
    [nido.design.check :as design]
    [tasks.nido-design :as nido-design]
@@ -426,7 +427,12 @@
    a tip origin's main does not hold, or a newest design that does not stand — and a re-run
    completes what an earlier run left undone: a closed workstream is not closed again, and the
    append goes through `append-entry-once!` keyed on the commit, so one landing is on the ledger
-   once however often this runs."
+   once however often this runs.
+
+   The :merged is appended BEFORE the close and only then: best-effort, so a failed append leaves
+   no record and the close still happens, and a re-run that finds the workstream already closed
+   writes nothing. The close is the landing's record for a phase gate, and appending first is
+   what keeps a landing's :merged ahead of the gate that opens the next phase."
   [& args]
   (let [[_ opts] (task-args/split-args args)
         given    (or (:cwd opts) (System/getProperty "user.dir"))
@@ -468,19 +474,30 @@
                 landing {:format :merged
                          :commit tip
                          :url    (if slug (str "https://github.com/" slug "/commit/" tip) tip)
-                         :title  title
-                         :design {:seq (:seq design)}}]
+                         :title  title}]
             (try
-              (when-not (:closed (cws/read-ws project ws-id))
-                (cws/close! project ws-id :done))
-              (let [result (cws/append-entry-once! project ws-id {:kind :merged} (pr-str landing)
-                                                   #(= tip (:commit %)))]
-                (println (str "land:record ok · " ws-id " is closed, and its landing at "
-                              (subs tip 0 (min 12 (count tip))) " is "
-                              (cond (:appended result) "recorded"
-                                    (:indexed result)  "recorded, completing an interrupted run"
-                                    :else              "already on the ledger")))
-                0)
+              (let [w (cws/read-ws project ws-id)]
+                (if (:closed w)
+                  (do (println (str "land:record ok · " ws-id " was already closed; a landing is recorded"
+                                    " only before its close, so nothing was written"))
+                      0)
+                  (let [result  (try (cws/append-entry-once! project ws-id {:kind :merged}
+                                                             (pr-str (assoc landing :design {:seq (:seq design)}))
+                                                             #(= tip (:commit %)))
+                                     (catch Exception e
+                                       (println (str "land:record · the :merged could not be appended ("
+                                                     (ex-message e) "); closing anyway"))
+                                       nil))
+                        outcome (phase/landing-outcome design (:entries (cws/read-ws project ws-id)))]
+                    (cws/close! project ws-id outcome (when (= :between-phases outcome) (:seq design)))
+                    (println (str "land:record ok · " ws-id " is closed "
+                                  (name outcome) ", and its landing at "
+                                  (subs tip 0 (min 12 (count tip))) " is "
+                                  (cond (:appended result) "recorded"
+                                        (:indexed result)  "recorded, completing an interrupted run"
+                                        (:existing result) "already on the ledger"
+                                        :else              "not recorded")))
+                    0)))
               (catch Exception e
                 (unrecorded (str "a write failed: " (ex-message e))
                             "repair what it names, then run this again — a re-run completes what this one left undone")))))))))

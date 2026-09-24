@@ -36,6 +36,13 @@
     {:signature [:=> [:catn [:design-standing [:maybe :map]] [:baseline-standing [:maybe :map]]
                       [:intent-standing [:maybe :map]]]
                  [:maybe :map]]})
+  (Operation standing-trail
+    "The trail kinds that stand since the newest :phase-gate or :findings, or nil when there is
+     neither. A gate or a findings round puts a workstream that already carried a trail back to
+     work, and what it owes is written after it — so the trail from before it is history, never a
+     stage passed."
+    {:signature [:=> [:catn [:w Workstream] [:design [:maybe :map]]] [:maybe [:set :keyword]]]
+     :delegates [trail-standing]})
   (Operation of*
     "Re-entry from what a caller already holds — pure, and the arity the fold uses. The newest
      baseline's standing is one of its inputs: a goal replaced after that survey, or the survey
