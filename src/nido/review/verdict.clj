@@ -16,6 +16,7 @@
    [nido.coordinator.agent :as agent]
    [nido.coordinator.report :as report]
    [nido.coordinator.report.model :as claim-model]
+   [nido.coordinator.record.phase :as phase]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.review.stages :as stages]))
@@ -85,13 +86,15 @@
    of it. A phased design's intermediate states are correct BY DESIGN — during an
    expand/migrate/contract, \"there is exactly one writer\" is deliberately untrue
    for the whole middle phase — so an :on-completion invariant that does not hold
-   yet is the plan working, not the design failing.
+   yet is the plan working, not the design failing. On the LAST phase the same
+   invariant is simply owed, and excusing it there would let the plan end with
+   the design never having held.
 
-   The pass is not told WHICH phase is current, because nothing tracks that yet.
-   That is a real limit and the prompt says so rather than inviting a guess: an
-   :on-completion invariant is reported on only when the code shows the last
-   phase has landed and it still does not hold."
-  [phases]
+   `progress` is `record.phase/progress` over the workstream's ledger, and says
+   which of the two this is. nil when the ledger could not be read, and then the
+   pass is told so rather than invited to guess: an :on-completion invariant is
+   reported on only when the code shows the last phase has landed."
+  [phases progress]
   (when (seq phases)
     (str "\nTHIS DESIGN LANDS IN " (count phases) " PHASES, not one. Each phase is a\n"
          "separate deploy that the system has to be able to live in:\n"
@@ -103,10 +106,24 @@
                            "\n   moves on when: " (:criterion exit)))
                     phases))
          "\n\n"
-         "An invariant marked \"holds on completion\" is NOT expected to hold before\n"
-         "the last phase lands. Finding that one does not hold yet is the plan\n"
-         "working as written — do not report it as broken. Report it only if the\n"
-         "code shows the final phase has landed and it still does not hold.\n"
+         (cond
+           (nil? progress)
+           (str "Which phase is current could not be read. An invariant marked \"holds on\n"
+                "completion\" is NOT expected to hold before the last phase lands — report\n"
+                "it only if the code shows the final phase has landed and it still does not\n"
+                "hold.\n")
+
+           (:next progress)
+           (str "THIS CHANGE IS PHASE " (:current progress) " OF " (:of progress)
+                " — not the last. An invariant marked\n"
+                "\"holds on completion\" is NOT expected to hold yet. Finding that one does\n"
+                "not hold is the plan working as written — do not report it as broken.\n")
+
+           :else
+           (str "THIS CHANGE IS PHASE " (:current progress) " OF " (:of progress)
+                " — the LAST. Every invariant is owed\n"
+                "now: judge one marked \"holds on completion\" as required, exactly as you\n"
+                "judge the others.\n"))
          "Invariants marked \"holds always\" are the ones that must be true at\n"
          "EVERY phase boundary, including this one; judge those normally.\n")))
 
@@ -239,10 +256,12 @@
   "The verdict prompt. `design` is the workstream's :design record, `baseline` the
    :baseline record it cited (nil when it predates them), `findings` the findings
    still open at the end, `history` the per-round digest, `prior` the last
-   verdict against this same design record (nil when there is none), `status`
+   verdict against this same design record in the current phase (nil when there
+   is none), `status`
    the run's terminal status, and `fix-outcomes` the run's
-   `stages/fix-outcomes`."
-  [{:keys [design baseline stance findings history rounds prior status fix-outcomes]}]
+   `stages/fix-outcomes`. `progress` is where the workstream stands in the
+   design's phase plan (`record.phase/progress`), nil when unphased or unread."
+  [{:keys [design baseline stance findings history rounds prior status fix-outcomes progress]}]
   (str
    (opening status (not-landed fix-outcomes))
    "Read the code where you need to — you have tools, and the question cannot be\n"
@@ -263,7 +282,7 @@
                             (str t " [holds " (name h) "]")))
                         (:invariants design)))))
    "\n"
-   (phase-section (:phases design))
+   (phase-section (:phases design) progress)
    (when-let [r (seq (:rejected design))]
      (str "Already rejected (a finding re-proposing one of these is ANSWERED,\n"
           "not evidence against the design — unless the reason no longer holds):\n"
@@ -711,6 +730,19 @@
           (seq held)   (assoc :invariants-held held)
           (seq broken) (assoc :invariants-broken broken))))))
 
+(defn- plan-progress
+  "Where the workstream at `cwd` is in the plan that governs it (`ws/plan-design` —
+   the plan the board shows and the gate opens), or nil when it is unphased or its
+   ledger could not be read. `ws/read-ws` throws on a malformed or unreadable
+   ledger, and an unread position is a prompt the pass can still answer — not a
+   run lost."
+  [cwd]
+  (try
+    (when-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+      (when-let [w (ws/read-ws project ws-id)]
+        (phase/progress (ws/plan-design project ws-id) (:entries w))))
+    (catch Exception _ nil)))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   run!
   "Run the verdict pass. Returns the verdict map, or nil when there is no design
@@ -720,10 +752,13 @@
 
    A standing verdict this run gave no reason to revisit is carried forward
    instead of re-derived; see `still-answers?` for when that holds and
-   `carried-forward` for what the entry then says."
+   `carried-forward` for what the entry then says. `stages/discover-prior-verdict`
+   offers no verdict from an earlier phase, so none is ever carried across a gate."
   [{:keys [cwd run-id budget final report]}]
   (when-let [design (stages/discover-design-record cwd)]
-    (let [prior  (stages/discover-prior-verdict cwd design)
+    (let [;; nil for a verdict reached in another phase, which answered another
+          ;; question: it is neither carried nor offered to the fresh pass as standing.
+          prior  (stages/discover-prior-verdict cwd design)
           rounds (or (get-in report [:summary :rounds]) 0)]
       (if (still-answers? prior final report)
         (carried-forward prior rounds)
@@ -736,7 +771,8 @@
                        :fix-outcomes (stages/fix-outcomes (:history final) (:carry final))
                        :status (:status final)
                        :rounds rounds
-                       :prior prior})
+                       :prior prior
+                       :progress (plan-progress cwd)})
               {:keys [num-turns result-error? result-text]}
               (agent/launch! {:run-id run-id :cwd cwd
                               :first-message prompt :budget budget
