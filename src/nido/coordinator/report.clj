@@ -1766,6 +1766,26 @@
    [:fn {:error/message "a landing names the pull request it merged or the commit it landed as — exactly one"}
     #(= 1 (count (filter % [:pr :commit])))]])
 
+(def PhaseGate
+  "A phase's gate met, and the next phase of the plan opened on the strength of it.
+
+   The only record of a plan moving forward. `nido.coordinator.record.phase` reads
+   the current phase off these and nothing else — never off how many :merged the
+   ledger holds, which a findings round or a landing recorded twice also add to.
+
+   :opens names the phase by its :claim, as a seam's :closed-by :phase does, so a
+   design superseded mid-plan keeps its progress for exactly the phases whose
+   claims it keeps. :evidence is what the person looked at: nido observes no
+   production, so a gate is asserted rather than checked, and the record is what
+   lets a reader tell a number from a vibe. Written only by
+   `record.workstream/open-phase!`, which the generic appends refuse to stand in
+   for."
+  [:map {:closed true}
+   [:format   [:= :phase-gate]]
+   [:design   [:map {:closed true} [:seq int?]]]
+   [:opens    [:string {:min 1}]]
+   [:evidence [:string {:min 1}]]])
+
 (def ShipSubmitted
   "The branch handed to the merge lane by `nido ship`. Carries no judgement — the
    session name is the whole fact — but it is load-bearing twice over: it marks
@@ -2928,6 +2948,7 @@
    :triage-accepted          TriageAccepted
    :pr-opened                PrOpened
    :merged                   Merged
+   :phase-gate               PhaseGate
    :ship-submitted           ShipSubmitted
    :review                   ReviewReport
    :baseline-review          BaselineReview
@@ -3468,6 +3489,13 @@
                   (str "**" title "** — " url)
                   (str "`" (or pr commit) "`" (when merged-at (str " · " merged-at)))])))
 
+(defn- phase-gate->markdown [{:keys [design opens evidence]}]
+  (str/join "\n" ["# Phase gate met"
+                  ""
+                  (str "Opens **" opens "** — under the design at entry " (:seq design) ".")
+                  ""
+                  (str "**Evidence** — " evidence)]))
+
 (defn- ship-submitted->markdown [{:keys [session]}]
   (str/join "\n" ["# Ship submitted" "" (str "`" session "` handed to the merge lane.")]))
 
@@ -3932,6 +3960,7 @@
     :triage-accepted          (triage-accepted->markdown report)
     :pr-opened                (pr-opened->markdown report)
     :merged                   (merged->markdown report)
+    :phase-gate               (phase-gate->markdown report)
     :ship-submitted           (ship-submitted->markdown report)
     :review-report            (review->markdown report)
     :baseline-review          (baseline-review->markdown report)
@@ -4004,4 +4033,5 @@
      :improvement-claim-reserved (str "Claim " (inc (:claim report))
                                       " of plan " (:plan-seq report) " reserved")
      :ship-submitted           "Ship submitted"
+     :phase-gate               (str "Phase gate met — opens " (first-line (:opens report)))
      nil)))

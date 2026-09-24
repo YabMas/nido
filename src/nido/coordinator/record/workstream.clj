@@ -9,6 +9,7 @@
    [clojure.string :as str]
    [malli.core :as m]
    [nido.coordinator.record.clock :as clock]
+   [nido.coordinator.record.phase :as phase]
    [nido.coordinator.report :as report]
    [nido.coordinator.report.model :as report-model]
    [nido.coordinator.record.session :as session]
@@ -56,9 +57,16 @@
    ;; so the addresses that carry no decline of their own return to the owed set
    ;; and are grouped again. Folding the two would make one decline bury every
    ;; proposal that happened to be claimed beside it.
+   ;;
+   ;; :between-phases is a landing of a phase that is not the plan's last. Closed,
+   ;; because nothing is in flight until a person has watched the running system;
+   ;; not :done, because the plan is not. `open-phase!` is its way forward.
    [:closed        [:maybe [:map
                             [:at      string?]
-                            [:outcome [:enum :done :dropped :dismissed :vetoed]]]]]
+                            [:outcome [:enum :done :dropped :dismissed :vetoed :between-phases]]
+                            ;; A :between-phases close names the design whose plan it
+                            ;; paused, which governs until the gate opens (`plan-design`).
+                            [:design  {:optional true} [:map {:closed true} [:seq int?]]]]]]
    [:created-at    string?]
    [:entries       [:vector [:map-of keyword? any?]]]
    [:intake        {:optional true} [:maybe IntakePayload]]
@@ -171,18 +179,32 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :Workstream]}
   close!
-  "Settle a workstream terminally. `outcome` is :done, :dropped, :dismissed or
-   — for a claim the improvement sweep refused at reservation — :vetoed, which
-   `proposal/owed` reads to return the claim's undeclined addresses to the owed
-   set rather than counting them as tried.
+  "Settle a workstream. `outcome` is :done, :dropped, :dismissed, :between-phases
+   — a phase landed and the plan has more — or, for a claim the improvement sweep
+   refused at reservation, :vetoed, which `proposal/owed` reads to return the
+   claim's undeclined addresses to the owed set rather than counting them as tried.
    No consumer branches on the value — every reader tests :closed for presence
    (engagement, the notion-sync/facets candidate sets) or renders (name outcome);
    the one exception is workstreams-view/workstream-row, which reads :dismissed
-   as the board veto. Idempotent write of :closed. Returns the updated record."
-  [project ws-id outcome]
-  (let [w (or (read-ws project ws-id)
-              (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
-    (write! (assoc w :closed {:at (clock/now-iso) :outcome outcome}))))
+   as the board veto. Idempotent write of :closed. Returns the updated record.
+
+   `design-seq`, given with :between-phases, names the design whose plan the landing
+   paused: it governs the workstream until its gate opens (`plan-design`)."
+  ([project ws-id outcome] (close! project ws-id outcome nil))
+  ([project ws-id outcome design-seq]
+   (let [w (or (read-ws project ws-id)
+               (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
+     (write! (assoc w :closed (cond-> {:at (clock/now-iso) :outcome outcome}
+                                design-seq (assoc :design {:seq design-seq})))))))
+
+(defn- reopened
+  "`w` un-terminalized at `stage`: :closed cleared, and a stage-history entry marked :reopened."
+  [w stage]
+  (-> w
+      (assoc :closed nil)
+      (assoc :stage stage)
+      (update :stage-history (fnil conj [])
+              {:at (clock/now-iso) :stage stage :reopened true})))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :Workstream]}
   reopen!
@@ -194,11 +216,7 @@
               (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
     (if (and (nil? (:closed w)) (= stage (:stage w)))
       w
-      (write! (-> w
-                  (assoc :closed nil)
-                  (assoc :stage stage)
-                  (update :stage-history (fnil conj [])
-                          {:at (clock/now-iso) :stage stage :reopened true}))))))
+      (write! (reopened w stage)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :map]] :Workstream]}
   set-findings!
@@ -900,6 +918,28 @@
     (throw (ex-info "A :design-cleared is appended only through append-entry-at!"
                     {:kind kind}))))
 
+(defn- refuse-unguarded-gate!
+  "A `:phase-gate` goes through `open-phase!` and nowhere else.
+
+   A gate opens the next phase, and whether it may is a question about the
+   workstream — settled between phases, its current phase landed, this the next
+   phase of the plan — that only the writer asking it under the lock can answer.
+   Admitted through a generic append it would move the plan with no one asking."
+  [kind]
+  (when (= :phase-gate kind)
+    (throw (ex-info "A :phase-gate is appended only through open-phase!"
+                    {:kind kind}))))
+
+(defn- refuse-design-between-phases!
+  "No :design joins a workstream closed :between-phases. Its plan is paused under the
+   design its close names, and a design written while it waits would put one gate on
+   the board and open another; a newer design takes over after the gate opens."
+  [w kind]
+  (when (and (= :design kind) (= :between-phases (get-in w [:closed :outcome])))
+    (throw (ex-info (str (:id w) " is waiting between phases — open the next phase before"
+                         " writing a design over it")
+                    {:ws-id (:id w) :kind kind}))))
+
 (defn- check-clearance-earned!
   "A `:design-cleared` records a round that ran, over a design that owes nobody,
    at the position it was compared at.
@@ -1102,10 +1142,14 @@
    that. Absent on rows written before the citation existed, where
    `reentry/generation` is still the answer."
   [entry seq-n payload rel]
-  (let [under (when (contains? trail-kinds (:kind entry))
-                (get-in (edn/read-string payload) [:design :seq]))]
+  (let [gate? (= :phase-gate (:kind entry))
+        body  (when (or gate? (contains? trail-kinds (:kind entry))) (edn/read-string payload))
+        under (get-in body [:design :seq])]
     (cond-> (assoc entry :seq seq-n :at (clock/now-iso) :file rel)
-      under (assoc :under under))))
+      under (assoc :under under)
+      ;; A gate's phase is mirrored for the same reason: `record.phase/progress`
+      ;; reads the index it is handed and parses nothing.
+      gate? (assoc :opens (:opens body)))))
 
 (defn- check-append!
   "Every refusal an append makes of `payload` joining `w`, in the order `append-entry!` asks them.
@@ -1113,6 +1157,7 @@
    append left on disk — so neither indexes an entry past a check the other would have made."
   [project w kind payload]
   (refuse-unguarded-clearance! kind)
+  (refuse-design-between-phases! w kind)
   (check-baseline-citation! w kind payload)
   (check-standing-citations! w kind payload)
   (check-fork-citation! project w kind payload)
@@ -1125,25 +1170,29 @@
 
 (defn- append-locked!
   "The append, for a caller already holding the append lock over `w`: number the entry off the
-   disk, make every check, write the payload and then its index row. Returns the absolute path."
-  [project ws-id w entry content]
-  (let [;; From the DISK, not from the index count. The two agree until an
-        ;; append writes its payload and dies before updating the index, and
-        ;; from then on every append computes a number the index says is
-        ;; free and the directory says is taken — overwriting a real entry
-        ;; and leaving the ledger looking consistent.
-        seq-n (inc (max (count (:entries w))
-                        (highest-seq-on-disk project ws-id)))
-        [ext payload] (report/entry-payload (:kind entry) content)
-        _     (check-append! project w (:kind entry) payload)
-        fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
-        rel   (str "entries/" fname)
-        abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
-    (refuse-if-taken! abs seq-n)
-    (io/write-text! abs payload)
-    (write! (update w :entries (fnil conj [])
-                    (index-row entry seq-n payload rel)))
-    abs))
+   disk, make every check, write the payload and then its index row. Returns the absolute path.
+
+   `f`, when given, is applied to the record in the same write as the index row, so a change
+   the entry implies lands with it or not at all — never an entry without its change."
+  ([project ws-id w entry content] (append-locked! project ws-id w entry content identity))
+  ([project ws-id w entry content f]
+    (let [;; From the DISK, not from the index count. The two agree until an
+          ;; append writes its payload and dies before updating the index, and
+          ;; from then on every append computes a number the index says is
+          ;; free and the directory says is taken — overwriting a real entry
+          ;; and leaving the ledger looking consistent.
+          seq-n (inc (max (count (:entries w))
+                          (highest-seq-on-disk project ws-id)))
+          [ext payload] (report/entry-payload (:kind entry) content)
+          _     (check-append! project w (:kind entry) payload)
+          fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
+          rel   (str "entries/" fname)
+          abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
+      (refuse-if-taken! abs seq-n)
+      (io/write-text! abs payload)
+      (write! (f (update w :entries (fnil conj [])
+                         (index-row entry seq-n payload rel))))
+      abs)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string] :Path]}
   append-entry!
@@ -1172,6 +1221,7 @@
   (when (= :design-cleared (:kind entry))
     (throw (ex-info "A :design-cleared is written at a position — through append-entry-at!"
                     {:kind (:kind entry) :ws-id ws-id})))
+  (refuse-unguarded-gate! (:kind entry))
   (io/with-file-lock
     (append-lock-path project ws-id)
     (fn []
@@ -1201,6 +1251,7 @@
    caller that forgets to thread the position fails closed instead of appending
    a decision to whatever the ledger happens to hold now."
   [project ws-id expected-seq entry content]
+  (refuse-unguarded-gate! (:kind entry))
   (io/with-file-lock
     (append-lock-path project ws-id)
     (fn []
@@ -1216,6 +1267,7 @@
           ;; the price of the one property this whole function exists for.
           (let [seq-n (inc (max latest (highest-seq-on-disk project ws-id)))
                 [ext payload] (report/entry-payload (:kind entry) content)
+                _     (refuse-design-between-phases! w (:kind entry))
                 _     (check-baseline-citation! w (:kind entry) payload)
                 _     (check-standing-citations! w (:kind entry) payload)
                 _     (check-fork-citation! project w (:kind entry) payload)
@@ -1255,6 +1307,7 @@
    at the :seq its file name carries, after the checks an append makes, and is never rewritten or
    renumbered; a file that does not parse matches nothing and is left as it is."
   [project ws-id entry content same?]
+  (refuse-unguarded-gate! (:kind entry))
   (io/with-file-lock
     (append-lock-path project ws-id)
     (fn []
@@ -1288,6 +1341,82 @@
 
           :else
           {:appended (append-locked! project ws-id w entry content)})))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
+  plan-design
+  "The design whose plan governs the workstream, or nil: the one its :between-phases
+   close names while it waits on a gate; once a gate opens, the one that
+   :phase-gate cites, until a :design is appended after it; else its newest design.
+
+   What every reader of phase progress passes `record.phase/progress`, so the gate a
+   person is shown is the gate that opens and the phase it opens is the one every
+   reader then reports. A :design cannot be appended while the workstream waits
+   (`refuse-design-between-phases!`), so a newer design takes over only by being
+   written after the gate."
+  [project ws-id]
+  (when-let [w (read-ws project ws-id)]
+    (let [close-seq (when (= :between-phases (get-in w [:closed :outcome]))
+                      (get-in w [:closed :design :seq]))
+          gate      (->> (:entries w) (filter #(= :phase-gate (:kind %))) (sort-by :seq) last)
+          newest    (->> (:entries w) (filter #(= :design (:kind %))) (map :seq) (reduce max 0))
+          n         (cond close-seq                            close-seq
+                          (and gate (> (:seq gate) newest))    (:under gate)
+                          (pos? newest)                        newest)]
+      (when n (read-entry-at w n)))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Workstream]}
+  open-phase!
+  "Append `gate` — a `:phase-gate` payload — and reopen the workstream at
+   :in-progress, the next phase's implementation owed. The kind's one writer.
+
+   Under the append lock, and every precondition read there, because each is a
+   fact about the ledger an append could change: the workstream is closed
+   :between-phases, `gate`'s `:evidence` is not blank, it cites the design that
+   close names, and `record.phase/progress` over that design and these rows
+   names `:opens` as the next phase. Whether the landing's :merged was written is
+   not asked: the close is the landing's record for the gate, and each landing
+   path attempts its :merged before it closes, so none can follow the gate.
+
+   Throws ex-info naming the precondition that failed; writes nothing then.
+   Returns the reopened record."
+  [project ws-id gate]
+  (io/with-file-lock
+    (append-lock-path project ws-id)
+    (fn []
+      (let [w      (or (read-ws project ws-id)
+                       (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+            n      (get-in w [:closed :design :seq])
+            design (when n (read-entry-at w n))
+            p      (when (= :design (:format design)) (phase/progress design (:entries w)))
+            refuse (fn [why data]
+                     (throw (ex-info (str "Cannot open a phase on " ws-id ": " why)
+                                     (merge {:ws-id ws-id} data))))]
+        (cond
+          (not= :between-phases (get-in w [:closed :outcome]))
+          (refuse "it is not settled between phases" {:closed (:closed w)})
+
+          (str/blank? (:evidence gate))
+          (refuse "the gate carries no evidence" {})
+
+          (nil? p)
+          (refuse (str "its close names no phased design on this ledger"
+                       (when n (str " (entry " n ")")))
+                  {:design n})
+
+          (not= n (get-in gate [:design :seq]))
+          (refuse (str "the gate cites entry " (get-in gate [:design :seq])
+                       ", and the plan waiting on it is the design at entry " n)
+                  {:design n :cites (get-in gate [:design :seq])})
+
+          (not= (:opens gate) (:claim (:next p)))
+          (refuse (str "it opens \"" (:opens gate) "\", and the next phase of the plan is "
+                       (if-let [c (:claim (:next p))] (str "\"" c "\"") "none"))
+                  {:opens (:opens gate) :next (:claim (:next p))}))
+        ;; One write: a gate indexed on a record still closed :between-phases would read its
+        ;; phase as open and unlanded, and every retry would be refused on that.
+        (append-locked! project ws-id w {:kind :phase-gate} (pr-str gate)
+                        #(reopened % :in-progress))
+        (read-ws project ws-id)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] [:maybe :LedgerEntry]]}
   latest-entry
