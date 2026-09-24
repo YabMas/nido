@@ -185,6 +185,52 @@
         ;; rank = 231+1; real checksum computed via public pg/flyway-checksum
         (is (re-find #"232, '234', 'add foo', 'SQL', 'V234__add_foo.sql', -?\d+, 'user', now\(\), 0, true" sql))))))
 
+;; A branch session's Flyway ran this body as V100; main merged it as V234.
+;; Re-running it would fail on the objects V100 created (brian's
+;; V20260924105843__library_folders, applied as V20260924081646).
+(defn- advance-with-history [history-out body]
+  (let [shell-calls (atom [])]
+    (with-redefs [shared/shared-applied-history (fn [_] {:versions #{1 100} :rank 231})
+                  shared/list-main-migration-files (fn [_] ["V234__add_foo.sql"])
+                  shared/materialize-one!
+                  (fn [_src dest filename]
+                    (spit (str (fs/path dest filename)) body)
+                    filename)
+                  pg/find-pg-bin-dir (constantly "/usr/bin")
+                  babashka.process/shell
+                  (fn [_opts & args]
+                    (swap! shell-calls conj (vec args))
+                    {:exit 0 :err ""
+                     :out (if (some #(and (string? %) (str/starts-with? % "select version, checksum"))
+                                    args)
+                            history-out "")})]
+      {:n     (shared/advance-shared-to-main!
+               {:port 5555 :db-name "brian" :owner-user "user" :schema "brian"
+                :source-repo "/x/Code/brian"})
+       :sql   (last (last @shell-calls))})))
+
+(deftest advance-rekeys-a-migration-main-re-versioned-instead-of-re-running-it
+  (let [body     "CREATE TABLE brian.foo (id int);\n"
+        checksum (let [f (fs/create-temp-file)]
+                   (spit (str f) body)
+                   (try (pg/flyway-checksum (str f)) (finally (fs/delete f))))
+        {:keys [n sql]} (advance-with-history
+                         (str "1\u001f5\u001f<< Flyway Baseline >>\n"
+                              "100\u001f" checksum "\u001fadd foo\n")
+                         body)]
+    (is (= 1 n))
+    (is (not (str/includes? sql "CREATE TABLE")) "the body is not run a second time")
+    (is (= (str "UPDATE brian.flyway_schema_history SET version = '234', "
+                "script = 'V234__add_foo.sql' WHERE version = '100';")
+           sql))))
+
+(deftest advance-still-applies-a-re-versioned-migration-whose-body-changed
+  (let [{:keys [sql]} (advance-with-history "100\u001f12345\u001fadd foo\n"
+                                            "CREATE TABLE brian.foo (id int);\n")]
+    (is (str/includes? sql "CREATE TABLE brian.foo")
+        "no checksum match → applied as new, and fails loud if it collides")
+    (is (str/includes? sql "INSERT INTO brian.flyway_schema_history"))))
+
 (deftest ensure-ready-orders-up-then-advance-then-role
   (let [order (atom [])]
     (with-redefs [shared/ensure-up! (fn [_] (swap! order conj :up) {:port 6000})

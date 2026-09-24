@@ -322,6 +322,41 @@
     {:versions (into #{} (keep (comp parse-long str/trim)) (some-> vs (str/split #",")))
      :rank     (or (some-> r str/trim parse-long) 0)}))
 
+(defn- reversioned-candidates
+  "Applied history rows whose version main does not carry, keyed by
+   [checksum description] → version. A branch session's Flyway writes its
+   migration into the shared history under the branch's version; brian
+   re-versions a migration when it merges, so main then carries the SAME
+   body under a new version and the old row names a version nothing on main
+   has. Rows main still carries are never candidates."
+  [{:keys [port db-name owner-user schema]} main-versions]
+  (let [bin-dir (pg/find-pg-bin-dir)
+        q       (str "select version, checksum, description from " schema
+                     ".flyway_schema_history where version ~ '^[0-9]+$' "
+                     "and checksum is not null;")
+        result  (shell {:continue true :out :string :err :string}
+                       (pg/pg-cmd bin-dir "psql")
+                       "-h" "127.0.0.1" "-p" (str port) "-U" owner-user "-d" db-name
+                       "-At" "-F" "\u001f" "-c" q)]
+    (when-not (zero? (:exit result))
+      (throw (ex-info "reading shared flyway history failed"
+                      {:error (:err result) :output (:out result)})))
+    (into {}
+          (keep (fn [line]
+                  (let [[v c d] (str/split line #"\u001f" 3)
+                        v       (some-> v str/trim parse-long)
+                        c       (some-> c str/trim parse-long)]
+                    (when (and v c d (not (contains? main-versions v)))
+                      [[c d] v]))))
+          (remove str/blank? (str/split-lines (:out result))))))
+
+(defn- history-rekey-sql
+  "Move an applied history row from its branch version to main's, so the
+   migration it records is not run a second time."
+  [{:keys [schema from-version version script]}]
+  (str "UPDATE " schema ".flyway_schema_history SET version = '" version
+       "', script = '" script "' WHERE version = '" from-version "';"))
+
 (def ^:private migrations-subdir "resources/db/migrations")
 
 (defn ^{:malli/schema [:=> [:cat :Path] [:vector :string]]}
@@ -360,7 +395,8 @@
   advance-shared-to-main!
   "Advance the shared cluster to main@origin by applying pending migrations as
    the owner. No-op when already current — nothing is materialized or shelled
-   out to jj/psql in that case. Returns the count applied."
+   out to jj/psql in that case. Returns the count applied, a re-versioned
+   migration re-keyed rather than re-run included."
   [{:keys [port db-name owner-user schema source-repo] :as opts}]
   (let [{:keys [versions rank]} (shared-applied-history opts)
         basenames (list-main-migration-files source-repo)
@@ -373,20 +409,31 @@
           (core/log-step (str "Advancing shared cluster to main@origin: applying "
                               (count pending) " migration(s): "
                               (str/join ", " (map #(str "V" (migration-file->version %)) pending))))
-          (loop [[f & more] pending, rank (inc rank), applied 0]
+          (loop [[f & more] pending, rank (inc rank), applied 0
+                 reversioned (reversioned-candidates
+                              opts (into #{} (keep migration-file->version) basenames))]
             (if-not f
               applied
               (let [_         (materialize-one! source-repo tmp f)
                     file-path (str (fs/path tmp f))
                     checksum  (pg/flyway-checksum file-path)
-                    body      (slurp file-path)
-                    combined  (str "SET search_path TO " schema ", public;\n"
-                                   body "\n"
-                                   (history-insert-sql
-                                    {:schema schema :rank rank
-                                     :version (migration-file->version f)
-                                     :description (migration-file->description f)
-                                     :script f :checksum checksum :owner-user owner-user}))
+                    desc      (migration-file->description f)
+                    version   (migration-file->version f)
+                    ;; Same checksum AND description as a row main dropped: this
+                    ;; body already ran here under its branch version. Re-key the
+                    ;; row rather than re-run DDL that would fail on its own
+                    ;; objects. A body that changed on the way to main does not
+                    ;; match, and is applied — and fails — as before.
+                    from      (get reversioned [checksum desc])
+                    combined  (if from
+                                (history-rekey-sql {:schema schema :from-version from
+                                                    :version version :script f})
+                                (str "SET search_path TO " schema ", public;\n"
+                                     (slurp file-path) "\n"
+                                     (history-insert-sql
+                                      {:schema schema :rank rank :version version
+                                       :description desc :script f :checksum checksum
+                                       :owner-user owner-user})))
                     bin-dir   (pg/find-pg-bin-dir)
                     res       (shell {:continue true :out :string :err :string}
                                      (pg/pg-cmd bin-dir "psql")
@@ -396,7 +443,11 @@
                 (when-not (zero? (:exit res))
                   (throw (ex-info (str "Advancing shared cluster failed applying " f)
                                   {:file f :error (:err res) :output (:out res)})))
-                (recur more (inc rank) (inc applied)))))
+                (when from
+                  (core/log-step (str "  V" version " already applied as V" from
+                                      " (re-versioned on main) — history re-keyed")))
+                (recur more (if from rank (inc rank)) (inc applied)
+                       (dissoc reversioned [checksum desc])))))
           (finally
             (fs/delete-tree tmp)))))))
 
