@@ -7,7 +7,10 @@
   (:require [fukan.common.vocab.code.stratum :refer [Stratum]]
             [canvas.coordinator.report :refer [coordinator-report]]
             [canvas.coordinator.report.model :refer [report-model]]
+            [canvas.coordinator.record.standing :refer [record-standing]]
             [canvas.coordinator.record.workstream :refer [record-workstream]]
+            [canvas.coordinator.lane.drive :refer [lane-pipeline]]
+            [canvas.coordinator.lane.reentry :refer [lane-reentry]]
             [canvas.review.core :refer [review-analysis review-cache review-conformance review-loop
                                         review-prompts review-reconcile review-retreat]]
             [canvas.review.merge :refer [review-merge]]
@@ -34,6 +37,21 @@
    cites, every health observation routed, a seam's phase planned — and read back by kind."
   {:provided-by [record-workstream]
    :rests-on    [record-model record-vocabulary]})
+
+;; ── what the records mean, above the ledger ─────────────────────────────────
+
+(Stratum record-status
+  "Whether a record still holds: a design decidable, decided or cleared, a baseline verified, a
+   goal live — and what stops it, with the seqs that decide it. The one reading of what a
+   retraction unseats."
+  {:provided-by [record-standing]
+   :rests-on    [ledger record-vocabulary]})
+
+(Stratum workstream-position
+  "Where a workstream is and what it owes next, read off the records' standing and the arc they
+   travelled. What the board, attach and the driver are written in."
+  {:provided-by [lane-pipeline lane-reentry]
+   :rests-on    [record-status ledger record-vocabulary]})
 
 ;; ── the review machinery, floor first ────────────────────────────────────────
 ;;
@@ -63,4 +81,4 @@
   {:provided-by [review-stages review-layers review-cache review-conformance review-prompts
                  review-pass review-verdict review-record review-settled review-retreat
                  review-merge review-analysis review-reconcile]
-   :rests-on    [review-language ledger record-model record-vocabulary]})
+   :rests-on    [review-language record-status ledger record-model record-vocabulary]})

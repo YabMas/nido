@@ -33,6 +33,11 @@
      its own number, and scoped for a goal nothing has replaced since."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:baseline :map]] :map]
      :delegates [workstream/entries-of]})
+  (Operation of-intent
+    "Whether an intent is still a goal work may rest on: not retracted, or retracted and replaced
+     by an intent superseding it."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:intent :map]] :map]
+     :delegates [workstream/entries-of]})
   (Operation why-not-decided
     "Why a standing is not decided, in words a person can act on. nil when it is."
     {:signature [:=> [:catn [:standing Standing]] [:maybe :string]]}))

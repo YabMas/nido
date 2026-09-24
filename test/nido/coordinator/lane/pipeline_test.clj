@@ -212,6 +212,65 @@
                     (:at (p/of :brian id))))
               "the ledger moved past it"))))))
 
+(deftest a-later-retraction-does-not-hide-an-earlier-one
+  ;; brian ws-20260921-82071b left a retracted intent behind by retracting an
+  ;; unrelated baseline. What a retraction unseats is standing's answer about the
+  ;; records the work stands on, so appending another retraction changes nothing
+  ;; about the first.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (let [stray (intent! add!)
+              b     (add! :baseline a-baseline)]
+          (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                                  :baseline-seq b :reason "it holds"})
+          (add! :design (a-design b))
+          (add! :retraction {:format :retraction :retracts {:seq b}
+                             :because "a second summing path exists"
+                             :evidence ["src/b.clj:9"]})
+          (is (= :premise-retracted (:at (p/of :brian id))))
+          (add! :retraction {:format :retraction :retracts {:seq stray}
+                             :because "opened by mistake" :evidence ["entry 1"]})
+          (is (= :premise-retracted (:at (p/of :brian id)))
+              "the survey the design stands on is still untrue"))))))
+
+(deftest a-retraction-nothing-rests-on-holds-no-position
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (let [stray (intent! add!)
+              b     (add! :baseline a-baseline)]
+          (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                                  :baseline-seq b :reason "it holds"})
+          (add! :design (a-design b))
+          (let [before (:at (p/of :brian id))]
+            (add! :retraction {:format :retraction :retracts {:seq stray}
+                               :because "opened by mistake" :evidence ["entry 1"]})
+            (is (= before (:at (p/of :brian id)))
+                "no baseline or design cites that goal, so there is nothing to redo")))))))
+
+(deftest a-retracted-goal-under-a-design-sends-the-work-to-the-intent
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            goal (intent! add!)
+            b    (add! :baseline a-baseline)]
+        (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                                :baseline-seq b :reason "it holds"})
+        (add! :design (a-design b))
+        (add! :retraction {:format :retraction :retracts {:seq goal}
+                           :because "aimed at the wrong surface" :evidence ["PROD log"]})
+        (let [r (p/of :brian id)]
+          (is (= :intent-retracted (:at r)))
+          (is (= :establish-intent (:stage (:next r)))))
+        (add! :intent {:format :intent :goal "g2" :done-when ["d"]
+                       :supersedes {:seq goal :why "restated"}})
+        (is (not (#{:intent-retracted :premise-retracted :design-retracted}
+                  (:at (p/of :brian id))))
+            "restated: what is owed now is the survey under the new goal")))))
+
 (deftest an-unanswered-blocker-halts-and-an-answered-one-does-not
   (with-tmp
     (fn [_]
@@ -734,6 +793,38 @@
           (is (= :design-invalidated (:at r)))
           (is (= {:stage :acknowledge-invalidation :mode :human} (:next r))
               "and nobody but a person can answer it"))))))
+
+(deftest the-newest-designs-standing-speaks-for-its-position-over-the-baselines
+  (with-tmp
+    (fn [_]
+      (testing "an invalidated design over a retracted premise stays invalidated"
+        ;; The design's standing reports the judgement, above the premise; a
+        ;; fall-through to the baseline's :premise-retracted would send the
+        ;; workstream to :rebaseline and bury what a person must acknowledge.
+        (let [[id add!] (ledger)
+              [b d] (approved-and-implemented! add!)]
+          (add! :design-verdict {:format :design-verdict :verdict :invalidated
+                                 :round 1 :design-seq d :reason "a second path sums"
+                                 :invariants-broken [{:invariant "one summing path"
+                                                      :finding "the renderer sums"}]
+                                 :needs "redesign the totalling seam"})
+          (add! :retraction {:format :retraction :retracts {:seq b}
+                             :because "the survey was wrong"
+                             :evidence ["src/a.clj:1"] :found-during :review})
+          (let [r (p/of :brian id)]
+            (is (= :design-invalidated (:at r)))
+            (is (= {:stage :acknowledge-invalidation :mode :human} (:next r))))))
+      (testing "a later survey the design does not cite unseats nothing"
+        (let [[id add!] (ledger)
+              _      (approved-and-implemented! add!)
+              before (:at (p/of :brian id))
+              b2     (add! :baseline a-baseline)]
+          (add! :retraction {:format :retraction :retracts {:seq b2}
+                             :because "the survey was wrong"
+                             :evidence ["src/a.clj:1"] :found-during :review})
+          (let [r (p/of :brian id)]
+            (is (= before (:at r)))
+            (is (not= :baseline (:stage (:re-entry r))))))))))
 
 (deftest a-retracted-design-goes-back-to-the-design-and-a-retracted-baseline-to-the-survey
   ;; Both answered :premise-retracted before, whose next action is :rebaseline —

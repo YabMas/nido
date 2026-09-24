@@ -105,6 +105,32 @@
     (when-let [r (replacement ins goal-seq)]
       (when (> r record-seq) r))))
 
+(defn- answers?
+  "Whether the replacement at `by` answers the retraction at `r`: it exists and
+   was appended after it. `replacement` returns the newest record of the chain,
+   so a correction restated after the retraction counts however the chain began."
+  [by r]
+  (boolean (and by (> by r))))
+
+(defn- goal-unseated
+  "What unseats the goal at `goal-seq` for a record written at `record-seq`, or nil:
+   {:retracted-by r} when a retraction names it and the goal has not been
+   restated since, or {:replaced-by r} when an intent replaces it — after the
+   record, or, once it is retracted, after the retraction.
+
+   A retraction lifts the sequence guard `goal-replaced` applies, because the guard
+   asks whether the record was written before the goal moved, and a retracted goal
+   is untrue whenever the record was written. It sets another in its place: only a
+   restatement written after the retraction answers it, since one written before
+   was written without knowing the goal was false and can carry the falsehood on."
+  [retracted ins goal-seq record-seq]
+  (when goal-seq
+    (if-let [r (retracted goal-seq)]
+      (let [by (replacement ins goal-seq)]
+        (if (answers? by r) {:replaced-by by} {:retracted-by r}))
+      (when-let [by (goal-replaced ins goal-seq record-seq)]
+        {:replaced-by by}))))
+
 (defn- invalidating-verdict
   "The :seq of a verdict that put `design-seq` itself in question and that nobody
    has answered, or nil.
@@ -187,7 +213,8 @@
                 goal-seq    (get-in design [:intent :seq])
                 premise-rec (->> bls (filter #(= premise-seq (:seq %))) first)
                 base-goal   (get-in premise-rec [:intent :seq])
-                goal-moved  #(goal-replaced ins % design-seq)
+                goal-moved  #(:replaced-by (goal-unseated retracted ins % design-seq))
+                goal-gone   #(:retracted-by (goal-unseated retracted ins % design-seq))
                 premise {:seq premise-seq
                          :retracted-by (retracted premise-seq)
                          :sufficient?  sufficient?
@@ -209,6 +236,30 @@
                          :goal-replaced-by (goal-moved base-goal)}
                 invalidated (invalidating-verdict vs oks design-seq)
                 blocked (cond
+                          ;; A retracted goal nothing replaces: there is no
+                          ;; goal to move to, so the intent is what is owed —
+                          ;; FIRST, ahead even of this design's own retraction
+                          ;; or invalidation: a replacement design, or a
+                          ;; baseline, written now would serve a goal still
+                          ;; retracted, so the restated intent is the repair
+                          ;; everything else waits on. Ahead of the moved-goal
+                          ;; clauses too, which name a replacement this has not
+                          ;; got. Asked of the design's own goal, then of the
+                          ;; goal under its baseline.
+                          (goal-gone goal-seq)
+                          {:reason :goal-retracted :seq (goal-gone goal-seq) :intent goal-seq
+                           :detail (str "the design serves the goal at entry " goal-seq
+                                        ", retracted by entry " (goal-gone goal-seq)
+                                        " and not restated since")}
+
+                          (goal-gone base-goal)
+                          {:reason :goal-retracted :seq (goal-gone base-goal) :intent base-goal
+                           :baseline premise-seq
+                           :detail (str "the baseline at entry " premise-seq
+                                        " was scoped for the goal at entry " base-goal
+                                        ", retracted by entry " (goal-gone base-goal)
+                                        " and not restated since")}
+
                           (retracted design-seq)
                           {:reason :design-retracted :seq (retracted design-seq)
                            :detail (str "the design at entry " design-seq
@@ -327,8 +378,9 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   of-baseline
   "Whether `baseline` — a stamped :baseline record — is still footing a design
-   may be written on: a round found it sufficient at exactly this number, and
-   the goal it was scoped for has not been replaced since.
+   may be written on: a round found it sufficient at exactly this number,
+   nothing retracts it, and the goal it was scoped for is neither retracted nor
+   replaced since.
 
    The baseline rung's own reading of the fact `of-design` reaches through its
    premise, by the same walk. It is asked of the baseline because the case that
@@ -355,34 +407,97 @@
       {:indeterminate? true :verified? false
        :blocked {:reason :no-workstream :detail (str "no workstream " ws-id)}}
       (let [revs (readable project ws-id w :baseline-review)
-            ins  (readable project ws-id w :intent)]
-        (if (some #{::unreadable} [revs ins])
+            ins  (readable project ws-id w :intent)
+            rs   (readable project ws-id w :retraction)
+            bls  (readable project ws-id w :baseline)]
+        (if (some #{::unreadable} [revs ins rs bls])
           {:indeterminate? true :verified? false
            :blocked {:reason :unreadable-ledger
                      :detail (str "an entry standing depends on could not be read on "
                                   ws-id " — standing cannot be derived, so nothing "
                                   "may proceed on it")}}
-          (let [seq-n       (:seq baseline)
+          (let [retracted   (retraction-index rs)
+                seq-n       (:seq baseline)
                 goal-seq    (get-in baseline [:intent :seq])
-                moved       (goal-replaced ins goal-seq seq-n)
+                goal        (goal-unseated retracted ins goal-seq seq-n)
                 sufficient? (boolean
                              (some #(and (= seq-n (:baseline-seq %))
                                          (report/verdict-holds (:verdict %)))
-                                   revs))]
-            (cond-> {:sufficient? sufficient?
-                     :verified?   (and sufficient? (nil? moved))}
-              moved (assoc :blocked
-                           {:reason :goal-superseded :seq goal-seq
-                            :replaced-by moved
-                            ;; What the survey under the amended goal
-                            ;; `:supersedes` — the two citations it carries are
-                            ;; both read here, never taken from recency.
-                            :baseline seq-n
-                            :detail (str "the baseline at entry " seq-n
-                                         " was scoped for the goal at entry " goal-seq
-                                         ", superseded at entry " moved
-                                         " — a baseline under the amended goal cites"
-                                         " entry " moved)}))))))))
+                                   revs))
+                blocked     (cond
+                              ;; A retracted goal first, as in `of-design`: a
+                              ;; survey written now would be scoped for a goal
+                              ;; still retracted, so restating it is the repair
+                              ;; the survey's own retraction waits on.
+                              (:retracted-by goal)
+                              {:reason :goal-retracted :seq (:retracted-by goal)
+                               :intent goal-seq :baseline seq-n
+                               :detail (str "the baseline at entry " seq-n
+                                            " was scoped for the goal at entry " goal-seq
+                                            ", retracted by entry " (:retracted-by goal)
+                                            " and not restated since")}
+
+                              ;; The survey itself found untrue. Its correction,
+                              ;; if one was written, is what to start from.
+                              (retracted seq-n)
+                              {:reason :premise-retracted :seq (retracted seq-n)
+                               :baseline seq-n
+                               :replaced-by (replacement bls seq-n)
+                               :detail (str "the baseline at entry " seq-n
+                                            " was retracted by entry " (retracted seq-n))}
+
+                              (:replaced-by goal)
+                              {:reason :goal-superseded :seq goal-seq
+                               :replaced-by (:replaced-by goal)
+                               ;; What the survey under the amended goal
+                               ;; `:supersedes` — the two citations it carries are
+                               ;; both read here, never taken from recency.
+                               :baseline seq-n
+                               :detail (str "the baseline at entry " seq-n
+                                            " was scoped for the goal at entry " goal-seq
+                                            ", superseded at entry " (:replaced-by goal)
+                                            " — a baseline under the amended goal cites"
+                                            " entry " (:replaced-by goal))})]
+            (cond-> {:seq         seq-n
+                     :sufficient? sufficient?
+                     :verified?   (and sufficient? (nil? blocked))}
+              blocked (assoc :blocked blocked))))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
+  of-intent
+  "Whether `intent` — a stamped :intent record — is still a goal work may rest
+   on. {:live? true} unless a retraction names it; retracted, :blocked says so,
+   as :goal-superseded, naming the replacement, when the goal was restated after
+   the retraction, and as :goal-retracted when it was not.
+
+   Asked where nothing cites the goal yet — a workstream with an intent and no
+   survey — which is the one place its retraction has no record to unseat and
+   would otherwise go unread. Fails closed like the other two."
+  [project ws-id intent]
+  (let [w (ws/read-ws project ws-id)]
+    (if (nil? w)
+      {:indeterminate? true :live? false
+       :blocked {:reason :no-workstream :detail (str "no workstream " ws-id)}}
+      (let [rs  (readable project ws-id w :retraction)
+            ins (readable project ws-id w :intent)]
+        (if (some #{::unreadable} [rs ins])
+          {:indeterminate? true :live? false
+           :blocked {:reason :unreadable-ledger
+                     :detail (str "an entry standing depends on could not be read on "
+                                  ws-id " — standing cannot be derived, so nothing "
+                                  "may proceed on it")}}
+          (let [retracted (retraction-index rs)
+                seq-n     (:seq intent)]
+            (if-let [r (retracted seq-n)]
+              {:live? false
+               :blocked (if-let [by (let [by (replacement ins seq-n)] (when (answers? by r) by))]
+                          {:reason :goal-superseded :seq seq-n :replaced-by by
+                           :detail (str "the goal at entry " seq-n " was retracted by entry "
+                                        r " and restated at entry " by)}
+                          {:reason :goal-retracted :seq r :intent seq-n
+                           :detail (str "the goal at entry " seq-n " was retracted by entry "
+                                        r " and not restated since")})}
+              {:live? true})))))))
 
 (defn ^{:malli/schema [:=> [:cat :Standing] [:maybe :string]]}
   why-not-decided

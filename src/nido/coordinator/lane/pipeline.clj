@@ -422,35 +422,26 @@
                         (:entries w))
           (:seq latest))))))
 
-(defn- live-retraction
-  "A retraction whose subject still stands unrepaired, as {:seq :kind}, or nil.
-   `:kind` is the kind of the entry it RETRACTED, which is what decides where the
-   work goes back to — a retracted design wants a new design, a retracted
-   baseline a new survey, and a retracted intent a restated goal.
+(defn- retracted-position
+  "The retracted position `standing` places a workstream at, or nil — given the
+   standing `reentry/current-standing` says answers for its current records.
 
-   A retraction is repaired by a later record superseding what it retracted, and
-   the ledger admits a retraction only of a kind something can supersede, so
-   every retraction read here has an answer an author can write. Only the newest
-   retraction is asked about: is there one the ledger has not moved past?
-   Anything finer is standing's business and is asked of standing."
-  [project ws-id w]
-  (when (contains? (kinds w) :retraction)
-    (let [rs        (ws/entries-of project ws-id :retraction)
-          latest    (last rs)
-          retracted (:seq (:retracts latest))]
-      (when (and retracted
-                 ;; Repaired when something was appended AFTER the retraction
-                 ;; that supersedes the entry it named. Nothing later at all
-                 ;; means nobody has answered it yet.
-                 (not (some #(= retracted (:seq (:supersedes %)))
-                            (concat (ws/entries-of project ws-id :baseline)
-                                    (ws/entries-of project ws-id :design)
-                                    (ws/entries-of project ws-id :intent)))))
-        ;; The kind comes off the INDEX rather than by parsing the retracted
-        ;; entry: the index already carries it, and standing fails closed on an
-        ;; unparseable one anyway.
-        {:seq  (:seq latest)
-         :kind (some #(when (= retracted (:seq %)) (:kind %)) (:entries w))}))))
+   Standing decides what a retraction unseats, and a retraction that unseats
+   nothing the work rests on places nothing, whichever retraction is newest.
+   This names the position whose next stage writes the replacement.
+
+   A retracted baseline corrected AFTER the retraction is not a halt: the work
+   owed is the design citing the correction, which re-entry already routes. A
+   correction written before it was written without knowing the survey was
+   false, and answers nothing."
+  [standing]
+  (let [{:keys [reason seq replaced-by]} (:blocked standing)]
+    (case reason
+      :design-retracted  :design-retracted
+      :premise-retracted (when-not (and replaced-by (> replaced-by seq))
+                           :premise-retracted)
+      :goal-retracted    :intent-retracted
+      nil)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :boolean]}
   baseline-verified?
@@ -553,14 +544,9 @@
     findings-open?                 :findings-open
     blocker-seq                    :blocked
 
-    ;; What was retracted decides where the work goes back to: each position's
-    ;; next stage writes the one kind that can supersede the retracted entry.
-    ;; The retraction names its target and the index knows that entry's kind,
-    ;; so the routing is read rather than assumed. A baseline, and anything
-    ;; older ledgers retracted that nothing can supersede, reads as the premise.
-    (= :design (:kind retraction))   :design-retracted
-    (= :intent (:kind retraction))   :intent-retracted
-    (:seq retraction)                :premise-retracted
+    ;; Standing's answer, placed: what the retraction unseats decides where the
+    ;; work goes back to, and each position's next stage writes its replacement.
+    retraction                       retraction
 
     ;; A round judged the design itself wrong and nobody has answered it. A halt
     ;; rather than a clamp, because it is a question put to a person: the two
@@ -760,6 +746,7 @@
    :premise-superseded   :route-back
    :premise-goal-superseded :route-back
    :goal-superseded      :route-back
+   :goal-retracted       :route-back
    :design-retracted     :route-back
    :no-premise           :route-back  ; the design cites no baseline at all
    :nothing-to-check     :route-back  ; the baseline recorded nothing checkable; it is too thin
@@ -937,6 +924,10 @@
           ;; the re-entry and `:verified?` below are this one reading.
           bl     (ws/latest-entry project ws-id :baseline)
           bst    (when bl (standing/of-baseline project ws-id bl))
+          ;; Only where nothing cites the goal yet: once a baseline or design
+          ;; exists, its own standing carries the goal's retraction.
+          in     (when-not (or design bl) (ws/latest-entry project ws-id :intent))
+          ist    (when in (standing/of-intent project ws-id in))
           ;; The pure arity, given what has already been read. `of*` would
           ;; otherwise re-read the workstream and re-run the standing closure —
           ;; the two most expensive things on this path, and the board runs this
@@ -945,7 +936,8 @@
           facts  {:closed?        (some? (:closed w))
                          :findings-open? (open-findings? w)
                          :blocker-seq    (unanswered-blocker project ws-id w)
-                         :retraction     (live-retraction project ws-id w)
+                         :retraction     (retracted-position
+                                          (reentry/current-standing st bst ist))
                          :re-entry       re
                          :ks             ks
                          ;; Approval is standing's answer, never re-derived

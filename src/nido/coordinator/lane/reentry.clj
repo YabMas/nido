@@ -130,6 +130,19 @@
      ;; as rotten.
      :stale   (into [] (filter #(< (:under %) current)) graded)}))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map] [:maybe :map] [:maybe :map]] [:maybe :map]]}
+  current-standing
+  "The standing that answers for a workstream's current records: the newest
+   design's where one exists, else the newest baseline's, else the newest
+   intent's. Each is what the work rests on at that stage, so a record beneath
+   it speaks through it — a design's standing already reports its cited survey
+   and goal — and a record it does not rest on does not speak at all.
+
+   The one place that choice is made. Every reader asking what a workstream's
+   records owe takes it from here, so no two of them choose differently."
+  [design-standing baseline-standing intent-standing]
+  (or design-standing baseline-standing intent-standing))
+
 (defn ^{:malli/schema [:=> [:cat :Workstream [:maybe :map] [:maybe :Standing] [:maybe :map]]
                         [:maybe :map]]}
   of*
@@ -166,14 +179,18 @@
     {:stage :design :trail #{} :because (:blocked st)}
 
     ;; The survey is owed before anything written over it, a design or none: a
-    ;; goal replaced after the newest baseline was scoped leaves that baseline
-    ;; unable to be reviewed or designed over, so the arc comes back to the
-    ;; baseline rung. Not to the design that cites it, and not to the
+    ;; goal replaced after the newest baseline was scoped, or that baseline
+    ;; retracted, leaves it unable to be reviewed or designed over, so the arc
+    ;; comes back to the baseline rung. Not to the design that cites it, and not to the
     ;; verification of the survey scoped for the old goal — the boundary refuses
     ;; both. An indeterminate baseline standing blocks nothing here: it is never
     ;; :verified?, which is the fail-closed half, and routing on a ledger nobody
-    ;; can read would be advancing on a default.
-    (= :goal-superseded (get-in bst [:blocked :reason]))
+    ;; can read would be advancing on a default. Over a design, owed only when
+    ;; the newest survey is the one the design cites: a later survey it does not
+    ;; cite unseats nothing, and once one is written over a cited survey the
+    ;; work is that survey's, which the record trail already places.
+    (and (#{:goal-superseded :premise-retracted} (get-in bst [:blocked :reason]))
+         (or (nil? design) (= (get-in design [:baseline :seq]) (:seq bst))))
     {:stage :baseline :trail #{} :because (:blocked bst)}
 
     ;; No design, nothing to be standing on, and nothing to come back to. A

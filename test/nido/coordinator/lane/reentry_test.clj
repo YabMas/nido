@@ -266,3 +266,14 @@
                 "the implementation is current again, so the PR is what is owed")
             (is (= #{:implementation-completed} (:trail r))
                 "and the fold may report the implementation, but nothing above it")))))))
+
+(deftest the-newest-record-the-work-rests-on-answers-for-it
+  ;; One choice, made here: a record beneath the newest one speaks through it,
+  ;; and a record the work does not rest on does not speak.
+  (let [d {:blocked {:reason :design-retracted}}
+        b {:blocked {:reason :premise-retracted}}
+        i {:blocked {:reason :goal-retracted}}]
+    (is (= d (reentry/current-standing d b i)) "a design answers over its survey")
+    (is (= b (reentry/current-standing nil b i)) "a survey over its goal")
+    (is (= i (reentry/current-standing nil nil i)) "a goal alone, when nothing cites it")
+    (is (nil? (reentry/current-standing nil nil nil)))))

@@ -169,6 +169,15 @@
     (is (str/includes? out "found it FALSE") "and that this is not mere staleness")
     (is (str/includes? out "entry 12 corrects it") "and where to start from")))
 
+(deftest a-retracted-goal-is-refused-and-told-to-restate-it
+  (let [[code out] (run {:session? true :design a-design
+                         :standing {:decidable? false :decided? false
+                                    :blocked {:reason :goal-retracted :seq 7 :intent 1
+                                              :detail "the design serves the goal at entry 1, retracted by entry 7"}}})]
+    (is (= 1 code))
+    (is (str/includes? out "entry 7") "the retraction responsible")
+    (is (str/includes? out ":supersedes naming the retracted one") "and how to answer it")))
+
 (deftest an-unreadable-ledger-refuses-rather-than-waving-through
   (let [[code out] (run {:session? true :design a-design
                          :standing {:indeterminate? true
@@ -181,7 +190,7 @@
   ;; The rule this gate is built on: an agent told only that it is blocked will
   ;; guess or stop. A reason with no route is a wall.
   (let [way-out #'land/way-out]
-    (doseq [reason [:premise-unverified :premise-retracted :design-retracted
+    (doseq [reason [:premise-unverified :premise-retracted :design-retracted :goal-retracted
                     :design-invalidated :premise-superseded
                     :no-premise :not-approved :unreadable-ledger]]
       (let [txt (way-out {:reason reason :seq 3})]

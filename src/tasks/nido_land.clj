@@ -102,6 +102,15 @@
          "  2. supersede the design so it cites :intent {:seq " replaced-by "}\n"
          "  3. bb nido:review:design, then approve it unless the round cleared it")
 
+    :goal-retracted
+    (str "  The goal this work serves was found untrue — read entry " seq " for\n"
+         "  why before you touch anything, then restate it.\n"
+         "  1. append an :intent with :supersedes naming the retracted one\n"
+         "  2. baseline the area again under it, citing the new intent, and\n"
+         "     bb nido:review:baseline until `sufficient`\n"
+         "  3. supersede the design so it cites both, then bb nido:review:design\n"
+         "     and approve it unless the round cleared it")
+
     :design-retracted
     (str "  Somebody found this design untrue — read entry " seq " first.\n"
          "  Write a superseding :design, run bb nido:review:design, and have it\n"

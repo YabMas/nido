@@ -509,3 +509,88 @@
                 st2 (standing/of-baseline :brian id (ws/entry-at-seq :brian id b2))]
             (is (true? (:verified? st2)))
             (is (nil? (:blocked st2)))))))))
+
+;; ── What a retraction unseats ───────────────────────────────────────────────
+
+(defn- retract! [add n]
+  (add :retraction {:format :retraction :retracts {:seq n}
+                    :because "found untrue" :evidence ["src/a.clj:1"]}))
+
+(deftest a-retracted-goal-unseats-the-design-serving-it
+  ;; The land gate and the design round read this answer, so a design standing
+  ;; on a retracted goal would land — the intent's retraction has to reach it.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b  (add :baseline a-baseline)
+            _  (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                      :baseline-seq b :reason "ok"})
+            d  (add :design (a-design b))
+            _  (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            st #(standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (true? (:decided? (st))))
+        (let [r (retract! add 1)]
+          (is (false? (:decidable? (st))))
+          (is (= {:reason :goal-retracted :seq r :intent 1}
+                 (select-keys (:blocked (st)) [:reason :seq :intent]))
+              "no replacement: the goal itself is what is owed")
+          (is (= :goal-retracted (:reason (:blocked (standing/of-baseline
+                                                     :brian id (ws/entry-at-seq :brian id b)))))
+              "and the survey scoped for it is not footing either"))
+        (let [i2 (add :intent {:format :intent :goal "g2" :done-when ["d"]
+                               :supersedes {:seq 1 :why "restated"}})]
+          (is (= {:reason :goal-superseded :replaced-by i2}
+                 (select-keys (:blocked (st)) [:reason :replaced-by]))
+              "restated: the design is sent to the replacement"))))))
+
+(deftest a-retracted-survey-is-not-footing-and-names-its-correction
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b  (add :baseline a-baseline)
+            _  (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                      :baseline-seq b :reason "ok"})
+            b2 (add :baseline (assoc a-baseline :supersedes {:seq b :why "corrected"}))
+            r  (retract! add b)
+            bst (standing/of-baseline :brian id (ws/entry-at-seq :brian id b))]
+        (is (false? (:verified? bst)) "sufficient, but retracted")
+        (is (= {:reason :premise-retracted :seq r :replaced-by b2}
+               (select-keys (:blocked bst) [:reason :seq :replaced-by])))))))
+
+(deftest an-intent-is-live-until-retracted-and-says-how-it-was-answered
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            it #(standing/of-intent :brian id (ws/entry-at-seq :brian id 1))]
+        (is (= {:live? true} (it)))
+        (let [r (retract! add 1)]
+          (is (= {:reason :goal-retracted :seq r :intent 1}
+                 (select-keys (:blocked (it)) [:reason :seq :intent]))))
+        (let [i2 (add :intent {:format :intent :goal "g2" :done-when ["d"]
+                               :supersedes {:seq 1 :why "restated"}})]
+          (is (= {:reason :goal-superseded :replaced-by i2}
+                 (select-keys (:blocked (it)) [:reason :replaced-by]))))))))
+
+(deftest a-goal-restated-before-its-retraction-has-not-answered-it
+  ;; A restatement written before the retraction was written without knowing the
+  ;; goal was false. Only one written after it answers it.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b  (add :baseline a-baseline)
+            _  (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                      :baseline-seq b :reason "ok"})
+            d  (add :design (a-design b))
+            i2 (add :intent {:format :intent :goal "g2" :done-when ["d"]
+                             :supersedes {:seq 1 :why "narrowed"}})
+            st #(standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (= :goal-superseded (:reason (:blocked (st)))) "moved, before anyone retracted it")
+        (let [r (retract! add 1)]
+          (is (= {:reason :goal-retracted :seq r}
+                 (select-keys (:blocked (st)) [:reason :seq]))
+              "the earlier restatement does not answer the retraction"))
+        (let [i3 (add :intent {:format :intent :goal "g3" :done-when ["d"]
+                               :supersedes {:seq i2 :why "restated knowing why"}})]
+          (is (= {:reason :goal-superseded :replaced-by i3}
+                 (select-keys (:blocked (st)) [:reason :replaced-by]))
+              "a restatement after it does, wherever the chain began"))))))

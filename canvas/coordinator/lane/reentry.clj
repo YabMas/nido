@@ -30,10 +30,17 @@
   (Operation trail-standing
     "How each trail kind stands against the current design: which are current, which are behind."
     {:signature [:=> [:catn [:w Workstream] [:current :int]] :map]})
+  (Operation current-standing
+    "The standing that answers for a workstream's current records — the newest design's, else
+     the newest baseline's, else the newest intent's. The one place that choice is made."
+    {:signature [:=> [:catn [:design-standing [:maybe :map]] [:baseline-standing [:maybe :map]]
+                      [:intent-standing [:maybe :map]]]
+                 [:maybe :map]]})
   (Operation of*
     "Re-entry from what a caller already holds — pure, and the arity the fold uses. The newest
-     baseline's standing is one of its inputs: a goal replaced after that survey sends the arc
-     back to the baseline rung, whether or not a design exists."
+     baseline's standing is one of its inputs: a goal replaced after that survey, or the survey
+     retracted, sends the arc back to the baseline rung — over a design, only when that survey
+     is the one the design cites."
     {:signature [:=> [:catn [:w Workstream] [:design [:maybe :map]] [:standing [:maybe Standing]]
                       [:baseline-standing [:maybe :map]]]
                  [:maybe :map]]
