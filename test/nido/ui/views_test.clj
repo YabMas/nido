@@ -1556,3 +1556,39 @@
                 namespace and must be scoped instead"))
       (is (not (re-find (re-pattern (str "(?m)^\\s*\\.[a-z-]+ \\." c " \\{")) css))
           (str "." c " is styled unscoped, so no other component may also scope it")))))
+
+;; ── Phases ──────────────────────────────────────────────────────────────────
+
+(def ^:private awaiting-phase
+  {:current 1 :of 3 :landed? true
+   :exit {:kind :soak :criterion "one billing cycle with no incident"}
+   :next {:claim "reads move" :exit {:kind :completion :criterion "nothing reads the old table"}}})
+
+(deftest a-phased-row-says-which-phase-and-an-awaiting-one-its-gate
+  (let [row  (fn [m] (str (h/html (#'views/ws-list-row a-board-screen nil "nido"
+                                   (merge {:ws-id "ws-1" :origin :notion :label "migration"} m)))))
+        live (row {:stage :in-progress :phase (assoc awaiting-phase :landed? false)})
+        gate (row {:stage :awaiting-gate :phase awaiting-phase
+                   :position {:at :awaiting-gate :next {:stage :assert-gate :mode :human}}})]
+    (is (str/includes? live "phase 1/3"))
+    (is (not (str/includes? live "one billing cycle")) "the gate shows only while it is owed")
+    (is (str/includes? gate "Awaiting gate"))
+    (is (str/includes? gate "your gate"))
+    (is (str/includes? gate "one billing cycle with no incident"))
+    (is (not (str/includes? (row {:stage :in-progress}) "phase ")) "an unphased row carries no chip")))
+
+(deftest the-gate-is-asserted-from-an-evidence-field
+  (let [html (str (h/html (views/action-bar "nido" "ws-1"
+                                            [{:id :assert-gate :label "Assert gate" :kind :evidence
+                                              :style :primary :criterion "a quiet week"}]
+                                            nil)))]
+    (is (str/includes? html "data-bind=\"evidence\""))
+    (is (str/includes? html "a quiet week"))
+    (is (str/includes? html "/gate/nido/ws-1/assert-gate"))
+    (is (not (str/includes? html "Reply &amp; resume")) "no reply box without a resume action")))
+
+(deftest a-phase-gate-entry-renders-its-evidence
+  (let [html (str (h/html (#'views/report-body {:format :phase-gate :design {:seq 3}
+                                                 :opens "reads move" :evidence "zero mismatches for 7 days"})))]
+    (is (str/includes? html "reads move"))
+    (is (str/includes? html "zero mismatches for 7 days"))))

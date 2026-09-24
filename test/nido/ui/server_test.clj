@@ -681,3 +681,10 @@
                         :detail "the baseline at entry 2 was retracted by entry 9"}})]
     (is (str/includes? msg "no longer stands"))
     (is (str/includes? msg "entry 9") "naming the entry is what a reader can act on")))
+
+(deftest a-refused-gate-says-why-and-a-restore-between-phases-says-what-to-do
+  (is (str/includes? (server/resolve-failure-msg {:decision :phase-refused
+                                                  :because "phase 1 has no landing recorded since it opened"})
+                     "no landing recorded"))
+  (is (str/includes? (server/resolve-failure-msg {:decision :between-phases}) "Assert its gate"))
+  (is (nil? (server/resolve-failure-msg {:decision :phase-opened}))))

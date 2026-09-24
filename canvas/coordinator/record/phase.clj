@@ -7,11 +7,12 @@
 
 (Kind PhaseProgress
   "Where a workstream is in its standing design's phase plan: the current phase, how many there
-   are, whether the current one has landed, and the next phase with its gate. nil for a
-   workstream whose standing design has no plan."
+   are, whether the current one has landed, the current phase's exit — the gate that opens its
+   successor — and the next phase. nil for a workstream whose standing design has no plan."
   [:map [:current :int]
         [:of :int]
         [:landed? :boolean]
+        [:exit [:maybe :map]]
         [:next [:maybe :map]]])
 
 (Module record-phase
