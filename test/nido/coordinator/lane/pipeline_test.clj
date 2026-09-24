@@ -959,3 +959,73 @@
                          does not stand, so nothing it was decided on places the
                          workstream")
                     (is (= {:stage :design :mode :authoring} (:next r)))))))))))))
+
+;; ── Phases ──────────────────────────────────────────────────────────────────
+
+(defn- a-phased-design [baseline-seq]
+  (assoc (a-design baseline-seq)
+         :holds  {"one-summing-path" :on-completion}
+         :phases [{:claim "both paths sum; only the old one is read"
+                   :habitable "readers unchanged" :exit {:kind :soak :criterion "a week"}
+                   :undo {:how :revert :by "stop the new path"}}
+                  {:claim "the old path is removed"
+                   :habitable "one path" :exit {:kind :completion :criterion "done"}
+                   :undo {:how :none :why "gone"}}]))
+
+(defn- landed-phase-one!
+  "A phased, approved design with its first phase implemented, published and
+   merged, closed as the landing path closes it."
+  []
+  (let [[id add!] (ledger)]
+    (intent! add!)
+    (add! :baseline a-baseline)
+    (add! :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})
+    (let [d (add! :design (a-phased-design 2))]
+      (add! :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+      (add! :implementation-completed {:format :implementation-completed :summary "s" :artifacts [] :design {:seq d}})
+      (add! :pr-opened {:format :pr-opened :url "u" :title "t" :design {:seq d}})
+      (add! :merged {:format :merged :pr "o/r#1" :url "u" :title "t" :design {:seq d}})
+      (ws/close! :brian id :between-phases d)
+      [id add! d])))
+
+(deftest a-landed-phase-with-more-to-come-awaits-its-gate
+  (with-tmp
+    (fn [_]
+      (let [[id] (landed-phase-one!)
+            r    (p/of :brian id)]
+        (is (= :awaiting-gate (:at r)))
+        (is (= {:stage :assert-gate :mode :human} (:next r)))))))
+
+(deftest there-is-no-phase-landed-position
+  (is (not-any? #{:phase-landed} p/positions)))
+
+(deftest an-opened-phase-owes-its-implementation-again
+  (with-tmp
+    (fn [_]
+      (let [[id add! d] (landed-phase-one!)]
+        (ws/open-phase! :brian id {:format :phase-gate :design {:seq d}
+                                   :opens "the old path is removed" :evidence "a quiet week"})
+        (is (= :design-approved (:at (p/of :brian id)))
+            "phase one's implementation, PR and merge are history, not stages passed")
+        (is (= :implement (:stage (:next (p/of :brian id)))))
+        (add! :implementation-completed {:format :implementation-completed :summary "s2" :artifacts [] :design {:seq d}})
+        (is (= :implemented (:at (p/of :brian id))) "what phase two writes places it as before")))))
+
+(deftest a-resolved-findings-round-is-placed-by-what-was-written-since
+  ;; What :phase-landed used to do for a reopened workstream — send it back to
+  ;; work — now comes from the trail restarting at the round.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (add! :baseline a-baseline)
+        (add! :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})
+        (let [d (add! :design (a-design 2))]
+          (add! :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+          (add! :implementation-completed {:format :implementation-completed :summary "s" :artifacts [] :design {:seq d}})
+          (add! :pr-opened {:format :pr-opened :url "u" :title "t" :design {:seq d}})
+          (add! :merged {:format :merged :pr "o/r#1" :url "u" :title "t" :design {:seq d}})
+          (add! :findings {:format :findings :round 1 :items [{:id "f1" :summary "s" :severity :tweak}]})
+          (is (= :design-approved (:at (p/of :brian id))) "nothing since the round: its fix is owed")
+          (add! :pr-opened {:format :pr-opened :url "u2" :title "fix" :design {:seq d}})
+          (is (= :published (:at (p/of :brian id))) "its own fix PR, not the landed one's"))))))

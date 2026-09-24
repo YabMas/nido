@@ -11,6 +11,7 @@
   (:require
    [clojure.string :as str]
    [nido.coordinator.record.clock :as clock]
+   [nido.coordinator.record.phase :as phase]
    [nido.coordinator.source.state :as sstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.lane.pickup :as pickup]
@@ -158,32 +159,49 @@
         (when (= :pr-opened (:kind shipment)) (:under shipment)))))
 
 (defn- record-merge!
-  "Append the terminal :merged event to the workstream's ledger. Best-effort and
-   deliberately AFTER close! — a ledger write that fails must not cost the close
-   or the Notion nudge.
+  "Append the landing's :merged to the workstream's ledger — once, BEFORE the close,
+   and best-effort: a failure is warned about and swallowed, because nothing waits
+   on the record. The close is the landing's record for the gate, and appending
+   first is what keeps every :merged a landing writes ahead of the :phase-gate that
+   opens the next phase. Keyed on the PR, so a re-run completes an interrupted
+   append and never writes two.
 
-   Skipped (loudly) on a ledger holding a design when nothing names the one the
-   PR was made under — `record-pr-opened!`'s rule, for its reason: the append
-   would refuse the record, and a citation guessed from append order is the thing
-   it refuses. The warning names the PR, so the missing citation is visible
-   rather than papered over with the newest design."
-  [project ws-id id {:keys [url title merged-at]}]
+   `d` is the design the merge is attributed to (`merge-design`). Skipped (loudly)
+   on a ledger holding a design when nothing names the one the PR was made under —
+   `record-pr-opened!`'s rule, for its reason: the append would refuse the record,
+   and a citation guessed from append order is the thing it refuses."
+  [project ws-id id {:keys [url title merged-at]} d]
   (try
-    (let [w (ws/read-ws project ws-id)
-          d (merge-design project w id url)]
-      (if (and (nil? d) (ws/holds-design? w))
-        (warn (str "github-merge: merged PR " id " on " ws-id " names no :design —"
-                   " neither its own records nor the shipment's :pr-opened cite one, and"
-                   " append order is not evidence; skipping the :merged ledger event"))
-        (ws/append-entry! project ws-id {:kind :merged}
-                          (pr-str (cond-> {:format    :merged
-                                           :pr        id
-                                           :url       url
-                                           :title     title
-                                           :merged-at merged-at}
-                                    d (assoc :design {:seq d}))))))
+    (if (and (nil? d) (ws/holds-design? (ws/read-ws project ws-id)))
+      (warn (str "github-merge: merged PR " id " on " ws-id " names no :design —"
+                 " neither its own records nor the shipment's :pr-opened cite one, and"
+                 " append order is not evidence; skipping the :merged ledger event"))
+      (ws/append-entry-once! project ws-id {:kind :merged}
+                             (pr-str (cond-> {:format    :merged
+                                              :pr        id
+                                              :url       url
+                                              :title     title
+                                              :merged-at merged-at}
+                                       d (assoc :design {:seq d})))
+                             #(= id (:pr %))))
     (catch Throwable t
-      (warn (str "github-merge: ledger append failed for " ws-id " (" id ") — " (.getMessage t))))))
+      (warn (str "github-merge: ledger append failed for " ws-id " (" id ") — " (.getMessage t)
+                 "; the close still happens, and the landing goes unrecorded")))))
+
+(defn- landing-design
+  "The design whose plan decides how this merge closes the workstream: `d`, the
+   :seq `merge-design` attributes the PR to, or nil when nothing does.
+
+   Never the newest design. One appended after the PR opened is not the plan this
+   landing is a phase of, and reading it would close the workstream under a phase
+   the landing never belonged to — or :done, skipping the gate its own phase owes.
+
+   Nor is the design's standing asked again here. It stood when the work was
+   cleared to be built; a record appended since the PR opened can unseat it, and
+   a design with no plan closes :done — so re-asking would let a later verdict
+   deliver the ticket on a landing that is only the plan's first phase."
+  [project w d]
+  (some->> d (ws/entry-at-seq project (:id w))))
 
 (def ^:private default-landing-base
   "The branch a merge must land on before it counts as shipped, when github.edn
@@ -223,17 +241,22 @@
                  (or (:base pr) "<no base reported>") ", not " base
                  " — leaving workstream " (:id w) " open. A stack-internal merge"
                  " lands nothing on " base "."))
-      :else (let [ref (notion-ref w)]
-              (ws/close! project (:id w) :done)
-              (record-merge! project (:id w) id pr)
-              (if-let [page-id (ref-page-id ref)]
+      :else (let [ref     (notion-ref w)
+                  d       (merge-design project w id (:url pr))
+                  ;; A phase that is not the plan's last closes between phases,
+                  ;; naming its plan, and delivers no ticket: the nudge is for the
+                  ;; landing that ends the plan.
+                  outcome (phase/landing-outcome (landing-design project w d) (:entries w))]
+              (record-merge! project (:id w) id pr d)
+              (ws/close! project (:id w) outcome (when (= :between-phases outcome) d))
+              (if-let [page-id (when (= :done outcome) (ref-page-id ref))]
                 (nudge-notion! page-id on-merge)
                 ;; No :notion ref at all (a GitHub-issue or Slack workstream)
                 ;; means there is no ticket to nudge, and silence is right. A ref
                 ;; we could not resolve is a gap: the workstream is now closed
                 ;; while its ticket sits at its pre-merge status, and nobody is
                 ;; told which of the two happened.
-                (when ref
+                (when (and ref (= :done outcome))
                   (warn (str "github-merge: workstream " (:id w) " carries a :notion ref ("
                              (:id ref) ") with no resolvable page-id — closed on " id
                              ", but the ticket was NOT nudged."))))))))

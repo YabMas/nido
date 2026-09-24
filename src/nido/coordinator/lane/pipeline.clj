@@ -40,7 +40,7 @@
 (def positions
   "Every position a workstream can be at, in the order `position` tests them.
 
-   Closed, and ordered by PRECEDENCE rather than by progress: the first six are
+   Closed, and ordered by PRECEDENCE rather than by progress: the first seven are
    halts and terminals that outrank whatever the record trail would otherwise
    say. A workstream whose baseline was retracted is at :premise-retracted even
    though it also holds a design — the retraction is the fact that matters, and
@@ -52,7 +52,10 @@
    such and left for a human — never advanced on a default. That refusal is an
    invariant of the design this implements, and it is why the vocabulary needs
    a name for `I do not know`."
-  [:shipped
+  [;; Closed, and not done: a phase landed and the plan has more. A person owes
+   ;; the gate — nothing moves until someone has watched the running system.
+   :awaiting-gate
+   :shipped
    :findings-open
    :blocked
    :design-retracted
@@ -61,7 +64,6 @@
    ;; The goal the newest survey was scoped for was replaced — the survey is
    ;; owed again, before anything that stands on it.
    :goal-superseded
-   :phase-landed
    :published
    :reviewed
    :implemented
@@ -156,7 +158,7 @@
     :implementation-plan :implementation-completed
     :review :review-analysis :improvement-decision :improvement-landed
     :blocker :blocker-answered :retraction
-    :findings :pr-opened :ship-submitted :merged})
+    :findings :pr-opened :ship-submitted :merged :phase-gate})
 
 (def ^:private stage-of-kind
   "Which stage of the arc each entry kind belongs to.
@@ -210,7 +212,9 @@
    ;; of the workstream still wants Publication and Shipping apart.
    :pr-opened       :publication
    :ship-submitted  :shipping
-   :merged          :shipping})
+   :merged          :shipping
+   ;; Opens the next landing, so it belongs where landings do.
+   :phase-gate      :shipping})
 
 (defn ^{:malli/schema [:=> [:cat :keyword] [:maybe :keyword]]}
   stage-of
@@ -513,8 +517,8 @@
    record trail underneath them; then implementation backwards from published;
    then the record arc. Each clause names a fact that is true of the ledger, so
    a position is always answerable by pointing at an entry."
-  [{:keys [closed? findings-open? blocker-seq retraction ks decided? approved? cleared?
-           verified? re-entry]}]
+  [{:keys [closed? closed-outcome findings-open? blocker-seq retraction ks decided? approved?
+           cleared? verified? re-entry restarted-trail]}]
   ;; THE CLAMP. The four trail clauses below place a stage by whether a kind is
   ;; present in the index, and an index is append-only — so each of them, once
   ;; true, is true for ever. `re-entry` is the reading that says how far up the
@@ -538,15 +542,19 @@
   ;; is owed — the verification, or the design that replaces it. Indeterminate
   ;; standing is exempt: nothing is owed on a ledger nobody can read, so the
   ;; position stays where the design put it and the round refuses there.
-  (let [trail-ks       (if re-entry (:trail re-entry) ks)
+  (let [;; A restart — the newest :phase-gate or :findings — scopes the trail to
+        ;; what was written since, and a re-entry scopes it further still.
+        trail-ks       (cond re-entry        (:trail re-entry)
+                             restarted-trail restarted-trail
+                             :else           ks)
         design-stands? (not (and (= :design (:stage re-entry))
                                  (not (:indeterminate? re-entry))))]
     (cond
-    ;; :closed is the authority on `done`, and a :merged entry is NOT. They come
-    ;; apart on exactly the case a phase plan creates: reopen! clears :closed for
-    ;; the next landing while every :merged entry stays in the ledger forever, so
-    ;; reading the entry as terminal would strand a phased workstream at :shipped
-    ;; after its first phase and leave the rest of the plan unreachable.
+    ;; :closed is the authority on `done`, and a :merged entry is NOT: every
+    ;; :merged stays in the ledger for ever, while a phase plan and a findings
+    ;; round both reopen a workstream after one. The close's OUTCOME is what
+    ;; tells a plan with more to land from an end.
+    (and closed? (= :between-phases closed-outcome)) :awaiting-gate
     closed?                        :shipped
     findings-open?                 :findings-open
     blocker-seq                    :blocked
@@ -574,11 +582,6 @@
     ;; which `reentry` already lets through first.
     (= :baseline (:stage re-entry))      :goal-superseded
 
-    ;; Merged and open again: a landing completed and somebody reopened it. That
-    ;; is the phase plan working, and the next act is the next phase — which is
-    ;; why this outranks :published, whose :pr-opened entry belongs to the
-    ;; landing that just finished.
-    (contains? trail-ks :merged)         :phase-landed
     (contains? trail-ks :pr-opened)      :published
     (contains? trail-ks :review)         :reviewed
     (contains? trail-ks :implementation-completed) :implemented
@@ -663,11 +666,9 @@
    ;; found, and what happens next is a judgement about whether it is right.
    :design-invalidated {:stage :acknowledge-invalidation :mode :human}
    :findings-open     {:stage :address-findings      :mode :working-copy}
-   ;; The next phase is an implementation, and which one is read off the design's
-   ;; :phases against how many :merged entries the ledger holds — a count, not a
-   ;; guess. Naming the stage is this module's job; picking the phase is the work
-   ;; of the turn that runs it.
-   :phase-landed      {:stage :implement             :mode :working-copy}
+   ;; A gate is asserted with the evidence a person looked at; nothing nido can
+   ;; run observes production, so the stage is theirs.
+   :awaiting-gate     {:stage :assert-gate           :mode :human}
    :blocked           {:stage :answer-blocker        :mode :human}
    :published         nil
    :shipped           nil
@@ -938,6 +939,8 @@
           ;; once per rendered row.
           re     (reentry/of* w design st bst)
           facts  {:closed?        (some? (:closed w))
+                         :closed-outcome (get-in w [:closed :outcome])
+                         :restarted-trail (reentry/standing-trail w design)
                          :findings-open? (open-findings? w)
                          :blocker-seq    (unanswered-blocker project ws-id w)
                          :retraction     (live-retraction project ws-id w)

@@ -89,12 +89,31 @@
   [design-seqs n]
   (last (take-while #(< % n) design-seqs)))
 
+(defn- restart
+  "The :seq of the newest `:phase-gate` or `:findings` on `w`, or nil.
+
+   Both put a workstream that already carried a trail back to work: a gate opens
+   the next phase, a findings round reopens the landed one. What either owes is
+   written after it, so a trail record from before it is history, never a stage
+   passed — without this the phase that just landed would read as the next
+   phase's implementation, review and publication, and a resolved findings round
+   as a landing."
+  [w]
+  (some->> (:entries w)
+           (filter #(#{:phase-gate :findings} (:kind %)))
+           (map :seq)
+           seq
+           (reduce max)))
+
 (defn ^{:malli/schema [:=> [:cat :Workstream :int] :map]}
   trail-standing
   "How each trail kind on `w` stands against the design at `current`:
 
      {:current #{kinds holding at least one record made under it}
       :stale   [{:kind :seq :under} …]  — records made under an older design}
+
+   Only records written after the newest restart (`restart`) are graded; those
+   before it are neither current nor stale.
 
    AT LEAST ONE, and that is the whole of the rule. A stage is passed when it
    holds a record of the design being built now; the records of designs before it
@@ -122,13 +141,32 @@
                               (when-let [g (or (:under e)
                                                (generation designs (:seq e)))]
                                 {:kind (:kind e) :seq (:seq e) :under g})))
-                      (filter #(trail-kinds (:kind %)) (:entries w)))]
+                      (filter #(and (trail-kinds (:kind %))
+                                    (> (:seq %) (or (restart w) 0)))
+                              (:entries w)))]
     {:current (into #{} (comp (filter #(>= (:under %) current)) (map :kind)) graded)
      ;; BEHIND, not merely different. Callers pass the latest design, so a record
      ;; under a newer one cannot arise there — but `stale` should mean what it
      ;; says for any argument, and a `not=` here reports a record from the future
      ;; as rotten.
      :stale   (into [] (filter #(< (:under %) current)) graded)}))
+
+(defn ^{:malli/schema [:=> [:cat :Workstream [:maybe :map]] [:maybe [:set :keyword]]]}
+  standing-trail
+  "The trail kinds that stand on `w` since its newest `:phase-gate` or `:findings`,
+   or nil when it holds neither — nil meaning the whole index may be read, as it
+   always could.
+
+   A set, possibly empty: empty is the answer for a phase just opened or a round
+   just filed, whose work is all still owed. Under `design`, only records made
+   under it count, as in `trail-standing`; with no design, every trail record
+   written since does."
+  [w design]
+  (when-let [r (restart w)]
+    (if design
+      (:current (trail-standing w (:seq design)))
+      (into #{} (comp (filter #(and (trail-kinds (:kind %)) (> (:seq %) r))) (map :kind))
+            (:entries w)))))
 
 (defn ^{:malli/schema [:=> [:cat :Workstream [:maybe :map] [:maybe :Standing] [:maybe :map]]
                         [:maybe :map]]}

@@ -107,3 +107,49 @@
           ;; and NOT in the ticket ledger
           (is (not-any? #(= :findings (:kind %))
                         (:entries (tickets/read-meta :brian "BR-8")))))))))
+
+(def ^:private phased-design-edn
+  (pr-str {:format :design :strata [] :summary "s" :shape "sh"
+           :model {:elements [{:id "m" :sort :module :hides "h" :interface "i"}]
+                   :claims [{:id "c" :about ["m"] :statement "st" :falsified-by "f"
+                             :evidence {:by :round}}]}
+           :holds {"c" :always}
+           :standing {:relation :conforms} :intent {:seq 1}
+           :baseline {:seq 2 :relation :within} :effort :S
+           :phases [{:claim "p1" :habitable "h" :exit {:kind :soak :criterion "w"} :undo {:how :revert :by "r"}}
+                    {:claim "p2" :habitable "h" :exit {:kind :completion :criterion "d"} :undo {:how :none :why "g"}}]}))
+
+(deftest resolving-a-round-filed-between-phases-returns-it-to-its-gate
+  (with-tmp
+    (fn []
+      (with-redefs [queue/enqueue! (constantly "/q/x.edn")]
+        (let [w (shipped-ticket-ws)]
+          (ws/close! :brian (:id w) :between-phases 3)
+          (findings/file! :brian (:id w) {:items [{:summary "A" :severity :tweak}]})
+          (is (nil? (:closed (ws/read-ws :brian (:id w)))) "filing reopens it, as for any landing")
+          (is (= 3 (:between-phases (:findings (ws/read-ws :brian (:id w))))) "the tracker keeps the plan")
+          (findings/resolve! :brian (:id w) ["f1"] "commit abc")
+          (is (= {:outcome :between-phases :design {:seq 3}}
+                 (select-keys (:closed (ws/read-ws :brian (:id w))) [:outcome :design]))
+              "the round belonged to the landed phase; its gate is owed again under the same plan"))))))
+
+(deftest resolving-a-round-with-a-fix-published-leaves-the-landing-to-close-it
+  (with-tmp
+    (fn []
+      (with-redefs [queue/enqueue! (constantly "/q/x.edn")]
+        (let [w (shipped-ticket-ws)]
+          (ws/close! :brian (:id w) :between-phases 3)
+          (findings/file! :brian (:id w) {:items [{:summary "A" :severity :tweak}]})
+          (ws/append-entry! :brian (:id w) {:kind :pr-opened} (pr-str {:format :pr-opened :url "u" :title "fix"}))
+          (findings/resolve! :brian (:id w) ["f1"] "pr 12")
+          (is (nil? (:closed (ws/read-ws :brian (:id w))))
+              "its fix PR will close it between phases when it lands"))))))
+
+(deftest resolving-a-round-on-a-done-workstream-leaves-it-open
+  (with-tmp
+    (fn []
+      (with-redefs [queue/enqueue! (constantly "/q/x.edn")]
+        (let [w (shipped-ticket-ws)]
+          (findings/file! :brian (:id w) {:items [{:summary "A" :severity :tweak}]})
+          (findings/resolve! :brian (:id w) ["f1"] "commit abc")
+          (is (nil? (:closed (ws/read-ws :brian (:id w))))))))))
