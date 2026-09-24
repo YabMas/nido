@@ -69,6 +69,7 @@
                  :triage {:in-flight [{:ws-id "tf"}] :queued [{:ws-id "tq"}]}
                  :in-progress [{:ws-id "p"}]
                  :shipping [{:ws-id "s"}]
+                 :awaiting-gate [{:ws-id "g"}]
                  :winding-down [{:ws-id "w"}]
                  :dismissed [{:ws-id "d"}]}
         intake  #{"i" "tf" "tq" "d"}
@@ -3257,3 +3258,97 @@
             (is (nil? (:ended-at (by-ws parked))))
             (is (= :stuck (:state (by-ws never))))
             (is (nil? (:ended-at (by-ws never))) "no session, so no end to report")))))))
+
+;; ── Phases ──────────────────────────────────────────────────────────────────
+
+(def ^:private phase-baseline
+  {:format :baseline :strata [] :intent {:seq 1}
+   :area "a" :bounded-by "b" :shape "s"
+   :model {:elements [{:id "m" :sort :module :hides "h" :interface "i"}]
+           :claims [{:id "c1" :about ["m"] :statement "st" :falsified-by "f" :evidence {:by :round}}]}
+   :read ["src/a.clj"]})
+
+(def ^:private phase-design
+  {:format :design :strata [] :summary "s" :shape "sh"
+   :model {:elements [{:id "m" :sort :module}]
+           :claims [{:id "c" :about ["m"] :statement "st" :falsified-by "f" :evidence {:by :round}}]}
+   :holds {"c" :on-completion}
+   :standing {:relation :conforms} :intent {:seq 1}
+   :baseline {:seq 2 :relation :within} :effort :S
+   :phases [{:claim "both paths run" :habitable "h" :exit {:kind :soak :criterion "a quiet week"}
+             :undo {:how :revert :by "r"}}
+            {:claim "the old path is removed" :habitable "h"
+             :exit {:kind :completion :criterion "nothing reads the old path"}
+             :undo {:how :none :why "gone"}}]})
+
+(defn- landed-between-phases!
+  "A ref-less workstream on the two-phase design, standing and granted, its first
+   phase landed."
+  []
+  (let [id   (:id (workstream/create! :brian {:stage :in-progress :external-refs []}))
+        add! #(workstream/append-entry! :brian id {:kind %1} (pr-str %2))]
+    (add! :intent {:format :intent :goal "g" :done-when ["d"]})
+    (add! :baseline phase-baseline)
+    (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                            :baseline-seq 2 :reason "ok"})
+    (add! :design phase-design)
+    (add! :design-approved {:format :design-approved :design {:seq 4} :at-seq 4})
+    (add! :merged {:format :merged :pr "o/r#1" :url "u" :title "t" :design {:seq 4}})
+    (workstream/close! :brian id :between-phases 4)
+    id))
+
+(deftest a-between-phases-workstream-is-on-its-own-band-with-its-progress
+  (with-tmp
+    (fn [_]
+      (let [id  (landed-between-phases!)
+            g   (work/grouped :brian #{})
+            row (first (:awaiting-gate g))]
+        (is (= id (:ws-id row)))
+        (is (= :awaiting-gate (:stage row)))
+        (is (= {:current 1 :of 2 :landed? true} (select-keys (:phase row) [:current :of :landed?])))
+        (is (:needs-you row) "a person owes the gate")
+        (is (= [:awaiting-gate] (map first (work/board-bands g))))
+        (is (= [:assert-gate] (map :id (:actions (work/gate :brian id))))
+            "closed, so it reads settled — and is still in the gate inbox")))))
+
+(deftest a-retracted-design-supplies-no-plan-and-opens-no-phase
+  (with-tmp
+    (fn [_]
+      (let [id (landed-between-phases!)]
+        (workstream/append-entry! :brian id {:kind :retraction}
+                                  (pr-str {:format :retraction :retracts {:seq 4}
+                                           :because "the design is not true of the code"
+                                           :evidence ["src/a.clj:9"]}))
+        (is (nil? (:phase (first (:awaiting-gate (work/grouped :brian #{}))))))
+        (is (= :phase-refused
+               (:decision (work/resolve-gate! :brian id :assert-gate "flat for a week"))))))))
+
+(deftest a-between-phases-workstream-with-a-live-session-is-not-winding-down
+  (with-tmp
+    (fn [_]
+      (let [id (landed-between-phases!)]
+        (session/create! :brian id {:name "p1" :weight :light :autonomy nil})
+        (is (empty? (work/winding-down :brian #{"p1"})) "one band, not two")
+        (is (= [id] (map :ws-id (:awaiting-gate (work/grouped :brian #{"p1"})))))))))
+
+(deftest the-gate-is-asserted-with-evidence-and-carries-its-criterion
+  (is (= [{:id :assert-gate :label "Assert gate" :kind :evidence :style :primary
+           :criterion "a quiet week"}]
+         (work/gate-actions :awaiting-gate false nil {:awaiting :assert-gate
+                                                      :gate-criterion "a quiet week"}))))
+
+(deftest asserting-the-gate-opens-the-next-phase
+  (with-tmp
+    (fn [_]
+      (let [id (landed-between-phases!)]
+        (is (= :phase-refused (:decision (work/resolve-gate! :brian id :assert-gate "  "))))
+        (is (= {:decision :phase-opened :opened "the old path is removed" :phase 2 :of 2}
+               (work/resolve-gate! :brian id :assert-gate "error rate flat for a week")))
+        (is (empty? (:awaiting-gate (work/grouped :brian #{}))) "off the gate band, back to work")))))
+
+(deftest restore-refuses-a-workstream-between-phases
+  (with-tmp
+    (fn [_]
+      (let [id (landed-between-phases!)]
+        (is (= {:decision :between-phases} (work/restore! :brian id)))
+        (is (= :between-phases (get-in (workstream/read-ws :brian id) [:closed :outcome])))))))

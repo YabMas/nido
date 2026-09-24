@@ -16,6 +16,7 @@
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.lane.facets :as facets]
    [nido.coordinator.lane.findings :as findings]
+   [nido.coordinator.lane.phase :as lphase]
    [nido.coordinator.source.notion-cache :as notion-cache]
    [nido.coordinator.source.queue :as queue]
    [nido.coordinator.source.start-failures :as start-failures]
@@ -61,8 +62,9 @@
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   board-bands
   "Ordered [stage rows] pairs the board renders out of a `grouped` map, empty
-   bands dropped: :shipping, :in-progress (most-advanced first), then
-   :winding-down — finished workstreams still holding live resources, whether
+   bands dropped: :shipping, :in-progress (most-advanced first), :awaiting-gate —
+   closed between phases, live session or not, since what they wait on is a
+   person rather than a session — then :winding-down — finished workstreams still holding live resources, whether
    nido settled them or Notion did (bring-down! is their one action). The ONE
    place the band list lives, so no surface can disagree about it.
 
@@ -78,9 +80,10 @@
   [grouped]
   (into []
         (keep (fn [[stage rows]] (when (seq rows) [stage (vec rows)])))
-        [[:shipping     (:shipping grouped)]
-         [:in-progress  (:in-progress grouped)]
-         [:winding-down (:winding-down grouped)]]))
+        [[:shipping      (:shipping grouped)]
+         [:in-progress   (:in-progress grouped)]
+         [:awaiting-gate (:awaiting-gate grouped)]
+         [:winding-down  (:winding-down grouped)]]))
 
 (def ^:private workstream-less-actions
   "Gate actions that are meaningful on a bare watched-view row — one with no
@@ -281,7 +284,8 @@
    correct automatically if the action sets change."
   ([stage parked?] (gate-actions stage parked? nil nil))
   ([stage parked? origin] (gate-actions stage parked? origin nil))
-  ([stage parked? _origin {:keys [bare? report-format options directions awaiting grantable?]
+  ([stage parked? _origin {:keys [bare? report-format options directions awaiting grantable?
+                                  gate-criterion]
                            entry-seq :seq}]
    (let [;; The branches of the CURRENT blocker, or [] — offered whether or not a
          ;; session is parked, because answering no longer depends on one being
@@ -365,6 +369,12 @@
                              :kind :mutation :style :default}
                       entry-seq (assoc :seq entry-seq))]
              parked? (conj {:id :reply :label "Reply" :kind :resume :style :default}))
+
+           ;; A gate is asserted with what a person observed, so its one action
+           ;; carries free text; the criterion rides on it for the surface to show.
+           (= :assert-gate awaiting)
+           [(cond-> {:id :assert-gate :label "Assert gate" :kind :evidence :style :primary}
+              gate-criterion (assoc :criterion gate-criterion))]
 
            approving?
            (cond-> [(cond-> {:id :approve :label "Approve"
@@ -483,6 +493,9 @@
   (let [origin (:source row)
         stage  (cond
                  (:dismissed? row)              :dismissed
+                 ;; Closed, and not over: its next phase waits on a person. Ahead
+                 ;; of :settled, which a closed workstream also reads as.
+                 (:between-phases? row)         :awaiting-gate
                  (= :settled (:engagement row)) :done
                  (= :scratch origin)            :in-progress
                  ;; A workstream that holds a reading rather than work. It folds
@@ -650,7 +663,10 @@
        []
        (->> (cws/list-ids project)
             (keep #(cws/read-ws project %))
-            (filter #(or (:closed %) (contains? done-ids (:id %))))
+            ;; Between phases is closed and not finished: it has its own band,
+            ;; and a row is on exactly one.
+            (filter #(or (and (:closed %) (not= :between-phases (get-in % [:closed :outcome])))
+                         (contains? done-ids (:id %))))
             (keep (fn [w]
                     (let [sessions (csession/list-sessions project (:id w))
                           live-s   (filterv #(contains? live (:name %)) sessions)]
@@ -1235,6 +1251,7 @@
                                   ;; a gate at all, and a second read is a second
                                   ;; moment.
                                   :awaiting      (awaiting-human (:position row))
+                                  :gate-criterion (get-in row [:phase :next :exit :criterion])
                                   :seq           (:seq report)})
      :session      (:name psess)
      :resume-error (get-in psess [:autonomy :error])
@@ -1256,7 +1273,10 @@
    (->> (list-workstreams project live-names)
         (remove #(= :dismissed (:stage %)))
         (filter :needs-you)
-        (remove #(= :settled (:engagement %)))
+        ;; Between phases is closed, so it reads :settled — and is still owed a
+        ;; person's :assert-gate, which only a gate carries.
+        (remove #(and (= :settled (:engagement %))
+                      (not= :awaiting-gate (:stage %))))
         (mapv #(->gate project %)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Gate]]}
@@ -1396,14 +1416,20 @@
    real (bare-row stamps :dismissed?, so a `bb nido:ticket:dismiss` orphan lands in
    the band), and clearing the ticket status IS the whole undo there — the row has
    no nido state beyond it. Only a row whose page carries no BR is a genuine no-op:
-   {:decision :no-workstream}."
+   {:decision :no-workstream}.
+
+   A workstream closed :between-phases is refused, {:decision :between-phases}: it
+   was never dismissed, and reopening it would start its next phase with no gate
+   asserted. Its ways back are a findings round and advance-phase!."
   [project ws-id]
   (if-let [w (cws/read-ws project ws-id)]
-    (do
-      (when-let [br (:id (wsv/ledger-ref w))]
-        (tickets/clear-status! project br))
-      (cws/reopen! project ws-id :triaging)
-      {:decision :restored})
+    (if (= :between-phases (get-in w [:closed :outcome]))
+      {:decision :between-phases}
+      (do
+        (when-let [br (:id (wsv/ledger-ref w))]
+          (tickets/clear-status! project br))
+        (cws/reopen! project ws-id :triaging)
+        {:decision :restored}))
     (if-let [br (bare-row-br project ws-id)]
       (do (tickets/clear-status! project br)
           {:decision :restored})
@@ -2004,6 +2030,25 @@
           {:decision :held :design (:seq design)})
       {:decision :nothing-to-acknowledge})))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :map]}
+  advance-phase!
+  "Assert a phased workstream's gate with `evidence` and open its next phase.
+   Returns {:decision :phase-opened :opened <claim> :phase n :of m}, or
+   {:decision :phase-refused :because <why>} — a gate that will not open is an
+   answer a person reads, not a failure of the click."
+  [project ws-id evidence]
+  (try
+    ;; The plan whose gate this is — the one the close names (`cws/plan-design`),
+    ;; the same one the board showed — and only while it still stands: a
+    ;; retracted design supplies no gate to open.
+    (when-let [d (cws/plan-design project ws-id)]
+      (when-not (:cleared? (standing/of-design project ws-id d))
+        (throw (ex-info (str "the design at entry " (:seq d) " no longer stands")
+                        {:ws-id ws-id}))))
+    (assoc (lphase/advance! project ws-id {:evidence evidence}) :decision :phase-opened)
+    (catch clojure.lang.ExceptionInfo e
+      {:decision :phase-refused :because (ex-message e)})))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any [:? :any]] :map]}
   resolve-gate!
   "Apply a gate follow-action, dispatching on `action-id`. A workstream-less ws-id
@@ -2023,12 +2068,14 @@
                               iff `payload` still names the latest report
      :direction-a … :direction-f -> apply! the verdict with the triage direction
                               that letter names, under the same position check
+     :assert-gate -> advance-phase! with `payload` as the gate's evidence
      :restore -> restore! (clear ticket status + reopen at :triaging)
      :start-triage -> start-triage-page! (force-spawn the triage trigger)
 
    `payload` is whatever the click carried besides its id, and what that is
-   depends on the action: the reply text for :reply, and the :seq of the report
-   the button was rendered from for every id position-carrying-action? names.
+   depends on the action: the reply text for :reply, the evidence for :assert-gate,
+   and the :seq of the report the button was rendered from for every id
+   position-carrying-action? names.
    Every other action resolves entirely nido-side and ignores it.
    Returns the resolver's result map."
   ([project ws-id action-id] (resolve-gate! project ws-id action-id nil))
@@ -2061,6 +2108,7 @@
        :approve (approve! project ws-id payload)
        :redesign     (redesign! project ws-id payload)
        :hold-design  (hold-design! project ws-id payload)
+       :assert-gate  (advance-phase! project ws-id payload)
        (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id}))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] :any]}
@@ -2146,6 +2194,7 @@
           (get-in grouped [:triage :queued])
           (:in-progress grouped)
           (:shipping grouped)
+          (:awaiting-gate grouped)
           (:winding-down grouped)
           (:dismissed grouped)))
 

@@ -10,7 +10,9 @@
    [clojure.string :as str]
    [nido.coordinator.source.notion-cache :as notion-cache]
    [nido.coordinator.record.activity :as activity]
+   [nido.coordinator.record.phase :as phase]
    [nido.coordinator.record.session :as session]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.workstream :as workstream]))
 
@@ -220,6 +222,17 @@
       (assoc doing :progress p)
       doing)))
 
+(defn- standing-design
+  "The design whose plan governs the workstream (`workstream/plan-design` — the one
+   its gate opens under) when it stands — cleared, as landing asks — or nil. Only a
+   phased one is asked, so an unphased row pays no standing read: it has no progress
+   whether or not its design stands."
+  [project ws-id]
+  (when-let [d (workstream/plan-design project ws-id)]
+    (when (and (seq (:phases d))
+               (:cleared? (standing/of-design project ws-id d)))
+      d)))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :Workstream [:? :any] [:? :any]] :WorkstreamRow]}
   workstream-row
   "One display row for a workstream: reads its sessions and projects engagement
@@ -304,7 +317,13 @@
       ;; pair would let one row answer the same question twice, :doing saying
       ;; :awaiting-merge on a row projected :done.
       :doing           doing
-      :open-findings   (count (:open (:findings ws)))})))
+      :open-findings   (count (:open (:findings ws)))
+      ;; Where the workstream is in its standing design's phase plan, nil for an
+      ;; unphased one or one whose design no longer stands. :between-phases? is
+      ;; read from :closed whatever drives the row: between phases is nido's own
+      ;; fact about the plan, which no ticket status carries.
+      :phase           (phase/progress (standing-design project (:id ws)) (:entries ws))
+      :between-phases? (= :between-phases (get-in ws [:closed :outcome]))})))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string :map] :WorkstreamRow]}
   bare-row
@@ -420,6 +439,7 @@
   [rows]
   (let [by (group-by :stage rows)]
     {:incoming    (by-needs-then-newest (:incoming by []))
+     :awaiting-gate (by-needs-then-newest (:awaiting-gate by []))
      :in-progress (by-needs-then-newest (:in-progress by []))
      :shipping    (by-needs-then-newest (:shipping by []))
      :triage      (triage-split (:triage by []))

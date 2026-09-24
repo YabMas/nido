@@ -238,6 +238,11 @@
      :delegates [triggers/load-for-project triggers/find-by-name queue/enqueue!]})
   (Operation file-findings! "File a findings round on a shipped workstream."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts :map]] :map]})
+  (Operation advance-phase!
+    "Assert a phased workstream's gate with its evidence and open its next phase. A gate that
+     will not open is an answer — {:decision :phase-refused :because …} — not a thrown failure."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:evidence [:maybe :string]]] :map]
+     :delegates [lanes/advance!]})
   (Operation session-started! "Tell the work plane a session came up."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
      :delegates [lanes/birth! lifecycle/session-weight]})

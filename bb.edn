@@ -464,6 +464,11 @@
    :doc "Stop driving one workstream: :project <p> :ws-id <id>"
    :task (apply nido-drive/remove-cmd *command-line-args*)}
 
+  nido:phase:advance
+  {:requires ([tasks.nido-phase :as nido-phase])
+   :doc "Assert a phased workstream's gate with its evidence and open the next phase: :project <p> (:ws-id <id> | :ref <BR-####>) :evidence \"<what was observed>\". Refuses unless it is closed between phases with its phase's landing recorded."
+   :task (apply nido-phase/advance-cmd *command-line-args*)}
+
   nido:findings:file
   {:requires ([tasks.nido-findings :as nido-findings])
    :doc "File a staging findings round on a shipped workstream (reopens it)."
