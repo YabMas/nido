@@ -5,6 +5,7 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.clock :as clock]
             [canvas.coordinator.record.session :as session]
+            [canvas.coordinator.record.phase :as phase]
             [canvas.coordinator.record.state :as state :refer [Path WorkstreamId]]
             [canvas.coordinator.report :as report]
             [canvas.platform.project :refer [ProjectName]]
@@ -92,6 +93,19 @@
     "Append an immutable entry and record it in the index, under the workstream's lock."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:entry :map] [:content :string]] Path]
      :delegates [append-lock-path read-ws write! report/entry-payload]})
+  (Operation plan-design
+    "The design whose plan governs a workstream: the one its :between-phases close names while
+     it waits on a gate; once a gate opens, the one it cites until a design is appended after it;
+     else its newest design, or nil. What every reader of phase progress passes record-phase, so
+     the gate shown is the gate that opens."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
+     :delegates [read-ws latest-entry entry-at-seq]})
+  (Operation open-phase!
+    "Append a :phase-gate and reopen the workstream, under its lock and in one write of the
+     record — the kind's one writer. Refused unless the workstream is closed :between-phases, the evidence is not blank, and the
+     gate opens the phase immediately after the current one of the plan it cites."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:gate :map]] Workstream]
+     :delegates [append-lock-path read-ws write! phase/progress]})
   (Operation highest-seq-on-disk
     "The largest entry number under entries/, or 0.
 

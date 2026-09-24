@@ -1651,3 +1651,146 @@
              clojure.lang.ExceptionInfo #"Implementation-completed :design cites entry 999"
              (ws/append-entry! :brian (:id w) {:kind :implementation-completed}
                                (pr-str (assoc an-implementation :design {:seq 999})))))))))
+
+;; ── phase gates ──────────────────────────────────────────────────────────────
+
+(defn- landed-first-phase!
+  "A workstream holding the two-phase design at seq 3, its first phase landed and
+   the workstream closed :between-phases — the state `open-phase!` opens from."
+  []
+  (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+    (seed-baseline! w)
+    (ws/append-entry! :brian (:id w) {:kind :design}
+                      (pr-str (phased-design-citing 2 "the old column is dropped")))
+    (ws/append-entry! :brian (:id w) {:kind :merged}
+                      (pr-str {:format :merged :pr "o/r#1" :url "u" :title "t" :design {:seq 3}}))
+    (ws/close! :brian (:id w) :between-phases 3)
+    w))
+
+(def ^:private second-phase
+  {:format :phase-gate :design {:seq 3} :opens "the old column is dropped"
+   :evidence "discrepancy counter at zero for 7 days (dashboard, 2026-09-24)"})
+
+(deftest open-phase-appends-the-gate-and-reopens
+  (with-tmp
+    (fn [_]
+      (let [w  (landed-first-phase!)
+            w' (ws/open-phase! :brian (:id w) second-phase)
+            row (last (:entries w'))]
+        (is (nil? (:closed w')))
+        (is (= :in-progress (:stage w')))
+        (is (= [:phase-gate "the old column is dropped" 3] ((juxt :kind :opens :under) row))
+            "the index row carries the phase it opens and the design it cites")))))
+
+(deftest an-interrupted-open-phase-leaves-nothing-a-retry-is-refused-on
+  ;; The gate and the reopen are one write. Were they two, dying between them would
+  ;; leave the next phase open and unlanded on a record still :between-phases —
+  ;; a state every retry refuses.
+  (with-tmp
+    (fn [_]
+      (let [w (landed-first-phase!)]
+        (with-redefs [ws/reopened (fn [& _] (throw (ex-info "killed mid-transition" {})))]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"killed mid-transition"
+                                (ws/open-phase! :brian (:id w) second-phase))))
+        (let [w' (ws/read-ws :brian (:id w))]
+          (is (= :between-phases (get-in w' [:closed :outcome])))
+          (is (not-any? #(= :phase-gate (:kind %)) (:entries w')) "no gate indexed without its reopen"))
+        (let [w' (ws/open-phase! :brian (:id w) second-phase)]
+          (is (nil? (:closed w')) "the retry completes the transition")
+          (is (= 1 (count (filter #(= :phase-gate (:kind %)) (:entries w'))))))))))
+
+(deftest open-phase-refuses-a-workstream-not-between-phases
+  (with-tmp
+    (fn [_]
+      (let [w (landed-first-phase!)]
+        (ws/reopen! :brian (:id w) :in-progress)
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not settled between phases"
+                              (ws/open-phase! :brian (:id w) second-phase)))
+        (ws/close! :brian (:id w) :done)
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not settled between phases"
+                              (ws/open-phase! :brian (:id w) second-phase)))))))
+
+(deftest open-phase-refuses-blank-evidence
+  (with-tmp
+    (fn [_]
+      (let [w (landed-first-phase!)]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no evidence"
+                              (ws/open-phase! :brian (:id w) (assoc second-phase :evidence "   "))))
+        (is (= 4 (count (:entries (ws/read-ws :brian (:id w))))) "nothing written")))))
+
+(deftest open-phase-opens-on-the-close-whether-or-not-the-merged-was-written
+  ;; The close is the landing's record for the gate. A :merged whose best-effort
+  ;; append failed strands nothing.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (seed-baseline! w)
+        (ws/append-entry! :brian (:id w) {:kind :design}
+                          (pr-str (phased-design-citing 2 "the old column is dropped")))
+        (ws/close! :brian (:id w) :between-phases 3)
+        (is (nil? (:closed (ws/open-phase! :brian (:id w) second-phase))))))))
+
+(deftest open-phase-refuses-a-close-that-names-no-design
+  (with-tmp
+    (fn [_]
+      (let [w (landed-first-phase!)]
+        (ws/close! :brian (:id w) :between-phases)
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"names no phased design"
+                              (ws/open-phase! :brian (:id w) second-phase)))))))
+
+(deftest open-phase-refuses-a-phase-that-is-not-next
+  (with-tmp
+    (fn [_]
+      (let [w (landed-first-phase!)]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"next phase of the plan is"
+                              (ws/open-phase! :brian (:id w)
+                                              (assoc second-phase :opens "both writers maintain the new column"))))
+        (ws/open-phase! :brian (:id w) second-phase)
+        (ws/append-entry! :brian (:id w) {:kind :merged}
+                          (pr-str {:format :merged :pr "o/r#2" :url "u" :title "t" :design {:seq 3}}))
+        (ws/close! :brian (:id w) :between-phases 3)
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"next phase of the plan is none"
+                              (ws/open-phase! :brian (:id w) second-phase))
+            "no phase remains after the last")))))
+
+(deftest open-phase-refuses-a-gate-citing-another-design-than-the-close
+  (with-tmp
+    (fn [_]
+      (let [w (landed-first-phase!)]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"the plan waiting on it is the design at entry 3"
+                              (ws/open-phase! :brian (:id w) (assoc second-phase :design {:seq 2}))))))))
+
+(deftest no-design-is-written-while-a-workstream-waits-between-phases
+  (with-tmp
+    (fn [_]
+      (let [w (landed-first-phase!)]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"waiting between phases"
+                              (ws/append-entry! :brian (:id w) {:kind :design}
+                                                (pr-str (phased-design-citing 2 "the old column is dropped")))))))))
+
+(deftest the-plan-is-the-closes-then-the-gates-then-the-newest
+  (with-tmp
+    (fn [_]
+      (let [w  (landed-first-phase!)
+            id (:id w)]
+        (is (= 3 (:seq (ws/plan-design :brian id))) "waiting: the design the close names")
+        (ws/open-phase! :brian id second-phase)
+        (is (= 3 (:seq (ws/plan-design :brian id))) "opened: the design the gate cites")
+        (ws/append-entry! :brian id {:kind :design}
+                          (pr-str (phased-design-citing 2 "the old column is dropped")))
+        (is (= (count (:entries (ws/read-ws :brian id))) (:seq (ws/plan-design :brian id)))
+            "a design written after the gate takes over")))))
+
+(deftest the-generic-appends-refuse-a-phase-gate
+  (with-tmp
+    (fn [_]
+      (let [w (landed-first-phase!)
+            n (count (:entries (ws/read-ws :brian (:id w))))]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only through open-phase!"
+                              (ws/append-entry! :brian (:id w) {:kind :phase-gate} (pr-str second-phase))))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only through open-phase!"
+                              (ws/append-entry-at! :brian (:id w) n {:kind :phase-gate} (pr-str second-phase))))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only through open-phase!"
+                              (ws/append-entry-once! :brian (:id w) {:kind :phase-gate} (pr-str second-phase)
+                                                     (constantly false))))
+        (is (= n (count (:entries (ws/read-ws :brian (:id w))))))))))
