@@ -1,6 +1,6 @@
 ---
 name: land
-description: Land the current session's stack — mark every layer ready for review, answer the PR checks that readiness triggers and any review thread a human left (fixing what it can, declining what it can defensibly decline), collapse the stack into its top PR and merge that one PR, watching it until it lands. No ledger events. Run from a session worktree. Usage: /land
+description: Land the current session's stack — mark every layer ready for review, answer the PR checks that readiness triggers and any review thread a human left (fixing what it can, declining what it can defensibly decline), collapse the stack into its top PR, write a product-terms QA brief onto the brian Notion ticket it closes, and merge that one PR, watching it until it lands. No ledger events. Run from a session worktree. Usage: /land
 ---
 
 # /land
@@ -411,6 +411,107 @@ and a second `Closes` would claim a ticket this arc does not deliver. See
 a stack for a follow-up `FU-#`, or in a project with no `:delivery-claim`
 config, carries no claim line here either.
 
+#### Write the QA brief onto the ticket — brian only
+
+The person who checks this work on staging opens the Notion ticket, not the PR,
+and usually has never seen either. What they find there today is a bug report
+written before anyone understood the bug, a triage note in engineering terms and
+a trail of PR links, and from that they have to work out what to click and what
+should happen. This step puts that answer at the top of the ticket.
+
+**It runs here, and only here:** after the collapse, before the enqueue. After
+the collapse because the arc is frozen — nothing is pushed after it — so the
+brief describes exactly what lands. Before the enqueue because brian's staging
+deploy moves the ticket to Review, and that is when the reviewer opens it.
+
+**Skip it — and say so in §7 — unless both hold:**
+
+1. **The project is brian.** The session home is
+   `…/.nido/sessions/brian/<session>/` (equivalently, `:project :brian` in
+   `./run-link/run.edn`). No other project's tickets have a QA reviewer reading
+   them.
+2. **The top PR carries a `Closes BR-####` claim** — the one you just wrote.
+   A `Refs`-only landing (an early phase, a follow-up `FU-#`) does not deliver
+   the ticket, and a brief on it would send the reviewer to test something that
+   is not finished.
+
+Resolve the page from that `BR-####`. `./run-link/run.edn` →
+`:event-payload :notion-page-id` when its `:id` is the same ticket; otherwise
+query the Task Database by unique id (`docs/reference/notion-access.md` has the
+command). Then read what the reviewer will see:
+
+```bash
+notion page markdown "$PAGE"
+notion comment list "$PAGE" --all
+```
+
+**Write it for someone who knows the product and nothing else.** No file,
+function, namespace, table, endpoint, flag or PR number; no "the fix", no
+"as discussed". A reader who never saw the ticket, the code or the chat must be
+able to follow it alone. Draw it from the collapsed PR's layer briefs (Claims,
+Verify, Out of scope), the ticket and its comments, and the design record
+(`bb nido:workstream:show`) — then translate every item into what a user does
+and sees. A Verify item with no user-visible form (a migration, a log line, a
+query count) is dropped, not translated into jargon; if nothing the change does
+is visible, the brief says that in one line and names what to check still works.
+Never write a step the diff does not back, and never claim something was tested.
+
+    QA instructions                                   ← callout, 🧪
+    What changed      1–3 sentences: the problem as a user met it, and what
+                      they experience now.
+    Before you start  where (staging), which role/account, what data must
+                      exist ("a course with at least one published quiz"),
+                      any setting to switch on — named as the UI names it.
+    Steps             numbered; each is one action, then "Expected: …".
+    Also check        1–3 nearby behaviours a user relies on that the change
+                      could plausibly disturb.
+    Not in this change  what a reviewer might expect but will not find, from
+                      the layers' Out of scope — so it is not filed as a bug.
+
+**Write it as ONE callout block, prepended.** The callout is the brief's
+identity: its text starts `QA instructions`, and that is how a re-run finds and
+replaces it. Build the block JSON (children nested inside the callout; keep
+each rich-text run under 2000 characters — one oversized run rejects the whole
+request) and send it:
+
+```bash
+notion api PATCH /v1/blocks/"$PAGE"/children --body - <<'JSON'
+{"position": {"type": "start"},
+ "children": [{"type": "callout",
+               "callout": {"icon": {"type": "emoji", "emoji": "🧪"},
+                           "rich_text": [{"type": "text", "text": {"content": "QA instructions"},
+                                          "annotations": {"bold": true}}],
+                           "children": [ …headings, paragraphs, numbered_list_items… ]}}]}
+JSON
+```
+
+**Check where it landed.** Notion can ignore `position` and append at the
+bottom instead; `nido.notion.client/prepend-block-children!` documents the same
+caveat. Read the first child back (`notion block list "$PAGE" --depth 1`). At
+the bottom is still a brief — report it as such in §7 rather than deleting and
+retrying.
+
+**Tidy only what a machine wrote and the brief supersedes:**
+
+- An earlier `QA instructions` callout — delete it before prepending the new
+  one (`notion api DELETE /v1/blocks/<block-id>`). This is what makes a re-run
+  replace rather than stack.
+- `GitHub PR: <url>` paragraphs pointing at a lower layer — those PRs close
+  unmerged after the landing. Delete them.
+- The `GitHub PR` property — set it to the top PR:
+  `notion page set "$PAGE" "GitHub PR=<top-pr-url>"`.
+
+**Everything a person wrote stays exactly as it is** — the report, its
+screenshots and videos, comments, the triage note, the title, every other
+property. Notion's API has no move, so "folding" old content away means
+deleting and recreating it, which loses its comments and history. The brief
+earns the reviewer's attention by being first and self-contained, not by
+clearing the page around it.
+
+**A Notion failure never stops the landing.** The brief serves the reviewer; the
+merge does not depend on it. Record what went wrong in §7 and go on to the
+enqueue.
+
 #### Merge and watch — one PR
 
 ```bash
@@ -573,6 +674,8 @@ Unresolved
 Checks
 - <check name> — <fixed how | still red>
 
+QA brief: <written to BR-#### (top of page | appended at bottom) | skipped — <not brian | no Closes claim> | failed — <what Notion answered>>
+
 Outcome: <merged at <sha> | on the queue, github-merge poller owns it | halted before merge>
 ```
 
@@ -598,6 +701,9 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
 - **No GitHub-side code review.** The review rounds (`bb nido:review:loop`) judge
   the diff before this runs, so `/land` waits on no reviewer and parses no bot.
   It answers the PR's checks, and whatever thread a person happened to leave.
+- **No other Notion writes.** The QA brief (§6) and the tidy that goes with it
+  are the only ones; the ticket's Status moves on brian's staging deploy and the
+  `github-merge` poller, not here.
 - **No un-readying.** A halt leaves the layers ready and the threads open —
   that is what lets a human read the review on GitHub.
 
@@ -618,6 +724,8 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
   queue; no second entry, and the watch below is what you want anyway.
 - Top PR already merged or queued → `gh pr merge --auto` reports it; no second
   merge.
+- QA brief already on the ticket → delete the `QA instructions` callout and
+  prepend the fresh one; a re-run replaces, never stacks (§6).
 - Already merged → §6's watch returns immediately; still emit the report.
 
 ## Common mistakes
@@ -674,6 +782,12 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
 - **Collapsing without carrying the delivery claim onto the top PR** — its body
   is authored, not generated, so the claim is lost unless you write it. The PR
   merges, the ticket never moves, and nothing says so (§"Rewrite the top PR").
+- **Writing the QA brief in engineering terms** — its reader knows the product,
+  not the code or the ticket's history. A step naming a function, a table or a
+  PR is a step they cannot follow (§6).
+- **Clearing the ticket to make room for the brief** — only machine-written,
+  superseded blocks go. The report, media, comments and triage note are a
+  person's record, and Notion cannot move them without destroying them (§6).
 - **Pushing after the collapse** — a `synchronize` is a new head commit, which
   re-fires CI on the full arc. The frozen head SHA is the whole reason the green
   checks still stand (§6).

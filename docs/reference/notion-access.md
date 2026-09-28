@@ -91,5 +91,6 @@ the Notion mutation happens deterministically in nido's apply path
 (`bb nido:ticket:apply`, `nido.work/apply!`). If you find yourself
 composing a Notion write inside one of those skills, the design has drifted.
 
-Outside those flows — `/prepare-draft-pr` stamping a PR URL onto a ticket, an
+Outside those flows — `/prepare-draft-pr` stamping a PR URL onto a ticket,
+`/land` writing its QA brief onto a brian ticket, an
 ad-hoc lookup — writing directly with the CLI is fine.
