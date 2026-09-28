@@ -683,6 +683,64 @@
     (cond-> a
       (= :establish-intent (:stage a)) (assoc :from kind))))
 
+(defn- owed-stages
+  "The stages `reading` — `ws/goal-amendment`'s — still owes, given whether standing verifies its
+   unit's newest survey and a round's decision lets its newest design proceed."
+  [{:keys [goal baseline baseline-stale? design design-stale?]} {:keys [verified? decided?]}]
+  (let [rebase? (or (nil? baseline) baseline-stale?)
+        verify? (or rebase? (not verified?))
+        design? (or (nil? design) design-stale? rebase?)
+        decide? (or design? (not decided?))]
+    (cond-> []
+      rebase? (conj (cond-> {:stage :rebaseline :intent goal}
+                      baseline-stale? (assoc :supersedes baseline)))
+      verify? (conj {:stage :verify-baseline :intent goal :baseline (when-not rebase? baseline)})
+      design? (conj (cond-> {:stage :design :intent goal :baseline (when-not rebase? baseline)}
+                      (and design (or design-stale? rebase?)) (assoc :supersedes design)))
+      decide? (conj {:stage :decide-design :intent goal :design (when-not design? design)}))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int] [:vector :map]]}
+  amendment-owed
+  "The stages the amendment of the goal at `goal-seq` still owes its unit, in order, each
+   carrying the live goal it serves as :intent and the seqs its record cites, supersedes or
+   judges: a :rebaseline while the unit's newest survey stands on the replaced goal, its
+   :verify-baseline until standing verifies that survey, a :design citing both while the newest
+   design stands on the replaced goal or the survey is still to be written, and its
+   :decide-design until a round's decision lets that design proceed. [] when the goal was never
+   amended, nothing in its unit was built on what it replaced, or every stage is passed.
+
+   ONE FUNCTION OF A GOAL, answered for whichever unit the caller names — the pipeline names
+   the unit of its newest survey's goal, a refusal the unit of the goal the refused record
+   reached — so two callers asking about one unit cannot get two chains. Which records still
+   stand on the replaced goal is the ledger's reading; which verdict verifies or decides is
+   standing's and `report/proceeds?`'s, never re-derived here. Here rather than in the ledger
+   because a review and a decision are stages of the arc. Stages and seqs, no wording: a
+   surface says them in its own terms. A seq a stage would cite that is not yet on the ledger
+   is nil."
+  [project ws-id goal-seq]
+  (let [w (ws/read-ws project ws-id)]
+    (if-let [{:keys [baseline design] :as reading} (when w (ws/goal-amendment w goal-seq))]
+      (owed-stages reading
+                   {:verified? (boolean (some->> baseline (ws/entry-at-seq project ws-id)
+                                                 (standing/of-baseline project ws-id)
+                                                 :verified?))
+                    :decided?  (boolean (when design
+                                          (some->> (ws/entries-of project ws-id :design-decision)
+                                                   (filter #(= design (:design-seq %)))
+                                                   last
+                                                   report/proceeds?)))})
+      [])))
+
+;; The positions the record arc places whose next stage is an amendment's own rung. A
+;; halt, a terminal or a retraction outranks the amendment there, and some of those name
+;; one of its stages too, so matching on the stage alone would hand them its chain.
+(def ^:private amendment-positions
+  "The positions whose next stage can be an amendment's own: the moved goal's, and the arc's
+   ordinary rungs the rest of the chain passes through. A retracted position can name the same
+   stage — :premise-retracted a :rebaseline, :design-retracted a :design — and the action it
+   chose is the retraction's, so it is not here."
+  #{:goal-superseded :baselined :baseline-verified :designed})
+
 (def ^:private clearance
   "The next action at :design-decided for a design whose own declarations owe
    nobody a grant, and which still stands.
@@ -905,9 +963,11 @@
   of
   "Where workstream `ws-id` is, and what should happen to it next.
 
-   Returns {:at <position> :next {:stage :mode (:from)} :stage <spine stage>
+   Returns {:at <position> :next {:stage :mode (:from) (:owed)} :stage <spine stage>
             :intake <kind> :read {…}} — or {:at :unplaceable :why …} when the ledger cannot be
-   read at all.
+   read at all. :owed rides on :next only when the amendment's own position chose it and its stage
+   is the first the amendment of the newest survey's goal still owes: `amendment-owed`'s stages,
+   in order.
 
    `:read` names the sources this answer was derived from, which is the point:
    the four position vocabularies keep their jobs and this relates them, so a
@@ -964,7 +1024,18 @@
                              (not (report/owes-a-person? design)))
                       clearance
                       (next-action p kind)))
-          nx     (next-of pos)]
+          ;; What an amendment of the newest survey's goal still owes, carried beside the
+          ;; stage fired only when the position is one of the arc's and that stage is the
+          ;; first owed — the rungs the arc would otherwise name one at a time. Where a
+          ;; blocker or a retraction outranks it, the action is theirs and nothing rides
+          ;; beside it.
+          owed   (some->> (get-in bl [:intent :seq]) (amendment-owed project ws-id))
+          nx     (let [n (next-of pos)]
+                   (cond-> n
+                     (and n (seq owed)
+                          (contains? amendment-positions pos)
+                          (= (:stage n) (:stage (first owed))))
+                     (assoc :owed owed)))]
       (cond->
        {:at     pos
         :next   nx

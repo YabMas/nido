@@ -590,6 +590,32 @@
                  (conj seen n) goals)))
       goals)))
 
+(defn- live-goals
+  "Every :intent :seq no later intent replaces, oldest first — the goals a new intent may
+   supersede."
+  [w]
+  (let [dead (superseded-goals w)]
+    (into [] (comp (filter #(= :intent (:kind %))) (map :seq) (remove dead)) (:entries w))))
+
+(defn- intent-supersessions
+  "Each :intent :seq that supersedes another → the :seq it supersedes."
+  [w]
+  (into {} (keep #(when-let [n (get-in (read-entry-at w (:seq %)) [:supersedes :seq])]
+                    [(:seq %) n]))
+        (filter #(= :intent (:kind %)) (:entries w))))
+
+(defn- live-tip
+  "The live goal of the chain `goal-seq` is on — forward along :supersedes until nothing
+   replaces it. Every link was refused unless its target was live, so the chain has one tip;
+   `seen` bounds a cycle only a hand-written ledger could hold."
+  [w goal-seq]
+  (let [by-old (into {} (map (fn [[new old]] [old new])) (intent-supersessions w))]
+    (loop [n goal-seq seen #{}]
+      (let [nxt (by-old n)]
+        (if (or (nil? nxt) (seen nxt)) n (recur nxt (conj seen n)))))))
+
+(declare goal-amendment)
+
 (defn- check-goal-is-live!
   "Nothing a record stands on stands on a goal something has replaced.
 
@@ -602,9 +628,12 @@
    goal nobody holds.
 
    That is an authoring error rather than a propagation failure, so it is
-   refused where authoring errors are refused. An :intent's own :supersedes is
-   held to the same rule for a different reason: an amendment naming an
-   already-replaced tip forks the chain and leaves the walk two answers to take.
+   refused where authoring errors are refused. The refusal names every record
+   still standing on the replaced goal, not only the one refused, and carries
+   `goal-amendment`'s reading under :amendment, from which the arc says the
+   whole chain owed. An :intent's own :supersedes is held to the same rule for
+   a different reason: an amendment naming an already-replaced tip forks the
+   chain and leaves the walk two answers to take.
 
    However many citations away, which is why this walks `goals-reached` rather
    than reading the record's own goal: a design naming the live goal over a
@@ -625,11 +654,61 @@
       (when (seq goals)
         (let [dead (superseded-goals w)]
           (when-let [n (some dead goals)]
-            (throw (ex-info (str (str/capitalize (name kind)) " stands on the goal at entry "
-                                 n ", which a later intent has replaced"
-                                 (when (= :intent kind)
-                                   " — an amendment naming an already-replaced goal forks the chain"))
-                            {:seq n :kind kind :superseded (vec (sort dead))}))))))))
+            (let [owed (when-not (= :intent kind) (goal-amendment w n))]
+              (throw (ex-info (str (str/capitalize (name kind)) " stands on the goal at entry "
+                                   n ", which a later intent has replaced"
+                                   (if (= :intent kind)
+                                     (str " — an amendment naming an already-replaced goal forks the chain;"
+                                          " the live goal is entry " (live-tip w n))
+                                     (when-let [{:keys [goal baseline baseline-stale? design design-stale?]} owed]
+                                       (when (or baseline-stale? design-stale?)
+                                         (str "; amending it to entry " goal " still owes a replacement for "
+                                              (str/join " and "
+                                                        (cond-> []
+                                                          baseline-stale? (conj (str "the baseline at entry " baseline))
+                                                          design-stale?   (conj (str "the design at entry " design)))))))))
+                              (cond-> {:seq n :kind kind :superseded (vec (sort dead))}
+                                owed (assoc :amendment owed)))))))))))
+
+(defn- check-intent-says-its-goal!
+  "An :intent joining a workstream that already states a goal says how it stands to it: it
+   :supersedes a live goal, amending it, or is :independent, opening a second unit.
+
+   Only the author knows which, and the ledger cannot tell them apart afterwards — a bare second
+   intent roots a unit of its own, and an author who meant an amendment finds out only when the
+   next design reaches both roots and is refused, on a different record, while the intent that
+   caused it stands. So the question is asked at the one append that can answer it, and the
+   refusal names the goal a :supersedes most likely meant: the newest one nothing replaces.
+   A retracted goal is still live here, because only a :supersedes answers its retraction.
+
+   The first intent on a workstream carries neither, since there is nothing to stand to, and is
+   refused carrying either."
+  [w kind payload]
+  (when (= :intent kind)
+    (let [r     (edn/read-string payload)
+          goals (live-goals w)]
+      (cond
+        (and (empty? goals) (or (:supersedes r) (:independent r)))
+        (throw (ex-info (str "This is the workstream's first intent, so there is no goal for it to"
+                             " amend (:supersedes) or to stand beside (:independent true) — drop both")
+                        {:supersedes  (get-in r [:supersedes :seq])
+                         :independent (:independent r)}))
+
+        (and (:supersedes r) (:independent r))
+        (throw (ex-info (str "An intent either amends a goal (:supersedes) or opens a unit of its"
+                             " own (:independent true), never both")
+                        {:supersedes (get-in r [:supersedes :seq])}))
+
+        (and (seq goals) (not (:supersedes r)) (not (:independent r)))
+        (let [n (last goals)]
+          (throw (ex-info (str "This intent names no goal it replaces, and entry " n
+                               " already states this workstream's goal"
+                               (when (next goals)
+                                 (str " (the live goals are entries " (str/join ", " goals) ")"))
+                               ". To amend that goal, add :supersedes {:seq " n " :why \"…\"}."
+                               " To open a second unit of work, add :independent true — or fork"
+                               " the unit (bb nido:workstream:fork) so it has a workstream of its own")
+                          {:live-goals goals :meant n})))))))
 
 (def ^:private trail-kinds
   "The records that say something HAPPENED, each of which names the design it
@@ -1038,6 +1117,15 @@
    either an entry to both of them or to neither."
   #"^(\d{4})-")
 
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :int]]}
+  seq-of-path
+  "The :seq of the entry file at `path` — what `append-entry!` returns — read off its name, or nil.
+
+   The one answer to which entry an append wrote. Rereading the ledger's newest entry afterwards is
+   not: the append lock is released by then, and another writer's entry may be the newest."
+  [path]
+  (some-> (re-find entry-file-pattern (str (fs/file-name path))) second parse-long))
+
 (defn- entry-filenames
   "The entry filenames under entries/, in :seq order. Empty when the workstream
    has no entries directory yet.
@@ -1121,6 +1209,46 @@
     (when (= 1 (count roots))
       (first roots))))
 
+(defn ^{:malli/schema [:=> [:cat :Workstream :int] [:maybe :map]]}
+  goal-amendment
+  "How far the amendment of the goal at `goal-seq` has got, or nil when there is none to read:
+   `{:goal <the live goal> :replaces <the goal it supersedes>
+     :baseline <seq>? :baseline-stale? <bool> :design <seq>? :design-stale? <bool>}`.
+
+   `goal-seq` may name any intent on the amended chain — the goal a record still stands on, or
+   the live one — and the answer is about that chain's unit alone, so a workstream holding several
+   units is told about THIS amendment. :baseline and :design are the unit's newest of each kind,
+   stale while it still reaches a goal the amendment replaced. nil when the goal was never
+   amended, or nothing in the unit was ever built on a goal the amendment replaced: then there is
+   nothing to redo, only the ordinary arc.
+
+   Citation facts, and nothing about what to do with them — which stages they leave owed, and
+   whether a replacement has been judged, are the arc's to say. A replacement counts by the goal
+   it cites: the ledger does not require it to :supersedes what it replaces, so this does not ask."
+  [w goal-seq]
+  (let [supers   (intent-supersessions w)
+        goal     (live-tip w goal-seq)
+        replaced (loop [n (supers goal) acc #{}]
+                   (if (or (nil? n) (acc n)) acc (recur (supers n) (conj acc n))))]
+    (when (seq replaced)
+      (let [root    (roots-at w goal)
+            in-unit (fn [kind]
+                      (filterv #(and (= kind (:kind %)) (= root (roots-at w (:seq %))))
+                               (:entries w)))
+            stale?  (fn [kind n] (boolean (some replaced (goals-reached w kind (read-entry-at w n)))))
+            bls     (in-unit :baseline)
+            dss     (in-unit :design)]
+        (when (or (some #(stale? :baseline (:seq %)) bls)
+                  (some #(stale? :design (:seq %)) dss))
+          (let [b  (:seq (peek bls))
+                d  (:seq (peek dss))
+                bs (and b (stale? :baseline b))
+                ds (and d (stale? :design d))]
+            (cond-> {:goal goal :replaces (supers goal)
+                     :baseline-stale? (boolean bs) :design-stale? (boolean ds)}
+              b (assoc :baseline b)
+              d (assoc :design d))))))))
+
 (defn ^{:malli/schema [:=> [:cat :Workstream] :boolean]}
   holds-design?
   "Does `w` hold a :design at all?
@@ -1174,6 +1302,7 @@
   (check-standing-citations! w kind payload)
   (check-fork-citation! project w kind payload)
   (check-merge-citation! project w kind payload)
+  (check-intent-says-its-goal! w kind payload)
   (check-goal-is-live! w kind payload)
   (check-trail-attribution! w kind payload)
   (check-one-root! w kind payload)
@@ -1285,6 +1414,7 @@
                 _     (check-fork-citation! project w (:kind entry) payload)
                 _     (check-merge-citation! project w (:kind entry) payload)
                 _     (check-clearance-owed! w (:kind entry) payload)
+                _     (check-intent-says-its-goal! w (:kind entry) payload)
                 _     (check-goal-is-live! w (:kind entry) payload)
                 _     (check-trail-attribution! w (:kind entry) payload)
                 _     (check-one-root! w (:kind entry) payload)

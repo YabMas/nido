@@ -88,6 +88,35 @@
         (recur replacement)
         status))))
 
+(defn ^{:malli/schema [:=> [:cat [:vector :map]] [:vector :string]]}
+  amendment-lines
+  "The stages an amended goal still owes — `pipeline/amendment-owed` — as the numbered lines a
+   person is shown: the record each stage writes, or the command that runs it. Beside
+   `skip-lines` because it is the same kind of answer, worded where commands are; the entry task
+   prints it too, so an amendment is told in one wording wherever it is met. [] when nothing is
+   owed."
+  [owed]
+  (let [why  " :why \"…\"}"
+        line (fn [{:keys [stage intent baseline design supersedes]}]
+               (case stage
+                 :rebaseline      (str "a :baseline with :intent {:seq " intent "}"
+                                       (when supersedes (str " and :supersedes {:seq " supersedes why)))
+                 :verify-baseline (str "bb nido:review:baseline" (when baseline (str " :seq " baseline))
+                                       " — until it answers `sufficient`")
+                 :design          (str "a :design with :baseline {:seq " (or baseline "<that baseline>")
+                                       "} and :intent {:seq " intent "}"
+                                       (when supersedes (str ", and :supersedes {:seq " supersedes why)))
+                 ;; The round takes no :seq — it decides the workstream's newest design — so an
+                 ;; entry is named as the design decided, never as the command's argument.
+                 :decide-design   (str "bb nido:review:design"
+                                       (when design (str " (it decides the newest design, entry " design ")"))
+                                       ", then approve it unless the round cleared it")))]
+    (if (empty? owed)
+      []
+      (into [(str "The goal amended to entry " (:intent (first owed)) " still owes, in order:")]
+            (map-indexed (fn [i st] (str "  " (inc i) ". " (line st))))
+            owed))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any :map] [:vector :string]]}
   skip-lines
   "What to tell a person about a position nothing will fire for them.
@@ -106,8 +135,12 @@
         mode  (:mode (:next position))
         sname (:name (first (csession/list-sessions project ws-id)))]
     (into
-     [(str "at " at (when stage (str " · next is " (name stage)
-                                     (when mode (str " (" (name mode) ")")))))]
+     (into [(str "at " at (when stage (str " · next is " (name stage)
+                                           (when mode (str " (" (name mode) ")")))))]
+           ;; The next stage is the first of several an amended goal owes, and the
+           ;; position carries the rest beside it.
+           (when-let [owed (:owed (:next position))]
+             (amendment-lines owed)))
      (case skip
        :terminal
        ["nothing is owed — this workstream's arc is over"]

@@ -49,6 +49,12 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:position :any]
                             [:decision :map]] [:vector :string]]
      :delegates [session/list-sessions]})
+  (Operation amendment-lines
+    "The stages an amended goal still owes, worded as the numbered lines a person is shown — the
+     record each stage writes or the command that runs it — so the entry task and attach name one
+     chain in one wording. Beside skip-lines because it is the same kind of answer: what a person
+     is told they owe, worded where commands are."
+    {:signature [:=> [:catn [:owed [:vector :map]]] [:vector :string]]})
   (Operation follow-holder!
     "Paint the holder's own run until it lets go, then answer with what it ended on — whatever
      it was doing. Attach asked for no particular work, so any live work is the answer to what

@@ -37,6 +37,34 @@
         (task/close* {:project "brian" :ref "BR-3" :outcome "done"})
         (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome)))))))
 
+(deftest an-intent-amending-a-built-on-goal-is-followed-by-what-it-owes
+  ;; The append that starts an amendment is the first moment its author can be
+  ;; told the whole chain, rather than learning it one refusal at a time.
+  (with-tmp
+    (fn [_]
+      (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+            add #(task/entry-add* {:project "brian" :ws-id (:id w) :kind %1 :content (pr-str %2)})]
+        (add "intent" {:format :intent :goal "g" :done-when ["d"]})
+        (add "baseline" {:format :baseline :strata [] :intent {:seq 1}
+                         :area "a" :bounded-by "b" :shape "s"
+                         :model {:elements [{:id "m" :sort :module :hides "h" :interface "i"}]
+                                 :claims [{:id "c1" :about ["m"] :statement "p"
+                                           :falsified-by "f" :evidence {:by :round}}]}
+                         :read ["src/a.clj"]})
+        (let [out (with-out-str
+                    (add "intent" {:format :intent :goal "g2" :done-when ["d"]
+                                   :supersedes {:seq 1 :why "moved"}}))]
+          (is (str/includes? out "The goal amended to entry 3 still owes, in order:"))
+          (is (str/includes? out ":supersedes {:seq 2")))
+        (let [opts {:project "brian" :ws-id (:id w)}
+              e    (try (add "baseline-review" {:format :baseline-review :baseline-seq 2
+                                                :verdict :sufficient :reason "holds"})
+                        nil
+                        (catch clojure.lang.ExceptionInfo e e))]
+          (is (= "The goal amended to entry 3 still owes, in order:"
+                 (first (#'task/refusal-lines opts e)))
+              "a refusal over the replaced goal is followed by what its unit owes"))))))
+
 (deftest stage-advance-refuses-a-stage-outside-the-vocabulary
   (with-tmp
     (fn [_]

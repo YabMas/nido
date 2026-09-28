@@ -5,13 +5,15 @@
   (:require
    [clojure.edn :as edn]
    [clojure.string :as str]
+   [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.view.workstreams :as wsv]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.record.fork :as fork]
    [nido.review.merge :as unit-merge]
    [nido.platform.task-args :as task-args]
-   [nido.coordinator.work :as work]))
+   [nido.coordinator.work :as work]
+   [tasks.nido-attach :as attach]))
 
 (defn- resolve-ws-id
   "Workstream id from opts: explicit :ws-id, or :ref resolved via find-by-ref
@@ -30,15 +32,37 @@
    carve-out rescues prose; nothing rescues a leading brace."
   #{:content})
 
+(defn- owed-lines
+  "What the amendment of the goal at `goal-seq` still owes its unit, as attach words it."
+  [project ws-id goal-seq]
+  (attach/amendment-lines (pipeline/amendment-owed project ws-id goal-seq)))
+
+(defn- refusal-lines
+  "What a refusal of a record over a replaced goal leaves that record's unit owing, or []. Asked
+   of the refused record's own unit, through the replaced goal the refusal carries, and never of
+   the position — which may be held by another unit's survey, or by a blocker."
+  [opts e]
+  (if (:amendment (ex-data e))
+    (owed-lines (keyword (:project opts)) (resolve-ws-id opts) (:seq (ex-data e)))
+    []))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   entry-add*
   "Append one entry. The body comes from :file when given, else :content — the
    same split nido:ticket:append makes, and for the same reason: a typed report
-   is EDN, which does not survive a shell argument intact at any useful size."
+   is EDN, which does not survive a shell argument intact at any useful size.
+
+   An :intent that amends a goal something was already built on is followed by
+   what the amendment still owes, so its author reads the whole chain at the
+   append that started it rather than one refusal at a time."
   [{:keys [project kind content file] :as opts}]
-  (ws/append-entry! (keyword project) (resolve-ws-id opts)
-                    {:kind (keyword (or kind "note"))}
-                    (if file (slurp (str file)) (or content ""))))
+  (let [p     (keyword project)
+        ws-id (resolve-ws-id opts)
+        path  (ws/append-entry! p ws-id {:kind (keyword (or kind "note"))}
+                                (if file (slurp (str file)) (or content "")))]
+    (when (= :intent (keyword kind))
+      (run! println (owed-lines p ws-id (ws/seq-of-path path))))
+    path))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   stage-advance* [{:keys [project stage] :as opts}]
@@ -164,7 +188,8 @@
       (catch Exception e
         (binding [*out* *err*]
           (println "append rejected:" (ex-message e))
-          (when-let [ex (:explain (ex-data e))] (println (pr-str ex))))
+          (when-let [ex (:explain (ex-data e))] (println (pr-str ex)))
+          (run! println (refusal-lines opts e)))
         (System/exit 1)))))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   stage-advance [& args] (run* stage-advance* args))

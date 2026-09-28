@@ -451,7 +451,13 @@
    ;; is not predicted by how far the goal moved: a narrowing can admit a cleaner
    ;; interface and cost more than a widening does. So the record says what
    ;; changed and why, and each rung above concludes for itself.
-   [:supersedes {:optional true} Supersedes]])
+   [:supersedes {:optional true} Supersedes]
+   ;; A second unit of work on the same workstream, independent of the goal already
+   ;; there. A marker rather than a citation: the unit it opens stands on nothing.
+   ;; Once a workstream holds a goal, one of this and :supersedes is owed — the
+   ;; append refuses a later intent carrying neither, because only its author knows
+   ;; whether it amends the goal there or opens another.
+   [:independent {:optional true} [:= true]]])
 
 (def IntentRelation
   "Which entry states what this change is for. :seq names an :intent entry, and

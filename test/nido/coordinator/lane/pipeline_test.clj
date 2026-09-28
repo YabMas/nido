@@ -111,6 +111,12 @@
 
 (defn- intent! [add!] (add! :intent {:format :intent :goal "g" :done-when ["d"]}))
 
+(defn- stray-intent!
+  "A second, independent goal — the shape a mistaken second intent takes once
+   the append asks which it means."
+  [add!]
+  (add! :intent {:format :intent :goal "g" :done-when ["d"] :independent true}))
+
 ;; ── The arc ─────────────────────────────────────────────────────────────────
 
 (deftest an-empty-ledger-is-intake-and-asks-for-an-intent
@@ -132,7 +138,7 @@
 
         (let [b (add! :baseline a-baseline)]
           (is (= :baselined (:at (p/of :brian id))))
-          (is (= {:stage :verify-baseline :mode :mechanical} (:next (p/of :brian id))))
+          (is (= {:stage :verify-baseline :mode :mechanical} (select-keys (:next (p/of :brian id)) [:stage :mode])))
 
           (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                   :baseline-seq b :reason "it holds"})
@@ -141,18 +147,17 @@
 
           (let [d (add! :design (a-design b))]
             (is (= :designed (:at (p/of :brian id))))
-            (is (= {:stage :decide-design :mode :mechanical} (:next (p/of :brian id))))
+            (is (= {:stage :decide-design :mode :mechanical} (select-keys (:next (p/of :brian id)) [:stage :mode])))
 
             (add! :design-decision (a-decision d :proceed))
             (is (= :design-decided (:at (p/of :brian id))))
-            (is (= {:stage :clear-design :mode :mechanical} (:next (p/of :brian id)))
+            (is (= {:stage :clear-design :mode :mechanical} (select-keys (:next (p/of :brian id)) [:stage :mode]))
                 "a design owing nobody a grant is not a person's to grant — what
                  is owed is the clearance the decision implies")
 
             (add! :design-approved {:format :design-approved :design {:seq d} :at-seq 5})
             (is (= :design-approved (:at (p/of :brian id))))
-            (is (= {:stage :implement :mode :working-copy}
-                   (:next (p/of :brian id))))))))))
+            (is (= {:stage :implement :mode :working-copy} (select-keys (:next (p/of :brian id)) [:stage :mode])))))))))
 
 ;; ── Precedence ──────────────────────────────────────────────────────────────
 
@@ -173,7 +178,7 @@
                              :because "a second summing path exists"
                              :evidence ["src/b.clj:9"]})
           (is (= :premise-retracted (:at (p/of :brian id))))
-          (is (= {:stage :rebaseline :mode :authoring} (:next (p/of :brian id)))))))))
+          (is (= {:stage :rebaseline :mode :authoring} (select-keys (:next (p/of :brian id)) [:stage :mode]))))))))
 
 (deftest a-superseding-baseline-repairs-the-retraction
   (with-tmp
@@ -189,15 +194,15 @@
               "the ledger moved past it, so it is no longer the fact that matters"))))))
 
 (deftest a-retracted-intent-is-answered-by-an-intent-superseding-it
-  ;; The shape brian ws-20260921-82071b was pinned by: a second intent written
-  ;; without :supersedes, then retracted. A baseline or design cannot supersede
+  ;; The shape brian ws-20260921-82071b was pinned by: a second, independent
+  ;; goal, then retracted. A baseline or design cannot supersede
   ;; an intent, so the only record that can answer the retraction is an intent —
   ;; and the position has to send the author to write one.
   (with-tmp
     (fn [_]
       (let [[id add!] (ledger)]
         (intent! add!)
-        (let [forked (intent! add!)]
+        (let [forked (stray-intent! add!)]
           (add! :retraction {:format :retraction :retracts {:seq forked}
                              :because "this goal was meant to amend the first"
                              :evidence ["entry 1"]})
@@ -221,7 +226,7 @@
     (fn [_]
       (let [[id add!] (ledger)]
         (intent! add!)
-        (let [stray (intent! add!)
+        (let [stray (stray-intent! add!)
               b     (add! :baseline a-baseline)]
           (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                   :baseline-seq b :reason "it holds"})
@@ -240,7 +245,7 @@
     (fn [_]
       (let [[id add!] (ledger)]
         (intent! add!)
-        (let [stray (intent! add!)
+        (let [stray (stray-intent! add!)
               b     (add! :baseline a-baseline)]
           (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                   :baseline-seq b :reason "it holds"})
@@ -735,7 +740,7 @@
           (let [r (p/of :brian id)]
             (is (= :design-approved (:at r))
                 "the new design is approved, so it is back at the implementation")
-            (is (= {:stage :implement :mode :working-copy} (:next r)))
+            (is (= {:stage :implement :mode :working-copy} (select-keys (:next r) [:stage :mode])))
             (is (= :implementation (:stage (:re-entry r))))
             (is (= :trail-superseded (:reason (:because (:re-entry r)))))))))))
 
@@ -791,7 +796,7 @@
                                :needs "redesign the totalling seam"})
         (let [r (p/of :brian id)]
           (is (= :design-invalidated (:at r)))
-          (is (= {:stage :acknowledge-invalidation :mode :human} (:next r))
+          (is (= {:stage :acknowledge-invalidation :mode :human} (select-keys (:next r) [:stage :mode]))
               "and nobody but a person can answer it"))))))
 
 (deftest the-newest-designs-standing-speaks-for-its-position-over-the-baselines
@@ -813,7 +818,7 @@
                              :evidence ["src/a.clj:1"] :found-during :review})
           (let [r (p/of :brian id)]
             (is (= :design-invalidated (:at r)))
-            (is (= {:stage :acknowledge-invalidation :mode :human} (:next r))))))
+            (is (= {:stage :acknowledge-invalidation :mode :human} (select-keys (:next r) [:stage :mode]))))))
       (testing "a later survey the design does not cite unseats nothing"
         (let [[id add!] (ledger)
               _      (approved-and-implemented! add!)
@@ -840,7 +845,7 @@
                              :evidence ["src/a.clj:1"] :found-during :review})
           (let [r (p/of :brian id)]
             (is (= :design-retracted (:at r)))
-            (is (= {:stage :design :mode :authoring} (:next r))))))
+            (is (= {:stage :design :mode :authoring} (select-keys (:next r) [:stage :mode]))))))
       (testing "a retracted baseline"
         (let [[id add!] (ledger)
               [b _] (approved-and-implemented! add!)]
@@ -849,7 +854,7 @@
                              :evidence ["src/a.clj:1"] :found-during :review})
           (let [r (p/of :brian id)]
             (is (= :premise-retracted (:at r)))
-            (is (= {:stage :rebaseline :mode :authoring} (:next r)))))))))
+            (is (= {:stage :rebaseline :mode :authoring} (select-keys (:next r) [:stage :mode])))))))))
 
 (deftest the-position-names-the-stage-the-work-is-in
   (with-tmp
@@ -950,7 +955,7 @@
             (clear! id d)
             (let [r (p/of :brian id)]
               (is (= :design-cleared (:at r)))
-              (is (= {:stage :implement :mode :working-copy} (:next r))
+              (is (= {:stage :implement :mode :working-copy} (select-keys (:next r) [:stage :mode]))
                   "and no person is asked"))))))))
 
 (deftest a-grant-still-outranks-a-clearance
@@ -1038,7 +1043,7 @@
             (is (false? (p/baseline-verified? :brian id))
                 "verification is standing's answer, and the goal it was scoped for moved")
             (is (= :goal-superseded (:at r)))
-            (is (= {:stage :rebaseline :mode :authoring} (:next r))
+            (is (= {:stage :rebaseline :mode :authoring} (select-keys (:next r) [:stage :mode]))
                 "a new survey, not a design over the old one and not a review of it")
             (is (= g2 (get-in r [:re-entry :because :replaced-by]))
                 "the goal the new survey cites, read rather than taken from recency")
@@ -1059,12 +1064,11 @@
                   r  (p/of :brian id)]
               (is (= :goal-superseded (:at r))
                   "not the design that cites the survey, and not a grant over it")
-              (is (= {:stage :rebaseline :mode :authoring} (:next r)))
+              (is (= {:stage :rebaseline :mode :authoring} (select-keys (:next r) [:stage :mode])))
               (testing "and once the survey is re-done under the live goal"
                 (let [b2 (add! :baseline (assoc a-baseline :intent {:seq g2}
                                                 :supersedes {:seq b :why "the goal moved"}))]
-                  (is (= {:stage :verify-baseline :mode :mechanical}
-                         (:next (p/of :brian id)))
+                  (is (= {:stage :verify-baseline :mode :mechanical} (select-keys (:next (p/of :brian id)) [:stage :mode]))
                       "it is verified — the old design is not decided over it")
                   (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                           :baseline-seq b2 :reason "holds"})
@@ -1073,7 +1077,7 @@
                         "and a design is owed: the one that stood on the old goal
                          does not stand, so nothing it was decided on places the
                          workstream")
-                    (is (= {:stage :design :mode :authoring} (:next r)))))))))))))
+                    (is (= {:stage :design :mode :authoring} (select-keys (:next r) [:stage :mode])))))))))))))
 
 ;; ── Phases ──────────────────────────────────────────────────────────────────
 
@@ -1144,3 +1148,117 @@
           (is (= :design-approved (:at (p/of :brian id))) "nothing since the round: its fix is owed")
           (add! :pr-opened {:format :pr-opened :url "u2" :title "fix" :design {:seq d}})
           (is (= :published (:at (p/of :brian id))) "its own fix PR, not the landed one's"))))))
+
+(deftest an-amendment-owes-every-stage-it-has-not-passed
+  ;; Each rung the arc would advance one at a time, named at once.
+  (let [owed #(#'p/owed-stages %1 %2)
+        none {:verified? false :decided? false}]
+    (is (= [{:stage :rebaseline :intent 4 :supersedes 2}
+            {:stage :verify-baseline :intent 4 :baseline nil}
+            {:stage :design :intent 4 :baseline nil :supersedes 3}
+            {:stage :decide-design :intent 4 :design nil}]
+           (owed {:goal 4 :replaces 1 :baseline 2 :baseline-stale? true
+                  :design 3 :design-stale? true}
+                 none)))
+    (is (= [{:stage :verify-baseline :intent 4 :baseline 5}
+            {:stage :design :intent 4 :baseline 5 :supersedes 3}
+            {:stage :decide-design :intent 4 :design nil}]
+           (owed {:goal 4 :replaces 1 :baseline 5 :baseline-stale? false
+                  :design 3 :design-stale? true}
+                 none))
+        "a replacement written still owes what the arc would fire for it")
+    (is (= [{:stage :design :intent 4 :baseline 5 :supersedes 3}
+            {:stage :decide-design :intent 4 :design nil}]
+           (owed {:goal 4 :replaces 1 :baseline 5 :baseline-stale? false
+                  :design 3 :design-stale? true}
+                 {:verified? true :decided? false}))
+        "verification is standing's fact, not a citation's")
+    (is (= [{:stage :decide-design :intent 4 :design 7}]
+           (owed {:goal 4 :replaces 1 :baseline 5 :baseline-stale? false
+                  :design 7 :design-stale? false}
+                 {:verified? true :decided? false})))
+    (is (= [] (owed {:goal 4 :replaces 1 :baseline 5 :baseline-stale? false
+                     :design 7 :design-stale? false}
+                    {:verified? true :decided? true}))
+        "nothing is owed once the arc has passed every rung")))
+
+(deftest an-amendment-is-owed-to-the-unit-asked-about
+  ;; One function of a goal: a caller naming one unit is told that unit's chain,
+  ;; whichever unit's survey the position reads.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            _  (intent! add!)                                                   ; 1
+            b  (add! :baseline a-baseline)                                      ; 2
+            _  (add! :intent {:format :intent :goal "other" :done-when ["d"]
+                              :independent true})                               ; 3
+            _  (add! :baseline (assoc a-baseline :intent {:seq 3}))             ; 4
+            _  (add! :intent {:format :intent :goal "wider" :done-when ["d"]
+                              :supersedes {:seq 1 :why "moved"}})               ; 5
+            r  (p/of :brian id)]
+        (is (= [:rebaseline :verify-baseline :design :decide-design]
+               (mapv :stage (p/amendment-owed :brian id 1)))
+            "the amended unit owes its chain")
+        (is (= {:stage :rebaseline :intent 5 :supersedes b} (first (p/amendment-owed :brian id 5)))
+            "asked by the live goal or the replaced one alike")
+        (is (= [] (p/amendment-owed :brian id 3)) "the other unit owes nothing")
+        (is (nil? (:owed (:next r)))
+            "the position reads the newest survey, the other unit's, and carries nothing")))))
+
+(deftest an-amended-goal-rides-beside-the-stage-it-fires
+  ;; The driver fires one stage; the rest of the chain rides beside it, and only
+  ;; while the stage fired is the chain's first.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            _  (intent! add!)                                                   ; 1
+            b  (add! :baseline a-baseline)                                      ; 2
+            _  (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                                       :baseline-seq b :reason "it holds"})     ; 3
+            _  (add! :intent {:format :intent :goal "wider" :done-when ["d"]
+                              :supersedes {:seq 1 :why "moved"}})               ; 4
+            r  (p/of :brian id)]
+        (is (= :goal-superseded (:at r)))
+        (is (= :rebaseline (:stage (:next r))))
+        (is (every? #(= 4 (:intent %)) (:owed (:next r))) "every stage serves the live goal")
+        (is (= [:rebaseline :verify-baseline :design :decide-design]
+               (mapv :stage (:owed (:next r)))))
+        (add! :baseline (assoc a-baseline :intent {:seq 4} :supersedes {:seq b :why "moved"})) ; 5
+        (let [r (p/of :brian id)]
+          (is (= :baselined (:at r)))
+          (is (= [:verify-baseline :design :decide-design] (mapv :stage (:owed (:next r))))
+              "the review of the replacement is owed, and named"))
+        (add! :baseline-review {:format :baseline-review :verdict :falsified
+                                :baseline-seq 5 :reason "untrue"
+                                :findings [{:cites ["c1"] :claim "c" :evidence ["e"]}]}) ; 6
+        (is (= [:verify-baseline :design :decide-design]
+               (mapv :stage (:owed (:next (p/of :brian id)))))
+            "a review that did not hold leaves the verification owed, as the arc does")
+        (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                                :baseline-seq 5 :reason "holds"})                ; 7
+        (let [r (p/of :brian id)]
+          (is (= :design (:stage (:next r))))
+          (is (= [:design :decide-design] (mapv :stage (:owed (:next r))))))
+        (add! :blocker {:format :blocker :summary "s" :needs "n"})
+        (is (nil? (:owed (:next (p/of :brian id))))
+            "a blocker outranks it, and nothing rides beside another stage")))))
+
+(deftest a-retraction-naming-the-amendments-stage-carries-none-of-it
+  ;; :premise-retracted fires a :rebaseline, the amendment's own first rung. The
+  ;; action is the retraction's, so the chain does not ride beside it.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            _  (intent! add!)                                                   ; 1
+            b  (add! :baseline a-baseline)                                      ; 2
+            _  (add! :intent {:format :intent :goal "wider" :done-when ["d"]
+                              :supersedes {:seq 1 :why "moved"}})               ; 3
+            _  (add! :retraction {:format :retraction :retracts {:seq b}
+                                  :because "wrong" :evidence ["src/b.clj:9"]})  ; 4
+            r  (p/of :brian id)]
+        (is (= :premise-retracted (:at r)))
+        (is (= :rebaseline (:stage (:next r))))
+        (is (= :rebaseline (:stage (first (p/amendment-owed :brian id 3))))
+            "the amendment does owe the same stage")
+        (is (nil? (:owed (:next r)))
+            "a retraction outranks the amendment, and nothing rides beside its action")))))

@@ -585,6 +585,123 @@
              (ws/append-entry! :brian (:id w) {:kind :intent}
                                (pr-str (assoc an-intent :supersedes {:seq 1 :why "second"})))))))))
 
+(deftest a-second-intent-says-how-it-stands-to-the-goal
+  ;; Only the author knows whether a second intent amends the goal or opens
+  ;; another unit, and a bare one used to be accepted as the second — to be
+  ;; refused later, on the next design reaching both roots, while it stood.
+  (with-tmp
+    (fn [_]
+      (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+            id  (:id w)
+            add #(ws/append-entry! :brian id {:kind :intent} (pr-str %))]
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"first intent"
+             (add (assoc an-intent :independent true)))
+            "a first intent has no goal to stand beside")
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (add (assoc an-intent :supersedes {:seq 1 :why "w"})))
+            "nor one to amend")
+        (is (empty? (:entries (ws/read-ws :brian id))) "nothing refused was written")
+        (add an-intent)                                                        ; 1
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"add :supersedes \{:seq 1 :why.*:independent true"
+             (add (assoc an-intent :goal "a wider goal")))
+            "a bare second intent is refused, naming the goal it likely amends")
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"never both"
+             (add (assoc an-intent :supersedes {:seq 1 :why "w"} :independent true))))
+        (is (= 1 (count (:entries (ws/read-ws :brian id)))) "nothing refused was written")
+        (add (assoc an-intent :goal "a second story" :independent true))       ; 2
+        (add (assoc an-intent :goal "a wider goal" :supersedes {:seq 1 :why "moved"})) ; 3
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"entries 2, 3\).*:supersedes \{:seq 3"
+             (add (assoc an-intent :goal "a fourth")))
+            "with several live goals, the newest is the one named")
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"forks the chain; the live goal is entry 3"
+             (add (assoc an-intent :supersedes {:seq 1 :why "late"})))
+            "an amendment of a replaced goal names the live one")
+        (let [w (ws/read-ws :brian id)]
+          (is (= [1 2 1] (mapv #(ws/unit-of w %) [1 2 3]))
+              "an independent intent roots a unit; one superseding a goal continues it"))))))
+
+(deftest a-retracted-goal-is-answered-by-superseding-it
+  ;; A retraction is answered only by a replacement citing what it replaces, so
+  ;; a bare restatement after it would leave the retraction standing for good.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (ws/append-entry! :brian id {:kind :intent} (pr-str an-intent))
+        (ws/append-entry! :brian id {:kind :retraction}
+                          (pr-str {:format :retraction :retracts {:seq 1}
+                                   :because "untrue" :evidence ["src/a.clj:1"]}))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #":supersedes \{:seq 1"
+             (ws/append-entry! :brian id {:kind :intent}
+                               (pr-str (assoc an-intent :goal "restated"))))))))) 
+
+(deftest an-amendment-owes-what-still-stands-on-the-replaced-goal
+  ;; Amending a goal something was built on owes a replacement for each record
+  ;; still standing on the old goal. The reading names them by citation, and a
+  ;; refusal carries it so whoever prints the refusal can name the whole chain.
+  (with-tmp
+    (fn [_]
+      (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+            id  (:id w)
+            add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))
+            now #(ws/goal-amendment (ws/read-ws :brian id) %)]
+        (seed-baseline! w)                                                     ; 1, 2
+        (add :design (design-citing 2))                                        ; 3
+        (is (nil? (now 1)) "nothing is owed while the goal holds")
+        (add :intent (assoc an-intent :goal "a wider goal"
+                            :supersedes {:seq 1 :why "the scope moved"}))      ; 4
+        (is (= {:goal 4 :replaces 1 :baseline 2 :baseline-stale? true :design 3 :design-stale? true}
+               (now 1) (now 4))
+            "named from the replaced goal or the live one alike")
+        (let [e (try (add :design (assoc (design-citing 2 4) :supersedes {:seq 3 :why "moved"}))
+                     nil
+                     (catch clojure.lang.ExceptionInfo e e))]
+          (is (re-find #"stands on the goal at entry 1.*amending it to entry 4 still owes a replacement for the baseline at entry 2 and the design at entry 3"
+                       (ex-message e)))
+          (is (= (now 1) (:amendment (ex-data e))) "the refusal carries the whole reading"))
+        (add :baseline (assoc a-baseline :intent {:seq 4}
+                              :supersedes {:seq 2 :why "the goal moved"}))     ; 5
+        (is (= {:goal 4 :replaces 1 :baseline 5 :baseline-stale? false :design 3 :design-stale? true}
+               (now 4))
+            "the replacement survey is read by the goal it cites")
+        (add :design (assoc (design-citing 5 4) :supersedes {:seq 3 :why "moved"})) ; 6
+        (is (= {:goal 4 :replaces 1 :baseline 5 :baseline-stale? false :design 6 :design-stale? false}
+               (now 4))
+            "and so is the replacement design; whether either was judged is the arc's to read")))))
+
+(deftest an-amendment-is-read-in-its-own-unit
+  ;; A workstream may hold several units, so what one amendment owes is read in
+  ;; the unit its goal roots — never off whichever goal moved most recently.
+  (with-tmp
+    (fn [_]
+      (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+            id  (:id w)
+            add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))
+            now #(ws/goal-amendment (ws/read-ws :brian id) %)]
+        (seed-baseline! w)                                                     ; 1, 2
+        (add :intent (assoc an-intent :goal "b" :independent true))            ; 3
+        (add :baseline (assoc a-baseline :intent {:seq 3}))                    ; 4
+        (add :intent (assoc an-intent :supersedes {:seq 1 :why "moved"}))      ; 5
+        (add :intent (assoc an-intent :goal "b2" :supersedes {:seq 3 :why "moved"})) ; 6
+        (is (= {:goal 5 :replaces 1 :baseline 2 :baseline-stale? true :design-stale? false} (now 1)))
+        (is (= {:goal 6 :replaces 3 :baseline 4 :baseline-stale? true :design-stale? false} (now 3)))))))
+
+(deftest a-goal-amended-before-anything-was-built-on-it-owes-nothing
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (ws/append-entry! :brian id {:kind :intent} (pr-str an-intent))
+        (ws/append-entry! :brian id {:kind :intent}
+                          (pr-str (assoc an-intent :supersedes {:seq 1 :why "sharper"})))
+        (is (nil? (ws/goal-amendment (ws/read-ws :brian id) 2)))))))
+
 (deftest design-citing-a-baseline-that-does-not-exist-is-refused
   (with-tmp
     (fn [_]
@@ -1279,8 +1396,9 @@
         (add :intent an-intent)                                          ; 1
         (add :baseline a-baseline)                                       ; 2
         (add :design (design-citing 2))                                  ; 3
-        ;; unit B, rooted at 4 — a second goal citing nothing opens one
-        (add :intent (assoc an-intent :goal "a different story"))        ; 4
+        ;; unit B, rooted at 4 — an independent second goal opens one
+        (add :intent (assoc an-intent :goal "a different story"
+                            :independent true))     ; 4
         (add :baseline (assoc a-baseline :intent {:seq 4}))              ; 5
         (add :design (assoc (design-citing 5) :intent {:seq 4}))         ; 6
         (let [w (ws/read-ws :brian id)]
@@ -1327,7 +1445,8 @@
             add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
         (add :intent an-intent)                                          ; 1
         (add :baseline a-baseline)                                       ; 2  roots at 1
-        (add :intent (assoc an-intent :goal "a different story"))        ; 3  roots at 3
+        (add :intent (assoc an-intent :goal "a different story"
+                            :independent true))     ; 3  roots at 3
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"reaches 2 goals"
              (add :design (assoc (design-citing 2) :intent {:seq 3})))
@@ -1339,20 +1458,22 @@
    cite what it replaces: goal 1 with its design at 3, a bare second goal at 4,
    and a design at 5 serving goal 4 while superseding 3 — so it reaches both.
 
-   Entry 5 is written by hand: the append boundary refuses it, and live ledgers
-   hold it anyway. Returns the workstream id."
+   Entries 4 and 5 are written by hand: the append boundary refuses both, and
+   live ledgers hold them anyway. Returns the workstream id."
   []
-  (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
-        id  (:id w)
-        rel "entries/0005-design.edn"]
+  (let [w    (ws/create! :brian {:stage :in-progress :external-refs []})
+        id   (:id w)
+        rel4 "entries/0004-intent.edn"
+        rel  "entries/0005-design.edn"]
     (seed-baseline! w)                                                         ; 1, 2
     (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))    ; 3
-    (ws/append-entry! :brian id {:kind :intent}                                ; 4
-                      (pr-str (assoc an-intent :goal "Totals match the invoice, in cents.")))
+    (io/write-text! (str (fs/path (cstate/workstream-dir :brian id) rel4))     ; 4
+                    (pr-str (assoc an-intent :goal "Totals match the invoice, in cents.")))
     (io/write-text! (str (fs/path (cstate/workstream-dir :brian id) rel))      ; 5
                     (pr-str (assoc (design-citing 2 4) :supersedes {:seq 3 :why "the goal moved"})))
-    (ws/write! (update (ws/read-ws :brian id) :entries conj
-                       {:kind :design :seq 5 :at "2026-09-11T16:26:00Z" :file rel}))
+    (ws/write! (update (ws/read-ws :brian id) :entries into
+                       [{:kind :intent :seq 4 :at "2026-09-11T16:25:00Z" :file rel4}
+                        {:kind :design :seq 5 :at "2026-09-11T16:26:00Z" :file rel}]))
     id))
 
 (deftest a-record-may-inherit-the-goals-a-pre-contract-design-reaches
@@ -1395,7 +1516,8 @@
              (add :design (assoc (design-citing 2 4) :supersedes {:seq 3 :why "again"})))
             "a design like the one at 5 cannot be appended — it cites nothing
              that already reaches both goals")
-        (add :intent (assoc an-intent :goal "a third story"))                  ; 6
+        (add :intent (assoc an-intent :goal "a third story"
+                            :independent true))            ; 6
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"reaches 3 goals"
              (add :design (assoc (design-citing 2 6) :supersedes {:seq 5 :why "moved"})))

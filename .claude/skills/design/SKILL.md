@@ -878,6 +878,14 @@ cat > /tmp/intent.edn <<'EDN'
 EDN
 ```
 
+**On a workstream that already states a goal**, say how the new one stands to
+it: `:supersedes {:seq <n> :why "…"}` amends that goal, and `:independent true`
+opens a second unit of its own (a fork, §5, is usually the better home for
+one). The append refuses an intent saying neither, naming the goal it
+most likely meant. An amendment of a goal something was already built on owes
+a baseline under it, its review, and a design citing both — each superseding
+its own kind — and the append prints that chain as soon as the intent lands.
+
 Skip it only when the intent is already written down: a triaged ticket's
 `:triage` entry states the goal, and the design may cite that entry instead.
 Nothing else is citable — a design cannot say it is *for* a review or a blocker.

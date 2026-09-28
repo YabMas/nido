@@ -47,6 +47,16 @@
      :delegates [workstream/entries-of]})
   (Operation next-action "The stage to run next and the mode it runs in, or nil at a terminus."
     {:signature [:=> [:catn [:position :any] [:kind :keyword]] [:maybe :map]]})
+  (Operation amendment-owed
+    "The stages the amendment of a goal still owes that goal's unit, in order — a rebaseline
+     while the unit's newest survey stands on the replaced goal, its verification until standing
+     verifies that survey, a design while the newest one stands on the replaced goal, its
+     decision until a round lets it proceed — each with the live goal and the seqs it cites or
+     supersedes, and no text. One function of a goal, answered for whichever unit the caller
+     names; a next action whose stage is the first owed by its newest survey's unit carries them
+     as :owed."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:goal-seq :int]]
+                 [:vector :map]]})
   (Operation disposition "What a finished status means for the workstream it finished on."
     {:signature [:=> [:catn [:status :keyword]] :keyword]})
   (Operation of "Where a workstream stands and what should happen to it next."

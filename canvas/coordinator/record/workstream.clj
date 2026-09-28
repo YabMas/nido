@@ -113,6 +113,12 @@
      the record. Numbering an append off the index alone is what let one workstream reach 39
      files against 37 rows, silently overwriting two."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :int]})
+  (Operation seq-of-path
+    "The :seq of the entry file an append returned, read off its name, or nil.
+
+     Which entry an append wrote is answered by what it returned. The ledger's newest entry,
+     reread once the lock is released, may be another writer's."
+    {:signature [:=> [:catn [:path :any]] [:maybe :int]]})
   (Operation index-drift
     "The entry files under entries/ that no index row names, or nil when the index names every
      one of them. What a reader is shown, because every other reader here trusts the index.
@@ -201,9 +207,10 @@
      kind a baseline's and a design's `:intent` may cite: a baseline cites its goal, a design
      cites its baseline and its goal, an implementation and a review cite the design they were
      made under, and an intent citing `:supersedes` continues its unit while one citing
-     nothing opens another. The append boundary refuses a record reaching more goals than
-     any one of its citations does, so the partition is established by CONSTRUCTION rather
-     than asserted here. A record from before that boundary reaching several goals is the
+     one marked `:independent` opens another. Only the first intent on a workstream carries
+     neither: the append refuses a later one that does not say which it means. The append boundary refuses a
+     record reaching more goals than any one of its citations does, so the partition is
+     established by CONSTRUCTION rather than asserted here. A record from before that boundary reaching several goals is the
      workstream's, like one reaching none, and so is everything citing it.
 
      A landing is outside the closure, not missing from it. A `:pr-opened` and a `:merged`
@@ -215,6 +222,13 @@
      derived: a field beside the citations would be a second answer to a question the graph
      already settles, and the one that drifts."
     {:signature [:=> [:catn [:w Workstream] [:seq-n :int]] [:maybe :int]]})
+  (Operation goal-amendment
+    "How far the amendment of a goal has got, read off citations alone and within that goal's
+     unit: the live goal of the chain the given intent is on, the goal it replaced, and the
+     unit's newest baseline and design with whether each still reaches a replaced goal. nil when
+     nothing in the unit was built on a replaced goal. Facts only — which stages they leave owed,
+     and whether a replacement was judged, are the arc's to say."
+    {:signature [:=> [:catn [:w Workstream] [:goal-seq :int]] [:maybe :map]]})
   (Operation holds-design?
     "Whether a workstream holds a :design at all — a PRESENCE CHECK, and never a citation
      source.

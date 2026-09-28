@@ -432,7 +432,8 @@
   (with-tmp
     (fn [_]
       (let [[id add] (ledger)
-            i2 (add :intent {:format :intent :goal "a second goal" :done-when ["d"]})
+            i2 (add :intent {:format :intent :goal "a second goal" :done-when ["d"]
+                             :independent true})
             b  (add :baseline a-baseline)            ; scoped for goal 1
             _  (add :baseline-review {:format :baseline-review :verdict :sufficient
                                       :baseline-seq b :reason "it holds"})
@@ -474,7 +475,8 @@
   (with-tmp
     (fn [_]
       (let [[_id add] (ledger)
-            i2 (add :intent {:format :intent :goal "a second goal" :done-when ["d"]})
+            i2 (add :intent {:format :intent :goal "a second goal" :done-when ["d"]
+                             :independent true})
             b  (add :baseline a-baseline)]          ; scoped for goal 1
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"reaches 2 goals"

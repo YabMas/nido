@@ -204,3 +204,39 @@
                 out (str/join "\n" (attach/skip-lines :brian id pos (drive/fireable pos)))]
             (is (str/includes? out "verify-baseline"))
             (is (str/includes? out "mechanical-stages"))))))))
+
+(deftest a-moved-goal-names-every-record-the-amendment-owes
+  ;; The position's next stage is only the first link; an author told only that
+  ;; learns the rest one refusal at a time.
+  (with-tmp
+    (fn []
+      (let [id (a-ws)]
+        (baselined! id)                                                          ; 1, 2
+        (ws/append-entry! :brian id {:kind :baseline-review}                     ; 3
+                          (pr-str {:format :baseline-review :baseline-seq 2
+                                   :verdict :sufficient :reason "r"}))
+        (ws/append-entry! :brian id {:kind :intent}                              ; 4
+                          (pr-str {:format :intent :goal "wider" :done-when ["d"]
+                                   :supersedes {:seq 1 :why "moved"}}))
+        (let [pos (pipeline/of :brian id)
+              out (attach/skip-lines :brian id pos (drive/fireable pos))]
+          (is (= :goal-superseded (:at pos)))
+          (is (= (attach/amendment-lines (:owed (:next pos)))
+                 (filterv #(or (str/starts-with? % "The goal amended") (re-find #"^  \d+\. " %)) out))
+              "the position's chain, whole")
+          (is (= 4 (count (filter #(re-find #"^  \d+\. " %) out)))))))))
+
+(deftest an-amendment-is-worded-as-its-whole-chain
+  (is (= ["The goal amended to entry 4 still owes, in order:"
+          "  1. a :baseline with :intent {:seq 4} and :supersedes {:seq 2 :why \"…\"}"
+          "  2. bb nido:review:baseline — until it answers `sufficient`"
+          "  3. a :design with :baseline {:seq <that baseline>} and :intent {:seq 4}, and :supersedes {:seq 3 :why \"…\"}"
+          "  4. bb nido:review:design, then approve it unless the round cleared it"]
+         (attach/amendment-lines [{:stage :rebaseline :intent 4 :supersedes 2}
+                                  {:stage :verify-baseline :intent 4 :baseline nil}
+                                  {:stage :design :intent 4 :baseline nil :supersedes 3}
+                                  {:stage :decide-design :intent 4 :design nil}])))
+  (is (= ["The goal amended to entry 4 still owes, in order:"
+          "  1. bb nido:review:design (it decides the newest design, entry 7), then approve it unless the round cleared it"]
+         (attach/amendment-lines [{:stage :decide-design :intent 4 :design 7}])))
+  (is (= [] (attach/amendment-lines []))))
