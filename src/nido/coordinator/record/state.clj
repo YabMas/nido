@@ -33,6 +33,13 @@
   (str (fs/path (coordinator-root) "queue")))
 
 (defn ^{:malli/schema [:=> [:cat] :Path]}
+  fired-keys-dir
+  "Where a keyed envelope goes once drained: its file, under its key, is the record that the
+   key is taken. Never pruned — a key that could be freed is a fire that could be repeated."
+  []
+  (str (fs/path (coordinator-root) "fired-keys")))
+
+(defn ^{:malli/schema [:=> [:cat] :Path]}
   status-path []
   (str (fs/path (coordinator-root) "status.edn")))
 
@@ -166,4 +173,5 @@
   []
   (fs/create-dirs (coordinator-root))
   (fs/create-dirs (queue-dir))
+  (fs/create-dirs (fired-keys-dir))
   (fs/create-dirs (runs-dir)))

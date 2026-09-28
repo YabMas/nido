@@ -445,34 +445,11 @@ notion page markdown "$PAGE"
 notion comment list "$PAGE" --all
 ```
 
-**Write it for someone who knows the product and nothing else.** No file,
-function, namespace, table, endpoint, flag or PR number; no "the fix", no
-"as discussed". A reader who never saw the ticket, the code or the chat must be
-able to follow it alone. Draw it from the collapsed PR's layer briefs (Claims,
-Verify, Out of scope), the ticket and its comments, and the design record
-(`bb nido:workstream:show`) — then translate every item into what a user does
-and sees. A Verify item with no user-visible form (a migration, a log line, a
-query count) is dropped, not translated into jargon; if nothing the change does
-is visible, the brief says that in one line and names what to check still works.
-Never write a step the diff does not back, and never claim something was tested.
-
-    QA instructions                                   ← callout, 🧪
-    What changed      1–3 sentences: the problem as a user met it, and what
-                      they experience now.
-    Before you start  where (staging), which role/account, what data must
-                      exist ("a course with at least one published quiz"),
-                      any setting to switch on — named as the UI names it.
-    Steps             numbered; each is one action, then "Expected: …".
-    Also check        1–3 nearby behaviours a user relies on that the change
-                      could plausibly disturb.
-    Not in this change  what a reviewer might expect but will not find, from
-                      the layers' Out of scope — so it is not filed as a bug.
-
-**Write it as ONE callout block, prepended.** The callout is the brief's
-identity: its text starts `QA instructions`, and that is how a re-run finds and
-replaces it. Build the block JSON (children nested inside the callout; keep
-each rich-text run under 2000 characters — one oversized run rejects the whole
-request) and send it:
+**Write it to `docs/reference/qa-brief.md`** — the reader, the sections, and
+how it goes into Notion are defined there, shared with `/review-queue`. Here its
+sources are the collapsed PR's layer briefs (Claims, Verify, Out of scope), the
+ticket and its comments, and the design record (`bb nido:workstream:show`);
+"Before you start" names staging. Build the callout JSON and send it:
 
 ```bash
 notion api PATCH /v1/blocks/"$PAGE"/children --body - <<'JSON'
@@ -485,17 +462,14 @@ notion api PATCH /v1/blocks/"$PAGE"/children --body - <<'JSON'
 JSON
 ```
 
-**Check where it landed.** Notion can ignore `position` and append at the
-bottom instead; `nido.notion.client/prepend-block-children!` documents the same
-caveat. Read the first child back (`notion block list "$PAGE" --depth 1`). At
-the bottom is still a brief — report it as such in §7 rather than deleting and
-retrying.
+**Write it on top, or not at all** — `docs/reference/qa-brief.md` § "How it is
+written to Notion" is the order: note the earlier briefs by id, prepend, read the
+first child back, and only then delete — the earlier briefs if the new one is on
+top, the new one if it is not. A brief that did not land on top is reported in
+§7 as failed, never left at the bottom.
 
-**Tidy only what a machine wrote and the brief supersedes:**
+**The rest of the tidy:**
 
-- An earlier `QA instructions` callout — delete it before prepending the new
-  one (`notion api DELETE /v1/blocks/<block-id>`). This is what makes a re-run
-  replace rather than stack.
 - `GitHub PR: <url>` paragraphs pointing at a lower layer — those PRs close
   unmerged after the landing. Delete them.
 - The `GitHub PR` property — set it to the top PR:
@@ -674,7 +648,7 @@ Unresolved
 Checks
 - <check name> — <fixed how | still red>
 
-QA brief: <written to BR-#### (top of page | appended at bottom) | skipped — <not brian | no Closes claim> | failed — <what Notion answered>>
+QA brief: <written to BR-#### | skipped — <not brian | no Closes claim> | failed — <did not land on top | what Notion answered>>
 
 Outcome: <merged at <sha> | on the queue, github-merge poller owns it | halted before merge>
 ```
@@ -724,8 +698,8 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
   queue; no second entry, and the watch below is what you want anyway.
 - Top PR already merged or queued → `gh pr merge --auto` reports it; no second
   merge.
-- QA brief already on the ticket → delete the `QA instructions` callout and
-  prepend the fresh one; a re-run replaces, never stacks (§6).
+- QA brief already on the ticket → the fresh one replaces it by the order in
+  `docs/reference/qa-brief.md`; a re-run never stacks a second (§6).
 - Already merged → §6's watch returns immediately; still emit the report.
 
 ## Common mistakes

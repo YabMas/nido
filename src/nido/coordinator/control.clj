@@ -156,12 +156,18 @@
   [payload]
   (triggers/placeholder-keys payload))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :keyword :map] :any]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :keyword :map [:? :string]] :any]}
   fire!
   "Queue an envelope at `project`/`trigger` with `payload`.
 
    Takes the three things a caller HAS rather than the envelope map they would otherwise each
    build: three call sites were spelling `{:target {:project … :trigger …} :payload …}` by hand,
-   which is the queue's wire shape leaking into two surfaces."
-  [project trigger payload]
-  (queue/enqueue! {:target {:project project :trigger trigger} :payload payload}))
+   which is the queue's wire shape leaking into two surfaces.
+
+   With a `key`, the fire is idempotent: it answers `{:queued path}` the first time and
+   `{:already-queued key}` every time after, however long after — the key stays taken once the
+   envelope is drained. A caller that must fire once per something keys the fire by it."
+  ([project trigger payload]
+   (queue/enqueue! {:target {:project project :trigger trigger} :payload payload}))
+  ([project trigger payload key]
+   (queue/enqueue-keyed! key {:target {:project project :trigger trigger} :payload payload})))

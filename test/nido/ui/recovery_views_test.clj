@@ -47,6 +47,6 @@
     (is (str/includes? html "href=\"/operations/recovery\"") "and there is a way back to the newest")))
 
 (deftest a-recovery-card-says-when-it-could-not-read
-  (let [cards (str (views/operations-home-fragment (views/operations-home-cards [] nil [])))]
+  (let [cards (str (views/operations-home-fragment (views/operations-home-cards [] nil [] [])))]
     (is (str/includes? cards "could not be read")
         "zero would read as nothing needing anyone")))

@@ -94,9 +94,21 @@
   (Operation operations-home-cards
     "One card per operational concern — its name, whether it needs a person, a line or two —
      read from the same values its own page renders, so a card and its page cannot disagree.
-     A concern that could not be read says so on its card rather than reading as zero."
+     A concern that could not be read says so on its card rather than reading as zero; the
+     review-queue card appears only where some project declares the grooming trigger."
     {:signature [:=> [:catn [:proposals :any] [:recovery [:maybe :map]]
-                  [:holds [:maybe [:vector :map]]]] :any]})
+                  [:holds [:maybe [:vector :map]]] [:queues [:maybe [:vector :map]]]] :any]})
+  (Operation review-queue-fragment
+    "Each project's latest review-queue grooming: where it stands, the levers that fit that
+     stage (run, approve the undecided, apply the approved), the queue in rank order with each
+     ticket's proposed writes and their full text, and the flags."
+    {:signature [:=> [:catn [:queues [:maybe [:vector :map]]] [:requested [:set :any]]] :string]})
+  (Operation review-queue-page
+    "The review-queue grooming: run it, go through its plan ticket by ticket, approve or skip
+     each write, and apply what was approved."
+    {:signature [:=> [:catn [:ctx :map] [:queues [:maybe [:vector :map]]]
+                  [:requested [:set :any]]] :any]
+     :delegates [shell review-queue-fragment]})
   (Operation operations-home-fragment "The home's card grid."
     {:signature [:=> [:catn [:cards [:vector :any]]] :string]})
   (Operation operations-home-page

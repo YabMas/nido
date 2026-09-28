@@ -75,5 +75,7 @@
   (Operation fire!
     "Queue an envelope at a trigger. Takes the three things a caller HAS rather than the envelope
      map four call sites were each building by hand — the queue's wire shape was leaking into
-     two surfaces and a review loop."
-    {:signature [:=> [:catn [:project ProjectName] [:trigger :keyword] [:payload :map]] :any]}))
+     two surfaces and a review loop. With a key the fire is idempotent: it queues once, and every
+     later fire with that key queues nothing and says so."
+    {:signature [:=> [:catn [:project ProjectName] [:trigger :keyword] [:payload :map]
+                          [:key [:? :string]]] :any]}))

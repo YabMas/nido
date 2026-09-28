@@ -65,8 +65,16 @@
    A directory rather than a channel, and that is the durability: an envelope written while the
    daemon is down is picked up on the next drain rather than lost."
   {:child [Envelope]}
-  (Operation drain! "Read and remove every queued envelope."
-    {:signature [:=> [:catn] [:vector Envelope]] :delegates [cstate/queue-dir]})
+  (Operation drain!
+    "Read and remove every queued envelope. A keyed one is moved to fired-keys rather than
+     removed, so its key stays taken once it is drained."
+    {:signature [:=> [:catn] [:vector Envelope]] :delegates [cstate/queue-dir cstate/fired-keys-dir]})
+  (Operation enqueue-keyed!
+    "Queue an envelope under a key unless the key is taken, waiting or drained. Queueing and
+     taking the key are one write — a whole temp file hard-linked to its keyed name — so no stop
+     leaves one without the other."
+    {:signature [:=> [:catn [:key :string] [:envelope Envelope]] :map]
+     :delegates [cstate/queue-dir cstate/fired-keys-dir]})
   (Operation enqueue! "Write an envelope into the queue."
     {:signature [:=> [:catn [:envelope Envelope]] :any] :delegates [cstate/queue-dir]}))
 

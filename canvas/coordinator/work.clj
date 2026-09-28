@@ -8,7 +8,7 @@
             [canvas.coordinator.record.session :as session :refer [Session]]
             [canvas.coordinator.source.core :as queue]
             [canvas.coordinator.record.triggers :as triggers]
-            [canvas.coordinator.record.state :refer [Path SessionName WorkstreamId]]
+            [canvas.coordinator.record.state :refer [Path RunId SessionName WorkstreamId]]
             [canvas.coordinator.record.workstream :as workstream :refer [Workstream]]
             [canvas.coordinator.view.workstreams :as view]
             [canvas.integration.notion :refer [NotionToken]]
@@ -181,6 +181,23 @@
     {:signature [:=> [:catn] [:vector :map]]
      :delegates [triggers/load-for-project workstream/list-ids workstream/read-ws
                  session/list-sessions session/engagement-state]})
+  (Operation review-queues
+    "The latest review-queue grooming of every project whose triggers declare the plan trigger —
+     its stage, its plan's tickets in rank order each with its proposed writes, and what was
+     decided and done with each write. A project that declares the trigger and was never groomed
+     is there at stage :none, so a surface can offer to run it."
+    {:signature [:=> [:catn] [:vector :map]]
+     :delegates [triggers/load-for-project]})
+  (Operation decide-review-item!
+    "Approve or skip one write of a grooming's plan. Only those two verdicts are recorded; an
+     item the plan does not have, or a plan already being applied, is refused without writing."
+    {:signature [:=> [:catn [:run-id RunId] [:n :int] [:verdict :keyword]] :map]})
+  (Operation begin-review-apply!
+    "Freeze a grooming's decisions and queue its apply through the fire the caller hands it —
+     the control facade's fire!, since an envelope is something done to the daemon. Refused
+     while an item is undecided, when nothing is approved, and once a fire is recorded; a fire
+     that throws leaves the plan frozen and unfired, and the next call fires it again."
+    {:signature [:=> [:catn [:run-id RunId] [:fire [:=> [:cat :keyword :map :string] :any]]] :map]})
   (Operation proposals "Every proposal this project's review analyses have made."
     {:signature [:=> [:catn [:project ProjectName]] [:vector :map]]
      :delegates [workstream/list-ids]})

@@ -247,8 +247,36 @@
            (println (str "[nido] reading improvement holds failed: " (ex-message t))))
          nil)))
 
+(defn- review-queues
+  "Every project's latest review-queue grooming, or nil when it could not be read
+   — like recovery, a broken reading must not take the rest of Operations down."
+  []
+  (try (work/review-queues)
+       (catch Throwable t
+         (binding [*out* *err*]
+           (println (str "[nido] reading the review queue failed: " (ex-message t))))
+         nil)))
+
+(defonce ^:private review-queue-requested
+  ;; project → the plan run that was newest when a run was asked for (nil when
+  ;; there was none). A request stands until a different run is newest: the
+  ;; envelope sits on the queue for a few seconds before the daemon makes a run
+  ;; of it, and offering the button again in that window queues a second one.
+  (atom {}))
+
+(defn- requested-projects [queues]
+  (let [newest (into {} (map (juxt :project :run-id)) queues)]
+    (swap! review-queue-requested
+           (fn [m] (into {} (filter (fn [[p before]] (= before (get newest p)))) m)))
+    (set (keys @review-queue-requested))))
+
+(defn- review-queue-fragment-response []
+  (let [qs (review-queues)]
+    (sse-response (sse-fragment (views/review-queue-fragment qs (requested-projects qs))))))
+
 (defn- operations-home-cards []
-  (views/operations-home-cards (all-proposals) (session-recovery nil) (improvement-holds)))
+  (views/operations-home-cards (all-proposals) (session-recovery nil) (improvement-holds)
+                               (review-queues)))
 
 (defn- operations-home-fragment-response []
   (sse-response (sse-fragment (views/operations-home-fragment (operations-home-cards)))))
@@ -538,6 +566,50 @@
               (println "[nido ui] work/file-findings! failed:" (ex-message e)))))
         (ws-pane-fragment-response project ws-id))
 
+      ;; POST /operations/review-queue/:project/run — fire a grooming. The plan run
+      ;; reads the queue and drafts; nothing it does writes to Notion.
+      (and (= 4 (count segs)) (= ["operations" "review-queue"] (subvec segs 0 2))
+           (= "run" (nth segs 3)))
+      (let [project (keyword (nth segs 2))
+            qs      (review-queues)]
+        (when-not (contains? (requested-projects qs) project)
+          (swap! review-queue-requested assoc project
+                 (:run-id (first (filter #(= project (:project %)) qs))))
+          (control/fire! project :review-queue
+                         {:id (.format (java.time.format.DateTimeFormatter/ofPattern "yyyyMMdd-HHmmss")
+                                       (java.time.LocalDateTime/now))}))
+        (review-queue-fragment-response))
+
+      ;; POST /operations/review-queue/:project/:run-id/items/:n?verdict= — decide one write
+      (and (= 6 (count segs)) (= ["operations" "review-queue"] (subvec segs 0 2))
+           (= "items" (nth segs 4)))
+      (let [verdict (keyword (or (get-in req [:params "verdict"])
+                                 (second (re-find #"verdict=([a-z]+)" (str (:query-string req))))))]
+        (work/decide-review-item! (nth segs 3) (or (parse-long (nth segs 5)) -1) verdict)
+        (review-queue-fragment-response))
+
+      ;; POST /operations/review-queue/:project/:run-id/approve-all — approve every undecided write
+      (and (= 5 (count segs)) (= ["operations" "review-queue"] (subvec segs 0 2))
+           (= "approve-all" (nth segs 4)))
+      (let [run-id (nth segs 3)
+            q      (first (filter #(= run-id (:run-id %)) (review-queues)))]
+        (doseq [it (concat (mapcat :items (:tickets q)) (:general q))
+                :when (nil? (:decision it))]
+          (work/decide-review-item! run-id (:n it) :approved))
+        (review-queue-fragment-response))
+
+      ;; POST /operations/review-queue/:project/:run-id/apply — freeze the decisions and
+      ;; fire the apply run, which carries out exactly the approved writes.
+      (and (= 5 (count segs)) (= ["operations" "review-queue"] (subvec segs 0 2))
+           (= "apply" (nth segs 4)))
+      (let [project (keyword (nth segs 2))]
+        (try (work/begin-review-apply! (nth segs 3) #(control/fire! project %1 %2 %3))
+             (catch Throwable t
+               ;; The plan stays frozen and unfired; the page offers Apply again.
+               (binding [*out* *err*]
+                 (println (str "[nido] firing the review-queue apply failed: " (ex-message t))))))
+        (review-queue-fragment-response))
+
       ;; POST /operations/:project/:ws-id/:analysis-seq/:observation — decide one
       ;; proposal. ?entry= is the ledger position the row was rendered from and
       ;; ?verdict= is which button; both ride the query string the same way every
@@ -645,6 +717,16 @@
 
       ["_fragment" "operations" "recovery"]
       (recovery-fragment-response (feed-position req))
+
+      ;; GET /operations/review-queue — run the grooming and go through its plan
+      ["operations" "review-queue"]
+      (let [qs (review-queues)]
+        (html-response 200 (views/review-queue-page
+                            (rail-ctx :operations (derive-screen (view-state/parse req)))
+                            qs (requested-projects qs))))
+
+      ["_fragment" "operations" "review-queue"]
+      (review-queue-fragment-response)
 
       ;; GET /_fragment/ops — SSE ops-panel refresh (patches #ops-panel + rail).
       ;; Scope rides ?scope=, parsed the same way every other view-state is —

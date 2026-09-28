@@ -86,3 +86,25 @@
                                    :payload {} :priority 42})
             env  (io/read-edn path)]
         (is (= 42 (:priority env)))))))
+
+(deftest a-keyed-envelope-is-queued-once-and-its-key-outlives-the-drain
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (let [env {:target {:project :brian :trigger :x} :payload {:id "1"}}]
+          (is (:queued (queue/enqueue-keyed! "k-1" env)))
+          (is (= {:already-queued "k-1"} (queue/enqueue-keyed! "k-1" env))
+              "taken while it waits")
+          (let [drained (queue/drain!)]
+            (is (= 1 (count drained)))
+            (is (= {:id "1"} (:payload (first drained)))))
+          (is (= {:already-queued "k-1"} (queue/enqueue-keyed! "k-1" env))
+              "and still taken once drained")
+          (is (empty? (queue/drain!)))
+          (is (:queued (queue/enqueue-keyed! "k-2" env)) "another key is its own")))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest a-key-must-be-a-plain-file-name
+  (is (thrown? clojure.lang.ExceptionInfo
+               (queue/enqueue-keyed! "../escape" {:target {:project :brian :trigger :x} :payload {}}))))

@@ -30,6 +30,7 @@
    [nido.coordinator.lane.spawn :as spawn]
    [nido.coordinator.record.phase :as phase]
    [nido.coordinator.record.proposal :as proposal]
+   [nido.coordinator.record.review-queue :as review-queue]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.triggers :as triggers]
@@ -37,6 +38,7 @@
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as cws]
    [nido.coordinator.view.recoveries :as recoveries-view]
+   [nido.coordinator.view.review-queue :as review-queue-view]
    [nido.coordinator.view.workstreams :as wsv]
    [nido.notion.client :as notion]
    [nido.notion.views :as views]
@@ -785,6 +787,53 @@
        :now        now
        :feed-from  feed-from
        :pacing     (start-failures/pacing (-> declaring first second :source))})))))
+
+;; ---------------------------------------------------------------------------
+;; Review-queue grooming
+
+(defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
+  review-queues
+  "The latest review-queue grooming of every project whose triggers declare the
+   plan trigger, as view.review-queue/overview shows one. A project that declares
+   it and was never groomed is there too, at `:stage :none`, so the surface can
+   offer to run it. Read on every call."
+  []
+  (vec (for [[pname _] (project/list-projects)
+             :let  [pk (keyword pname)]
+             :when (some #(= review-queue/plan-trigger (:name %))
+                         (triggers/load-for-project pk))
+             :let  [run (review-queue/latest-plan-run pk)
+                    id  (:id run)]]
+         (review-queue-view/overview
+          {:project   pk
+           :plan-run  run
+           :plan      (some-> id review-queue/read-plan)
+           :decisions (if id (review-queue/read-decisions id) {:decisions {}})
+           :results   (if id (review-queue/read-results id) {})
+           :apply-run (some->> id (review-queue/apply-run-for pk))}))))
+
+(defn ^{:malli/schema [:=> [:cat :RunId :int :keyword] :map]}
+  decide-review-item!
+  "Approve or skip item `n` of plan run `run-id`. A verdict other than :approved
+   or :skipped records nothing — there is no safe default for a choice nobody
+   made. See record.review-queue/decide! for the refusals."
+  [run-id n verdict]
+  (if (#{:approved :skipped} verdict)
+    (review-queue/decide! run-id n verdict)
+    {:decision :no-verdict}))
+
+(defn ^{:malli/schema [:=> [:cat :RunId [:=> [:cat :keyword :map :string] :any]] :map]}
+  begin-review-apply!
+  "Freeze plan run `run-id`'s decisions and queue its apply by calling `fire` with the apply
+   trigger, its payload and a key naming the plan — the caller's control/fire!, since an
+   envelope is something done to the daemon, which is the control facade's vocabulary rather
+   than this one's. The key is what makes the apply queued once per plan: a retry after any
+   stop finds it taken. Refusals are record.review-queue/apply!'s."
+  [run-id fire]
+  (let [payload {:id       (str "apply-" (subs run-id (max 0 (- (count run-id) 8))))
+                 :plan-run run-id}]
+    (review-queue/apply! run-id #(fire review-queue/apply-trigger payload
+                                       (str "review-queue-apply-" run-id)))))
 
 (defn- hold-state
   "What a hold's engagement means for the sweep it holds. `:idle` is the one

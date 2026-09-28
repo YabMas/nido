@@ -60,6 +60,7 @@ that's `notion auth`.
 | resolve `BR-####` | `notion db query <task-db> --filter-json '{"property":"ID","unique_id":{"equals":5942}}' --format json` |
 | create a page | `notion page create …` / `notion db add …` |
 | set properties | `notion page set <id> "GitHub PR=<url>"` |
+| a database's views, and one view's sorts and filter | `notion api GET "/v1/views?database_id=<db-id>"` · `notion api GET /v1/views/<view-id>` |
 | append content | `notion block append <id> …` / `notion page set-markdown <id> …` |
 | anything unsupported | `notion api <METHOD> <path> --body -` |
 

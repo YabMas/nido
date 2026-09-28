@@ -73,6 +73,10 @@
   (Operation queue-dir
     "The manual event source — one envelope file per queued fire."
     {:signature [:=> [:catn ] Path]})
+  (Operation fired-keys-dir
+    "Where a keyed envelope goes once drained; its file is the record that its key is taken, and
+     is never pruned."
+    {:signature [:=> [:catn] Path]})
   (Operation status-path
     "The heartbeat file: what the daemon last reported about itself."
     {:signature [:=> [:catn ] Path]})

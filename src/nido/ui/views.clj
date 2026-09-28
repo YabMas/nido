@@ -381,6 +381,23 @@
         .ops-card-num.ops-you { color:#f87171; }
         .ops-card-num.ops-busy { color:#7dd3fc; }
         .ops-crumb { font-size:12px; color:#777; margin-bottom:10px; }
+        /* Review queue — a ticket is a card, its proposed writes rows in it. */
+        .rq-item { border-top:1px solid #222; padding:8px 0; }
+        .rq-item.rq-skipped { opacity:.5; }
+        .rq-sum { font-size:13px; }
+        .rq-rank { color:#fbbf24; min-width:28px; }
+        .rq-title { color:#cfd8e3; }
+        .rq-why { font-size:12px; color:#a8b4c0; margin:0 0 6px; }
+        .rq-detail summary { font-size:11px; color:#777; cursor:pointer; }
+        .rq-pre { font-size:12px; color:#cfd8e3; background:#101018;
+                  border-left:2px solid #3a5a7a; padding:8px 10px; margin:6px 0; }
+        .rq-order { margin:0 0 10px; padding-left:22px; font-size:13px; }
+        .rq-flags { font-size:12px; color:#fbbf24; }
+        .rq-o-applied { background:#1a3a2a; color:#4ade80; }
+        .rq-o-failed { background:#3a1a1a; color:#f87171; }
+        .rq-o-skipped { background:#26262b; color:#9aa3ad; }
+        .rq-qa-keep { background:#1a3a2a; color:#4ade80; }
+        .rq-qa-write, .rq-qa-correct { background:#3a2e14; color:#fbbf24; }
         /* Session recovery — the state chip is the first thing read, so each
            state has its own colour: red asks for a person, blue is nido working,
            amber is nido waiting, green and grey are finished. */
@@ -2866,13 +2883,42 @@
    [:div {:class (str "ops-card-num" (when tone (str " ops-" (name tone))))} headline]
    (for [l lines :when l] [:div.meta l])])
 
-(defn ^{:malli/schema [:=> [:cat :any [:maybe :map] [:maybe [:vector :map]]] :any]}
+(defn- review-queue-card
+  "The review-queue card: what the latest grooming is waiting on. Undecided
+   items are the only thing on it that asks for a person."
+  [queues]
+  (let [q (first (sort-by (comp name :project) queues))
+        {:keys [stage counts]} q
+        more (when (next queues) (str "+" (dec (count queues)) " more project(s)"))]
+    (ops-card
+     {:href     "/operations/review-queue"
+      :title    "Review queue"
+      :headline (case stage
+                  nil        "could not be read"
+                  :none      "never groomed"
+                  :planning  "planning…"
+                  :failed    "last run failed"
+                  :deciding  (str (:undecided counts) " to decide")
+                  :unfired   "apply not queued"
+                  :applying  "applying…"
+                  :applied   (str (:applied counts) " applied"))
+      :tone     (case stage
+                  (nil :failed :unfired) :you
+                  :deciding     (when (pos? (:undecided counts)) :you)
+                  (:planning :applying) :busy
+                  nil)
+      :lines    [(when q (str (name (:project q)) " · " (count (:tickets q)) " tickets in Review"))
+                 (when (= :deciding stage)
+                   (str (:approved counts) " approved · " (:skipped counts) " skipped"))
+                 more]})))
+
+(defn ^{:malli/schema [:=> [:cat :any [:maybe :map] [:maybe [:vector :map]] [:maybe [:vector :map]]] :any]}
   operations-home-cards
   "The card for each operational concern, read from the same values their own
    pages render — so a card and the page behind it cannot disagree about a count.
    A value that could not be read (nil) is said on its card rather than shown as
    zero, since zero is the reading that nothing needs anyone."
-  [proposals recovery holds]
+  [proposals recovery holds queues]
   (let [{:keys [open waiting]} (group-by proposal-band proposals)
         stuck (count (filter #(#{:stuck :waiting-on-you} (:state %)) holds))
         {:keys [needs-you recovering waiting-rec]}
@@ -2899,13 +2945,19 @@
        :lines    (when recovery
                    [(str recovering " recovering · " waiting-rec " waiting")
                     (str (:restored (:counts recovery)) " restored in the last "
-                         recoveries-view/window-days " days")])})]))
+                         recoveries-view/window-days " days")])})
+     ;; Only where some project declares the grooming trigger: a card for a job
+     ;; nothing can run would offer a button that fires at nothing.
+     (when (or (nil? queues) (seq queues))
+       (if (nil? queues)
+         (review-queue-card [{:stage nil}])
+         (review-queue-card queues)))]))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :any]] :string]}
   operations-home-fragment
   "The home's card grid, patched under #ops-home by the home's poll."
   [cards]
-  (str (h/html [:div {:id "ops-home" :class "ops-cards"} (seq cards)])))
+  (str (h/html [:div {:id "ops-home" :class "ops-cards"} (seq (remove nil? cards))])))
 
 (defn ^{:malli/schema [:=> [:cat :map [:vector :any]] :any]}
   operations-home-page
@@ -2965,6 +3017,144 @@
                        "')")}
     (ops-crumb "Session recovery")
     (h/raw (recovery-fragment recovery))]))
+
+(defn- rq-base [project run-id]
+  (str "/operations/review-queue/" (name project) "/" run-id))
+
+(def ^:private rq-kind-label
+  {:rank "rank" :brief "QA brief" :correct "correct" :delete "delete" :fold "fold"
+   :clear-rank "clear rank" :schema "schema" :view-sort "view sort"})
+
+(defn- rq-item
+  "One proposed write: what it does, the full text behind it folded under the
+   summary, and — while the plan is being decided — the two answers. After the
+   apply run reaches it, what happened instead of the buttons."
+  [project run-id stage {:keys [n kind summary detail decision result]}]
+  (let [post (fn [v] (str "@post('" (rq-base project run-id) "/items/" n "?verdict=" v "')"))]
+    [:div {:class (str "rq-item" (when (= :skipped decision) " rq-skipped"))}
+     [:div.prop-head
+      [:span.meta (str "[" n "]")]
+      [:span {:class (str "chip rq-k-" (name (or kind :other)))}
+       (get rq-kind-label kind (some-> kind name))]
+      [:span.rq-sum summary]
+      (case decision
+        :approved [:span.prop-verdict.v-approved "approved"]
+        :skipped  [:span.prop-verdict.prop-disposed "skipped"]
+        nil)
+      (when-let [{:keys [outcome note]} result]
+        [:span {:class (str "prop-verdict rq-o-" (name outcome))}
+         (str (name outcome) (when note (str " — " note)))])]
+     (when-not (str/blank? (str detail))
+       ;; Line by line rather than pre-wrapped: a brief's line breaks are its
+       ;; structure (sections, numbered steps), and the stylesheet keeps no
+       ;; pre-wrap rule.
+       [:details.rq-detail [:summary "show"]
+        [:div.rq-pre (for [l (str/split-lines (str detail))]
+                       [:div (if (str/blank? l) (h/raw "&nbsp;") l)])]])
+     (when (= :deciding stage)
+       [:div.actions
+        [:button {:class (str "btn" (when (not= :approved decision) " btn-primary"))
+                  "data-on:click" (post "approved")} "Approve"]
+        [:button.btn {"data-on:click" (post "skipped")} "Skip"]])]))
+
+(defn- rq-ticket [project run-id stage {:keys [rank br title url lifecycle qa why items]}]
+  [:div.prop
+   [:div.prop-head
+    [:span.rq-rank (if rank (str "#" rank) "–")]
+    [:a.prop-where {:href url :target "_blank"} br]
+    [:span.rq-title title]
+    (when lifecycle [:span.meta lifecycle])
+    (when qa [:span {:class (str "prop-verdict rq-qa-" (name qa))} (str "QA: " (name qa))])]
+   (when why [:p.rq-why why])
+   (if (seq items)
+     (for [it items] (rq-item project run-id stage it))
+     [:p.meta "Nothing to change."])])
+
+(defn- rq-stage-line [{:keys [stage started-at counts]} requested?]
+  (cond
+    requested?          "Requested — the daemon starts the run within a few seconds."
+    (= :none stage)     "Never groomed."
+    (= :planning stage) (str "Reading the queue and drafting a plan (started " (ago started-at) ").")
+    (= :failed stage)   (str "The run that started " (ago started-at) " ended without a plan — see its session.")
+    (= :deciding stage) (str (:items counts) " proposed writes · " (:approved counts) " approved · "
+                             (:skipped counts) " skipped · " (:undecided counts) " undecided")
+    (= :unfired stage)  "Apply was pressed but could not be queued."
+    (= :applying stage) (str "Applying " (:approved counts) " approved writes · "
+                             (:applied counts) " done so far"
+                             (when (pos? (:failed counts)) (str " · " (:failed counts) " failed")))
+    (= :applied stage)  (str (:applied counts) " applied · " (:failed counts) " failed · "
+                             (:skipped counts) " skipped")))
+
+(defn- rq-section
+  "One project's grooming: where it stands, the levers that fit that stage, the
+   queue in rank order with each ticket's proposed writes, and the flags."
+  [{:keys [project stage run-id tickets general flags counts] :as q} requested?]
+  (let [run-url   (str "/operations/review-queue/" (name project) "/run")
+        idle?     (and (not requested?) (#{:none :failed :deciding :applied} stage))]
+    [:div.rq-section
+     [:div.ops-head
+      [:strong (str "Review queue · " (name project))]
+      [:span.meta (rq-stage-line q requested?)]]
+     [:div.actions {:style "margin-bottom:14px"}
+      (when idle?
+        [:button {:class (str "btn" (when (#{:none :applied :failed} stage) " btn-primary"))
+                  "data-on:click" (str "@post('" run-url "')")}
+         (if (= :none stage) "Run grooming" "Run a fresh grooming")])
+      (when (and (= :deciding stage) (pos? (:undecided counts)))
+        [:button.btn {"data-on:click" (str "@post('" (rq-base project run-id) "/approve-all')")}
+         (str "Approve the " (:undecided counts) " undecided")])
+      (when (and (= :deciding stage) (zero? (:undecided counts)) (pos? (:approved counts)))
+        [:button.btn.btn-primary {"data-on:click" (str "@post('" (rq-base project run-id) "/apply')")}
+         (str "Apply " (:approved counts) " approved")])
+      (when (= :unfired stage)
+        [:button.btn.btn-primary {"data-on:click" (str "@post('" (rq-base project run-id) "/apply')")}
+         "Apply again"])]
+     (when (and (= :deciding stage) (not requested?))
+       [:p.meta (if (pos? (:undecided counts))
+                  "Approve or skip every item to apply. Nothing is written to Notion until you press Apply."
+                  "Nothing is written to Notion until you press Apply.")])
+     (when (= :unfired stage)
+       [:p.meta "Your decisions are frozen, but the apply run was never queued. Apply again queues it with the same decisions."])
+     (when (seq tickets)
+       (list
+        [:h3.rec-title "Order"]
+        [:ol.rq-order
+         (for [{:keys [br title why]} tickets]
+           [:li [:b br] " " title (when why [:span.meta (str " — " why)])])]
+        [:h3.rec-title "Tickets"]
+        (for [t tickets] (rq-ticket project run-id stage t))))
+     (when (seq general)
+       (list [:h3.rec-title "Across the queue"]
+             [:div.prop (for [it general] (rq-item project run-id stage it))]))
+     (when (seq flags)
+       (list [:h3.rec-title "Flags — for a person, not acted on"]
+             [:ul.rq-flags (for [f flags] [:li f])]))]))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe [:vector :map]] [:set :any]] :string]}
+  review-queue-fragment
+  "The review-queue page's body, patched under #review-queue by its poll.
+   `requested` is the projects whose run was asked for and has not appeared yet —
+   so the button is not offered twice for one click. `queues` nil means they
+   could not be read, said rather than rendered as a queue with nothing in it."
+  [queues requested]
+  (str
+   (h/html
+    [:div {:id "review-queue"}
+     (cond
+       (nil? queues)   [:p.ops-empty "The review queue could not be read — see the dashboard log."]
+       (empty? queues) [:p.ops-empty "No project declares the :review-queue trigger."]
+       :else           (for [q queues] (rq-section q (contains? requested (:project q)))))])))
+
+(defn ^{:malli/schema [:=> [:cat :map [:maybe [:vector :map]] [:set :any]] :any]}
+  review-queue-page
+  "The review-queue grooming: run it, go through what it proposes ticket by
+   ticket, approve or skip each write, and apply what was approved."
+  [ctx queues requested]
+  (shell
+   (assoc ctx :active :operations :title "Review queue")
+   [:div.ops-col {:data-on-interval__duration.5s "@get('/_fragment/operations/review-queue')"}
+    (ops-crumb "Review queue")
+    (h/raw (review-queue-fragment queues requested))]))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :any]}
   proposal-result-fragment
