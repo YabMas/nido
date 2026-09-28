@@ -382,7 +382,7 @@ The `:postgresql` service runs in one of three **modes** (`:mode` on the service
 
 Three cluster roles:
 
-- **Template cluster** — long-lived APFS clone source at `~/.nido/templates/<project>/pg-data/`. Initialized with `bb nido:template:pg:init :project <name>`; refreshed from a dump with `bb nido:template:pg:refresh`. Must always be stopped when not actively being refreshed — both clone paths (shared seed + per-session) need a clean `postmaster.pid` absence. `bb nido:template:pg:stop` clears a stale pid (kill fallback included).
+- **Template cluster** — long-lived APFS clone source at `~/.nido/templates/<project>/pg-data/`. Initialized with `bb nido:template:pg:init :project <name>`; refreshed from a dump with `bb nido:template:pg:refresh`. Must always be stopped when not actively being refreshed — both clone paths (shared seed + per-session) need a clean `postmaster.pid` absence. `bb nido:template:pg:stop` clears a stale pid (kill fallback included). A refresh keeps a pre-refresh snapshot at `pg-data.refresh-bak`; if the refresh process is killed, that snapshot is the only good copy. Sessions then refuse to clone the half-built template, and `bb nido:template:pg:rollback` restores it (the next refresh also restores it first).
 - **Shared cluster** — the running per-project cluster sessions use in `:shared` mode. Seeded once by APFS-cloning the (stopped) template, then left running across sessions. Manage with `bb nido:shared:pg:{up,status,down,reset,destroy} :project <name>`. `reset` re-clones from the current template (recovery after a divergent migration lands on the shared DB, or to pick up a `template:pg:refresh`).
 - **Per-session cluster** — only exists for `:clone`/`:isolated` sessions, as above.
 

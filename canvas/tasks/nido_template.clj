@@ -17,6 +17,9 @@
   (Operation refresh
     "Refresh the template cluster by running the project's declared"
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation rollback
+    "Restore the template from the snapshot a killed refresh left behind."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation status
     "Show template status for a project."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

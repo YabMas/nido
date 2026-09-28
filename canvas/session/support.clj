@@ -95,6 +95,10 @@
   (Operation refresh! "Bring the template up to date by running the project's declared refresh."
     {:signature [:=> [:catn [:project-name ProjectName]] :any]
      :delegates [sstate/template-pg-data-dir sstate/write-template-meta!]})
+  (Operation rollback! "Restore the template a killed refresh left half-built from its pre-refresh
+     snapshot. Refuses while the template runs: a live refresh has a snapshot too."
+    {:signature [:=> [:catn [:project-name ProjectName]] :any]
+     :delegates [sstate/template-pg-data-dir sstate/refresh-snapshot-dir]})
   (Operation status "What state a project's template is in."
     {:signature [:=> [:catn [:project-name ProjectName]] :any] :delegates [sstate/read-template-meta]})
   (Operation stop! "Stop the template cluster. No-op when it was never initialised."

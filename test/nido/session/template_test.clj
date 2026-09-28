@@ -1,9 +1,12 @@
 (ns nido.session.template-test
   "Tests for the snapshot+rollback guard around `refresh!`: a failed refresh
-   (e.g. the staging fetch throws) must never leave the template destroyed."
+   (e.g. the staging fetch throws) must never leave the template destroyed,
+   and a killed one must never leave it cloned or its snapshot discarded."
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
+   [nido.session.services.postgresql :as pg]
+   [nido.session.state :as state]
    [nido.session.template :as tpl]))
 
 (defn- with-temp-template
@@ -65,3 +68,53 @@
           "the thunk must not run when the protective snapshot can't be made")
       (finally
         (fs/delete-tree tmp)))))
+
+(defn- interrupt-refresh!
+  "Leave the state a refresh killed mid-flight leaves: the snapshot holds the
+   original template, and data-dir holds the half-built one."
+  [data-dir backup-dir marker]
+  (fs/copy-tree data-dir backup-dir)
+  (spit marker "HALF-BUILT"))
+
+(deftest a-refresh-after-a-killed-one-restores-the-snapshot-instead-of-discarding-it
+  (with-temp-template
+    (fn [data-dir backup-dir marker]
+      (interrupt-refresh! data-dir backup-dir marker)
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo #"fetch boom"
+           (#'tpl/with-template-rollback
+            data-dir
+            (fn [] (throw (ex-info "fetch boom" {})))))
+          "the new refresh fails too")
+      (is (= "ORIGINAL" (slurp marker))
+          "the template is the pre-kill one, not the half-built one"))))
+
+(deftest a-template-with-an-unfinished-refresh-is-never-cloned
+  (with-temp-template
+    (fn [data-dir backup-dir marker]
+      (interrupt-refresh! data-dir backup-dir marker)
+      (let [target (str (fs/path (fs/parent data-dir) "session-pg-data"))]
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"unfinished refresh"
+             (pg/clone-pgdata! data-dir target)))
+        (is (not (fs/exists? target)) "no clone is made")))))
+
+(deftest rollback-restores-the-template-a-killed-refresh-left
+  (with-temp-template
+    (fn [data-dir backup-dir marker]
+      (interrupt-refresh! data-dir backup-dir marker)
+      (with-redefs [state/template-pg-data-dir (constantly data-dir)]
+        (tpl/rollback! "proj"))
+      (is (= "ORIGINAL" (slurp marker)))
+      (is (not (fs/exists? backup-dir)) "the snapshot is consumed"))))
+
+(deftest rollback-refuses-while-the-template-runs
+  (with-temp-template
+    (fn [data-dir backup-dir marker]
+      (interrupt-refresh! data-dir backup-dir marker)
+      (spit (str (fs/path data-dir "postmaster.pid")) "1")
+      (with-redefs [state/template-pg-data-dir (constantly data-dir)]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"running"
+                              (tpl/rollback! "proj"))))
+      (is (= "HALF-BUILT" (slurp marker)) "a live refresh is left alone")
+      (is (fs/exists? backup-dir)))))

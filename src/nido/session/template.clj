@@ -9,6 +9,7 @@
                 stop cleanly. Idempotent on PGDATA existence.
      refresh  — start template, run project-declared :refresh-steps
                 (e.g. fetch & restore a staging dump), stop cleanly.
+     rollback — restore the pre-refresh snapshot a killed refresh left.
      status   — report whether the template exists, its port, last-refresh.
      destroy  — stop if running and remove PGDATA + metadata.
 
@@ -63,12 +64,25 @@
   (let [existing (or (state/read-template-meta project-name) {})]
     (state/write-template-meta! project-name (merge existing patch))))
 
+(defn- restore-snapshot!
+  "Replace the template at `data-dir` with its pre-refresh snapshot, consuming
+   the snapshot."
+  [data-dir]
+  (ensure-stopped! data-dir)                  ; can't swap a running cluster's dir
+  (fs/delete-tree data-dir)
+  (fs/move (state/refresh-snapshot-dir data-dir) data-dir))
+
 (defn- with-template-rollback
   "Protect the template from a failed refresh. APFS-clone the (stopped) template
-   at `data-dir` to a `<data-dir>.refresh-bak` snapshot, run `thunk`, and on
-   success discard the snapshot. On ANY throw, restore `data-dir` from the
-   snapshot and rethrow — so a failed fetch or a half-completed restore can
-   never leave the template destroyed.
+   at `data-dir` to its refresh snapshot, run `thunk`, and on success discard
+   the snapshot. On ANY throw, restore `data-dir` from the snapshot and
+   rethrow — so a failed fetch or a half-completed restore can never leave the
+   template destroyed.
+
+   A killed refresh throws nothing and leaves its snapshot behind. That
+   snapshot is the known-good template, so it is restored before anything
+   else, never discarded: replacing it with a snapshot of the half-refreshed
+   `data-dir` would lose the last good copy.
 
    The protective snapshot is taken BEFORE `thunk` runs anything destructive,
    so if it can't be made (uninitialized template, cross-volume PGDATA),
@@ -76,9 +90,11 @@
    untouched. The caller must have already stopped the cluster (cloning a
    running cluster is refused)."
   [data-dir thunk]
-  (let [backup-dir (str data-dir ".refresh-bak")]
+  (let [backup-dir (state/refresh-snapshot-dir data-dir)]
     (when (fs/exists? backup-dir)
-      (fs/delete-tree backup-dir))            ; clear a stale snapshot from a prior crash
+      (core/log-step (str "An earlier refresh was interrupted — restoring the "
+                          "pre-refresh template at " data-dir " first"))
+      (restore-snapshot! data-dir))
     (pg/clone-pgdata! data-dir backup-dir)
     (try
       (let [result (thunk)]
@@ -87,10 +103,30 @@
       (catch Throwable t
         (core/log-step
          (str "Refresh failed — restoring template from pre-refresh snapshot at " data-dir))
-        (ensure-stopped! data-dir)            ; can't swap a running cluster's dir
-        (fs/delete-tree data-dir)
-        (fs/move backup-dir data-dir)
+        (restore-snapshot! data-dir)
         (throw t)))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  rollback!
+  "Restore the template a killed refresh left half-built from its pre-refresh
+   snapshot. No-op when there is no snapshot. Refuses while the template is
+   running, because a live refresh also has a snapshot and rolling it back
+   would destroy that refresh's work mid-flight."
+  [project-name]
+  (let [data-dir (state/template-pg-data-dir project-name)]
+    (cond
+      (not (fs/exists? (state/refresh-snapshot-dir data-dir)))
+      (core/log-step (str "No interrupted refresh for " project-name " — nothing to roll back."))
+
+      (not (pg/template-stopped? data-dir))
+      (throw (ex-info "Template is running — a refresh may be in progress; refusing to roll back"
+                      {:project-name project-name :data-dir data-dir
+                       :hint (str "If no refresh is running, stop it with "
+                                  "`bb nido:template:pg:stop :project " project-name "` first.")}))
+
+      :else
+      (do (restore-snapshot! data-dir)
+          (core/log-step (str "Template restored from its pre-refresh snapshot at " data-dir))))))
 
 ;; ---------------------------------------------------------------------------
 ;; init
@@ -214,6 +250,9 @@
     (println "  data-dir:" data-dir)
     (println "  initialized?:" initialized?)
     (println "  running?:" running?)
+    (when (fs/exists? (state/refresh-snapshot-dir data-dir))
+      (println "  unfinished refresh?:" true
+               "— sessions refuse to clone it; `bb nido:template:pg:rollback` restores it"))
     (when meta
       (when-let [port (:port meta)] (println "  port:" port))
       (when-let [t (:initialized-at meta)] (println "  initialized-at:" t))

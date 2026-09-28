@@ -112,6 +112,15 @@
   [project-name]
   (str (fs/path (project-template-dir project-name) "pg-data")))
 
+(defn ^{:malli/schema [:=> [:cat :Path] :Path]}
+  refresh-snapshot-dir
+  "Where a template refresh keeps its pre-refresh snapshot of `data-dir`.
+   It exists only while a refresh runs, or after one was killed before it
+   could restore or discard it. Either way it is the last known-good template
+   and `data-dir` is not."
+  [data-dir]
+  (str data-dir ".refresh-bak"))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
   template-meta-file
   "Template metadata file: ~/.nido/templates/<project-name>/template.edn"

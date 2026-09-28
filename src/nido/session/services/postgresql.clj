@@ -125,7 +125,8 @@
 (defn ^{:malli/schema [:=> [:cat :Path :Path] :any]}
   clone-pgdata!
   "APFS-clone source-data-dir to target-data-dir using `cp -cR`. Source must be
-   stopped (no postmaster.pid). Target must not yet exist. The clone is
+   stopped (no postmaster.pid) and have no refresh snapshot beside it. Target
+   must not yet exist. The clone is
    essentially free on APFS — blocks are shared until either side mutates."
   [source-data-dir target-data-dir]
   (when-not (fs/exists? (str (fs/path source-data-dir "PG_VERSION")))
@@ -136,6 +137,16 @@
     (throw (ex-info "Template Postgres is not stopped (postmaster.pid present)"
                     {:source source-data-dir
                      :hint "Stop the template cluster before cloning a worktree from it."})))
+  ;; A clone taken mid-refresh copies a database the refresh has dropped and
+  ;; not yet restored: it boots, and fails later on whatever the project's
+  ;; migrations make of an empty schema.
+  (when (fs/exists? (state/refresh-snapshot-dir source-data-dir))
+    (throw (ex-info (str "Template holds an unfinished refresh (a pre-refresh snapshot "
+                         "is still beside it); refusing to clone it")
+                    {:source source-data-dir
+                     :snapshot (state/refresh-snapshot-dir source-data-dir)
+                     :hint (str "If no refresh is running, restore the pre-refresh template with "
+                                "`bb nido:template:pg:rollback :project <name>`.")})))
   (when (fs/exists? target-data-dir)
     (throw (ex-info "Target PGDATA already exists; refusing to overwrite"
                     {:target target-data-dir})))

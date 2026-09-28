@@ -55,6 +55,9 @@
     {:signature [:=> [:catn [:project-name ProjectName]] Path] :delegates [templates-dir]})
   (Operation template-pg-data-dir "A project template's Postgres data directory."
     {:signature [:=> [:catn [:project-name ProjectName]] Path] :delegates [project-template-dir]})
+  (Operation refresh-snapshot-dir "Where a template refresh keeps its pre-refresh snapshot. Present
+     outside a running refresh only when one was killed, and then it is the known-good template."
+    {:signature [:=> [:catn [:data-dir Path]] Path]})
   (Operation template-meta-file "A project template's metadata."
     {:signature [:=> [:catn [:project-name ProjectName]] Path] :delegates [project-template-dir]})
   (Operation template-log-file "A project template's log."

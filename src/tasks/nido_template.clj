@@ -44,6 +44,17 @@
     (template/refresh! project-name)))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  rollback
+  "Restore the template from the snapshot a killed refresh left behind.
+
+   Usage:
+     bb nido:template:pg:rollback :project \"brian\""
+  [& args]
+  (let [opts (parse-opts args)
+        project-name (require-project opts)]
+    (template/rollback! project-name)))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   status
   "Show template status for a project.
 

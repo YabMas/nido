@@ -138,6 +138,11 @@
    :doc "Refresh the template from a fresh dump via project-declared :refresh-steps"
    :task (apply nido-template/refresh *command-line-args*)}
 
+  nido:template:pg:rollback
+  {:requires ([tasks.nido-template :as nido-template])
+   :doc "Restore the template from the snapshot a killed refresh left behind"
+   :task (apply nido-template/rollback *command-line-args*)}
+
   nido:template:pg:status
   {:requires ([tasks.nido-template :as nido-template])
    :doc "Show template cluster status for a project"
