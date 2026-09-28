@@ -577,17 +577,22 @@
 ;; ── The amend stage ─────────────────────────────────────────────────────────
 
 (defn- with-amend
-  [{:keys [prev writes recommend append-throws?] :or {prev a-design recommend :amend}} c]
-  (let [appended (atom nil)]
+  [{:keys [prev writes recommend append-throws? refusals prompts]
+    :or {prev a-design recommend :amend refusals 0}} c]
+  (let [appended (atom nil)
+        refused  (atom 0)]
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] prev)
                   stages/discover-baseline (fn [_ _] nil)
                   stages/working-copy-state (fn [_] "")
                   ws/append-entry! (fn [_ _ _ payload]
-                                     (when append-throws? (throw (ex-info "schema said no" {})))
+                                     (when (or append-throws? (< @refused refusals))
+                                       (swap! refused inc)
+                                       (throw (ex-info "schema said no" {})))
                                      (reset! appended payload)
                                      "/ws/entries/0005-design.edn")
                   agent/launch! (fn [{:keys [first-message]}]
+                                  (some-> prompts (swap! conj first-message))
                                   (when writes
                                     (writes (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))))
                                   {:num-turns 3})]
@@ -603,6 +608,41 @@
     (is (nil? (:status out)))
     (is (= fixed (read-string appended)))
     (is (= [] (:retreats out)))))
+
+(deftest a-refused-design-amendment-is-handed-back-and-the-repair-appended
+  ;; Seen live: an amender put :removed at the design's top level instead of under
+  ;; :model, and the round lost its whole amendment to one disallowed key.
+  (let [prompts (atom [])
+        fixed   (assoc a-design :effort :L)
+        [out appended] (with-amend {:refusals 1 :prompts prompts
+                                    :writes (fn [p] (spit p (pr-str {:record fixed})))}
+                                   (ctx :findings [(check :relation-honest :broken)]
+                                        :record (decision :amend)))]
+    (is (nil? (:status out)))
+    (is (= 2 (count @prompts)))
+    (is (str/includes? (second @prompts) "The ledger refused the design record"))
+    (is (= fixed (read-string appended)))
+    (is (= ["schema said no"] (:amend-refusals out)))))
+
+(deftest a-design-the-ledger-keeps-refusing-ends-amend-invalid
+  (let [[out appended] (with-amend {:append-throws? true
+                                    :writes (fn [p] (spit p (pr-str {:record a-design})))}
+                                   (ctx :findings [(check :relation-honest :broken)]
+                                        :record (decision :amend)))]
+    (is (= :amend-invalid (:status out)))
+    (is (= "schema said no" (:amend-error out)))
+    (is (nil? appended))))
+
+(deftest the-design-amender-is-told-where-removals-go
+  (let [p (record/design-amend-prompt {:design (assoc a-design :model {:elements [] :claims []})
+                                       :recommend :amend :raised [] :out-path "/x"})]
+    (is (str/includes? p "under :model :removed"))
+    (is (str/includes? p "never at the record's top level")))
+  (testing "and so is the repair of a refused one"
+    (is (str/includes? (record/refusal-prompt {:kind :design
+                                               :record (assoc a-design :model {:elements [] :claims []})
+                                               :refusal "no" :out-path "/x"})
+                       "under :model :removed"))))
 
 (deftest a-design-amended-to-claim-it-moves-nothing-is-still-judged
   ;; Declaring :within, :conforms and a modest effort used to stop the loop here,

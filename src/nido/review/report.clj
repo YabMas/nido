@@ -425,11 +425,14 @@
       ;; not report itself as having amended anything.
       ;; :amend-error is why an amendment the ledger refused was not appended —
       ;; the judge phase's :detail, for this stage, and held nowhere else either.
+      ;; :refusals is every refusal the amender was handed back to repair, so an
+      ;; amendment appended on a re-ask does not read as one accepted first time.
       :amend  (cond-> (assoc ph :retreats (vec (:retreats ctx))
                                 :disputes (vec (:disputes ctx))
                                 :amended? (boolean (:amended? ctx))
                                 :resurveyed (some-> (:resurveyed ctx) name))
-                (:amend-error ctx) (assoc :amend-error (:amend-error ctx)))
+                (:amend-error ctx) (assoc :amend-error (:amend-error ctx))
+                (seq (:amend-refusals ctx)) (assoc :refusals (vec (:amend-refusals ctx))))
 
       ;; :conflicted is what ended THIS round, where the copy on the target is
       ;; what the stack looked like when the run last asked. A round that stopped

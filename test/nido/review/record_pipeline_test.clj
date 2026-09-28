@@ -293,20 +293,25 @@
 (defn- with-amend
   "Run amend-stage with every seam stubbed. `writes` is called with the out-path
    and stands in for what the amender did (or did not) leave behind; `tree-before`
-   and `tree-after` are what the working copy's diff contained either side of it."
-  [{:keys [prev writes tree-before tree-after append-throws?]
-    :or {prev a-baseline tree-before "" tree-after nil}} c]
+   and `tree-after` are what the working copy's diff contained either side of it.
+   The ledger refuses every append under `append-throws?`, or the first `refusals`
+   of them; each prompt an amender is launched over is added to `prompts`."
+  [{:keys [prev writes tree-before tree-after append-throws? refusals prompts]
+    :or {prev a-baseline tree-before "" tree-after nil refusals 0}} c]
   (let [tree (atom tree-before)
-        appended (atom nil)]
+        appended (atom nil)
+        refused (atom 0)]
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] prev)
                   stages/working-copy-state (fn [_] @tree)
                   ws/append-entry! (fn [_ _ _ payload]
-                                     (when append-throws?
+                                     (when (or append-throws? (< @refused refusals))
+                                       (swap! refused inc)
                                        (throw (ex-info "schema said no" {})))
                                      (reset! appended payload)
                                      "/ws/entries/0002-baseline.edn")
                   agent/launch! (fn [{:keys [first-message]}]
+                                  (some-> prompts (swap! conj first-message))
                                   (when writes
                                     (writes (second (re-find #"Write EDN to:\n\n  (\S+)"
                                                              first-message))))
@@ -396,6 +401,83 @@
     (is (= "schema said no" (:amend-error out)))
     (is (= "schema said no" (:amend-error (persisted-phase :amend out)))
         "and the report keeps it, since nothing was appended to say it")))
+
+(deftest a-refused-amendment-is-handed-back-and-the-repair-appended
+  ;; Seen live, twice on one brian workstream and once on nido: an amender demoted
+  ;; a stratum's reading without the health observation the write contract ties to
+  ;; it, and the round lost the whole amendment over one missing field.
+  (let [prompts  (atom [])
+        repaired (assoc a-baseline :area "repaired")
+        [out appended] (with-amend {:refusals 1 :prompts prompts
+                                    :writes (fn [p]
+                                              (spit p (pr-str {:record (if (= 1 (count @prompts))
+                                                                         a-baseline
+                                                                         repaired)})))}
+                                   (ctx :findings [a-finding]))]
+    (is (nil? (:status out)) "the round goes on to be judged")
+    (is (= 2 (count @prompts)))
+    (is (str/includes? (second @prompts) "WHY IT WAS REFUSED:\n\n  schema said no"))
+    (is (str/includes? (second @prompts) "THE RECORD THE LEDGER REFUSED"))
+    (is (= "repaired" (:area (read-string appended))) "what the repair returned is what is appended")
+    (is (= ["schema said no"] (:amend-refusals out)))
+    (is (= ["schema said no"] (:refusals (persisted-phase :amend out)))
+        "and the report says it took a repair")))
+
+(deftest an-amendment-taken-first-time-reports-no-refusals
+  (let [[out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record a-baseline})))}
+                            (ctx :findings [a-finding]))]
+    (is (nil? (:status out)))
+    (is (not (contains? (persisted-phase :amend out) :refusals)))))
+
+(deftest a-refusal-the-amender-cannot-repair-ends-the-round
+  (let [prompts (atom [])
+        [out appended] (with-amend {:append-throws? true :prompts prompts
+                                    :writes (fn [p] (spit p (pr-str a-baseline)))}
+                                   (ctx :findings [a-finding]))]
+    (is (= :amend-invalid (:status out)))
+    (is (= 3 (count @prompts)) "the amendment, then two repairs")
+    (is (= 2 (count (:amend-refusals out))) "the two handed back, not the one that ended the round")
+    (is (nil? appended))))
+
+(deftest a-repair-answered-with-nothing-ends-on-the-refusal
+  (let [prompts (atom [])
+        [out appended] (with-amend {:append-throws? true :prompts prompts
+                                    :writes (fn [p] (when (= 1 (count @prompts))
+                                                      (spit p (pr-str a-baseline))))}
+                                   (ctx :findings [a-finding]))]
+    (is (= :amend-invalid (:status out)))
+    (is (= "schema said no" (:amend-error out)))
+    (is (= 2 (count @prompts)))
+    (is (nil? appended))))
+
+(deftest a-repair-that-writes-code-is-caught
+  (let [tree     (atom "")
+        launches (atom 0)
+        out (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                          ws/latest-entry (fn [_ _ _] a-baseline)
+                          stages/working-copy-state (fn [_] @tree)
+                          ws/append-entry! (fn [& _] (throw (ex-info "schema said no" {})))
+                          agent/launch! (fn [{:keys [first-message]}]
+                                          (when (= 2 (swap! launches inc)) (reset! tree "diff"))
+                                          (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
+                                                (pr-str a-baseline))
+                                          {:num-turns 1})]
+              (run record/amend-stage (ctx :findings [a-finding])))]
+    (is (= :amend-touched-code (:status out)))))
+
+(deftest the-amender-is-told-which-edits-travel-together
+  (let [p (record/amend-prompt {:baseline (assoc a-baseline :strata []) :findings [a-finding]
+                                :out-path "/x"})]
+    (is (str/includes? p "EDITS THAT TRAVEL TOGETHER"))
+    (is (str/includes? p "named, under :about, by a :health observation")))
+  (testing "and so is the repair of a refused one"
+    (is (str/includes? (record/refusal-prompt {:kind :baseline :record (assoc a-baseline :strata [])
+                                               :refusal "no" :out-path "/x"})
+                       "named, under :about, by a :health observation")))
+  (testing "a baseline from before strata is not told a rule it cannot break"
+    (is (not (str/includes? (record/amend-prompt {:baseline a-baseline :findings [a-finding]
+                                                  :out-path "/x"})
+                            "EDITS THAT TRAVEL TOGETHER")))))
 
 (deftest a-corrected-record-is-appended-and-the-loop-continues
   (let [corrected (assoc-in a-baseline [:load-bearing 0 :property]

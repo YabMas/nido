@@ -1685,7 +1685,7 @@
    :disputed   "the judge restated a finding the amender objected to twice — neither can settle it, so you do"
    :amend-noop "the amender produced no record — nothing was appended"
    :amend-unreadable "the amender's answer would not parse as EDN"
-   :amend-invalid "the ledger refused the amended record"
+   :amend-invalid "the ledger refused the amended record, and refused the amender's repairs of it too"
    :amend-touched-code "a record pass wrote to the working copy; whatever it wrote is still there"
    :dry-run    "nothing was amended"
    ;; Only reachable when a caller asked for a cap. The loop has no default one

@@ -99,6 +99,10 @@
     {:signature [:=> [:catn [:history :any]] :any]})
   (Operation amend-prompt "The instruction to repair a baseline."
     {:signature [:=> [:catn [:opts :map]] :string]})
+  (Operation refusal-prompt
+    "The instruction to repair an amended baseline or design the ledger refused: the refusal, the
+     record as offered, and nothing the judge found."
+    {:signature [:=> [:catn [:opts :map]] :string]})
   (Operation broken-checks "The derivations that failed."
     {:signature [:=> [:catn [:record :map]] :any]})
   (Operation underivable-checks "The derivations the round could not make at all."

@@ -1781,6 +1781,106 @@
     (str "This project declares no design, so an element keeps the id the record already\n"
          "gave it, and an element new to the record takes an id of the record's own.\n")))
 
+(defn- coupled-edits
+  "The write rules that tie one field of a `kind` record to another, for whoever amends it — nil
+   for a record in no era they bind. The ledger refuses a record that satisfies one side and not
+   the other, and an amender changing one field has no reason to look at the second."
+  [kind record]
+  (case kind
+    :baseline
+    (when (strata-era? record)
+      (str "EDITS THAT TRAVEL TOGETHER. A stratum whose :stratified/level reading is\n"
+           "anything but :sound must be named, under :about, by a :health observation in\n"
+           "the same record — and a health observation's :about names only strata the\n"
+           "record lists. Demoting a reading and adding the observation that names it\n"
+           "is ONE edit; the ledger refuses a record that makes only the first.\n\n"))
+    :design
+    (when (contains? record :model)
+      (str "EDITS THAT TRAVEL TOGETHER. A design takes an element or claim out of the\n"
+           "model it is laid over under :model :removed {:elements [ids] :claims [ids]} —\n"
+           "inside :model, never at the record's top level — and never also states an id\n"
+           "it removes. An id the design simply leaves out is carried unchanged, not\n"
+           "removed.\n\n"))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  refusal-prompt
+  "Instruction to repair an amended record the ledger refused, handed to the same kind of amender
+   that wrote it: the refusal, the record as it was offered to the ledger, and a fresh answer file.
+
+   Narrower than the amend prompts on purpose. The judge's findings are not repeated, because the
+   record already answers them and this is not another round: the only thing wrong with it is
+   what the ledger named."
+  [{:keys [kind record refusal out-path]}]
+  (str "The ledger refused the " (name kind) " record you wrote for this round, so nothing\n"
+       "was appended and the amendment has not taken effect.\n\n"
+       "WHY IT WAS REFUSED:\n\n  " refusal "\n\n"
+       "Repair exactly that, and change nothing the refusal does not name: every other\n"
+       "field comes back as it is below. Where the rule ties two fields together, make\n"
+       "the field you were missing agree with the one you changed — undoing the change\n"
+       "you made for the judge would get the record accepted and make it false again.\n\n"
+       (coupled-edits kind record)
+       "THE RECORD THE LEDGER REFUSED:\n\n"
+       (pr-str (ws/unstamp record))
+       "\n\nWrite EDN to:\n\n  " out-path "\n\n"
+       "  {:record <the COMPLETE repaired record — every field, not a diff>}\n\n"
+       "nido reads this file, validates it and appends it. Do not append it yourself, do\n"
+       "not commit anything, and do NOT edit any source file."))
+
+(def ^:private amend-reasks
+  "How many times one round hands a refused amendment back to its amender before the round ends
+   on the refusal. A refusal names its rule, so one repair is usually enough; the second is for a
+   record that broke two rules, which the ledger reports one check at a time."
+  2)
+
+(defn- append-amendment!
+  "Offer an amended `record` to the ledger through `append`, and hand each refusal back to the
+   amender to repair — up to `amend-reasks` times — so a refused amendment is repaired rather than
+   lost.
+
+   `append` takes a record and returns `{:path p :record r}` when the ledger took it or
+   `{:err refusal :record r}` when it did not, `r` being the record as offered. `stem` names this
+   round's answer files. Returns what the accepting `append` returned plus `:refusals`, every
+   refusal the round was re-asked over, oldest first; or, when the round ends here, `{:status s}`
+   with `:refusals` and — for `:amend-invalid` — the last refusal as `:amend-error`. A re-ask
+   answered with no readable record ends the round on the refusal it failed to repair, and one
+   that wrote to the working copy ends it `:amend-touched-code`."
+  [ctx {:keys [kind stem record append]}]
+  (let [{:keys [cwd run-id budget]} (:config ctx)
+        code-cwd (or (:code-cwd (:config ctx)) cwd)
+        dir      (cstate/run-dir run-id)]
+    (loop [record record, refusals []]
+      (let [{:keys [err] :as written} (append record)]
+        (cond
+          (nil? err)
+          (assoc written :refusals refusals)
+
+          (= amend-reasks (count refusals))
+          {:status :amend-invalid :amend-error err :refusals refusals}
+
+          :else
+          (let [refusals (conj refusals err)
+                label    (str stem "-reask-" (count refusals))
+                out-path (str (fs/path dir (str label ".edn")))
+                before   (stages/working-copy-state code-cwd)]
+            (fs/delete-if-exists out-path)
+            (agent/launch!
+             {:run-id run-id :cwd code-cwd :budget budget
+              :first-message (refusal-prompt {:kind kind :record (:record written)
+                                              :refusal err :out-path out-path})
+              :err-file (str (fs/path dir (str label ".err.log")))})
+            (let [raw   (when (fs/exists? out-path)
+                          (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
+                  again (:record (parse-amend-answer raw [] nil))]
+              (cond
+                (not= before (stages/working-copy-state code-cwd))
+                {:status :amend-touched-code :refusals refusals}
+
+                (nil? again)
+                {:status :amend-invalid :amend-error err :refusals refusals}
+
+                :else
+                (recur again refusals)))))))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   amend-prompt
   "Instruction to repair a baseline the round found wanting.
@@ -1857,6 +1957,7 @@
           "subject it is about. The ledger refuses anything else and the whole record\n"
           "is lost with it, so use these and nothing else:\n"
           (lens-block)))
+   (coupled-edits :baseline baseline)
    (if gaps?
      (str "CHANGE ONLY WHAT WAS ASKED FOR. A claim nobody named must come back\n"
           "unchanged — not restated, not sharpened, not made more precise.\n\n")
@@ -2148,23 +2249,33 @@
               ;; ledger refused all nine, losing the amendment each time. Where
               ;; the citation cannot be resolved at all, honour it: an unreadable
               ;; ledger is not evidence the author was wrong.
-              (let [cited     (get-in record [:supersedes :seq])
-                    resolved  (when cited (ws/entry-at-seq project ws-id cited))
-                    misnamed? (and resolved (not= :baseline (:format resolved)))
-                    record  (cond-> record
-                              (and (:seq prev) (or (nil? cited) misnamed?))
-                              (assoc :supersedes
-                                     {:seq (:seq prev)
-                                      :why (str "corrected against the code after round "
-                                                (:iter ctx) " of run " run-id)}))
-                    written (try {:path (ws/append-entry!
-                                         project ws-id {:kind :baseline}
-                                         (pr-str (ws/unstamp record)))}
-                                 (catch Exception e
-                                   {:err (ledger-refusal e)}))]
-                (if-let [err (:err written)]
-                  (assoc ctx :control :stop :status :amend-invalid
-                         :amend-error err)
+              (let [cite    (fn [record]
+                              (let [cited     (get-in record [:supersedes :seq])
+                                    resolved  (when cited (ws/entry-at-seq project ws-id cited))
+                                    misnamed? (and resolved (not= :baseline (:format resolved)))]
+                                (cond-> record
+                                  (and (:seq prev) (or (nil? cited) misnamed?))
+                                  (assoc :supersedes
+                                         {:seq (:seq prev)
+                                          :why (str "corrected against the code after round "
+                                                    (:iter ctx) " of run " run-id)}))))
+                    written (append-amendment!
+                             ctx {:kind :baseline
+                                  :stem (str "amend-round-" (:iter ctx))
+                                  :record record
+                                  :append (fn [record]
+                                            (let [record (cite record)]
+                                              (try {:record record
+                                                    :path (ws/append-entry!
+                                                           project ws-id {:kind :baseline}
+                                                           (pr-str (ws/unstamp record)))}
+                                                   (catch Exception e
+                                                     {:record record :err (ledger-refusal e)}))))})
+                    record  (:record written)]
+                (if-let [status (:status written)]
+                  (cond-> (assoc ctx :control :stop :status status
+                                 :amend-refusals (:refusals written))
+                    (:amend-error written) (assoc :amend-error (:amend-error written)))
                   (let [retreats (retreat/baseline-retreats prev record)
                         ;; Stamped, not as the amender wrote it. The judge
                         ;; labels its verdict with the :seq of the record it
@@ -2176,6 +2287,7 @@
                         ctx' (assoc ctx
                                     :retreats retreats
                                     :disputes disputes
+                                    :amend-refusals (:refusals written)
                                     :history (conj (vec (:history ctx)) (entry retreats true)))]
                     ;; :as-authored is set once and never overwritten — it is
                     ;; the record the RUN started from, which is what growth
@@ -2461,6 +2573,7 @@
           "subject it is about. The ledger refuses anything else and the whole record\n"
           "is lost with it, so use these and nothing else:\n"
           (lens-block)))
+   (some->> (coupled-edits :design design) str/trimr (str "\n\n"))
    "\n\nCHANGE ONLY WHAT WAS REFUTED. Every check is re-derived over the WHOLE\n"
    "record each round, so a part nobody challenged that you restate anyway is a\n"
    "fresh chance for a check that held to stop holding. Rounds have gone by\n"
@@ -2733,18 +2846,27 @@
           (assoc ctx :control :stop :status :amend-noop)
 
           :else
-          (let [err (try (ws/append-entry! project ws-id
-                                           {:kind :design}
-                                           (pr-str (ws/unstamp record)))
-                         nil
-                         (catch Exception e (ledger-refusal e)))]
-            (if err
-              (assoc ctx :control :stop :status :amend-invalid :amend-error err)
+          (let [written (append-amendment!
+                         ctx {:kind :design
+                              :stem (str "design-amend-round-" (:iter ctx))
+                              :record record
+                              :append (fn [record]
+                                        (try (ws/append-entry! project ws-id {:kind :design}
+                                                               (pr-str (ws/unstamp record)))
+                                             {:record record}
+                                             (catch Exception e
+                                               {:record record :err (ledger-refusal e)})))})
+                record  (:record written)]
+            (if-let [status (:status written)]
+              (cond-> (assoc ctx :control :stop :status status
+                             :amend-refusals (:refusals written))
+                (:amend-error written) (assoc :amend-error (:amend-error written)))
               (let [retreats (retreat/design-retreats prev record)]
                 (assoc ctx
                        :amended? true
                        :retreats retreats
                        :disputes disputes
+                       :amend-refusals (:refusals written)
                        :history (conj (vec (:history ctx)) (entry retreats true)))))))))))
 
 (defn- run-design-amend-stage
