@@ -19,7 +19,8 @@
    [nido.review.loop :as rloop]
    [nido.review.record :as record]
    [nido.review.settled :as settled]
-   [nido.review.stages :as stages]))
+   [nido.review.stages :as stages]
+   [nido.review.tree :as tree]))
 
 (defn- with-tmp-nido-root
   "Every stage here writes where the real stage writes — run dirs, answer files
@@ -736,6 +737,28 @@
                        (assoc (ctx :findings [(check :relation-honest :broken)])
                               :record (decision :amend)))]
     (is (str/includes? prompt "CHANGE ONLY WHAT WAS REFUTED"))))
+
+(deftest a-resurvey-reads-what-a-baseline-round-would
+  ;; Not the design round's tree: that carries the design's declaration over the
+  ;; base, and a baseline describes the area before the change. A tree the caller
+  ;; named travels as :survey-cwd and is read as given.
+  (let [nested (atom []) asked (atom [])]
+    (with-redefs [rloop/run-loop (fn [cfg] (swap! nested conj (:code-cwd cfg))
+                                   {:status :sufficient :carry {:under-repair corrected-baseline}})
+                  tree/reading   (fn [kind _ _] (swap! asked conj kind) {:rev "abc" :overlay []})
+                  tree/with-reading! (fn [_ _ _ _ f] (f "/base-tree"))
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ kind] (if (= :baseline kind) corrected-baseline a-design))
+                  stages/discover-baseline (fn [_ _] {:format :baseline :seq 8})
+                  stages/working-copy-state (fn [_] "")
+                  agent/launch! (fn [_] {:num-turns 1})]
+      (doseq [config [{:cwd "/w" :run-id "r1" :code-cwd "/design-tree"}
+                      {:cwd "/w" :run-id "r1" :code-cwd "/named" :survey-cwd "/named"}]]
+        (run record/design-amend-stage
+             (assoc (ctx :findings [(check :relation-honest :broken)] :record (decision :resurvey))
+                    :config config))))
+    (is (= ["/base-tree" "/named"] @nested))
+    (is (= [:baseline] @asked) "a named tree asks for no reading")))
 
 (deftest a-resurvey-is-only-half-the-repair
   ;; The failure this catches: discover-baseline resolves the CITED baseline, so

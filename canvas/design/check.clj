@@ -106,6 +106,11 @@
     "A project's design configuration, or nil when it declares none."
     {:signature [:=> [:catn [:project-name ProjectName] [:worktree :string]] [:maybe DesignConfig]]
      :delegates [project/get-project]})
+  (Operation spec-dirs
+    "Where a project keeps its declaration, whether or not a given tree holds one there —
+     `design-of` is what says whether it does."
+    {:signature [:=> [:catn [:project-name ProjectName]] [:vector :string]]
+     :delegates [project/get-project]})
   (Operation describe
     "The declared design as a document, asked of FUKAN rather than read off disk — fukan is what
      knows which vocabularies were instantiated and which nodes are the project's own.

@@ -56,7 +56,8 @@
    [nido.review.loop :as rloop]
    [nido.review.retreat :as retreat]
    [nido.review.settled :as settled]
-   [nido.review.stages :as stages]))
+   [nido.review.stages :as stages]
+   [nido.review.tree :as tree]))
 
 ;; ── Whether a round is worth running ────────────────────────────────────────
 
@@ -2745,28 +2746,37 @@
    stopped getting anywhere. A count would stop it while it was still making
    progress, which is the one thing a convergence loop must not do."
   [ctx]
-  (let [{:keys [cwd code-cwd run-id budget reviewer]} (:config ctx)
+  (let [{:keys [cwd survey-cwd run-id budget reviewer]} (:config ctx)
         [project ws-id] (stages/project+ws-from-cwd cwd)
         n   (count (filter :resurveyed (:history ctx)))
+        nested-id (str run-id "-resurvey-" (inc n))
         ;; The baseline the design was JUDGED against, which is the only one whose
         ;; repair can change the verdict. A workstream may hold several — a
         ;; narrow follow-up written beside the broad baseline it came out of — and
         ;; repairing the newest instead would leave the cited one untouched
         ;; however many rounds it ran.
         cited (stages/discover-baseline cwd (ws/latest-entry project ws-id :design))
-        out (rloop/run-loop {:cwd cwd
-                             :code-cwd code-cwd
-                             :run-id (str run-id "-resurvey-" (inc n))
-                             ;; Named, not left in the id's suffix: its reviews are read as this
-                             ;; run's by this field, never by parsing the id they were given.
-                             :within-run run-id
-                             :budget budget
-                             :reviewer reviewer
-                             :emit (fn [_])
-                             :baseline    cited
-                             :pipeline    baseline-pipeline
-                             :judged-after :judge
-                             :finding-key baseline-finding-key})]
+        ;; Not the design round's tree: that one carries the design's declaration,
+        ;; which a baseline describing the area before the change must not be
+        ;; judged against. A tree the caller named is read as given.
+        survey (fn [dir]
+                 (rloop/run-loop {:cwd cwd
+                                  :code-cwd dir
+                                  :run-id nested-id
+                                  ;; Named, not left in the id's suffix: its reviews are read as this
+                                  ;; run's by this field, never by parsing the id they were given.
+                                  :within-run run-id
+                                  :budget budget
+                                  :reviewer reviewer
+                                  :emit (fn [_])
+                                  :baseline    cited
+                                  :pipeline    baseline-pipeline
+                                  :judged-after :judge
+                                  :finding-key baseline-finding-key}))
+        out (if survey-cwd
+              (survey survey-cwd)
+              (tree/with-reading! cwd (tree/reading :baseline project cwd) nested-id
+                                  (str (fs/path (cstate/run-dir nested-id) "tree")) survey))]
         (if (= :sufficient (:status out))
           ;; No history entry here. The re-survey is only HALF the repair — the
           ;; design still cites the baseline that was wrong — so the round is not

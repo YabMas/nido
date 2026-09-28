@@ -17,7 +17,8 @@
             [canvas.review.passes :refer [review-claude review-codex review-layers review-pass
                                           review-stages review-verdict]]
             [canvas.review.record :refer [review-record]]
-            [canvas.review.settled :refer [review-settled]]))
+            [canvas.review.settled :refer [review-settled]]
+            [canvas.review.tree :refer [review-tree]]))
 
 ;; ── the record machinery, floor first ────────────────────────────────────────
 
@@ -80,5 +81,5 @@
    run settled. Nothing else in the review machinery is written in them."
   {:provided-by [review-stages review-layers review-cache review-conformance review-prompts
                  review-pass review-verdict review-record review-settled review-retreat
-                 review-merge review-analysis review-reconcile]
+                 review-merge review-analysis review-reconcile review-tree]
    :rests-on    [review-language record-status ledger record-model record-vocabulary]})

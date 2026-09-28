@@ -33,6 +33,7 @@
    [nido.review.retreat :as retreat]
    [nido.review.stages :as stages]
    [nido.review.report :as report]
+   [nido.review.tree :as tree]
    [nido.review.verdict :as verdict]
    [nido.session.lifecycle :as lifecycle]
    [nido.platform.config :as config]
@@ -1775,7 +1776,7 @@
   "One record round, from the engine to the last printed line. Split out of
    `record-loop-cmd*` only so the claim can wrap it — everything here is what the
    command always did."
-  [{:keys [cwd code-cwd kind run-id clock title report-path report-atom
+  [{:keys [cwd code-cwd survey-cwd kind run-id clock title report-path report-atom
            plain emit pipeline finding-key max-iters dry-run? budget baseline
            remedies epilogue reviewer]}]
   (let [final  (try
@@ -1805,7 +1806,8 @@
                                  ;; nothing has shown the same cost there.
                                  :judged-after :judge
                                  :finding-key finding-key}
-                          baseline (assoc :baseline baseline))))))
+                          baseline   (assoc :baseline baseline)
+                          survey-cwd (assoc :survey-cwd survey-cwd))))))
                  (finally
                    (println (render/record-final @report-atom {:title title}))))
         status (:status final)]
@@ -1853,21 +1855,18 @@
    Two working directories, and keeping them apart is the whole of `:code-cwd`.
    `:cwd` anchors the LEDGER — it resolves the session and so the workstream
    whose records this run reads and amends. `:code-cwd` is where the agents
-   read, and it defaults to `:cwd` because they are usually the same tree.
+   read.
 
-   They are not the same tree when a baseline describes an area BEFORE a change
-   that is already written. A baseline is supposed to be fillable without
-   knowing the fix; judged against a worktree that carries the fix, it is told
-   its own subject does not exist — the round reports the change's new modules
-   as things the baseline failed to mention, and an amender asked to repair that
-   folds the change INTO the baseline it was supposed to be judged against. The
-   record then describes the post-change world, and every relation the design
-   declares to it is answered against a premise that already contains the
-   answer.
-
-   So the revision is an axis of its own, separate from the workstream: point
-   `:code-cwd` at a checkout of the base and the baseline is judged against the
-   area as it was, while the ledger stays where the work is.
+   They are not the same tree once the change is in the worktree. A baseline is
+   supposed to be fillable without knowing the fix; judged against a worktree
+   that carries the fix, the round reports the change's new modules as things
+   the baseline failed to mention, and an amender asked to repair that folds the
+   change INTO the baseline it was supposed to be judged against. So with no
+   `:code-cwd` the tree is `nido.review.tree`'s reading for the round's kind —
+   the fork point with main for a baseline, that fork point under the worktree's
+   declaration for a design — produced for the run and removed after it. A
+   `:code-cwd` the caller names is read as given, the design round's re-survey
+   included; a default re-survey asks for its own baseline reading.
 
    The final block prints from a `finally`, so a loop that throws still leaves
    its rounds, its weakenings and its objections on screen."
@@ -1894,8 +1893,12 @@
                                         :started-at (str (clock))
                                         :machinery (provenance/loaded-from)}))
         plain  (frontend/plain?)
-        emit   (frontend/emit-fn report-atom report-path clock plain)]
+        emit   (frontend/emit-fn report-atom report-path clock plain)
+        reading (if code-cwd
+                  {:dir code-cwd}
+                  (tree/reading (keyword kind) (first (stages/project+ws-from-cwd cwd)) cwd))]
     (some-> (off-position-line cwd (record-loop-kinds kind)) println)
+    (some-> (tree/line reading) println)
     ;; Under the claim from here, exactly as the diff loop is: two record rounds
     ;; amending one workstream's ledger at once would each judge a record the
     ;; other is rewriting.
@@ -1909,23 +1912,27 @@
       ;; tree it is judged against. A round of the same kind on either other
       ;; value is different work, and joining it would report a verification of
       ;; the entry nobody verified.
-      ;; The EFFECTIVE tree, which is what the pipeline judges with — a round
-      ;; given no :code-cwd and one given its own worktree do identical work, and
-      ;; publishing the raw value made them look like different targets, so the
-      ;; second was refused as other work rather than joined.
-      :target {:seq seq-n :code-cwd (or code-cwd cwd)}
+      ;; The READING, not the directory it is produced in: a produced tree is a
+      ;; fresh path per run, so two default rounds at one fork point would look
+      ;; like different work and the second would be refused rather than joined.
+      ;; A round given its own worktree and one reading the worktree in place
+      ;; publish the same {:dir …}.
+      :target {:seq seq-n :tree (select-keys reading [:dir :rev :overlay])}
       ;; The frame this loop paints for itself, so an invocation that finds the
       ;; round already running watches it in the record frame rather than
       ;; through a diff review's header.
       :render-fn (fn [report now] (render/record-frame report now {:title title}))}
      (fn []
-       (record-loop-body
-        {:cwd cwd :code-cwd code-cwd :kind kind :run-id run-id :clock clock
-         :title title :report-path report-path :report-atom report-atom
-         :plain plain :emit emit :pipeline pipeline :finding-key finding-key
-         :max-iters max-iters :dry-run? dry-run? :budget budget
-         :reviewer reviewer
-         :baseline baseline :remedies remedies :epilogue epilogue})))))
+       (tree/with-reading!
+        cwd reading run-id (str (fs/path (cstate/run-dir run-id) "tree"))
+        (fn [dir]
+          (record-loop-body
+           {:cwd cwd :code-cwd dir :survey-cwd code-cwd :kind kind :run-id run-id
+            :clock clock :title title :report-path report-path
+            :report-atom report-atom :plain plain :emit emit :pipeline pipeline
+            :finding-key finding-key :max-iters max-iters :dry-run? dry-run?
+            :budget budget :reviewer reviewer
+            :baseline baseline :remedies remedies :epilogue epilogue})))))))
 
 (def ^:private baseline-remedies
   "Only :sufficient ends a run. :insufficient is a VERDICT and never a status —

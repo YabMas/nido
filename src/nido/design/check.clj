@@ -53,6 +53,18 @@
    it can equally well not say."
   60000)
 
+(defn- config-of
+  "The design configuration `project-name`'s registry entry lays over the defaults."
+  [project-name]
+  (merge default-design (:design (project/get-project (name project-name)))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :string]]}
+  spec-dirs
+  "The dirs, relative to a worktree root, where `project-name` keeps its design declaration —
+   whether or not they hold one in any given tree. `design-of` answers whether they do."
+  [project-name]
+  (vec (:spec-dirs (config-of project-name))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string] [:maybe :DesignConfig]]}
   design-of
   "The design configuration for `project-name` in `worktree`, or nil when the project declares
@@ -67,7 +79,7 @@
    `project-name` may be a string or a keyword — callers hold it both ways, and a lookup that
    silently missed on the wrong one would fall back to the defaults and check the wrong tree."
   [project-name worktree]
-  (let [cfg   (merge default-design (:design (project/get-project (name project-name))))
+  (let [cfg   (config-of project-name)
         dirs  (for [d (:spec-dirs cfg)] (fs/path worktree d))
         files (mapcat #(when (fs/directory? %) (fs/glob % "**.clj")) dirs)]
     (when (seq files)

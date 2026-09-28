@@ -12,6 +12,7 @@
    [nido.platform.core :as core]
    [nido.review.frontend :as frontend]
    [nido.review.stages :as stages]
+   [nido.review.tree :as tree]
    [tasks.nido-review :as review]))
 
 (use-fixtures :each
@@ -280,12 +281,11 @@
       (is (= :converged @res)))))
 
 (deftest a-record-round-publishes-the-tree-it-actually-judges
-  (testing "the pipeline judges with (or code-cwd cwd), so a round given no
-            :code-cwd and one given its own worktree do identical work. Publishing
-            the raw value made them look like different targets, and the second
-            was refused as other work rather than joined."
+  (testing "a round given its own worktree and one reading the worktree in place do
+            identical work, so they publish one target and the second joins"
     (let [captured (atom [])]
-      (with-redefs [review/claiming (fn [opts _f] (swap! captured conj (:target opts)) :stopped)]
+      (with-redefs [review/claiming (fn [opts _f] (swap! captured conj (:target opts)) :stopped)
+                    tree/reading    (fn [_ _ wt] {:dir wt})]
         (#'review/record-loop-cmd*
          {:kind "baseline" :pipeline [] :finding-key identity}
          {:cwd "/wt" :code-cwd nil})
@@ -293,8 +293,37 @@
          {:kind "baseline" :pipeline [] :finding-key identity}
          {:cwd "/wt" :code-cwd "/wt"}))
       (is (= 2 (count @captured)))
-      (is (apply = (map :code-cwd @captured))
-          "identical work must publish an identical target"))))
+      (is (apply = @captured) "identical work must publish an identical target")))
+  (testing "a produced tree is published as its reading, never as the fresh directory
+            each run produces it in"
+    (let [captured (atom nil)]
+      (with-redefs [review/claiming (fn [opts _f] (reset! captured (:target opts)) :stopped)
+                    tree/reading    (fn [_ _ _] {:rev "abc" :overlay [] :ahead 3})]
+        (with-out-str
+          (#'review/record-loop-cmd*
+           {:kind "baseline" :pipeline [] :finding-key identity}
+           {:cwd "/wt" :seq 4})))
+      (is (= {:seq 4 :tree {:rev "abc" :overlay []}} @captured)))))
+
+(deftest a-round-given-no-tree-reads-the-one-its-kind-asks-for
+  ;; The whole point of the default: what the pipeline is handed is the reading's
+  ;; directory, the kind decides the reading, and a tree the caller names goes
+  ;; through untouched — re-survey included, which is why it travels separately.
+  (let [asked (atom []) handed (atom [])]
+    (with-redefs [review/claiming    (fn [_ f] (f))
+                  tree/reading       (fn [kind _ _] (swap! asked conj kind) {:rev "abc" :overlay []})
+                  tree/with-reading! (fn [_ reading _ _ f] (f (or (:dir reading) "/produced")))
+                  review/record-loop-body (fn [opts] (swap! handed conj (select-keys opts [:code-cwd :survey-cwd])) :ok)]
+      (with-out-str
+        (#'review/record-loop-cmd* {:kind "design" :pipeline [] :finding-key identity} {:cwd "/wt"})
+        (#'review/record-loop-cmd* {:kind "baseline" :pipeline [] :finding-key identity} {:cwd "/wt"})
+        (#'review/record-loop-cmd* {:kind "design" :pipeline [] :finding-key identity}
+                                   {:cwd "/wt" :code-cwd "/named"})))
+    (is (= [:design :baseline] @asked) "a named tree asks for no reading")
+    (is (= [{:code-cwd "/produced" :survey-cwd nil}
+            {:code-cwd "/produced" :survey-cwd nil}
+            {:code-cwd "/named" :survey-cwd "/named"}]
+           @handed))))
 
 ;; ── A verb that runs a stage the ledger did not choose ──────────────────────
 
