@@ -135,6 +135,21 @@
         .pos.pos-you .pos-at { color:#c9a227; }
         .pos.pos-you .pos-nx { color:#a08a4a; }
         .phase-chip { font-size:11px; color:#8a8aa8; border:1px solid #33334a; border-radius:4px; padding:0 5px; margin-left:6px; }
+        .gate-sub span.phase-chip { flex:none; }
+        .plan { margin:10px 0 14px; }
+        .plan h3 { font-size:13px; margin:0 0 8px; color:#c8c8e0; }
+        .plan ol { list-style:none; margin:0; padding:0; border:1px solid #26263e; border-radius:6px; }
+        .plan li { padding:8px 12px; border-top:1px solid #20203a; }
+        .plan li:first-child { border-top:none; }
+        .plan .ph { display:flex; gap:10px; align-items:baseline; }
+        .plan .mk { width:14px; color:#6a6a8a; }
+        .plan li.landed .mk { color:#6fbf73; }
+        .plan li.current .mk { color:#7aa2f7; }
+        .plan li.current .cl { color:#e0e0f0; font-weight:600; }
+        .plan li.ahead .cl { color:#8a8aa8; }
+        .plan .pm { font-size:11px; color:#7a7a98; margin:3px 0 0 24px; }
+        .plan .pm.owed { color:#c9a227; }
+        .plan .pm.pnr { color:#d9776a; }
         .gate-criterion { font-size:12px; color:#c9a227; margin-top:3px; }
         .posn { margin:2px 0 10px; }
         .posn .nx { font-size:13px; color:#9a9ac0; }
@@ -2156,6 +2171,33 @@
   [project ws-id action-id]
   (str "/workstreams/" project "/" ws-id "/gate/" (name action-id)))
 
+(defn- plan-block
+  "A phased workstream's plan, phase by phase: which landed, which is underway, which
+   are ahead, the gate each one's successor waits on, and the evidence a person gave
+   for each gate already passed. Leads with where the plan stands, because the arc
+   below draws only the phase underway — earlier phases are read here, not there.
+
+   The gate owed NOW is marked where it sits: under the landed phase whose exit it is."
+  [{:keys [current of waiting? phases]}]
+  [:div.plan
+   [:h3 (str "Plan — phase " current " of " of
+             (if waiting? " · landed, waiting on its gate" ""))]
+   (into [:ol]
+         (for [{:keys [n claim exit undo state opened-by]} phases]
+           [:li {:class (name state)}
+            [:div.ph [:span.mk (case state :landed "✓" :current "●" "·")]
+             [:span.cl (str n ". " claim)]]
+            (when opened-by
+              [:div.pm (str "opened " (some-> (:at opened-by) (subs 0 10)) " — " (:evidence opened-by))])
+            (when (and exit (< n of))
+              [:div {:class (str "pm" (when (and waiting? (= n current)) " owed"))}
+               (cond (and waiting? (= n current)) "gate owed now: "
+                     (< n current)                  "gate passed: "
+                     :else                          "gate to the next: ")
+               (:criterion exit) " (" (name (:kind exit)) ")"])
+            (when (= :none (:how undo))
+              [:div.pm.pnr (str "point of no return — " (:why undo))])]))])
+
 (defn- pane-action-bar
   "Stage-appropriate gate actions rendered below the reader pane, driven by
    `work/gate-actions` (different stages → different actions; a parked triage adds
@@ -2179,7 +2221,7 @@
    `position` is the workstream's pipeline position — the pane already has it for
    its heading — and is here because one of the buttons is owed by a PERSON
    rather than by a parked agent (work/awaiting-human)."
-  [project ws-id origin stage sessions report position]
+  [project ws-id origin stage sessions report position plan]
   (let [parked? (boolean (some :parked? sessions))
         session (:name (first (filter :parked? sessions)))]
     (action-bar project ws-id
@@ -2193,6 +2235,7 @@
                                     ;; position — a design decision is owed a
                                     ;; person whether or not an agent is parked.
                                     :awaiting      (work/awaiting-human position)
+                                    :gate-criterion (get-in plan [:owed-gate :criterion])
                                     :seq           (:seq report)})
                 session pane-route)))
 
@@ -2276,7 +2319,7 @@
    — see pane-fragment), so transient dev-env states (starting…) self-advance
    without the refresh closing whatever the reader has open."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing]
+  ([{:keys [project ws-id origin stage label links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan]
      :or {on-latest? true}} session-dev-states machine-facts]
    (let [pos  {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds
                :stage open-stage :history? history?}
@@ -2318,6 +2361,7 @@
             ;; The arc leads. The heading above states where the workstream is;
             ;; this states how it got there, and it is the one thing on the page
             ;; that can show the work having been sent back to an earlier stage.
+            (when plan (plan-block plan))
             (when (seq (:stages arc))
               (arc-block pos arc entries report in-stage? (wsv/doing-label doing)))
             (when (seq holds) (holds-block holds))
@@ -2328,7 +2372,7 @@
             ;; which is the one thing they are not.
             (when (and on-latest? error-msg)
               [:div.action-err "⚠ " error-msg])
-            (when on-latest? (pane-action-bar project ws-id origin stage sessions action-report position))
+            (when on-latest? (pane-action-bar project ws-id origin stage sessions action-report position plan))
             (when (= :done stage) (file-findings-form project ws-id))
 
             ;; Collapsed by default. The arc above is the reading a driver

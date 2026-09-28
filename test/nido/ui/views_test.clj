@@ -1592,3 +1592,34 @@
                                                  :opens "reads move" :evidence "zero mismatches for 7 days"})))]
     (is (str/includes? html "reads move"))
     (is (str/includes? html "zero mismatches for 7 days"))))
+
+(def ^:private a-plan
+  {:current 1 :of 3 :waiting? true
+   :owed-gate {:kind :soak :criterion "a quiet week"}
+   :phases [{:n 1 :claim "both write" :state :landed :exit {:kind :soak :criterion "a quiet week"}}
+            {:n 2 :claim "reads move" :state :ahead :exit {:kind :soak :criterion "a billing cycle"}}
+            {:n 3 :claim "old dropped" :state :ahead :exit {:kind :completion :criterion "done"}
+             :undo {:how :none :why "the data is gone"}}]})
+
+(deftest the-pane-shows-the-plan-phase-by-phase
+  (let [html (str (h/html (#'views/plan-block a-plan)))]
+    (is (str/includes? html "Plan — phase 1 of 3 · landed, waiting on its gate"))
+    (is (str/includes? html "gate owed now: a quiet week"))
+    (is (str/includes? html "gate to the next: a billing cycle"))
+    (is (str/includes? html "point of no return — the data is gone"))
+    (is (not (str/includes? html "gate to the next: done")) "the last phase has no gate after it"))
+  (let [opened (-> a-plan
+                   (assoc :current 2 :waiting? false :owed-gate nil)
+                   (assoc-in [:phases 1] {:n 2 :claim "reads move" :state :current
+                                          :exit {:kind :soak :criterion "a billing cycle"}
+                                          :opened-by {:evidence "zero mismatches" :at "2026-09-28T10:00:00Z"}}))
+        html   (str (h/html (#'views/plan-block opened)))]
+    (is (str/includes? html "gate passed: a quiet week"))
+    (is (str/includes? html "opened 2026-09-28 — zero mismatches"))))
+
+(deftest the-panes-gate-form-carries-the-owed-criterion
+  (let [html (str (h/html (#'views/pane-action-bar "nido" "ws-1" :notion :awaiting-gate [] nil
+                                                   {:at :awaiting-gate :next {:stage :assert-gate :mode :human}}
+                                                   a-plan)))]
+    (is (str/includes? html "a quiet week"))
+    (is (str/includes? html "/workstreams/nido/ws-1/gate/assert-gate"))))

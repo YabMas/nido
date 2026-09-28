@@ -3352,3 +3352,36 @@
       (let [id (landed-between-phases!)]
         (is (= {:decision :between-phases} (work/restore! :brian id)))
         (is (= :between-phases (get-in (workstream/read-ws :brian id) [:closed :outcome])))))))
+
+(deftest the-detail-carries-the-plan-phase-by-phase
+  (with-tmp
+    (fn [_]
+      (let [id   (landed-between-phases!)
+            plan (:plan (work/workstream :brian id))]
+        (is (= {:current 1 :of 2 :waiting? true} (select-keys plan [:current :of :waiting?])))
+        (is (= "a quiet week" (get-in plan [:owed-gate :criterion])))
+        (is (= [:landed :ahead] (mapv :state (:phases plan))))
+        (work/resolve-gate! :brian id :assert-gate "error rate flat for a week")
+        (let [plan (:plan (work/workstream :brian id))]
+          (is (= [:landed :current] (mapv :state (:phases plan))))
+          (is (nil? (:owed-gate plan)))
+          (is (= "error rate flat for a week" (get-in plan [:phases 1 :opened-by :evidence]))))))))
+
+(deftest the-arc-draws-the-phase-underway
+  (with-tmp
+    (fn [_]
+      (let [id (landed-between-phases!)]
+        (workstream/append-entry! :brian id {:kind :implementation-completed}
+                                  (pr-str {:format :implementation-completed :summary "p1" :artifacts []
+                                           :design {:seq 4}}))
+        (work/resolve-gate! :brian id :assert-gate "a quiet week, observed")
+        (let [arc  (:arc (work/workstream :brian id))
+              impl (first (filter #(= :implementation (:stage %)) (:stages arc)))]
+          (is (zero? (:entries impl)) "phase 1's implementation is not phase 2's")
+          (is (empty? (:excursions arc)) "nor are its landing or the gate"))))))
+
+(deftest an-unphased-detail-has-no-plan
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :in-progress :external-refs []})]
+        (is (nil? (:plan (work/workstream :brian (:id w)))))))))

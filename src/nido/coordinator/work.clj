@@ -28,6 +28,7 @@
    [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.lane.spawn :as spawn]
+   [nido.coordinator.record.phase :as phase]
    [nido.coordinator.record.proposal :as proposal]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
@@ -1075,6 +1076,60 @@
                              :blocked (:blocked st)
                              :record design}))))
 
+(defn- plan
+  "Where the workstream stands in the plan that governs it (`cws/plan-design`), phase by
+   phase, or nil for an unphased one: {:current n :of m :waiting? :owed-gate <exit> :phases
+   [{:n :claim :habitable :exit :undo :state :opened-by} …]}.
+
+   `:state` is :landed below the current phase — and the current one once it has landed —
+   :current while its work is underway, :ahead above it. `:opened-by` is the gate that opened
+   a phase, read oldest first with each gate opening the first phase after the one already
+   reached whose claim it names — `record.phase/progress`'s reading, so the phase a gate is
+   shown against is the phase it opened. `:owed-gate` is the landed phase's exit while the
+   workstream waits between phases, the gate a person asserts."
+  [project ws-id w]
+  (when-let [d (cws/plan-design project ws-id)]
+    (when-let [p (phase/progress d (:entries w))]
+      (let [phases   (vec (:phases d))
+            opened   (loop [i 0 [g & more] (cws/entries-of project ws-id :phase-gate) acc {}]
+                       (if-not g
+                         acc
+                         (if-let [k (some #(when (= (:opens g) (:claim (phases %))) %)
+                                          (range (inc i) (count phases)))]
+                           (recur k more (assoc acc k g))
+                           (recur i more acc))))
+            waiting? (= :between-phases (get-in w [:closed :outcome]))
+            cur      (:current p)]
+        {:current   cur
+         :of        (:of p)
+         :waiting?  waiting?
+         :owed-gate (when waiting? (:exit p))
+         :phases    (vec (map-indexed
+                          (fn [i ph]
+                            (let [n (inc i)]
+                              (cond-> (assoc (select-keys ph [:claim :habitable :exit :undo]) :n n
+                                             :state (cond (< n cur)       :landed
+                                                          (> n cur)       :ahead
+                                                          (:landed? p)    :landed
+                                                          :else           :current))
+                                (opened i) (assoc :opened-by (select-keys (opened i) [:evidence :at :seq])))))
+                          phases))}))))
+
+(def ^:private phase-trail-kinds
+  "What a phase's own landing leaves behind — the kinds a gate puts behind the next phase."
+  #{:implementation-completed :review :pr-opened :ship-submitted :merged})
+
+(defn- current-phase-entries
+  "`entries` as the arc reads them: a :phase-gate drops, and so does the implementation
+   trail written before the newest one — that was the landed phase's work, and the arc
+   draws the phase underway. Every entry stays in the index; the Plan section is where
+   earlier phases and their gates are read."
+  [entries]
+  (let [g (->> entries (filter #(= :phase-gate (:kind %))) (map :seq) (reduce max 0))]
+    (remove #(or (= :phase-gate (:kind %))
+                 (and (< (:seq %) g) (phase-trail-kinds (:kind %))))
+            entries)))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? :any]] :map]}
   workstream
   "Full detail for one workstream: origin, spine stage, label, a light ledger
@@ -1146,8 +1201,11 @@
         ;; The stage the work is in comes off the position read above, so the
         ;; heading and the arc under it are one reading and cannot disagree.
         ;; What is running rides beside it, on the stage it is running in.
-        :arc          (pipeline/arc entries {:at     (:stage position)
-                                             :active (pipeline/stage-active position (:doing row))})
+        :arc          (pipeline/arc (current-phase-entries entries)
+                                    {:at     (:stage position)
+                                     :active (pipeline/stage-active position (:doing row))})
+        ;; A phased workstream's plan, phase by phase — nil for an unphased one.
+        :plan         (plan project ws-id w)
         :holds        (holds project ws-id)
         :entries      index
         :selected-seq sel
