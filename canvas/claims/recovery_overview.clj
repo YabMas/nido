@@ -30,7 +30,7 @@
   {:about [source-start-failures] :evidence "round"})
 
 (Claim operations-carries-recovery-in-one-poll
-  "The Operations page and its five-second poll render the recovery section from work/session-recovery beside the proposals, the poll as one SSE event patching #recovery and #operations; when recovery cannot be read the section says so and the proposals are still shown."
+  "The recovery page (/operations/recovery) and its five-second poll render the recovery section from work/session-recovery, the poll as one SSE event patching #recovery; when recovery cannot be read the section says so, and the Operations home's recovery card says so too rather than counting zero."
   {:about [ui-server ui-views] :evidence "round"})
 
 (Claim feed-page-kept-across-polls

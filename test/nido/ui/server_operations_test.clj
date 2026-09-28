@@ -29,11 +29,14 @@
           (f id)))
       (finally (fs/delete-tree tmp)))))
 
+(defn- page [uri]
+  (str (:body (server/handle-request {:request-method :get :uri uri :query-string "scope=nido"}))))
+
 (deftest the-surface-shows-a-proposal-with-what-earned-it
   (with-one-proposal
     (fn [_id]
       (let [body (str (:body (server/handle-request
-                              {:request-method :get :uri "/_fragment/operations"
+                              {:request-method :get :uri "/_fragment/operations/improvements"
                                :query-string "scope=nido"})))]
         (is (str/includes? body "1 awaiting you"))
         (is (str/includes? body "the clean path forgets") "the observation")
@@ -77,6 +80,34 @@
         (is (str/includes? body "/operations") "the rail links to it")
         (is (str/includes? body "_fragment/operations") "and the page polls its own fragment")))))
 
+(deftest the-home-is-a-card-per-concern-each-opening-its-page
+  (with-one-proposal
+    (fn [_id]
+      (with-redefs [work/improvement-holds (constantly [])]
+        (let [home (page "/operations")
+              poll (page "/_fragment/operations")]
+          (doseq [body [home poll]]
+            (is (str/includes? body "id=\"ops-home\"") "patched under its own id")
+            (is (str/includes? body "href=\"/operations/improvements\""))
+            (is (str/includes? body "href=\"/operations/recovery\""))
+            (is (str/includes? body "1 awaiting you")
+                "the backlog card counts what its page shows as awaiting you"))
+          (is (not (str/includes? home "the clean path forgets"))
+              "the home carries counts, not the proposals themselves"))))))
+
+(deftest each-concern-has-its-own-page
+  (with-one-proposal
+    (fn [_id]
+      (with-redefs [work/improvement-holds (constantly [])]
+        (let [improvements (page "/operations/improvements")
+              recovery     (page "/operations/recovery")]
+          (is (str/includes? improvements "the clean path forgets"))
+          (is (str/includes? improvements "_fragment/operations/improvements"))
+          (is (not (str/includes? improvements "id=\"recovery\"")))
+          (is (str/includes? recovery "id=\"recovery\""))
+          (is (str/includes? recovery "_fragment/operations/recovery"))
+          (is (not (str/includes? recovery "the clean path forgets"))))))))
+
 (deftest an-approval-nobody-carried-out-says-so
   ;; The bug the whole band exists for: three proposals were approved on this
   ;; surface and nothing in nido acts on an approval, so they read as finished.
@@ -86,7 +117,7 @@
                               :uri (str "/operations/nido/" id "/1/0")
                               :query-string "entry=1&verdict=approved&scope=nido"})
       (let [body (str (:body (server/handle-request
-                              {:request-method :get :uri "/_fragment/operations"
+                              {:request-method :get :uri "/_fragment/operations/improvements"
                                :query-string "scope=nido"})))]
         (is (str/includes? body "not yet implemented")
             "an approval carries the state it is actually in")
@@ -106,7 +137,7 @@
       (work/record-landing! :nido id {:analysis-seq 1 :observation 0 :rev "qlosnwus"
                                       :note "the second half is spun out"})
       (let [body (str (:body (server/handle-request
-                              {:request-method :get :uri "/_fragment/operations"
+                              {:request-method :get :uri "/_fragment/operations/improvements"
                                :query-string "scope=nido"})))]
         (is (str/includes? body "landed · qlosnwus")
             "the row names what carries it, so a reader can go and look")
@@ -122,7 +153,7 @@
       (work/decide-proposal! :nido id {:analysis-seq 1 :observation 0 :verdict :declined
                                        :at-seq 1 :note "the seam it names is deliberate"})
       (let [body (str (:body (server/handle-request
-                              {:request-method :get :uri "/_fragment/operations"
+                              {:request-method :get :uri "/_fragment/operations/improvements"
                                :query-string "scope=nido"})))]
         (is (str/includes? body "the seam it names is deliberate")
             "a decline without its reason is indistinguishable from an oversight,
@@ -131,7 +162,7 @@
 ;; ── the veto has to be reachable ────────────────────────────────────────────
 
 (defn- board [] (str (:body (server/handle-request
-                             {:request-method :get :uri "/_fragment/operations"
+                             {:request-method :get :uri "/_fragment/operations/improvements"
                               :query-string "scope=nido"}))))
 
 (deftest an-approved-proposal-can-still-be-declined
@@ -221,14 +252,11 @@
    :title "improve: stop re-reading a layer" :state :stuck
    :started-at "2026-09-11T09:07:51Z" :ended-at "2026-09-11T09:47:21Z"})
 
-(defn- page [uri]
-  (str (:body (server/handle-request {:request-method :get :uri uri :query-string "scope=nido"}))))
-
 (deftest a-stuck-sweep-is-said-on-the-page
   (with-one-proposal
     (fn [_id]
       (with-redefs [work/improvement-holds (constantly [stuck])]
-        (doseq [body [(board) (page "/operations")]]
+        (doseq [body [(board) (page "/operations/improvements")]]
           (is (str/includes? body "id=\"sweep\"") "patched under its own id, on the page and the poll")
           (is (str/includes? body "sweep stuck"))
           (is (str/includes? body "ws-20260911-b365db") "naming what holds it")

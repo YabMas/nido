@@ -368,6 +368,19 @@
            beside a proposal, so its 38% column would leave the evidence — the
            part you actually have to read — wrapped against two-thirds empty. */
         .ops-col { max-width:900px; padding-top:4px; }
+        /* The Operations home: a card per concern. The number is the card —
+           coloured only when it asks something of someone. */
+        .ops-cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr));
+                     gap:12px; margin-top:12px; }
+        .ops-card { display:block; background:#16213e; border:1px solid #2a2a4a;
+                    border-radius:6px; padding:14px 16px; color:#e0e0e0; }
+        .ops-card:hover { border-color:#3a5a7a; text-decoration:none; }
+        .ops-card-title { font-size:12px; color:#9a9ac0; text-transform:uppercase;
+                          letter-spacing:.06em; }
+        .ops-card-num { font-size:18px; margin:6px 0 4px; color:#cfd8e3; }
+        .ops-card-num.ops-you { color:#f87171; }
+        .ops-card-num.ops-busy { color:#7dd3fc; }
+        .ops-crumb { font-size:12px; color:#777; margin-bottom:10px; }
         /* Session recovery — the state chip is the first thing read, so each
            state has its own colour: red asks for a person, blue is nido working,
            amber is nido waiting, green and grey are finished. */
@@ -2564,9 +2577,11 @@
     (when ws-id [:a {:href (str "/workstreams?sel=nido:" ws-id)} ws-id])]])
 
 (defn- feed-href
-  "The Operations page at feed position `pos`; the newest page when nil."
+  "The recovery page at feed position `pos`; the newest page when nil."
   [pos]
-  (if pos (str "/operations?feed=" (java.net.URLEncoder/encode (str pos) "UTF-8")) "/operations"))
+  (if pos
+    (str "/operations/recovery?feed=" (java.net.URLEncoder/encode (str pos) "UTF-8"))
+    "/operations/recovery"))
 
 (defn- activity-line
   [{:keys [at kind session message verdict text outcomes state reason outcome commit url count]}]
@@ -2628,8 +2643,7 @@
               [:div.rec-feed (for [e activity] (activity-line e))]
               [:div.prop-meta {:style "margin-top:8px"}
                (when (:from feed) [:a {:href (feed-href nil)} "newest"])
-               (when (:next feed) [:a {:href (feed-href (:next feed))} "older →"])]]))))
-       [:h3.rec-title "Improvement backlog"]]))))
+               (when (:next feed) [:a {:href (feed-href (:next feed))} "older →"])]]))))]))))
 
 (defn- hold-row
   [{:keys [project ws-id title state started-at ended-at]}]
@@ -2841,41 +2855,116 @@
                   [:summary (str (count settled) " settled")]
                   (for [p settled] (proposal-card p))])))]))))
 
-(defn ^{:malli/schema [:=> [:cat :map :any [:maybe :map] [:maybe [:vector :map]]] :any]}
-  operations-page
-  "Every proposal nido's review-loop analyses have made, and what was decided.
+(defn- ops-card
+  "One concern on the Operations home: its name, the one number that says
+   whether it needs a person, and the line under it. `tone` colours the number —
+   :you when something waits on a reader, :busy when nido is working, nil when
+   the concern asks nothing."
+  [{:keys [href title headline tone lines]}]
+  [:a.ops-card {:href href}
+   [:div.ops-card-title title]
+   [:div {:class (str "ops-card-num" (when tone (str " ops-" (name tone))))} headline]
+   (for [l lines :when l] [:div.meta l])])
 
-   Its unit is the proposal rather than the workstream, which is what makes it a
-   destination of its own rather than a tab on the board: these records are not
-   a stage of any arc, and they are read ACROSS workstreams — the same defect
-   proposed by four runs is four rows here and four unrelated workstreams
-   there.
+(defn ^{:malli/schema [:=> [:cat :any [:maybe :map] [:maybe [:vector :map]]] :any]}
+  operations-home-cards
+  "The card for each operational concern, read from the same values their own
+   pages render — so a card and the page behind it cannot disagree about a count.
+   A value that could not be read (nil) is said on its card rather than shown as
+   zero, since zero is the reading that nothing needs anyone."
+  [proposals recovery holds]
+  (let [{:keys [open waiting]} (group-by proposal-band proposals)
+        stuck (count (filter #(#{:stuck :waiting-on-you} (:state %)) holds))
+        {:keys [needs-you recovering waiting-rec]}
+        (let [c (:counts recovery)]
+          {:needs-you (:needs-you c) :recovering (:recovering c) :waiting-rec (:waiting c)})]
+    [(ops-card
+      {:href     "/operations/improvements"
+       :title    "Improvement backlog"
+       :headline (str (count open) " awaiting you")
+       :tone     (when (seq open) :you)
+       :lines    [(when (seq waiting)
+                    (str (count waiting) " approved, not yet implemented"))
+                  (cond (nil? holds)  "sweep state could not be read"
+                        (pos? stuck)  (str "sweep held: " stuck " need" (when (= 1 stuck) "s") " you")
+                        :else         nil)
+                  (str (count proposals) " proposals in all")]})
+     (ops-card
+      {:href     "/operations/recovery"
+       :title    "Session recovery"
+       :headline (if recovery (str needs-you " need you") "could not be read")
+       :tone     (cond (nil? recovery)     :you
+                       (pos? needs-you)    :you
+                       (pos? recovering)   :busy)
+       :lines    (when recovery
+                   [(str recovering " recovering · " waiting-rec " waiting")
+                    (str (:restored (:counts recovery)) " restored in the last "
+                         recoveries-view/window-days " days")])})]))
 
-   Unscoped, and the poll is too: operating nido is a cross-project concern, and
-   the project a proposal is filed under is always nido whatever it reviewed.
+(defn ^{:malli/schema [:=> [:cat [:vector :any]] :string]}
+  operations-home-fragment
+  "The home's card grid, patched under #ops-home by the home's poll."
+  [cards]
+  (str (h/html [:div {:id "ops-home" :class "ops-cards"} (seq cards)])))
 
-   One column rather than the board's queue+pane split — there is no pane, since
-   a proposal carries its own evidence and nothing opens beside it.
+(defn ^{:malli/schema [:=> [:cat :map [:vector :any]] :any]}
+  operations-home-page
+  "Operations' home: one card per concern nido operates on itself — each saying
+   whether it needs a person — and each opening its own page.
 
-   Session recovery sits above the backlog: it is what is happening now, and the
-   part of it that needs a person must not scroll away under ninety proposals.
-   What holds the improvement sweep sits between them, for the same reason."
-  [ctx proposals recovery holds]
+   A home rather than one long page, because the concerns share nothing but the
+   fact that none of them is a workstream: recovery is what is happening now, the
+   backlog is a queue of decisions, and a third concern stacked under both is a
+   section nobody scrolls to."
+  [ctx cards]
   (shell
    (assoc ctx :active :operations :title "Operations")
-   ;; The poll asks for the feed page the reader is on, so reading an older page
-   ;; does not snap back to the newest every five seconds.
-   [:div.ops-col {:data-on-interval__duration.5s
-                  (str "@get('/_fragment/operations"
-                       (when-let [pos (-> recovery :feed :from)]
-                         (str "?feed=" (java.net.URLEncoder/encode (str pos) "UTF-8")))
-                       "')")}
+   [:div.ops-col {:data-on-interval__duration.5s "@get('/_fragment/operations')"}
+    [:h1 "Operations"]
+    (h/raw (operations-home-fragment cards))]))
+
+(defn- ops-crumb [title]
+  [:div.ops-crumb [:a {:href "/operations"} "Operations"] " / " title])
+
+(defn ^{:malli/schema [:=> [:cat :map :any [:maybe [:vector :map]]] :any]}
+  improvements-page
+  "Every proposal nido's review-loop analyses have made, and what was decided.
+
+   Its unit is the proposal rather than the workstream: these records are not a
+   stage of any arc, and they are read ACROSS workstreams — the same defect
+   proposed by four runs is four rows here and four unrelated workstreams there.
+   Unscoped, and the poll is too: the project a proposal is filed under is always
+   nido whatever it reviewed.
+
+   What holds the improvement sweep sits above the backlog, because the backlog
+   is what a hold stops."
+  [ctx proposals holds]
+  (shell
+   (assoc ctx :active :operations :title "Improvement backlog")
+   [:div.ops-col {:data-on-interval__duration.5s "@get('/_fragment/operations/improvements')"}
+    (ops-crumb "Improvement backlog")
     ;; Rendered inline, not left as a placeholder for the first poll to fill:
     ;; the poll is a refresh, and a surface that is blank until it fires reads
     ;; as a surface with nothing on it.
-    (h/raw (recovery-fragment recovery))
     (h/raw (sweep-fragment holds))
     (h/raw (operations-fragment proposals))]))
+
+(defn ^{:malli/schema [:=> [:cat :map [:maybe :map]] :any]}
+  recovery-page
+  "Session recovery on its own page: what is being recovered, what needs a
+   person, and the activity trail."
+  [ctx recovery]
+  (shell
+   (assoc ctx :active :operations :title "Session recovery")
+   ;; The poll asks for the feed page the reader is on, so reading an older page
+   ;; does not snap back to the newest every five seconds.
+   [:div.ops-col {:data-on-interval__duration.5s
+                  (str "@get('/_fragment/operations/recovery"
+                       (when-let [pos (-> recovery :feed :from)]
+                         (str "?feed=" (java.net.URLEncoder/encode (str pos) "UTF-8")))
+                       "')")}
+    (ops-crumb "Session recovery")
+    (h/raw (recovery-fragment recovery))]))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :any]}
   proposal-result-fragment

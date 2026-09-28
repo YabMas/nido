@@ -83,20 +83,33 @@
   (Operation operations-fragment "The proposal list."
     {:signature [:=> [:catn [:proposals :any]] :any]})
   (Operation recovery-fragment
-    "Session recovery on the Operations page: counts, one row per live or recently settled
-     cause, and the activity feed — or a notice when recovery could not be read."
+    "Session recovery: counts, one row per live or recently settled cause, and the activity
+     feed — or a notice when recovery could not be read."
     {:signature [:=> [:catn [:overview [:maybe :map]]] :string]})
   (Operation sweep-fragment
-    "What holds the improvement sweep, under the backlog it stops: a hold nothing is working on
+    "What holds the improvement sweep, above the backlog it stops: a hold nothing is working on
      as a notice, one parked at a gate as a pointer to it, one being worked on as a line — or a
      notice when the holds could not be read."
     {:signature [:=> [:catn [:holds [:maybe [:vector :map]]]] :string]})
-  (Operation operations-page
-    "Session recovery, then what holds the improvement sweep, then every proposal the review
-     analyses have made."
-    {:signature [:=> [:catn [:ctx :map] [:proposals :any] [:recovery [:maybe :map]]
-                  [:holds [:maybe [:vector :map]]]] :any]
-     :delegates [shell recovery-fragment sweep-fragment operations-fragment]})
+  (Operation operations-home-cards
+    "One card per operational concern — its name, whether it needs a person, a line or two —
+     read from the same values its own page renders, so a card and its page cannot disagree.
+     A concern that could not be read says so on its card rather than reading as zero."
+    {:signature [:=> [:catn [:proposals :any] [:recovery [:maybe :map]]
+                  [:holds [:maybe [:vector :map]]]] :any]})
+  (Operation operations-home-fragment "The home's card grid."
+    {:signature [:=> [:catn [:cards [:vector :any]]] :string]})
+  (Operation operations-home-page
+    "Operations' home: a card per concern nido operates on itself, each opening its own page."
+    {:signature [:=> [:catn [:ctx :map] [:cards [:vector :any]]] :any]
+     :delegates [shell operations-home-fragment]})
+  (Operation improvements-page
+    "What holds the improvement sweep, then every proposal the review analyses have made."
+    {:signature [:=> [:catn [:ctx :map] [:proposals :any] [:holds [:maybe [:vector :map]]]] :any]
+     :delegates [shell sweep-fragment operations-fragment]})
+  (Operation recovery-page "Session recovery on its own page."
+    {:signature [:=> [:catn [:ctx :map] [:recovery [:maybe :map]]] :any]
+     :delegates [shell recovery-fragment]})
   (Operation proposal-result-fragment "What deciding a proposal swaps in."
     {:signature [:=> [:catn [:result :map] [:proposals :any]] :any] :delegates [operations-fragment]})
   (Operation not-found-page "The 404."

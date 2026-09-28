@@ -247,10 +247,18 @@
            (println (str "[nido] reading improvement holds failed: " (ex-message t))))
          nil)))
 
-(defn- operations-fragment-response [feed-from]
-  (sse-response (sse-fragment (str (views/recovery-fragment (session-recovery feed-from))
-                                   (views/sweep-fragment (improvement-holds))
+(defn- operations-home-cards []
+  (views/operations-home-cards (all-proposals) (session-recovery nil) (improvement-holds)))
+
+(defn- operations-home-fragment-response []
+  (sse-response (sse-fragment (views/operations-home-fragment (operations-home-cards)))))
+
+(defn- improvements-fragment-response []
+  (sse-response (sse-fragment (str (views/sweep-fragment (improvement-holds))
                                    (views/operations-fragment (all-proposals))))))
+
+(defn- recovery-fragment-response [feed-from]
+  (sse-response (sse-fragment (views/recovery-fragment (session-recovery feed-from)))))
 
 (defn- ops-fragment-response
   "`scope` filters the badge count to one project's gates (string :project on
@@ -609,17 +617,34 @@
       ["_fragment" "needs"]
       (needs-fragment-response (derive-screen (view-state/parse req)))
 
-      ;; GET /operations — nido's own improvement backlog, one row per proposal
+      ;; GET /operations — the home: one card per operational concern
       ["operations"]
-      (html-response 200 (views/operations-page
+      (html-response 200 (views/operations-home-page
+                          (rail-ctx :operations (derive-screen (view-state/parse req)))
+                          (operations-home-cards)))
+
+      ;; GET /_fragment/operations — SSE card-grid refresh
+      ["_fragment" "operations"]
+      (operations-home-fragment-response)
+
+      ;; GET /operations/improvements — nido's own improvement backlog, one row per proposal
+      ["operations" "improvements"]
+      (html-response 200 (views/improvements-page
                           (rail-ctx :operations (derive-screen (view-state/parse req)))
                           (all-proposals)
-                          (session-recovery (feed-position req))
                           (improvement-holds)))
 
-      ;; GET /_fragment/operations — SSE proposal-list refresh
-      ["_fragment" "operations"]
-      (operations-fragment-response (feed-position req))
+      ["_fragment" "operations" "improvements"]
+      (improvements-fragment-response)
+
+      ;; GET /operations/recovery — session recovery and its activity feed
+      ["operations" "recovery"]
+      (html-response 200 (views/recovery-page
+                          (rail-ctx :operations (derive-screen (view-state/parse req)))
+                          (session-recovery (feed-position req))))
+
+      ["_fragment" "operations" "recovery"]
+      (recovery-fragment-response (feed-position req))
 
       ;; GET /_fragment/ops — SSE ops-panel refresh (patches #ops-panel + rail).
       ;; Scope rides ?scope=, parsed the same way every other view-state is —

@@ -1,5 +1,5 @@
 (ns nido.ui.recovery-views-test
-  "The Operations page's session-recovery section, rendered from an overview."
+  "The session-recovery page, rendered from an overview."
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
@@ -35,19 +35,18 @@
     (is (str/includes? html "project-defect"))
     (is (str/includes? html "https://github.com/o/r/pull/1"))
     (is (str/includes? html "Activity"))
-    (is (str/includes? html "/operations?feed=0001789000000000%7Efailure-kept%7EF0")
+    (is (str/includes? html "/operations/recovery?feed=0001789000000000%7Efailure-kept%7EF0")
         "the older page is a link away")))
 
 (deftest an-older-page-keeps-its-position-across-polls
-  (let [html (str (views/operations-page {:active :operations} []
-                                         (assoc empty-overview :feed {:from "0001789000000000~failure-kept~F9"
-                                                                      :events [] :next nil})
-                                         []))]
-    (is (str/includes? html "_fragment/operations?feed=0001789000000000%7Efailure-kept%7EF9")
+  (let [html (str (views/recovery-page {:active :operations}
+                                       (assoc empty-overview :feed {:from "0001789000000000~failure-kept~F9"
+                                                                    :events [] :next nil})))]
+    (is (str/includes? html "_fragment/operations/recovery?feed=0001789000000000%7Efailure-kept%7EF9")
         "the poll asks for the page being read, not the newest")
-    (is (str/includes? html "href=\"/operations\"") "and there is a way back to the newest")))
+    (is (str/includes? html "href=\"/operations/recovery\"") "and there is a way back to the newest")))
 
-(deftest the-operations-page-carries-recovery-above-the-backlog
-  (let [html (str (views/operations-page {:active :operations} [] empty-overview []))]
-    (is (< (str/index-of html "id=\"recovery\"") (str/index-of html "id=\"operations\""))
-        "what is happening now sits above the backlog")))
+(deftest a-recovery-card-says-when-it-could-not-read
+  (let [cards (str (views/operations-home-fragment (views/operations-home-cards [] nil [])))]
+    (is (str/includes? cards "could not be read")
+        "zero would read as nothing needing anyone")))
