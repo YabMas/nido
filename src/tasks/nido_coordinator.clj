@@ -12,6 +12,7 @@
    [nido.coordinator.daemon.heartbeat :as heartbeat]
    [nido.coordinator.daemon.pid :as pid]
    [nido.coordinator.lane.ship :as ship]
+   [nido.coordinator.work :as work]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.daemon.launchctl :as lc]
    [nido.coordinator.source.state :as sst]
@@ -32,6 +33,43 @@
                        ms       (into [:poll-ms ms])
                        dport    (into [:dashboard-port dport])
                        no-dash? (into [:no-dashboard true])))))
+
+;; The poll's own state says only whether the source is healthy, and a held sweep is
+;; healthy: it polls on time and emits nothing, which reads "OK" exactly like a
+;; discharged day. A hold whose session died is released by nothing but a close,
+;; so on the one surface a person reads, a hold says what holds it and whether
+;; anyone is still working on it.
+(defn- source-health [s]
+  (cond
+    (= :open (:breaker s)) (str "breaker OPEN: "
+                                (name (or (-> s :last-poll-result :error) :unknown)))
+    (:held-by s)           (str "held by " (:held-by s) " at last poll")
+    :else                  "OK"))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe [:vector :map]]] [:vector :string]]}
+  sweep-hold-lines
+  "The status lines for what holds each improvement sweep, from
+   `work/improvement-holds`; empty when nothing does. A `:stuck` hold names the
+   close that releases it, because no session will ever write that close. nil
+   (the holds could not be read) is said, not read as no hold."
+  [holds]
+  (cond
+    (nil? holds) ["Improvement sweep: holds could not be read"]
+    :else
+    (vec (for [{:keys [project ws-id address state started-at ended-at]} holds
+               line (case state
+                      :stuck
+                      [(format "⚠ Improvement sweep (%s) STUCK: %s holds it (claim %s, since %s) and no session is working on it%s"
+                               project ws-id address started-at
+                               (if ended-at (str " — its last session ended " ended-at) ""))
+                       (format "    nothing will release it but a close: bb nido:workstream:close :project %s :ws-id %s :outcome vetoed"
+                               project ws-id)]
+                      :waiting-on-you
+                      [(format "Improvement sweep (%s): held by %s (claim %s) — its session is parked at a gate for you"
+                               project ws-id address)]
+                      [(format "Improvement sweep (%s): held by %s (claim %s) — a session is working on it"
+                               project ws-id address)])]
+           line))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   status [& _args]
@@ -79,11 +117,10 @@
           (println (format "  %s %s  (%s, %s)"
                            (name (or (:type s) :unknown))
                            h
-                           (case (:breaker s)
-                             :open  (str "breaker OPEN: "
-                                         (name (or (-> s :last-poll-result :error) :unknown)))
-                             "OK")
-                           (or (:last-polled-at s) "never polled"))))))))
+                           (source-health s)
+                           (or (:last-polled-at s) "never polled"))))))
+    (run! println (sweep-hold-lines (try (work/improvement-holds)
+                                         (catch Exception _ nil))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   halt

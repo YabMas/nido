@@ -17,6 +17,9 @@
   (Operation status
     "The `status` entry point."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation sweep-hold-lines
+    "The status lines for what holds each improvement sweep; a stuck hold names the close that releases it, and an unreadable reading is said rather than read as no hold."
+    {:signature [:=> [:catn [:holds [:maybe [:vector :map]]]] [:vector :string]]})
   (Operation halt
     "bb nido:halt [:note '...'] — pauses coordinator; existing Runs get SIGTERM."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
