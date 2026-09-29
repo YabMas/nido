@@ -795,31 +795,53 @@
    record descending from one written before the contract. `check-one-root!`
    is what confines several to that last route.
 
-   Bounded by the entry count, so a citation cycle cannot spin here."
-  [w record kind]
-  (letfn [(step [k rec depth]
-            (if (or (nil? rec) (neg? depth))
-              #{}
-              (let [paths (get stands-on k)
-                    targets (keep #(get-in rec %) paths)]
-                (if (and (= :intent k) (empty? targets))
-                  ;; A goal citing nothing IS a root, and :intent is the only
-                  ;; kind that can be one.
-                  #{(:seq rec)}
-                  (into #{}
-                        (mapcat (fn [n]
-                                  (when-let [e (->> (:entries w)
-                                                    (filter #(= n (:seq %))) first)]
-                                    (step (:kind e) (read-entry-at w n) (dec depth)))))
-                        targets)))))]
-    (step kind record (count (:entries w)))))
+   Each ledger entry is walked once per `memo`: a design cites its survey and
+   supersedes the design before it, which does the same, so the citations share
+   most of their paths and an unshared walk re-reads each one once per path
+   reaching it — seconds per call on a workstream with a few dozen rounds. The
+   memo holds entry seq → roots for ONE snapshot `w`; a caller asking several
+   questions of the same `w` passes one memo to all of them. An entry reached
+   again while its own walk is in progress is a citation cycle and reaches
+   nothing through that path."
+  ([w record kind] (roots-of w record kind (volatile! {})))
+  ([w record kind memo]
+   (let [by-seq (into {} (map (juxt :seq identity)) (:entries w))]
+     (letfn [(step [k rec]
+               (if (nil? rec)
+                 #{}
+                 (let [targets (keep #(get-in rec %) (get stands-on k))]
+                   (if (and (= :intent k) (empty? targets))
+                     ;; A goal citing nothing IS a root, and :intent is the only
+                     ;; kind that can be one.
+                     #{(:seq rec)}
+                     (into #{} (mapcat at) targets)))))
+             (at [n]
+               (let [known (get @memo n ::unwalked)]
+                 (cond
+                   (= ::walking known)   #{}
+                   (not= ::unwalked known) known
+                   :else
+                   (if-let [e (by-seq n)]
+                     (do (vswap! memo assoc n ::walking)
+                         (let [r (step (:kind e) (read-entry-at w n))]
+                           (vswap! memo assoc n r)
+                           r))
+                     #{}))))]
+       (step kind record)))))
 
 (defn- roots-at
-  "Every root the entry at `seq-n` reaches — `#{}` when no entry is there."
-  [w seq-n]
-  (if-let [e (->> (:entries w) (filter #(= seq-n (:seq %))) first)]
-    (roots-of w (read-entry-at w seq-n) (:kind e))
-    #{}))
+  "Every root the entry at `seq-n` reaches — `#{}` when no entry is there. `memo`
+   as `roots-of` takes it, shared by a caller asking of several entries of one `w`."
+  ([w seq-n] (roots-at w seq-n (volatile! {})))
+  ([w seq-n memo]
+   (if-let [e (->> (:entries w) (filter #(= seq-n (:seq %))) first)]
+     (let [known (get @memo seq-n)]
+       (if (set? known)
+         known
+         (let [r (roots-of w (read-entry-at w seq-n) (:kind e) memo)]
+           (vswap! memo assoc seq-n r)
+           r)))
+     #{})))
 
 (defn- check-one-root!
   "A record reaches no more goals than one of its citations already does.
@@ -1231,9 +1253,10 @@
         replaced (loop [n (supers goal) acc #{}]
                    (if (or (nil? n) (acc n)) acc (recur (supers n) (conj acc n))))]
     (when (seq replaced)
-      (let [root    (roots-at w goal)
+      (let [memo    (volatile! {})
+            root    (roots-at w goal memo)
             in-unit (fn [kind]
-                      (filterv #(and (= kind (:kind %)) (= root (roots-at w (:seq %))))
+                      (filterv #(and (= kind (:kind %)) (= root (roots-at w (:seq %) memo)))
                                (:entries w)))
             stale?  (fn [kind n] (boolean (some replaced (goals-reached w kind (read-entry-at w n)))))
             bls     (in-unit :baseline)

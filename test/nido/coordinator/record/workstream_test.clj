@@ -692,6 +692,34 @@
         (is (= {:goal 5 :replaces 1 :baseline 2 :baseline-stale? true :design-stale? false} (now 1)))
         (is (= {:goal 6 :replaces 3 :baseline 4 :baseline-stale? true :design-stale? false} (now 3)))))))
 
+(deftest a-long-arc-reads-each-entry-once-per-amendment-reading
+  ;; Every design supersedes the one before it and cites its survey, and every
+  ;; survey supersedes the one before it, so the citations share most of their
+  ;; paths. Walked without a memo, the reading re-read each entry once per path
+  ;; reaching it — 11s on a real 200-entry ledger, paid on every board poll.
+  (with-tmp
+    (fn [_]
+      (let [w     (ws/create! :brian {:stage :in-progress :external-refs []})
+            id    (:id w)
+            add   #(ws/append-entry! :brian id {:kind %1} (pr-str %2))
+            reads (atom 0)
+            real  @#'ws/read-entry-at]
+        (seed-baseline! w)                                                     ; 1, 2
+        (add :design (design-citing 2))                                        ; 3
+        (doseq [i (range 12)]
+          (let [b (+ 4 (* 2 i))]
+            (add :baseline (assoc a-baseline :intent {:seq 1}
+                                  :supersedes {:seq (- b 2) :why "again"}))    ; b
+            (add :design (assoc (design-citing b) :supersedes {:seq (- b 1) :why "again"})))) ; b+1
+        (add :intent (assoc an-intent :goal "wider" :supersedes {:seq 1 :why "moved"}))
+        (let [w (ws/read-ws :brian id)
+              n (count (:entries w))]
+          (with-redefs [ws/read-entry-at (fn [& args] (swap! reads inc) (apply real args))]
+            (is (= 1 (:replaces (ws/goal-amendment w 1)))))
+          (is (<= @reads (* 2 n))
+              (str "each entry is read a bounded number of times, not once per citation path — "
+                   @reads " reads for " n " entries")))))))
+
 (deftest a-goal-amended-before-anything-was-built-on-it-owes-nothing
   (with-tmp
     (fn [_]
