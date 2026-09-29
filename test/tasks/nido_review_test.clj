@@ -563,7 +563,40 @@
                                {:rounds []}
                                "/runs/r/report.json")]
     (is (str/includes? (second lines) "Sep 7th, 2026 9:42 AM"))
-    (is (str/includes? (last lines) "the branch is unjudged"))))
+    (is (str/includes? (last lines) "is unjudged"))
+    (is (= 3 (count lines))
+        "no reviewer answered, so there is no count of targets read to report")))
+
+(deftest an-unavailable-reviewer-says-what-it-read-before-the-wall
+  ;; The remedy line says what was not read; without this a run that lost its
+  ;; reviewer in round two, holding a P1 from round one, reads as a run that
+  ;; judged nothing.
+  (let [lines (t/outcome-lines {:status :reviewer-unavailable
+                                :unavailable {:signal :usage-limit :message "You've hit your usage limit."}}
+                               {:rounds [{:round 1 :phases [{:phase "review"
+                                                             :layers [{:label "a" :status "reviewed"}
+                                                                      {:label "b" :status "error"}]}]}]}
+                               "/runs/r/report.json")]
+    (is (some #(str/includes? % "1 target(s) read before the reviewer became unavailable") lines))))
+
+(deftest a-loop-launched-minutes-after-an-unavailable-reviewer-is-refused
+  ;; Observed replays came 56s and 70s after the run before them met the quota,
+  ;; and each spent a round of refused launches plus an analysis session.
+  (let [met   (java.time.Instant/parse "2026-09-18T11:25:44Z")
+        u     {:signal :usage-limit :message "You've hit your usage limit. try again at Sep 22nd, 2026 1:14 PM."
+                 :retry-at "Sep 22nd, 2026 1:14 PM"}]
+    (#'t/remember-unavailable! :codex u met)
+    (let [refusal (#'t/recently-unavailable :codex (.plusSeconds met 70))]
+      (is (= :reviewer-recently-unavailable (:reason refusal)))
+      (is (some #(str/includes? % "try again at Sep 22nd") (:lines refusal))
+          "the vendor's sentence is printed whole: it names the remedy")
+      (is (= 1 (t/exit-code (:reason refusal)))
+          "a launch that never ran produced no review, and a driver reads the exit"))
+    (is (nil? (#'t/recently-unavailable :claude (.plusSeconds met 70)))
+        "a quota is the reviewer's, so another reviewer launches")
+    (is (nil? (#'t/recently-unavailable :codex (.plusSeconds met 301)))
+        "a fixed window, never :retry-at — a four-day `try again at` cleared in
+         twenty-four minutes, and waiting for it reports a working reviewer absent")))
 
 (deftest an-unfixable-run-reaches-the-ledger-with-what-it-gave-up-on
   ;; The run that most needs a durable record is the one holding a question

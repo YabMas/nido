@@ -54,7 +54,9 @@
          ;; review either, and the caller most likely to read this is a driver
          ;; deciding whether the stage it asked for happened — which for these
          ;; two it did not, and no report was written for it to find out from.
-         :no-design-record :no-workstream} status)
+         :no-design-record :no-workstream
+         ;; `recently-unavailable`'s refusal, on the same ground.
+         :reviewer-recently-unavailable} status)
     1 0))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
@@ -1314,7 +1316,7 @@
    ;; ── nothing was learned about the branch ──
    :nothing-to-review "every diff was empty — nothing was read, so this is not a clean bill; check the base you passed"
    :review-failed "the reviewer broke — this is not a clean bill, and the branch is unjudged"
-   :reviewer-unavailable "the reviewer could not be run at all; nothing was reviewed and the branch is unjudged"
+   :reviewer-unavailable "the reviewer could not be run — every target it did not read is unjudged, and a loop launched in the next five minutes is refused rather than sent to the same wall"
    :warden-indeterminate "the warden returned no decision, so nothing was attributed and no repair was attempted — re-run"
    :workspace-drifted "the working copy moved after the reviewers read it, so no further repair could land on the tree they judged — the repairs that landed first are kept; re-run"
 
@@ -1345,6 +1347,14 @@
       ;; got that from.
       unavailable
       (conj (str "  " (:message unavailable)))
+
+      ;; What the reviewer DID read before it became unavailable, which the
+      ;; remedy line cannot say: a run that lost its reviewer in round two had
+      ;; read and ruled on targets, and read alone it claims the whole branch
+      ;; was left unjudged.
+      (and unavailable (pos? (:reviewed (report/coverage report))))
+      (conj (str "  " (:reviewed (report/coverage report))
+                 " target(s) read before the reviewer became unavailable"))
 
       ;; The ids `jj resolve` takes. The conflict is mid-stack, so
       ;; `jj resolve --list` answers that the branch is clean and these are the
@@ -1499,6 +1509,58 @@
                   (when-let [b (:because entry)] (str " — " b))
                   "\n  this run is recorded in " report-path " alone"))))
 
+(def unavailable-window-ms
+  "How long after a run ended with its reviewer unavailable a new diff loop on the
+   same reviewer is refused.
+
+   Fixed, and short, because it is not the vendor's estimate and must not become
+   one. Codex's `try again at` named a date four days out on a quota that had
+   cleared inside twenty-four minutes, so a gate that waited for it would report
+   a working reviewer as absent for days. What this catches is the replay: the
+   two observed relaunches onto the same refusal came 56s and 70s after the run
+   before them ended, and each spent a round of refused launches plus an
+   analysis session."
+  (* 5 60 1000))
+
+(defn- unavailable-path
+  "Where the last unavailability of `reviewer` is kept. One file per reviewer and
+   none per workstream: a quota is the account's, and the third replay on
+   2026-09-15 was a different project from the run that met it."
+  [reviewer]
+  (str (fs/path (cstate/nido-root) "review" "unavailable" (str (name reviewer) ".edn"))))
+
+(defn- remember-unavailable!
+  "Keep `unavailable` — `codex/unavailability`'s map — as `reviewer`'s latest,
+   stamped with when this run met it. Best-effort: a record that cannot be written
+   costs the next launch its refusal, never this run its ending."
+  [reviewer unavailable at]
+  (try
+    (let [path (unavailable-path reviewer)]
+      (fs/create-dirs (fs/parent path))
+      (spit path (pr-str (assoc unavailable :observed-at (str at)))))
+    (catch Throwable _ nil)))
+
+(defn- recently-unavailable
+  "Why a diff loop judged by `reviewer` may not start at `now` (an Instant), as
+   `{:reason :lines}`, or nil when it may: nil unless a run met the reviewer
+   unavailable less than `unavailable-window-ms` ago. The stored sentence is
+   printed whole, since it names the remedy, but its `:retry-at` decides nothing."
+  [reviewer now]
+  (when-let [{:keys [message observed-at]}
+             (try (edn/read-string (slurp (unavailable-path reviewer)))
+                  (catch Throwable _ nil))]
+    (when-let [seen (try (Instant/parse observed-at) (catch Throwable _ nil))]
+      (let [age (- (.toEpochMilli ^Instant now) (.toEpochMilli seen))]
+        (when (< -1 age unavailable-window-ms)
+          {:reason :reviewer-recently-unavailable
+           :lines  ["review-loop: REFUSED — the reviewer was unavailable moments ago."
+                    ""
+                    (str "  " (name reviewer) " at " observed-at ": " message)
+                    ""
+                    (str "  A run launched now would meet the same refusal on every target."
+                         " Retry after " (.plus seen (java.time.Duration/ofMillis unavailable-window-ms)) ",")
+                    "  or pass :ignore-unavailable? true if you know it has lifted."]})))))
+
 (defn- review-branch!
   "Drive the loop over the branch and record what it found, returning the
    terminal status.
@@ -1512,6 +1574,8 @@
                  {:report-atom report-atom :report-path report-path :clock clock}
                  (fn [emit] (rloop/run-loop (assoc config :emit emit))))
         status (:status final)
+        _      (when (and (= :reviewer-unavailable status) (:unavailable final))
+                 (remember-unavailable! (:reviewer config) (:unavailable final) (clock)))
         entry  (append-review-entry! cwd final @report-atom report-path)
         ;; After the ledger entry, because the entry is the record everything
         ;; downstream reads and this rewrites commits. Before the outcome lines,
@@ -1671,7 +1735,7 @@
                :refused)))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  loop-cmd* [{:keys [cwd base max-iters dry-run? budget fixer-model reviewer]}]
+  loop-cmd* [{:keys [cwd base max-iters dry-run? budget fixer-model reviewer ignore-unavailable?]}]
   (let [;; Through the home-aware resolution WHETHER OR NOT a cwd was named. A
         ;; session home is a place an agent legitimately stands, and passing one
         ;; explicitly used to skip worktree-from-cwd entirely — so the run
@@ -1686,7 +1750,9 @@
     ;; review nobody performed — and `reconcile/orphans` then has to tell that
     ;; from a run that died. Nothing has been spent at this point and nothing is
     ;; left behind.
-    (if-let [refusal (no-yardstick cwd)]
+    (if-let [refusal (or (no-yardstick cwd)
+                         (when-not ignore-unavailable?
+                           (recently-unavailable (reviewer-of cwd reviewer) (Instant/now))))]
       (do (binding [*out* *err*] (run! println (:lines refusal)))
           (:reason refusal))
       (loop-cmd-run! {:cwd cwd :base base :max-iters max-iters

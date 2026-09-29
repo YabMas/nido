@@ -315,7 +315,8 @@
    read, at any count.
 
    `:targets-reviewed` is `report/coverage`'s `:reviewed`, which counts a target
-   only once a reviewer answered for it. Read off the count of ROUNDS instead —
+   only once a reviewer answered for it — a reviewer that failed or was refused
+   answered nothing. Read off the count of ROUNDS instead —
    which is what `reconcile/settle-one!` gated on — this says yes to every run
    that got as far as opening a round, and a round opens on `:phase-started`,
    before a reviewer is launched."
@@ -326,9 +327,9 @@
 (defn ^{:malli/schema [:=> [:cat :map :boolean] :boolean]}
   worth-analysing?
   "Pure. Every terminal outcome is worth a look EXCEPT a dry run, a run that
-   reviewed nothing, an orphan that stopped before it read anything, a record
-   run none of whose rounds launched a judge, and a run that left no report to
-   read.
+   reviewed nothing, an orphan that stopped before it read anything, a run whose
+   reviewer was unavailable before any target was answered, a record run none of
+   whose rounds launched a judge, and a run that left no report to read.
 
    `:nothing-to-review` is the cheapest of all to exclude and the most obviously
    right: no reviewer read anything, so there is no loop behaviour in the run to
@@ -366,8 +367,17 @@
    is the outcome most worth reading, and it still writes a report — the
    frontend persists one as the events arrive, so the failure is in it.
 
+   `:reviewer-unavailable` is judged by `:targets-reviewed`, like an orphan, and
+   not by its status. Refused at the door on every target it is a vendor quota
+   or a credential, not loop behaviour, and it reaches a human already — the
+   `:review` entry carries the vendor's sentence and the lane escalates on the
+   status; six such runs in one week each bought a worktree and an hour of Opus
+   to say so. But the status alone would also drop a run that read three
+   targets, raised a P1 and lost its reviewer in round two, which is as worth
+   reading as any.
+
    Takes the run map the enqueue site already holds rather than the status
-   alone, because two of the four exclusions are now facts about the run. That
+   alone, because three of the exclusions are facts about the run. That
    is also what keeps this the ONLY gate: an orphan reaches the analysis through
    `reconcile/settle-one!` and a finished one through `tasks.nido-review`, and a
    second gate at either call site is a second place for the list above to be
@@ -379,6 +389,8 @@
                 report?
                 (or (not (contains? settled-statuses (name status)))
                     (orphan-worth-reading? run))
+                (or (not= :reviewer-unavailable (keyword status))
+                    (pos? (long (or (:targets-reviewed run) 0))))
                 ;; A record run that launched no judge has nothing a loop did to read. Its count
                 ;; decides, never its status: :premise-unverified ends runs that judged and runs
                 ;; that never started alike.

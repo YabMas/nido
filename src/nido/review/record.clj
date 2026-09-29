@@ -2834,24 +2834,33 @@
             (seq disputes) (assoc :disputed (mapv :claim disputes))))
         history)))
 
-(def ^:private before-a-judge
-  "The outcomes a round reaches without launching a judge: nothing to judge, nothing checkable, no
-   ledger, a subject the declaration does not hold, a declaration fukan could not list, or a premise
-   no round has verified. A status alone does not say which happened — a run can end on
-   :premise-unverified after rounds that judged — so what counts is each round's own outcome."
-  #{"no-workstream" "no-record" "nothing-to-check" "subjects-undeclared" "declaration-unreadable"
-    "premise-unverified"})
+(def ^:private judge-outcomes
+  "The outcomes only a LAUNCHED judge yields: it exited non-zero, wrote no answer, crashed the round,
+   answered unusably, or answered over code that moved under it. Every other outcome is a round
+   stopped before a judge — no ledger, no record, nothing checkable, a subject or a declaration it
+   could not resolve, or a premise `standing` refused.
+
+   Listed this way round because the other list is the open one. Every new reason `standing` grows
+   for refusing a premise is one more outcome reached without a judge, and a deny-list that did not
+   name it counted the refused run as judged and spent an analysis session on it."
+  #{"codex-failed" "no-output" "round-crashed" "unusable-answer" "code-moved"})
+
+(defn- judge-launched?
+  "Whether a judge phase launched a judge: it reached a verdict, it carries no outcome — a design
+   round's judgement is not folded as a verdict — or its outcome is one of `judge-outcomes`."
+  [ph]
+  (let [outcome (some-> (:outcome ph) name)]
+    (boolean (or (:verdict ph) (nil? outcome) (judge-outcomes outcome)))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :int]}
   judges-launched
-  "How many of a record run's rounds launched a judge, read off the run's report: a round whose judge
-   phase reached a verdict, or failed after a judge was launched, counts; one whose outcome is reached
-   before a judge does not. Zero means the run judged nothing, whatever status it ended in."
+  "How many of a record run's rounds launched a judge, read off the run's report — see
+   `judge-launched?`. Zero means the run judged nothing, whatever status it ended in."
   [report]
   (count (for [round (:rounds report)
                ph    (:phases round)
                :when (= "judge" (some-> (:phase ph) name))
-               :when (not (before-a-judge (some-> (:outcome ph) name)))]
+               :when (judge-launched? ph)]
            ph)))
 
 (defn- tally

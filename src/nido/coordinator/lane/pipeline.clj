@@ -891,6 +891,10 @@
    ;; remedy are the whole content of the outcome. The one thing a person can do
    ;; about it is the only thing that changes anything.
    :reviewer-unavailable :escalate
+   ;; The diff loop refusing to launch minutes after one met that wall, and for
+   ;; its reason: the launch would meet it again. It writes nothing, so this is
+   ;; `:no-design-record`'s case too — anything but a park re-fires it.
+   :reviewer-recently-unavailable :escalate
    ;; Somebody moved the working copy under a round in flight. Nothing is wrong
    ;; with the branch; the round just reviewed a state that stopped being
    ;; current, so the answer is to run it again, not to ask a human anything.

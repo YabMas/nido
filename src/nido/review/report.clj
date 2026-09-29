@@ -161,6 +161,11 @@
                        (every? #(= "nothing-to-review" (:status %)) read-rows))]
     (cond
       (some #(= "error" (:status %)) phases)                       "failed"
+      ;; Before "clean", which a judge phase with no findings otherwise falls
+      ;; into: an outcome with no verdict is a round nothing judged — `standing`
+      ;; refused the premise before a judge launched, or the judge left no usable
+      ;; answer — and its findings are empty because nobody looked.
+      (and judge (:outcome judge) (nil? (:verdict judge)))         "unjudged"
       ;; A record round, whose two stages tell the same story the review's three
       ;; do: nothing left to say, something given up, or another round earned.
       (and judge (= "ok" (:status judge)) (empty? (:findings judge))) "clean"
@@ -721,15 +726,18 @@
 
 (def ^:private read-statuses
   "The row statuses that say THIS run answered for the target: a reviewer came
-   back, a reviewer failed, or the diff was empty and there was nothing to come
-   back about.
+   back, or the diff was empty and there was nothing to come back about.
 
-   Every other status is a target this run did not answer for, for one of two
-   reasons. `skipped` is the convergence cache answering instead. `pending`,
+   Every other status is a target this run did not answer for, for one of three
+   reasons. `skipped` is the convergence cache answering instead. `error` is a
+   reviewer that produced nothing — no findings, no answer file — and that
+   includes one the vendor refused at the door before it took a turn: counted
+   as read, a run whose every launch was refused for quota published `6 targets
+   read` and bought a full analysis session on the strength of it. `pending`,
    `running`, `orphaned` and `interrupted` are a run that stopped before it
    could — and reading them as read is what `not= \"skipped\"` did, which held
    only for as long as every row reaching `coverage` had finished."
-  #{"reviewed" "error" "nothing-to-review"})
+  #{"reviewed" "nothing-to-review"})
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport] :map]}
   coverage
@@ -746,7 +754,8 @@
    THE TWO DO NOT PARTITION THE TARGETS, and a run that stopped is where the gap
    opens: a target left `pending`, `running`, `orphaned` or `interrupted` was
    neither read here nor remembered from before, so it is counted in neither
-   number. `:reviewed` is the load-bearing one — two gates spend an agent session
+   number — and so is one whose reviewer ended in `error`, which answered
+   nothing about it. `:reviewed` is the load-bearing one — two gates spend an agent session
    on the strength of it being positive — and inflating it with rows nobody ever
    opened is a claim about work that did not happen.
 

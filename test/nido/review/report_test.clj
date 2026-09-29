@@ -635,6 +635,18 @@
 (deftest a-record-round-that-amended-cleanly-continues
   (is (= "continued" (record-round-status [{:cites ["a"]}] []))))
 
+(deftest a-record-round-no-judge-read-is-not-clean
+  ;; `standing` refused the premise before a judge launched, so the phase is ok
+  ;; with no findings — which is also what a round a judge read and passed looks
+  ;; like. Called clean, it was a bill nobody issued.
+  (let [r (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+              (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+              (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                   :ctx {:record {:outcome :goal-superseded :detail "d"}
+                                         :findings []}} nil)
+              (report/apply-event {:event :run-finalized :status :goal-superseded :ctx {} :at "t3"} nil))]
+    (is (= "unjudged" (:status (first (:rounds r)))))))
+
 (deftest a-record-round-with-no-amendment-yet-is-not-mistaken-for-a-review-round
   (is (= "ended" (record-round-status [{:cites ["a"]}] nil))))
 
@@ -1372,12 +1384,24 @@
              :phases [{:phase "review" :status "running" :layers rows}]}]})
 
 (deftest a-target-counts-as-read-only-once-a-reviewer-answered-for-it
-  ;; The three are the terminal states this run reached ITSELF: an answer, a
-  ;; failed reviewer, and an empty diff there was nothing to answer about.
-  (is (= {:reviewed 3 :skipped 0}
+  ;; The two are the answers this run reached ITSELF: a reviewer came back, and
+  ;; an empty diff there was nothing to answer about.
+  (is (= {:reviewed 2 :skipped 0}
          (report/coverage (reviewed-rows [{:label "a" :status "reviewed"}
-                                          {:label "b" :status "error"}
                                           {:label "c" :status "nothing-to-review"}])))))
+
+(deftest a-target-whose-reviewer-was-refused-is-not-a-target-it-read
+  ;; Six launches refused at the door for quota published `6 targets read`, and
+  ;; the analysis gate spent an hour of Opus on the strength of it.
+  (is (= {:reviewed 0 :skipped 0}
+         (report/coverage (reviewed-rows [{:label "a" :status "error"}
+                                          {:label "stack" :status "error"}])))
+      "an errored reviewer answered nothing about its target")
+  (is (= {:reviewed 1 :skipped 0}
+         (report/coverage
+          {:rounds [{:round 1 :phases [{:phase "review" :layers [{:label "a" :status "reviewed"}]}]}
+                    {:round 2 :phases [{:phase "review" :layers [{:label "a" :status "error"}]}]}]}))
+      "a target read in round one and lost in round two was still read by this run"))
 
 (deftest a-target-a-run-never-got-to-is-not-a-target-it-read
   ;; The miscount two gates spend an agent session on. A run killed inside its

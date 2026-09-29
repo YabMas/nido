@@ -261,6 +261,16 @@
   (is (analysis/worth-analysing? (ended :no-progress) true))
   (is (analysis/worth-analysing? (ended :escalated) true)))
 
+(deftest an-unavailable-reviewer-is-analysed-only-when-something-answered
+  ;; Refused at the door on every target, the run is a vendor quota, not loop
+  ;; behaviour — six of them in a week each bought a worktree and an hour of Opus.
+  (is (not (analysis/worth-analysing? (assoc (ended :reviewer-unavailable) :targets-reviewed 0) true)))
+  (is (not (analysis/worth-analysing? {:status "reviewer-unavailable" :dry-run? false} true))
+      "a run that resolved no target carries no count at all")
+  ;; But one that read targets before its reviewer ran out holds rulings and a
+  ;; P1 at confidence 1.0, and excluding the status would have dropped it.
+  (is (analysis/worth-analysing? (ended :reviewer-unavailable) true)))
+
 (deftest a-run-with-no-terminal-status-is-not-analysed
   (is (not (analysis/worth-analysing? (ended nil) true))))
 

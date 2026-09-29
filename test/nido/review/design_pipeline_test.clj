@@ -1237,6 +1237,10 @@
         "a verdict and a failed judge were both launched")
     (is (= 1 (record/judges-launched {:rounds [(round nil) (round "premise-unverified")]})))
     (is (= 0 (record/judges-launched {:rounds [(round "subjects-undeclared")]})))
+    (is (= 0 (record/judges-launched {:rounds [(round "goal-superseded") (round "premise-retracted")]}))
+        "a premise `standing` refused launched no judge, whatever it is called —
+         a reason nobody listed is counted as not judged, never as judged")
+    (is (= 1 (record/judges-launched {:rounds [{:phases [{:phase "judge" :verdict "sufficient"}]}]})))
     (is (= 0 (record/judges-launched nil)))))
 
 ;; ── Each named stratum read by a judge of its own ────────────────────────────
