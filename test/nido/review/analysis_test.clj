@@ -372,6 +372,15 @@
     (is (str/includes? (:headline p) "bb nido:review:figures :run-id design-loop-1"))
     (is (not (contains? p :fix-attempts)) "a record run dispatches no repairs to count")))
 
+(deftest a-record-run-that-ended-on-a-refused-amendment-says-where-it-is
+  ;; `0 amended` read the same for an amender that did nothing and one whose
+  ;; complete answer the ledger refused — and only the second left work to recover.
+  (let [h (:headline (analysis/payload (assoc a-design-run :status :amend-invalid :amended 0
+                                              :unappended "/r/design-amend-round-2.edn")))]
+    (is (str/includes? h "0 amended · 1 refused by the ledger · "))
+    (is (str/includes? h "Refused amendment, not appended: /r/design-amend-round-2.edn")))
+  (is (not (str/includes? (:headline (analysis/payload a-design-run)) "refused"))))
+
 (deftest a-diff-runs-envelope-keeps-its-fields-and-gains-a-headline
   (let [p (analysis/payload a-run)]
     (is (= (str "Status: converged · 3 rounds · 3 defects settled (5 repairs dispatched) · 1 still open · 0 kept\n"

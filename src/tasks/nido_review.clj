@@ -13,6 +13,7 @@
    See docs/superpowers/specs/2026-06-30-review-tui-frontend-design.md."
   (:require
    [babashka.fs :as fs]
+   [clojure.edn :as edn]
    [clojure.string :as str]
    [nido.coordinator.daemon.pid :as daemon-pid]
    [nido.coordinator.lane.pipeline :as pipeline]
@@ -1763,6 +1764,7 @@
       :rounds           (or (get-in report [:summary :rounds]) 0)
       :judged           (record/judges-launched report)
       :amended          (count (filter :amended? history))
+      :unappended       (:amend-unappended final)
       :weakened         (count (mapcat :retreats history))
       :disputed         (count (mapcat :disputes history))
       :record-seq       (or (:design-seq rec) (:baseline-seq rec))
@@ -1822,6 +1824,8 @@
     ;; needs to act.
     (when-let [detail (or (:amend-error final) (get-in final [:record :detail]))]
       (println (str "  " detail)))
+    (when-let [path (:amend-unappended final)]
+      (println (str "  the refused amendment, not appended: " path)))
     (doseq [k (:unfixable final)]
       (println (str "  ↯ " (finding-name k)
                     " — raised and re-raised, never resolved")))
@@ -2108,3 +2112,23 @@
   [& args]
   (let [[_ opts] (task-args/split-args args)]
     (figures-cmd* opts)))
+
+(defn ^{:malli/schema [:=> [:cat :map] :int]}
+  amend-check*
+  "Dry-run an amender's answer file against the ledger it will be appended to: 0 and `ok` when the
+   append would take its :record, 1 and the refusal when it would not, 2 when there is no record to
+   check. Writes nothing."
+  [{:keys [project ws-id kind file]}]
+  (let [answer (try (edn/read-string (slurp (str file))) (catch Exception _ nil))]
+    (if-let [r (:record answer)]
+      (if-let [refusal (record/amendment-refusal (keyword (name project)) (str ws-id)
+                                                 (keyword (name kind)) r)]
+        (do (println (str "refused — " refusal)) 1)
+        (do (println "ok — the ledger would take this record") 0))
+      (do (println (str "nothing to check — " file " holds no readable {:record ...}")) 2))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  amend-check-cmd
+  [& args]
+  (let [[_ opts] (task-args/split-args args)]
+    (System/exit (amend-check* opts))))

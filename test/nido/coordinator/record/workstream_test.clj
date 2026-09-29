@@ -432,6 +432,25 @@
    (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
    (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str baseline))))
 
+;; ── Checking an entry without appending it ─────────────────────────────────
+
+(deftest checking-an-entry-refuses-what-the-append-would-and-writes-nothing
+  ;; An amender told only that nido validates its file either reverse-engineers the validators
+  ;; or skips validation and loses the amendment at the append. The check is the append's own
+  ;; refusals, so the two cannot disagree about a record.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (seed-baseline! w)
+        (is (thrown-with-msg? Exception #"99"
+                              (ws/check-entry :brian (:id w) {:kind :design}
+                                              (pr-str (design-citing 99))))
+            "a citation of an entry that does not exist is refused exactly as the append refuses it")
+        (is (nil? (ws/check-entry :brian (:id w) {:kind :design} (pr-str (design-citing 2))))
+            "a record the append would take checks clean")
+        (is (= 2 (count (:entries (ws/read-ws :brian (:id w)))))
+            "a check is not an append — neither answer may reach the ledger")))))
+
 (deftest design-may-cite-a-real-baseline-on-the-same-workstream
   (with-tmp
     (fn [_]

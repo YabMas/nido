@@ -154,6 +154,13 @@
   (Operation figures-cmd
     "The `figures-cmd` entry point."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation amend-check*
+    "Dry-run a record amender's answer file against the ledger: 0 when the append would take its
+     record, 1 with the refusal when it would not, 2 when there is no record to check."
+    {:signature [:=> [:catn [:opts :map]] :int]})
+  (Operation amend-check-cmd
+    "The `amend-check` entry point."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation run-context
     "What this run can and cannot reach, as {:has [..] :missing [..]}. A run outside a session
      silently loses the cache and the ledger; this is what says so before it starts."

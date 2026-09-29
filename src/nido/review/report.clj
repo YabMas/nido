@@ -152,6 +152,7 @@
       ;; A record round, whose two stages tell the same story the review's three
       ;; do: nothing left to say, something given up, or another round earned.
       (and judge (= "ok" (:status judge)) (empty? (:findings judge))) "clean"
+      (and amend (:unappended amend))                              "amend-refused"
       (and amend (seq (:retreats amend)))                          "weakened"
       (and judge amend)                                            "continued"
       judge                                                        "ended"
@@ -432,13 +433,18 @@
       ;; anything moved, since a tree moved under an amender and an amender that
       ;; wrote look alike from every other field, and the tree itself will have
       ;; moved on by the time anyone reads this.
+      ;; :unappended is the answer file holding an amendment the ledger refused
+      ;; past every repair, and marks the phase refused rather than ok: that
+      ;; amendment is a complete answer to the round, held nowhere else.
       :amend  (cond-> (assoc ph :retreats (vec (:retreats ctx))
                                 :disputes (vec (:disputes ctx))
                                 :amended? (boolean (:amended? ctx))
                                 :resurveyed (some-> (:resurveyed ctx) name))
                 (:amend-error ctx) (assoc :amend-error (:amend-error ctx))
                 (seq (:amend-refusals ctx)) (assoc :refusals (vec (:amend-refusals ctx)))
-                (:amend-tree ctx) (assoc :tree (:amend-tree ctx)))
+                (:amend-tree ctx) (assoc :tree (:amend-tree ctx))
+                (:amend-unappended ctx) (assoc :status "refused"
+                                               :unappended (:amend-unappended ctx)))
 
       ;; :conflicted is what ended THIS round, where the copy on the target is
       ;; what the stack looked like when the run last asked. A round that stopped

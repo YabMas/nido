@@ -1339,6 +1339,22 @@
   (check-seam-phase-ref! kind payload)
   (check-implementation-approved! w kind payload))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string] :nil]}
+  check-entry
+  "Throw exactly what `append-entry!` would throw for `content` joining this ledger now, and write
+   nothing. Nil when the append would be taken.
+
+   Against the ledger as it is read, under no lock, so it answers for this moment only: an append
+   landing between the check and the write can still change the answer. It is for an author
+   checking a record before handing it over, never a guard in place of the append's own."
+  [project ws-id entry content]
+  (refuse-unguarded-gate! (:kind entry))
+  (let [w (or (read-ws project ws-id)
+              (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+        [_ payload] (report/entry-payload (:kind entry) content)]
+    (check-append! project w (:kind entry) payload)
+    nil))
+
 (defn- append-locked!
   "The append, for a caller already holding the append lock over `w`: number the entry off the
    disk, make every check, write the payload and then its index row. Returns the absolute path.

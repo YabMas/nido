@@ -22,6 +22,7 @@
     "running" (spinner now)
     "ok"      "✓"
     "error"   "✗"
+    "refused" "✗"
     "·"))
 
 (defn- label [ph target]
@@ -502,7 +503,8 @@
                 (:resurveyed ph) (conj (str "re-surveyed " (:resurveyed ph)))
                 (:amended? ph)   (conj "amended")
                 (pos? n)         (conj (str n " weakening" (when (not= 1 n) "s")))
-                (pos? d)         (conj (str d " objection" (when (not= 1 d) "s"))))]
+                (pos? d)         (conj (str d " objection" (when (not= 1 d) "s")))
+                (:unappended ph) (conj (str "refused by the ledger, not appended: " (:unappended ph))))]
     (if (seq parts) (str/join " · " parts) "nothing to amend")))
 
 (defn- record-phase-line

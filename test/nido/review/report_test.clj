@@ -614,6 +614,24 @@
 (deftest a-record-round-that-gave-something-up-says-so
   (is (= "weakened" (record-round-status [{:cites ["a"]}] [{:what :health-dropped :detail "d"}]))))
 
+(deftest a-record-round-whose-amendment-the-ledger-refused-says-so
+  ;; It read `continued` with an amend phase `ok`, so a reader saw the checks
+  ;; still broken and nothing pointing at the complete answer to them.
+  (let [r  (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+               (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+               (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                    :ctx {:record {:verdict :falsified} :findings [{:cites ["a"]}]}} nil)
+               (report/apply-event {:event :phase-started :iter 1 :phase :amend :at "t3"} nil)
+               (report/apply-event {:event :phase-finished :iter 1 :phase :amend :at "t4"
+                                    :ctx {:retreats [] :amend-error "no"
+                                          :amend-unappended "/run/amend-round-1.edn"}} nil)
+               (report/apply-event {:event :run-finalized :status :amend-invalid :ctx {} :at "t5"} nil))
+        rd (first (:rounds r))
+        ph (last (:phases rd))]
+    (is (= "amend-refused" (:status rd)))
+    (is (= "refused" (:status ph)))
+    (is (= "/run/amend-round-1.edn" (:unappended ph)))))
+
 (deftest a-record-round-that-amended-cleanly-continues
   (is (= "continued" (record-round-status [{:cites ["a"]}] []))))
 

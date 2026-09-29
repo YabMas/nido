@@ -245,8 +245,8 @@
    its rounds judged, amended, gave something up, or were argued with — and, for a design run, which
    checks were still broken when it ended; the figures per check are the ledger's, read by
    `bb nido:review:figures`, never carried here."
-  [{:keys [loop run-id report-path status rounds judged amended weakened disputed record-seq
-           still-broken reviewed-project reviewed-session reviewed-ws-id] :as run}]
+  [{:keys [loop run-id report-path status rounds judged amended unappended weakened disputed
+           record-seq still-broken reviewed-project reviewed-session reviewed-ws-id] :as run}]
   (let [kind   (name loop)
         broken (seq (map name still-broken))]
     (cond-> {:adapter     :review-run
@@ -263,7 +263,9 @@
              :rounds      (or rounds 0)
              :headline    (str "Status: " (name (or status :unknown)) " · " (or rounds 0) " rounds, "
                                (or judged 0) " judged · " (or amended 0) " amended · "
+                               (when unappended "1 refused by the ledger · ")
                                (or weakened 0) " weakenings · " (or disputed 0) " disputed\n"
+                               (when unappended (str "Refused amendment, not appended: " unappended "\n"))
                                "Record: the " kind (when record-seq (str " at entry " record-seq))
                                (when broken (str " · broken at the end: " (str/join ", " broken)))
                                " · figures: bb nido:review:figures :run-id " run-id "\n"

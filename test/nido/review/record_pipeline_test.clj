@@ -9,6 +9,7 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
+   [malli.core :as m]
    [nido.platform.core :as core]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.record.state :as cstate]
@@ -1271,6 +1272,34 @@
                                     :writes (fn [p] (spit p (pr-str {:record corrected})))}
                                    (ctx :findings [a-finding])))]
     (is (= 3 (get-in (read-string appended) [:supersedes :seq])))))
+
+(deftest a-baseline-corrected-twice-keeps-the-reason-its-author-gave
+  ;; The author's :why pinned the base revision the survey was read at, and the
+  ;; first amendment's boilerplate erased the only mention of it.
+  (let [corrected (assoc a-baseline :area "corrected")
+        [_ appended] (with-amend {:prev (assoc a-baseline :seq 7 :at "t"
+                                               :supersedes {:seq 3 :why "surveyed at d045c958"})
+                                  :writes (fn [p] (spit p (pr-str {:record corrected})))}
+                                 (ctx :findings [a-finding]))]
+    (is (= 7 (get-in (read-string appended) [:supersedes :seq])))
+    (is (str/includes? (get-in (read-string appended) [:supersedes :why]) "surveyed at d045c958"))))
+
+(deftest the-baseline-amender-is-told-what-every-stratum-owes
+  ;; A new stratum declared without a reading, and a reading demoted without the
+  ;; health observation naming it, each cost a whole amendment at the ledger.
+  (let [p (record/amend-prompt {:baseline (assoc a-baseline :strata [] :model {:elements [] :claims []})
+                                :findings [a-finding] :out-path "/x"})]
+    (is (str/includes? p "must be named, under :about, by a :health observation"))
+    (is (str/includes? p "carries a :stratified/level reading. A stratum you add\nneeds all four"))))
+
+(deftest a-refusal-says-where-in-the-record-the-slip-is
+  ;; `{:removed ["disallowed key"]}` read, to an amender shown a record whose
+  ;; :model legally holds :removed, as a contradiction of what it was shown.
+  (let [explain (m/explain [:map {:closed true} [:model [:map [:a int?]]]]
+                           {:removed 1 :model {:a "x"}})
+        msg     (#'record/ledger-refusal (ex-info "Invalid event report" {:explain explain}))]
+    (is (str/includes? msg "[:removed]: disallowed key"))
+    (is (str/includes? msg "[:model :a]: should be an int"))))
 
 (deftest a-baseline-with-no-seq-to-name-gains-no-citation
   ;; The run was pointed at a record that is not in this ledger — a nested

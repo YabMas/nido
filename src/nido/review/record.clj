@@ -44,6 +44,7 @@
    [clojure.edn :as edn]
    [clojure.java.io :as jio]
    [clojure.string :as str]
+   [malli.core :as m]
    [malli.error :as me]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.report :as report]
@@ -52,6 +53,7 @@
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.design.check :as design-check]
+   [nido.platform.core :as core]
    [nido.review.codex :as codex]
    [nido.review.loop :as rloop]
    [nido.review.retreat :as retreat]
@@ -353,7 +355,7 @@
    stops asking whether the whole record still serves the goal that moved. The
    delta is what an AUTHORING handler needs and exactly what a judging one must
    not see, which is why `amend-prompt` and `design-amend-prompt` do not go
-   through here and `design-amend-prompt` tells its author to set `:supersedes`.
+   through here — and why the loop, not either author, sets `:supersedes`.
 
    By NAME, and that is the whole of what this adds: both judging prompts already
    omitted the field, but they omitted it by transcribing a record field by field
@@ -860,7 +862,10 @@
    "                      property to move is not what it says it is. Read this\n"
    "                      against the baseline's MODULES: a change that moves a\n"
    "                      module boundary, or asks a module to stop hiding what\n"
-   "                      it hides, is :revisit however small its diff.\n"
+   "                      it hides, is :revisit however small its diff — and\n"
+   "                      the baseline line it moves (that module's interface\n"
+   "                      or what it hides, or the property) is what the\n"
+   "                      :revisit names under :breaks. Say which line.\n"
    "  goal-served       — does it serve the goal, and ONLY the goal? Under-\n"
    "                      serving is easy to see. OVER-serving is the common\n"
    "                      one: the goal plus a good deal more, every piece\n"
@@ -1782,10 +1787,24 @@
     (str "This project declares no design, so an element keeps the id the record already\n"
          "gave it, and an element new to the record takes an id of the record's own.\n")))
 
+(defn- relation-shapes
+  "The `:baseline` citation's variants as the write schema states them, one line each — read off
+   `report/BaselineRelation` so the prompt and the ledger cannot disagree about a key."
+  []
+  (str/join
+   "\n"
+   (for [[relation _ variant] (m/children (m/schema report/BaselineRelation))]
+     (str "    " relation " — "
+          (str/join ", " (for [[k props s] (m/children variant)
+                               :when (not= :relation k)]
+                           (str k " " (pr-str (m/form s))
+                                (when (:optional props) " (optional)"))))))))
+
 (defn- coupled-edits
   "The write rules that tie one field of a `kind` record to another, for whoever amends it — nil
-   for a record in no era they bind. The ledger refuses a record that satisfies one side and not
-   the other, and an amender changing one field has no reason to look at the second."
+   for a baseline from before strata, which none of them bind. The ledger refuses a record that
+   satisfies one side and not the other, and an amender changing one field has no reason to look
+   at the second."
   [kind record]
   (case kind
     :baseline
@@ -1794,14 +1813,50 @@
            "anything but :sound must be named, under :about, by a :health observation in\n"
            "the same record — and a health observation's :about names only strata the\n"
            "record lists. Demoting a reading and adding the observation that names it\n"
-           "is ONE edit; the ledger refuses a record that makes only the first.\n\n"))
+           "is ONE edit; the ledger refuses a record that makes only the first.\n"
+           "Every stratum is listed twice, once by id under :strata and once as a\n"
+           ":sort :stratum element of :model, and that element says what it provides\n"
+           "(:interface) and carries a :stratified/level reading. A stratum you add\n"
+           "needs all four; one short of any is refused.\n\n"))
     :design
-    (when (contains? record :model)
-      (str "EDITS THAT TRAVEL TOGETHER. A design takes an element or claim out of the\n"
-           "model it is laid over under :model :removed {:elements [ids] :claims [ids]} —\n"
-           "inside :model, never at the record's top level — and never also states an id\n"
-           "it removes. An id the design simply leaves out is carried unchanged, not\n"
-           "removed.\n\n"))))
+    (str "EDITS THAT TRAVEL TOGETHER. :baseline names the relation, and each relation\n"
+         "carries exactly these keys beside :relation, no others:\n"
+         (relation-shapes) "\n"
+         "A :revisit names under :breaks each line of the cited baseline it stops making\n"
+         "true — a load-bearing property, or, for a moved module boundary, that module's\n"
+         "interface or what it hides. A move that stops no baseline line being true is\n"
+         "not a :revisit. Changing the relation means changing its keys with it: a\n"
+         ":within keeps no :breaks, not even an empty one.\n"
+         (when (contains? record :model)
+           (str "A design takes an element or claim out of the\n"
+                "model it is laid over under :model :removed {:elements [ids] :claims [ids]} —\n"
+                "inside :model, never at the record's top level — and never also states an id\n"
+                "it removes. An id the design simply leaves out is carried unchanged, not\n"
+                "removed.\n"
+                "An element the baseline does not already describe is described here: a\n"
+                "module it adds says what it :hides and its :interface; a stratum it adds\n"
+                "says what it provides (:interface) and carries a :stratified/level reading.\n"))
+         "A :spin-out's :ref names a follow-up that already exists. You cannot file one\n"
+         "from here, and a number you guess names someone else's: where a remainder has\n"
+         "no ref yet, route it otherwise and say under :open that it needs filing.\n\n")))
+
+(defn- check-block
+  "How an author checks its answer file against the ledger before handing it over, or nil with no
+   command to offer. The append still decides; this only lets the author find out first."
+  [check-cmd]
+  (when check-cmd
+    (str "CHECK IT BEFORE YOU FINISH. Once the file is written, run\n\n  " check-cmd "\n\n"
+         "It makes every check the append will make, with the citation the loop will set,\n"
+         "and writes nothing. It prints what the ledger would refuse; repair that and run\n"
+         "it again until it prints ok.\n\n")))
+
+(defn- amend-check-cmd
+  "The shell command that dry-runs the answer at `out-path` as a `kind` record on this ledger —
+   through nido's own bb.edn, because an amender runs in the reviewed project's tree."
+  [project ws-id kind out-path]
+  (str "bb --config " (fs/path (core/nido-source-dir) "bb.edn")
+       " nido:review:amend:check :project " (name project) " :ws-id " ws-id
+       " :kind " (name kind) " :file " out-path))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   refusal-prompt
@@ -1811,7 +1866,7 @@
    Narrower than the amend prompts on purpose. The judge's findings are not repeated, because the
    record already answers them and this is not another round: the only thing wrong with it is
    what the ledger named."
-  [{:keys [kind record refusal out-path]}]
+  [{:keys [kind record refusal out-path check-cmd]}]
   (str "The ledger refused the " (name kind) " record you wrote for this round, so nothing\n"
        "was appended and the amendment has not taken effect.\n\n"
        "WHY IT WAS REFUSED:\n\n  " refusal "\n\n"
@@ -1824,6 +1879,7 @@
        (pr-str (ws/unstamp record))
        "\n\nWrite EDN to:\n\n  " out-path "\n\n"
        "  {:record <the COMPLETE repaired record — every field, not a diff>}\n\n"
+       (check-block check-cmd)
        "nido reads this file, validates it and appends it. Do not append it yourself, do\n"
        "not commit anything, and do NOT edit any source file."))
 
@@ -1905,21 +1961,25 @@
    `{:err refusal :record r}` when it did not, `r` being the record as offered. `stem` names this
    round's answer files. Returns what the accepting `append` returned plus `:refusals`, every
    refusal the round was re-asked over, oldest first; or, when the round ends here, `{:status s}`
-   with `:refusals` and — for `:amend-invalid` — the last refusal as `:amend-error`. A re-ask
-   answered with no readable record ends the round on the refusal it failed to repair, and one
-   whose own calls reached a path that moved ends it `:amend-touched-code`, with that stop's
-   `:amend-error` and `:amend-tree`. `permitted` is the dirs a repair may write in, as for the
-   amendment it repairs."
-  [ctx {:keys [kind stem record append permitted]}]
-  (let [dir (cstate/run-dir (:run-id (:config ctx)))]
-    (loop [record record, refusals []]
+   with `:refusals` and — for `:amend-invalid` — the last refusal as `:amend-error` and the answer
+   file holding the last record refused as `:unappended`. A re-ask answered with no readable
+   record ends the round on the refusal it failed to repair, and one whose own calls reached a
+   path that moved ends it `:amend-touched-code`, with that stop's `:amend-error` and
+   `:amend-tree`. `permitted` is the dirs a repair may write in, as for the amendment it repairs.
+   `path` is the answer file `record` was read from; `check-cmd`, given an answer file, is the
+   command that dry-runs it, or nil to offer none."
+  [ctx {:keys [kind stem record path append permitted check-cmd]}]
+  (let [dir     (cstate/run-dir (:run-id (:config ctx)))
+        invalid (fn [err refusals path]
+                  {:status :amend-invalid :amend-error err :refusals refusals :unappended path})]
+    (loop [record record, path path, refusals []]
       (let [{:keys [err] :as written} (append record)]
         (cond
           (nil? err)
           (assoc written :refusals refusals)
 
           (= amend-reasks (count refusals))
-          {:status :amend-invalid :amend-error err :refusals refusals}
+          (invalid err refusals path)
 
           :else
           (let [refusals (conj refusals err)
@@ -1929,7 +1989,9 @@
                 trespass (launch-amender!
                           ctx {:label label :permitted permitted
                                :first-message (refusal-prompt {:kind kind :record (:record written)
-                                                               :refusal err :out-path out-path})})
+                                                               :refusal err :out-path out-path
+                                                               :check-cmd (when check-cmd
+                                                                            (check-cmd out-path))})})
                 raw      (when (fs/exists? out-path)
                            (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
                 answer   (parse-amend-answer raw [] nil)
@@ -1941,10 +2003,24 @@
                   (assoc :refusals refusals))
 
               (nil? again)
-              {:status :amend-invalid :amend-error err :refusals refusals}
+              (invalid err refusals path)
 
               :else
-              (recur again refusals))))))))
+              (recur again out-path refusals))))))))
+
+(defn- refused-stop
+  "End the round on what `append-amendment!` ended it on, keeping what the amender said.
+
+   The answer's `disputes` are kept whatever stopped the round: they are objections to the judge,
+   not part of the record the ledger refused, and a stopped run is the one a person reads next. An
+   amendment the ledger refused is named by its file, since nothing else holds it."
+  [ctx written disputes]
+  (cond-> (assoc ctx :control :stop :status (:status written)
+                 :disputes disputes
+                 :amend-refusals (:refusals written))
+    (:amend-error written) (assoc :amend-error (:amend-error written))
+    (:unappended written)  (assoc :amend-unappended (:unappended written))
+    (:amend-tree written)  (assoc :amend-tree (:amend-tree written))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   amend-prompt
@@ -1963,7 +2039,7 @@
    right — and the fields that say which it is, :blocks and :needs, were on the
    record and printed nowhere. Only the gap branch is new; the refutation wording
    is the one that converged and is left alone."
-  [{:keys [baseline findings out-path stance declared?]}]
+  [{:keys [baseline findings out-path stance declared? check-cmd]}]
   (let [gaps? (boolean (some :blocks findings))]
    (str
    (if gaps?
@@ -2098,6 +2174,7 @@
    "the modules it concerns, with {:by :round} evidence and its evidence as\n"
    ":read-at; the composition a claim about the modules it composes.\n"
    (element-id-rule declared?)
+   (some->> (check-block check-cmd) (str "\n"))
    "nido reads this file, validates it, and appends it as the superseding baseline.\n"
    "Do not append it yourself and do not commit anything.\n\n"
    ;; The design amender is handed its :seq with a note that an amender shown no
@@ -2119,16 +2196,98 @@
           "boundary is FOR. Correct the decomposition through it.\n\n" stance "\n"))
    (level-reminder))))
 
+(def ^:private loop-why-prefix
+  "How every :supersedes :why the loop writes begins — the mark `authored-why` reads it by."
+  "corrected against the code after round ")
+
+(def ^:private carried-marker
+  "Where a loop-written :why carries the authored :why of the record it corrects."
+  " — carried from the record it corrects: ")
+
+(defn- authored-why
+  "The part of a :supersedes :why that its author wrote, or nil when the loop wrote all of it.
+
+   A loop-written :why carries the authored one after `carried-marker`, so the author's reason —
+   often the only record of which base revision the chain was surveyed at — travels down every
+   amendment instead of being replaced by the first."
+  [why]
+  (when why
+    (if (str/starts-with? why loop-why-prefix)
+      (let [i (str/index-of why carried-marker)]
+        (when i (subs why (+ i (count carried-marker)))))
+      why)))
+
+(defn ^{:malli/schema [:=> [:cat :keyword [:maybe :map] :map :map] :map]}
+  cite-corrected
+  "`record`, a `kind` amendment of `prev`, citing under :supersedes the record it corrects.
+
+   The loop sets the citation, not the author: an amender is handed `prev` unstamped, so a :seq it
+   writes is a guess, and the guesses it makes are the entry it read its findings from and the
+   citation it copied off `prev` — the one a real record of the right kind, which the ledger takes
+   and which forks the lineage. So the citation becomes `prev` whenever the author wrote none,
+   named an entry `resolve` finds is not a `kind` record, or named `prev`'s own predecessor. Any
+   other citation is the author's and stands: it names a different record of this kind on
+   purpose. One `resolve` cannot find stands too — an unreadable ledger is not evidence the author
+   was wrong.
+
+   The author's :why survives a replaced :seq; a :why merely copied off `prev` does not, and in its
+   place goes one naming this round, carrying `prev`'s own authored :why. `prev` with no :seq —
+   a record from outside this ledger — leaves `record` as it is. The last argument names the round
+   (`iter`, `run-id`) and how to read the ledger (`resolve`, a :seq to its entry or nil)."
+  [kind prev record {:keys [iter run-id resolve]}]
+  (let [cited     (get-in record [:supersedes :seq])
+        resolved  (when cited (resolve cited))
+        stale?    (and cited (= cited (get-in prev [:supersedes :seq])))
+        misnamed? (and resolved (not= kind (:format resolved)))
+        why       (get-in record [:supersedes :why])
+        own-why   (when (not= why (get-in prev [:supersedes :why])) why)]
+    (if (and (:seq prev) (or (nil? cited) misnamed? stale?))
+      (assoc record :supersedes
+             {:seq (:seq prev)
+              :why (or own-why
+                       (str loop-why-prefix iter " of run " run-id
+                            (some->> (authored-why (get-in prev [:supersedes :why]))
+                                     (str carried-marker))))})
+      record)))
+
+(defn- humanized-lines
+  "The humanized explain `h`, one line per error, each prefixed by where in the record it is."
+  [h path]
+  (let [at (if (seq path) (pr-str path) "top level")]
+    (cond
+      (map? h)        (mapcat (fn [[k v]] (humanized-lines v (conj path k))) h)
+      (sequential? h) (concat (keep #(when (string? %) (str at ": " %)) h)
+                              (mapcat (fn [i v] (when (coll? v) (humanized-lines v (conj path i))))
+                                      (range) h))
+      (some? h)       [(str at ": " h)])))
+
 (defn- ledger-refusal
   "Why the ledger refused a record, in a form somebody can act on.
 
    `ex-message` alone is \"Invalid event report\", which names no field and tells
    an amender nothing it could fix. The explain data is already on the exception;
-   this is only a matter of reading it out."
+   this is only a matter of reading it out — each error with its path, because a key
+   legal one level down reads, unlocated, as a contradiction of the record the
+   amender was shown."
   [e]
   (let [explain (:explain (ex-data e))]
     (str (or (ex-message e) "the ledger refused it")
-         (when explain (str " — " (pr-str (me/humanize explain)))))))
+         (when explain
+           (str " — " (str/join "; " (humanized-lines (me/humanize explain) [])))))))
+
+(defn ^{:malli/schema [:=> [:cat :keyword :string :keyword :map] [:maybe :string]]}
+  amendment-refusal
+  "What the ledger would refuse of `record` appended now as a `kind` amendment, citing what the
+   loop would have it cite — or nil when it would be taken. Writes nothing. For an amender to check
+   its answer before handing it over; see `nido.coordinator.record.workstream/check-entry` for how
+   far \"now\" holds."
+  [project ws-id kind record]
+  (let [record (cite-corrected kind (ws/latest-entry project ws-id kind) record
+                               {:iter "n" :run-id "(dry run)"
+                                :resolve #(ws/entry-at-seq project ws-id %)})]
+    (try (ws/check-entry project ws-id {:kind kind} (pr-str (ws/unstamp record)))
+         nil
+         (catch Exception e (ledger-refusal e)))))
 
 (defn- appended
   "The record as a READER will find it: what was just written, stamped with the
@@ -2235,7 +2394,8 @@
                           (:baseline (:config ctx))
                           (ws/latest-entry project ws-id :baseline))
             dir       (cstate/run-dir run-id)
-            out-path  (str (fs/path dir (str "amend-round-" (:iter ctx) ".edn")))]
+            out-path  (str (fs/path dir (str "amend-round-" (:iter ctx) ".edn")))
+            check-cmd (when (and project ws-id) #(amend-check-cmd project ws-id :baseline %))]
         (fs/create-dirs dir)
         ;; "The file is there" is the whole test for whether the amender
         ;; answered, so the round must start with it absent. A leftover from
@@ -2247,6 +2407,7 @@
                              :first-message (amend-prompt {:baseline  prev
                                                            :findings  (:findings ctx)
                                                            :out-path  out-path
+                                                           :check-cmd (when check-cmd (check-cmd out-path))
                                                            :stance    (stages/read-stance project)
                                                            :declared? (some? (design-check/design-of project code-cwd))})})
               ;; Read before the tree is judged, so an answer the round will not
@@ -2295,39 +2456,20 @@
                 (assoc ctx :control :stop :status :amend-noop)
 
                 :else
-                ;; The correction names what it corrects. This round is the
-                ;; only thing that knows the pair — `prev` is the record it was
-                ;; asked to repair and `record` is the repair — and it is
-                ;; written rather than derived because taking the newest baseline
-                ;; instead is exactly the recency the ledger's citations exist
-                ;; to refuse. An amender that supplied its own is left alone:
-                ;; a citation is the author's, and nothing here overrules one.
-                ;; A citation is still the author's — but only where it cites a
-                ;; BASELINE. An amender deliberately superseding a different record
-                ;; of this workstream (the narrow follow-up rather than the broad
-                ;; survey it sits beside) is honoured, as it always was. What is no
-                ;; longer honoured is a citation that names something which is not a
-                ;; baseline at all: an amender is handed its record unstamped, so a
-                ;; :seq it supplies is a guess unless it went and checked, and the
-                ;; guess it actually makes is the entry it read the findings from —
-                ;; the review. Nine rounds of one run cited the review and the
-                ;; ledger refused all nine, losing the amendment each time. Where
-                ;; the citation cannot be resolved at all, honour it: an unreadable
-                ;; ledger is not evidence the author was wrong.
-                (let [cite    (fn [record]
-                                (let [cited     (get-in record [:supersedes :seq])
-                                      resolved  (when cited (ws/entry-at-seq project ws-id cited))
-                                      misnamed? (and resolved (not= :baseline (:format resolved)))]
-                                  (cond-> record
-                                    (and (:seq prev) (or (nil? cited) misnamed?))
-                                    (assoc :supersedes
-                                           {:seq (:seq prev)
-                                            :why (str "corrected against the code after round "
-                                                      (:iter ctx) " of run " run-id)}))))
+                ;; The correction names what it corrects, and this round is the
+                ;; only thing that knows the pair: `prev` is the record it was
+                ;; asked to repair and `record` is the repair. Written rather than
+                ;; derived, because taking the newest baseline instead is exactly
+                ;; the recency the ledger's citations exist to refuse.
+                (let [cite    #(cite-corrected :baseline prev %
+                                               {:iter (:iter ctx) :run-id run-id
+                                                :resolve (fn [n] (ws/entry-at-seq project ws-id n))})
                       written (append-amendment!
                                ctx {:kind :baseline
                                     :stem (str "amend-round-" (:iter ctx))
                                     :record record
+                                    :path out-path
+                                    :check-cmd check-cmd
                                     :append (fn [record]
                                               (let [record (cite record)]
                                                 (try {:record record
@@ -2337,11 +2479,8 @@
                                                      (catch Exception e
                                                        {:record record :err (ledger-refusal e)}))))})
                       record  (:record written)]
-                  (if-let [status (:status written)]
-                    (cond-> (assoc ctx :control :stop :status status
-                                   :amend-refusals (:refusals written))
-                      (:amend-error written) (assoc :amend-error (:amend-error written))
-                      (:amend-tree written) (assoc :amend-tree (:amend-tree written)))
+                  (if (:status written)
+                    (refused-stop ctx written disputes)
                     (let [retreats (retreat/baseline-retreats prev record)
                           ;; Stamped, not as the amender wrote it. The judge
                           ;; labels its verdict with the :seq of the record it
@@ -2572,7 +2711,7 @@
    answerable and both are disputable, and the number is how: the amender
    objects by ordinal and never by matching text. `:findings` is the judge's own
    prose beneath them, which says more and is keyed to nothing."
-  [{:keys [design baseline recommend reason raised findings out-path declared?]}]
+  [{:keys [design baseline recommend reason raised findings out-path declared? check-cmd]}]
   (str
    "A read-only judge derived what could be derived about this DESIGN record,\n"
    "before any code is written, and it did not come out clean.\n\n"
@@ -2598,10 +2737,8 @@
                     ;; to guess the one field the citation is checked against.
                     (if-let [n (:seq baseline)]
                       (str "Set :baseline :seq to " n " — that is the entry the\n"
-                           "corrected baseline was appended as — and set :supersedes to the\n"
-                           "design you are replacing.\n\n")
-                      (str "Point :baseline :seq at the corrected baseline and set\n"
-                           ":supersedes to the design you are replacing.\n\n"))
+                           "corrected baseline was appended as.\n\n")
+                      "Point :baseline :seq at the corrected baseline.\n\n")
                     "If a claim no longer holds under the corrected baseline, change it.\n"
                     "Re-pointing the citation while leaving the claims untouched asserts\n"
                     "the design still stands on a premise nobody has re-checked it\n"
@@ -2665,8 +2802,17 @@
           "under canvas/ to match: that edit is part of this amendment, and the next round\n"
           "judges it with the record. Any other file in the tree you only read — a write\n"
           "there ends the round with this answer unappended.\n"))
+   (some->> (check-block check-cmd) (str "\n"))
    "nido reads this file, validates it, and appends it as the superseding design.\n"
-   "Do not append it yourself and do not commit anything."
+   "Do not append it yourself and do not commit anything.\n\n"
+   ;; The record above is printed unstamped, so an amender asked for this field
+   ;; guesses — the entry it read the findings from, or the citation already on
+   ;; the record — and either guess loses the amendment or forks the lineage.
+   "LEAVE :supersedes :seq TO THE LOOP. It sets it to "
+   (if-let [n (:seq design)] (str "entry " n ", ") "")
+   "the design shown above,\n"
+   "which is what you are replacing. Give :supersedes {:why \"...\"} only to say why\n"
+   "in words of your own; that is kept.\n"
    (level-reminder :commitment)))
 
 (defn- run-design-judge-stage
@@ -2730,7 +2876,8 @@
       :else
       (let [claims-of (fn [{c :check}]
                         (into [] (comp (filter #(= c (:check %)))
-                                       (keep #(not-empty (str (:claim-id %)))))
+                                       (keep #(not-empty (str (:claim-id %))))
+                                       (distinct))
                               (:findings record)))
             handle    (fn [f] (assoc f :disputed-n (get counts (design-finding-base-key f) 0)))
             ;; A finding that broke none of the four, carried under the claim it is about.
@@ -2893,7 +3040,8 @@
         ;; moves or adds has an id only once the canvas lists it, so the edit the
         ;; element-id rule requires is part of the answer, and the next round
         ;; judges it with the rest.
-        permitted (:spec-dirs declared)]
+        permitted (:spec-dirs declared)
+        check-cmd (when (and project ws-id) #(amend-check-cmd project ws-id :design %))]
     (fs/create-dirs dir)
     (fs/delete-if-exists out-path)
     (let [trespass (launch-amender!
@@ -2907,6 +3055,7 @@
                                           :raised (:findings ctx)
                                           :findings (get-in ctx [:record :findings])
                                           :out-path out-path
+                                          :check-cmd (when check-cmd (check-cmd out-path))
                                           :declared? (some? declared)})})
           raw      (when (fs/exists? out-path)
                      (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
@@ -2939,23 +3088,26 @@
             (assoc ctx :control :stop :status :amend-noop)
 
             :else
-            (let [written (append-amendment!
+            (let [cite    #(cite-corrected :design prev %
+                                           {:iter (:iter ctx) :run-id run-id
+                                            :resolve (fn [n] (ws/entry-at-seq project ws-id n))})
+                  written (append-amendment!
                            ctx {:kind :design
                                 :stem (str "design-amend-round-" (:iter ctx))
                                 :permitted permitted
                                 :record record
+                                :path out-path
+                                :check-cmd check-cmd
                                 :append (fn [record]
-                                          (try (ws/append-entry! project ws-id {:kind :design}
-                                                                 (pr-str (ws/unstamp record)))
-                                               {:record record}
-                                               (catch Exception e
-                                                 {:record record :err (ledger-refusal e)})))})
+                                          (let [record (cite record)]
+                                            (try (ws/append-entry! project ws-id {:kind :design}
+                                                                   (pr-str (ws/unstamp record)))
+                                                 {:record record}
+                                                 (catch Exception e
+                                                   {:record record :err (ledger-refusal e)}))))})
                   record  (:record written)]
-              (if-let [status (:status written)]
-                (cond-> (assoc ctx :control :stop :status status
-                               :amend-refusals (:refusals written))
-                  (:amend-error written) (assoc :amend-error (:amend-error written))
-                  (:amend-tree written) (assoc :amend-tree (:amend-tree written)))
+              (if (:status written)
+                (refused-stop ctx written disputes)
                 (let [retreats (retreat/design-retreats prev record)]
                   (assoc ctx
                          :amended? true

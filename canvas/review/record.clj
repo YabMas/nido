@@ -122,4 +122,12 @@
      entries, so the figures are derived on every read and stored nowhere."
     {:signature [:=> [:catn [:entries [:vector :map]]] :map]})
   (Operation design-amend-prompt "The instruction to repair a design."
-    {:signature [:=> [:catn [:opts :map]] :string]}))
+    {:signature [:=> [:catn [:opts :map]] :string]})
+  (Operation cite-corrected
+    "An amendment citing the record it corrects under :supersedes — the loop's to set, not the
+     amender's — keeping a :why its author wrote and carrying the corrected record's own."
+    {:signature [:=> [:catn [:kind :keyword] [:prev [:maybe :map]] [:record :map] [:at :map]] :map]})
+  (Operation amendment-refusal
+    "What the ledger would refuse of an amendment appended now, citing what the loop would have it
+     cite; nil when it would be taken. Writes nothing."
+    {:signature [:=> [:catn [:project :keyword] [:ws-id :string] [:kind :keyword] [:record :map]] [:maybe :string]]}))

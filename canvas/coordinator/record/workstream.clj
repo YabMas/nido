@@ -129,6 +129,11 @@
      measures an ordinal against a cardinality and reports drift on an intact ledger."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe [:vector :string]]]
      :delegates [read-ws]})
+  (Operation check-entry
+    "Throw what an append of this entry would throw now, and write nothing — for an author checking
+     a record before handing it over, never a guard in place of the append's own."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:entry :map] [:content :string]] :nil]
+     :delegates [read-ws report/entry-payload]})
   (Operation append-entry-at!
     "Append only if the ledger's latest entry is still the one the caller read. The optimistic
      lock that stops two people deciding the same thing from both writing the decision."

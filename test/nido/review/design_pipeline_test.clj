@@ -690,6 +690,95 @@
     (is (= "schema said no" (:amend-error out)))
     (is (nil? appended))))
 
+;; ── What a design amendment cites ───────────────────────────────────────────
+
+(deftest a-design-amendment-cites-the-design-it-corrects
+  ;; The amender is shown the design unstamped, so it guessed this field — the
+  ;; round's decision one run, the design's own stale citation the next — and the
+  ;; ledger refused the first guess and forked the lineage on the second.
+  (let [[_ appended] (with-amend {:prev (assoc a-design :seq 21)
+                                  :writes (fn [p] (spit p (pr-str {:record a-design})))}
+                                 (ctx :findings [(check :relation-honest :broken)]
+                                      :record (decision :amend)))]
+    (is (= 21 (get-in (read-string appended) [:supersedes :seq])))
+    (is (str/includes? (get-in (read-string appended) [:supersedes :why]) "round 1"))))
+
+(deftest a-citation-copied-off-the-design-is-replaced-and-its-reason-carried
+  ;; Seen live: every amendment of one run cited the grandparent and repeated its
+  ;; :why, so the ledger held no reason for any of them — and the author's :why
+  ;; was the only record of the base revision the chain was surveyed at.
+  (let [prev    (assoc a-design :seq 21 :supersedes {:seq 19 :why "surveyed at d045c958"})
+        [_ app] (with-amend {:prev prev
+                             :writes (fn [p] (spit p (pr-str {:record (dissoc prev :seq)})))}
+                            (ctx :findings [(check :relation-honest :broken)]
+                                 :record (decision :amend)))
+        cited   (:supersedes (read-string app))]
+    (is (= 21 (:seq cited)) "the design corrected, not its predecessor")
+    (is (str/includes? (:why cited) "round 1"))
+    (is (str/includes? (:why cited) "surveyed at d045c958")
+        "the author's reason travels down the chain instead of being overwritten")))
+
+(deftest a-reason-carried-twice-is-carried-once
+  ;; A carried reason that nested another per amendment would grow without bound
+  ;; across a run, which is the growth the amend prompts exist to stop.
+  (let [at    {:iter 3 :run-id "r" :resolve (constantly nil)}
+        once  (record/cite-corrected :design {:seq 5 :supersedes {:seq 4 :why "the pin"}} {} at)
+        twice (record/cite-corrected :design (assoc once :seq 6) {} at)]
+    (is (= (get-in once [:supersedes :why]) (get-in twice [:supersedes :why])))
+    (is (= 6 (get-in twice [:supersedes :seq])))))
+
+(deftest a-citation-of-no-design-is-replaced-and-the-authors-reason-kept
+  (let [[_ appended]
+        (with-redefs [ws/entry-at-seq (fn [_ _ n] (when (= 20 n) {:format :design-decision :seq 20}))]
+          (with-amend {:prev (assoc a-design :seq 21)
+                       :writes (fn [p] (spit p (pr-str {:record (assoc a-design :supersedes
+                                                                         {:seq 20 :why "goal-served narrowed"})})))}
+                      (ctx :findings [(check :relation-honest :broken)]
+                           :record (decision :amend))))]
+    (is (= {:seq 21 :why "goal-served narrowed"} (:supersedes (read-string appended))))))
+
+(deftest a-refused-design-amendment-is-named-and-its-objections-kept
+  ;; A round that ended on a refusal read `continued`, named no file, and dropped
+  ;; the amender's disputes — so the one complete answer to the round, and the
+  ;; objections the next reader most needs, were visible only in the run dir.
+  (let [[out _] (with-amend {:append-throws? true
+                             :writes (fn [p] (spit p (pr-str {:record a-design
+                                                             :disputes [{:finding 1 :because "the code routes it"
+                                                                         :evidence ["src/x.clj:4"]}]})))}
+                            (ctx :findings [(check :relation-honest :broken)]
+                                 :record (decision :amend)))]
+    (is (= :amend-invalid (:status out)))
+    (is (str/ends-with? (:amend-unappended out) "design-amend-round-1-reask-2.edn")
+        "the last record the ledger refused, which is the one worth recovering by hand")
+    (is (= 1 (count (:disputes out))))))
+
+(deftest the-design-amender-is-told-the-laws-it-is-held-to
+  (let [p (record/design-amend-prompt {:design (assoc a-design :seq 21 :model {:elements [] :claims []})
+                                       :recommend :amend :raised [] :out-path "/x"
+                                       :check-cmd "bb nido:review:amend:check :file /x"})]
+    (is (str/includes? p ":revisit — :seq int?, :breaks [:vector {:min 1} string?], :note string?")
+        "the relation shapes as the write schema states them, so a :revisit carries :breaks")
+    (is (str/includes? p "for a moved module boundary, that module's\ninterface")
+        "and what a moved boundary names there, which is what the judge calls :revisit")
+    (is (str/includes? p "carries a :stratified/level reading"))
+    (is (str/includes? p "bb nido:review:amend:check :file /x") "the check it can run first")
+    (is (str/includes? p "LEAVE :supersedes :seq TO THE LOOP. It sets it to entry 21"))
+    (is (str/includes? p "a number you guess names someone else's")
+        "a follow-up ref it cannot file, it must not mint")))
+
+(deftest the-design-amender-is-handed-a-check-of-its-own-answer
+  (let [prompts (atom [])]
+    (with-amend {:prompts prompts} (ctx :findings [(check :relation-honest :broken)]
+                                        :record (decision :amend)))
+    (is (re-find #"nido:review:amend:check :project nido :ws-id ws-1 :kind design :file \S+design-amend-round-1\.edn"
+                 (first @prompts)))))
+
+(deftest the-judge-says-what-a-moved-boundary-breaks
+  ;; The judge called a moved boundary :revisit and the schema requires :revisit to
+  ;; name what it breaks, so an amender following the judge wrote a record the
+  ;; ledger refused, or softened it to :within to get it taken.
+  (is (str/includes? (record/design-prompt {:design a-design}) "names under :breaks")))
+
 (deftest the-design-amender-is-told-where-removals-go
   (let [p (record/design-amend-prompt {:design (assoc a-design :model {:elements [] :claims []})
                                        :recommend :amend :raised [] :out-path "/x"})]
