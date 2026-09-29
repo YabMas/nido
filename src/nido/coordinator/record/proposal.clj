@@ -310,6 +310,12 @@
           {}
           plans))
 
+(def ^:private returned-outcomes
+  "The claim closes that return a claim's addresses to the owed set rather than
+   counting them as tried: a veto (a decline stopped it) and an orphan (a daemon
+   restart killed its Run). Neither is a session giving up on the work."
+  #{:vetoed :orphaned})
+
 (defn ^{:malli/schema [:=> [:cat [:vector :map] [:vector :map] [:vector :map]] [:vector :map]]}
   owed
   "The proposals a plan may still claim, oldest analysis first.
@@ -335,12 +341,13 @@
    stands. The exception is a claim closed as VETOED, which is not a session
    giving up — it is the veto working — and its addresses that carry no decline
    of their own were never the reason it stopped. They return to the owed set
-   and are grouped again tomorrow."
+   and are grouped again tomorrow. A claim closed as ORPHANED (a restart killed
+   its Run) returns its addresses the same way."
   [proposals plans attempts]
   (let [disposed (dispositions-by-address plans)
         tried    (into #{}
                        (comp (remove :open?)
-                             (remove #(= :vetoed (:outcome %)))
+                             (remove #(returned-outcomes (:outcome %)))
                              (mapcat :addresses))
                        attempts)]
     (->> proposals

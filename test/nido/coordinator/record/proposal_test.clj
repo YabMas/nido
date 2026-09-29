@@ -79,6 +79,13 @@
                      :open? false :outcome :vetoed)]]
     (is (= ["ws-b/1.0" "ws-c/1.0"] (addrs (proposal/owed ps [] at))))))
 
+(deftest an-orphaned-close-returns-its-addresses-to-the-owed-set
+  ;; A restart killed the Run working the claim. Nothing was tried to a
+  ;; conclusion, so what it covered is grouped again, as after a veto.
+  (let [ps [(p "ws-a" 1 0) (p "ws-b" 1 0)]
+        at [(attempt :addresses ["ws-a/1.0" "ws-b/1.0"] :open? false :outcome :orphaned)]]
+    (is (= ["ws-a/1.0" "ws-b/1.0"] (addrs (proposal/owed ps [] at))))))
+
 (deftest a-later-plan-reconsiders-an-address-an-earlier-one-dispositioned
   (let [ps [(p "ws-a" 1 0)]]
     (is (empty? (proposal/owed ps [(plan (claim :land "ws-a/1.0"))

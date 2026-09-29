@@ -442,3 +442,72 @@
       (seed-run! (assoc base-run :trigger :merge :skill :drive-home))
       (reconcile/reconcile!)
       (is (= :awaiting-review (:state (runs/read-run (:id base-run))))))))
+
+;; ── releasing the improvement sweep ──────────────────────────────────────────
+
+(defn- improvement-ws! [project ref-id]
+  (ws/create! project {:stage :triaging
+                       :external-refs [{:adapter :improvement :id ref-id :title "improve: x"}]}))
+
+(defn- claim-run [w]
+  (assoc base-run :id "2026-09-29-test-improvement-claim-bbbbbbbb"
+                  :workstream-id (:id w)
+                  :event-payload {:adapter :improvement :leg "claim" :id "ws-p/1#0"}))
+
+(deftest a-restart-releases-the-sweep-an-orphaned-claim-held
+  ;; A restart killed the claim's agent mid-work. Nothing will ever close its
+  ;; workstream, and a close is the only thing that releases the sweep.
+  (with-tmp
+    (fn [_]
+      (let [w   (improvement-ws! :test "ws-p/1#0")
+            run (claim-run w)]
+        (seed-run! run)
+        (agent-started! (:id run))
+        (reconcile/reconcile!)
+        (is (= :orphaned-from-restart (-> (runs/read-run (:id run)) :error :reason)))
+        (is (= :orphaned (get-in (ws/read-ws :test (:id w)) [:closed :outcome])))))))
+
+(deftest a-requeued-claim-keeps-its-hold
+  ;; Caught before its agent launched, the Run goes back in the queue and will
+  ;; still work the claim, so the hold stands.
+  (with-tmp
+    (fn [_]
+      (let [w   (improvement-ws! :test "ws-p/1#0")
+            run (claim-run w)]
+        (seed-run! run)
+        (reconcile/reconcile!)
+        (is (= :queued (:state (runs/read-run (:id run)))))
+        (is (nil? (:closed (ws/read-ws :test (:id w)))))))))
+
+(deftest a-claim-that-finished-is-not-closed-as-orphaned
+  (with-tmp
+    (fn [_]
+      (let [w   (improvement-ws! :test "ws-p/1#0")
+            run (claim-run w)]
+        (seed-run! run)
+        (io/write-edn! (cstate/run-status-path (:id run)) {:phase :complete})
+        (reconcile/reconcile!)
+        (is (= :done (:state (runs/read-run (:id run)))))
+        (is (nil? (:closed (ws/read-ws :test (:id w)))))))))
+
+(deftest an-orphan-on-a-workstream-that-is-not-the-sweeps-is-left-open
+  (with-tmp
+    (fn [_]
+      (let [w   (ws/create! :test {:stage :triaging :external-refs []})
+            run (assoc (claim-run w) :event-payload {})]
+        (seed-run! run)
+        (agent-started! (:id run))
+        (reconcile/reconcile!)
+        (is (= :failed (:state (runs/read-run (:id run)))))
+        (is (nil? (:closed (ws/read-ws :test (:id w)))))))))
+
+(deftest a-claim-already-closed-keeps-its-own-close
+  (with-tmp
+    (fn [_]
+      (let [w   (improvement-ws! :test "ws-p/1#0")
+            run (claim-run w)]
+        (ws/close! :test (:id w) :done)
+        (seed-run! run)
+        (agent-started! (:id run))
+        (reconcile/reconcile!)
+        (is (= :done (get-in (ws/read-ws :test (:id w)) [:closed :outcome])))))))

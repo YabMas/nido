@@ -9,11 +9,13 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [nido.coordinator.record.clock :as clock]
+   [nido.coordinator.record.proposal :as proposal]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.status-file :as status-file]
-   [nido.coordinator.record.tickets :as tickets]))
+   [nido.coordinator.record.tickets :as tickets]
+   [nido.coordinator.record.workstream :as cws]))
 
 (def ^:private non-terminal-states
   (set (keys runs/allowed-transitions)))
@@ -112,6 +114,32 @@
         (println (str "nido coordinator: reconcile could not settle the session of "
                       (:id run) " — " (ex-message e)))))))
 
+(defn- release-improvement-hold!
+  "Close the improvement workstream a Run this start orphaned was working, as
+   :orphaned, so the sweep it holds is released.
+
+   The sweep is released by a close and by nothing weaker, so a second agent
+   never starts on a branch the first abandoned mid-edit. A Run failed here as
+   orphaned-from-restart is proven dead — the daemon that ran it is gone — and
+   no session of it will ever write that close, so without this the sweep waits
+   on a workstream nothing is working (twice: 09-23 for six days, 09-29 within
+   the hour). Each claim gets its own workspace, so releasing it puts no second
+   agent on the dead one's branch.
+
+   Only a workstream carrying the :improvement adapter, and only while open: a
+   claim that closed itself before the restart is left as it closed. Never
+   throws, like settle-session!."
+  [{:keys [project workstream-id id]}]
+  (try
+    (when-let [w (when workstream-id (cws/read-ws project workstream-id))]
+      (when (and (nil? (:closed w))
+                 (some #(= proposal/improvement-adapter (:adapter %)) (:external-refs w)))
+        (cws/close! project workstream-id :orphaned)))
+    (catch Throwable e
+      (binding [*out* *err*]
+        (println (str "nido coordinator: reconcile could not release the improvement hold of "
+                      id " — " (ex-message e)))))))
+
 (defn- reconcile-one!
   "Read run.edn, decide a terminal/parked state if non-terminal, write it back,
    then settle the Run's session for the state it ends at. A Run already
@@ -172,7 +200,9 @@
             (when-not (= :queued state)
               ;; Keep the ticket record honest: an orphaned triage Run clears a stale :investigating.
               (tickets/on-run-terminal! updated state)
-              (settle-session! updated state (= :awaiting-review state)))))))))
+              (settle-session! updated state (= :awaiting-review state))
+              (when (= :orphaned-from-restart (:reason error))
+                (release-improvement-hold! updated)))))))))
 
 (defn ^{:malli/schema [:=> [:cat] :any]}
   reconcile!
