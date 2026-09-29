@@ -3024,7 +3024,8 @@
   (str "/operations/review-queue/" (name project) "/" run-id))
 
 (def ^:private rq-kind-label
-  {:rank "rank" :brief "QA brief" :correct "correct" :delete "delete" :fold "fold"
+  {:rank "rank" :brief "QA brief" :correct "correct" :follow-up "follow-up"
+   :delete "delete" :fold "fold"
    :clear-rank "clear rank" :schema "schema" :view-sort "view sort"})
 
 (defn- rq-item

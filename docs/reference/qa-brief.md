@@ -46,8 +46,7 @@ tested.
 ## Is an existing brief adequate?
 
 A ticket may already carry QA instructions — a person's, or another bot's
-`QA – what to test:` block. Keep it when all of these hold; rewrite it when any
-fails:
+`QA – what to test:` block. Judge its substance against all of these:
 
 1. **Self-contained** — followable without reading anything else on the page,
    the comments or a linked video.
@@ -56,7 +55,32 @@ fails:
 4. **Current** — it describes what shipped, not a plan, and says nothing that
    the release has made false ("not released yet", "until this ships").
 
-A brief that passes 1–3 and fails only 4 is corrected in place, not rewritten.
+Every ticket's brief has the one shape above, so a reviewer moving down the
+queue reads the same thing in the same place. What to do with an existing one
+follows from its substance and its shape:
+
+- **In this shape, passes all four** — keep it.
+- **In this shape, fails only 4** — correct it in place.
+- **Any other shape, passes 1–3** — restyle it: the same steps and outcomes,
+  rewritten into the sections above, with anything 4 fails dropped. Its
+  substance is not re-derived; a person already worked it out.
+- **Fails 1, 2 or 3** — write a new one.
+
+## Follow-up actions
+
+Something a person still owes on the ticket — tell a customer once it is
+released, check something on production nobody has recorded checking, set a
+property that is wrong — is not a QA step, and buried in the body it is not
+seen. It goes in its own callout directly under the brief:
+
+    Follow-up                                          ← callout, 📌
+    ☐ one to-do per action: what, and who if the ticket names them —
+      "Tell Daniel Riniker (St. Gallen) that the fix is live"
+
+Only actions still open and owed by a person: an unchecked to-do elsewhere on
+the page moves in here, a checked one does not. A question for the reviewer to
+answer while testing belongs in the brief's steps. No open actions, no block.
+The block is found and replaced by its first text, `Follow-up`, as the brief is.
 
 ## How it is written to Notion
 
@@ -67,9 +91,10 @@ ticket never carries two.
 A brief is written on top or not at all. In this order:
 
 1. **Note the earlier briefs by id.** List the page's top-level blocks and keep
-   the ids of every callout whose text starts `QA instructions`. From here on
-   they are deleted by those ids — never found again by their title, which the
-   new brief now shares.
+   the ids of every callout whose text starts `QA instructions`, plus the blocks
+   of a brief in another shape that this one restyles. From here on they are
+   deleted by those ids — never found again by their title, which the new brief
+   now shares.
 2. **Prepend the new one** — `PATCH /v1/blocks/<page>/children` with
    `"position": {"type": "start"}` — and keep the id Notion returns for it.
 3. **Read the first child back.** Notion can ignore `position` and append at the

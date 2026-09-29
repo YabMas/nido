@@ -1,6 +1,6 @@
 ---
 name: review-queue
-description: Groom brian's Notion Review queue — every ticket in Review whose Lifecycle is Development, Staging or Prod. The plan leg judges each ticket's QA instructions against docs/reference/qa-brief.md, proposes a brief where they fall short and a cleanup where the page buries them, ranks the queue by what most needs a reviewer's attention, and writes the plan for a person to decide on the Operations page. The apply leg (`/review-queue apply <plan-run-id>`) carries out exactly the writes that person approved. Fired by the :review-queue and :review-queue-apply triggers on brian. Usage: /review-queue | /review-queue apply <plan-run-id>
+description: Groom brian's Notion Review queue — every ticket in Review whose Lifecycle is Development, Staging or Prod. The plan leg judges each ticket's QA instructions against docs/reference/qa-brief.md, proposes a brief where they fall short or are in another style, a Follow-up block for what a person still owes, and a cleanup where the page buries them, ranks the queue by what most needs a reviewer's attention, and writes the plan for a person to decide on the Operations page. The apply leg (`/review-queue apply <plan-run-id>`) carries out exactly the writes that person approved. Fired by the :review-queue and :review-queue-apply triggers on brian. Usage: /review-queue | /review-queue apply <plan-run-id>
 ---
 
 # /review-queue
@@ -119,12 +119,29 @@ Reach Notion through the `notion` CLI only (`docs/reference/notion-access.md`).
 Hold what is there to the **adequacy test in `docs/reference/qa-brief.md`**, and
 record one verdict:
 
-- **keep** — passes all four. Nothing to write.
-- **correct** — passes 1–3, fails only *current*. Propose the exact edit
+- **keep** — in that document's shape and passes all four. Nothing to write.
+- **correct** — in that shape, fails only *current*. Propose the exact edit
   ("delete 'not released yet'", "drop the support workaround — it shipped").
+- **restyle** — any other shape (another bot's `QA – what to test:`, a person's
+  paragraph), passes 1–3. Rewrite it into the shape, keeping its steps and
+  outcomes; the old blocks are replaced. Every brief on the queue ends up in one
+  style.
 - **write** — no instructions, or they fail 1, 2 or 3. Draft the full brief,
-  to that document's structure. "Before you start" names production for a Prod
-  ticket, staging otherwise.
+  to that document's structure.
+
+"Before you start" names production for a Prod ticket, staging otherwise, in a
+restyled brief as in a written one.
+
+### Follow-up actions
+
+Collect what a person still owes on the ticket — an unchecked to-do in the body,
+a notification promised "once it is released", a production check someone asked
+for and nobody recorded, a property the page contradicts (a `GitHub PR` naming a
+PR closed unmerged) — into one `Follow-up` block under the brief, as
+`docs/reference/qa-brief.md` § "Follow-up actions" says. An action that is
+about the ticket goes there, not in `:flags`: flags are for the person running
+the grooming (a ticket out of scope, a Status that reads wrong), the block is
+for whoever opens the ticket.
 
 A brief is wanted where it tells a reviewer what to do. A ticket whose Review is
 a **design sign-off** — no code yet, a spec or a Figma awaiting approval — needs
@@ -142,8 +159,8 @@ only these:
 - **Delete stale text** — what the release has made false: "not released yet",
   a workaround "until this ships", "ready for review, stacked on PR …".
   Quote each deleted line in the plan.
-- **Fold the original report** into one collapsed toggle directly under the
-  brief, `Original report` — what the reporter or requester wrote, its quotes,
+- **Fold the original report** into one collapsed toggle under the brief and
+  its `Follow-up` block, `Original report` — what the reporter or requester wrote, its quotes,
   its screenshots and videos, in their order. It is folded whole and never edited:
   it is the record of what the reporter saw, and the brief already says what a
   reviewer needs from it (self-contained, `docs/reference/qa-brief.md`).
@@ -206,7 +223,7 @@ exactly this shape — the dashboard renders it, and the apply leg is held to it
             :lifecycle "Prod"
             :rank      1
             :why       "data loss and access for every teacher; five concurrency fixes; tests only"
-            :qa        :write          ; :keep | :correct | :write | :design-signoff
+            :qa        :write          ; :keep | :correct | :restyle | :write | :design-signoff
             :last-read "2026-09-28T09:14:03.000Z"}]
  :items   [{:n 1 :br "BR-6348" :kind :rank   :summary "rank → 1"}
            {:n 2 :br "BR-6348" :kind :brief  :summary "prepend a QA brief (none on the page)"
@@ -227,8 +244,10 @@ exactly this shape — the dashboard renders it, and the apply leg is held to it
 
 - **`:n` is the identity** a person approves. Number every write once, globally,
   from 1.
-- **`:kind`** is one of `:rank`, `:brief`, `:correct`, `:delete`, `:fold`,
-  `:clear-rank`, `:schema`, `:view-sort`. `:br nil` for a write about no one ticket.
+- **`:kind`** is one of `:rank`, `:brief`, `:correct`, `:follow-up`, `:delete`,
+  `:fold`, `:clear-rank`, `:schema`, `:view-sort`. A restyle is a `:brief` whose
+  `:detail` also lists the old blocks it replaces. A `:follow-up` carries every
+  to-do's text, and the ids of the body to-dos it moves in. `:br nil` for a write about no one ticket.
 - **`:detail` is what the apply leg executes from.** Put in it everything that
   leg needs and a reviewer should read: the full brief text, every quoted line a
   delete removes, the block ids a fold or delete touches, what stays put and why.
@@ -329,11 +348,21 @@ says — earlier briefs noted by id, the new one prepended, the first child read
 back — and record `:applied` only when the new brief is on top; otherwise the
 new one is deleted again and the item is `:failed` with "did not land on top". A **correct** is an edit of the
 existing blocks' text (`notion api PATCH /v1/blocks/<block-id>`), not a new brief.
+A **restyle** is written as a brief, and the old blocks it names are what step 1
+notes and the final step deletes.
+
+**Follow-ups, after the ticket's brief:** note any earlier `Follow-up` callout by
+id, create the new one with
+`"position": {"type": "after_block", "after_block": {"id": <brief-id>}}`, read
+the page's blocks back, and only then delete the earlier callout and the body
+to-dos it moved in. Notion placing it elsewhere is recorded in the result, not a
+failure — the block still stands on its own.
 
 **Folding, in this order, so nothing is lost if a call fails midway:**
 
 1. Create the toggle with copies of the blocks inside it — `Original report`
-   with `"position": {"type": "after_block", "after_block": {"id": <brief-id>}}`,
+   after the `Follow-up` block, or after the brief where there is none
+   (`"position": {"type": "after_block", "after_block": {"id": <that block>}}`),
    `Engineering notes & history` at the bottom. If Notion puts the report toggle
    anywhere else, say so in the result; it is still collapsed. A request nests
    two levels; append deeper children to the returned child ids.
@@ -387,8 +416,9 @@ Undo: <plan-run-artifacts>/deleted-blocks.edn (<k> blocks)
 
 ## Idempotency
 
-A fresh plan run reads the queue fresh. A brief an earlier apply wrote passes the
-adequacy test and is kept; a fold already done leaves nothing to fold; ranks are
+A fresh plan run reads the queue fresh. A brief an earlier apply wrote is in the
+shape and passes the adequacy test, so it is kept; a `Follow-up` block is
+rewritten only when its open actions changed; a fold already done leaves nothing to fold; ranks are
 rewritten to the new order. Re-running is how the order stays current as tickets
 arrive and leave.
 
