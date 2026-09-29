@@ -476,9 +476,21 @@ first: write the brief `after_block` it instead of at `start`. A brief that did 
 - The `GitHub PR` property — set it to the top PR:
   `notion page set "$PAGE" "GitHub PR=<top-pr-url>"`.
 
+**Release blocker.** Judge the arc by `docs/reference/qa-brief.md` § "Release
+blocker" — it has not reached production, so the only question is whether it
+alters what users experience. A blocker it is, and `Priority` is not already
+`0 – Release Blocker`:
+
+- **It would not hold the mobile release** (that section says when it would) →
+  set it, `notion page set "$PAGE" "Priority=0 – Release Blocker"` (an en dash),
+  and read it back. Only ever raise; a Priority already at 0 is left alone.
+- **It would** → leave `Priority` as it is. A mark that holds another team's
+  release is not one to make with nobody watching: report it in §7 as proposed,
+  with its reason, and `/review-queue` puts it to a person on the Operations page.
+
 **Everything a person wrote stays exactly as it is** — the report, its
 screenshots and videos, comments, the triage note, the title, every other
-property. Notion's API has no move, so "folding" old content away means
+property but `GitHub PR` and a raised `Priority`. Notion's API has no move, so "folding" old content away means
 deleting and recreating it, which loses its comments and history. The brief
 earns the reviewer's attention by being first and self-contained, not by
 clearing the page around it.
@@ -650,6 +662,7 @@ Checks
 - <check name> — <fixed how | still red>
 
 QA brief: <written to BR-#### | skipped — <not brian | no Closes claim> | failed — <did not land on top | what Notion answered>>
+Release blocker: <set — <reason> | proposed, would hold the mobile release — <reason> | already set | not one | skipped with the brief>>
 
 Outcome: <merged at <sha> | on the queue, github-merge poller owns it | halted before merge>
 ```
@@ -676,8 +689,8 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
 - **No GitHub-side code review.** The review rounds (`bb nido:review:loop`) judge
   the diff before this runs, so `/land` waits on no reviewer and parses no bot.
   It answers the PR's checks, and whatever thread a person happened to leave.
-- **No other Notion writes.** The QA brief (§6) and the tidy that goes with it
-  are the only ones; the ticket's Status moves on brian's staging deploy and the
+- **No other Notion writes.** The QA brief (§6), the tidy that goes with it and
+  a raised release-blocker Priority are the only ones; the ticket's Status moves on brian's staging deploy and the
   `github-merge` poller, not here.
 - **No un-readying.** A halt leaves the layers ready and the threads open —
   that is what lets a human read the review on GitHub.

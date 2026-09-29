@@ -125,6 +125,10 @@ built. It is accepted for now and will be revisited.)
 A web change marked a blocker under those conditions holds the next app release
 too, until its ticket is Done. Say so beside the reason whenever it applies.
 
+`/land` sets the mark itself when it lands the change, unless it would hold the
+mobile release; `/review-queue` proposes it for a person to approve, and is
+where a mark `/land` held back reaches one.
+
 ## How it is written to Notion
 
 One callout block whose text starts `QA instructions`, with the sections nested
