@@ -284,6 +284,24 @@
       (is (str/includes? @captured "do NOT park anything")
           "with no stated invariant there is nothing for a finding to contradict"))))
 
+(deftest the-warden-launch-cannot-reach-any-mcp-server
+  ;; The warden is report-only: everything it rules on is inlined in its
+  ;; prompt. An MCP server leaked from cwd handed it partial code access (and
+  ;; incident writes) that its ruling then leaned on.
+  (let [opts (atom nil)]
+    (with-redefs [agent/launch! (fn [o] (reset! opts o)
+                                  {:num-turns 1 :result-error? false
+                                   :result-text "```json\n{\"decision\":\"stop\",\"reason\":\"r\"}\n```"})
+                  stages/discover-design-record (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] nil)]
+      ((:run stages/warden-stage)
+       {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings [{:title "x"}]})
+      (let [cmd (#'agent/build-cmd (assoc @opts :claude-bin "claude"))]
+        (is (= ["--tools" ""] (take 2 (drop-while #(not= "--tools" %) cmd)))
+            "no built-in tool")
+        (is (some #{"--strict-mcp-config"} cmd) "no MCP server discovered from cwd")
+        (is (not (some #{"--mcp-config"} cmd)) "and none granted")))))
+
 (deftest warden-stage-noop-is-indeterminate
   (with-redefs [agent/launch! (fn [_] {:num-turns 0 :result-error? false :result-text ""})
                 stages/discover-design-record (fn [_] nil)

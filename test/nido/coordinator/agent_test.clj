@@ -241,9 +241,26 @@
     (is (< (.indexOf cmd "--tools") (.indexOf cmd "--"))
         "--tools precedes the -- option terminator")))
 
+(deftest a-tool-restricted-launch-reaches-no-ambient-mcp-server
+  ;; --tools narrows only the built-in set. Without --strict-mcp-config the
+  ;; report-only warden launched holding ~140 MCP tools discovered from cwd,
+  ;; incident and team-membership writes among them, and used them.
+  (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi" :tools ""})]
+    (is (some #{"--strict-mcp-config"} cmd)
+        "a launch that restricts tools must not inherit MCP servers from its cwd")
+    (is (not (some #{"--mcp-config"} cmd))
+        "and names none, so it holds no MCP server at all")
+    (is (= ["--" "hi"] (take-last 2 cmd)) "the prompt is still the trailing positional"))
+  (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi" :tools ""
+                                :mcp-config "/grant.json"})]
+    (is (and (some #{"--strict-mcp-config"} cmd) (some #{"/grant.json"} cmd))
+        "a server granted outright is the only one it holds")))
+
 (deftest build-cmd-omits-tools-when-absent
   (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"})]
-    (is (not (some #{"--tools"} cmd)) "no --tools flag when :tools is not given")))
+    (is (not (some #{"--tools"} cmd)) "no --tools flag when :tools is not given")
+    (is (not (some #{"--strict-mcp-config"} cmd))
+        "an unrestricted launch keeps the MCP servers its cwd configures")))
 
 (deftest build-cmd-passes-a-model-only-when-one-is-named
   ;; Omitting is not the same as naming the default: a launch that passes no

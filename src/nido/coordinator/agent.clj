@@ -119,11 +119,15 @@
     system-prompt                          (into ["--append-system-prompt" system-prompt])
     mcp-config                             (into ["--mcp-config" mcp-config])
     (seq add-dirs)                         (into (mapcat (fn [d] ["--add-dir" d]) add-dirs))
-    ;; --tools "" disables all tools (report-only launches, e.g. the review
-    ;; judge). "" is truthy in Clojure, so this fires exactly when :tools is
-    ;; supplied. --tools is variadic; the `--` terminator below keeps the empty
-    ;; value from consuming the prompt.
-    tools                                  (into ["--tools" tools])
+    ;; --tools narrows only the BUILT-IN set; MCP servers discovered from cwd
+    ;; (project .mcp.json, user config, claude.ai connectors) still arrive, so
+    ;; a report-only launch (`:tools ""`, e.g. the review warden) would hold
+    ;; every one of them, writes included. --strict-mcp-config admits only what
+    ;; :mcp-config names: nothing, unless the caller grants a server outright.
+    ;; "" is truthy in Clojure, so this fires exactly when :tools is supplied.
+    ;; --tools is variadic; the `--` terminator below keeps the empty value from
+    ;; consuming the prompt.
+    tools                                  (into ["--tools" tools "--strict-mcp-config"])
     ;; `--` terminates option parsing so the trailing prompt positional is never
     ;; swallowed by a preceding variadic flag. claude 2.x made --add-dir
     ;; (<directories...>) and --mcp-config (<configs...>) variadic; without the
