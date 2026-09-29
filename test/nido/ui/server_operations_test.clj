@@ -245,6 +245,24 @@
         (is (str/includes? body "no change needed")
             "settled by a plan rather than by anything landing, and the chip says which")))))
 
+;; A plan's :land claim puts a proposal in the sweep's queue. It is still owed,
+;; but it goes ahead unless declined, so it is not a question for the reader —
+;; counting it as one read 487 awaiting you when about 10 were.
+(deftest a-proposal-a-plan-queued-to-land-is-not-awaiting-you
+  (with-one-proposal
+    (fn [id]
+      (ws/append-entry! :nido id {:kind :improvement-plan}
+                        (pr-str {:format   :improvement-plan
+                                 :date     "2026-09-29"
+                                 :frontier {:proposals [] :attempts []}
+                                 :claims   [{:disposition :land
+                                             :statement   "carry it"
+                                             :addresses   [(str id "/1.0")]}]}))
+      (with-redefs [work/improvement-holds (constantly [])]
+        (doseq [body [(board) (page "/operations")]]
+          (is (str/includes? body "0 awaiting you"))
+          (is (str/includes? body "1 queued for implementation")))))))
+
 ;; ── what holds the sweep ────────────────────────────────────────────────────
 
 (def ^:private stuck

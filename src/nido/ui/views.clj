@@ -2828,12 +2828,19 @@
    A plan settles a row too, and settles it by writing nothing: `:file` and
    `:no-op` mean nothing landed and nothing is going to, so they record no
    landing, so the row stays in the backlog for as long as the ledger stands
-   unless the disposition is read here."
+   unless the disposition is read here.
+
+   `:queued` is what a plan put in a `:land` claim. It is still owed — the sweep
+   has not carried it — but it is not the reader's to answer: under the veto
+   model it goes ahead unless declined. Counting it as open read 487 awaiting a
+   person the day a hand-condensed plan queued 477 of them. `:open` plus
+   `:queued` is the owed set."
   [{:keys [decision landed disposition]}]
   (cond
     landed                            :settled
     (= :declined (:verdict decision)) :settled
     (#{:file :no-op} disposition)     :settled
+    (= :land disposition)             :queued
     (nil? decision)                   :open
     :else                             :waiting))
 
@@ -2849,13 +2856,15 @@
    disclosure marked `already decided` is how three approvals could sit
    untouched with the board reporting nothing awaiting anyone."
   [proposals]
-  (let [{:keys [open waiting settled] :or {open [] waiting [] settled []}}
+  (let [{:keys [open queued waiting settled] :or {open [] queued [] waiting [] settled []}}
         (group-by proposal-band proposals)]
     (str
      (h/html
       [:div {:id "operations"}
        [:div.ops-head
         [:strong (str (count open) " awaiting you")]
+        (when (seq queued)
+          [:span.meta (str (count queued) " queued for implementation")])
         (when (seq waiting)
           [:span.prop-verdict.prop-waiting
            (str (count waiting) " approved, not yet implemented")])
@@ -2863,6 +2872,11 @@
        (if (empty? proposals)
          [:p.ops-empty "No review-loop analysis has proposed anything yet."]
          (list (for [p open] (proposal-card p))
+               (when (seq queued)
+                 [:details.trail
+                  [:summary (str (count queued) " queued for implementation — the sweep carries "
+                                 "these unless you decline one")]
+                  (for [p queued] (proposal-card p))])
                (when (seq waiting)
                  (list
                   [:p.meta {:style "margin:18px 0 8px"}
@@ -2921,7 +2935,7 @@
    A value that could not be read (nil) is said on its card rather than shown as
    zero, since zero is the reading that nothing needs anyone."
   [proposals recovery holds queues]
-  (let [{:keys [open waiting]} (group-by proposal-band proposals)
+  (let [{:keys [open queued waiting]} (group-by proposal-band proposals)
         stuck (count (filter #(#{:stuck :waiting-on-you} (:state %)) holds))
         {:keys [needs-you recovering waiting-rec]}
         (let [c (:counts recovery)]
@@ -2931,7 +2945,9 @@
        :title    "Improvement backlog"
        :headline (str (count open) " awaiting you")
        :tone     (when (seq open) :you)
-       :lines    [(when (seq waiting)
+       :lines    [(when (seq queued)
+                    (str (count queued) " queued for implementation"))
+                  (when (seq waiting)
                     (str (count waiting) " approved, not yet implemented"))
                   (cond (nil? holds)  "sweep state could not be read"
                         (pos? stuck)  (str "sweep held: " stuck " need" (when (= 1 stuck) "s") " you")
