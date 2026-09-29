@@ -1526,9 +1526,9 @@
    fresh one. The card's whole claim is that a judge read this code against this
    record; a carry is the same judgment standing, and letting the two look alike
    turns a held position into repeated confirmation."
-  [{:keys [verdict round reason invariants-held invariants-broken
-           load-bearing-held load-bearing-broken findings-classified needs
-           carried-from]}]
+  [{:keys [verdict round reason invariants-held invariants-broken invariants-unmet
+           load-bearing-held load-bearing-broken findings-classified unraised
+           standing-answered needs carried-from]}]
   [:div.md
    [:h2 "Design verdict"]
    [:div.report-meta
@@ -1545,6 +1545,11 @@
       (into [:ul]
             (for [{:keys [invariant finding]} invariants-broken]
               [:li invariant [:div.meta "by: " finding]]))])
+   (when (seq invariants-unmet)
+     [:div [:h3 "Not met yet — the design stands"]
+      (into [:ul]
+            (for [{:keys [invariant finding]} invariants-unmet]
+              [:li invariant [:div.meta "open: " finding]]))])
    (when (seq load-bearing-broken)
      [:div [:h3 "Broken without being declared"]
       [:p.meta "Properties the area relied on that this change did not say it
@@ -1562,6 +1567,14 @@
       (into [:ul]
             (for [{:keys [finding as]} findings-classified]
               [:li [:span.meta "[" (name as) "] "] finding]))])
+   (when (seq unraised)
+     [:div [:h3 report/unraised-heading]
+      (into [:ul] (for [{:keys [where what]} unraised] [:li [:code where] " — " what]))])
+   (when (seq standing-answered)
+     [:details.trail
+      [:summary "Standing items answered (" (count standing-answered) ")"]
+      (into [:ul] (for [{:keys [item answer]} standing-answered]
+                    [:li item [:div.meta answer]]))])
    (when needs
      [:div [:h3 (report/verdict-needs-heading verdict)] [:p needs]])])
 

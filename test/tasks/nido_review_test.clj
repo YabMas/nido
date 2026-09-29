@@ -142,10 +142,12 @@
                 :target {:base "main"}
                 :design-verdict {:outcome "answered"
                                  :verdict {:verdict :sound :round 3
-                                           :needs "nido_attach.clj:139 has an unreachable :claimed branch"}}}]
+                                           :unraised [{:where "nido_attach.clj:139"
+                                                       :what "an unreachable :claimed branch"}]
+                                           :needs "re-baseline the attach record"}}}]
     (is (= 1 (:findings-kept (analysis-payload-for final report)))
         "a defect the branch ships on the judge's say-so is kept, exactly as a
-         declined finding is")
+         declined finding is — and the advice beside it is not a second one")
     (is (= 0 (:findings-remaining (analysis-payload-for final report)))
         "and it is not OWED — routing it into the remainder would ask the next
          run to repair something nobody ruled on")))
@@ -172,10 +174,40 @@
                 :target {:base "main"}
                 :design-verdict {:outcome "answered"
                                  :verdict {:verdict :strained :round 2
-                                           :needs "the third call site is where the cut is failing"}}}]
+                                           :unraised [{:where "cut.clj:3"
+                                                       :what "the third call site is where the cut is failing"}]}}}]
     (is (= 2 (:findings-kept (analysis-payload-for final report)))
         "the two halves of the remainder are counted together or one of them
          hides the other")))
+
+(deftest advice-is-not-counted-as-kept
+  ;; `Nothing is needed to ship`, a list of landing chores, a record edit: each
+  ;; was published as `1 kept` on a run that kept nothing.
+  (let [report {:summary {:rounds 2 :fix-attempts 0}
+                :target {:base "main"}
+                :design-verdict {:outcome "answered"
+                                 :verdict {:verdict :sound :round 2
+                                           :needs "Nothing is needed to ship. Re-baseline first-event."}}}]
+    (is (= 0 (:findings-kept (analysis-payload-for {:status :clean :history [] :findings []}
+                                                   report))))))
+
+(deftest a-standing-item-the-verdict-answered-is-not-published-open
+  ;; The warden asked a person to confirm the live tests pass; the verdict ran
+  ;; them. Published beside that answer, the question told a person to do what
+  ;; had already been done.
+  (let [final  {:status :clean :history [] :findings []
+                :warden {:standing ["confirm the live tests do not stall"
+                                    "is the Monday bucket UTC or Berlin?"]}}
+        report {:summary {:rounds 3 :fix-attempts 0}
+                :target {:base "main"}
+                :design-verdict {:outcome "answered"
+                                 :verdict {:verdict :sound :round 3
+                                           :standing-answered
+                                           [{:item "confirm the live tests do not stall"
+                                             :answer "179 tests, 0 failures, no stall"}]}}}]
+    (is (= ["is the Monday bucket UTC or Berlin?"]
+           (:standing (analysis-payload-for final report)))
+        "only what the verdict left unanswered is still standing")))
 
 (deftest a-decision-the-gate-is-holding-is-not-counted-as-kept
   ;; It reaches a human through the blocker instead. Counted here it would read

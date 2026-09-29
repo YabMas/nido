@@ -524,7 +524,12 @@
    the sum is made HERE and nowhere else: the `:review` ledger entry is written
    before the verdict pass runs and can only ever count the rounds. This payload
    is the one record that sees the loop and the judge together — see
-   `verdict/kept-by-the-verdict` for why a non-decision `:needs` belongs in it.
+   `verdict/kept-by-the-verdict` for which of the verdict's rows belong in it.
+
+   `:standing` is the last warden's list less what the verdict answered from
+   the code (`:standing-answered`), for the same reason: the warden asked
+   before the judge read, and publishing its question beside the answer told a
+   person to do what had already been done.
 
    `:review-entry` is what became of that ledger entry, read off the report for
    the verdict's reason: the report is the copy that survives a ledger which
@@ -535,7 +540,13 @@
   (let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd) {})
         open   (verdict/owed-rows final)
         judged (verdict/kept-by-the-verdict report)
-        cover  (report/coverage report)]
+        cover  (report/coverage report)
+        owed   (into #{} (comp (mapcat (juxt :id :handle)) (remove nil?) (map str))
+                     (verdict/still-owed final))
+        stop   (report/stopped-on final)
+        answered (into #{} (map :item)
+                       (get-in report [:design-verdict :verdict :standing-answered]))
+        standing (into [] (remove answered) (:standing stop))]
     (analysis/enqueue!
      (merge
       {:run-id             (:run-id config)
@@ -547,8 +558,8 @@
        :fix-attempts       (or (get-in report [:summary :fix-attempts]) 0)
        :defects-settled    (count (verdict/settled-by-fixing final))
        :findings-remaining (count open)
-       :findings-kept      (cond-> (count (verdict/kept-across-run final))
-                             judged inc)
+       :findings-kept      (+ (count (verdict/kept-across-run final))
+                              (count judged))
        :remaining-handed   (count (filter :handed open))
        :remaining-parked   (count (filter #(= :park (:disposition %)) open))
        :targets-reviewed   (:reviewed cover)
@@ -560,8 +571,9 @@
        :reviewed-session   session
        :reviewed-ws-id     ws-id
        :review-entry       (:review-entry report)}
-      (report/stopped-on final)
-      (report/verdict-summary report)))))
+      (cond-> (dissoc stop :standing)
+        (seq standing) (assoc :standing standing))
+      (report/verdict-summary report owed)))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   verdict-worth-running?

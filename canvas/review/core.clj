@@ -229,8 +229,11 @@
      A reader of the report has `with-verdict`'s whole value and needs none of this. This is for
      the readers who will not have the report — the analysis payload, and a title on a board —
      for whom a run that published `converged · 0 still open` over a `strained` verdict naming
-     two unrepaired implementation defects was indistinguishable from one that was finished."
-    {:signature [:=> [:catn [:report ReviewReport]] [:maybe :map]]})
+     two unrepaired implementation defects was indistinguishable from one that was finished.
+
+     The count is of repair nobody was dispatched for: implementation findings still `owed`, and
+     every defect no round raised. A settled finding is the loop working, not a remainder."
+    {:signature [:=> [:catn [:report ReviewReport] [:owed :any]] [:maybe :map]]})
   (Operation with-review-entry
     "The report carrying what became of the run's own `:review` ledger entry.
 

@@ -123,8 +123,9 @@
      record is for."
     {:signature [:=> [:catn [:final :map]] :any]})
   (Operation kept-by-the-verdict
-    "The judge's own half of that remainder: the `:needs` of a verdict that asks nobody to
-     decide anything.
+    "The judge's own half of that remainder: the `:unraised` rows of a verdict that asks nobody
+     to decide anything — one per located defect no round raised. The verdict's `:needs` is
+     advice to a person and counts as nothing.
 
      Same shape as a decline — a located defect the branch ships, owed to no one — and until it
      was counted a `sound` verdict naming three of them published `0 still open` with nothing
@@ -134,7 +135,7 @@
 
      Never from a decision. Those put their `:needs` to a person and reach the gate as a
      blocker; counted here they would read as something already settled."
-    {:signature [:=> [:catn [:report :map]] [:maybe :string]]
+    {:signature [:=> [:catn [:report :map]] :any]
      :delegates [decision?]})
   (Operation settled-by-fixing
     "The defects the run REMOVED: findings a repair was aimed at and that no later reviewer
@@ -177,7 +178,8 @@
 
      Three things could move a judgment: the record it judges, the code it reads and the
      findings it classifies. The first is held fixed by matching :design-seq; this asks the
-     other two, and holds when the run raised nothing, decided nothing and dispatched no fix.
+     other two, and holds when the verdict's `:patch-hashes` are this run's final tree, and the
+     run raised nothing, decided nothing and dispatched no fix.
      Never for a DECISION — a question owed to a human is re-asked rather than re-asserted
      unlooked-at."
     {:signature [:=> [:catn [:prior :any] [:final :map] [:report :any]] :boolean]
@@ -185,12 +187,20 @@
   (Operation carried-forward
     "A standing verdict re-stated as this run's, marked with the entry an agent actually
      reached it at. The mark is what keeps the ledger honest: six unmarked identical verdicts
-     claim six readings of the code, and only the first of them is one."
-    {:signature [:=> [:catn [:prior :map] [:rounds :int]] :map]})
+     claim six readings of the code, and only the first of them is one. It keeps the round it
+     was reached after, which is the round its reason talks about."
+    {:signature [:=> [:catn [:prior :map]] :map]})
+  (Operation against-the-run
+    "A parsed verdict reconciled with the run it judged: an `:unraised` row naming a finding the
+     run raised is dropped, an invariant held over a still-open finding that contradicts it is
+     `:invariants-unmet`, standing answers are matched to the warden's items by index, and the
+     tree the judge read is stamped as `:patch-hashes` when it is known."
+    {:signature [:=> [:catn [:verdict :map] [:final :map] [:standing :any]] :map]
+     :delegates [open-across-run]})
   (Operation run!
     "Run the verdict pass, or carry the standing one when this run gave it nothing to revisit."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [build-prompt parse still-open still-answers? carried-forward]}))
+     :delegates [build-prompt parse still-open still-answers? carried-forward against-the-run]}))
 
 (Module review-layers
   "The session's stack of layers, and the reshaping the review may do to it.

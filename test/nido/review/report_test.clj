@@ -1151,15 +1151,30 @@
   (let [r (report/with-verdict
             (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
             {:outcome :answered :ledger :appended
-             :verdict (assoc a-verdict :findings-classified
-                             [{:finding "f1" :as :implementation}
-                              {:finding "f2" :as :implementation}
-                              {:finding "f3" :as :baseline}])})]
-    (is (= "strained" (:design-verdict (report/verdict-summary r))))
-    (is (= 2 (:verdict-implementation (report/verdict-summary r)))
-        "only the findings the judge laid at the implementation's door: those are
-         repair on the BRANCH the run dispatched nobody for, and the number the
-         status `0 still open` is contradicted by")))
+             :verdict (assoc a-verdict
+                             :findings-classified
+                             [{:finding "f1 — the sum" :as :implementation}
+                              {:finding "f2 — the rounding" :as :implementation}
+                              {:finding "f3" :as :baseline}]
+                             :unraised [{:where "a.clj:3" :what "nobody raised it"}])})]
+    (is (= "strained" (:design-verdict (report/verdict-summary r #{"f1" "f2"}))))
+    (is (= 3 (:verdict-implementation (report/verdict-summary r #{"f1" "f2"})))
+        "the implementation findings still owed, plus the defects no round raised:
+         repair on the BRANCH the run dispatched nobody for")
+    (is (= 1 (:verdict-implementation (report/verdict-summary r #{})))
+        "a finding the run already settled is the loop working, not repair it
+         owes — counted, `sound + 0` was unreachable for a run that fixed anything")))
+
+(deftest a-carried-verdict-says-so-in-the-summary
+  (let [r (report/with-verdict
+            (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+            {:outcome :answered :ledger :appended
+             :verdict (assoc a-verdict :carried-from 18
+                             :findings-classified [{:finding "b0229ac9" :as :implementation}])})]
+    (is (= {:design-verdict "strained" :verdict-implementation 0 :design-carried-from 18}
+           (report/verdict-summary r #{}))
+        "an earlier run's classification is not this run's repair, and a reader
+         has to know no judge read this run's code")))
 
 (deftest a-pass-that-decided-nothing-summarises-to-nothing
   ;; Absence rather than a zero. A run whose ledger has no design record and one
@@ -1167,8 +1182,10 @@
   ;; them would put the first in the payload as a verdict it never got.
   (is (nil? (report/verdict-summary
              (report/with-verdict (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
-                                  {:outcome :no-answer :because "its answer carried no verdict"}))))
-  (is (nil? (report/verdict-summary (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})))))
+                                  {:outcome :no-answer :because "its answer carried no verdict"})
+             #{})))
+  (is (nil? (report/verdict-summary (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+                                    #{}))))
 
 (deftest the-verdict-summary-reads-a-report-that-has-been-through-json
   ;; The same value is keywords in the process that folded it and strings once
@@ -1183,7 +1200,7 @@
                                         [{:finding "f1" :as :implementation}])})
                      path)
     (is (= {:design-verdict "strained" :verdict-implementation 1}
-           (report/verdict-summary (json/parse-string (slurp path) true))))))
+           (report/verdict-summary (json/parse-string (slurp path) true) #{"f1"})))))
 
 ;; ---- the rest of what the run's tail wrote --------------------------------
 

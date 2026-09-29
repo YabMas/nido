@@ -328,6 +328,9 @@
                            "finding"   "invoice.clj sums lines directly"}]
    "findings_classified" [{"finding" "the invoice reader re-rounds"
                            "as"      "implementation"}]
+   "unraised"            [{"where" "invoice.clj:40" "what" "sums lines itself"
+                           "finding" nil}]
+   "standing_answered"   [{"index" 0 "answer" "the suite ran green"}]
    "needs"               "move the sum back behind the aggregate"})
 
 (defn- template-fields
@@ -353,13 +356,14 @@
          filled here would leave the class half closed, which is how it opened")
     (doseq [v ["sound" "strained" "invalidated" "standing_challenged"]]
       (testing v
-        (let [parsed (verdict/parse
-                      (fenced (json/generate-string (assoc template-answer "verdict" v)))
-                      2 3)]
+        (let [parsed (-> (verdict/parse
+                          (fenced (json/generate-string (assoc template-answer "verdict" v)))
+                          2 3)
+                         (verdict/against-the-run {} ["confirm the suite passes"]))]
           (is (= #{:format :verdict :round :design-seq :reason
                    :invariants-held :invariants-broken
                    :load-bearing-held :load-bearing-broken
-                   :findings-classified :needs}
+                   :findings-classified :unraised :standing-answered :needs}
                  (set (keys parsed)))
               "parse keeps every field the template asked for, whatever the
                verdict — it is not the place a branch's vocabulary is applied")
@@ -641,22 +645,34 @@
 (defn- report-holding [v]
   {:summary {:rounds 3} :design-verdict {:outcome "answered" :verdict v}})
 
-(deftest a-sound-verdicts-needs-is-part-of-what-the-run-kept
+(def ^:private unraised-row
+  {:where "drive.clj:185" :what "cites a var that does not exist"})
+
+(deftest a-sound-verdicts-unraised-defects-are-part-of-what-the-run-kept
   ;; The run this comes from ended `clean · 0 still open` over a `sound` verdict
   ;; naming three located defects in a layer three rounds of reviewers had read.
   ;; Nobody was owed them — which is what makes them kept — but nothing counted
   ;; them either, so the headline was false in the one direction a reader has no
   ;; way to check.
-  (is (= "drive.clj:185 cites a var that does not exist"
+  (is (= [unraised-row]
          (verdict/kept-by-the-verdict
-          (report-holding {:verdict :sound :round 3
-                           :needs "drive.clj:185 cites a var that does not exist"})))
+          (report-holding {:verdict :sound :round 3 :unraised [unraised-row]})))
       "a judge that needs no decision can still be holding a defect the branch
        is about to ship")
-  (is (= "the boundary is under pressure at the third call site"
-         (verdict/kept-by-the-verdict
-          (report-holding {:verdict :strained :round 1
-                           :needs "the boundary is under pressure at the third call site"})))))
+  (is (= 2 (count (verdict/kept-by-the-verdict
+                   (report-holding {:verdict :strained :round 1
+                                    :unraised [unraised-row
+                                               {:where "a.clj:1" :what "another"}]}))))
+      "one per defect: three defects are three kept, not one paragraph"))
+
+(deftest a-verdicts-advice-is-not-a-kept-defect
+  ;; Five runs published `1 kept` over a :needs that held no defect: `Nothing is
+  ;; needed to ship`, a list of landing chores, a record edit, a pointer to an
+  ;; earlier verdict, a restatement of a finding still open.
+  (is (nil? (verdict/kept-by-the-verdict
+             (report-holding {:verdict :sound :round 3
+                              :needs "Nothing in the code. Re-baseline first-event."})))
+      "advice to a person is not a defect the branch ships"))
 
 (deftest a-decisions-needs-is-not-kept-it-is-asked
   ;; :invalidated and :standing-challenged put their :needs to a person, and
@@ -665,6 +681,7 @@
   ;; nobody has decided anything yet.
   (is (nil? (verdict/kept-by-the-verdict
              (report-holding {:verdict :invalidated :round 2
+                              :unraised [unraised-row]
                               :needs "supersede the record or undo the boundary move"}))))
   (is (nil? (verdict/kept-by-the-verdict
              (report-holding {:verdict :standing-challenged :round 2
@@ -674,9 +691,8 @@
   (is (nil? (verdict/kept-by-the-verdict
              (report-holding {:verdict :sound :round 1 :reason "the findings were details"}))))
   (is (nil? (verdict/kept-by-the-verdict
-             (report-holding {:verdict :sound :round 1 :needs "   "})))
-      "a blank :needs is what the parser already refuses to store; reading it as
-       a remainder would invent one")
+             (report-holding {:verdict :sound :round 1 :unraised []})))
+      "an empty list is no remainder; reading it as one would invent one")
   (is (nil? (verdict/kept-by-the-verdict {:summary {:rounds 1}}))
       "a run whose pass never answered kept nothing by way of it")
   (is (nil? (verdict/kept-by-the-verdict
@@ -688,10 +704,10 @@
   ;; outlived the process that wrote it — the one case where being wrong is
   ;; silent.
   (is (nil? (verdict/kept-by-the-verdict
-             (report-holding {:verdict "invalidated" :round 2 :needs "supersede it"}))))
-  (is (= "the comment is stale"
+             (report-holding {:verdict "invalidated" :round 2 :unraised [unraised-row]}))))
+  (is (= [unraised-row]
          (verdict/kept-by-the-verdict
-          (report-holding {:verdict "sound" :round 2 :needs "the comment is stale"}))))
+          (report-holding {:verdict "sound" :round 2 :unraised [unraised-row]}))))
   (is (verdict/decision? {:verdict "standing-challenged"})
       "and the same reading answers the question every other reader asks of it"))
 
@@ -702,6 +718,8 @@
   {:format :design-verdict :verdict :strained :round 4 :design-seq 3
    :seq 12 :at "2026-09-03T22:15:00Z"
    :reason "the unread indicator is read in two places"
+   :patch-hashes ["aaa" "bbb"]
+   :unraised [{:where "header.clj:12" :what "reads the unread count a second time"}]
    :needs "reconcile the indicator with the header badge, or say why both"})
 
 (deftest the-prompt-hands-the-judge-what-it-already-concluded
@@ -713,8 +731,10 @@
     (is (str/includes? p "the unread indicator is read in two places"))
     (is (str/includes? p "reconcile the indicator with the header badge"))
     (is (str/includes? p "verdict strained"))
-    (is (str/includes? p "Do NOT\n  restate the outstanding question in new words")
-        "restating it is what turns one held position into several decisions")
+    (is (str/includes? p "header.clj:12 — reads the unread count a second time")
+        "the defects it found are shown located, so a judge can copy them forward")
+    (is (str/includes? p "do NOT answer `unchanged`")
+        "a pointer in place of the defect lost the defect one run later")
     (is (str/includes? p "Overturning it is allowed")
         "a standing answer is a default to confirm or move, never a ruling to defer to")))
 
@@ -732,11 +752,27 @@
     (is (not (str/includes? p "WHAT YOU CONCLUDED LAST TIME"))
         "a first pass has no prior answer, and one is not invented for it")))
 
+(def ^:private same-tree #{"bbb" "aaa"})
+
 (deftest a-standing-verdict-answers-a-run-that-moved-nothing
-  (let [quiet {:status :clean :findings [] :history []}]
+  (let [quiet {:status :clean :findings [] :history [] :patch-hashes same-tree}]
     (is (verdict/still-answers? standing quiet {:summary {:fix-attempts 0}}))
     (is (not (verdict/still-answers? nil quiet {:summary {:fix-attempts 0}}))
         "no prior verdict is nothing to carry, not a licence to skip the pass")))
+
+(deftest a-verdict-is-carried-only-over-the-tree-it-read
+  ;; Four runs carried a verdict across a branch rebased, re-cut or edited
+  ;; between runs — one over the very repair of the defect its :needs named,
+  ;; one over a layer no judge had read. Dispatching no fixer is a fact about
+  ;; THIS run; the tree moving between runs is not.
+  (let [rpt {:summary {:fix-attempts 0}}
+        run #(hash-map :status :clean :findings [] :history [] :patch-hashes %)]
+    (is (not (verdict/still-answers? standing (run #{"aaa" "ccc"}) rpt))
+        "one layer's patch moved: the verdict read code that is no longer there")
+    (is (not (verdict/still-answers? standing (run #{}) rpt))
+        "a tree nobody could hash is not known to be the same tree")
+    (is (not (verdict/still-answers? (dissoc standing :patch-hashes) (run same-tree) rpt))
+        "a verdict that recorded no tree read one nobody can compare")))
 
 (deftest a-run-holding-anything-re-derives-the-verdict
   ;; Each of these is evidence the standing verdict was never shown.
@@ -763,7 +799,7 @@
         "a fixer edits code, and a repair that moves a boundary is what this pass exists to catch")
     (is (not (verdict/still-answers?
               standing
-              {:status :clean :findings [] :history []
+              {:status :clean :findings [] :history [] :patch-hashes same-tree
                :carry {:inherited-open [{:id "a" :layer "core"
                                          :title "the extent reader" :disposition :fix}]}}
               rpt))
@@ -773,7 +809,7 @@
          the unrepaired defect as a thing to do")
     (is (verdict/still-answers?
          standing
-         {:status :clean :findings []
+         {:status :clean :findings [] :patch-hashes same-tree
           :history [{:iter 1 :findings [{:id "a" :title "t" :disposition :closed}]}]
           :carry {:inherited-open [{:id "a" :layer "core" :title "t"}]}}
          rpt)
@@ -784,7 +820,7 @@
   ;; :invalidated and :standing-challenged are questions owed to a human.
   ;; Carrying one unlooked-at would escalate every run over a design that may
   ;; since have been repaired in the code.
-  (let [quiet {:status :clean :findings [] :history []}
+  (let [quiet {:status :clean :findings [] :history [] :patch-hashes same-tree}
         rpt   {:summary {:fix-attempts 0}}]
     (is (not (verdict/still-answers?
               (assoc standing :verdict :invalidated
@@ -794,8 +830,10 @@
               (assoc standing :verdict :standing-challenged) quiet rpt)))))
 
 (deftest a-carried-verdict-says-where-it-was-reached
-  (let [v (verdict/carried-forward standing 7)]
-    (is (= 7 (:round v)) "it answers for THIS run's rounds")
+  (let [v (verdict/carried-forward standing)]
+    (is (= 4 (:round v))
+        "the round it was REACHED after: its reason quotes that run's rounds, and
+         restamped it read `after round 2` over prose about round 3")
     (is (= 12 (:carried-from v)))
     (is (nil? (:seq v)) "the reader's stamp cannot be written back")
     (is (nil? (:at v)))
@@ -806,8 +844,8 @@
 (deftest a-carry-of-a-carry-still-names-the-entry-a-judge-reached-it-at
   ;; Five runs later the pointer must still land on the one place a judgment was
   ;; made, not on the last copy of it.
-  (let [once  (assoc (verdict/carried-forward standing 7) :seq 15)
-        twice (verdict/carried-forward once 9)]
+  (let [once  (assoc (verdict/carried-forward standing) :seq 15)
+        twice (verdict/carried-forward once)]
     (is (= 12 (:carried-from twice)))))
 
 (deftest the-pass-is-not-launched-when-the-standing-verdict-answers
@@ -816,11 +854,11 @@
                   stages/discover-prior-verdict (fn [_ _] standing)
                   agent/launch! (fn [_] (reset! launched true) {:num-turns 1 :result-text ""})]
       (let [v (verdict/run! {:cwd "/w" :run-id "r" :budget "30m"
-                             :final {:status :clean :findings [] :history []}
+                             :final {:status :clean :findings [] :history []
+                                     :patch-hashes same-tree}
                              :report {:summary {:rounds 2 :fix-attempts 0}}})]
         (is (false? @launched) "the minutes an agent costs are the whole point of the carry")
-        (is (= 12 (:carried-from v)))
-        (is (= 2 (:round v)))))))
+        (is (= 12 (:carried-from v)))))))
 
 (deftest a-run-with-something-to-judge-launches-the-pass-holding-the-prior
   (let [seen (atom nil)]
@@ -931,8 +969,9 @@
                   ws/read-ws (fn [& _] {:entries [{:seq 12 :kind :design-verdict}]})
                   ws/latest-entry (fn [_ _ kind]
                                     (when (= :design-verdict kind) (assoc standing :seq 12)))]
-      (is (= (:needs standing) (:needs (stages/standing-needs "/w")))
-          "within its own phase, the verdict's :needs still reach the reviewers"))))
+      (is (= "- header.clj:12 — reads the unread count a second time"
+             (:needs (stages/standing-needs "/w")))
+          "within its own phase, the verdict's unraised defects still reach the reviewers"))))
 
 (deftest an-unphased-prompt-says-nothing-about-phases
   (is (not (str/includes? (verdict/build-prompt {:design design :findings [] :history [] :rounds 1})
@@ -952,3 +991,61 @@
          carried, marked, and without the last run's claim of an unread repair")
     (is (not (verdict/still-answers? {:verdict :sound} (assoc final :findings []) {}))
         "a verdict is not carried over a workstream still holding a row")))
+
+;; ── A verdict reconciled with the run it judged ────────────────────────────
+
+(def ^:private judged
+  {:format :design-verdict :verdict :sound :round 2 :design-seq 3 :reason "r"})
+
+(deftest an-unraised-row-restating-a-raised-finding-is-not-kept-again
+  ;; Two runs published `2 still open · 1 kept` over one set of two defects:
+  ;; the verdict restated the open findings, and the count took it for a third.
+  (let [final {:findings [{:handle "54a44beb" :title "sniff" :disposition :fix}]
+               :history []}
+        v     (verdict/against-the-run
+               (assoc judged :unraised [{:where "a.clj:1" :what "the sniff again"
+                                         :finding "54a44beb"}
+                                        {:where "b.clj:9" :what "nobody saw this"}])
+               final [])]
+    (is (= [{:where "b.clj:9" :what "nobody saw this"}] (:unraised v))
+        "a row naming a finding the run raised is that finding, counted already")))
+
+(deftest an-invariant-an-open-finding-contradicts-is-unmet-not-held
+  ;; A sound verdict has no slot for a design the code falls short of, so the
+  ;; judge listed as confirmed the claim a still-open finding contradicts by id.
+  (let [final {:findings [{:handle "54a44beb" :title "sniff" :disposition :fix
+                           :contradicts "parsed-before-kept"}]
+               :history []}
+        v     (verdict/against-the-run
+               (assoc judged :invariants-held ["[parsed-before-kept]" "one-writer"])
+               final [])]
+    (is (= ["one-writer"] (:invariants-held v))
+        "the ledger may not call a claim confirmed that an open finding contradicts")
+    (is (= [{:invariant "[parsed-before-kept]" :finding "54a44beb"}] (:invariants-unmet v))
+        "the design stands and the code falls short, which is a different entry")
+    (is (= v (report/validate-event :design-verdict v)))))
+
+(deftest a-standing-answer-is-recorded-with-the-item-it-answers
+  (let [v (verdict/against-the-run
+           (assoc judged ::verdict/standing-answers [{:index 1 :answer "179 tests, no stall"}
+                                                     {:index 5 :answer "names nothing"}])
+           {} ["the UTC question" "confirm the live tests do not stall"])]
+    (is (= [{:item "confirm the live tests do not stall" :answer "179 tests, no stall"}]
+           (:standing-answered v))
+        "matched by index, and an index outside the list names nothing")
+    (is (= v (report/validate-event :design-verdict v)))))
+
+(deftest a-verdict-records-the-tree-it-read
+  (is (= ["aaa" "bbb"]
+         (:patch-hashes (verdict/against-the-run judged {:patch-hashes #{"bbb" "aaa"}} [])))
+      "sorted, so two runs over one tree record one value")
+  (is (nil? (:patch-hashes (verdict/against-the-run
+                            judged {:patch-hashes #{"aaa"} :fixes [{:layer "l"}]} [])))
+      "a repair after the reading moved the tree the judge read, so the hashes
+       before it are not that tree — and an unstamped verdict is never carried"))
+
+(deftest the-prompt-numbers-the-standing-items
+  (let [p (verdict/build-prompt {:design design :findings [] :history [] :rounds 1
+                                 :standing ["the UTC question" "run the live tests"]})]
+    (is (str/includes? p "0: the UTC question\n1: run the live tests")
+        "answered by index, so the fold that retires one never matches reworded prose")))

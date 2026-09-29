@@ -148,6 +148,16 @@
         "a run whose ledger holds no design record got no verdict, and must not
          reach the analysis carrying a zero that reads like one")))
 
+(deftest the-headline-says-whether-a-judge-read-this-runs-code
+  ;; `1 kept` over a carried verdict had to be worked out from file lists and
+  ;; the cache's hash history: the headline never said the verdict was carried.
+  (let [h (:headline (analysis/payload (assoc a-run :design-verdict "strained"
+                                              :design-carried-from 18)))]
+    (is (str/includes? h "Design: strained, carried from entry 18")))
+  (let [h (:headline (analysis/payload (assoc a-run :design-verdict "sound")))]
+    (is (str/includes? h "Design: sound"))
+    (is (not (str/includes? h "carried from entry")))))
+
 (deftest the-title-says-when-the-judge-disagreed-with-the-status
   (is (str/includes? (:title (analysis/payload (assoc a-run :design-verdict "strained")))
                      "design strained"))

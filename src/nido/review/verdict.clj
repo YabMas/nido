@@ -154,19 +154,44 @@
          (when-let [b (seq (:load-bearing-broken prior))]
            (str "And these load-bearing properties broken without being declared:\n"
                 (bullets (map #(str (:invariant %) " — by " (:finding %)) b)) "\n"))
+         (when-let [u (seq (:unraised prior))]
+           (str "It found these defects in the code that no round raised:\n"
+                (bullets (map #(str (:where %) " — " (:what %)) u)) "\n"))
          (when-let [n (:needs prior)]
-           (str "It left this outstanding, and nobody has answered it:\n" n "\n"))
+           (str "And it advised:\n" n "\n"))
          "\n"
          "That verdict STANDS unless this round moved it, and your job is to say\n"
          "which:\n"
          "- Nothing moved: reach the same verdict and say so in a line. Do NOT\n"
-         "  restate the outstanding question in new words. It is above, it is\n"
-         "  still open, and rewriting it every run makes one standing decision\n"
-         "  read as several.\n"
+         "  restate the advice in new words, and do NOT answer `unchanged` —\n"
+         "  copy every defect above that is still in the code into `unraised`\n"
+         "  as it stands. A pointer to an earlier verdict is lost the moment the\n"
+         "  earlier verdict stops being shown.\n"
          "- Something moved: name WHAT — a finding that contradicts it, an\n"
          "  invariant this round confirmed, a boundary since repaired — and\n"
          "  reach the verdict that follows from it.\n"
          "Overturning it is allowed. Re-deriving it from scratch is not.\n")))
+
+(defn- standing-section
+  "The terminal warden's standing items — `report/stopped-on`'s `:standing` —
+   numbered, so the judge can answer one by its index, or nil when there are
+   none.
+
+   A standing item names something no finding covers, so the verdict pass is
+   the only reader after the loop that can check one against the code. Answered
+   in prose, it stayed open everywhere a person reads: the payload published the
+   warden's question beside a verdict that had already run the tests it asked
+   for. By index, never by rewording, because the fold that retires an answered
+   item matches it exactly."
+  [standing]
+  (when (seq standing)
+    (str "\nSTANDING — what the last warden knew was open and handed to nobody:\n"
+         (->> standing
+              (map-indexed (fn [i item] (str i ": " item)))
+              (str/join "\n"))
+         "\nWhere the code settles one, put it in standing_answered with its\n"
+         "index and the answer. Leave out any you could not settle — those stay\n"
+         "open.\n")))
 
 (defn- not-landed
   "The rows of a `stages/fix-outcomes` whose fixer got nothing into the code.
@@ -263,9 +288,10 @@
    design's phase plan (`record.phase/progress`), nil when unphased or unread.
    `inherited` is what the last run left owed that this one never answered —
    `stages/unanswered-inherited` — which no round's findings mention, so a judge
-   shown only those says `nothing is open` beside an entry that lists them."
+   shown only those says `nothing is open` beside an entry that lists them.
+   `standing` is the terminal warden's standing list, see `standing-section`."
   [{:keys [design baseline stance findings inherited history rounds prior status
-           fix-outcomes progress]}]
+           fix-outcomes progress standing]}]
   (str
    (opening status (not-landed fix-outcomes))
    "Read the code where you need to — you have tools, and the question cannot be\n"
@@ -331,6 +357,7 @@
                            (when disposition (str " — ruled " (name disposition))))))
                (str/join "\n"))
           "\n"))
+   (standing-section standing)
    ;; Last, so the judge reads this round's evidence before it is reminded what
    ;; it already decided — the standing answer is what the new evidence is
    ;; weighed against, not the frame it is read through.
@@ -344,7 +371,19 @@
    " \"load_bearing_held\": [\"...\"],\n"
    " \"load_bearing_broken\": [{\"invariant\": \"...\", \"finding\": \"...\"}],\n"
    " \"findings_classified\": [{\"finding\": \"...\", \"as\": \"implementation|design|stance|baseline\"}],\n"
+   " \"unraised\": [{\"where\": \"file:line\", \"what\": \"...\", \"finding\": null}],\n"
+   " \"standing_answered\": [{\"index\": 0, \"answer\": \"...\"}],\n"
    " \"needs\": \"...\"}\n\n"
+   "- findings_classified: name each finding by the handle shown before its\n"
+   "  title, then say what it is.\n"
+   "- unraised: every DEFECT you found in the code that no round raised,\n"
+   "  one row each, located at a file and line — whatever the verdict. It is\n"
+   "  the only way such a defect reaches the next run's reviewers. A row\n"
+   "  about a finding the rounds did raise names its handle in `finding`;\n"
+   "  it is already counted, so prefer leaving it out.\n"
+   "- needs: what a PERSON should do or decide — advice, a record to amend,\n"
+   "  a chore before landing. Never a defect in the code; those go in\n"
+   "  unraised. Leave it empty when there is nothing to say.\n"
    "- sound: the findings were implementation details. THIS IS THE EXPECTED\n"
    "  OUTCOME. Populate invariants_held with the ones this round actually\n"
    "  confirmed — that is the point of the verdict, not a formality.\n"
@@ -400,6 +439,25 @@
                                   (when (#{:implementation :design :stance :baseline} as)
                                     {:finding (str (:finding %)) :as as})))
                          (:findings_classified m)))
+
+            (seq (:unraised m))
+            (assoc :unraised
+                   (into []
+                         (keep (fn [{:keys [where what finding]}]
+                                 (when-not (or (str/blank? (str where)) (str/blank? (str what)))
+                                   (cond-> {:where (str/trim (str where))
+                                            :what  (str/trim (str what))}
+                                     (not (str/blank? (str finding)))
+                                     (assoc :finding (str/trim (str finding)))))))
+                         (:unraised m)))
+
+            (seq (:standing_answered m))
+            (assoc ::standing-answers
+                   (into []
+                         (keep (fn [{:keys [index answer]}]
+                                 (when (and (integer? index) (not (str/blank? (str answer))))
+                                   {:index index :answer (str/trim (str answer))})))
+                         (:standing_answered m)))
 
             (not (str/blank? (str (:needs m))))
             (assoc :needs (str (:needs m))))))
@@ -630,10 +688,10 @@
   [final]
   (into [] (filter stages/kept?) (final-rulings final)))
 
-(defn ^{:malli/schema [:=> [:cat :map] [:maybe :string]]}
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
   kept-by-the-verdict
-  "The design judge's own remainder, out of `report`: the `:needs` of a verdict
-   that asks nobody to decide anything — or nil.
+  "The design judge's own remainder, out of `report`: the `:unraised` rows of a
+   verdict that asks nobody to decide anything — or nil.
 
    Same shape as a decline. The judge names a located defect, no round raised
    it, no fixer was handed it, and the run ships it anyway; nobody is owed
@@ -641,6 +699,12 @@
    to lose. Uncounted, a `sound` verdict naming three defects in a layer three
    rounds of reviewers had read published `clean · 0 still open` with no
    remainder beside it — a headline the judge's own entry contradicts.
+
+   One per ROW, and rows only. `:needs` is the judge's advice to a person and
+   counts as nothing: counted, it made `1 kept` out of `nothing is needed to
+   ship`, a list of landing chores, a record edit, a pointer to an earlier
+   verdict and a restatement of a finding still open. A row restating a finding
+   the run raised never reaches here — `against-the-run` drops it.
 
    Only from a verdict that leaves the design STANDING, on
    `stages/standing-needs`' argument: :invalidated and :standing-challenged put
@@ -652,10 +716,8 @@
    report is where `report/with-verdict` has put it."
   [report]
   (let [v (get-in report [:design-verdict :verdict])]
-    (when (and (:verdict v)
-               (not (decision? v))
-               (not (str/blank? (str (:needs v)))))
-      (str (:needs v)))))
+    (when (and (:verdict v) (not (decision? v)))
+      (not-empty (vec (:unraised v))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   handed-to-a-fixer
@@ -756,6 +818,12 @@
    only offers a verdict carrying the same :design-seq. The other two are what
    this asks about, and nido can answer them without an agent:
 
+   - The tree is the one the verdict read: its `:patch-hashes` are this run's
+     final round's, exactly. A branch rebased, re-cut or edited BETWEEN runs is
+     code no judge read, and a run that dispatched no fixer says nothing about
+     that — carried over it, a verdict republished a repaired defect as shipped
+     and a sound design over a layer no judge had seen. A verdict with no
+     hashes read a tree nobody recorded, and is never carried.
    - The run raised nothing and decided nothing. Every finding is settled and
      none was kept, so there is no evidence in front of this pass that was not
      in front of the last one. `still-owed` and `kept-across-run` are read
@@ -788,14 +856,20 @@
   (boolean
    (and prior
         (not (decision? prior))
+        (seq (:patch-hashes prior))
+        (= (set (:patch-hashes prior)) (set (map str (:patch-hashes final))))
         (empty? (still-owed final))
         (empty? (kept-across-run final))
         (zero? (or (get-in report [:summary :fix-attempts]) 0)))))
 
-(defn ^{:malli/schema [:=> [:cat :map :int] :map]}
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
   carried-forward
   "`prior` re-stated as this run's verdict: the same judgment, stamped with the
-   round it now answers for and with the entry an agent actually reached it at.
+   entry an agent actually reached it at.
+
+   Its `:round` is the round it was REACHED after, not this run's: the reason
+   quotes that run's rounds, and restamped it read `after round 2` over prose
+   about round 3 of a run the reader cannot see.
 
    :carried-from is what keeps the ledger honest, and it is the reason this is a
    re-statement rather than a silence. A run that records a verdict no agent
@@ -810,11 +884,16 @@
 
    `unstamp` because :seq and :at belong to the reader: the write schema is
    closed and refuses an entry carrying them."
-  [prior rounds]
+  [prior]
   (-> prior
       ws/unstamp
-      (assoc :round rounds
-             :carried-from (or (:carried-from prior) (:seq prior)))))
+      (assoc :carried-from (or (:carried-from prior) (:seq prior)))))
+
+(defn- bare-claim
+  "A claim id as the design states it. The prompt renders ids in brackets and a
+   judge quotes them back so."
+  [x]
+  (str/replace (str/trim (str x)) #"^\[|\]$" ""))
 
 (defn- held-to-claims
   "`verdict` as the ledger may record it against a design stating `claim-ids`, or nil when it
@@ -825,19 +904,74 @@
    state is dropped: a confirmation of nothing loses nothing true by going. A broken one makes the
    whole answer a non-answer, because dropping it could turn an accusation into a clean verdict.
 
-   Ids are compared bare — the prompt renders them in brackets and a judge quotes them back so.
+   Ids are compared bare — see `bare-claim`.
    `claim-ids` nil, for a design from before the shared model whose invariants carry no ids,
    leaves the verdict as parsed."
   [verdict claim-ids]
   (if (nil? claim-ids)
     verdict
-    (let [bare   #(str/replace (str/trim (str %)) #"^\[|\]$" "")
-          broken (mapv #(update % :invariant bare) (:invariants-broken verdict))
-          held   (into [] (comp (map bare) (filter claim-ids)) (:invariants-held verdict))]
+    (let [broken (mapv #(update % :invariant bare-claim) (:invariants-broken verdict))
+          held   (into [] (comp (map bare-claim) (filter claim-ids)) (:invariants-held verdict))]
       (when (every? #(contains? claim-ids (:invariant %)) broken)
         (cond-> (dissoc verdict :invariants-held :invariants-broken)
           (seq held)   (assoc :invariants-held held)
           (seq broken) (assoc :invariants-broken broken))))))
+
+(defn- raised-identities
+  "Every id and handle the run raised or was handed — every round's findings
+   and the rows the last run left that this one inherited. What an `:unraised`
+   row may not name."
+  [final]
+  (into #{}
+        (comp (mapcat (juxt :id :handle)) (remove nil?) (map str))
+        (concat (:findings final)
+                (mapcat :findings (:history final))
+                (stages/unanswered-inherited final))))
+
+(defn ^{:malli/schema [:=> [:cat :map :map :any] :map]}
+  against-the-run
+  "A parsed verdict, reconciled with the run it judged, as the ledger records
+   it. Four things the judge cannot be trusted to keep straight, each decided
+   here mechanically:
+
+   - An `:unraised` row naming a finding the run raised is a restatement, and
+     is dropped: that finding is already open or kept, and counting it again
+     made one set of two defects read `2 still open · 1 kept`.
+   - An invariant the judge lists as held that a finding still open
+     `:contradicts` moves to `:invariants-unmet`. A sound verdict had no slot
+     for a design the code falls short of, so it listed the contradicted claim
+     as confirmed.
+   - Standing answers name an item by index into `standing`, and are recorded
+     with the item's text; an index outside it names nothing and is dropped.
+   - `:patch-hashes` is stamped when the tree the judge read is known — the
+     final round's hashes, when that round landed no repair. A repair after the
+     reading moved the tree, and a verdict stamped with the tree before it would
+     carry onto a tree it never read."
+  [v final standing]
+  (let [raised    (raised-identities final)
+        unraised  (into [] (comp (remove #(contains? raised (:finding %)))
+                                 (map #(dissoc % :finding)))
+                        (:unraised v))
+        contra    (into {} (keep (fn [f] (when-let [c (:contradicts f)]
+                                           [(bare-claim c)
+                                            (str (or (:handle f) (:id f) (:title f)))])))
+                        (open-across-run final))
+        unmet     (into [] (keep #(when-let [f (contra (bare-claim %))]
+                                    {:invariant (str %) :finding f}))
+                        (:invariants-held v))
+        held      (into [] (remove #(contains? contra (bare-claim %))) (:invariants-held v))
+        answered  (into [] (keep (fn [{:keys [index answer]}]
+                                   (when (< -1 index (count standing))
+                                     {:item (str (nth standing index)) :answer answer})))
+                        (::standing-answers v))
+        hashes    (sort (map str (:patch-hashes final)))]
+    (cond-> (dissoc v ::standing-answers :unraised :invariants-held)
+      (seq unraised) (assoc :unraised unraised)
+      (seq held)     (assoc :invariants-held held)
+      (seq unmet)    (assoc :invariants-unmet unmet)
+      (seq answered) (assoc :standing-answered answered)
+      (and (seq hashes) (empty? (:fixes final)))
+      (assoc :patch-hashes (vec hashes)))))
 
 (defn- plan-progress
   "Where the workstream at `cwd` is in the plan that governs it (`ws/plan-design` —
@@ -859,6 +993,8 @@
    names as broken a claim the design does not state — each means 'nothing to
    record', never a fabricated :sound.
 
+   A fresh verdict is recorded as `against-the-run` reconciles it.
+
    A standing verdict this run gave no reason to revisit is carried forward
    instead of re-derived; see `still-answers?` for when that holds and
    `carried-forward` for what the entry then says. `stages/discover-prior-verdict`
@@ -867,10 +1003,11 @@
   (when-let [design (stages/discover-design-record cwd)]
     (let [;; nil for a verdict reached in another phase, which answered another
           ;; question: it is neither carried nor offered to the fresh pass as standing.
-          prior  (stages/discover-prior-verdict cwd design)
-          rounds (or (get-in report [:summary :rounds]) 0)]
+          prior    (stages/discover-prior-verdict cwd design)
+          rounds   (or (get-in report [:summary :rounds]) 0)
+          standing (vec (get-in report [:reason :standing]))]
       (if (still-answers? prior final report)
-        (carried-forward prior rounds)
+        (carried-forward prior)
         (let [prompt (build-prompt
                       {:design design
                        :baseline (stages/discover-baseline cwd design)
@@ -882,7 +1019,8 @@
                        :status (:status final)
                        :rounds rounds
                        :prior prior
-                       :progress (plan-progress cwd)})
+                       :progress (plan-progress cwd)
+                       :standing standing})
               {:keys [num-turns result-error? result-text]}
               (agent/launch! {:run-id run-id :cwd cwd
                               :first-message prompt :budget budget
@@ -890,4 +1028,5 @@
           (when-not (or (zero? (or num-turns 0)) result-error?)
             (some-> (parse result-text rounds (:seq design))
                     (held-to-claims (when (contains? design :model)
-                                      (into #{} (map :id) (claim-model/claims design)))))))))))
+                                      (into #{} (map :id) (claim-model/claims design))))
+                    (against-the-run final standing))))))))

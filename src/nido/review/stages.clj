@@ -1711,7 +1711,8 @@
 (defn ^{:malli/schema [:=> [:cat :Path] [:maybe :map]]}
   standing-needs
   "What the last verdict against this workstream's design record left
-   outstanding, as `{:round :verdict :needs}` — or nil.
+   outstanding, as `{:round :verdict :needs}` — or nil. `:needs` is the
+   verdict's `:unraised` rows, one `where — what` line each.
 
    The verdict pass names concrete, located defects, and it runs after the loop
    has already returned, so no reviewer, warden or fixer in the run that
@@ -1721,9 +1722,12 @@
    fixer can be handed. Without it a verdict can name the same located defect
    run after run and nothing in the loop is ever able to hear it.
 
-   :needs alone, out of everything a verdict carries. :invariants-broken and
+   :unraised alone, out of everything a verdict carries. :invariants-broken and
    :load-bearing-broken each name the finding that broke them, so they were
-   raised by construction; :needs is the field for what nobody raised.
+   raised by construction; :unraised is the field for what nobody raised. The
+   verdict's own :needs is advice to a person — a chore before landing, a record
+   to amend — and handed to a reviewer as a thing to find in the code it became
+   a question no reviewer could answer, run after run.
 
    Only from a verdict that leaves the design STANDING. :invalidated and
    :standing-challenged put their :needs to a person — that is what makes them
@@ -1734,8 +1738,9 @@
   (when-let [design (discover-design-record cwd)]
     (when-let [v (discover-prior-verdict cwd design)]
       (when (and (not (report/verdict-invalidates (:verdict v)))
-                 (not (str/blank? (str (:needs v)))))
-        {:round (:round v) :verdict (:verdict v) :needs (:needs v)}))))
+                 (seq (:unraised v)))
+        {:round (:round v) :verdict (:verdict v)
+         :needs (str/join "\n" (map #(str "- " (:where %) " — " (:what %)) (:unraised v)))}))))
 
 (def ^:private person-answers
   "The entry kinds that are a person answering the workstream's open questions:

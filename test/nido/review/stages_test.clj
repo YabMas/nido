@@ -1922,12 +1922,13 @@
                                       :design         {:seq 3}
                                       :design-verdict {:verdict :strained :design-seq 3
                                                        :round 4 :reason "pressure"
-                                                       :needs "close-turn! still tests (empty? open)"}
+                                                       :unraised [{:where "turn.clj:40"
+                                                                   :what "close-turn! still tests (empty? open)"}]}
                                       nil))
                   pass/review! (fn [opts] (reset! seen opts)
                                   {:status :clean :findings []})]
       ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})
-      (is (= "close-turn! still tests (empty? open)"
+      (is (= "- turn.clj:40 — close-turn! still tests (empty? open)"
              (get-in @seen [:standing :needs]))))))
 
 ;; ---- fan-out: every layer plus the whole stack ---------------------------
@@ -4307,10 +4308,22 @@
   (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                 ws/latest-entry (ledger-of {:verdict :strained :design-seq 3 :round 4
                                             :reason "the seam is under pressure"
-                                            :needs "close-turn! still tests (empty? open)"})]
+                                            :unraised [{:where "turn.clj:40"
+                                                        :what "close-turn! still tests (empty? open)"}]
+                                            :needs "re-baseline the turn record"})]
     (is (= {:round 4 :verdict :strained
-            :needs "close-turn! still tests (empty? open)"}
-           (stages/standing-needs "/w"))))
+            :needs "- turn.clj:40 — close-turn! still tests (empty? open)"}
+           (stages/standing-needs "/w"))
+        "the located defects, and not the advice beside them"))
+
+  (testing "advice alone is not a question a reviewer can answer in code"
+    ;; One verdict's :needs became `The earlier outstanding item is unchanged`,
+    ;; and ten reviewers were handed it as a thing to find.
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (ledger-of {:verdict :sound :design-seq 3 :round 2
+                                              :reason "nothing moved"
+                                              :needs "The earlier outstanding item is unchanged."})]
+      (is (nil? (stages/standing-needs "/w")))))
 
   (testing "a verdict that named nothing outstanding seeds nothing"
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])

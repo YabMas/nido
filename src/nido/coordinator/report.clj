@@ -2204,6 +2204,23 @@
    [:invariant string?]
    [:finding   string?]])
 
+(def UnraisedDefect
+  "A located defect the design judge found in the code that no round of the run
+   raised. The one part of a verdict that counts as a defect the branch keeps —
+   advice, landing chores and questions for a person go in `:needs`, which
+   counts as nothing."
+  [:map {:closed true}
+   [:where string?]
+   [:what  string?]])
+
+(def StandingAnswer
+  "One of the terminal warden's standing items the judge answered from the code.
+   `:item` is the warden's text, verbatim; items the judge did not answer are
+   still open and are not listed."
+  [:map {:closed true}
+   [:item   string?]
+   [:answer string?]])
+
 (def ^:private design-verdict-fields
   "What a design verdict may carry, in the order the prompt's JSON template asks
    a judge for it. Every one of these reaches every branch of `DesignVerdict`,
@@ -2222,12 +2239,21 @@
    ;; repeated independent confirmation — six unmarked identical verdicts claim
    ;; six readings of the code, and only the first of them is one.
    [:carried-from {:optional true} int?]
+   ;; The patch hashes of the tree the judge read — `stages/content-hashes` of
+   ;; the final round, sorted. Absent when that is not known, and then the
+   ;; verdict is never carried: a verdict carries only over the tree it read.
+   [:patch-hashes {:optional true} [:vector string?]]
    [:reason string?]
    [:invariants-held {:optional true} [:vector string?]]
    [:invariants-broken {:optional true} [:vector BrokenInvariant]]
+   ;; Held by the design, contradicted by a finding still open: the design
+   ;; stands and the code falls short of it. Never listed as held.
+   [:invariants-unmet {:optional true} [:vector BrokenInvariant]]
    [:load-bearing-held {:optional true} [:vector string?]]
    [:load-bearing-broken {:optional true} [:vector BrokenInvariant]]
    [:findings-classified {:optional true} [:vector ClassifiedFinding]]
+   [:unraised {:optional true} [:vector UnraisedDefect]]
+   [:standing-answered {:optional true} [:vector StandingAnswer]]
    [:needs {:optional true} string?]])
 
 (defn- design-verdict-branch
@@ -2269,7 +2295,10 @@
    :needs is optional on :sound and :strained rather than absent. The prompt asks
    for it unconditionally, and a :strained verdict's needs is the most actionable
    paragraph the pass produces: it is what says where the pressure is and what to
-   do about it."
+   do about it. It is prose for a person and never a count; what the judge found
+   wrong IN THE CODE is `:unraised`, one row per located defect, because one
+   free-text slot was counted as a kept defect whether it held a defect, a
+   landing chore, a record edit or a restatement of a finding still open."
   [:multi {:dispatch :verdict}
    [:sound               (design-verdict-branch :sound nil)]
    [:strained            (design-verdict-branch :strained nil)]
@@ -3850,20 +3879,24 @@
   "What a design verdict's `:needs` IS, which the verdict carrying it decides.
 
    Under :invalidated or :standing-challenged it is a question only a person can
-   close, and the gate offers them the branches. Under :sound or :strained the
-   judge named a located defect the rounds did not raise and nobody is being
-   asked to rule on it: it is remainder, counted with the run's other kept
-   findings and re-offered to the next run's reviewers by
-   `nido.review.stages/standing-needs`. Headed as a decision it told a reader
-   the opposite of what the entry three lines above it said, and told them to
-   wait for a ruling that was never going to be asked for.
+   close, and the gate offers them the branches. Under :sound or :strained it is
+   the judge's advice — a landing chore, a record to amend, a question worth
+   asking — and nobody is being asked to rule on it. Headed as a decision it
+   told a reader to wait for a ruling that was never going to be asked for.
+
+   What no reviewer raised is not here: that is `:unraised`, see
+   `UnraisedDefect`, and it has its own heading.
 
    Shape-agnostic, because both callers render an entry that may have been
    through EDN or JSON."
   [verdict]
   (if (some-> verdict name keyword verdict-invalidates)
     "Needs a decision"
-    "What no reviewer raised"))
+    "Advice — no defect"))
+
+(def unraised-heading
+  "The heading over a design verdict's `:unraised`, wherever it is rendered."
+  "What no reviewer raised")
 
 (defn- ruling->markdown
   "What a judgement left without a confirmation, as lines under their own headings: the checks
@@ -3938,14 +3971,18 @@
       ["\n## For you to decide" asks]))))
 
 (defn- design-verdict->markdown
-  [{:keys [verdict round reason invariants-held invariants-broken
-           load-bearing-held load-bearing-broken findings-classified needs]}]
+  [{:keys [verdict round reason invariants-held invariants-broken invariants-unmet
+           load-bearing-held load-bearing-broken findings-classified unraised
+           standing-answered needs carried-from]}]
   (str/join
    "\n"
    (remove nil?
      (concat
       [(str "# Design verdict: " (name verdict))
-       (str "after round " round)
+       (str "after round " round
+            (when carried-from
+              (str " · carried from entry " carried-from
+                   " — the same tree, not read again")))
        "" reason]
       (when (seq invariants-held)
         (cons "\n## Invariants this round confirmed"
@@ -3954,6 +3991,10 @@
         (cons "\n## Invariants contradicted"
               (for [{:keys [invariant finding]} invariants-broken]
                 (str "- " invariant "\n  - by: " finding))))
+      (when (seq invariants-unmet)
+        (cons "\n## Invariants the code does not meet yet — the design stands"
+              (for [{:keys [invariant finding]} invariants-unmet]
+                (str "- " invariant "\n  - open: " finding))))
       (when (seq load-bearing-held)
         (cons "\n## Load-bearing properties still standing"
               (for [i load-bearing-held] (str "- " i))))
@@ -3965,6 +4006,13 @@
         (cons "\n## Findings by layer"
               (for [{:keys [finding as]} findings-classified]
                 (str "- [" (name as) "] " finding))))
+      (when (seq unraised)
+        (cons (str "\n## " unraised-heading)
+              (for [{:keys [where what]} unraised] (str "- " where " — " what))))
+      (when (seq standing-answered)
+        (cons "\n## Standing items the verdict answered"
+              (for [{:keys [item answer]} standing-answered]
+                (str "- " item "\n  - " answer))))
       (when needs [(str "\n## " (verdict-needs-heading verdict)) needs])))))
 
 (defn- findings->markdown [{:keys [round staging-ref note items]}]

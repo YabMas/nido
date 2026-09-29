@@ -138,6 +138,10 @@
    zero, because a `sound` verdict over no implementation findings is the
    sentence that says the run is genuinely done.
 
+   A `Design:` line says the verdict in the headline too, and that it was
+   carried when it was: the kept count may include what that verdict found, and
+   a reader has to know whether a judge read THIS run's code to weigh it.
+
    `:review-entry` is what became of the run's own `:review` ledger entry —
    `report/with-review-entry`'s answer, carried whole. It is the one field here
    that is about the RECORD rather than about the run, and it is in the title
@@ -176,7 +180,7 @@
            findings-remaining findings-kept remaining-handed remaining-parked
            targets-reviewed targets-skipped unfixable parked standing
            drift unavailable base in-flight errored design-verdict verdict-implementation
-           review-entry reviewed-project reviewed-session reviewed-ws-id] :as run}]
+           design-carried-from review-entry reviewed-project reviewed-session reviewed-ws-id] :as run}]
   ;; `:in-flight` is the reconciler's reading of an orphan's report and is the
   ;; same value `worth-analysing?` gates on; the phase is the half of it that
   ;; means something to a reader, so it is published and the round is not.
@@ -230,6 +234,11 @@
                                       "Coverage: " (or targets-reviewed 0) " targets read this run, "
                                       (or targets-skipped 0) " carried from an earlier run\n"
                                       (reviewed-line run (str " (base " base ")"))
+                                      (when verdict
+                                        (str "\nDesign: " verdict
+                                             (when design-carried-from
+                                               (str ", carried from entry " design-carried-from
+                                                    " — not read again"))))
                                       (when unavailable
                                         (str "\nReviewer unavailable: " (:message unavailable)))
                                       (when (= "superseded" ledger)
@@ -255,6 +264,7 @@
       died-in          (assoc :died-in died-in)
       verdict          (assoc :design-verdict verdict
                               :verdict-implementation (or verdict-implementation 0))
+      design-carried-from (assoc :design-carried-from design-carried-from)
       reviewed-project (assoc :reviewed-project (name reviewed-project))
       reviewed-session (assoc :reviewed-session reviewed-session)
       reviewed-ws-id   (assoc :reviewed-ws-id reviewed-ws-id))))

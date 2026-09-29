@@ -4,7 +4,8 @@
    (apply-event). Pure — persistence is one explicit fn (persist!)."
   (:require
    [babashka.fs :as fs]
-   [cheshire.core :as json]))
+   [cheshire.core :as json]
+   [clojure.string :as str]))
 
 (def schema-version 1)
 
@@ -1169,32 +1170,43 @@
            because (assoc :because because)
            verdict (assoc :verdict verdict))))
 
-(defn ^{:malli/schema [:=> [:cat :ReviewReport] [:maybe :map]]}
+(defn ^{:malli/schema [:=> [:cat :ReviewReport :any] [:maybe :map]]}
   verdict-summary
-  "What the design verdict DECIDED, in the two facts that fit somewhere a reader
+  "What the design verdict DECIDED, in the facts that fit somewhere a reader
    who cannot open the report will look: `{:design-verdict \"strained\"
-   :verdict-implementation 2}`. nil when the pass produced no verdict at all.
+   :verdict-implementation 2}`, and `:design-carried-from` when no judge read
+   this run's code and the verdict is an earlier one standing. nil when the pass
+   produced no verdict at all.
 
    `with-verdict` beside it records what became of the PASS, which is a different
    question and a longer answer — the verdict travels whole so a ledger refusal
    can be diagnosed from the report alone. This is the headline.
 
-   The count is of findings the judge laid at the IMPLEMENTATION's door: real
-   defects on the branch that the design does not explain away. `:design` and
-   `:stance` name work on the record rather than on the code, and `:baseline`
-   says the survey was wrong — none of them is repair the loop failed to
-   dispatch, which is what this number is asked about.
+   The count is of repair the loop dispatched nobody for: a finding STILL OWED
+   that the judge laid at the implementation's door, plus every located defect
+   no round raised (`:unraised`). `owed` is the ids and handles of what the run
+   still owes, and a classified finding counts when its text names one — the
+   judge names a finding by its handle. A finding the run already settled is
+   the loop working, and counting it made `sound + 0`, the sentence that says a
+   run is genuinely done, unreachable for any run that found and fixed
+   something. `:design`, `:stance` and `:baseline` name work on the record or
+   the survey rather than on the code.
 
    Shape-agnostic on the classification and the verdict alike, because the same
    value is a keyword in the process that folded it and a string once the report
    has been through JSON, and a reader that silently answered 0 for the second
    would be wrong exactly where the report outlived its process."
-  [report]
-  (let [v (get-in report [:design-verdict :verdict])]
+  [report owed]
+  (let [v     (get-in report [:design-verdict :verdict])
+        owed? (fn [text] (some #(and (not (str/blank? (str %))) (str/includes? (str text) (str %)))
+                               owed))]
     (when-let [k (:verdict v)]
-      {:design-verdict         (name k)
-       :verdict-implementation (count (filter #(= "implementation" (some-> (:as %) name))
-                                              (:findings-classified v)))})))
+      (cond-> {:design-verdict         (name k)
+               :verdict-implementation (+ (count (filter #(and (= "implementation" (some-> (:as %) name))
+                                                               (owed? (:finding %)))
+                                                         (:findings-classified v)))
+                                          (count (:unraised v)))}
+        (:carried-from v) (assoc :design-carried-from (:carried-from v))))))
 
 ;; ---- the rest of what the run's tail wrote -------------------------------
 

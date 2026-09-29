@@ -1918,7 +1918,7 @@
   (report/report->markdown
    {:format :design-verdict :verdict verdict :round 3
     :reason "the findings were details"
-    :needs "nido_attach.clj:139 has an unreachable :claimed branch"}))
+    :needs "re-baseline the attach record before landing"}))
 
 (deftest a-verdicts-needs-is-headed-by-what-it-asks-of-the-reader
   ;; The heading was fixed at "Needs a decision", so a `sound` verdict rendered
@@ -1927,12 +1927,26 @@
   ;; a number saying it is already decided.
   (is (str/includes? (verdict-md :invalidated) "## Needs a decision"))
   (is (str/includes? (verdict-md :standing-challenged) "## Needs a decision"))
-  (is (str/includes? (verdict-md :sound) "## What no reviewer raised")
-      "on a standing design the block is remainder: the judge saw a defect the
-       rounds did not, and it goes to the next run's reviewers rather than to a
-       human")
-  (is (str/includes? (verdict-md :strained) "## What no reviewer raised"))
+  (is (str/includes? (verdict-md :sound) "## Advice — no defect")
+      "on a standing design :needs is advice, and headed as a defect it read as
+       one — which is what the kept count took it for")
+  (is (str/includes? (verdict-md :strained) "## Advice — no defect"))
   (is (not (str/includes? (verdict-md :sound) "Needs a decision"))))
+
+(deftest a-verdicts-unraised-defects-are-headed-as-what-no-reviewer-raised
+  (let [md (report/report->markdown
+            {:format :design-verdict :verdict :sound :round 3 :reason "details"
+             :unraised [{:where "nido_attach.clj:139" :what "an unreachable :claimed branch"}]})]
+    (is (str/includes? md "## What no reviewer raised\n- nido_attach.clj:139 — an unreachable :claimed branch"))
+    (is (not (str/includes? md "Advice")) "no advice was given, so none is headed")))
+
+(deftest a-carried-verdict-renders-as-carried
+  ;; Rendered as `after round 2` over a reason about round 3, a carried verdict
+  ;; read as a fresh judgment of code no judge had read.
+  (let [md (report/report->markdown
+            {:format :design-verdict :verdict :sound :round 5 :reason "r"
+             :carried-from 18})]
+    (is (str/includes? md "after round 5 · carried from entry 18"))))
 
 (deftest a-verdict-holding-nothing-outstanding-renders-no-block-at-all
   (is (not (str/includes?
