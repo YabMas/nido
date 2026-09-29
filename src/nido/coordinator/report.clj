@@ -1825,11 +1825,17 @@
    ;; on. Absent on a branch with no layers and on a finding no layer owns.
    [:layer       {:optional true} [:maybe string?]]
    ;; This row is a PREVIOUS run's open finding that the run writing the entry
-   ;; neither raised nor answered. Present only when true, and never carried a
-   ;; second time: a defect whose owning layer was seeded to a reviewer and
-   ;; still went unreported is not evidence enough to hold the branch open for
-   ;; ever. It says to a reader that the last two runs were both asked.
-   [:inherited   {:optional true} boolean?]])
+   ;; neither raised nor answered. Present only when true. A defect is never
+   ;; carried a second time: one whose owning layer was seeded to a reviewer and
+   ;; put in front of a warden, and still went unreported and unruled, is not
+   ;; evidence enough to hold the branch open for ever. A PARK is carried until
+   ;; a person answers on the ledger — no quiet run answers a question put to
+   ;; one. It says to a reader that the last two runs were both asked.
+   [:inherited   {:optional true} boolean?]
+   ;; How many repairs for it have landed, across the runs that held it.
+   ;; Present only when there was one: a row that has resisted two repairs is
+   ;; a different question from one nobody has tried.
+   [:attempts    {:optional true} pos-int?]])
 
 (def ReviewReport
   "The review-loop outcome as one terminal ledger event (verdict + counts). Points

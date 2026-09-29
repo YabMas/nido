@@ -73,19 +73,42 @@
    survives the repair a `:fix` row is asking for. The warden's owner where it
    assigned one, since that is where the repair goes whoever reported it; the
    reviewer that raised it otherwise, which is the best available answer for a
-   finding no warden ruled on and still the layer whose reviewer read the code."
+   finding no warden ruled on and still the layer whose reviewer read the code.
+
+   `:attempts` is `verdict/still-owed`'s count of the repairs that landed for
+   it. It rides to the next run's warden and reviewer, which otherwise meet a
+   row that has resisted two repairs exactly as they meet one nobody has tried."
   [handed findings]
   (into []
         (map (fn [{:keys [id title file line-start disposition because
-                          owner-layer from-layer] :as f}]
+                          owner-layer from-layer attempts] :as f}]
                (cond-> {:title (str (or title "(untitled finding)"))}
                  id          (assoc :id (str id))
                  file        (assoc :where (str file (when line-start (str ":" line-start))))
                  disposition (assoc :disposition (keyword disposition))
                  because     (assoc :because (str because))
                  (or owner-layer from-layer) (assoc :layer (str (or owner-layer from-layer)))
-                 (verdict/handed? handed f) (assoc :handed true))))
+                 (verdict/handed? handed f) (assoc :handed true)
+                 (and attempts (pos? attempts)) (assoc :attempts attempts))))
         findings))
+
+(def ^:private ledger-row-keys
+  "What an inherited row may carry back into an entry: the ledger's own
+   `ReviewFinding` keys. The carry adds what the run used it for, and none of
+   that is a fact about the branch."
+  [:id :title :where :disposition :because :layer :attempts :inherited])
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  owed-rows
+  "`verdict/still-owed`, as the ledger's `:open` rows: this run's own remainder
+   first, trimmed by `ledger-findings`, then every inherited row nobody
+   answered. The one list the entry, the analysis payload and the gate count."
+  [final]
+  (let [owed   (verdict/still-owed final)
+        handed (verdict/handed-to-a-fixer final)]
+    (into (ledger-findings handed (remove :inherited owed))
+          (map #(select-keys % ledger-row-keys))
+          (filter :inherited owed))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   refused-repairs
@@ -193,23 +216,11 @@
    prior obligation and said nothing about it writes an entry holding nothing —
    and that entry is the whole of what the run after gets, so the obligation
    disappears at the first quiet run rather than at the run that settled it.
-   Deduped on the finding id, which is derived from file, line and title: a
-   defect this run raised again is this run's, and its own accounting decides
-   what is owed on it."
+   The list is `owed-rows`, which the analysis payload counts too."
   [final report report-path]
-  (let [handed   (verdict/handed-to-a-fixer final)
-        refused  (refused-repairs final)
+  (let [refused  (refused-repairs final)
         unstarted (launch-failures final)
-        raised   (ledger-findings handed (verdict/open-across-run final))
-        seen     (into #{} (keep :id) raised)
-        ;; `:handed` does not survive the carry. It claims a repair is sitting in
-        ;; the branch that no reviewer has read, and the run writing this entry
-        ;; put the row in front of the reviewer of its own layer — so whatever
-        ;; is true of it now, unread is not.
-        open     (into raised
-                       (comp (remove #(contains? seen (:id %)))
-                             (map #(-> % (dissoc :handed) (assoc :inherited true))))
-                       (stages/unanswered-inherited final))
+        open     (owed-rows final)
         kept     (ledger-findings #{} (verdict/kept-across-run final))
         repaired (count (filter :handed open))
         parked   (count (filter #(= :park (:disposition %)) open))
@@ -501,6 +512,12 @@
    `:options` rather than prose because the ledger refuses a choice written as an
    essay, and rightly — an essay can only be answered by typing one back.
 
+   `findings` is what the run is still owed — `owed-rows` — and never the last
+   round's findings. A park is never raised twice, so the round a run ends on
+   is the one least likely to hold it: read there, a run that ended clean over a
+   park from round 1 raised no gate, and a gate named only the latest of two
+   parks. The last run's parks nobody answered are in it, marked inherited.
+
    `verdict` is this run's design verdict, or nil when the pass found nothing to
    judge against, was skipped, or produced no answer."
   [findings verdict]
@@ -522,7 +539,7 @@
    a side record could not be written. Returns the blocker, or nil."
   [cwd final verdict]
   (try
-    (when-let [blocker (parked-blocker (:findings final) verdict)]
+    (when-let [blocker (parked-blocker (owed-rows final) verdict)]
       (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
         (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
           (ws/append-entry! (keyword project) ws-id {:kind :blocker}
@@ -569,8 +586,7 @@
    judgement, when it is the last run's."
   [cwd final report report-path config ws-id]
   (let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd) {})
-        open   (verdict/open-across-run final)
-        handed (verdict/handed-to-a-fixer final)
+        open   (owed-rows final)
         judged (verdict/kept-by-the-verdict report)
         cover  (report/coverage report)]
     (analysis/enqueue!
@@ -586,7 +602,7 @@
        :findings-remaining (count open)
        :findings-kept      (cond-> (count (verdict/kept-across-run final))
                              judged inc)
-       :remaining-handed   (count (filter #(verdict/handed? handed %) open))
+       :remaining-handed   (count (filter :handed open))
        :remaining-parked   (count (filter #(= :park (:disposition %)) open))
        :targets-reviewed   (:reviewed cover)
        :targets-skipped    (:skipped cover)
@@ -1559,8 +1575,10 @@
                     ;; What the engine cannot ask for itself: it never looks
                     ;; inside a finding, so the pipeline that knows what a
                     ;; disposition means is the one that says whether anything
-                    ;; is still owed.
-                    :open?     (complement stages/settled?)
+                    ;; is still owed — by the one derivation the entry and the
+                    ;; headline count, so a status cannot say `converged` over
+                    ;; a remainder they publish.
+                    :owed      verdict/still-owed
                     ;; Also what the engine cannot ask for itself: whether the
                     ;; round moved the code. Without it a repeated finding set
                     ;; is read as a stall, and a defect class the fixers are

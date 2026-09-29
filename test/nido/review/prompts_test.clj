@@ -1307,8 +1307,8 @@ layers, it is not yours"))
       "saying \"nothing outstanding\" invites a reviewer to look for one"))
 
 (deftest an-earlier-runs-unmet-obligation-is-put-to-the-layers-reviewer
-  ;; Nothing else in a run knows the defect was ever ruled on, so a silence
-  ;; here is read as the defect being gone.
+  ;; Nothing else in a run knows the defect was ever ruled on, so the reviewer
+  ;; is asked to answer it by id rather than left to say nothing.
   (let [out (prompts/prior-open-block
              [{:id "cc56069f" :title "Preserve tagged-literal identity when reading extents"
                :where "extraction/core.clj:122" :disposition :fix
@@ -1323,7 +1323,12 @@ layers, it is not yours"))
         "that run read a different tree; a reviewer that copies it back
          unverified launders a stale claim into a fresh finding")
     (is (str/includes? out "report it as a finding")
-        "a finding is the only currency a fixer can be handed")))
+        "a finding is the only currency a fixer can be handed")
+    (is (str/includes? out "- cc56069f  Preserve")
+        "under the id the answer has to name")
+    (is (str/includes? out "silence is not an answer")
+        "the reviewer used to be told that silence meant repaired while the loop
+         read it as owed, so a clean run ended unresolved and re-carried the row")))
 
 (deftest a-run-inheriting-nothing-tells-the-reviewer-nothing
   (is (nil? (prompts/prior-open-block nil)))

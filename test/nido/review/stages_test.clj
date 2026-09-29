@@ -2223,13 +2223,18 @@
   ;; the patch owes something.
   (let [core {:label "core" :patch-hash "h"}]
     (is (= #{"h"} (-> {}
-                      (stages/with-quiet-reads [[core :converged]])
+                      (stages/with-quiet-reads [[core :converged]] #{"h"})
                       (get-in [:carry :quiet-reads])))
         "a reading that owed nothing is what the next one pairs with")
     (is (= #{} (-> {:carry {:quiet-reads #{"h"}}}
-                   (stages/with-quiet-reads [[core :partial]])
+                   (stages/with-quiet-reads [[core :partial]] #{})
                    (get-in [:carry :quiet-reads])))
-        "and a reading that owed something takes it back")))
+        "and a reading that owed something takes it back")
+    (is (= #{"h"} (-> {}
+                      (stages/with-quiet-reads [[core :partial]] #{"h"})
+                      (get-in [:carry :quiet-reads])))
+        "a reading held open only by a park is still a quiet reading: the park
+         is carried from before it, and says nothing about what it saw")))
 
 (deftest a-target-whose-content-could-not-be-hashed-pairs-with-nothing
   ;; Unknown content is no evidence that two readings were of one thing, and it
@@ -4815,3 +4820,162 @@
     (is (= [] (:attributed (trespass gone {:name "Bash" :input {:command "cat src/x.clj"}}))))
     (is (= ["src/x.clj"] (:attributed (trespass gone {:name "Write" :input {:file_path "/w/src/x.clj"}}))))
     (is (= "jj debug tree exited 1" (:unreadable (trespass gone))))))
+
+;; ── What the last run left owed, in front of the warden ──────────────────────
+
+(deftest an-inherited-row-is-answered-by-a-same-as-naming-it
+  ;; A defect re-found under new wording got a new id, was fixed, and the row
+  ;; it repeated was carried as owed beside the finding that repaired it.
+  (let [inherited [{:id "a" :layer "core" :title "Apply the byte limit to errors"}
+                   {:id "b" :layer "core" :title "u"}]]
+    (is (= ["b"] (mapv :id (stages/unanswered-of
+                            inherited
+                            [[{:id "x" :handle "a" :title "Bound non-200 bodies"
+                               :disposition :fix}]])))
+        "the warden's same_as files the fresh finding under the row's id, and
+         that is this run owning the defect")))
+
+(deftest an-inherited-row-a-reviewer-answered-repaired-is-answered
+  (let [inherited [{:id "a" :title "t" :answered {:by "core" :round 1 :evidence "x.clj:3"}}
+                   {:id "b" :title "u"}]]
+    (is (= ["b"] (mapv :id (stages/unanswered-of inherited [[]])))
+        "an explicit, evidenced answer settles a row; silence still does not")))
+
+(deftest a-reviewer-answer-counts-only-when-asked-and-evidenced
+  (let [results [{:target {:label "core" :prior-open [{:id "a"} {:id "b"} {:id "c"}]}
+                  :prior-open-answers [{:id "a" :status "repaired" :evidence "core.clj:12 bounds it"}
+                                       {:id "b" :status "repaired" :evidence "  "}
+                                       {:id "c" :status "still_present" :evidence "core.clj:40"}
+                                       {:id "z" :status "repaired" :evidence "elsewhere"}]}]]
+    (is (= {"a" {:by "core" :round 2 :evidence "core.clj:12 bounds it"}}
+           (#'stages/reviewer-answers results 2))
+        "`repaired` with nothing behind it is silence spelled as a word, a
+         still_present is carried by the finding it comes with, and an id the
+         target was never asked about is not this reviewer's to answer")))
+
+(deftest an-answered-row-is-not-asked-again
+  (let [[core] (stages/with-prior-open
+                 [{:label "core"}]
+                 [{:id "a" :layer "core" :title "t" :disposition :fix
+                   :answered {:by "core" :round 1 :evidence "e"}}
+                  {:id "b" :layer "core" :title "u" :disposition :fix}])]
+    (is (= ["b"] (mapv :id (:prior-open core))))))
+
+(deftest a-verdict-need-naming-a-park-is-not-put-to-a-reviewer
+  ;; ws-20260923-31f9cf: the verdict's :needs named parked question 8fe6d19e,
+  ;; the reviewer re-raised it, the warden ruled it fix, and a fixer wrote one
+  ;; answer to a question a person was still being asked.
+  (let [standing {:round 3 :verdict :sound
+                  :needs "a human needs to decide the parked question (8fe6d19e)"}]
+    (is (nil? (#'stages/unless-parked standing [{:id "8fe6d19e" :disposition :park}])))
+    (is (= standing (#'stages/unless-parked standing [{:id "8fe6d19e" :disposition :fix}]))
+        "only a park is a question somebody else is answering")
+    (is (= standing (#'stages/unless-parked standing [])))))
+
+(deftest the-warden-is-shown-the-last-runs-rows-parks-included
+  ;; The warden saw only this run's parks, so a park re-raised from the last run
+  ;; arrived with no history, was ruled fix, and cost a fixer and a round before
+  ;; the recurrence brake parked it again.
+  (let [captured (atom nil)]
+    (with-redefs [agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! captured first-message)
+                                  {:num-turns 1 :result-error? false
+                                   :result-text "```json\n{\"decision\":\"stop\",\"reason\":\"r\"}\n```"})
+                  stages/discover-design-record (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] nil)]
+      ((:run stages/warden-stage)
+       {:config {:cwd "/w" :run-id "r1"} :iter 1
+        :findings [{:id "f1" :title "x"}]
+        :carry {:inherited-open [{:id "8fe6d19e" :title "Identity in Phase 1"
+                                  :layer "core" :disposition :park :attempts 2}
+                                 {:id "done" :title "Zqx already settled row" :disposition :fix
+                                  :answered {:by "core" :round 1 :evidence "e"}}]}})
+      (let [p @captured]
+        (is (str/includes? p "LEFT OWED BY THE LAST RUN"))
+        (is (str/includes? p "8fe6d19e  Identity in Phase 1")
+            "under its own id, which is what a ruling or a same_as names")
+        (is (str/includes? p "left park after 2 landed repairs")
+            "with how the last run left it")
+        (is (str/includes? p "last run 8fe6d19e")
+            "and in the pool same_as points into")
+        (is (not (str/includes? p "Zqx already settled row"))
+            "a row a reviewer already answered is not a question any more")))))
+
+(deftest a-warden-ruling-lands-on-an-inherited-row
+  (letfn [(warden [json-findings]
+            (with-redefs [agent/launch! (fn [_] {:num-turns 1 :result-error? false
+                                                 :result-text (str "```json\n{\"decision\":\"continue\",\"reason\":\"r\",\"findings\":"
+                                                                   json-findings "}\n```")})
+                          stages/discover-design-record (fn [_] nil)
+                          stages/project+ws-from-cwd (fn [_] nil)]
+              ((:run stages/warden-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 1
+                :findings [{:id "f1" :title "x"}]
+                :carry {:inherited-open [{:id "p1" :title "which layer owns the socket"
+                                          :where "/w/core.clj:40" :layer "core"
+                                          :disposition :park}
+                                         {:id "q1" :title "left alone" :layer "core"
+                                          :disposition :fix}]}})))]
+    (let [ctx (warden "[{\"id\":\"f1\",\"disposition\":\"fix\"},{\"id\":\"p1\",\"disposition\":\"fix\",\"because\":\"answered on the ledger; now a repair\"}]")
+          p1  (first (filter #(= "p1" (:id %)) (:findings ctx)))]
+      (is (= :fix (:disposition p1)) "a ruling on a row makes it this round's work")
+      (is (= ["/w/core.clj" 40 "core"] [(:file p1) (:line-start p1) (:owner-layer p1)])
+          "at the row's own site, owned by the layer the row was placed on")
+      (is (not-any? #(= "q1" (:id %)) (:findings ctx))
+          "a row the warden said nothing about is not made fix by omission")
+      (is (= ["q1"] (mapv :id (stages/unanswered-of (get-in ctx [:carry :inherited-open])
+                                                    [(:findings ctx)])))
+          "and it is the only row still unanswered"))
+    (let [ctx (warden "[{\"id\":\"f1\",\"same_as\":\"p1\",\"disposition\":\"park\",\"because\":\"the same question\"}]")]
+      (is (= "p1" (:handle (first (:findings ctx))))
+          "a same_as naming the row files the fresh finding under the row's id")
+      (is (contains? (get-in ctx [:carry :parks]) "p1")
+          "and the park is carried as this run's, under that id"))))
+
+(deftest a-park-does-not-cancel-the-second-reading
+  ;; ws-20260922-14d73b: a run carrying a park ended clean on ONE reading of a
+  ;; patch its fixer had rewritten, because the park held the target :partial and
+  ;; only a :converged was ever paired.
+  (let [core {:label "core" :patch-hash "h"}]
+    (is (= [[core :read-once]] (stages/pair-quiet-readings [[core :partial]] #{} #{"h"}))
+        "a first quiet reading is owed a second, whatever holds the target open")
+    (is (= [[core :partial]] (stages/pair-quiet-readings [[core :partial]] #{"h"} #{"h"}))
+        "and the second earns the reading, not the convergence the park withholds")
+    (is (= [[core :partial]] (stages/pair-quiet-readings [[core :partial]] #{} #{}))
+        "a reading that owed something is no quiet reading at all")))
+
+(deftest a-quiet-round-over-a-standing-park-is-not-clean
+  ;; review-036204ac wrote `clean` with `reason.parked [08469cff]` in the same
+  ;; report, and that `clean` is what the next run inherited.
+  (let [ctx {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 3
+             :carry {:quiet-reads #{"h"}
+                     :parks {"08469cff" {:since 1 :title "who owns it" :owner-layer nil}}}}]
+    (with-redefs [layers/patch-hash (fn [& _] "h")
+                  pass/merge-base  (fn [& _] "FORK")
+                  cache/read-cache  (fn [& _] {})
+                  cache/write!      (fn [& _] true)
+                  conformance/findings (fn [& _] [])
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [& _] nil)
+                  pass/review! (fn [_] {:status nil :findings []})]
+      (is (= :unresolved (:status ((:run stages/review-stage) ctx)))
+          "a run holding a question for a person cannot emit the loop's
+           strongest nothing-owed signal"))))
+
+(deftest an-inherited-park-is-carried-until-a-person-answers
+  ;; Every park on ws-20260831-bee656 lived exactly two entries and reached no
+  ;; blocker: the one-hop drop answered the question for the person.
+  (let [open [{:id "p" :title "q" :disposition :park :inherited true}
+              {:id "f" :title "d" :disposition :fix :inherited true}
+              {:id "g" :title "e" :disposition :fix}]]
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ kind]
+                                    (when (= :review kind) {:seq 5 :open open}))]
+      (with-redefs [ws/read-ws (fn [& _] {:entries [{:kind :review :seq 5}]})]
+        (is (= ["p" "g"] (mapv :id (stages/prior-open "/w")))
+            "an inherited defect has had its one hop; an inherited park has not"))
+      (with-redefs [ws/read-ws (fn [& _] {:entries [{:kind :review :seq 5}
+                                                    {:kind :blocker-answered :seq 7}]})]
+        (is (= ["g"] (mapv :id (stages/prior-open "/w")))
+            "a person answering after the entry that carried the parks answers
+             them — including this run's own, which that blocker listed")))))

@@ -260,8 +260,12 @@
    is none), `status`
    the run's terminal status, and `fix-outcomes` the run's
    `stages/fix-outcomes`. `progress` is where the workstream stands in the
-   design's phase plan (`record.phase/progress`), nil when unphased or unread."
-  [{:keys [design baseline stance findings history rounds prior status fix-outcomes progress]}]
+   design's phase plan (`record.phase/progress`), nil when unphased or unread.
+   `inherited` is what the last run left owed that this one never answered —
+   `stages/unanswered-inherited` — which no round's findings mention, so a judge
+   shown only those says `nothing is open` beside an entry that lists them."
+  [{:keys [design baseline stance findings inherited history rounds prior status
+           fix-outcomes progress]}]
   (str
    (opening status (not-landed fix-outcomes))
    "Read the code where you need to — you have tools, and the question cannot be\n"
@@ -318,6 +322,15 @@
           (str/join "\n"))
      "(none)")
    "\n"
+   (when (seq inherited)
+     (str "\nLeft owed by the LAST run of this workstream and answered by nobody in\n"
+          "this one. They are still open on the branch, whatever the rounds above say:\n"
+          (->> inherited
+               (map (fn [{:keys [id title where disposition]}]
+                      (str "- " id " " title (when where (str " (" where ")"))
+                           (when disposition (str " — ruled " (name disposition))))))
+               (str/join "\n"))
+          "\n"))
    ;; Last, so the judge reads this round's evidence before it is reminded what
    ;; it already decided — the standing answer is what the new evidence is
    ;; weighed against, not the frame it is read through.
@@ -555,6 +568,51 @@
   [final]
   (into [] (remove stages/settled?) (final-rulings final)))
 
+(defn- fix-attempts-on
+  "How many rounds of this run landed a repair aimed at `f` — `repairs-aimed-at`
+   over each round in the history, which holds exactly the rounds that landed
+   one. A repair the stack refused is no attempt here: nothing of it reached the
+   branch."
+  [final f]
+  (let [k (or (:handle f) (:id f))]
+    (count (filter #(contains? (repairs-aimed-at (:fixes %)) k) (:history final)))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  still-owed
+  "What the WORKSTREAM is still owed when this run ends: everything the run is
+   holding — `open-across-run` — and, after it, every row the last run left owed
+   that this one neither raised nor answered, each marked `:inherited`. See
+   `stages/unanswered-inherited` for what answers one.
+
+   THE one derivation of the remainder. The status a run stops as, the ledger
+   entry it writes, the analysis headline, the parked-blocker gate and the
+   carried verdict all read it, because each used to read its own: the entry
+   counted the inherited rows and the headline did not, so one run published
+   `0 still open` beside an entry holding five, and a run whose only owed rows
+   were a park from round 1 and an inherited one stopped `:converged`.
+
+   An inherited row this run raised again is this run's, and its own accounting
+   decides what is owed on it — deduped on the id and on the handle, since a
+   `same_as` naming the row files the new finding under the row's id.
+
+   `:handed` does not survive the carry. It claims a repair is sitting in the
+   branch that no reviewer has read, and this run put the row in front of the
+   reviewer of its own layer — so whatever is true of it now, unread is not.
+
+   Each of this run's own carries `:attempts` when a repair for it has landed —
+   in this run, or in the last one for a row the warden took on — so the run
+   after meets a defect that has resisted two repairs as one."
+  [final]
+  (let [raised (mapv (fn [f]
+                       (let [n (+ (fix-attempts-on final f) (or (:prior-attempts f) 0))]
+                         (cond-> (dissoc f :prior-attempts) (pos? n) (assoc :attempts n))))
+                     (open-across-run final))
+        seen   (into #{} (comp (mapcat (juxt :id :handle)) (remove nil?)) raised)]
+    (into raised
+          (comp (remove #(contains? seen (:id %)))
+                (map #(-> % (dissoc :handed) (assoc :inherited true))))
+          (stages/unanswered-inherited final))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   kept-across-run
   "What the run DECIDED to live with — the real defects it declined and the
@@ -645,22 +703,19 @@
 
    - The run raised nothing and decided nothing. Every finding is settled and
      none was kept, so there is no evidence in front of this pass that was not
-     in front of the last one. `open-across-run` and `kept-across-run` are read
+     in front of the last one. `still-owed` and `kept-across-run` are read
      rather than the final round's findings, because a park raised in round 1
      is never raised again and so leaves the final round empty.
    - No fix was dispatched. A fixer edits code, and a repair that moves a
      boundary is a thing no reviewer judged against the design — which is
      precisely what this pass exists to catch. A run that landed one has a tree
      the standing verdict never saw.
-   - The WORKSTREAM is holding nothing either. The first three tests are all
-     about this run, and the docstring's own argument — there is no evidence in
-     front of this pass that was not in front of the last one — is true of the
-     round and false of the workstream: a run whose reviewers said nothing over
-     a defect an earlier run ruled `:fix` passes every one of them. Carrying the
-     verdict there republishes a `:needs` naming that unrepaired defect as a
-     thing to do, on an entry claiming nothing is owed.
-     `stages/unanswered-inherited` is the same read the round's own `clean` and
-     the cache's `:converged` are refused on.
+   - The WORKSTREAM is holding nothing either, which is why the first test
+     reads `still-owed` rather than the run's own remainder: a run whose
+     reviewers said nothing over a defect an earlier run ruled `:fix` is holding
+     nothing of its own. Carrying the verdict there republishes a `:needs`
+     naming that unrepaired defect as a thing to do, on an entry claiming
+     nothing is owed.
 
    A DECISION is never carried. :invalidated and :standing-challenged put a
    question to a human, and re-asserting one unlooked-at would keep escalating a
@@ -678,9 +733,8 @@
   (boolean
    (and prior
         (not (decision? prior))
-        (empty? (open-across-run final))
+        (empty? (still-owed final))
         (empty? (kept-across-run final))
-        (empty? (stages/unanswered-inherited final))
         (zero? (or (get-in report [:summary :fix-attempts]) 0)))))
 
 (defn ^{:malli/schema [:=> [:cat :map :int] :map]}
@@ -767,6 +821,7 @@
                        :baseline (stages/discover-baseline cwd design)
                        :stance (stages/read-stance (first (stages/project+ws-from-cwd cwd)))
                        :findings (still-open (:findings final))
+                       :inherited (stages/unanswered-inherited final)
                        :history (mapv #(dissoc % :findings :patch-hashes) (:history final))
                        :fix-outcomes (stages/fix-outcomes (:history final) (:carry final))
                        :status (:status final)

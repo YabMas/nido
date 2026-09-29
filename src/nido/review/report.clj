@@ -80,6 +80,11 @@
    quiet round has no warden at all; they are still counted open, and without
    them here a row counted open would be named nowhere a person reads.
 
+   `:inherited` is what the LAST run left owed that this one never answered —
+   the rows of `:owed`, the remainder the engine stamped on the terminal ctx,
+   that are marked inherited. They are why a run whose every round was quiet
+   ends `unresolved`, and no round of this report mentions them.
+
    `:unavailable` is why no reviewer could be run, as the reviewer said it —
    `nido.review.codex/unavailability`'s `{:signal :message :retry-at}`. The
    status names the condition; this is the remedy and the hour to come back,
@@ -87,7 +92,10 @@
   [ctx]
   (let [parks    (get-in ctx [:carry :parks])
         standing (into [] (distinct) (concat (get-in ctx [:warden :standing])
-                                             (:unplaced ctx)))]
+                                             (:unplaced ctx)))
+        inherited (into [] (comp (filter :inherited)
+                                 (map #(select-keys % [:id :title :where :disposition :layer])))
+                        (:owed ctx))]
     (not-empty
      (cond-> {}
        (:unavailable ctx)
@@ -101,6 +109,9 @@
 
        (seq standing)
        (assoc :standing standing)
+
+       (seq inherited)
+       (assoc :inherited inherited)
 
        (seq parks)
        (assoc :parked (->> parks

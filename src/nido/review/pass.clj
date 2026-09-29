@@ -78,11 +78,17 @@
 (defn ^{:malli/schema [:=> [:cat :string] :any]}
   parse-output
   "Parse codex --output-schema JSON string into
-   {:findings [...] :overall-correctness <str>}."
+   {:findings [...] :overall-correctness <str> :prior-open-answers [...]}.
+
+   `:prior-open-answers` is the reviewer's answer per id to what an earlier run
+   left owed, as it wrote them — `{:id :status :evidence}`. Which of them count
+   is `stages/reviewer-answers`' question: only the target knows which ids it
+   was asked about."
   [json-str]
   (let [m (json/parse-string json-str true)]
     {:findings            (mapv (comp with-id normalize-finding) (:findings m))
-     :overall-correctness (:overall_correctness m)}))
+     :overall-correctness (:overall_correctness m)
+     :prior-open-answers  (vec (:prior_open m))}))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   composition-schema

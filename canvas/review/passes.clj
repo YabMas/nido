@@ -105,6 +105,17 @@
      as 'not closed' instead let one run report as still open the finding its own convergence
      check had settled."
     {:signature [:=> [:catn [:final :map]] :any]})
+  (Operation still-owed
+    "What the WORKSTREAM is still owed when a run ends: the run's own remainder, then every row
+     the last run left owed that this one neither raised nor answered, marked inherited.
+
+     The one derivation of the remainder. The status a run stops as, its ledger entry, the
+     analysis headline, the parked-blocker gate and the carried verdict all read it, because
+     each used to derive its own: one run published `0 still open` beside an entry holding
+     five, and a run whose only debts were a park from round 1 and an inherited row stopped
+     `converged`."
+    {:signature [:=> [:catn [:final :map]] :any]
+     :delegates [open-across-run]})
   (Operation kept-across-run
     "What the run DECIDED to live with — the defects it declined and the layer claims it let
      stand. Nobody owes anything on these, which is what keeps them out of `open-across-run`
@@ -158,7 +169,7 @@
      Never for a DECISION — a question owed to a human is re-asked rather than re-asserted
      unlooked-at."
     {:signature [:=> [:catn [:prior :any] [:final :map] [:report :any]] :boolean]
-     :delegates [decision? open-across-run kept-across-run]})
+     :delegates [decision? still-owed kept-across-run]})
   (Operation carried-forward
     "A standing verdict re-stated as this run's, marked with the entry an agent actually
      reached it at. The mark is what keeps the ledger honest: six unmarked identical verdicts
@@ -361,9 +372,11 @@
      the loop itself recorded reached the next run through no channel: the reviewer of the
      file holding it started blank, the layer took an irrevocable :converged mark over it, and
      the design verdict was carried forward as though the run had produced no evidence. One
-     read, three refusals. The carry is one hop — a row an earlier run already inherited is
-     dropped — because a defect whose layer was handed to a reviewer and still went unreported
-     is not evidence enough to hold a branch open for ever."
+     read, three refusals. A defect's carry is one hop — a row an earlier run already inherited
+     is dropped — because a defect whose layer was handed to a reviewer and put before a warden,
+     and still went unreported and unruled, is not evidence enough to hold a branch open for
+     ever. A PARK is carried until a person answers on the ledger: no quiet run answers a
+     question put to one."
     {:signature [:=> [:catn [:cwd Path]] :any]})
   (Operation placed-on
     "The layer a finding NO REVIEWER RAISED is owed of: the layer it names when the stack still
@@ -384,19 +397,21 @@
     "Each layer's reviewer told what the last run left owed against THAT layer, matched by
      label: a repair moves the patch a hash is taken over, so a hash cannot carry an
      obligation across the repair it is asking for. A park is withheld — it is a question
-     already put to a human — and so is the composition pass, as with `with-standing-needs`."
+     already put to a human, and the warden is shown it instead — and so is a row a reviewer
+     already answered, and so is the composition pass, as with `with-standing-needs`."
     {:signature [:=> [:catn [:targets :any] [:inherited :any]] :any]})
   (Operation unanswered-of
-    "The inherited rows this run has said nothing about. Pure. Answered means RULED, not
-     repaired: from the moment a reviewer raises one again the run's own accounting decides
-     what is owed on it, and carrying the inherited copy beside it would count one defect
-     twice."
+    "The inherited rows this run has said nothing about. Pure. A row is answered by a ruling on
+     it, by a `same_as` naming it, by the same defect raised again, or by a reviewer's explicit
+     evidenced `repaired` — from then the run's own accounting decides what is owed, and
+     carrying the inherited copy beside it would count one defect twice. Silence stays
+     unanswered: not reporting a defect is not evidence it is gone."
     {:signature [:=> [:catn [:inherited :any] [:rounds :any]] :any]})
   (Operation unanswered-inherited
     "The same question asked of a terminal ctx — what the last run left owed that this whole
-     run neither raised nor answered. Three readers: the round that ends quiet may not call
-     itself clean while it holds one, the ledger entry carries them so the next run inherits
-     what this one could not settle, and the design verdict is not carried forward over one."
+     run neither raised nor answered. The inherited half of `review-verdict/still-owed`, which
+     every reader of the remainder reads; the design judge is shown it on its own, because no
+     round's findings mention these."
     {:signature [:=> [:catn [:final :map]] :any]
      :delegates [unanswered-of]})
   (Operation deny-inherited-convergence
@@ -406,21 +421,23 @@
      exempt from the code lane until somebody happens to edit the file."
     {:signature [:=> [:catn [:statuses :any] [:unanswered :any]] :any]})
   (Operation pair-quiet-readings
-    "The same pairs with a :converged that is only its patch's FIRST quiet reading turned down
-     to :read-once. Pure. A reviewer is not deterministic at a byte-identical patch — across
-     five analysed runs a second read at an unchanged hash found a P1 or P2 the first had
-     missed — so convergence is earned by two readings that each left nothing owed. Paired per
-     TARGET: pairing whole ROUNDS by branch content discarded a layer's second reading whenever
-     any other layer moved in between."
-    {:signature [:=> [:catn [:statuses :any] [:known :any]] :any]})
+    "The same pairs with every target whose reading was its patch's FIRST quiet one turned to
+     :read-once. Pure. A reviewer is not deterministic at a byte-identical patch — across five
+     analysed runs a second read at an unchanged hash found a P1 or P2 the first had missed — so
+     convergence is earned by two readings that each left nothing owed. Paired on the READING,
+     not the grant: a park holding a target :partial used to cancel the rule, and a run ended
+     clean on one reading. Paired per TARGET: pairing whole ROUNDS by branch content discarded a
+     layer's second reading whenever any other layer moved in between."
+    {:signature [:=> [:catn [:statuses :any] [:known :any] [:quiet :any]] :any]})
   (Operation with-quiet-reads
     "The ctx with what this round read of each patch folded into the carry — the patches a
      reading left owing nothing added, the patches a reading found something owed of dropped.
      The carry covers what the cache cannot: a cache write is best-effort, and a review outside
      a workstream has no cache at all. The drop is what stops a reading from before a defect
      was found pairing with one from after, where a refused repair returns the layer to content
-     an earlier round read quiet."
-    {:signature [:=> [:catn [:ctx :map] [:statuses :any]] :map]})
+     an earlier round read quiet. Quiet is what the READING found, so a park holding the
+     target open does not take its reading back."
+    {:signature [:=> [:catn [:ctx :map] [:statuses :any] [:quiet :any]] :map]})
   (Operation stance-path "Where a project's stance text lives."
     {:signature [:=> [:catn [:project ProjectName]] Path]})
   (Operation read-stance "A project's stance text."

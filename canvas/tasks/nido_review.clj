@@ -23,10 +23,15 @@
      can refuse a repair in one round and converge in the next — which is the case the terminal
      context has nothing to say about."
     {:signature [:=> [:catn [:final :map]] :any]})
+  (Operation owed-rows
+    "What the run leaves owed, as the ledger's `:open` rows — `still-owed`, trimmed. The one
+     list the `:review` entry, the analysis headline and the parked-blocker gate count, so the
+     remainder a person scans and the one they open cannot disagree."
+    {:signature [:=> [:catn [:final :map]] :any]})
   (Operation review-event
     "Pure: build a :review ledger payload from the loop's terminal value `final`"
     {:signature [:=> [:catn [:opts [:* :any]]] :any]
-     :delegates [refused-repairs]})
+     :delegates [refused-repairs owed-rows]})
   (Operation append-review-entry!
     "Resolve cwd → session → workstream (the tasks.nido-ship path) and append one :review"
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})

@@ -192,7 +192,7 @@
    round. Only the first reaches the phase event, because it is the stage's own
    account of itself and the second is not: folded as one, it would overwrite
    what the phase had already recorded with what the phase was given."
-  [ctx pipeline emit clock judged-after end? open? ends-run?]
+  [ctx pipeline emit clock judged-after end? owed ends-run?]
   (reduce
    (fn [ctx stage]
      (emit {:event :phase-started :iter (:iter ctx) :phase (:name stage)
@@ -212,13 +212,14 @@
               :ctx ctx' :at (str (clock))})
        (cond
          (:status ctx')                (reduced ctx')
-         ;; A stop is a convergence only if the round is not still holding
-         ;; something. `open?` is the pipeline's own reading of that — the engine
-         ;; must not look inside a finding, which is what keeps it shared with
-         ;; the record loops — and it defaults to "nothing is open", so a
-         ;; pipeline that does not answer the question keeps the old behaviour.
+         ;; A stop is a convergence only if the RUN is not still holding
+         ;; something. `owed` is the pipeline's own reading of that, over the
+         ;; whole ctx — the engine must not look inside a finding, which is
+         ;; what keeps it shared with the record loops — and it defaults to
+         ;; "nothing is owed", so a pipeline that does not answer the question
+         ;; keeps the old behaviour.
          (= :stop (:control ctx'))
-         (reduced (assoc ctx' :status (if (some open? (:findings ctx'))
+         (reduced (assoc ctx' :status (if (seq (owed ctx'))
                                         :unresolved
                                         :converged)))
          (= :escalate (:control ctx')) (reduced (assoc ctx' :status :escalated))
@@ -259,7 +260,7 @@
    terminates on its own merits (converged / escalated / clean / no-progress /
    error). A round that changes nothing still ends the run via `no-progress?`,
    so unbounded does not mean non-terminating. Pass :max-iters only to cap it.
-   :emit / :clock / :attempt-key / :attempted? / :open? are injection seams.
+   :emit / :clock / :attempt-key / :attempted? / :owed are injection seams.
    :finding-key decides what \"the same finding again\" means and so what
    no-progress? can detect; only the program knows what its findings are.
    :attempt-key decides what \"we already tried this\"
@@ -273,12 +274,14 @@
    to rule on a finding wants. :changed? decides whether a round moved anything,
    and so whether a repeated finding set is a stall or a defect class the loop
    is still narrowing; it defaults to \"not known to have changed anything\",
-   which leaves the set equality standing alone. :open? decides whether a
-   finding is still owed, and so
+   which leaves the set equality standing alone. :owed is what the RUN still owes, off a round's ctx, and so
    whether a pipeline saying stop has CONVERGED or merely stopped: a run that
-   ends holding something reports :unresolved instead. It defaults to
-   \"nothing is open\", which is the reading a pipeline with no notion of an
-   unactioned finding wants.
+   ends holding something reports :unresolved instead. The whole ctx rather
+   than the round's findings, because what a run holds is not all in its last
+   round — a park raised in round 1 is never raised again, and what an earlier
+   run left owed was raised by nobody here. It defaults to \"nothing is owed\",
+   which is the reading a pipeline with no notion of an unactioned finding
+   wants.
 
    A round's ctx is rebuilt from scratch. `:carry` is the only channel a stage
    has to reach the next round, and it survives onto the terminal ctx too — see
@@ -291,10 +294,10 @@
    throw crashes the run, because finalizing on it would publish a verdict
    nobody reached."
   [{:keys [run-id max-iters pipeline emit clock finding-key attempt-key
-           attempted? judged-after open? changed?] :as config
+           attempted? judged-after owed changed?] :as config
     :or   {emit (fn [_]) clock #(Instant/now)
            attempted? (constantly true)
-           open? (constantly false)
+           owed (constantly nil)
            changed? (constantly false)}}]
   (let [pipeline (or pipeline
                      (throw (ex-info "run-loop needs a :pipeline — the engine runs what its caller passes and names no program of its own" {})))
@@ -331,7 +334,7 @@
                   :iter iter :max-iters max-iters}
             end? (fn [c prior] (terminal cfg c prior))
             ctx  (try
-                   (run-pipeline ctx0 pipeline emit clock judged-after end? open? ends-run?)
+                   (run-pipeline ctx0 pipeline emit clock judged-after end? owed ends-run?)
                    (catch clojure.lang.ExceptionInfo e
                      (let [{:keys [reason] :as data} (ex-data e)]
                        (if (ends-run? reason)
@@ -360,7 +363,11 @@
                       ;; cannot contradict it.
                       (terminal cfg ctx (butlast (:history ctx))))]
         (if final
-          (do (emit {:event :run-finalized :status (:status final)
-                     :ctx final :at (str (clock))})
-              final)
+          ;; What the run still owes rides on the terminal ctx, read once by
+          ;; the reading that decided the status, so the report states the
+          ;; remainder the status was decided on rather than deriving its own.
+          (let [final (assoc final :owed (vec (owed final)))]
+            (emit {:event :run-finalized :status (:status final)
+                   :ctx final :at (str (clock))})
+            final)
           (recur (inc iter) (:history ctx) (:findings ctx) (:carry ctx)))))))

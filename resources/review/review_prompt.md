@@ -4,7 +4,7 @@ Flag an issue only when ALL hold: it meaningfully impacts correctness, performan
 
 Ignore trivial style, formatting, typos, and documentation nits. Prefer outputting NO findings over a marginal one. Output every qualifying finding — do not stop at the first.
 
-Begin each finding title with a priority tag: [P0] drop-everything/blocking, [P1] urgent, [P2] normal, [P3] low/nice-to-have. Set the numeric "priority" field to 0/1/2/3 accordingly (or null if undetermined). The body is one Markdown paragraph explaining why it is a problem, citing files/lines; keep line ranges tight. Set "confidence_score" between 0.0 and 1.0. Set "overall_correctness" to "correct" when the patch is free of blocking issues, else "incorrect".
+Begin each finding title with a priority tag: [P0] drop-everything/blocking, [P1] urgent, [P2] normal, [P3] low/nice-to-have. Set the numeric "priority" field to 0/1/2/3 accordingly (or null if undetermined). The body is one Markdown paragraph explaining why it is a problem, citing files/lines; keep line ranges tight. Set "confidence_score" between 0.0 and 1.0. Set "overall_correctness" to "correct" when the patch is free of blocking issues, else "incorrect". Set "prior_open" to [] unless this prompt lists findings an earlier run left owed, by id; that list says what to put there.
 
 Set "reach" on every finding. It says what the DESIGN settles about the finding — it is NOT a severity and it does not change priority:
 

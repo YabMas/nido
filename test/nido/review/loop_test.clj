@@ -230,7 +230,7 @@
         pipe [(stage :review (fn [c] (assoc c :findings [{:title "x" :done? false}])))
               (stage :warden (fn [c] (assoc c :control :stop)))]
         out (run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit
-                             :open? (complement :done?)})]
+                             :owed #(remove :done? (:findings %))})]
     (is (= :unresolved (:status out)))))
 
 (deftest a-stop-holding-nothing-open-still-converges
@@ -238,7 +238,7 @@
         pipe [(stage :review (fn [c] (assoc c :findings [{:title "x" :done? true}])))
               (stage :warden (fn [c] (assoc c :control :stop)))]
         out (run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit
-                             :open? (complement :done?)})]
+                             :owed #(remove :done? (:findings %))})]
     (is (= :converged (:status out)))))
 
 (deftest a-pipeline-that-does-not-answer-open-keeps-converging

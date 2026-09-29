@@ -501,3 +501,20 @@
     (is (= :reviewer-unavailable (:reason (ex-data e))))
     (is (str/includes? (ex-message e) "Claude AI usage limit reached")
         "the line from the stand-in's log: it is the one that ended the run")))
+
+(deftest a-reviewer-answers-what-an-earlier-run-left-owed-by-id
+  ;; The reviewer schema held findings and a verdict and nothing else, so a
+  ;; reviewer that wrote "the previously owed issues appear repaired" had no
+  ;; field to say it in, and its silence was read as the defect still standing.
+  (let [out (pass/parse-output
+             (json/generate-string
+              {:findings [] :overall_correctness "correct"
+               :prior_open [{:id "75dde695" :status "repaired"
+                             :evidence "conversion.clj:328 now bounds the body"}]}))]
+    (is (= [{:id "75dde695" :status "repaired"
+             :evidence "conversion.clj:328 now bounds the body"}]
+           (:prior-open-answers out))))
+  (let [schema (json/parse-string (pass/schema-json true) true)]
+    (is (some #{"prior_open"} (:required schema))
+        "strict structured output demands every property be required, the
+         composition variant included — it is derived from the same base")))

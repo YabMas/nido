@@ -937,3 +937,18 @@
 (deftest an-unphased-prompt-says-nothing-about-phases
   (is (not (str/includes? (verdict/build-prompt {:design design :findings [] :history [] :rounds 1})
                           "PHASES"))))
+
+(deftest still-owed-counts-an-inherited-row-once
+  ;; The one derivation the status, the entry and the headline all read.
+  (let [final {:history []
+               :findings [{:id "x" :handle "a" :title "re-found under new words"
+                           :disposition :fix}]
+               :carry {:inherited-open [{:id "a" :title "the original" :disposition :fix}
+                                        {:id "b" :title "untouched" :disposition :park
+                                         :handed true}]}}]
+    (is (= [["x" nil] ["b" true]]
+           (mapv (juxt :id :inherited) (verdict/still-owed final)))
+        "a row a finding was filed under is that finding's; the rest are
+         carried, marked, and without the last run's claim of an unread repair")
+    (is (not (verdict/still-answers? {:verdict :sound} (assoc final :findings []) {}))
+        "a verdict is not carried over a workstream still holding a row")))

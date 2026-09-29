@@ -798,7 +798,7 @@
                                    :pipeline [review warden stages/fix-stage]
                                    :finding-key stages/default-finding-key
                                    :terminal-reasons stages/terminal-reasons
-                                   :open? (complement stages/settled?)
+                                   :owed verdict/still-owed
                                    :emit (fn [ev] (swap! rpt rreport/apply-event ev nil))})]
         [final @rpt]))))
 
@@ -882,7 +882,7 @@
                                    :pipeline [stages/review-stage warden fix]
                                    :finding-key stages/default-finding-key
                                    :terminal-reasons stages/terminal-reasons
-                                   :open? (complement stages/settled?)
+                                   :owed verdict/still-owed
                                    :emit (fn [ev] (swap! rpt rreport/apply-event ev nil))})]
         [final @rpt]))))
 
@@ -2067,3 +2067,59 @@
                   ws/entries-of (fn [_ _ kind] (get entries kind))]
       (is (= {"s" {:read 2 :fits 1 :widens 1 :misplaced 0 :not-a-level 0 :failed 0}}
              (:strata (read-string (with-out-str (t/figures-cmd* {:project "nido"})))))))))
+
+;; ---- one remainder, published once ---------------------------------------
+
+(def ^:private owing-run
+  "A run whose last round was quiet, holding a park from round 1 and an
+   inherited park and :fix row nobody answered — the shape in which the entry,
+   the headline and the gate used to disagree."
+  {:status :unresolved
+   :history [{:iter 1 :fixes [{:layer "core" :handed ["f1"]}]
+              :findings [{:id "p1" :handle "p1" :title "who owns the socket"
+                          :file "/w/a.clj" :line-start 3 :disposition :park}
+                         {:id "f1" :handle "f1" :title "fixed" :file "/w/a.clj"
+                          :line-start 9 :disposition :fix}]}]
+   :findings []
+   :carry {:inherited-open [{:id "ip" :title "Identity in Phase 1" :layer "core"
+                             :disposition :park :inherited true}
+                            {:id "if" :title "bound the body" :layer "core"
+                             :where "/w/b.clj:4" :disposition :fix :handed true
+                             :attempts 1}]}})
+
+(deftest the-headline-the-entry-and-the-gate-count-one-remainder
+  ;; Four analyses filed the same thing: the entry said 3 remaining · 2 parked,
+  ;; the payload said 0 still open, and the gate listed only the final round's
+  ;; parks — three writers, three derivations of one number.
+  (let [report  {:summary {:rounds 2 :fix-attempts 1} :target {:base "main" :base-rev "x"}}
+        entry   (t/review-event owing-run report "/runs/r/report.json")
+        payload (analysis-payload-for owing-run report)
+        blocker (t/parked-blocker (t/owed-rows owing-run) nil)]
+    (is (= ["p1" "ip" "if"] (mapv :id (:open entry)))
+        "the park from round 1 and both inherited rows; the repaired finding is not owed")
+    (is (= [3 2] [(:findings-remaining entry) (:remaining-parked entry)]))
+    (is (= [3 2] [(:findings-remaining payload) (:remaining-parked payload)])
+        "the headline a person scans reads the same remainder as the entry they open")
+    (is (str/includes? (:summary blocker) "2 findings")
+        "the gate is raised over both parks, though the run's last round held neither")
+    (is (str/includes? (:summary blocker) "Identity in Phase 1"))
+    (is (nil? (:handed (last (:open entry))))
+        "the last run's unread repair is not this run's claim to make")
+    (is (= entry (report/validate-event :review entry)))))
+
+(deftest a-stop-over-a-remainder-the-round-does-not-hold-is-unresolved
+  ;; A warden stop was judged from the stopping round's findings, so a run
+  ;; holding a park from round 1 — or a row the last run left owed — ended
+  ;; `converged` beside an entry listing it.
+  (is (seq (verdict/still-owed owing-run)))
+  (let [final (rloop/run-loop {:run-id "r" :finding-key :id
+                               :pipeline [{:name :warden
+                                           :run (fn [c] (assoc c
+                                                               :findings []
+                                                               :carry (:carry owing-run)
+                                                               :control :stop))}]
+                               :owed verdict/still-owed})]
+    (is (= :unresolved (:status final)))
+    (is (= ["ip" "if"] (mapv :id (:owed final)))
+        "and the remainder the status was decided on rides on the terminal ctx,
+         which is where the report reads why")))

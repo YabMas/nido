@@ -368,8 +368,7 @@
   [{:keys [round verdict needs]}]
   (when needs
     (str
-     "AN EARLIER RUN'S DESIGN VERDICT LEFT THIS OUTSTANDING, AND NO FINDING HAS\n"
-     "EVER RAISED IT.\n\n"
+     "AN EARLIER RUN'S DESIGN VERDICT LEFT THIS OUTSTANDING.\n\n"
      "After round " round " of an earlier run the design was judged "
      (name verdict) ", and\n"
      "this was left open:\n\n"
@@ -405,17 +404,28 @@
 
    Reporting it back when it IS still there is what turns it into work: a
    finding is the only currency a fixer can be handed, and this list is the one
-   thing in the run that knows the defect was ever ruled on."
+   thing in the run that knows the defect was ever ruled on.
+
+   Each is asked for an answer BY ID in `prior_open`, and the reviewer is told
+   that silence answers nothing. It used to be told the opposite — say nothing
+   when it is repaired — while the loop read that silence as still owed, so a
+   reviewer that wrote `the previously owed issues appear repaired` in prose
+   ended the run `:unresolved` and carried the rows to the next one. A
+   `repaired` answer with its evidence settles the row; see
+   `stages/reviewer-answers`."
   [prior-open]
   (when (seq prior-open)
     (str
      "AN EARLIER RUN LEFT THESE OWED AGAINST THIS LAYER, AND NO REPAIR IS\n"
      "RECORDED FOR THEM.\n\n"
      (->> prior-open
-          (map (fn [{:keys [title where disposition because handed]}]
-                 (str "- " title
+          (map (fn [{:keys [id title where disposition because handed attempts]}]
+                 (str "- " id "  " title
                       (when where (str "  (" where ")"))
                       (when disposition (str "\n  ruled " (name disposition)))
+                      (when (and attempts (pos? attempts))
+                        (str ", " attempts (if (= 1 attempts) " repair" " repairs")
+                             " landed for it"))
                       (when handed
                         (str "\n  a repair for it was landed and no reviewer has read it since"))
                       (when-not (str/blank? (str because))
@@ -423,12 +433,15 @@
           (str/join "\n"))
      "\n\n"
      "That run read a different tree than the one below, so whether each is\n"
-     "still true is a question, not a fact. Check it against the range:\n"
-     "- Still true: report it as a finding like any other, at the lines you\n"
-     "  found it. Nothing else in this run knows it was ever ruled on, so a\n"
-     "  silence here is read as the defect being gone.\n"
-     "- Repaired, or outside what you are reviewing: say nothing. Do NOT\n"
-     "  report it back on the strength of this text.\n\n")))
+     "still true is a question, not a fact. Check it against the range, and\n"
+     "answer EVERY id above in `prior_open`:\n"
+     "- Still true: `still_present`, AND report it as a finding like any\n"
+     "  other, at the lines you found it. The finding is what becomes work.\n"
+     "- Repaired: `repaired`, with `evidence` naming the file and lines you\n"
+     "  read that show it gone. Do NOT report it as a finding.\n"
+     "- Outside what you are reviewing: leave it out of `prior_open`.\n"
+     "An id you leave out is read as still owed — silence is not an answer,\n"
+     "and neither is `repaired` without evidence.\n\n")))
 
 (def disposition-vocabulary
   "What may become of a finding. One entry per destination: the word the warden
@@ -1622,16 +1635,63 @@
    defect is that one needs the defect. Titles only — a body per finding per
    round would grow the prompt without helping, because what a fresh reviewer
    rewrites between rounds is exactly the title."
-  [seen]
-  (when (seq seen)
+  [seen inherited]
+  (when (or (seq seen) (seq inherited))
     (str "ALREADY RAISED IN AN EARLIER ROUND — the pool `same_as` points into.\n"
          "A finding here was seen before; whether it is the same DEFECT as one\n"
-         "below is what you are being asked.\n"
-         (->> seen
-              (map (fn [{:keys [round id title]}]
-                     (str "  r" round " " id "  " title)))
+         "below is what you are being asked. `last run` rows are the ones under\n"
+         "LEFT OWED BY THE LAST RUN: naming one in `same_as` answers it.\n"
+         (->> (concat (map (fn [{:keys [round id title]}]
+                             (str "  r" round " " id "  " title))
+                           seen)
+                      (map (fn [{:keys [id title disposition]}]
+                             (str "  last run " id "  " title
+                                  (when disposition (str "  (ruled " (name disposition) ")"))))
+                           inherited))
               (str/join "\n"))
          "\n\n")))
+
+(defn- inherited-block
+  "What the last run of this workstream left owed and nothing in this run has
+   answered, each under its own id, with how that run left it.
+
+   The warden is the one reader that can answer a row: a reviewer is handed only
+   the rows of its own layer and never a park, and cannot say that a finding it
+   is raising is one of them. Without this, a park re-raised from the last run
+   arrived with no history, was ruled `fix`, and cost a fixer and a round before
+   the recurrence brake parked it again — while a row re-found under new wording
+   was carried as owed beside the finding that repaired it.
+
+   Optional per row, where a finding is not: a row nobody rules on stays owed,
+   which is the honest reading of silence and is what makes leaving it cheap."
+  [inherited]
+  (when (seq inherited)
+    (str "LEFT OWED BY THE LAST RUN OF THIS WORKSTREAM — inherited, not raised this run\n"
+         "No finding of this run has answered these. A park among them is a\n"
+         "question already put to a person, carried until one answers it —\n"
+         "treat it as you would STILL PARKED above. For each row you can answer:\n"
+         "- a finding below is the same defect: put this id in that finding's\n"
+         "  `same_as`. Do not also rule on the row.\n"
+         "- otherwise rule on it by its id in `findings`, like a finding: `fix`\n"
+         "  hands it to its layer's fixer, `park` keeps it for a person, and a\n"
+         "  settling ruling ends it — with the authority, as always.\n"
+         "Leave out a row you have nothing to say about: it stays owed, and is\n"
+         "counted open.\n"
+         (->> inherited
+              (map (fn [{:keys [id title where layer disposition because attempts handed]}]
+                     (str "- " id "  " title
+                          (when where (str "  (" where ")"))
+                          (when layer (str "  [" layer "]"))
+                          "\n    left " (if disposition (name disposition) "unruled")
+                          (when (and attempts (pos? attempts))
+                            (str " after " attempts
+                                 (if (= 1 attempts) " landed repair" " landed repairs")))
+                          (when handed ", its last repair unread")
+                          (when-not (str/blank? (str because))
+                            (str "\n    " because))
+                          "\n")))
+              (apply str))
+         "\n")))
 
 (defn- fixer-declines-block
   "The findings a fixer was handed, refused, and argued against — carried from
@@ -1829,7 +1889,7 @@
    rather than a dispatch: what it knows to be open that this round is handing
    to nobody. It is asked for on every answer, not only on a `stop`, because the
    round that turns out to be the last one is not knowable while it is running."
-  [{:keys [findings history design stance toc answered seen parked fix-outcomes]}]
+  [{:keys [findings history design stance toc answered seen parked inherited fix-outcomes]}]
   ;; A branch with no layers is reviewed flat, and there is then no layer label
   ;; for a finding to be attributed to. Asked for one anyway, the warden supplied
   ;; the only stack-shaped thing it had — a file path — on every ruling of the
@@ -1901,7 +1961,11 @@
           "Empty unless an account under WHAT THE FIXERS SAID names a defect no\n"
           "finding below covers; that section says when to fill it.\n")
      "}\n")
-   "Every finding below must appear exactly once.\n\n"
+   "Every finding below must appear exactly once.\n"
+   (when (seq inherited)
+     (str "A row under LEFT OWED BY THE LAST RUN may appear too, by its id — see\n"
+          "that section.\n"))
+   "\n"
    "DECISION:\n"
    "- continue: something is worth fixing now.\n"
    "- stop: nothing left worth fixing; remaining items are nits.\n"
@@ -2026,11 +2090,12 @@
                                  (when-let [b (:because p)] (str "\n    " b)) "\n")))
                (apply str))
           "\n"))
+   (inherited-block inherited)
    (fixer-declines-block fixer-declines)
    (refused-repairs-block refused)
    (unstarted-block unstarted)
    (fixer-accounts-block fixer-accounts)
-   (seen-block seen)
+   (seen-block seen inherited)
    "History of prior rounds (findings + what was fixed):\n"
    (pr-str history) "\n\n"
    "THIS ROUND'S FINDINGS:\n\n"

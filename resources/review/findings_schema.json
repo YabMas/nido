@@ -3,7 +3,8 @@
   "additionalProperties": false,
   "required": [
     "findings",
-    "overall_correctness"
+    "overall_correctness",
+    "prior_open"
   ],
   "properties": {
     "findings": {
@@ -84,6 +85,33 @@
     },
     "overall_correctness": {
       "type": "string"
+    },
+    "prior_open": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "status",
+          "evidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "repaired",
+              "still_present"
+            ]
+          },
+          "evidence": {
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }

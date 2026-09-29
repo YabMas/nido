@@ -1499,3 +1499,15 @@
     (is (= "clean" (:status (report/apply-event
                              r {:event :run-interrupted :at "2026-06-30T14:05:01Z"}
                              clock))))))
+
+(deftest the-report-says-which-inherited-rows-left-the-run-unresolved
+  ;; report.json read `unresolved` with a null reason and a clean last round;
+  ;; the rows that decided the status were in the ledger entry and nowhere here.
+  (let [ctx {:owed [{:id "f1" :title "this run's" :disposition :fix}
+                    {:id "75dde695" :title "Apply the byte limit" :where "c.clj:328"
+                     :disposition :fix :layer "core" :inherited true :handed true}]}]
+    (is (= [{:id "75dde695" :title "Apply the byte limit" :where "c.clj:328"
+             :disposition :fix :layer "core"}]
+           (:inherited (report/stopped-on ctx))))
+    (is (nil? (report/stopped-on {:owed [{:id "f1" :title "this run's"}]}))
+        "the run's own remainder is in its rounds already")))
