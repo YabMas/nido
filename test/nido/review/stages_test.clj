@@ -4979,3 +4979,80 @@
         (is (= ["g"] (mapv :id (stages/prior-open "/w")))
             "a person answering after the entry that carried the parks answers
              them — including this run's own, which that blocker listed")))))
+
+;; ── Routing a repair to a layer whose fixer may write it ────────────────────
+
+(def ^:private fenced-toc
+  "review ws-20260918-e2578e's shape: one file touched by layers 1, 2 and 3."
+  [{:label "creation-step" :files ["src/handlers/dialogue.clj"]}
+   {:label "oral-preview"  :files ["src/handlers/dialogue.clj" "src/preview.clj"]}
+   {:label "mode-set-once" :files ["src/handlers/dialogue.clj" "src/mode.clj"]}])
+
+(defn- ruling [overrides]
+  (merge {:id "f1" :title "t" :file "/w/src/handlers/dialogue.clj"
+          :disposition :fix :owner-layer "oral-preview" :because "caused here"}
+         overrides))
+
+(deftest a-fix-owned-below-a-layer-touching-its-file-goes-to-the-highest-toucher
+  ;; The fixer of oral-preview is told dialogue.clj is layer 3's and may not
+  ;; edit it; three rounds ruled it there anyway, and each was declined or
+  ;; rolled back.
+  (let [[f] (stages/within-the-fence "/w" fenced-toc [(ruling {})])]
+    (is (= "mode-set-once" (:owner-layer f))
+        "the only fixer the fence lets edit the file is the highest one touching it")
+    (is (str/starts-with? (:because f) "caused here — moved up from oral-preview to mode-set-once")
+        "the warden's reason survives, and the move says where it came from and why"))
+  (testing "a relative path is read against the worktree, as the file lists are"
+    (is (= "mode-set-once"
+           (:owner-layer (first (stages/within-the-fence
+                                 "/w" fenced-toc [(ruling {:file "src/handlers/dialogue.clj"})]))))))
+  (testing "never down: an owner above every toucher was put there on purpose"
+    (let [f (ruling {:file "/w/src/preview.clj" :owner-layer "mode-set-once"})]
+      (is (= [f] (stages/within-the-fence "/w" fenced-toc [f])))))
+  (testing "a layer nothing above touches the file of keeps it"
+    (let [f (ruling {:file "/w/src/preview.clj"})]
+      (is (= [f] (stages/within-the-fence "/w" fenced-toc [f])))))
+  (testing "only a fix is work for a fixer; any other ruling is left as the warden made it"
+    (let [f (ruling {:disposition :deviation})]
+      (is (= [f] (stages/within-the-fence "/w" fenced-toc [f])))))
+  (testing "no file, or no layers, places nothing"
+    (let [f (ruling {:file nil})]
+      (is (= [f] (stages/within-the-fence "/w" fenced-toc [f]))))
+    (let [f (ruling {})]
+      (is (= [f] (stages/within-the-fence "/w" [] [f]))))))
+
+(deftest the-warden-stage-routes-its-fix-rulings-inside-the-fence
+  ;; Through the stage, so a ruling the fix plan reads is the one routed: the
+  ;; function existing is not the same as the warden's answer passing through it.
+  (let [answer (json/generate-string
+                {:decision "continue" :reason "one fix"
+                 :findings [{:id "f1" :disposition "fix" :owner_layer "creation-step"
+                             :because "caused in the creation step"}]})]
+    (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false
+                                         :result-text (str "```json\n" answer "\n```")})
+                  stages/discover-design-record (fn [_] nil)
+                  stages/read-stance (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] nil)]
+      (let [ctx ((:run stages/warden-stage)
+                 {:config {:cwd "/w" :run-id "r1"} :iter 1 :history []
+                  :toc fenced-toc
+                  :findings [{:id "f1" :title "t" :priority 1 :from-layer "oral-preview"
+                              :file "/w/src/handlers/dialogue.clj" :line-start 3 :line-end 3}]})]
+        (is (= "mode-set-once" (:owner-layer (first (:findings ctx))))
+            "a repair ruled onto a fenced layer never reaches the fixer that would have to break the fence")))))
+
+(deftest a-lower-fixers-account-reaches-the-fixer-whose-files-it-names
+  (let [said [{:layer "voice-conduct" :handed 1
+               :account "Still needed in voice_socket.clj (layer 10): build the outcome from ex-data."}
+              {:layer "voice-recording" :handed 1 :account "Fixed. Nothing else."}]]
+    (is (= ["voice-conduct"]
+           (mapv :layer (stages/accounts-naming said ["src/voice/voice_socket.clj"])))
+        "a fixer names a file as often by its name as by its path")
+    (is (= ["voice-recording"]
+           (mapv :layer (stages/accounts-naming
+                         [{:layer "voice-recording" :account "edited src/voice/rec.clj"}]
+                         ["src/voice/rec.clj"]))))
+    (is (empty? (stages/accounts-naming said ["src/other.clj"]))
+        "an account about somebody else's files is not handed over")
+    (is (empty? (stages/accounts-naming said nil))
+        "a layer with no file list is handed nothing")))

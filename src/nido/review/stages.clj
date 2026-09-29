@@ -867,6 +867,46 @@
                      (when (some #(= target (path %)) files) label))
                    (rseq (vec toc))))))
 
+(defn ^{:malli/schema [:=> [:cat :Path :any :any] :any]}
+  within-the-fence
+  "`findings` with every `:fix` ruling owned by a layer whose fixer may edit the
+   finding's file: one owned below the highest layer touching that file is moved
+   up to it, and its `:because` says so. Every other ruling, and every finding
+   with no file or on an unlayered branch, is returned as it was.
+
+   The warden attributes by where a defect was CAUSED, and the fixer is fenced by
+   where a repair may be WRITTEN — every file a layer above its own touches is
+   not its to edit, because rebasing that layer over the edit is what
+   `run-fix-stage` rolls back. Where the two disagree the fixer declines, or
+   obeys the finding over the fence and loses the whole attempt, and the next
+   round hands the same finding to the same layer. The layer the fence permits
+   is the one `placed-on` already chooses for a file: the highest that touches
+   it.
+
+   Only ever UP. An owner above every toucher is one the warden moved there on
+   purpose — a claim that covers the remedy — and nothing above it is rebased
+   through the file; an owner naming no layer is the top layer's already, by
+   `owned-by`."
+  [cwd toc findings]
+  (if (empty? toc)
+    findings
+    (let [at  (into {} (map-indexed (fn [i {:keys [label]}] [label i])) toc)
+          top (dec (count toc))]
+      (mapv (fn [{:keys [owner-layer disposition file] :as f}]
+              (let [highest (when (= :fix disposition) (placed-on cwd toc nil file))]
+                (if (and highest (> (at highest) (get at owner-layer top)))
+                  (assoc f
+                         :owner-layer highest
+                         :because (str/join
+                                   " — "
+                                   (remove str/blank?
+                                           [(:because f)
+                                            (str "moved up from " owner-layer " to " highest
+                                                 ", the highest layer touching " file
+                                                 ": a fixer below it may not edit that file")])))
+                  f)))
+            findings))))
+
 (defn- where-file
   "The file in a ledger row's `:where` — `file:line`, or the file alone when the
    finding had no line."
@@ -2861,10 +2901,11 @@
             decision (cond-> decision
                        (seq unplaceable)
                        (update :standing #(into [] (distinct) (concat % unplaceable))))
-            ruled (-> (apply-rulings (:findings ctx) (:rulings decision) handles)
-                      (into promoted)
-                      (into (ruled-inherited inherited (:rulings decision) handles
-                                             (:findings ctx))))
+            ruled (->> (-> (apply-rulings (:findings ctx) (:rulings decision) handles)
+                           (into promoted)
+                           (into (ruled-inherited inherited (:rulings decision) handles
+                                                  (:findings ctx))))
+                       (within-the-fence cwd (:toc ctx)))
             parks (carried-parks (get-in ctx [:carry :parks] {}) ruled (:iter ctx))
             declines (carried-while-open (get-in ctx [:carry :fixer-declines] {}) ruled)
             ;; The same lifetime rule over the other channel a fixer leaves
@@ -3432,6 +3473,27 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    to STAY inside a layer, was the one shown none of it."
   [toc label]
   (first (filter #(= label (:label %)) toc)))
+
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  accounts-naming
+  "The accounts in `said` — `{:layer :account :handed}` for each fixer that
+   already ran this stage — that name one of `files`, by its path or by its file
+   name alone, since an account says `voice_socket.clj` as often as the path.
+
+   What a lower fixer could not do because the file is above its layer is
+   exactly what the upper fixer may do, and it runs later in the same stage. The
+   warden reads the account only NEXT round, so without this the handoff costs a
+   round per hop; on a run capped at two it is never acted on. A match on a bare
+   file name can hand over an account that meant another file of that name —
+   the fixer reads it as a claim to check, so the cost is a reading, where the
+   miss is a round."
+  [said files]
+  (let [names (into #{} (comp (mapcat (fn [f] [(str f) (str (fs/file-name (str f)))]))
+                              (remove str/blank?))
+                    files)]
+    (filterv (fn [{:keys [account]}]
+               (some #(str/includes? (str account) %) names))
+             said)))
 
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   with-sweep-memory
@@ -4011,6 +4073,10 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
               ;; the stage — see `with-round-carried`. `left!` records `a` with
               ;; every plan entry from `from` on still owed, and answers `a`.
               !left (volatile! nil)
+              ;; What each fixer that ran this stage said, bottom→top. Stage-
+              ;; local: the next round's warden reads the same accounts off
+              ;; the fix rows, as rulings' evidence rather than as a handoff.
+              !said (volatile! [])
               left! (fn [a from]
                       (vreset! !left (assoc a :unattempted (unattempted-tail plan from)))
                       a)
@@ -4074,7 +4140,10 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                           ;; own, and the row alone cannot say
                                           ;; where its own sits.
                                           :stack (:toc ctx)
-                                          :settled (get decided label)})
+                                          :settled (get decided label)
+                                          :handoffs (accounts-naming
+                                                     @!said
+                                                     (:files (toc-row (:toc ctx) label)))})
                          :budget wall
                          :claude-session-id (layer-fixer-session impl-session-id label)
                          :resume? (session-opened? (get-in acc [:carry :fixer-launches])
@@ -4113,6 +4182,12 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        ;; below can forget it: the session exists whatever becomes
                        ;; of the repair.
                        acc    (record-launch acc label handed ran? exit-code)
+                       ;; Whatever becomes of the repair: a rolled-back fixer's
+                       ;; account names the edit the stack refused, which is the
+                       ;; one an upper fixer can make.
+                       _      (when (and ran? (not (str/blank? (str result-text))))
+                                (vswap! !said conj {:layer label :account (str result-text)
+                                                    :handed (count findings)}))
                        ;; Before the check below, whose first jj call is the one
                        ;; a stale copy refuses. Only for a fixer that ran: a
                        ;; launch that never started wrote nothing, and returned

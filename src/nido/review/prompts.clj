@@ -1073,13 +1073,43 @@
                        (apply str))
                   "\n"
                   "Your fix lands on your own layer and every layer above is then\n"
-                  "rebased onto it, so a file listed there is NOT yours to edit:\n"
+                  "rebased onto it, so a file listed there is NOT yours to edit —\n"
+                  "even one your own layer touches too:\n"
                   "the rebase conflicts, and the whole attempt — every edit you\n"
                   "made this round, not just that one — is rolled back and lost.\n"
                   "If a finding cannot be resolved without touching one of those\n"
                   "files, do everything else and NAME the file and what it needs\n"
                   "in your final message. That is what reaches the layer that\n"
-                  "owns it; editing it here reaches nobody.\n\n"))))))
+                  "owns it; editing it here reaches nobody. A finding whose own\n"
+                  "file is listed there is never handed to you — it goes to the\n"
+                  "highest layer touching that file.\n\n"))))))
+
+(defn- handoffs-block
+  "What fixers below this one said this stage about files this layer touches —
+   see `nido.review.stages/accounts-naming`.
+
+   A CLAIM and not a ruling, and said so, because the warden has not read it:
+   the fixer takes up only what completes a repair a fixer was handed, and
+   anything else stays with the next round's warden, which is the one reader
+   that rules on new defects. Bounded by `account-excerpt`, which keeps the
+   closing sentence of every section — where a fixer names what it could not
+   do."
+  [handoffs]
+  (when (seq handoffs)
+    (str "WHAT THE FIXERS BELOW YOURS SAID THIS ROUND\n"
+         "They ran before you, and each named a file your layer touches — often\n"
+         "a change it could not make because the file is above its own layer,\n"
+         "which makes it yours. It is their CLAIM, not a ruling: nobody has\n"
+         "checked it. Where it names a change in your files that completes a\n"
+         "repair it was handed, make that change as you make your own, and say\n"
+         "in your final message what you took up and what you left. Anything\n"
+         "else it names is not yours to act on this round.\n"
+         (->> handoffs
+              (map (fn [{:keys [layer account handed]}]
+                     (str "- " (or layer "the branch") " said: "
+                          (account-excerpt account (or handed 1)) "\n")))
+              (apply str))
+         "\n")))
 
 (defn- settled-block
   "What has already been decided about the code this fixer is being sent into.
@@ -1232,8 +1262,13 @@
    every caller of a single function read the same shape. The way out the block
    insists on is an ANSWER too, not a failure to sweep: a class whose members are
    one requirement written out three times has no common source to change, and
-   saying so is what lets the loop stop instead of spending a third round on it."
-  [{:keys [findings layer stack settled]}]
+   saying so is what lets the loop stop instead of spending a third round on it.
+
+   `:handoffs` is what the fixers below this one said this stage about this
+   layer's files — see `handoffs-block`. It is the fence's other half: a lower
+   fixer is told to NAME the change it may not make, and this is the fixer that
+   may make it, running minutes later in the same stage."
+  [{:keys [findings layer stack settled handoffs]}]
   (str
    "Fix the following code-review findings in this working directory. Make the\n"
    "MINIMAL change that resolves each. Do NOT commit — the orchestrator commits.\n\n"
@@ -1259,6 +1294,7 @@
    "the ORIENTING read that is deferred here, not the re-read above: that one\n"
    "belongs to finishing a repair, and this rule is about starting one.\n\n"
    (stacked-change-block stack layer)
+   (handoffs-block handoffs)
    (settled-block settled)
    (->> findings
         (map (fn [f]
@@ -1322,8 +1358,8 @@
    scope, and which files it touches.
 
    This is the MAP and not the territory — enough to say \"that file is also
-   touched by the layer below, so this is probably theirs\" deliberately, instead
-   of guessing at everything it cannot place. Deliberately no diffs: a reader
+   touched by a layer above, so the repair is theirs to write\" deliberately,
+   instead of guessing at everything it cannot place. Deliberately no diffs: a reader
    that could see the layer below would re-derive it, which is the cost the
    layering exists to avoid.
 
@@ -1992,10 +2028,18 @@
           "live, and naming it adds nothing.\n\n")
      (str
       "PER FINDING — owner_layer first. It is the layer the fixer will work on.\n"
-      "The layer that REPORTED a finding is often not the layer that caused it:\n"
-      "a defect seen from an upper layer frequently originates below. Use the\n"
-      "file lists in the stack map to attribute it, and say so in `because` when\n"
-      "you move one.\n"
+      "It is NOT the layer that caused the defect: it is the layer whose fixer\n"
+      "may WRITE the repair. Every fixer is told that a file any layer above its\n"
+      "own touches is not its to edit — the layers above are rebased onto its\n"
+      "fix, and a conflict there rolls the whole attempt back. So own a repair\n"
+      "at the HIGHEST layer touching every file it must edit, even where the\n"
+      "cause sits lower, and say so in `because`. For the finding's own file the\n"
+      "loop moves a lower owner up for you; a repair that needs other files is\n"
+      "yours to place from the file lists in the stack map. That the edit lives\n"
+      "in another layer's file is a reason to move owner_layer, never a ground\n"
+      "for `park`. A finding you move UP onto a layer whose own head already\n"
+      "holds the remedy is not `fix`: it is a broken intermediate, a `deviation`\n"
+      "against the claim of the layer that reported it.\n"
       "A finding from the `stack` pass exists only in the COMPOSITION of layers,\n"
       "and names the ones it spans after `across`. Use them:\n"
       "assign it to the HIGHEST layer involved, because that is the first point in\n"

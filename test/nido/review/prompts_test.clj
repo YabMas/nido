@@ -1430,3 +1430,49 @@ layers, it is not yours"))
     (is (str/includes? out "That is a CLAIM and\nnot a ruling"))
     (is (str/includes? out "design SPEAKS and the code disagrees")
         "and it is distinguished from `structural`, which says the design is silent")))
+
+(deftest the-warden-owns-a-repair-where-its-fixer-may-write-it
+  ;; The warden attributed by where a defect was caused while the fixer is fenced
+  ;; by where it may write, and nothing told the warden the fence. Repairs went
+  ;; to fixers forbidden to make them — declined, or made and rolled back — and
+  ;; the next round routed them to the same layer again.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :toc a-toc})]
+    (is (str/includes? out "the layer whose fixer\nmay WRITE the repair")
+        "owner_layer is defined by the fence, not by the cause")
+    (is (str/includes? out "HIGHEST layer touching every file it must edit")
+        "the rule the loop enforces for the finding's own file, stated for the rest")
+    (is (str/includes? out "never a ground\nfor `park`")
+        "an edit in another layer's file is a re-attribution, which one warden parked four rounds running")
+    (is (str/includes? out "a `deviation`\nagainst the claim of the layer that reported it")
+        "moving a finding up onto a head that already holds the remedy sends a fixer after nothing")))
+
+(deftest a-fixer-is-handed-what-the-fixers-below-it-said-about-its-files
+  ;; A lower fixer names the change it may not make; the upper fixer runs minutes
+  ;; later in the same stage and was never shown it, so each hop cost a round.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b"}]
+              :stack [{:label "core" :files ["a.clj"]}
+                      {:label "wiring" :files ["b.clj"]}]
+              :layer {:label "wiring" :files ["b.clj"]}
+              :handoffs [{:layer "core" :handed 1
+                          :account "Still needed in b.clj: pass the id down."}]})]
+    (is (str/includes? out "WHAT THE FIXERS BELOW YOURS SAID THIS ROUND"))
+    (is (str/includes? out "- core said: Still needed in b.clj: pass the id down.")
+        "the lower fixer's own words are what name the change")
+    (is (str/includes? out "their CLAIM, not a ruling")
+        "nobody has ruled on it, so the upper fixer checks it rather than obeys it"))
+  (testing "and a fixer nobody below spoke to is shown no block"
+    (is (not (str/includes? (prompts/fix-prompt {:findings [{:priority 1 :title "t" :body "b"}]})
+                            "WHAT THE FIXERS BELOW")))))
+
+(deftest a-fixer-is-told-a-file-it-shares-with-a-layer-above-is-fenced-too
+  ;; Two fixers read the fence opposite ways about a file both their layer and a
+  ;; higher one touch; the obedient one wrote a third copy of a private helper.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b"}]
+              :stack [{:label "bench" :files ["bench.clj" "doc.md"]}
+                      {:label "doc" :files ["doc.md"]}]
+              :layer {:label "bench" :files ["bench.clj" "doc.md"]}})]
+    (is (str/includes? out "even one your own layer touches too"))
+    (is (str/includes? out "never handed to you")
+        "the fence and the routing say the same thing, so the finding's own file is never behind it")))

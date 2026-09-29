@@ -387,6 +387,21 @@
      reviewer is told. Highest, for a file several layers touch, because nothing above that
      layer changes the file: a repair made there is rebased over no later edit to it."
     {:signature [:=> [:catn [:cwd Path] [:toc :any] [:named :any] [:file :any]] [:maybe :string]]})
+  (Operation within-the-fence
+    "Every `fix` ruling owned by a layer whose fixer may edit the finding's file: one owned
+     below the highest layer touching that file is moved up to it, and says so. The warden
+     attributes by where a defect was caused, and a fixer is fenced by where it may write —
+     every file a layer above its own touches is not its to edit, because rebasing that layer
+     over the edit is what the fix stage rolls back. Only ever up: an owner above every
+     toucher was put there on purpose."
+    {:signature [:=> [:catn [:cwd Path] [:toc :any] [:findings :any]] :any]
+     :delegates [placed-on]})
+  (Operation accounts-naming
+    "The accounts of fixers that already ran this stage that name one of a layer's files, by
+     path or by file name. What a lower fixer could not make because the file is above it is
+     what the upper fixer, running later in the same stage, may make — handed over as a claim,
+     since no warden has read it yet."
+    {:signature [:=> [:catn [:said :any] [:files :any]] :any]})
   (Operation place-inherited
     "The last run's open rows placed on this round's stack, and the ones that place nowhere set
      apart so the run can name them in its standing. A flat branch places every row on its one
