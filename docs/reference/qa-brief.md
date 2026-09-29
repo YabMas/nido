@@ -71,8 +71,9 @@ follows from its substance and its shape:
 Something a person still owes the product's people once the change is out —
 tell the customer who reported it, have sales confirm the new view is theirs,
 check on production what someone asked to be checked there — is not a QA step,
-and buried in the body it is not seen. It goes in its own callout directly under
-the brief:
+and buried in the body it is not seen. It goes in its own callout pinned to the
+top of the page, above the brief — the one thing on the ticket still undone is
+what whoever opens it should read first:
 
     Follow-up                                          ← callout, 📌
     ☐ one to-do per action: what, and who if the ticket names them —
@@ -94,7 +95,10 @@ question for the reviewer to answer while testing belongs in the brief's steps.
 
 Only actions still open: an unchecked to-do elsewhere on the page that passes
 the above moves in here, a checked one does not. No open actions, no block.
-The block is found and replaced by its first text, `Follow-up`, as the brief is.
+The block is found and replaced by its first text, `Follow-up`, as the brief is,
+and written the same way: noted by id, prepended with `"position": {"type":
+"start"}`, the first child read back, and only then the earlier one deleted — or
+the new one, if it did not land first.
 
 ## How it is written to Notion
 
@@ -102,19 +106,23 @@ One callout block whose text starts `QA instructions`, with the sections nested
 inside it. That text is how a later run finds an earlier brief to replace, so a
 ticket never carries two.
 
-A brief is written on top or not at all. In this order:
+A brief is written on top or not at all — where "on top" is the page's first
+block, or its second directly under a `Follow-up` callout that leads the page. In
+this order:
 
 1. **Note the earlier briefs by id.** List the page's top-level blocks and keep
    the ids of every callout whose text starts `QA instructions`, plus the blocks
    of a brief in another shape that this one restyles. From here on they are
    deleted by those ids — never found again by their title, which the new brief
    now shares.
-2. **Prepend the new one** — `PATCH /v1/blocks/<page>/children` with
-   `"position": {"type": "start"}` — and keep the id Notion returns for it.
-3. **Read the first child back.** Notion can ignore `position` and append at the
-   bottom instead (`nido.notion.client/prepend-block-children!` documents the
-   same caveat).
-   - **It is the new brief** → delete the ids noted in step 1. Written.
+2. **Write the new one on top** — `PATCH /v1/blocks/<page>/children` with
+   `"position": {"type": "start"}`, or `{"type": "after_block", "after_block":
+   {"id": <follow-up-id>}}` when a `Follow-up` callout leads the page — and keep
+   the id Notion returns for it.
+3. **Read the first two children back.** Notion can ignore `position` and append
+   at the bottom instead (`nido.notion.client/prepend-block-children!` documents
+   the same caveat).
+   - **The new brief is on top** → delete the ids noted in step 1. Written.
    - **It is not** → delete the new brief by the id from step 2, leave the
      earlier ones as they were, and record the write as failed: "did not land on
      top". A brief at the bottom is not a brief a reviewer reads first, and

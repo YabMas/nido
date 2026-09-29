@@ -464,8 +464,9 @@ JSON
 
 **Write it on top, or not at all** — `docs/reference/qa-brief.md` § "How it is
 written to Notion" is the order: note the earlier briefs by id, prepend, read the
-first child back, and only then delete — the earlier briefs if the new one is on
-top, the new one if it is not. A brief that did not land on top is reported in
+top of the page back, and only then delete — the earlier briefs if the new one is
+on top, the new one if it is not. A `Follow-up` callout leading the page stays
+first: write the brief `after_block` it instead of at `start`. A brief that did not land on top is reported in
 §7 as failed, never left at the bottom.
 
 **The rest of the tidy:**

@@ -136,8 +136,8 @@ restyled brief as in a written one.
 
 Collect what a person still owes the product's people — a notification
 promised "once it is released", a confirmation owed by sales or CS, a production
-check someone asked for and nobody recorded — into one `Follow-up` block under
-the brief, exactly as `docs/reference/qa-brief.md` § "Follow-up actions" bounds
+check someone asked for and nobody recorded — into one `Follow-up` block pinned
+above the brief, exactly as `docs/reference/qa-brief.md` § "Follow-up actions" bounds
 it. Be sparing: most tickets have none, and a block that lists chores teaches
 readers to skip it.
 
@@ -162,8 +162,8 @@ only these:
 - **Delete stale text** — what the release has made false: "not released yet",
   a workaround "until this ships", "ready for review, stacked on PR …".
   Quote each deleted line in the plan.
-- **Fold the original report** into one collapsed toggle under the brief and
-  its `Follow-up` block, `Original report` — what the reporter or requester wrote, its quotes,
+- **Fold the original report** into one collapsed toggle directly under the
+  brief, `Original report` — what the reporter or requester wrote, its quotes,
   its screenshots and videos, in their order. It is folded whole and never edited:
   it is the record of what the reporter saw, and the brief already says what a
   reviewer needs from it (self-contained, `docs/reference/qa-brief.md`).
@@ -354,18 +354,18 @@ existing blocks' text (`notion api PATCH /v1/blocks/<block-id>`), not a new brie
 A **restyle** is written as a brief, and the old blocks it names are what step 1
 notes and the final step deletes.
 
-**Follow-ups, after the ticket's brief:** note any earlier `Follow-up` callout by
-id, create the new one with
-`"position": {"type": "after_block", "after_block": {"id": <brief-id>}}`, read
-the page's blocks back, and only then delete the earlier callout and the body
-to-dos it moved in. Notion placing it elsewhere is recorded in the result, not a
-failure — the block still stands on its own.
+**Follow-ups, after the ticket's brief:** written on top as
+`docs/reference/qa-brief.md` § "Follow-up actions" says — the earlier callout
+noted by id, the new one prepended, the first child read back. Only when it is
+first are the earlier callout and the body to-dos it moved in deleted; otherwise
+the new one is deleted again and the item is `:failed` with "did not land on
+top".
 
 **Folding, in this order, so nothing is lost if a call fails midway:**
 
 1. Create the toggle with copies of the blocks inside it — `Original report`
-   after the `Follow-up` block, or after the brief where there is none
-   (`"position": {"type": "after_block", "after_block": {"id": <that block>}}`),
+   directly after the brief
+   (`"position": {"type": "after_block", "after_block": {"id": <brief-id>}}`),
    `Engineering notes & history` at the bottom. If Notion puts the report toggle
    anywhere else, say so in the result; it is still collapsed. A request nests
    two levels; append deeper children to the returned child ids.
