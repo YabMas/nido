@@ -63,8 +63,9 @@
 
    Emitted rather than written directly, so the hook's write is serialized with
    the engine's own events and lands through the same persister — see
-   `emit-fn`. The event is a no-op for a run that already ended and for one
-   stopped mid-repair, so the bracket does not have to be tight.
+   `emit-fn`. The event is a no-op for a run that already ended, and only
+   stamps one stopped mid-repair — see `report/stamp-interrupt` — so the
+   bracket does not have to be tight.
 
    `emit` and `clock` are this run's; `f` is the run."
   [emit clock f]

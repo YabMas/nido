@@ -1480,10 +1480,110 @@
                   {:event :phase-started :iter 1 :phase :fix
                    :at "2026-06-30T14:02:01Z"}])]
     (is (nil? (report/interrupted r "2026-06-30T14:03:00Z")))
-    (is (= r (report/apply-event r {:event :run-interrupted :at "2026-06-30T14:03:00Z"}
-                                 clock))
-        "the fold is a no-op, so the report stays `running` and reconcile finds
-         it exactly as it finds a crash")))
+    (let [stamped (report/apply-event r {:event :run-interrupted :at "2026-06-30T14:03:00Z"}
+                                      clock)]
+      (is (= "running" (:status stamped))
+          "left open, so the refusal that protects a tree left mid-repair still
+           fires for the next claimant")
+      (is (= "fix" (:phase (report/in-flight stamped))))
+      (is (= "2026-06-30T14:03:00Z" (:interrupted-at stamped))
+          "and stamped, because the report alone reads the same after a
+           person's stop as after a crash — the difference is what the next
+           reader needs")
+      (is (= stamped (report/apply-event stamped {:event :run-finalized :status :fix-launch-failed
+                                                  :ctx {} :at "2026-06-30T14:03:04Z"}
+                                         clock))
+          "the reap turns the killed fixer into a launch that never started;
+           folding the unwinding would publish a person's stop as a machinery
+           failure")
+      (testing "and whoever settles it seals it as the person's stop"
+        (let [closed (report/settled stamped "2026-06-30T15:00:00Z")]
+          (is (= "interrupted" (:status closed)))
+          (is (= "2026-06-30T14:03:00Z" (:ended-at closed))
+              "when it was stopped, not when somebody next noticed"))))))
+
+(deftest a-run-nobody-stopped-is-settled-as-an-orphan
+  (let [r (drive [{:event :run-started :run-id "review-1" :cwd "/w" :base "main"
+                   :at "2026-06-30T14:00:00Z"}
+                  {:event :phase-started :iter 1 :phase :fix
+                   :at "2026-06-30T14:02:01Z"}])
+        closed (report/settled r "2026-06-30T14:09:00Z")]
+    (is (= "orphaned" (:status closed))
+        "a crash runs no nido code on the way out, so nothing says a person
+         decided anything — the accident label is the honest one")
+    (is (= "2026-06-30T14:09:00Z" (:ended-at closed)))))
+
+(deftest a-fix-phase-keeps-its-account-while-it-runs
+  ;; A run killed on its fourth fixer used to publish `0 repairs dispatched`
+  ;; over the three that landed: the phase folded its account once, at the end
+  ;; the kill never reached.
+  (let [fix {:layer "a1" :commit "c1" :handed ["h1"] :fixed-count 1}
+        r   (drive [{:event :run-started :run-id "review-1" :cwd "/w" :base "main"
+                     :at "2026-06-30T14:00:00Z"}
+                    {:event :phase-started :iter 1 :phase :fix :at "2026-06-30T14:02:01Z"}
+                    {:event :fix-progress :iter 1 :at "2026-06-30T14:02:02Z"
+                     :ctx {:unattempted [{:layer "a1" :handed ["h1"]}
+                                         {:layer "a2" :handed ["h2"]}]}}
+                    {:event :fix-progress :iter 1 :at "2026-06-30T14:03:00Z"
+                     :ctx {:history [{:iter 1 :fixes [fix] :fixed-count 1}]
+                           :fixes [fix]
+                           :unattempted [{:layer "a2" :handed ["h2"]}]}}
+                    {:event :fix-progress :iter 1 :at "2026-06-30T14:03:01Z"
+                     :fixing {:layer "a2" :handed ["h2"] :op "op-9"}
+                     :ctx {:history [{:iter 1 :fixes [fix] :fixed-count 1}]
+                           :fixes [fix]
+                           :unattempted [{:layer "a2" :handed ["h2"]}]}}])
+        ph  (get-in r [:rounds 0 :phases 0])]
+    (is (= "running" (:status ph)) "an account so far is not a finished phase")
+    (is (= [fix] (:fixes ph)) "the landed repair is on the report before the phase ends")
+    (is (= {:layer "a2" :handed ["h2"] :op "op-9"} (:fixing (report/in-flight r)))
+        "the fixer in flight and the operation that undoes it — what a stop
+         mid-repair leaves that the tree cannot say")
+    (is (= 1 (:fix-attempts (:summary (report/settled r "2026-06-30T14:09:00Z"))))
+        "the dispatch count an orphan publishes is the one its fixers earned")
+    (testing "and finishing replaces the account whole"
+      (let [done (report/apply-event r {:event :phase-finished :iter 1 :phase :fix
+                                        :at "2026-06-30T14:05:00Z"
+                                        :ctx {:history [{:iter 1 :fixes [fix] :fixed-count 1}]
+                                              :fixes [fix]}}
+                                     clock)
+            ph   (get-in done [:rounds 0 :phases 0])]
+        (is (nil? (:fixing ph)) "no fixer is in flight in a finished phase")
+        (is (nil? (:unattempted ph))
+            "a layer the progress listed as owed and the finish reached must not
+             stay listed as never attempted")))))
+
+(deftest a-fix-row-from-before-handed-counts-its-landed-repairs
+  ;; A report from before rows carried `:handed`, re-summarized when it is
+  ;; settled: counting `:handed` alone published 0 repairs over seven landed.
+  (let [r {:rounds [{:round 1 :phases [{:phase "fix" :fixes [{:layer "a" :fixed-count 3}
+                                                             {:layer "b" :handed [] :fixed-count 2}]}]}]
+           :status "running"}]
+    (is (= 3 (:fix-attempts (:summary (report/settled r "t")))))
+    (is (report/account-lost? {:status "running"
+                               :rounds [{:round 1 :status "running"
+                                         :phases [{:phase "fix" :status "running"}]}]})
+        "a running fix phase with no account at all has a dispatch count nobody
+         recorded, which is unknown rather than zero")))
+
+(deftest a-report-rebuilds-the-rulings-a-dead-run-was-holding
+  (let [r {:status "running"
+           :rounds [{:round 1 :status "running"
+                     :phases [{:phase "review" :status "ok"
+                               :findings [{:id "f1" :title "Leaks" :file "a.clj" :line-start 3}]}
+                              {:phase "warden" :status "ok"
+                               :rulings [{:id "f1" :handle "h1" :disposition "fix"
+                                          :owner-layer "a1"}]}
+                              {:phase "fix" :status "running"
+                               :fixes [{:layer "a1" :commit "c" :handed ["h1"]}]}]}]}
+        final (report/as-final r)]
+    (is (= [{:id "f1" :title "Leaks" :file "a.clj" :line-start 3 :handle "h1"
+             :disposition :fix :owner-layer "a1"}]
+           (:findings final))
+        "a ruling is joined to what it ruled on, with the keyword every reader
+         of a disposition compares")
+    (is (= [{:layer "a1" :commit "c" :handed ["h1"]}] (:fixes final)))
+    (is (false? (:review-aborted? final)))))
 
 (deftest a-run-that-already-ended-is-not-restamped-as-stopped
   ;; A loop finalizes its report and then keeps going — the ledger entry, the

@@ -3,12 +3,15 @@
    [babashka.fs :as fs]
    [cheshire.core :as json]
    [clojure.test :refer [deftest is testing]]
+   [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.source.queue :as queue]
    [nido.platform.core :as core]
    [nido.review.reconcile :as reconcile]
    [nido.review.report :as report]
+   [nido.review.stages :as stages]
    [nido.session.lifecycle :as lifecycle])
   (:import
    [java.time Instant]))
@@ -120,15 +123,23 @@
      (write-run! (report-in "review-mine" tree reviewing) 0)
      (is (empty? (reconcile/orphans tree "review-mine"))))))
 
-(deftest a-run-that-recorded-being-stopped-is-not-an-orphan
+(deftest a-run-that-recorded-being-stopped-is-settled-for-its-inheritance-alone
   (in-tmp-home
    (fn []
-     ;; The whole payoff of writing the report from the shutdown hook. The run
-     ;; said how it ended, so there is nothing for a later claimant to settle:
-     ;; no restamp, no refusal, and no analysis session to read a run that
-     ;; already accounts for itself.
-     (write-run! (report/interrupted (report-in "review-stopped" tree reviewing) "t3") 0)
-     (is (empty? (reconcile/orphans tree "review-mine"))))))
+     ;; The run said how it ended, so there is no restamp, no refusal and no
+     ;; analysis session to read a run that already accounts for itself. What
+     ;; the hook cannot do is write the ledger, so what the run was holding is
+     ;; still only in its run dir — settling adds that and nothing else.
+     (let [queued (atom [])]
+       (with-redefs [queue/enqueue! (fn [e] (swap! queued conj e) "/q/1.edn")]
+         (write-run! (report/interrupted (report-in "review-stopped" tree read-one-then-died) "t3") 0)
+         (let [out (reconcile/settle! {:cwd tree :run-id "review-mine"})
+               r   (read-back "review-stopped")]
+           (is (:proceed? out) "it stopped reading, so the tree is as its reviewers found it")
+           (is (= "interrupted" (:status r)) "the status it recorded for itself stands")
+           (is (some? (:settled r)) "and it is settled once, not on every scan")
+           (is (empty? @queued))
+           (is (empty? (reconcile/orphans tree "review-mine")))))))))
 
 (deftest a-run-stopped-mid-repair-is-still-an-orphan
   (in-tmp-home
@@ -338,3 +349,159 @@
           (is (empty? (:settled out)))
           (is (= "running" (:status (read-back "review-dead"))))))
       (finally (fs/delete-tree tmp)))))
+
+;; ---- what a settled run leaves the workstream ----------------------------
+
+(defn- in-tmp-ws
+  "`in-tmp-home`, with a real workstream behind the tree, whose id `f` is given."
+  [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))
+                    queue/enqueue! (constantly "/q/1.edn")]
+        (let [ws-id (:id (ws/create! :brian {:stage :in-progress :external-refs []}))]
+          (with-redefs [lifecycle/session-from-cwd (constantly {:project :brian
+                                                                :session "fix-thing"})
+                        csession/workstream-id-for (constantly ws-id)]
+            (f ws-id))))
+      (finally (fs/delete-tree tmp)))))
+
+(def ^:private killed-mid-fix
+  "Round 1 ruled two fixes and a park; the a1 fixer landed its repair, and the
+   a2 fixer was launched and never came back."
+  [{:phase "review" :status "ok" :started-at "t0" :ended-at "t1" :design-seq nil
+    :findings [{:id "f1" :title "Leaks a handle" :file "a.clj" :line-start 3 :from-layer "a1"}
+               {:id "f2" :title "Wrong order" :file "b.clj" :line-start 9 :from-layer "a2"}
+               {:id "f3" :title "Contradicts the lease" :file "c.clj" :line-start 1 :from-layer "a2"}]
+    :layers [{:label "a1" :status "reviewed" :findings 1}
+             {:label "a2" :status "reviewed" :findings 2}]}
+   {:phase "warden" :status "ok" :started-at "t1" :ended-at "t2"
+    :rulings [{:id "f1" :handle "h1" :disposition "fix" :owner-layer "a1"}
+              {:id "f2" :handle "h2" :disposition "fix" :owner-layer "a2"}
+              {:id "f3" :handle "h3" :disposition "park" :owner-layer "a2"
+               :because "a person decides the lease"}]
+    :standing [{:what "the retry path" :why-no-finding "outside the change"}]}
+   {:phase "fix" :status "running" :started-at "t2" :ended-at nil
+    :fixes [{:layer "a1" :commit "c1" :handed ["h1"] :fixed-count 1}]
+    :unattempted [{:layer "a2" :handed ["h2"]}]
+    :fixing {:layer "a2" :handed ["h2"] :op "op-7"}}])
+
+(deftest a-run-killed-mid-fix-leaves-what-it-was-holding-on-the-ledger
+  ;; The measured loss: a run stopped three fixers into its fix stage wrote no
+  ;; entry, so its landed repairs read as none, its fix rulings still owed
+  ;; reached no later run, and its successor re-derived five of seven findings.
+  (in-tmp-ws
+   (fn [ws-id]
+     (write-run! (report-in "review-dead" tree killed-mid-fix) (* 5 60 1000))
+     (let [out   (reconcile/settle! {:cwd tree :run-id "review-mine"})
+           entry (ws/latest-entry :brian ws-id :review-settled)
+           open  (into {} (map (juxt :id identity)) (:open entry))]
+       (is (not (:proceed? out)) "a tree left mid-repair still refuses its next claimant")
+       (is (= :orphaned (:status entry)))
+       (is (= 1 (:fix-attempts entry)) "the repair that landed is counted, not zero")
+       (is (= 3 (:findings-remaining entry)))
+       (is (true? (:handed (open "f1")))
+           "a repair for it is in the branch and no reviewer read it — it needs
+            checking, not doing")
+       (is (nil? (:handed (open "f2"))) "its fixer never finished")
+       (is (= :park (:disposition (open "f3"))) "a question put to a person outlives the run")
+       (is (= 1 (:remaining-parked entry)))
+       (is (= [{:what "the retry path" :why-no-finding "outside the change"}] (:standing entry)))
+       (is (= {:round 1 :phase "fix"
+               :fixing {:layer "a2" :handed ["h2"] :op "op-7"}
+               :landed [{:layer "a1" :commit "c1" :handed ["h1"]}]}
+              (:stopped entry))
+           "where it stopped, which fixer it stopped under, and how to undo it")
+       (is (= #{"f1" "f2" "f3"} (set (map :id (stages/prior-open tree))))
+           "and the next run inherits it, rather than the run before it")
+       (is (= "appended" (get-in (read-back "review-dead") [:review-entry :ledger])))))))
+
+(deftest a-person-stopping-a-fix-is-not-labelled-an-accident
+  (in-tmp-ws
+   (fn [ws-id]
+     (write-run! (assoc (report-in "review-stopped" tree killed-mid-fix)
+                        :interrupted-at "2026-09-01T10:00:00Z")
+                 (* 5 60 1000))
+     (reconcile/settle! {:cwd tree :run-id "review-mine"})
+     (is (= "interrupted" (:status (read-back "review-stopped"))))
+     (let [entry (ws/latest-entry :brian ws-id :review-settled)]
+       (is (= :interrupted (:status entry)))
+       (is (= "2026-09-01T10:00:00Z" (get-in entry [:stopped :at])))))))
+
+(deftest a-fix-phase-with-no-account-publishes-its-count-as-unknown
+  (in-tmp-ws
+   (fn [ws-id]
+     (write-run! (report-in "review-old" tree fixing) (* 5 60 1000))
+     (reconcile/settle! {:cwd tree :run-id "review-mine"})
+     (let [entry (ws/latest-entry :brian ws-id :review-settled)]
+       (is (contains? entry :fix-attempts))
+       (is (nil? (:fix-attempts entry))
+           "a report from before the stage said what it dispatched holds no count;
+            zero would be one nobody made")))))
+
+(deftest a-settled-run-never-replaces-a-newer-record
+  (in-tmp-ws
+   (fn [ws-id]
+     (ws/append-entry! :brian ws-id {:kind :review}
+                       (pr-str {:format :review-report :status :converged :base "main"
+                                :base-rev nil :rounds 1 :fix-attempts 0 :defects-settled 0
+                                :findings-remaining 0 :report-path nil}))
+     (write-run! (assoc (report-in "review-dead" tree killed-mid-fix)
+                        :started-at "2020-01-01T00:00:00Z")
+                 (* 5 60 1000))
+     (reconcile/settle! {:cwd tree :run-id "review-mine"})
+     (is (nil? (ws/latest-entry :brian ws-id :review-settled))
+         "prior-open reads the newest record, so appending a run that died before
+          its successor finished would hand the next run the dead one's rows")
+     (is (= "superseded" (get-in (read-back "review-dead") [:review-entry :ledger]))))))
+
+(deftest what-the-last-run-left-is-carried-unaged-through-a-run-that-stopped
+  (in-tmp-ws
+   (fn [ws-id]
+     (ws/append-entry! :brian ws-id {:kind :review}
+                       (pr-str {:format :review-report :status :unresolved :base "main"
+                                :base-rev nil :rounds 1 :fix-attempts 1 :defects-settled 0
+                                :findings-remaining 1 :report-path nil
+                                :open [{:id "old-1" :title "Still owed" :disposition :fix
+                                        :layer "a1"}]}))
+     (write-run! (assoc (report-in "review-dead" tree reviewing)
+                        :started-at (str (Instant/now)))
+                 0)
+     (reconcile/settle! {:cwd tree :run-id "review-mine"})
+     (let [row (first (:open (ws/latest-entry :brian ws-id :review-settled)))]
+       (is (= "old-1" (:id row)))
+       (is (nil? (:inherited row))
+           "a run that died reading never put it in front of a warden; marking it
+            inherited would spend its one hop of attention on nobody")))))
+
+(deftest the-coordinator-settles-a-run-nobody-holds-the-claim-of
+  (in-tmp-ws
+   (fn [ws-id]
+     (write-run! (report-in "review-dead" tree killed-mid-fix) (* 13 60 60 1000))
+     (let [[res :as out] (reconcile/settle-abandoned! {})]
+       (is (= 1 (count out)))
+       (is (= tree (:cwd res)))
+       (is (= "orphaned" (:status (read-back "review-dead")))
+           "no claimant needed: a branch nobody reviews again still gets its
+            orphan's rulings onto the ledger")
+       (is (some? (ws/latest-entry :brian ws-id :review-settled)))))))
+
+(deftest the-coordinator-leaves-a-held-claim-to-its-holder
+  (in-tmp-ws
+   (fn [ws-id]
+     (write-run! (report-in "review-live" tree killed-mid-fix) (* 5 60 1000))
+     (activity/with-claim :brian ws-id {:kind :diff-review :run-id "review-live"
+                                        :report-path nil}
+       (fn []
+         (is (empty? (reconcile/settle-abandoned! {})))
+         (is (= "running" (:status (read-back "review-live")))
+             "a held claim is a live process; its report is its own to finish"))))))
+
+(deftest the-coordinator-leaves-a-fresh-stop-mid-repair-for-its-claimant
+  ;; The claimant's refusal is where the person who stopped it learns which
+  ;; repairs landed unread and how to undo the fixer that was cut off.
+  (in-tmp-ws
+   (fn [_]
+     (write-run! (report-in "review-fresh" tree killed-mid-fix) (* 5 60 1000))
+     (is (empty? (reconcile/settle-abandoned! {})))
+     (is (= "running" (:status (read-back "review-fresh")))))))

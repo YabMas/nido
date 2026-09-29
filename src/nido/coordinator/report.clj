@@ -2139,6 +2139,50 @@
             ReviewReport)
       (conj [:findings-fixed int?])))
 
+(def ReviewSettled
+  "What a review run that never finished left the workstream, written by whoever
+   settled it — `nido.review.reconcile` — out of its run dir.
+
+   A :review's shape and not a :review, and the difference is the point. A
+   :review is a run's own verdict, and its presence on the ledger is what places
+   a driven workstream past the review: `nido.coordinator.lane.pipeline` reads
+   the kind, never the payload. A run killed mid-fix reached no verdict, so it
+   may not advance anything — but it may be holding rulings nobody acted on,
+   repairs already in the branch and parks a person owes an answer, and those
+   are what the next run inherits. `nido.review.stages/prior-open` reads the
+   newer of the two kinds.
+
+   `:status` is the two ends no run reaches: `:orphaned`, a run nobody can
+   account for, and `:interrupted`, one a person stopped. `:fix-attempts` is nil
+   when the fix phase the run stopped in kept no account of itself — a report
+   written before the stage said what it dispatched — because zero there would
+   be a count nobody made. Every other count is derived from the rounds the
+   report folded, the same derivation a finished run's entry makes.
+
+   `:stopped` is where it stopped: the round, the phase, the fixer that was
+   running with the operation that undoes it, and the repairs that round had
+   already landed that no reviewer read."
+  (-> (into [] (remove #(and (vector? %) (#{:status :fix-attempts} (first %))))
+            ReviewReport)
+      (conj [:status [:enum :orphaned :interrupted]]
+            [:fix-attempts [:maybe int?]]
+            [:stopped {:optional true}
+             [:map {:closed true}
+              [:round int?]
+              [:phase {:optional true} string?]
+              [:at {:optional true} string?]
+              [:fixing {:optional true}
+               [:map {:closed true}
+                [:layer {:optional true} [:maybe string?]]
+                [:handed [:sequential string?]]
+                [:op {:optional true} [:maybe string?]]]]
+              [:landed {:optional true}
+               [:sequential
+                [:map {:closed true}
+                 [:layer {:optional true} [:maybe string?]]
+                 [:commit {:optional true} [:maybe string?]]
+                 [:handed [:sequential string?]]]]]]])))
+
 (def ReviewReportAny
   "The READ contract for :review — dispatched on the count key that was renamed,
    which is what the era changed."
@@ -3003,6 +3047,7 @@
    :phase-gate               PhaseGate
    :ship-submitted           ShipSubmitted
    :review                   ReviewReport
+   :review-settled           ReviewSettled
    :baseline-review          BaselineReview
    :design-decision          DesignDecision
    :design-verdict           DesignVerdict

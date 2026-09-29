@@ -1755,10 +1755,28 @@
      (some #(and (contains? person-answers (:kind %)) (> (:seq %) since))
            (try (:entries (ws/read-ws project ws-id)) (catch Exception _ nil))))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
+  last-review
+  "The newer of `ws-id`'s last `:review` and last `:review-settled` — what the
+   last run on this workstream left, whether it finished or was settled from its
+   run dir — or nil when it holds neither.
+
+   Both kinds, because a run that stopped mid-fix may be holding the rulings the
+   next run most needs, and reading `:review` alone would inherit from the run
+   before it. `nido.coordinator.report/ReviewSettled` says why a settled run is
+   not a `:review`."
+  [project ws-id]
+  (->> [(ws/latest-entry project ws-id :review)
+        (ws/latest-entry project ws-id :review-settled)]
+       (remove nil?)
+       (sort-by :seq)
+       last))
+
 (defn ^{:malli/schema [:=> [:cat :Path] :any]}
   prior-open
-  "What the last review of this workstream left OWED, as ledger rows carrying
-   the layer each is owed of. Empty when the workstream has no `:review` entry,
+  "What the last review of this workstream left OWED — `last-review`, so a run
+   settled from its run dir counts — as ledger rows carrying the layer each is
+   owed of. Empty when the workstream has no such entry,
    when the last run finished owing nothing, or when cwd maps to no workstream.
 
    THE ONE READ three things in this run depend on. Every run writes this list
@@ -1789,7 +1807,7 @@
    back into a ledger entry can do it without a translation."
   [cwd]
   (when-let [[project ws-id] (project+ws-from-cwd cwd)]
-    (let [entry (ws/latest-entry project ws-id :review)]
+    (let [entry (last-review project ws-id)]
       (into []
             (remove (if (answered-by-a-person? project ws-id (:seq entry))
                       #(or (:inherited %) (= :park (:disposition %)))
@@ -3790,7 +3808,8 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
         budget-str)
     budget))
 
-(defn- fixer-log
+(defn ^{:malli/schema [:=> [:cat :string [:maybe :string] [:maybe :int] :string] :string]}
+  fixer-log
   "Where one fixer's `suffix` log goes — per layer and per round, which is the
    granularity at which two of them can be told apart.
 
@@ -4023,6 +4042,27 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
             launcher/live-services-prompt)
     (catch Throwable _ nil)))
 
+(defn- tell-fix-progress!
+  "Hand the report the fix phase's account so far — `account` is the round as
+   `left!` last recorded it — and `fixing`, the fixer about to launch, or nil
+   when none is.
+
+   What an orphan keeps. The phase is otherwise folded once, when it finishes,
+   so a run killed on its fourth fixer published `0 repairs dispatched` over
+   three landed ones and named no layer its stop interrupted.
+
+   Best-effort, like every display event: a repair must not fail because the
+   event describing it could not be sent."
+  [ctx account fixing]
+  (when-let [emit (get-in ctx [:config :emit])]
+    (try
+      (emit (cond-> {:event :fix-progress
+                     :iter  (:iter ctx)
+                     :at    (str (java.time.Instant/now))
+                     :ctx   (with-round-history account)}
+              fixing (assoc :fixing fixing)))
+      (catch Throwable _ nil))))
+
 (defn- run-fix-stage
   [ctx]
   (if (:dry-run? (:config ctx))
@@ -4078,7 +4118,9 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
               ;; the fix rows, as rulings' evidence rather than as a handoff.
               !said (volatile! [])
               left! (fn [a from]
-                      (vreset! !left (assoc a :unattempted (unattempted-tail plan from)))
+                      (tell-fix-progress!
+                       ctx (vreset! !left (assoc a :unattempted (unattempted-tail plan from)))
+                       nil)
                       a)
               ctx'
               (with-working-copy-restored
@@ -4115,6 +4157,11 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        ;; finding coming back — because it holds one end of the
                        ;; join and discards the other.
                        handed (handed-ids findings)
+                       ;; Launched and not yet settled, with the operation that
+                       ;; undoes it: the one fact about a stop mid-repair that the
+                       ;; tree cannot say for itself.
+                       _      (tell-fix-progress! ctx @!left
+                                                  {:layer label :handed handed :op op})
                        ;; This fixer's own wall, not the loop's. Bound here
                        ;; because the rows below report it: once the wall varies
                        ;; per launch, "killed on budget" no longer says which

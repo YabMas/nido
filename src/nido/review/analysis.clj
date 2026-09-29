@@ -55,6 +55,9 @@
    The counts are duplicated out of the report on purpose. They are the whole
    story of the run if the run dir has been reclaimed by the time the analysis
    gets there — which is the normal end state of a run dir, not an edge case.
+   A run that was settled rather than finished — `orphaned` or `interrupted` —
+   has the counts its settled entry derived, and one it could not derive is
+   published as `unknown`: a run killed holding a P1 read as `0 still open`.
 
    `:fix-attempts` and `:defects-settled` are two different questions: how much
    repair work the run sent out, and how many defects a later reviewer's silence
@@ -162,6 +165,12 @@
   [{:keys [reviewed-project reviewed-session]} tail]
   (str "Reviewed: " (some-> reviewed-project name) " / " reviewed-session tail))
 
+(def ^:private settled-statuses
+  "The two ends a run never reaches itself, stamped by whoever settled it — see
+   `nido.review.reconcile`. A count such a run could not derive is unknown, not
+   zero, and the two are opposite instructions to whoever reads the board."
+  #{"orphaned" "interrupted"})
+
 (defn- diff-payload
   [{:keys [run-id report-path status rounds fix-attempts defects-settled
            findings-remaining findings-kept remaining-handed remaining-parked
@@ -173,16 +182,22 @@
   ;; means something to a reader, so it is published and the round is not.
   ;; `:errored` is the same half of a finished run's own report.
   (let [died-in (or (:phase in-flight) (:phase errored))
+        settled? (contains? settled-statuses (some-> status name))
+        ;; A finished run's counts are facts it produced, and an absent one is
+        ;; nothing to report. A settled run's are derived from its run dir, and
+        ;; an absent one is a count nobody could make.
+        n       (fn [v] (cond (some? v) v settled? "unknown" :else 0))
         verdict (some-> design-verdict name)
         ;; Shape-agnostic for `verdict-summary`'s reason: the same value is a
         ;; keyword in the process that folded it and a string once the report
         ;; has been through JSON.
         ledger  (some-> (:ledger review-entry) name)
-        ;; A ledger that was there and did not take this run's `:review` entry.
+        ;; A ledger that was there and did not take this run's entry.
         ;; `no-workstream` is not an unrecorded run — there was no ledger for it
-        ;; to reach, which the `Reviewed:` line already says — and an orphan
-        ;; never got as far as offering one, so it carries no answer at all.
-        unrecorded (when (and ledger (not (#{"appended" "no-workstream"} ledger)))
+        ;; to reach, which the `Reviewed:` line already says. `superseded` is a
+        ;; settled run a later record already replaced, which is not the loop's
+        ;; memory skipping a run and is said in its own words.
+        unrecorded (when (and ledger (not (#{"appended" "no-workstream" "superseded"} ledger)))
                      review-entry)]
     (cond-> {:adapter            :review-run
              :id                 (str run-id)
@@ -201,22 +216,26 @@
              :report-path        report-path
              :status             (name (or status :unknown))
              :rounds             (or rounds 0)
-             :fix-attempts       (or fix-attempts 0)
-             :defects-settled    (or defects-settled 0)
-             :findings-remaining (or findings-remaining 0)
-             :findings-kept      (or findings-kept 0)
+             :fix-attempts       (n fix-attempts)
+             :defects-settled    (n defects-settled)
+             :findings-remaining (n findings-remaining)
+             :findings-kept      (n findings-kept)
              :targets-reviewed   (or targets-reviewed 0)
              :targets-skipped    (or targets-skipped 0)
              :headline           (str "Status: " (name (or status :unknown)) " · " (or rounds 0)
-                                      " rounds · " (or defects-settled 0) " defects settled ("
-                                      (or fix-attempts 0) " repairs dispatched) · "
-                                      (or findings-remaining 0) " still open · "
-                                      (or findings-kept 0) " kept\n"
+                                      " rounds · " (n defects-settled) " defects settled ("
+                                      (n fix-attempts) " repairs dispatched) · "
+                                      (n findings-remaining) " still open · "
+                                      (n findings-kept) " kept\n"
                                       "Coverage: " (or targets-reviewed 0) " targets read this run, "
                                       (or targets-skipped 0) " carried from an earlier run\n"
                                       (reviewed-line run (str " (base " base ")"))
                                       (when unavailable
                                         (str "\nReviewer unavailable: " (:message unavailable)))
+                                      (when (= "superseded" ledger)
+                                        (str "\nNot recorded: settled after a later run on "
+                                             (or reviewed-ws-id "this workstream")
+                                             " had already written its own record, which stands"))
                                       (when unrecorded
                                         (str "\nNot recorded: this run's :review entry did not"
                                              " reach the ledger (" ledger ")"
@@ -315,8 +334,9 @@
    change ids, and through the lane escalating on the status.
 
    An ORPHAN is excluded on exactly that ground and judged by `:targets-reviewed`
-   — see `orphan-worth-reading?`. `orphaned` is not a status the loop reaches; it
-   is stamped from outside, by whoever next takes the workstream's claim, and a
+   — see `orphan-worth-reading?` — and so is a run a person interrupted, whose
+   first seconds are no more worth reading. `orphaned` is not a status the loop
+   reaches; it is stamped from outside, by whoever settles the run, and a
    process killed seconds into its first review phase reaches this having read
    nothing at all. Two such runs on one tree, alive 2.6s and 6.7s, each bought a
    worktree and an hour of Opus to report that nothing happened.
@@ -347,7 +367,7 @@
                 (not (#{:nothing-to-review :stack-conflicted} (keyword status)))
                 (not dry-run?)
                 report?
-                (or (not= :orphaned (keyword status))
+                (or (not (contains? settled-statuses (name status)))
                     (orphan-worth-reading? run))
                 ;; A record run that launched no judge has nothing a loop did to read. Its count
                 ;; decides, never its status: :premise-unverified ends runs that judged and runs

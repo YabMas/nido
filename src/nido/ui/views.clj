@@ -1481,9 +1481,13 @@
       ;; is a fact about the branch, and a card that omits it reads identically
       ;; to one where the reviewers found nothing.
       [:span.meta rounds " round" (when (not= 1 rounds) "s")
-       " · " (if fix-attempts
-               (str defects-settled " settled (" fix-attempts " dispatched)")
-               (str findings-fixed " dispatched"))
+       ;; A run settled from its run dir can hold a nil dispatch count — a fix
+       ;; phase that kept no account — and says `unknown` rather than falling
+       ;; through to the pre-rename count it does not have.
+       " · " (if findings-fixed
+               (str findings-fixed " dispatched")
+               (str defects-settled " settled (" (if (some? fix-attempts) fix-attempts "unknown")
+                    " dispatched)"))
        " · " findings-remaining " remaining"
        (when (pos? (or remaining-handed 0))
          (str " (" remaining-handed " already repaired, unverified)"))

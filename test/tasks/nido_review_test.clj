@@ -1921,26 +1921,65 @@
   ;; It is still said out loud: the analysis it just queued appears on nido's
   ;; board, and a reader who was not told reads it as invented work.
   (let [o {:settled [{:run-id "review-f00636e7" :report-path "/runs/r/report.json"
-                      :in-flight {:round 1 :phase "review"}}]
+                      :in-flight {:round 1 :phase "review"}
+                      :report {:status "orphaned"}
+                      :recorded {:ledger :appended :ws-id "ws-9"}}]
            :writing [] :proceed? true}
         out (str/join "\n" (t/orphans-settled-lines o))]
     (is (str/includes? out "review-f00636e7"))
-    (is (str/includes? out "orphaned"))
+    (is (str/includes? out "died — no nido code saw it end")
+        "an accident is labelled one, and only one")
     (is (str/includes? out "round 1's review phase"))
+    (is (str/includes? out "on ws-9") "what it was holding is somewhere a reader can go")
     (is (empty? (t/orphans-refusal-lines o)))))
+
+(deftest a-run-a-person-stopped-is-not-told-as-a-crash
+  (let [out (str/join "\n" (t/orphans-settled-lines
+                            {:settled [{:run-id "review-1" :report-path "/r"
+                                        :report {:status "interrupted"
+                                                 :reason {:interrupted {:round 2 :phase "review"}}}}]}))]
+    (is (str/includes? out "was stopped by a person"))
+    (is (str/includes? out "round 2's review phase"))))
 
 (deftest nothing-is-said-when-nothing-died
   (is (empty? (t/orphans-settled-lines {:settled [] :writing [] :proceed? true})))
   (is (empty? (t/orphans-refusal-lines {:settled [] :writing []}))))
 
 (deftest a-run-that-died-repairing-the-branch-says-what-the-branch-now-is
-  (let [out (str/join "\n" (t/orphans-refusal-lines
-                            {:settled [a-dead-fixer] :writing []}))]
+  ;; Described from its run dir, never from what such a stop usually does: the
+  ;; old refusal said the fixers outlived the loop and landed their work, of a
+  ;; run whose only fixer died with it having written nothing.
+  (let [o   (assoc a-dead-fixer
+                   :report {:run-id "review-3876f59b" :status "interrupted"}
+                   :entry {:fix-attempts 2
+                           :stopped {:round 1 :phase "fix"
+                                     :fixing {:layer "gate-is-read" :handed ["h4"] :op "op-77"}
+                                     :landed [{:layer "units" :commit "c1" :handed ["h2"]}]}}
+                   :wrote? true)
+        out (str/join "\n" (t/orphans-refusal-lines {:settled [o] :writing []}))]
     (is (str/includes? out "refused:"))
-    (is (str/includes? out "landed whatever they got to"))
+    (is (str/includes? out "a person stopped it"))
+    (is (str/includes? out "units (c1)") "the repair already in the branch, by layer")
+    (is (str/includes? out "gate-is-read fixer, handed h4"))
+    (is (str/includes? out "jj op restore op-77")
+        "the one remedy the tree cannot suggest for itself")
+    (is (not (str/includes? out "outlived")))
     (is (str/includes? out "Run this again")
         "the refusal fires once — its report has just been closed, so the next
-         invocation reviews the branch as it now stands")))
+         invocation reviews the branch as it now stands"))
+  (testing "a fixer that only read is said to have written nothing"
+    (let [o   (assoc a-dead-fixer :report {:status "orphaned"}
+                     :entry {:fix-attempts 1 :stopped {:round 1 :phase "fix"
+                                                       :fixing {:layer "a" :handed ["h"] :op "op"}}}
+                     :wrote? false)
+          out (str/join "\n" (t/orphans-refusal-lines {:settled [o] :writing []}))]
+      (is (str/includes? out "it had only read"))
+      (is (not (str/includes? out "jj op restore")))))
+  (testing "a report with no account says what it cannot say"
+    (let [o   (assoc a-dead-fixer :report {:status "orphaned"}
+                     :entry {:fix-attempts nil :stopped {:round 1 :phase "fix"}})
+          out (str/join "\n" (t/orphans-refusal-lines {:settled [o] :writing []}))]
+      (is (str/includes? out "is unknown")))))
 
 (deftest an-orphan-still-being-written-to-asks-for-something-different
   ;; Not history: the fixers outlived the loop and nothing is supervising them.
@@ -2094,7 +2133,7 @@
   (let [report  {:summary {:rounds 2 :fix-attempts 1} :target {:base "main" :base-rev "x"}}
         entry   (t/review-event owing-run report "/runs/r/report.json")
         payload (analysis-payload-for owing-run report)
-        blocker (t/parked-blocker (t/owed-rows owing-run) nil)]
+        blocker (t/parked-blocker (verdict/owed-rows owing-run) nil)]
     (is (= ["p1" "ip" "if"] (mapv :id (:open entry)))
         "the park from round 1 and both inherited rows; the repaired finding is not owed")
     (is (= [3 2] [(:findings-remaining entry) (:remaining-parked entry)]))

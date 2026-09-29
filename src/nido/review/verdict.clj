@@ -691,6 +691,61 @@
   [handed f]
   (contains? handed (or (:handle f) (:id f))))
 
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  ledger-findings
+  "Findings trimmed to what a reader of the workstream needs and nothing that
+   only makes sense inside a run. `where` is assembled here because file and
+   line are two fields in the report and one fact to a reader.
+
+   `handed` is a `handed-to-a-fixer` set, and `:handed` is the one field
+   here that is not the finding's own: whether a repair for it is sitting
+   unverified in the branch. Two remainders read alike in a list of titles and
+   ask opposite things of whoever picks them up — one needs checking, the other
+   needs doing. Empty for a list where nothing is owed and the question cannot
+   arise.
+
+   `:layer` is what makes this list joinable back onto a later run's targets —
+   `nido.review.stages/prior-open` is the reader, and a label is the only identity that
+   survives the repair a `:fix` row is asking for. The warden's owner where it
+   assigned one, since that is where the repair goes whoever reported it; the
+   reviewer that raised it otherwise, which is the best available answer for a
+   finding no warden ruled on and still the layer whose reviewer read the code.
+
+   `:attempts` is `still-owed`'s count of the repairs that landed for
+   it. It rides to the next run's warden and reviewer, which otherwise meet a
+   row that has resisted two repairs exactly as they meet one nobody has tried."
+  [handed findings]
+  (into []
+        (map (fn [{:keys [id title file line-start disposition because
+                          owner-layer from-layer attempts] :as f}]
+               (cond-> {:title (str (or title "(untitled finding)"))}
+                 id          (assoc :id (str id))
+                 file        (assoc :where (str file (when line-start (str ":" line-start))))
+                 disposition (assoc :disposition (keyword disposition))
+                 because     (assoc :because (str because))
+                 (or owner-layer from-layer) (assoc :layer (str (or owner-layer from-layer)))
+                 (handed? handed f) (assoc :handed true)
+                 (and attempts (pos? attempts)) (assoc :attempts attempts))))
+        findings))
+
+(def ledger-row-keys
+  "What an inherited row may carry back into an entry: the ledger's own
+   `ReviewFinding` keys. The carry adds what the run used it for, and none of
+   that is a fact about the branch."
+  [:id :title :where :disposition :because :layer :attempts :inherited])
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  owed-rows
+  "`still-owed`, as the ledger's `:open` rows: this run's own remainder
+   first, trimmed by `ledger-findings`, then every inherited row nobody
+   answered. The one list the entry, the analysis payload and the gate count."
+  [final]
+  (let [owed   (still-owed final)
+        handed (handed-to-a-fixer final)]
+    (into (ledger-findings handed (remove :inherited owed))
+          (map #(select-keys % ledger-row-keys))
+          (filter :inherited owed))))
+
 (defn ^{:malli/schema [:=> [:cat :any :map :any] :boolean]}
   still-answers?
   "Whether `prior` — a verdict against this run's own design record — is still

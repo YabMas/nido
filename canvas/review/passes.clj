@@ -160,6 +160,18 @@
   (Operation handed?
     "Whether a repair for this finding is sitting in the branch, unverified."
     {:signature [:=> [:catn [:handed :any] [:f :any]] :boolean]})
+  (Operation ledger-findings
+    "Findings trimmed to the ledger's rows — what a reader of the workstream needs and nothing
+     that only makes sense inside a run — each marked where a repair for it is already in the
+     branch, unread."
+    {:signature [:=> [:catn [:handed :any] [:findings :any]] :any]
+     :delegates [handed?]})
+  (Operation owed-rows
+    "What the run leaves owed, as the ledger's `:open` rows — `still-owed`, trimmed. The one
+     list the `:review` entry, the settled entry, the analysis headline and the parked-blocker
+     gate count, so the remainder a person scans and the one they open cannot disagree."
+    {:signature [:=> [:catn [:final :map]] :any]
+     :delegates [still-owed handed-to-a-fixer ledger-findings]})
   (Operation still-answers?
     "Whether a standing verdict is still this run's answer, so no agent need be launched at all.
 
@@ -366,6 +378,18 @@
      patch the question somebody was asked to answer."
     {:signature [:=> [:catn [:cwd Path]] [:maybe :map]]
      :delegates [discover-design-record discover-prior-verdict]})
+  (Operation last-review
+    "The newer of the workstream's last `:review` and last `:review-settled` — what the last run
+     left, whether it finished or was settled from its run dir. A run killed mid-fix may be
+     holding exactly the rulings the next run needs, and `:review` alone would inherit from the
+     run before it."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]})
+  (Operation fixer-log
+    "Where one fixer's log goes, per layer and per round — the only record of which fixer wrote
+     what, and so what a settled run's refusal reads to say whether the fixer it stopped under
+     had written anything."
+    {:signature [:=> [:catn [:run-id :string] [:label [:maybe :string]] [:iter [:maybe :int]]
+                  [:suffix :string]] :string]})
   (Operation prior-open
     "What the LAST review of this workstream left owed, as ledger rows carrying the layer each
      is owed of. Every run writes that list and, until this, no run read it — so an obligation
@@ -377,7 +401,8 @@
      and still went unreported and unruled, is not evidence enough to hold a branch open for
      ever. A PARK is carried until a person answers on the ledger: no quiet run answers a
      question put to one."
-    {:signature [:=> [:catn [:cwd Path]] :any]})
+    {:signature [:=> [:catn [:cwd Path]] :any]
+     :delegates [last-review]})
   (Operation placed-on
     "The layer a finding NO REVIEWER RAISED is owed of: the layer it names when the stack still
      has it, otherwise the highest layer whose files include its file, and nothing when neither

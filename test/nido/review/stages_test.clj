@@ -325,6 +325,26 @@
         (is (some #(= ["commit" "-m" "review-loop: iter 2 fixes"] %) @commits))
         (is (nil? (:control ctx)))))))
 
+(deftest fix-stage-tells-the-report-what-it-is-doing-as-it-goes
+  ;; A run killed mid-fix used to leave a phase with no account at all, so its
+  ;; landed repairs published as none and nothing named the fixer it died under.
+  (let [events (atom [])
+        seen   (atom nil)]
+    (with-redefs [agent/launch! (fn [_] (reset! seen (last @events))
+                                  {:num-turns 4 :result-error? false :result-text "done"})
+                  stages/working-copy-dirty? (fn [_] true)
+                  jj/jj! (fn [_dir & _] {:exit 0 :out "" :err ""})]
+      ((:run stages/fix-stage)
+       {:config {:cwd "/w" :run-id "r1" :emit #(swap! events conj %)} :iter 2
+        :findings [{:id "aa11" :handle "h1" :title "x" :disposition :fix}]})
+      (is (= :fix-progress (:event @seen)))
+      (is (= ["h1"] (get-in @seen [:fixing :handed]))
+          "the fixer is named before it launches — a stop inside the launch is the
+           one moment nothing else says what was running")
+      (is (contains? (:fixing @seen) :op) "with the operation that undoes it")
+      (is (some #(seq (get-in % [:ctx :fixes])) (filter #(= :fix-progress (:event %)) @events))
+          "and the repair is reported the moment it lands, not when the phase ends"))))
+
 (defn- jj-with-conflicts
   "A jj stub whose `conflicts()` revset names `ids` on every call, and whose
    operation log is empty — so `restore-op!` has no point to roll back to and

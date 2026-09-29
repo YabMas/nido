@@ -182,15 +182,37 @@
      for; an interrupt is a run saying it was told to stop, written from the shutdown hook while
      it still knows. Refused for a run that already ended, whose verdict this would discard, and
      for one stopped mid-repair — that one left the tree rewritten and a report still saying
-     `running` is the only thing that tells the next claimant so."
+     `running` is the only thing that tells the next claimant so. That one is stamped with the
+     stop instead and left open, and `settled` seals it."
     {:signature [:=> [:catn [:report ReviewReport] [:at :string]] [:maybe ReviewReport]]
+     :delegates [in-flight]})
+  (Operation settled
+    "The report forced terminal by whoever settles a run that never wrote an ending:
+     `interrupted`, at the moment its own hook stamped, when a person stopped it mid-repair, and
+     `orphaned` otherwise. The label is the one fact a reader cannot recover afterwards — a
+     person's decision and a crash leave the same report."
+    {:signature [:=> [:catn [:report ReviewReport] [:observed-at :string]] ReviewReport]
+     :delegates [orphaned]})
+  (Operation as-final
+    "The loop's terminal value, rebuilt from the rounds a report folded, for a run that never
+     returned its own — rulings joined back onto what they ruled, and the repairs each round
+     landed. The shape the verdict's folds read, so a settled run's remainder is the same
+     derivation a finished run's is rather than a second one that could disagree."
+    {:signature [:=> [:catn [:report ReviewReport]] :map]})
+  (Operation account-lost?
+    "Whether the fix phase a run is still in kept no account of itself — a report from before
+     the stage said what it dispatched as it went. Its dispatch count is unknown, and zero
+     would be a count nobody made."
+    {:signature [:=> [:catn [:report ReviewReport]] :boolean]
      :delegates [in-flight]})
   (Operation apply-event
     "The report with one event folded in. Pure.
 
      An interrupted report is FINAL and every later event is dropped: the shutdown hook stamps
      it and then reaps the reviewers, which unblocks the engine's thread to spend the reap's
-     grace unwinding — and a finalize out of that would restate the interrupt as a verdict."
+     grace unwinding — and a finalize out of that would restate the interrupt as a verdict.
+     The fix stage's progress is folded as it goes, so a run killed on its fourth fixer still
+     names the three repairs that landed and the fixer it died under."
     {:signature [:=> [:catn [:report ReviewReport] [:event :map]] ReviewReport]
      :delegates [interrupted]})
   (Operation with-verdict
@@ -243,7 +265,12 @@
    reads as free while the tree is still moving. An orphan that stopped in its fix phase
    therefore refuses the next run rather than letting it read a stack mid-edit — and settling
    that orphan is what clears the refusal, so it fires once. One still being written to is left
-   non-terminal on purpose, so its refusal repeats until the writing stops."
+   non-terminal on purpose, so its refusal repeats until the writing stops.
+
+   SETTLING KEEPS WHAT THE RUN WAS HOLDING. The run dir is the only copy of its rulings, its
+   landed repairs and its parks, so settling writes them to the workstream as a
+   `:review-settled` entry the next run inherits from. And it does not wait for a claimant:
+   the coordinator settles every run whose claim nobody holds."
   (Operation fixing?
     "Whether an orphan stopped in the phase that rewrites the tree. The whole of what a
      claimant decides on: every other phase only reads the branch."
@@ -253,12 +280,28 @@
      write first. Sound only under the claim, which is what makes a `running` report a dead
      process; a record round is not one of these, judging a ledger entry rather than the tree."
     {:signature [:=> [:catn [:cwd Path] [:own-run-id [:maybe :string]]] [:sequential :map]]})
+  (Operation settled-entry
+    "Pure: the `:review-settled` entry a run that never finished leaves its workstream — its
+     remainder, kept decisions and settled defects by the finished run's own derivation, where
+     it stopped and under which fixer, and what the last run left owed, carried unaged because
+     a run that stopped did not finish asking about it."
+    {:signature [:=> [:catn [:pre :map] [:post :map] [:prior [:sequential :map]]
+                  [:report-path [:maybe :string]]] :map]})
   (Operation settle!
-    "Force each of them terminal, queue its analysis, and say whether the caller may review the
-     tree. Settles nothing, and proceeds, where there is no workstream — the same condition
-     `claiming` takes no claim on, and a run that took none has excluded nobody."
+    "Force each of them terminal, keep what it was holding on the workstream, queue its
+     analysis, and say whether the caller may review the tree. Settles nothing, and proceeds,
+     where there is no workstream — the same condition `claiming` takes no claim on, and a run
+     that took none has excluded nobody."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [orphans fixing?]}))
+     :delegates [orphans fixing? settled-entry]})
+  (Operation settle-abandoned!
+    "The coordinator's half of `settle!`: every tree holding a run nobody settled, each settled
+     under its own workstream's claim, so a dead run's inheritance reaches the ledger when it
+     dies rather than when somebody next reviews that branch — which may be never. A held claim
+     is a live holder's to settle; a tree with no workstream has no claim that could prove its
+     runs dead, and is left alone."
+    {:signature [:=> [:catn [:opts :map]] [:sequential :map]]
+     :delegates [settle!]}))
 
 (Module review-retreat
   "What a superseding record gave up, and what it grew.

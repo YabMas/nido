@@ -47,6 +47,7 @@
    [nido.coordinator.record.triggers :as triggers]
    [nido.platform.core :as nido-core]
    [nido.platform.project :as project]
+   [nido.review.reconcile :as review-reconcile]
    [nido.session.reclaim :as reclaim]
    [nido.session.profiles :as profiles]
    [nido.coordinator.work :as work]))
@@ -67,6 +68,11 @@
    ;; adopting live orphans into scratch workstreams (work/adopt-orphans!). First
    ;; tick after (re)start sweeps immediately (throttle clock starts at 0).
    :adopt-interval-ms (* 5 60 1000)   ; every 5 min
+   ;; Review runs that died, or that a person stopped mid-repair, settled from
+   ;; their run dirs so what they were holding reaches the workstream's ledger
+   ;; without waiting for somebody to review that branch again. First tick after
+   ;; (re)start sweeps immediately (throttle clock starts at 0).
+   :review-settle-interval-ms (* 60 60 1000)   ; hourly
    ;; Queue hygiene: drop un-promoted Slack inbox entries after 3 days. Swept at
    ;; most once per :inbox-sweep-interval-ms (and on the first tick after start,
    ;; since the throttle clock starts at 0).
@@ -134,6 +140,10 @@
 (defonce ^:private !last-adopt-ms (atom 0))
 
 (defn- reset-adopt-throttle! [] (reset! !last-adopt-ms 0))
+
+;; Last wall-clock ms a review-settle sweep ran. Starts at 0 so the first tick
+;; after a (re)start sweeps immediately, then throttles to the interval.
+(defonce ^:private !last-review-settle-ms (atom 0))
 
 ;; Last wall-clock ms an inbox-expiry sweep ran. Starts at 0 so the first tick
 ;; after a (re)start sweeps immediately, then throttles to the interval.
@@ -203,6 +213,26 @@
         (binding [*err* *err*]
           (.println ^java.io.PrintWriter *err*
                     (str "WARN: auto-reclaim threw — " (ex-message t))))))))
+
+(defn- maybe-settle-reviews!
+  "Throttled: at most once per :review-settle-interval-ms, settle every review
+   run nobody holds the claim of — see `review-reconcile/settle-abandoned!`.
+   Never throws into the tick loop."
+  [now-ms]
+  (when (>= (- now-ms @!last-review-settle-ms) (:review-settle-interval-ms defaults))
+    (reset! !last-review-settle-ms now-ms)
+    (try
+      (doseq [{:keys [cwd settled writing]} (review-reconcile/settle-abandoned! {})]
+        (when (seq settled)
+          (println (str "nido coordinator: settled " (count settled)
+                        " review run(s) that never finished on " cwd ": "
+                        (str/join ", " (map :run-id settled)))))
+        (when (seq writing)
+          (println (str "nido coordinator: left " (count writing)
+                        " dead review run(s) on " cwd " whose agents are still writing"))))
+      (catch Throwable t
+        (.println ^java.io.PrintWriter *err*
+                  (str "WARN: review settle sweep threw — " (ex-message t)))))))
 
 (defn- registered-projects []
   ;; nido.platform.project/list-projects returns {<string-name> {:directory ...}}.
@@ -1065,6 +1095,7 @@
           ;; Periodic disk hygiene (throttled to :reclaim-interval-ms).
           (maybe-reclaim! now-ms)
           (maybe-adopt! now-ms)
+          (maybe-settle-reviews! now-ms)
           (maybe-expire-inbox! now-ms)
           (maybe-poll-github-merges! now-ms)
           (maybe-poll-github-issues! now-ms)

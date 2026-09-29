@@ -391,3 +391,24 @@
     (doseq [k [:fix-attempts :defects-settled :findings-remaining :findings-kept
                :targets-reviewed :targets-skipped :base :reviewed-project :reviewed-session]]
       (is (contains? p k) (str "a template that still names " k " renders a diff run as before")))))
+
+(deftest a-settled-run-publishes-a-count-it-could-not-make-as-unknown
+  ;; A run killed holding a P1 was headlined `0 still open`. Zero and unknown
+  ;; are opposite instructions to whoever reads the board.
+  (let [p (analysis/payload {:run-id "review-x" :report-path "/r" :status "orphaned"
+                             :rounds 1 :fix-attempts nil :defects-settled 0
+                             :findings-remaining 3 :findings-kept 0
+                             :in-flight {:round 1 :phase "fix"}})]
+    (is (str/includes? (:headline p) "(unknown repairs dispatched)"))
+    (is (str/includes? (:headline p) "3 still open")
+        "what the settled entry derived is published as the fact it is")
+    (is (= "unknown" (:fix-attempts p))))
+  (is (= 0 (:fix-attempts (analysis/payload (assoc a-run :fix-attempts nil))))
+      "a finished run's absent count is nothing to report, as it always was"))
+
+(deftest a-settled-run-a-later-record-replaced-is-not-called-a-memory-gap
+  (let [h (:headline (analysis/payload {:run-id "review-x" :report-path "/r" :status "orphaned"
+                                        :rounds 1 :reviewed-ws-id "ws-1"
+                                        :review-entry {:ledger "superseded"}}))]
+    (is (str/includes? h "had already written its own record, which stands"))
+    (is (not (str/includes? h "inherits the one before it")))))

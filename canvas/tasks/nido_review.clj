@@ -8,6 +8,7 @@
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.lane.drive :as pipeline]
+            [canvas.review.passes :as passes]
             [canvas.coordinator.record.state :refer [Path WorkstreamId]]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
@@ -23,15 +24,10 @@
      can refuse a repair in one round and converge in the next — which is the case the terminal
      context has nothing to say about."
     {:signature [:=> [:catn [:final :map]] :any]})
-  (Operation owed-rows
-    "What the run leaves owed, as the ledger's `:open` rows — `still-owed`, trimmed. The one
-     list the `:review` entry, the analysis headline and the parked-blocker gate count, so the
-     remainder a person scans and the one they open cannot disagree."
-    {:signature [:=> [:catn [:final :map]] :any]})
   (Operation review-event
     "Pure: build a :review ledger payload from the loop's terminal value `final`"
     {:signature [:=> [:catn [:opts [:* :any]]] :any]
-     :delegates [refused-repairs owed-rows]})
+     :delegates [refused-repairs passes/owed-rows]})
   (Operation append-review-entry!
     "Resolve cwd → session → workstream (the tasks.nido-ship path) and append one :review"
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
@@ -81,6 +77,12 @@
      the only notice those analyses were queued — several sessions can appear on nido's board
      from one invocation, and a reader who was not told reads them as invented work."
     {:signature [:=> [:catn [:orphaned :map]] [:sequential :string]]})
+  (Operation repair-left-lines
+    "What one run stopped mid-repair left the branch as — who stopped it, the repairs already in
+     the branch that no reviewer read, the fixer in flight and whether it wrote, and the
+     operation that undoes it — from its settled entry and that fixer's transcript, never from
+     what such a stop usually does."
+    {:signature [:=> [:catn [:orphan :map]] [:sequential :string]]})
   (Operation orphans-refusal-lines
     "Why nothing was reviewed, when a run that died on this tree stopped in its fix phase.
 

@@ -446,13 +446,15 @@
     :phase-finished (str "round " iter " · " (name phase) " ✓")
     :phase-errored  (str "round " iter " · " (name phase) " ✗")
     :run-finalized  (str "done · " (name status))
-    ;; Read off the FOLDED report rather than announced from the event: the
-    ;; interrupt is refused for a run stopped mid-repair, and a log claiming a
-    ;; run recorded itself as stopped when it was deliberately left open sends
-    ;; its reader after a report that says no such thing. Worth a line at all
-    ;; because a log that simply stops mid-stream is what a crash and a SIGKILL
-    ;; look like too.
-    :run-interrupted (when (= "interrupted" (:status report)) "stopped · interrupted")
+    ;; Read off the FOLDED report rather than announced from the event: a run
+    ;; stopped mid-repair is stamped and left open rather than sealed, and a log
+    ;; claiming it recorded itself as stopped sends its reader after a report
+    ;; that says no such thing. Worth a line at all because a log that simply
+    ;; stops mid-stream is what a crash and a SIGKILL look like too.
+    :run-interrupted (cond
+                       (= "interrupted" (:status report)) "stopped · interrupted"
+                       (:interrupted-at report)
+                       "stopped mid-repair · left open for the next run to settle")
     nil))
 
 ;; ── A loop over a ledger record ─────────────────────────────────────────────

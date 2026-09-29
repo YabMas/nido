@@ -401,6 +401,31 @@
   [findings]
   (into [] (comp (filter :disposition) (map #(select-keys % ruling-keys))) findings))
 
+(def ^:private fix-account-keys
+  "Every key `fix-account` writes, so a re-fold replaces the account rather than
+   layering a later one over rows an earlier one held — a `:stranded` row the
+   next step landed must leave the phase when it lands."
+  [:fixes :fixed-count :declined :launch-failed :rolled-back :stranded
+   :conflicted :unattempted :fixing])
+
+(defn- fix-account
+  "The fix phase's account of its round, off a ctx the fix stage built.
+
+   Folded twice over one phase: on every `:fix-progress` the stage emits while
+   it runs, and once more when it finishes. The first is what an orphan keeps —
+   a run killed on its fourth fixer still names the three repairs that landed
+   and the layers it never reached — and the second replaces it whole."
+  [ph ctx]
+  (let [h (last (filter #(= (:iter ctx) (:iter %)) (:history ctx)))]
+    (cond-> (assoc (apply dissoc ph fix-account-keys)
+                   :fixes (vec (:fixes h)) :fixed-count (:fixed-count h))
+      (seq (:declined ctx))    (assoc :declined (vec (:declined ctx)))
+      (seq (:launch-failed ctx)) (assoc :launch-failed (vec (:launch-failed ctx)))
+      (seq (:rolled-back ctx)) (assoc :rolled-back (vec (:rolled-back ctx)))
+      (seq (:stranded ctx))    (assoc :stranded (vec (:stranded ctx)))
+      (seq (:conflicted ctx))  (assoc :conflicted (vec (:conflicted ctx)))
+      (seq (:unattempted ctx)) (assoc :unattempted (vec (:unattempted ctx))))))
+
 (defn- finish-phase
   [ph phase ctx at]
   (let [ph (assoc ph :status "ok" :ended-at at)]
@@ -480,9 +505,14 @@
       ;; as on the rows because it is what the ROUND did: a round that found
       ;; nothing and did not end the run is otherwise a clean round the report
       ;; cannot explain.
+      ;; :design-seq is the design this round's reviewers judged against. A
+      ;; finished run cites it from its terminal ctx; a run that never finished
+      ;; has only this, and the ledger refuses a :review that cites none on a
+      ;; workstream holding a design.
       :review (cond-> (assoc ph :overall-correctness (:overall-correctness ctx)
                              :findings (vec (:findings ctx))
                              :layers (review-layers ctx))
+                (get-in ctx [:design :seq]) (assoc :design-seq (get-in ctx [:design :seq]))
                 (seq (:conflicted ctx)) (assoc :conflicted (vec (:conflicted ctx)))
                 (seq (:read-once ctx))  (assoc :read-once (vec (:read-once ctx)))
                 (seq (:unplaced ctx))   (assoc :unplaced (vec (:unplaced ctx))))
@@ -541,14 +571,7 @@
       ;; moved while it did, or jj refused a step before its repair landed: the
       ;; repair is on no layer, so the row's :patch is the one copy of it the run
       ;; keeps.
-      :fix    (let [h (last (filter #(= (:iter ctx) (:iter %)) (:history ctx)))]
-                (cond-> (assoc ph :fixes (vec (:fixes h)) :fixed-count (:fixed-count h))
-                  (seq (:declined ctx))    (assoc :declined (vec (:declined ctx)))
-                  (seq (:launch-failed ctx)) (assoc :launch-failed (vec (:launch-failed ctx)))
-                  (seq (:rolled-back ctx)) (assoc :rolled-back (vec (:rolled-back ctx)))
-                  (seq (:stranded ctx))    (assoc :stranded (vec (:stranded ctx)))
-                  (seq (:conflicted ctx))  (assoc :conflicted (vec (:conflicted ctx)))
-                  (seq (:unattempted ctx)) (assoc :unattempted (vec (:unattempted ctx)))))
+      :fix    (fix-account ph ctx)
       ;; What the stage decided about each recut, whether or not it could act.
       ;; Kept because a reshape is the only remedy a recut has — the warden
       ;; withholds it from the fixers — so an empty reshape phase is the report
@@ -681,13 +704,18 @@
    in it reads as defects removed, and this is nearly double that on any run
    whose findings took more than one round to settle. Publish it under such a
    name and every reader downstream — a ledger entry, a dashboard card, an
-   analysis — states it as work the run finished."
+   analysis — states it as work the run finished.
+
+   A row with NO `:handed` key is a report written before rows carried one, and
+   it counts its `:fixed-count` instead — a floor, since only a landed repair
+   wrote that, but the only count such a row holds. Absent and empty are the
+   discriminator: an empty `:handed` is a fixer handed nothing, a genuine zero."
   [report]
   (->> (:rounds report)
        (mapcat :phases)
        (filter #(= "fix" (:phase %)))
        (mapcat fix-rows-with-a-fixer)
-       (map #(count (:handed %)))
+       (map #(if (contains? % :handed) (count (:handed %)) (or (:fixed-count %) 0)))
        (reduce + 0)))
 
 (def ^:private read-statuses
@@ -756,20 +784,24 @@
    Not one of the loop's own terminal statuses — `nido.review.loop/engine-statuses`
    and `nido.review.stages/stage-statuses` are what a run REACHES, and a run that
    reaches nothing is what this names. It is assigned from outside, by whoever
-   next takes the workstream's claim, and so it is deliberately absent from the
-   ledger's ReviewReport enum: no `:review` entry is ever written on it."
+   settles the run — the workstream's next claimant, or the coordinator's sweep —
+   and the `:review` entry settling writes carries it. The ledger's enum admits
+   it for that reason alone; no run returns it."
   "orphaned")
 
 (def interrupted-status
   "What a run a person stopped is recorded as.
 
-   Reaches no ledger entry either, for the same reason as `orphaned-status`, and
-   states a different fact. An orphan is a run nobody can account for, stamped
-   later by whoever next took the claim; an interrupt is the run itself saying it
-   was told to stop, written from the shutdown hook while it still knows. Kept
-   apart so a reader can tell a decision from an accident — a crash, a SIGKILL
-   and a closed lid all still arrive as `orphaned`, because none of them runs any
-   nido code on the way out."
+   States a different fact from `orphaned-status`. An orphan is a run nobody can
+   account for, stamped later by whoever settled it; an interrupt is the run
+   itself saying it was told to stop, written from the shutdown hook while it
+   still knows. Kept apart so a reader can tell a decision from an accident — a
+   crash, a SIGKILL and a closed lid all still arrive as `orphaned`, because none
+   of them runs any nido code on the way out.
+
+   Sealed by the hook, except in the `rewriting-phase`: there the hook only
+   stamps `:interrupted-at` and leaves the report `running`, and whoever settles
+   the run seals it as this — see `settled`."
   "interrupted")
 
 (def rewriting-phase
@@ -800,13 +832,20 @@
 
    A round between phases has no phase in flight, and a run that died before its
    first phase-started has no round: both say `nothing was in progress`, which is
-   what a caller needs to hear."
+   what a caller needs to hear.
+
+   `:fixing` is the fixer a `fix` phase had launched and not yet settled — its
+   layer, what it was handed, and the operation that undoes it — absent when no
+   fixer was mid-flight, and absent from every report written before the stage
+   said so."
   [report]
   (let [round (last (:rounds report))]
     (when (= "running" (:status round))
-      (let [ph (last (:phases round))]
+      (let [ph (last (:phases round))
+            running? (= "running" (:status ph))]
         (cond-> {:round (:round round)}
-          (= "running" (:status ph)) (assoc :phase (:phase ph)))))))
+          running?                  (assoc :phase (:phase ph))
+          (and running? (:fixing ph)) (assoc :fixing (:fixing ph)))))))
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport] [:maybe :map]]}
   errored
@@ -910,11 +949,105 @@
    doing its post-processing, and stamping over it would discard the verdict it
    reached. A run stopped in its `rewriting-phase` left the tree mid-repair, and
    the report saying `running` is what tells the next claimant so — closing it
-   here would hand that claimant a branch nobody signed off, silently."
+   here would hand that claimant a branch nobody signed off, silently. That run
+   is stamped instead; see `stamp-interrupt`."
   [report at]
   (when (and (= "running" (:status report))
              (not= rewriting-phase (:phase (in-flight report))))
     (forced-terminal report interrupted-status at)))
+
+(defn- stamp-interrupt
+  "`report` marked as stopped by a person at `at`, and left `running`.
+
+   For the run `interrupted` refuses to seal. The stamp is what lets whoever
+   settles it tell a person's stop from a crash — the report alone reads the
+   same either way — while `running` keeps the refusal that protects the tree
+   exactly where it was, since that refusal keys on the phase in flight."
+  [report at]
+  (cond-> report
+    (= "running" (:status report)) (assoc :interrupted-at at)))
+
+(defn ^{:malli/schema [:=> [:cat :ReviewReport :string] :ReviewReport]}
+  settled
+  "`report` forced terminal by whoever settles a run that never wrote an ending:
+   `interrupted` at the moment its own hook stamped, when one did, and
+   `orphaned` at `observed-at` otherwise — see `orphaned` for why that is the
+   run's last observed write rather than now."
+  [report observed-at]
+  (if-let [at (:interrupted-at report)]
+    (forced-terminal report interrupted-status at)
+    (orphaned report observed-at)))
+
+(defn- phase-named [round n] (last (filter #(= n (:phase %)) (:phases round))))
+
+(defn- round-as-ctx
+  "One folded round as the loop's ctx held it: the findings the warden ruled,
+   with the ruling on each, and the repairs its fix phase landed.
+
+   Rulings are joined back onto what was raised — the review's findings and the
+   warden's promotions — because a ruling row is an id and a disposition, and
+   everything downstream reads titles and files. A round whose warden never
+   finished contributes its review's findings unruled, which is what they were.
+   Dispositions come back as keywords: the report stores them as the strings
+   JSON left, and every reader of a ruling compares keywords."
+  [round]
+  (let [review (phase-named round "review")
+        warden (phase-named round "warden")
+        by-id  (into {} (map (juxt :id identity))
+                     (concat (:findings review) (:promoted warden)))
+        ruled  (fn [r] (cond-> (merge (by-id (:id r)) r)
+                         (:disposition r) (update :disposition keyword)))]
+    {:iter     (:round round)
+     :read?    (= "ok" (:status review))
+     :findings (if (= "ok" (:status warden))
+                 (mapv ruled (:rulings warden))
+                 (vec (:findings review)))
+     :fixes    (vec (:fixes (phase-named round "fix")))}))
+
+(defn ^{:malli/schema [:=> [:cat :ReviewReport] :map]}
+  as-final
+  "The loop's terminal value as far as `report` can rebuild one, for a run that
+   never returned its own: `:findings` and `:fixes` of the round it stopped in,
+   `:history` of every earlier round that landed a repair, and
+   `:review-aborted?` when the stopping round's review never finished.
+
+   The shape `nido.review.verdict` folds, so a settled run's remainder, kept
+   decisions and settled defects are the same derivation a finished run's are
+   rather than a second one that could disagree. It holds no `:carry`: what the
+   last run left is the settler's to add, since this run may not have finished
+   asking about it.
+
+   Only what was folded. A round's warden that never finished ruled nothing,
+   and a fix phase from before the stage reported as it went holds no repair —
+   see `account-lost?`."
+  [report]
+  (let [rounds (mapv round-as-ctx (:rounds report))]
+    (if-let [stop (peek rounds)]
+      {:history         (into [] (comp (filter #(seq (:fixes %)))
+                                       (map #(select-keys % [:iter :fixes :findings])))
+                              (pop rounds))
+       :findings        (:findings stop)
+       :fixes           (:fixes stop)
+       :iter            (:iter stop)
+       :review-aborted? (not (:read? stop))}
+      {:history [] :findings [] :fixes [] :review-aborted? true})))
+
+(defn ^{:malli/schema [:=> [:cat :ReviewReport] :boolean]}
+  account-lost?
+  "Whether the fix phase this run is still in kept no account of itself — a
+   report written before the stage said what it dispatched as it went.
+
+   The stage now names its owed layers before the first fixer launches, so a
+   running fix phase with nothing on it is one whose dispatches nobody recorded.
+   Its count is unknown, and a caller publishing it as zero states a count
+   nobody made. False for every run not stopped in `fix`."
+  [report]
+  (boolean
+   (when (= rewriting-phase (:phase (in-flight report)))
+     (let [ph (phase-named (last (:rounds report)) rewriting-phase)]
+       (and (empty? (:fixes ph))
+            (not-any? #(contains? ph %) [:unattempted :fixing :declined :launch-failed
+                                         :rolled-back :stranded :conflicted]))))))
 
 ;; ---- fold ----------------------------------------------------------------
 
@@ -928,9 +1061,15 @@
    spend the reap's five-second grace unwinding. Everything that unwinding emits
    describes a run already stopped — and `:run-finalized` among it would restate
    the interrupt as a verdict the loop reached, which is the one reading the
-   status exists to prevent."
+   status exists to prevent. A report stamped `:interrupted-at` is final on the
+   same argument: the reap turns the fixer it killed into a launch that never
+   started, and folding that would publish the stop as a machinery failure.
+
+   A `:fix-progress` refolds the running fix phase's account from the stage's
+   ctx, as `:phase-finished` will, and keeps it running. `:fixing` on it is the
+   fixer just launched; an event without one says none is in flight."
   [report {:keys [event] :as ev} _clock]
-  (if (= interrupted-status (:status report))
+  (if (or (= interrupted-status (:status report)) (:interrupted-at report))
     report
     (case event
       :run-started
@@ -955,6 +1094,12 @@
       (let [ctx (assoc (:ctx ev) :iter (:iter ev))]
         (update-current-phase report (name (:phase ev))
                               #(finish-phase % (:phase ev) ctx (:at ev))))
+
+      :fix-progress
+      (let [ctx (assoc (:ctx ev) :iter (:iter ev))]
+        (update-current-phase report "fix"
+                              #(cond-> (fix-account % ctx)
+                                 (:fixing ev) (assoc :fixing (:fixing ev)))))
 
       :stack-conflicts
       (record-conflicts report ev)
@@ -987,10 +1132,10 @@
       ;; The one event no stage emits: it arrives from the shutdown hook, on the
       ;; hook's own thread, and is folded here so that it is serialized with the
       ;; engine's events and persisted by the same writer. `interrupted` answers
-      ;; nil for a run that must be left to the reconciler, and a no-op fold is
-      ;; how that refusal reaches the report — unsealed, still `running`.
+      ;; nil for a run that must be left to the reconciler, which is stamped
+      ;; rather than sealed — unsealed, still `running`, and saying who stopped it.
       :run-interrupted
-      (or (interrupted report (:at ev)) report)
+      (or (interrupted report (:at ev)) (stamp-interrupt report (:at ev)))
 
       report)))
 

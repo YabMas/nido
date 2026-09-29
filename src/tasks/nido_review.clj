@@ -38,6 +38,7 @@
    [nido.review.verdict :as verdict]
    [nido.session.lifecycle :as lifecycle]
    [nido.platform.config :as config]
+   [nido.platform.process :as nprocess]
    [nido.platform.task-args :as task-args])
   (:import
    [java.time Instant]))
@@ -55,60 +56,6 @@
          ;; two it did not, and no report was written for it to find out from.
          :no-design-record :no-workstream} status)
     1 0))
-
-(defn- ledger-findings
-  "Findings trimmed to what a reader of the workstream needs and nothing that
-   only makes sense inside a run. `where` is assembled here because file and
-   line are two fields in the report and one fact to a reader.
-
-   `handed` is a `verdict/handed-to-a-fixer` set, and `:handed` is the one field
-   here that is not the finding's own: whether a repair for it is sitting
-   unverified in the branch. Two remainders read alike in a list of titles and
-   ask opposite things of whoever picks them up — one needs checking, the other
-   needs doing. Empty for a list where nothing is owed and the question cannot
-   arise.
-
-   `:layer` is what makes this list joinable back onto a later run's targets —
-   `stages/prior-open` is the reader, and a label is the only identity that
-   survives the repair a `:fix` row is asking for. The warden's owner where it
-   assigned one, since that is where the repair goes whoever reported it; the
-   reviewer that raised it otherwise, which is the best available answer for a
-   finding no warden ruled on and still the layer whose reviewer read the code.
-
-   `:attempts` is `verdict/still-owed`'s count of the repairs that landed for
-   it. It rides to the next run's warden and reviewer, which otherwise meet a
-   row that has resisted two repairs exactly as they meet one nobody has tried."
-  [handed findings]
-  (into []
-        (map (fn [{:keys [id title file line-start disposition because
-                          owner-layer from-layer attempts] :as f}]
-               (cond-> {:title (str (or title "(untitled finding)"))}
-                 id          (assoc :id (str id))
-                 file        (assoc :where (str file (when line-start (str ":" line-start))))
-                 disposition (assoc :disposition (keyword disposition))
-                 because     (assoc :because (str because))
-                 (or owner-layer from-layer) (assoc :layer (str (or owner-layer from-layer)))
-                 (verdict/handed? handed f) (assoc :handed true)
-                 (and attempts (pos? attempts)) (assoc :attempts attempts))))
-        findings))
-
-(def ^:private ledger-row-keys
-  "What an inherited row may carry back into an entry: the ledger's own
-   `ReviewFinding` keys. The carry adds what the run used it for, and none of
-   that is a fact about the branch."
-  [:id :title :where :disposition :because :layer :attempts :inherited])
-
-(defn ^{:malli/schema [:=> [:cat :map] :any]}
-  owed-rows
-  "`verdict/still-owed`, as the ledger's `:open` rows: this run's own remainder
-   first, trimmed by `ledger-findings`, then every inherited row nobody
-   answered. The one list the entry, the analysis payload and the gate count."
-  [final]
-  (let [owed   (verdict/still-owed final)
-        handed (verdict/handed-to-a-fixer final)]
-    (into (ledger-findings handed (remove :inherited owed))
-          (map #(select-keys % ledger-row-keys))
-          (filter :inherited owed))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   refused-repairs
@@ -216,12 +163,12 @@
    prior obligation and said nothing about it writes an entry holding nothing —
    and that entry is the whole of what the run after gets, so the obligation
    disappears at the first quiet run rather than at the run that settled it.
-   The list is `owed-rows`, which the analysis payload counts too."
+   The list is `verdict/owed-rows`, which the analysis payload counts too."
   [final report report-path]
   (let [refused  (refused-repairs final)
         unstarted (launch-failures final)
-        open     (owed-rows final)
-        kept     (ledger-findings #{} (verdict/kept-across-run final))
+        open     (verdict/owed-rows final)
+        kept     (verdict/ledger-findings #{} (verdict/kept-across-run final))
         repaired (count (filter :handed open))
         parked   (count (filter #(= :park (:disposition %)) open))
         cover    (report/coverage report)
@@ -512,7 +459,7 @@
    `:options` rather than prose because the ledger refuses a choice written as an
    essay, and rightly — an essay can only be answered by typing one back.
 
-   `findings` is what the run is still owed — `owed-rows` — and never the last
+   `findings` is what the run is still owed — `verdict/owed-rows` — and never the last
    round's findings. A park is never raised twice, so the round a run ends on
    is the one least likely to hold it: read there, a run that ended clean over a
    park from round 1 raised no gate, and a gate named only the latest of two
@@ -539,7 +486,7 @@
    a side record could not be written. Returns the blocker, or nil."
   [cwd final verdict]
   (try
-    (when-let [blocker (parked-blocker (owed-rows final) verdict)]
+    (when-let [blocker (parked-blocker (verdict/owed-rows final) verdict)]
       (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
         (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
           (ws/append-entry! (keyword project) ws-id {:kind :blocker}
@@ -586,7 +533,7 @@
    judgement, when it is the last run's."
   [cwd final report report-path config ws-id]
   (let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd) {})
-        open   (owed-rows final)
+        open   (verdict/owed-rows final)
         judged (verdict/kept-by-the-verdict report)
         cover  (report/coverage report)]
     (analysis/enqueue!
@@ -891,11 +838,26 @@
           (str "  end it with `kill " (:pid their) "`, or wait for it to finish.")))))
 
 (defn- orphan-line
-  "One dead run, named by where it stopped and by the report a reader opens next."
-  [{:keys [run-id in-flight report-path]}]
-  (str "  " run-id " stopped in round " (:round in-flight)
-       (if-let [ph (:phase in-flight)] (str "'s " ph " phase") ", between phases")
-       "\n    " report-path))
+  "One dead run, named by how it ended, where it stopped, what it left on the
+   workstream, and the report a reader opens next."
+  [{:keys [run-id in-flight report-path report recorded]}]
+  (let [status (:status report)
+        how    (case status
+                 "interrupted" "was stopped by a person"
+                 "orphaned"    "died — no nido code saw it end"
+                 "stopped")
+        where  (or in-flight (get-in report [:reason :interrupted]))]
+    (str "  " run-id " " how
+         (when where
+           (str " in round " (:round where)
+                (if-let [ph (:phase where)] (str "'s " ph " phase") ", between phases")))
+         (case (some-> (:ledger recorded) name)
+           "appended"   (str "; what it was holding is on " (:ws-id recorded))
+           "superseded" "; a later run's record stands in its place"
+           nil          ""
+           (str "; ⚠ what it was holding reached no ledger ("
+                (name (:ledger recorded)) ")"))
+         "\n    " report-path)))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:sequential :string]]}
   orphans-settled-lines
@@ -911,9 +873,52 @@
     []
     (cons (str "review-loop: " (count settled) " earlier review run"
                (when (not= 1 (count settled)) "s")
-               " died on this tree without a terminal status —"
-               " closed as `orphaned` and queued for analysis")
+               " on this tree never finished — settled from "
+               (if (= 1 (count settled)) "its run dir" "their run dirs"))
           (map orphan-line settled))))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:sequential :string]]}
+  repair-left-lines
+  "What one run stopped mid-repair left the branch as, from its settled entry
+   and the transcript of the fixer it stopped under — never from what such a
+   stop usually does. A report from before the fix stage said what it was doing
+   supports no sentence about the fixer, and says so.
+
+   The operation is named because it is the one remedy the tree cannot suggest
+   for itself: a fixer stopped before its repair landed leaves its edits on an
+   undescribed commit above its layer, outside every layer's range, and
+   `jj op restore` to the op taken before it launched puts the stack back."
+  [{:keys [report entry wrote?]}]
+  (let [{:keys [fixing landed]} (:stopped entry)
+        who   (if (= "interrupted" (:status report))
+                "a person stopped it"
+                "it died — nothing recorded why")
+        layer (fn [l] (or (:layer l) "the branch"))]
+    (remove
+     nil?
+     (concat
+      [(str "  " (:run-id report) ": " who ".")]
+      (if (seq landed)
+        (map #(str "  landed before the stop, read by no reviewer: " (layer %)
+                   (when (:commit %) (str " (" (:commit %) ")"))
+                   " — for " (str/join ", " (:handed %)))
+             landed)
+        ["  no repair had landed in that round."])
+      (cond
+        fixing
+        [(str "  in flight: the " (layer fixing) " fixer, handed " (str/join ", " (:handed fixing))
+              (case wrote?
+                true  " — it had written to the tree, so its edits may sit on an undescribed commit above that layer."
+                false " — it had only read; nothing of it reached the tree."
+                " — its transcript is gone, so whether it wrote is unknown."))
+         (when (and wrote? (:op fixing))
+           (str "  → to put the stack back as it was before that fixer: jj op restore " (:op fixing)))]
+
+        (nil? (:fix-attempts entry))
+        ["  the report predates the fix stage saying what it was doing, so which fixer was running, and whether it wrote, is unknown."]
+
+        :else
+        ["  no fixer was in flight when it stopped."])))))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:sequential :string]]}
   orphans-refusal-lines
@@ -925,7 +930,10 @@
    invocation reviews the branch as it now stands — the reader is being told what
    the branch IS, not asked to do anything. One still writing is not history: its
    fixers outlived the loop, nothing is supervising them, and reviewing now would
-   read a tree they are part-way through rewriting."
+   read a tree they are part-way through rewriting.
+
+   The quiet one is described from its run dir and from nothing else — see
+   `repair-left-lines`."
   [{:keys [settled writing]}]
   (cond
     (seq writing)
@@ -939,11 +947,10 @@
              "  → wait for them to finish, or end them, then run this again."])
 
     (seq (filter reconcile/fixing? settled))
-    ["refused: a review run died while repairing this branch."
-     (str "  its fixers outlived it and landed whatever they got to, which no round"
-          " ever reviewed — the branch is not what anybody signed off.")
-     (str "  → nothing was reviewed. Run this again to review the branch as it"
-          " now stands.")]
+    (concat ["refused: a review run stopped while repairing this branch."]
+            (mapcat repair-left-lines (filter reconcile/fixing? settled))
+            [(str "  → nothing was reviewed. Run this again to review the branch as it"
+                  " now stands.")])
 
     :else []))
 
@@ -1512,8 +1519,13 @@
     ;; reads it as, so the halt reached no gate at all.
     ;;
     ;; The halt survives a verdict pass that fails, because that pass catches its
-    ;; own exceptions and answers nil — the only loss is the third branch.
-    (let [outcome (append-design-verdict! cwd final @report-atom config)]
+    ;; own exceptions and answers nil — the only loss is the third branch. It
+    ;; survives a pass that is KILLED the same way: the pass is an agent reading
+    ;; code for minutes, and a stop there used to leave an escalated entry with no
+    ;; gate after it, which the next run repaid a whole round to rebuild.
+    (let [outcome (nprocess/with-exit-note
+                    #(append-blocker! cwd final nil)
+                    #(append-design-verdict! cwd final @report-atom config))]
       (record-verdict! outcome report-atom report-path)
       (print-verdict! (:verdict outcome))
       (when-let [b (append-blocker! cwd final (:verdict outcome))]
