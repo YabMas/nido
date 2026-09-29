@@ -68,18 +68,32 @@ follows from its substance and its shape:
 
 ## Follow-up actions
 
-Something a person still owes on the ticket — tell a customer once it is
-released, check something on production nobody has recorded checking, set a
-property that is wrong — is not a QA step, and buried in the body it is not
-seen. It goes in its own callout directly under the brief:
+Something a person still owes the product's people once the change is out —
+tell the customer who reported it, have sales confirm the new view is theirs,
+check on production what someone asked to be checked there — is not a QA step,
+and buried in the body it is not seen. It goes in its own callout directly under
+the brief:
 
     Follow-up                                          ← callout, 📌
     ☐ one to-do per action: what, and who if the ticket names them —
       "Tell Daniel Riniker (St. Gallen) that the fix is live"
 
-Only actions still open and owed by a person: an unchecked to-do elsewhere on
-the page moves in here, a checked one does not. A question for the reviewer to
-answer while testing belongs in the brief's steps. No open actions, no block.
+It is written for the same reader as the brief, in the same product terms.
+What belongs:
+
+- **communication** owed to a customer, a colleague or a team about this change;
+- **a confirmation** someone outside engineering still has to give;
+- **a check on production** that a person asked for and nobody recorded doing,
+  said as what to look at, not how.
+
+What does not: the ticket's own bookkeeping — a wrong or empty `GitHub PR`
+property, a Lifecycle or Status that reads wrong, a missing Priority. Those are
+faults in how the ticket was kept, not work the product owes anyone, and they
+are reported to whoever runs the tooling, never written onto the ticket. A
+question for the reviewer to answer while testing belongs in the brief's steps.
+
+Only actions still open: an unchecked to-do elsewhere on the page that passes
+the above moves in here, a checked one does not. No open actions, no block.
 The block is found and replaced by its first text, `Follow-up`, as the brief is.
 
 ## How it is written to Notion

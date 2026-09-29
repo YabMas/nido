@@ -134,14 +134,17 @@ restyled brief as in a written one.
 
 ### Follow-up actions
 
-Collect what a person still owes on the ticket — an unchecked to-do in the body,
-a notification promised "once it is released", a production check someone asked
-for and nobody recorded, a property the page contradicts (a `GitHub PR` naming a
-PR closed unmerged) — into one `Follow-up` block under the brief, as
-`docs/reference/qa-brief.md` § "Follow-up actions" says. An action that is
-about the ticket goes there, not in `:flags`: flags are for the person running
-the grooming (a ticket out of scope, a Status that reads wrong), the block is
-for whoever opens the ticket.
+Collect what a person still owes the product's people — a notification
+promised "once it is released", a confirmation owed by sales or CS, a production
+check someone asked for and nobody recorded — into one `Follow-up` block under
+the brief, exactly as `docs/reference/qa-brief.md` § "Follow-up actions" bounds
+it. Be sparing: most tickets have none, and a block that lists chores teaches
+readers to skip it.
+
+Ticket bookkeeping — a `GitHub PR` property naming the wrong PR or none, a
+Lifecycle or Status that reads wrong, a missing Priority — is never a follow-up
+and never written onto the ticket. It goes in `:flags`, for the person running
+the grooming: it says the tooling that keeps tickets missed something.
 
 A brief is wanted where it tells a reviewer what to do. A ticket whose Review is
 a **design sign-off** — no code yet, a spec or a Figma awaiting approval — needs
