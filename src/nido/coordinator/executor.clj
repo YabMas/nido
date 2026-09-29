@@ -51,6 +51,25 @@
          :in-flight-capped   {}
          :in-flight-uncapped {}))
 
+(defn ^{:malli/schema [:=> [:cat :int] :any]}
+  await-idle!
+  "Test-only: block until every future in flight has finished, or throw once
+   `timeout-ms` has passed, naming the run-ids still running. Promotes nothing —
+   queued work waits for tick! — and reaps nothing, so a finished future still
+   counts in `snapshot` until the next tick!.
+
+   A test that stubs a Run's collaborators with `with-redefs` must call this
+   before the redefs unwind. The futures run on other threads and outlive the
+   form: one still running afterwards calls the REAL session spawn against the
+   real ~/.nido, and a loaded host is exactly when a fixed sleep is too short."
+  [timeout-ms]
+  (let [deadline (+ (System/currentTimeMillis) timeout-ms)
+        {:keys [in-flight-capped in-flight-uncapped]} @!state]
+    (doseq [[rid f] (merge in-flight-capped in-flight-uncapped)]
+      (when (= ::timeout (deref f (max 0 (- deadline (System/currentTimeMillis))) ::timeout))
+        (throw (ex-info (str "executor still running " rid " after " timeout-ms "ms")
+                        {:run-id rid :timeout-ms timeout-ms}))))))
+
 (defn ^{:malli/schema [:function [:=> [:cat :map] :any] [:=> [:cat :RunId :int] :any] [:=> [:cat :RunId :int :boolean] :any] [:=> [:cat :RunId :int :boolean :keyword [:maybe :int]] :any]]}
   submit!
   "Add a unit of work to the wait queue. run-id is opaque to the executor;

@@ -243,3 +243,21 @@
     (ex/tick! (fn [_]) {})
     (Thread/sleep 200)
     (is (= #{:a :b} (set @ran)) "and it runs once the slot frees")))
+
+(deftest await-idle-waits-out-a-run-still-in-flight
+  ;; What a with-redefs test relies on: once await-idle! returns, no Run it
+  ;; started is still running to call an unstubbed collaborator.
+  (let [done (promise)]
+    (ex/submit! "slow" 0)
+    (ex/tick! (fn [_] (Thread/sleep 300) (deliver done :finished)) {})
+    (ex/await-idle! 5000)
+    (is (realized? done))))
+
+(deftest await-idle-throws-rather-than-returning-with-a-run-in-flight
+  (let [release (promise)]
+    (ex/submit! "stuck" 0)
+    (ex/tick! (fn [_] @release) {})
+    (try
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"still running stuck"
+                            (ex/await-idle! 100)))
+      (finally (deliver release :go)))))

@@ -21,6 +21,11 @@
     "Reset the queue and the in-flight tally. Test-only, and does not cancel what is already
      running — a reset that killed live work would be a different function."
     {:signature [:=> [:catn] :any]})
+  (Operation await-idle!
+    "Block until everything in flight has finished, or throw at the deadline. Test-only, and
+     the partner `clear!` lacks: a test stubbing a Run's collaborators must wait out the futures
+     before its stubs unwind, or a Run still running calls the real ones."
+    {:signature [:=> [:catn [:timeout-ms :int]] :any]})
   (Operation submit!
     "Queue a unit of work.
 

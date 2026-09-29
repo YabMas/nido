@@ -142,8 +142,8 @@
           (executor/submit! (:id run) 0)
           ;; first tick: promotes the Run into a future that calls run-blocking!
           (executor/tick! #'nido.boot.core/run-blocking! {})
-          ;; wait for the future to finish (agent stub is instant)
-          (Thread/sleep 200)
+          ;; the future must finish before the redefs unwind, however loaded the host
+          (executor/await-idle! 30000)
           ;; second tick: reaps the finished future
           (executor/tick! #'nido.boot.core/run-blocking! {})
           (is (contains? #{:done :failed :awaiting-review}

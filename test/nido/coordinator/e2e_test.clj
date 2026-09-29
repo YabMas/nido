@@ -21,21 +21,21 @@
 
 (use-fixtures :each reset-executor!)
 
-(defn- tick-until-terminal!
-  "Poll for a terminal state (max 20 iterations × 50ms = 1s cap).
-   Needed because process-envelope! now submits to the executor instead
-   of blocking synchronously. Robust under load."
+(defn- tick-until-idle!
+  "Tick until the executor has nothing queued and every Run it started has
+   finished, or throw after 30s. process-envelope! hands a Run to the executor's
+   futures, so it must be waited out INSIDE the test's with-redefs: a Run still
+   running once they unwind spawns a real session against the real ~/.nido."
   []
-  (loop [i 0]
-    (when (< i 20)
+  (let [deadline (+ (System/currentTimeMillis) 30000)]
+    (loop []
       (core/tick!)
-      (let [run-dirs (->> (fs/list-dir (cstate/runs-dir))
-                          (filter fs/directory?))
-            state (when (seq run-dirs)
-                    (:state (runs/read-run (str (fs/file-name (first run-dirs))))))]
-        (if (contains? #{:done :failed :awaiting-review :halted :dry-run-would-fire} state)
-          (do (Thread/sleep 50) (core/tick!))
-          (do (Thread/sleep 50) (recur (inc i))))))))
+      (executor/await-idle! (max 0 (- deadline (System/currentTimeMillis))))
+      (when (pos? (:queued (executor/snapshot)))
+        (when (> (System/currentTimeMillis) deadline)
+          (throw (ex-info "executor queue never drained" (executor/snapshot))))
+        (recur)))
+    (core/tick!)))
 
 (deftest manual-trigger-end-to-end
   (let [tmp     (fs/create-temp-dir)
@@ -89,7 +89,7 @@
         (queue/enqueue! {:target  {:project :brian :trigger :investigate-bug}
                          :payload {:url "https://x"}})
         ;; 3. tick + wait for executor future + reap
-        (tick-until-terminal!)
+        (tick-until-idle!)
         ;; 4. assert
         (let [run-dirs (->> (fs/list-dir (cstate/runs-dir))
                             (filter fs/directory?))]
@@ -115,7 +115,7 @@
                     project/list-projects       (constantly {"brian" {:directory "/tmp"}})
                     runs/spawn-session-for-run! no-session
                     ;; stub launch-context — avoids real I/O (jj/git) that would
-                    ;; add latency and break the timing in tick-until-terminal!
+                    ;; add latency to every Run tick-until-idle! waits out
                     runs/launch-context         (fn [_run] {:cwd (str tmp) :briefing ""
                                                             :mcp-config nil :add-dirs []
                                                             :run-paths ""})
@@ -131,13 +131,13 @@
         (dotimes [_ 3]
           (queue/enqueue! {:target  {:project :brian :trigger :failing}
                            :payload {}})
-          (tick-until-terminal!))
+          (tick-until-idle!))
         (is (breakers/tripped? :brian :failing)
             "3 failures should trip the breaker")
         ;; A 4th fire should NOT create a new Run (breaker open).
         (let [runs-before (count (filter fs/directory? (fs/list-dir (cstate/runs-dir))))]
           (queue/enqueue! {:target {:project :brian :trigger :failing} :payload {}})
-          (tick-until-terminal!)
+          (tick-until-idle!)
           (is (= runs-before (count (filter fs/directory? (fs/list-dir (cstate/runs-dir)))))
               "skipped envelope should not create a Run")))
       (finally (fs/delete-tree tmp)))))
