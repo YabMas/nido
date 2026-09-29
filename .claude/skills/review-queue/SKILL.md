@@ -1,6 +1,6 @@
 ---
 name: review-queue
-description: Groom brian's Notion Review queue — every ticket in Review whose Lifecycle is Development, Staging or Prod. The plan leg judges each ticket's QA instructions against docs/reference/qa-brief.md, proposes a brief where they fall short or are in another style, a Follow-up block for what a person still owes, and a cleanup where the page buries them, ranks the queue by what most needs a reviewer's attention, and writes the plan for a person to decide on the Operations page. The apply leg (`/review-queue apply <plan-run-id>`) carries out exactly the writes that person approved. Fired by the :review-queue and :review-queue-apply triggers on brian. Usage: /review-queue | /review-queue apply <plan-run-id>
+description: Groom brian's Notion Review queue — every ticket in Review whose Lifecycle is Development, Staging or Prod. The plan leg judges each ticket's QA instructions against docs/reference/qa-brief.md, proposes a brief where they fall short or are in another style, a Follow-up block for what a person still owes, a Release Blocker Priority where the change alters what users experience, and a cleanup where the page buries them, ranks the queue by what most needs a reviewer's attention, and writes the plan for a person to decide on the Operations page. The apply leg (`/review-queue apply <plan-run-id>`) carries out exactly the writes that person approved. Fired by the :review-queue and :review-queue-apply triggers on brian. Usage: /review-queue | /review-queue apply <plan-run-id>
 ---
 
 # /review-queue
@@ -25,8 +25,8 @@ some a hundred blocks of engineering handoff with the steps nowhere. And the
 queue has no order, so a reviewer picks what looks quick rather than what
 matters.
 
-The plan leg makes three proposals per ticket — its **rank**, its **QA brief**,
-its **cleanup** — as one numbered plan, and ends. A person goes through it on the
+The plan leg makes its proposals per ticket — its **rank**, its **QA brief**,
+its **Follow-up**, whether it is a **release blocker**, its **cleanup** — as one numbered plan, and ends. A person goes through it on the
 Operations page and approves or skips each write. The apply leg then carries out
 **exactly the approved writes, as the plan worded them** — that is the safety:
 nothing reaches Notion that a person did not read and approve by number.
@@ -34,7 +34,8 @@ nothing reaches Notion that a person did not read and approve by number.
 ## Two hard boundaries
 
 1. **Never change Status, Lifecycle, Ball Holder or any property but
-   `Review rank` and `GitHub PR`, and no view but the Review view's sort.** Where one looks wrong — shipped work with no
+   `Review rank`, `GitHub PR`, and `Priority` raised to `0 – Release Blocker`,
+   and no view but the Review view's sort.** Where one looks wrong — shipped work with no
    Lifecycle, a ticket its own comments call finished — the plan *flags* it for
    the human. Moving a ticket through the workflow is theirs.
 2. **Never edit code.** The `:lite` worktree is a symlink to brian's main
@@ -146,6 +147,15 @@ Lifecycle or Status that reads wrong, a missing Priority — is never a follow-u
 and never written onto the ticket. It goes in `:flags`, for the person running
 the grooming: it says the tooling that keeps tickets missed something.
 
+### Release blocker
+
+For a ticket not yet in production (Lifecycle Development or Staging) whose
+`Priority` is not already `0 – Release Blocker`, decide whether it should be, by
+`docs/reference/qa-brief.md` § "Release blocker". Propose it as one `:blocker`
+item: the one-sentence reason, the Priority it replaces, and — read from the
+ticket's `App Domain`, `Ball Holder` and `Participants` — whether the mark would
+also hold the next mobile app release. Never propose lowering a Priority.
+
 A brief is wanted where it tells a reviewer what to do. A ticket whose Review is
 a **design sign-off** — no code yet, a spec or a Figma awaiting approval — needs
 no QA brief; flag that its Status reads as QA work when it is not.
@@ -235,6 +245,8 @@ exactly this shape — the dashboard renders it, and the apply leg is held to it
             :detail "stays put: 1 inline-commented paragraph\n<block ids>"}
            {:n 5 :br "BR-6348" :kind :fold   :summary "fold the original report (9 blocks, 2 images) into Original report"
             :detail "<block ids>"}
+           {:n 6 :br "BR-6348" :kind :blocker :summary "Priority 2 - Should → 0 – Release Blocker"
+            :detail "teachers see a new save-conflict warning when editing a course\nApp Domain Teacher — does not hold the mobile release"}
            {:n 4 :br "BR-6454" :kind :delete :summary "delete the empty bug-report template (16 blocks)"
             :detail "<every deleted line, quoted>\n<block ids>"}
            {:n 9 :br nil       :kind :schema :summary "add number property Review rank to the Task Database"}
@@ -247,7 +259,7 @@ exactly this shape — the dashboard renders it, and the apply leg is held to it
 
 - **`:n` is the identity** a person approves. Number every write once, globally,
   from 1.
-- **`:kind`** is one of `:rank`, `:brief`, `:correct`, `:follow-up`, `:delete`,
+- **`:kind`** is one of `:rank`, `:brief`, `:correct`, `:follow-up`, `:blocker`, `:delete`,
   `:fold`, `:clear-rank`, `:schema`, `:view-sort`. A restyle is a `:brief` whose
   `:detail` also lists the old blocks it replaces. A `:follow-up` carries every
   to-do's text, and the ids of the body to-dos it moves in. `:br nil` for a write about no one ticket.
@@ -346,6 +358,11 @@ ascending, and `:failed` with what came back otherwise.
 
 **Ranks:** `notion page set <id> "Review rank=<n>"`; clearing one sets it empty.
 
+**Release blockers:** `notion page set <id> "Priority=0 – Release Blocker"` (an
+en dash), then read the page back. If `Priority` changed since the plan read it,
+the page-edited re-check above has already skipped the ticket; the write never
+lowers anything.
+
 **Briefs:** write as `docs/reference/qa-brief.md` § "How it is written to Notion"
 says — earlier briefs noted by id, the new one prepended, the first child read
 back — and record `:applied` only when the new brief is on top; otherwise the
@@ -407,7 +424,8 @@ Undo: <plan-run-artifacts>/deleted-blocks.edn (<k> blocks)
 ## What this skill does NOT do
 
 - **No workflow moves.** Status, Lifecycle and Ball Holder belong to people;
-  anything that looks wrong is a flag (boundary 1).
+  anything that looks wrong is a flag (boundary 1). Priority moves only up, to
+  Release Blocker, and only as an approved item.
 - **No review.** It prepares the queue for a reviewer; it does not click
   through a single step or judge whether a change works.
 - **No Code Review tickets, and no Review tickets without a Lifecycle in scope.**

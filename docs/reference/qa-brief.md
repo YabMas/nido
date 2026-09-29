@@ -100,6 +100,31 @@ and written the same way: noted by id, prepended with `"position": {"type":
 "start"}`, the first child read back, and only then the earlier one deleted — or
 the new one, if it did not land first.
 
+## Release blocker
+
+A change that alters user-facing product behaviour — something **learners,
+teachers or school admins** will see or do differently once it reaches
+production — should be reviewed before it gets there. On this board that is
+said by `Priority` `0 – Release Blocker`.
+
+Not a blocker:
+
+- superadmin screens and internal tooling;
+- a bug fix that restores behaviour users already had;
+- a ticket already in production — there is no release left for it to hold.
+
+If unsure, propose it, and say why in one sentence; the reason is what the
+person approving reads. Only ever raise: never clear or lower a Priority a
+person set. (This overloads `Priority`, which otherwise ranks work before it is
+built. It is accepted for now and will be revisited.)
+
+**The mark reaches further than the web release.** brian-mobile's release gate
+(`tool/release_blocker.dart check`) holds a mobile release while any
+`0 – Release Blocker` ticket is not Done and either carries `App Domain`
+`Student`, or carries no `App Domain` and belongs to the mobile release owner.
+A web change marked a blocker under those conditions holds the next app release
+too, until its ticket is Done. Say so beside the reason whenever it applies.
+
 ## How it is written to Notion
 
 One callout block whose text starts `QA instructions`, with the sections nested

@@ -3041,6 +3041,7 @@
 
 (def ^:private rq-kind-label
   {:rank "rank" :brief "QA brief" :correct "correct" :follow-up "follow-up"
+   :blocker "release blocker"
    :delete "delete" :fold "fold"
    :clear-rank "clear rank" :schema "schema" :view-sort "view sort"})
 
