@@ -13,8 +13,10 @@
   "What a round already knows about a subject, keyed by its CONTENT and what it was judged against
    — the record-side counterpart of `review-cache`, derived rather than stored.
 
-   A subject is settled when a baseline review or a design decision named its id in `:confirmed`
-   while judging a record whose subject with that id is byte-identical, at this subject's key; when
+   A subject is settled when a baseline review or a design decision named its id in `:confirmed`,
+   with where it was read in `:checked-at`, while judging a record whose subject with that id is
+   byte-identical — beside the same entries for the elements it is about, the same other claims
+   about them, and the same cited intent and baseline — at this subject's key; when
    no judgement at that same content and key has found against it since that confirmation; and
    when the record the confirming judgement judged is not retracted. A finding stands until a later
    confirmation at the same key answers it, so a record amended elsewhere in answer to a finding
@@ -33,16 +35,18 @@
    checked, and the tree and element identities it read — and they are on the judgement. So a
    ledger that cannot be read, or a reading that yields no identity, settles nothing."
   (Operation code-identity
-    "A hash of the tree jj lists at `cwd` — every path with the content id of what it holds — or
-     nil when the listing cannot be read in full. Moves when any content, path, symlink or
-     executable bit in the tree moves; a description edit, or a rebase that leaves the tree as it
-     was, does not move it. Read as a judge launches and again as it returns, and the tree is not
-     frozen between the two readings."
+    "A hash of the tree at `cwd` — in a jj repository the tree jj lists, every path with the content
+     id of what it holds; in a plain git repository the tree git would commit from the working copy,
+     ignored files left out — or nil when neither can be read in full. Moves when any content, path,
+     symlink or executable bit in the tree moves; a description edit, or a rebase that leaves the
+     tree as it was, does not move it. Read as a judge launches and again as it returns, and the
+     tree is not frozen between the two readings."
     {:signature [:=> [:catn [:cwd Path]] [:maybe :string]]})
   (Operation subject-identities
     "Each declared element's identity at a worktree, by id, from the element listing: its
-     declaration digests and the content of the file its module pairs with. Nil when the listing
-     is not listed — a project that declares no design has no element to identify."
+     declaration digests and the content of the file its module pairs with — for a stratum, of the
+     files of the modules providing it. Nil when the listing is not listed — a project that declares
+     no design has no element to identify."
     {:signature [:=> [:catn [:listing DeclaredElements] [:worktree Path]]
                  [:maybe [:map-of :string :string]]]})
   (Operation subjects
@@ -50,6 +54,15 @@
      in the shared model its claims and elements, and the whole-record fields named by their field
      names. Pure."
     {:signature [:=> [:catn [:record :map]] :map]})
+  (Operation nothing-to-check?
+    "Whether a subject carries nothing a judge could check — every part of it an element stating no
+     more than its id and sort — and so is never owed a ruling. Pure."
+    {:signature [:=> [:catn [:content [:vector :any]]] :boolean]})
+  (Operation rested-on
+    "Every declared element some subject of a record rests on, a role's players read from the
+     effective record — the only element identities a judgement over that record keeps. Pure."
+    {:signature [:=> [:catn [:record :map] [:effective :map]] [:set :string]]
+     :delegates [subjects]})
   (Operation ledger
     "One workstream's reviews and decisions, the baselines and designs they judged, and its
      retractions, as `settled` reads them — or nil when any entry of those kinds cannot be read, since

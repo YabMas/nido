@@ -557,7 +557,9 @@
    "Not `does this feel right` — `does that specific counterexample exist in the\n"
    "code`. Report a finding only when you found one, and say what it is.\n\n"
    "A COUNTEREXAMPLE THAT NEEDS AN AUDIT OF EVERY CALLER IS THE WRONG ONE, and\n"
-   "when a claim names one, that is itself the finding. A property about what a\n"
+   "when a claim you are checking names one, that is itself the finding — never\n"
+   "for a subject outside this round's checks, which only a counterexample you\n"
+   "actually found can refute. A property about what a\n"
    "MODULE promises is checked by reading that module. A property phrased as\n"
    "`every client does X` is not a decomposition claim at all — it is a\n"
    "conformance claim over N implementations, it has a counterexample for every\n"
@@ -649,9 +651,23 @@
    "composition text. A finding that cites nothing is not a finding; do not\n"
    "report it. Neither is a finding that reports a bug in code the baseline\n"
    "correctly describes.\n\n"
-   "Populate confirmed with the IDS of what you actually went and checked — the\n"
-   "bracketed slugs, without the brackets. Every subject carries one: claims,\n"
-   "modules, health observations, and [shape] and [composition] too.\n\n"
+   "Populate confirmed with what you actually went and checked and found to hold —\n"
+   "each by its id, the bracketed slug without the brackets, with the file:line\n"
+   "references you read that show it holds. Every subject carries an id: claims,\n"
+   "modules, health observations, and [shape] and [composition] too. A\n"
+   "confirmation citing nothing you read is not counted.\n\n"
+   "CONFIRMED MEANS EVERY SENTENCE HELD. A clause of a subject that you found\n"
+   "false is a finding against that subject's id — a falsification — even when\n"
+   "the counterexample the subject states does not name that clause. Leave the id\n"
+   "out of confirmed, and do not park the correction in reason: nothing reads it\n"
+   "there.\n\n"
+   "RULE ON EVERY SUBJECT YOU ARE ASKED TO CHECK — everything above, and nothing\n"
+   "listed as outside this round's checks. Each one ends up confirmed, named by a\n"
+   "finding, or in unchecked with why it cannot be checked here: its evidence is\n"
+   "not in the code (production data, a deploy history). An element that is only\n"
+   "an id and a sort says nothing to check and needs no ruling. A subject you\n"
+   "leave without a ruling is not counted as held: the round is asked again, and\n"
+   "a sufficient verdict over it does not stand.\n\n"
    "Ids, not sentences. A confirmation worded differently each round cannot be\n"
    "matched to the claim it is about, so the next round cannot tell what is\n"
    "settled and checks it again instead of checking what nobody has looked at\n"
@@ -889,10 +905,19 @@
    "that shows one of the four broken names it in check; one that bears on none\n"
    "of them leaves check empty — a record contradicting itself or a claim it\n"
    "rests on is a defect under no derivation, and it is repaired like any other.\n\n"
-   "Populate confirmed with the IDS of the claims you checked and found to hold —\n"
-   "the bracketed slugs, without the brackets. Leave it empty when the design lists\n"
-   "invariants with no ids. Ids, not sentences: a confirmation worded differently\n"
-   "each round cannot be matched to the claim it is about.\n\n"
+   "Populate confirmed with the claims you checked and found to hold — each by its\n"
+   "id, the bracketed slug without the brackets, with the file:line references you\n"
+   "read, and at_this_tree: `holds` when the code you read already makes the claim\n"
+   "true, `owed` when it is a sound commitment the code you read does not meet yet.\n"
+   "A claim about what this change will build is owed until it is built — and the\n"
+   "tree you are reading may already hold the change, so look rather than assume.\n"
+   "Leave confirmed empty when the design lists invariants with no ids. Ids, not\n"
+   "sentences: a confirmation worded differently each round cannot be matched to\n"
+   "the claim it is about.\n\n"
+   "RULE ON EVERY CLAIM YOU ARE ASKED TO CHECK — the claims above, and none listed\n"
+   "as outside this round's checks. Each one ends up confirmed, named by a finding,\n"
+   "or in unchecked with why it cannot be checked here. A claim left without a\n"
+   "ruling is asked again, and a proceed over it does not stand.\n\n"
    "asks is REQUIRED whatever you recommend: state the question the human still\n"
    "has to answer, in one or two sentences, with everything you derived already\n"
    "taken off the table. Never answer it yourself."
@@ -910,6 +935,80 @@
   "Every derivation a round may answer about, of either era. What an answer names is kept only if it
    is one of these; which of them a round asks about is the record's era."
   (into #{} (concat report/derivations report/strata-derivations)))
+
+(defn- slug
+  "An id as the judge wrote it, stripped of the brackets the prompt renders around every id. A judge
+   shown `[engine-names-no-stage] the engine …` cites it back with them, and an id that is sometimes
+   bracketed and sometimes not is no identity at all."
+  [x]
+  (-> (str x) str/trim (str/replace "[" "") (str/replace "]" "")))
+
+(defn- parse-confirmed
+  "A judge's confirmed list as `{:confirmed [id …] :checked-at {id [file:line …]} :owed [id …]}`.
+
+   An entry is `{id evidence at_this_tree}`; a bare string is an id with no evidence, which is what an
+   answer in the older shape gives, and it confirms nothing that settles. An id the judge says the
+   code does not meet yet is :owed rather than :confirmed — a sound commitment, not a fact of the
+   tree it read."
+  [raw]
+  (reduce (fn [acc e]
+            (let [m?  (map? e)
+                  id  (slug (if m? (:id e) e))
+                  ev  (when m? (into [] (comp (map str) (remove str/blank?)) (:evidence e)))
+                  at  (when m? (str (or (:at_this_tree e) (:at-this-tree e))))]
+              (cond
+                (str/blank? id) acc
+                (= "owed" at)   (update acc :owed (fnil conj []) id)
+                :else           (cond-> (update acc :confirmed (fnil conj []) id)
+                                  (seq ev) (assoc-in [:checked-at id] ev)))))
+          {}
+          (distinct (if (sequential? raw) raw []))))
+
+(defn- parse-unchecked
+  "The subjects a judge said it could not check here, each with its reason; one per id."
+  [raw]
+  (into [] (comp (keep (fn [e] (when (map? e)
+                                 (let [id (slug (:id e))]
+                                   (when-not (str/blank? id) {:id id :reason (str (:reason e))})))))
+                 (distinct))
+        (if (sequential? raw) raw [])))
+
+(defn- with-ruling
+  "`record` carrying the judge's confirmed and unchecked lists from the answer `m`, as the round
+   filters them next (`rule`)."
+  [record m]
+  (let [{:keys [confirmed checked-at owed]} (parse-confirmed (:confirmed m))
+        unchecked (parse-unchecked (:unchecked m))]
+    (cond-> record
+      (seq confirmed)  (assoc :confirmed (vec (distinct confirmed)))
+      (seq checked-at) (assoc :checked-at checked-at)
+      (seq owed)       (assoc :owed (vec (distinct owed)))
+      (seq unchecked)  (assoc :unchecked unchecked))))
+
+(defn- rule
+  "A parsed judgement, its ruling held to what the round asked: `checks` are the subjects put to the
+   judge, `asked` those of them it owes a ruling on.
+
+   A confirmation counts only for a check, only with the file:line it was read at, and only when no
+   finding of the same judgement names that id — a judge that both found against a subject and
+   confirmed it has found. An id outside the checks is dropped whatever the judge said of it: it was
+   shown as settled, or it is no subject of this record. What is left of `asked` without a ruling —
+   confirmed, found, :owed, or declared :unchecked — is :unruled, which is what stops the judgement
+   holding (`nido.coordinator.report/review-holds?`, `nido.coordinator.report/proceeds?`)."
+  [result checks asked]
+  (let [found     (into #{} (keep :claim-id) (:findings result))
+        held?     #(and (contains? checks %) (not (found %)))
+        confirmed (filterv #(and (held? %) (seq (get-in result [:checked-at %]))) (:confirmed result))
+        owed      (filterv held? (:owed result))
+        unchecked (filterv #(held? (:id %)) (:unchecked result))
+        ruled     (into (set confirmed) (concat owed (map :id unchecked) found))
+        unruled   (vec (sort (remove ruled asked)))]
+    (cond-> (dissoc result :confirmed :checked-at :owed :unchecked :unruled)
+      (seq confirmed) (assoc :confirmed confirmed
+                             :checked-at (select-keys (:checked-at result) confirmed))
+      (seq owed)      (assoc :owed owed)
+      (seq unchecked) (assoc :unchecked unchecked)
+      (seq unruled)   (assoc :unruled unruled))))
 
 (defn- normalize-findings
   [raw]
@@ -958,7 +1057,8 @@
                              :cites  cites
                              :claim  (str (:claim f))
                              :needs  (str (:needs f))}
-                      (seq (:evidence f)) (assoc :evidence (mapv str (:evidence f)))))))
+                      (seq (:evidence f)) (assoc :evidence (mapv str (:evidence f)))
+                      (not (str/blank? (slug (:claim-id f)))) (assoc :claim-id (slug (:claim-id f)))))))
               raw)))
 
 (defn ^{:malli/schema [:=> [:cat :string :any] :map]}
@@ -978,19 +1078,11 @@
           ;; A non-sufficient verdict with nothing usable behind it is exactly the
           ;; theatre this round guards against — read it as no answer.
           (when (or (= :sufficient v) (seq findings))
-            (cond-> {:format :baseline-review
-                     :verdict v
-                     :baseline-seq baseline-seq
-                     :reason (str (:reason m))}
-              ;; Normalised like a cited id, and for the same reason: an id that
-              ;; is sometimes bracketed is no identity at all.
-              (seq (:confirmed m))
-              (assoc :confirmed (into [] (comp (map #(-> (str %) str/trim
-                                                        (str/replace "[" "")
-                                                        (str/replace "]" "")))
-                                               (remove str/blank?)
-                                               (distinct))
-                                      (:confirmed m)))
+            (cond-> (with-ruling {:format :baseline-review
+                                  :verdict v
+                                  :baseline-seq baseline-seq
+                                  :reason (str (:reason m))}
+                                 m)
               (not= :sufficient v) (assoc :findings findings))))))
     (catch Exception _ nil)))
 
@@ -1019,21 +1111,13 @@
                  (seq checks)
                  (not (str/blank? asks))
                  (or (= :proceed r) (seq findings)))
-        (cond-> {:format :design-decision
-                 :recommend r
-                 :design-seq design-seq
-                 :reason (str (:reason m))
-                 :checks checks
-                 :asks asks}
-          ;; Normalised like a baseline review's: an id that is sometimes bracketed is no
-          ;; identity at all.
-          (seq (:confirmed m))
-          (assoc :confirmed (into [] (comp (map #(-> (str %) str/trim
-                                                    (str/replace "[" "")
-                                                    (str/replace "]" "")))
-                                           (remove str/blank?)
-                                           (distinct))
-                                  (:confirmed m)))
+        (cond-> (with-ruling {:format :design-decision
+                              :recommend r
+                              :design-seq design-seq
+                              :reason (str (:reason m))
+                              :checks checks
+                              :asks asks}
+                             m)
           (not= :proceed r) (assoc :findings findings))))
     (catch Exception _ nil)))
 
@@ -1232,8 +1316,9 @@
    identity itself. So do the `:listing` the stage read and the
    `:subject-identities` in it, recorded beside the tree's identity only when
    the tree did not move — they are what a model claim is settled on in a
-   project that declares a design. Settled subjects are shown and are not checks, so the
-   review's :confirmed keeps only ids that were checks. And a round handed
+   project that declares a design, and only those the baseline's subjects rest on. Settled subjects
+   are shown and are not checks; the review's ruling is held to its checks by `rule`, so a check the
+   judge left without one is named under :unruled. And a round handed
    settled subjects whose tree moved appends nothing — it answers
    {:outcome :code-moved :answer <the review>} — because those subjects were
    settled against a tree its judge did not read throughout.
@@ -1261,7 +1346,10 @@
                                    #(parse-baseline-review % (:seq baseline)))
                   after    (settled/code-identity code-cwd)
                   one-tree (when (= before after) before)
-                  checks   (set (keys (apply dissoc (settled/subjects baseline) (keys settled))))]
+                  subjects (settled/subjects baseline)
+                  checks   (set (keys (apply dissoc subjects (keys settled))))
+                  asked    (into #{} (remove #(settled/nothing-to-check? (subjects %))) checks)
+                  rests-on (settled/rested-on baseline baseline)]
               (cond
                 (not (:format result)) result
 
@@ -1272,10 +1360,10 @@
                  :answer  result}
 
                 :else
-                (cond-> result
-                  (:confirmed result)                     (update :confirmed #(filterv checks %))
-                  one-tree                                (assoc :code-identity one-tree)
-                  (and one-tree (seq subject-identities)) (assoc :subject-identities subject-identities)))))
+                (let [kept (select-keys subject-identities rests-on)]
+                  (cond-> (rule result checks asked)
+                    one-tree                  (assoc :code-identity one-tree)
+                    (and one-tree (seq kept)) (assoc :subject-identities kept))))))
         {:outcome :nothing-to-check
          :detail "the baseline records no load-bearing property and no health observation"})
       {:outcome :no-record :detail "this workstream has no :baseline entry"})
@@ -1457,9 +1545,10 @@
 
    Settlement works as it does for a baseline round. The `:design`, the `:settled`
    claims, the `:listing` and the identities they were settled at come from the
-   stage that chose them. Settled claims are shown apart and are not checks, so
-   the decision's :confirmed keeps only ids that were checks. It carries
-   `:code-identity`, and `:subject-identities` beside it, only when the tree read
+   stage that chose them. Settled claims are shown apart and are not checks; the
+   decision's ruling is held to its checks by `rule`, and a claim it was handed and
+   left without a ruling is named under :unruled. It carries `:code-identity`, and
+   the `:subject-identities` of what the design's subjects rest on beside it, only when the tree read
    as the judge launched is the tree read as it returned — and a round holding
    settled claims whose tree moved appends nothing, answering
    {:outcome :code-moved :answer <the decision>}."
@@ -1469,7 +1558,8 @@
     (if-let [design (or design (ws/latest-entry project ws-id :design))]
       (or (unverified-premise project ws-id design)
           (undeclared-subjects project (or code-cwd cwd) (effective-design cwd design) listing)
-          (let [code-cwd (or code-cwd cwd)
+          (let [code-cwd  (or code-cwd cwd)
+                effective (effective-design cwd design)
                 settled  (or settled {})
                 before   (if (contains? opts :code-identity)
                            (:code-identity opts)
@@ -1494,7 +1584,12 @@
                                  #(parse-design-decision % (:seq design)))
                 after    (settled/code-identity code-cwd)
                 one-tree (when (= before after) before)
-                checks   (set (keys (apply dissoc (settled/subjects design) (keys settled))))]
+                subjects (settled/subjects design)
+                checks   (set (keys (apply dissoc subjects (keys settled))))
+                ;; Only the claims: a design's prompt asks the judge to confirm claims by id and shows
+                ;; its elements and fields as what they are about.
+                asked    (into #{} (filter #(some :about (subjects %))) checks)
+                rests-on (settled/rested-on design effective)]
             (cond
               (not (:format result)) result
 
@@ -1505,11 +1600,11 @@
                :answer  result}
 
               :else
-              (cond-> result
-                (seq levels)                            (assoc :strata-read (mapv :reading levels))
-                (:confirmed result)                     (update :confirmed #(filterv checks %))
-                one-tree                                (assoc :code-identity one-tree)
-                (and one-tree (seq subject-identities)) (assoc :subject-identities subject-identities)))))
+              (let [kept (select-keys subject-identities rests-on)]
+                (cond-> (rule result checks asked)
+                  (seq levels)              (assoc :strata-read (mapv :reading levels))
+                  one-tree                  (assoc :code-identity one-tree)
+                  (and one-tree (seq kept)) (assoc :subject-identities kept))))))
       {:outcome :no-record :detail "this workstream has no :design entry"})
     {:outcome :no-workstream :detail (str "cwd resolves to no nido session: " cwd)}))
 
@@ -2317,6 +2412,28 @@
     (and (:format record) run-id)     (assoc :run-id (str run-id))
     (and (:format record) within-run) (assoc :within-run (str within-run))))
 
+(defn- banking
+  "What the report says about whether a round's confirmations can settle anything: how many subjects
+   were put to the judge, and — when nothing it confirmed can settle — why not. `reading` is the one
+   taken as the judge launched, `record` what the round returned."
+  [subject settled reading record]
+  (cond-> {:checks (count (apply dissoc (settled/subjects subject) (keys settled)))}
+    (nil? (:code-identity reading))
+    (assoc :unbanked "no identity could be read for this tree, so nothing this round confirms can settle")
+
+    (and (:code-identity reading) (:format record) (nil? (:code-identity record)))
+    (assoc :unbanked "the tree moved while the judge read it, so nothing this round confirmed can settle")))
+
+(defn- unruled-stop
+  "A round that would have ended the run with checks it never ruled on. The first time, the run goes
+   on to another judgement and nothing is amended: what this round did confirm is settled by then,
+   so the next judge is handed only what was left. The second time, the run ends :unruled — the
+   judge was asked and still did not rule, and nothing lets the record hold over that."
+  [ctx]
+  (if (get-in ctx [:carry :reasked-unruled])
+    (assoc ctx :control :stop :status :unruled)
+    (-> ctx (assoc :control :next-round) (assoc-in [:carry :reasked-unruled] true))))
+
 (defn- run-judge-stage
   [ctx]
   (let [{:keys [cwd code-cwd run-id reviewer]} (:config ctx)
@@ -2348,11 +2465,15 @@
                   :label (str "baseline-review-round-" (:iter ctx))
                   :disputes (disputes-for-judge (:history ctx))})
                 (:config ctx))
-        ctx    (assoc ctx :settled settled)]
+        ctx    (merge (assoc ctx :settled settled)
+                      (when subject (banking subject settled reading record)))]
     (append! cwd record)
     (cond
       (:outcome record)
       (assoc ctx :record record :status (:outcome record))
+
+      (and (= :sufficient (:verdict record)) (seq (:unruled record)))
+      (unruled-stop (assoc ctx :record record :findings []))
 
       (= :sufficient (:verdict record))
       (assoc ctx :record record :findings [] :control :stop :status :sufficient)
@@ -2378,7 +2499,11 @@
    rule the one-shot round already held — a round that could not run must never
    read like a round that ran and found nothing — and a loop makes it matter
    more, not less: `:codex-failed` on round three of an otherwise converging run
-   is not convergence."
+   is not convergence.
+
+   A sufficient verdict ends the run only over checks it ruled on. One leaving
+   some :unruled is judged once more, with no amendment between; still unruled,
+   the run ends :unruled (`unruled-stop`)."
   {:name :judge
    :run
    run-judge-stage})
@@ -2665,15 +2790,23 @@
      {:decisions n :checks      {check {:broken n :alone n :at-end bool}}
                    :strata      {stratum {:read n :fits n :widens n :misplaced n :not-a-level n :failed n}}
       :reviews   n :derivations {derivation {:broken n :alone n :at-end bool}}
-                   :falsified   {claim-id n}}
+                   :falsified   {claim-id n}
+      :unruled   {id n}}
+
+   :unruled counts, per subject, the judgements of either kind that were handed it as a check and
+   left it without a ruling — present only when one did.
 
    Read from the decisions rather than the run's report, because a decision holds every check's
    status — a check a proceeding round broke included, which the report drops — and it outlives the
    run dir. Derived on every read; nothing stores it."
   [entries]
   (let [decisions (filterv #(= :design-decision (:format %)) entries)
-        reviews   (filterv #(= :baseline-review (:format %)) entries)]
+        reviews   (filterv #(= :baseline-review (:format %)) entries)
+        unruled   (frequencies (mapcat :unruled (concat decisions reviews)))]
     (cond-> {}
+      (seq unruled)
+      (assoc :unruled (into (sorted-map) unruled))
+
       (seq decisions)
       (assoc :decisions (count decisions)
              :checks    (tally (mapv broken-check-names decisions)))
@@ -2839,7 +2972,8 @@
                   :label (str "design-decision-round-" (:iter ctx))
                   :disputes (disputes-for-judge (:history ctx))})
                 (:config ctx))
-        ctx    (assoc ctx :settled settled)
+        ctx    (merge (assoc ctx :settled settled)
+                      (when design (banking design settled reading record)))
         traj   (trajectory (:history ctx))
         final! (fn [c] (append! cwd (cond-> record (seq traj) (assoc :trajectory traj))) c)]
     (cond
@@ -2906,6 +3040,16 @@
               (assoc ctx :record record :findings findings
                      :underivable (underivable-checks record)))
 
+          ;; Nothing to repair, and claims it was handed that it neither confirmed nor refuted: a
+          ;; proceed over them does not proceed (`report/proceeds?`), so the round is asked again
+          ;; before a person is.
+          (seq (:unruled record))
+          (let [c (unruled-stop (assoc ctx :record record :findings []
+                                       :underivable (underivable-checks record)))]
+            (if (= :unruled (:status c))
+              (final! (assoc c :control :escalate))
+              (do (append! cwd record) c)))
+
           ;; Nothing an amender could repair, and a check the round could not derive at
           ;; all: what is left is the missing yardstick. An amender told to fix one would
           ;; amend a true record until the complaint stopped. Read off the CHECKS and
@@ -2938,7 +3082,9 @@
    missing yardstick. One holding nothing to repair and no such check ends
    :nothing-to-amend: it would not proceed and named nothing, which is the judge
    contradicting itself. A finding stated a third time after two objections
-   escalates. Everything else is another round.
+   escalates. A round that would proceed but left claims it was handed :unruled
+   does not proceed: it is judged once more, and still unruled it escalates
+   :unruled. Everything else is another round.
 
    What reaches the amender is every finding the round made, whether it broke one
    of the four derivations or none. `Nothing broke` is not `nothing to repair`:

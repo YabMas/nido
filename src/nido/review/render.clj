@@ -482,9 +482,11 @@
    that is the one reading a round which could not run must never invite."
   [ph]
   (if-let [v (:verdict ph)]
-    (let [n (count (:findings ph))]
+    (let [n (count (:findings ph))
+          u (count (:unruled ph))]
       (str v (when (pos? n)
                (str " · " n " finding" (when (not= 1 n) "s")))
+           (when (pos? u) (str " · " u " unruled"))
            (settled-detail (:settled ph))))
     (when-let [o (:outcome ph)]
       (str o " — no judgment" (settled-detail (:settled ph))))))

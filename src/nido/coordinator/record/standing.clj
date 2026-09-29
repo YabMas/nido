@@ -200,7 +200,7 @@
                                  last)
                 sufficient? (boolean
                              (some #(and (= premise-seq (:baseline-seq %))
-                                         (report/verdict-holds (:verdict %)))
+                                         (report/review-holds? %))
                                    revs))
                 replaced-by (replacement bls premise-seq)
                 ;; The goal this design was written to serve, and the goal the
@@ -422,7 +422,7 @@
                 goal        (goal-unseated retracted ins goal-seq seq-n)
                 sufficient? (boolean
                              (some #(and (= seq-n (:baseline-seq %))
-                                         (report/verdict-holds (:verdict %)))
+                                         (report/review-holds? %))
                                    revs))
                 blocked     (cond
                               ;; A retracted goal first, as in `of-design`: a

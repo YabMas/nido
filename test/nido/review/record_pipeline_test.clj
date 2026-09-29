@@ -17,6 +17,7 @@
    [nido.design.check :as design-check]
    [nido.review.loop :as rloop]
    [nido.review.record :as record]
+   [nido.coordinator.report :as ledger-report]
    [nido.review.report :as report]
    [nido.review.settled :as settled]
    [nido.review.stages :as stages]))
@@ -992,7 +993,8 @@
 (def ^:private settling-ledger
   "A ledger on which a review that read tree-a confirmed c1 of `a-baseline`."
   {:reviews     [{:format :baseline-review :seq 2 :baseline-seq 1 :verdict :sufficient
-                  :reason "ok" :confirmed ["c1"] :code-identity "tree-a"}]
+                  :reason "ok" :confirmed ["c1"] :checked-at {"c1" ["src/order/aggregate.clj:12"]}
+                  :code-identity "tree-a"}]
    :baselines   [(assoc a-baseline :seq 1)]
    :retractions []})
 
@@ -1021,6 +1023,35 @@
     (is (= "tree-a" (:code-identity seen)) "with the reading the settling was made at")
     (is (= {"c1" {:ws-id "ws-1" :seq 2}} (:settled out)) "and the report is told what was not asked, and where")))
 
+(defn- judged-with
+  "The judge stage's ctx over `a-baseline` when its judge returns `review`, starting from `c`."
+  [review c]
+  (with-redefs [record/baseline-review! (fn [_] review)
+                record/append! (fn [_ _] nil)
+                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                ws/latest-entry (fn [_ _ _] a-baseline)
+                settled/code-identity (fn [_] "tree-a")
+                settled/ledgers (fn [_ _ _] [(assoc settling-ledger :ws-id "ws-1")])]
+    (run record/judge-stage c)))
+
+(deftest a-sufficient-verdict-over-unruled-checks-is-asked-again-then-refused
+  ;; A sufficient verdict ended the run while checks had no ruling, and nothing recorded them. Asked
+  ;; again first — what the round did confirm is settled by then, so the next judge is handed only
+  ;; what was left — and the run ends :unruled, not :sufficient, if they are still unruled.
+  (let [review {:format :baseline-review :verdict :sufficient :reason "ok" :unruled ["shape"]}
+        first  (judged-with review (ctx))]
+    (is (= :next-round (:control first)) "no amendment, another judgement")
+    (is (nil? (:status first)))
+    (let [second (judged-with review (ctx :carry (:carry first)))]
+      (is (= :unruled (:status second))))
+    (is (= :sufficient (:status (judged-with (dissoc review :unruled) (ctx))))
+        "a verdict that ruled on every check ends the run as it always did")))
+
+(deftest the-report-is-told-how-much-was-checked-and-whether-it-banks
+  (let [out (judged-with {:format :baseline-review :verdict :sufficient :reason "ok"} (ctx))]
+    (is (= 4 (:checks out)) "the subjects left once c1 was settled")
+    (is (:unbanked out) "a review appended with no identity settles nothing, and says why")))
+
 (deftest nothing-is-settled-at-a-tree-no-review-read
   (let [[seen _] (judged-at "tree-b")]
     (is (= {} (:settled seen)))))
@@ -1036,7 +1067,9 @@
         ids      {"canvas.order/aggregate" "agg-1" "canvas.order/summers" "role-1"}
         ledger   {:ws-id "ws-1" :reviews [] :baselines [] :retractions [] :designs [design]
                   :decisions [{:format :design-decision :seq 2 :design-seq 1 :recommend :proceed
-                               :confirmed ["summers-sum-once"] :subject-identities ids}]}
+                               :confirmed ["summers-sum-once"]
+                               :checked-at {"summers-sum-once" ["src/order/aggregate.clj:3"]}
+                               :subject-identities ids}]}
         settled-at (fn [now]
                      (let [seen (atom nil)]
                        (with-redefs [record/design-decision! (fn [opts] (reset! seen opts)
@@ -1056,19 +1089,79 @@
     (is (= {} (settled-at (assoc ids "canvas.order/aggregate" "agg-2")))
         "a player the design never restated moved, so the claim is a check again")))
 
+(defn- reviewed
+  "What `baseline-review!` appends for a judge answering `answer` over `a-baseline`, with c1 settled."
+  [answer]
+  (with-redefs [record/run-round! (fn [_] {:ok (json/generate-string answer)})
+                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                settled/code-identity (fn [_] "tree-a")]
+    (record/baseline-review! {:cwd "/w" :run-id "r1" :baseline (assoc a-baseline :seq 3)
+                              :settled {"c1" 2} :code-identity "tree-a"})))
+
+(defn- read-at [id] {:id id :evidence ["src/order/aggregate.clj:12"]})
+
 (deftest a-review-confirms-only-what-its-own-judge-checked
   ;; A subject outside the checks was not checked, so a judge listing it confirmed
   ;; nothing; nor does an id naming nothing — watched live, a judge answered with
   ;; health AXIS values. Either kept would let a later round settle on a check
   ;; that never happened.
-  (with-redefs [record/run-round! (fn [_] {:ok (str "{\"verdict\":\"sufficient\",\"reason\":\"ok\","
-                                                    "\"confirmed\":[\"c1\",\"mod-the-order-aggregate\","
-                                                    "\"design\",\"shape\",\"shape\"],\"findings\":[]}")})
-                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
-                settled/code-identity (fn [_] "tree-a")]
-    (let [r (record/baseline-review! {:cwd "/w" :run-id "r1" :baseline (assoc a-baseline :seq 3)
-                                      :settled {"c1" 2} :code-identity "tree-a"})]
-      (is (= ["mod-the-order-aggregate" "shape"] (:confirmed r))))))
+  (let [r (reviewed {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
+                     :confirmed (mapv read-at ["c1" "mod-the-order-aggregate" "design" "shape" "shape"])})]
+    (is (= ["mod-the-order-aggregate" "shape"] (:confirmed r)))
+    (is (= #{"mod-the-order-aggregate" "shape"} (set (keys (:checked-at r))))
+        "and where each was read, which is what lets it settle")))
+
+(deftest a-check-left-without-a-ruling-is-named
+  ;; A sufficient verdict ended runs with checks nobody confirmed or refuted, and the ledger's
+  ;; confirmed list read as the whole check.
+  (let [r (reviewed {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
+                     :confirmed [(read-at "shape")]})]
+    (is (= ["composition" "invoice-resums" "mod-the-order-aggregate"] (:unruled r)))
+    (is (not (ledger-report/review-holds? r)) "a sufficient verdict over an unruled check does not hold")))
+
+(deftest a-confirmation-citing-nothing-it-read-is-no-ruling
+  (let [r (reviewed {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
+                     :confirmed ["shape" {:id "composition" :evidence []}]})]
+    (is (nil? (:confirmed r)) "the judge's word alone confirms nothing")
+    (is (every? (set (:unruled r)) ["shape" "composition"]))))
+
+(deftest a-subject-the-judge-could-not-check-is-ruled-and-not-confirmed
+  (let [r (reviewed {:verdict "sufficient" :reason "ok" :findings []
+                     :confirmed (mapv read-at ["shape" "composition" "mod-the-order-aggregate"])
+                     :unchecked [{:id "invoice-resums" :reason "its evidence is a production log"}]})]
+    (is (nil? (:unruled r)))
+    (is (= [{:id "invoice-resums" :reason "its evidence is a production log"}] (:unchecked r)))
+    (is (ledger-report/review-holds? r) "a declared gap is a ruling, and visible where the review is read")))
+
+(deftest a-subject-both-found-against-and-confirmed-has-been-found
+  ;; An insufficient finding dropped its claim-id, so a judge that both found against an id and
+  ;; confirmed it left the id settled by the very judgement that found against it.
+  (let [r (reviewed {:verdict "insufficient" :reason "gap" :unchecked []
+                     :confirmed (mapv read-at ["shape" "composition" "mod-the-order-aggregate" "invoice-resums"])
+                     :findings [{:claim-id "[shape]" :blocks "relation-honest" :cites ["the shape"]
+                                 :claim "c" :needs "n" :evidence []}]})]
+    (is (= "shape" (:claim-id (first (:findings r)))))
+    (is (not (some #{"shape"} (:confirmed r))))
+    (is (nil? (:unruled r)) "a finding is a ruling")))
+
+(deftest a-review-keeps-only-the-identities-its-subjects-rest-on
+  ;; One ledger held 730 KB of 790 KB in identity maps: every declared element of the project, on
+  ;; every judgement, when a judgement needs only what its own subjects rest on.
+  (let [agg      {:id "canvas.order/aggregate" :sort :module :hides "h" :interface "i"}
+        claim    {:id "one-path" :about ["canvas.order/aggregate"] :statement "s" :falsified-by "f"
+                  :evidence {:by :round}}
+        baseline {:format :baseline :seq 3 :strata [] :area "a" :bounded-by "b"
+                  :model {:elements [agg] :claims [claim]}}
+        r (with-redefs [record/run-round! (fn [_] {:ok (json/generate-string
+                                                        {:verdict "sufficient" :reason "ok" :findings []
+                                                         :unchecked [] :confirmed (mapv read-at ["one-path" "canvas.order/aggregate"])})})
+                        stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                        settled/code-identity (fn [_] "tree-a")]
+            (record/baseline-review! {:cwd "/w" :run-id "r1" :baseline baseline :listing {:status :unmodelled}
+                                      :code-identity "tree-a"
+                                      :subject-identities {"canvas.order/aggregate" "agg-1"
+                                                           "canvas.other/unrelated" "x-1"}}))]
+    (is (= {"canvas.order/aggregate" "agg-1"} (:subject-identities r)))))
 
 (deftest a-tree-that-moved-under-a-round-with-settled-subjects-appends-nothing
   ;; Those subjects were settled against the tree read as the judge launched, and

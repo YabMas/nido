@@ -5,6 +5,7 @@
     "verdict",
     "reason",
     "confirmed",
+    "unchecked",
     "findings"
   ],
   "properties": {
@@ -22,9 +23,48 @@
     },
     "confirmed": {
       "type": "array",
-      "description": "The IDS of the claims and modules you actually checked and found to hold — the slugs shown in brackets, without the brackets. Ids, not sentences: a confirmation phrased differently each round cannot be matched to the claim it is about, so the next round cannot tell what is already settled and re-examines it instead.",
+      "description": "Every subject you were asked to check that you went and checked and found to hold — EVERY sentence of it, not most of them — each with where you read it. By id, not by sentence: a confirmation phrased differently each round cannot be matched to the subject it is about.",
       "items": {
-        "type": "string"
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "evidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The bracketed slug, without the brackets."
+          },
+          "evidence": {
+            "type": "array",
+            "description": "The file:line references you read that show it holds. Never empty: a confirmation citing nothing is not counted.",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "unchecked": {
+      "type": "array",
+      "description": "Each subject you were asked to check and COULD NOT check here, with why — its evidence is not in the code (production data, a deploy history, a service you cannot reach). A subject listed here is ruled on, visibly unconfirmed. Not for a subject you simply did not get to: that one you go and check.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "reason"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The bracketed slug, without the brackets."
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
       }
     },
     "findings": {

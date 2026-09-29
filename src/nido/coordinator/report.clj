@@ -2294,7 +2294,27 @@
    [:cites    [:vector {:min 1} string?]]
    [:claim    string?]
    [:needs    string?]
-   [:evidence {:optional true} [:vector string?]]])
+   [:evidence {:optional true} [:vector string?]]
+   ;; The subject the gap sits in, when it sits in one. A judgement that both found against an id
+   ;; and confirmed it has found, and only a kept id lets anything read it that way.
+   [:claim-id {:optional true} string?]])
+
+(def Ruling
+  "What a judge said about the subjects it was asked to check, beyond the findings — on a baseline
+   review and a design decision alike, and optional on both because a judgement from before rulings
+   were counted carries none.
+
+   :confirmed is only what held AND names where it was read: `:checked-at` gives, per confirmed id,
+   the file:line references the judge read to confirm it. A confirmation citing nothing is the
+   judge's word, and is counted as no ruling at all.
+   :unchecked is what the judge declared it could not check here, and why — evidence that is not
+   in the code (production data, a deploy history), say. A ruling, visibly not a confirmation.
+   :unruled is every check the judge left without any ruling: not confirmed with evidence, not
+   found against, not declared unchecked (nor, on a decision, :owed). Derived by the round, never
+   by the judge, and it is what stops the judgement holding — see `review-holds?` and `proceeds?`."
+  [[:checked-at {:optional true} [:map-of string? [:vector {:min 1} string?]]]
+   [:unchecked  {:optional true} [:vector [:map {:closed true} [:id string?] [:reason string?]]]]
+   [:unruled    {:optional true} [:vector string?]]])
 
 (def BaselineReview
   "The verification round over a baseline: is this true, and is it ENOUGH?
@@ -2332,6 +2352,7 @@
                 ;; names neither.
                 [:run-id     {:optional true} string?]
                 [:within-run {:optional true} string?]]
+        common (into common Ruling)
         shape  (fn [verdict & extra]
                  (into [:map {:closed true}]
                        (concat common [[:verdict [:= verdict]]] extra)))]
@@ -2482,12 +2503,17 @@
                 ;; element's identity in a project that declares a design.
                 [:code-identity      {:optional true} string?]
                 [:subject-identities {:optional true} [:map-of string? string?]]
+                ;; The claims the judge found SOUND as commitments the code at the tree it read does
+                ;; not yet meet — what the build owes. Ruled, and never settled: the tree they were
+                ;; confirmed at is one they are not true of.
+                [:owed               {:optional true} [:vector string?]]
                 ;; The run whose round appended this decision, by which that run's rounds are read
                 ;; back; a decision appended before it existed names none.
                 [:run-id             {:optional true} string?]
                 ;; What each declared stratum the design names concluded, read by a judge of its own
                 ;; before the deciding one — present when the design named any.
                 [:strata-read        {:optional true} [:vector StratumReading]]]
+        common (into common Ruling)
         shape  (fn [recommend & extra]
                  (into [:map {:closed true}]
                        (concat common [[:recommend [:= recommend]]] extra)))]
@@ -2872,6 +2898,9 @@
    cut alone may not hold a design. False when nothing broke on a round that did
    not say :proceed: a clean round reads as its own recommendation.
 
+   Never while the round left a check it was handed :unruled — a decision that did not rule on a
+   claim has not derived that nothing blocks it, whatever it recommended.
+
    ONE definition, over the record alone, for every reader that asks it: the
    judge that ends the round, the clearance writer and the boundary that admits
    its record, the position fold, and the gate that offers a grant. A reader
@@ -2879,8 +2908,9 @@
    be parked for a person whose grant nothing then accepted."
   [decision]
   (let [broken (filter #(= :broken (:status %)) (:checks decision))]
-    (boolean (or (= :proceed (:recommend decision))
-                 (and (seq broken) (every? #(= advisory-check (:check %)) broken))))))
+    (boolean (and (empty? (:unruled decision))
+                  (or (= :proceed (:recommend decision))
+                      (and (seq broken) (every? #(= advisory-check (:check %)) broken)))))))
 
 (def Fork
   "Where a child unit came from, written once on the child workstream's own ledger: the parent
@@ -3713,6 +3743,18 @@
    copy of the same set."
   #{:sufficient :accurate})
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
+  review-holds?
+  "Whether a baseline review says the baseline was checked against the code and held: a verdict in
+   `verdict-holds`, over a round that left none of its checks :unruled. A sufficient verdict with a
+   check nobody ruled on is a judge that stopped reading, not a baseline that held.
+
+   The record-level reading for every reader that asks whether a baseline was verified; the
+   verdict alone answers only what the judge SAID."
+  [review]
+  (boolean (and (verdict-holds (:verdict review))
+                (empty? (:unruled review)))))
+
 (def verdict-invalidates
   "The design verdicts that put the design itself in question rather than its
    execution — the two a human has to answer rather than read.
@@ -3760,8 +3802,21 @@
     "Needs a decision"
     "What no reviewer raised"))
 
+(defn- ruling->markdown
+  "What a judgement left without a confirmation, as lines under their own headings: the checks
+   nobody ruled on, and those the judge said it could not check. Rendered beside the confirmed list
+   because that list reads as the whole check, and it is only the part that held."
+  [{:keys [unruled unchecked]}]
+  (concat
+   (when (seq unruled)
+     (cons "\n## Not ruled on — neither confirmed nor found against"
+           (for [id unruled] (str "- " id))))
+   (when (seq unchecked)
+     (cons "\n## Not checkable here"
+           (for [{:keys [id reason]} unchecked] (str "- " id " — " reason))))))
+
 (defn- baseline-review->markdown
-  [{:keys [verdict baseline-seq reason confirmed findings]}]
+  [{:keys [verdict baseline-seq reason confirmed findings] :as review}]
   (str/join
    "\n"
    (remove nil?
@@ -3772,6 +3827,7 @@
       (when (seq confirmed)
         (cons "\n## Confirmed against the code"
               (for [c confirmed] (str "- " c))))
+      (ruling->markdown review)
       (record-findings->markdown (findings-heading verdict) findings)
       (when-not (verdict-holds verdict)
         ["\n> Re-survey — the design may be sound on a bad premise."])))))
@@ -3797,7 +3853,7 @@
                    (str "\n  - disputed: " (str/join "; " disputed))))))))
 
 (defn- design-decision->markdown
-  [{:keys [recommend design-seq reason checks asks findings trajectory]}]
+  [{:keys [recommend design-seq reason checks asks findings trajectory owed] :as decision}]
   (str/join
    "\n"
    (remove nil?
@@ -3811,6 +3867,10 @@
                     :held "✓" :broken "✗" :underivable "—")
              " " (name check) " — " note))
       (record-findings->markdown "What the derivation found" findings)
+      (ruling->markdown decision)
+      (when (seq owed)
+        (cons "\n## Sound commitments the code does not meet yet — owed to the build"
+              (for [id owed] (str "- " id))))
       (trajectory->markdown trajectory)
       ["\n## For you to decide" asks]))))
 

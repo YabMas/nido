@@ -3,6 +3,8 @@
   "What settles a subject, and every doubt that must not."
   (:require
    [babashka.fs :as fs]
+   [babashka.process]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.record.fork :as fork]
    [nido.coordinator.record.workstream :as ws]
@@ -20,10 +22,17 @@
    :modules [{:id "m1" :module "aggregate" :hides "summing order" :interface "a total"}]
    :load-bearing (vec claims)})
 
+(defn- read-at
+  "Where a judge says it read each of `ids` — the evidence a confirmation settles by."
+  [ids]
+  (zipmap ids (repeat ["src/a.clj:1"])))
+
 (defn- review
+  "A review; each id it confirms is confirmed with evidence unless `over` says where it was read."
   [seq-n baseline-seq & {:as over}]
   (merge {:format :baseline-review :seq seq-n :baseline-seq baseline-seq
           :verdict :sufficient :reason "ok" :code-identity "tree-a"}
+         (when (:confirmed over) {:checked-at (read-at (:confirmed over))})
          over))
 
 (defn- ledger
@@ -125,6 +134,14 @@
                                tree-a))
         "the module moved under the shared id, so the id names a subject nobody checked")))
 
+(deftest a-confirmation-that-cites-nothing-it-read-settles-nothing
+  ;; A bare id is the judge's word. Settled on it, one skim of a subject shielded it from every later
+  ;; round for as long as the tree held — and several such confirmations were false.
+  (let [l (ledger :baselines [(baseline 1 c1)]
+                  :reviews [(review 2 1 :confirmed ["c1"] :checked-at {})])]
+    (is (= {} (settled/settled [l] (baseline 3 c1) tree-a))
+        "a confirmation that names no file:line is re-checked, not banked")))
+
 ;; ── What a claim of a model rests on ────────────────────────────────────────
 
 (def ^:private agg {:id "canvas.a/agg" :sort :module :hides "summing order" :interface "a total"})
@@ -170,7 +187,8 @@
         ids       {"canvas.a/agg" "agg-1" "canvas.a/summers" "role-1"}
         l         [(ledger :designs [(design 1)]
                            :decisions [{:format :design-decision :seq 2 :design-seq 1 :recommend :proceed
-                                        :confirmed ["summers-once"] :subject-identities ids}])]]
+                                        :confirmed ["summers-once"] :checked-at (read-at ["summers-once"])
+                                        :subject-identities ids}])]]
     (is (= {"summers-once" (by 2)}
            (settled/settled l (design 3) {:subject-identities ids} (effective 3))))
     (is (= {} (settled/settled l (design 3) {:subject-identities (assoc ids "canvas.a/agg" "agg-2")}
@@ -184,6 +202,7 @@
         l      [(ledger :designs [(design 1)]
                         :decisions [{:format :design-decision :seq 2 :design-seq 1 :recommend :proceed
                                      :confirmed ["shape" "composition" "one-path"]
+                                     :checked-at (read-at ["shape" "composition" "one-path"])
                                      :code-identity "tree-a" :subject-identities ids}])]]
     (is (= {} (settled/settled [(ledger)] (design 3) {:code-identity "tree-a" :subject-identities ids}))
         "with nothing confirmed there is nothing settled — and a round is not stopped by asking")
@@ -195,14 +214,18 @@
 
 (deftest a-design-decision-confirms-as-a-review-does
   (let [design   (fn [n] {:format :design :strata [] :seq n
-                          :model {:elements [{:id "canvas.a/agg" :sort :module}] :claims [one-path]}})
+                          :model {:elements [agg] :claims [one-path]}})
         decision {:format :design-decision :seq 2 :design-seq 1 :recommend :proceed
-                  :confirmed ["one-path"] :subject-identities {"canvas.a/agg" "agg-1"}}
+                  :confirmed ["one-path"] :checked-at (read-at ["one-path"])
+                  :subject-identities {"canvas.a/agg" "agg-1"}}
         l        [(ledger :designs [(design 1)] :decisions [decision])]
         reading  {:subject-identities {"canvas.a/agg" "agg-1"}}]
     (is (= {"one-path" (by 2)} (settled/settled l (design 3) reading)))
     (testing "and a claim a design had confirmed carries to a baseline stating the same claim"
-      (is (= {"one-path" (by 2)} (settled/settled l (model-baseline 4 one-path) reading))))))
+      (is (= {"one-path" (by 2)} (settled/settled l (model-baseline 4 one-path) reading))))
+    (testing "only while the baseline says the same of what it is about"
+      (is (= {} (settled/settled l (assoc-in (model-baseline 4 one-path) [:model :elements 0 :hides] "more")
+                                 reading))))))
 
 (deftest a-confirmation-on-another-ledger-names-that-ledger
   (let [parent (ledger :ws-id "ws-parent"
@@ -289,3 +312,119 @@
                     ws/entries-of (fn [_ _ kind] (if (= k kind) [] (parsed kind)))]
         (is (nil? (settled/ledger :nido "ws-1"))
             (str "a " k " the index holds and nothing could read"))))))
+
+;; ── What the record says around a subject ──────────────────────────────────
+
+(def ^:private sibling {:id "sibling" :about ["canvas.a/agg"] :statement "the aggregate is the only writer"
+                        :falsified-by "a second writer" :evidence {:by :round}})
+
+(defn- confirmed-model [record ids]
+  [(ledger :baselines [record]
+           :reviews [(review 2 (:seq record) :confirmed ids :subject-identities {"canvas.a/agg" "agg-1"})])])
+
+(def ^:private at-agg-1 {:subject-identities {"canvas.a/agg" "agg-1"}})
+
+(deftest amending-a-sibling-claim-unsettles-a-claim-about-the-same-element
+  ;; A claim is judged beside the other claims about its elements. A sibling amended to say something
+  ;; that makes it false left it settled, because neither its words nor the element's code moved.
+  (let [l (confirmed-model (model-baseline 1 one-path sibling) ["one-path"])]
+    (is (= {"one-path" (by 2)} (settled/settled l (model-baseline 3 one-path sibling) at-agg-1)))
+    (is (= {} (settled/settled l (model-baseline 3 one-path (assoc sibling :statement "two writers now"))
+                               at-agg-1))
+        "the sibling moved, so what one-path was confirmed beside is gone")
+    (is (= {} (settled/settled l (model-baseline 3 one-path sibling
+                                                 {:id "added" :about ["canvas.a/agg"] :statement "new"
+                                                  :falsified-by "x" :evidence {:by :round}})
+                               at-agg-1))
+        "a sibling added about the same element unsettles it too")
+    (is (= {"one-path" (by 2)}
+           (settled/settled l (model-baseline 3 one-path sibling
+                                              {:id "elsewhere" :about ["canvas.b/other"] :statement "new"
+                                               :falsified-by "x" :evidence {:by :round}})
+                            at-agg-1))
+        "a claim about another element is not its context")))
+
+(deftest amending-the-records-own-element-entry-unsettles-the-claims-about-it
+  ;; An amender rewriting an element's interface in the record moves no code and no declaration, so
+  ;; neither identity saw it — and every claim about that element stayed settled.
+  (let [l (confirmed-model (model-baseline 1 one-path) ["one-path"])
+        amended (assoc-in (model-baseline 3 one-path) [:model :elements 0 :interface] "a total and a tax")]
+    (is (= {} (settled/settled l amended at-agg-1)))))
+
+(deftest a-changed-yardstick-unsettles-what-was-judged-against-the-old-one
+  ;; A design resting on a re-surveyed baseline, or written for a goal that moved, is judged against
+  ;; a different yardstick however identical its claims are.
+  (let [design   (fn [n base intent] {:format :design :strata [] :seq n :baseline {:seq base}
+                                      :intent {:seq intent} :model {:elements [agg] :claims [one-path]}})
+        decision {:format :design-decision :seq 5 :design-seq 4 :recommend :proceed
+                  :confirmed ["one-path"] :checked-at (read-at ["one-path"])
+                  :subject-identities {"canvas.a/agg" "agg-1"}}
+        l        [(ledger :designs [(design 4 2 1)] :decisions [decision])]]
+    (is (= {"one-path" (by 5)} (settled/settled l (design 6 2 1) at-agg-1)))
+    (is (= {} (settled/settled l (design 6 3 1) at-agg-1)) "the baseline was re-surveyed")
+    (is (= {} (settled/settled l (design 6 2 7) at-agg-1)) "the intent was replaced")))
+
+(deftest a-judgement-keeps-only-the-identities-its-record-rests-on
+  (let [role   {:id "canvas.a/summers" :sort :role :plays ["canvas.a/agg"]}
+        claim  {:id "summers-once" :about ["canvas.a/summers"] :statement "s" :falsified-by "f"
+                :evidence {:by :round}}
+        record {:format :baseline :strata [] :model {:elements [role] :claims [claim]}
+                :health [{:id "h1" :axis :design :observation "o"}]}]
+    (is (= #{"canvas.a/summers" "canvas.a/agg"}
+           (settled/rested-on record (assoc-in record [:model :elements] [agg role]))))
+    (is (= #{} (settled/rested-on (baseline 1 c1) (baseline 1 c1))) "a record with no model rests on none")))
+
+(deftest a-subject-stating-only-its-id-and-sort-has-nothing-to-check
+  (is (settled/nothing-to-check? [{:id "k" :sort :kind}]))
+  (is (settled/nothing-to-check? [{:id "k" :sort :operation :readings []}]))
+  (is (not (settled/nothing-to-check? [agg])) "a module states what it hides")
+  (is (not (settled/nothing-to-check? [one-path])) "a claim is always checkable")
+  (is (not (settled/nothing-to-check? ["the aggregate sums"])) "a whole-record field is too"))
+
+(deftest a-strata-identity-moves-with-the-code-of-its-modules
+  ;; A stratum's reading is about how the code of its modules is written, so a `sound` read at one
+  ;; tree is not settled at a tree where those modules moved.
+  (let [dir (fs/create-temp-dir)
+        f   (str (fs/path dir "src" "a.clj"))]
+    (try
+      (fs/create-dirs (fs/parent f))
+      (spit f "(ns a)")
+      (let [module  {:id "canvas.a/agg" :sort :fukan.common.vocab.code.module/Module
+                     :declaration "d1" :file "src/a.clj"}
+            stratum {:id "canvas.strata/core" :sort :canvas.vocab.strata/Stratum :declaration "s1"
+                     :refs {:provided-by ["canvas.a/agg"]}}
+            ids     #(get (settled/subject-identities {:status :listed :elements %} (str dir))
+                          "canvas.strata/core")
+            before  (ids [module stratum])]
+        (is (string? before))
+        (spit f "(ns a) (def x 1)")
+        (is (not= before (ids [module stratum])) "a providing module's code moved")
+        (is (nil? (ids [(dissoc module :file) stratum]))
+            "a provider paired with no file is a doubt, and a doubt identifies nothing"))
+      (finally (fs/delete-tree dir)))))
+
+(deftest a-plain-git-checkout-has-a-code-identity
+  ;; A project that is a git repository and no jj one had no identity at all, so nothing it confirmed
+  ;; could ever settle — and nothing said so.
+  (let [dir (str (fs/create-temp-dir))
+        git (fn [& args] (apply babashka.process/shell {:dir dir :out :string :err :string} "git" args))]
+    (try
+      (git "init" "-q")
+      (spit (str (fs/path dir "a.clj")) "(ns a)")
+      (spit (str (fs/path dir ".gitignore")) "target/\n")
+      (let [before (settled/code-identity dir)]
+        (is (string? before))
+        (is (= before (settled/code-identity dir)) "the same tree read twice is one identity")
+        (fs/create-dirs (fs/path dir "target"))
+        (spit (str (fs/path dir "target" "out.txt")) "build output")
+        (is (= before (settled/code-identity dir)) "an ignored file is not the code")
+        (spit (str (fs/path dir "a.clj")) "(ns a) (def x 1)")
+        (is (not= before (settled/code-identity dir)) "an uncommitted edit moves it")
+        (is (empty? (str/trim (:out (git "status" "--porcelain" "--untracked-files=no"))))
+            "reading the identity stages nothing into the repository's own index"))
+      (finally (fs/delete-tree dir)))))
+
+(deftest a-directory-in-no-repository-has-no-identity
+  (let [dir (str (fs/create-temp-dir))]
+    (try (is (nil? (settled/code-identity dir)))
+         (finally (fs/delete-tree dir)))))

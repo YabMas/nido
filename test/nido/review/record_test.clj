@@ -148,7 +148,9 @@
         p (record/design-prompt {:design d})]
     (is (str/includes? p "[rounded-once] a total is rounded exactly once"))
     (is (not (str/includes? p "Invariants:")))
-    (is (str/includes? p "Populate confirmed with the IDS of the claims"))))
+    (is (str/includes? p "Populate confirmed with the claims you checked"))
+    (is (str/includes? p "RULE ON EVERY CLAIM YOU ARE ASKED TO CHECK")
+        "a claim left without a ruling is what stops a proceed")))
 
 (deftest a-decision-records-the-claims-its-judge-confirmed
   (let [r (record/parse-design-decision
@@ -158,6 +160,29 @@
            4)]
     (is (= ["rounded-once" "lines-exact"] (:confirmed r)) "ids, brackets and blanks taken off")
     (is (report/validate-event :design-decision r) "and the ledger takes it")))
+
+(deftest a-commitment-the-code-does-not-meet-yet-is-owed-not-confirmed
+  ;; A pre-build round confirms claims as sound commitments, and settlement read them as true of the
+  ;; tree the judge read — so a later round at that tree skipped claims the code refutes.
+  (let [r (record/parse-design-decision
+           (json/generate-string {:recommend "proceed" :reason "r" :asks "worth it?"
+                                  :checks [{:check "relation_honest" :status "held" :note "n"}]
+                                  :findings [] :unchecked []
+                                  :confirmed [{:id "rounded-once" :evidence ["src/a.clj:3"] :at_this_tree "holds"}
+                                              {:id "lines-exact" :evidence ["src/a.clj:9"] :at_this_tree "owed"}]})
+           4)]
+    (is (= ["rounded-once"] (:confirmed r)))
+    (is (= {"rounded-once" ["src/a.clj:3"]} (:checked-at r)))
+    (is (= ["lines-exact"] (:owed r)))
+    (is (report/validate-event :design-decision r))))
+
+(deftest a-decision-leaving-a-claim-unruled-does-not-proceed
+  (let [d {:format :design-decision :recommend :proceed :design-seq 4 :reason "r" :asks "a"
+           :checks [{:check :relation-honest :status :held :note "n"}]}]
+    (is (report/proceeds? d))
+    (is (not (report/proceeds? (assoc d :unruled ["lines-exact"])))
+        "a proceed that never ruled on a claim it was handed has not derived that nothing blocks it")
+    (is (report/validate-event :design-decision (assoc d :unruled ["lines-exact"])))))
 
 (deftest the-decision-prompt-carries-the-four-derivations-and-the-answer-key
   (let [p (record/design-prompt
@@ -548,8 +573,12 @@
 
 (deftest the-judge-is-asked-for-ids-not-sentences
   (let [p (record/baseline-prompt {:baseline {:format :baseline}})]
-    (is (str/includes? p "IDS of what you actually went and checked"))
-    (is (str/includes? p "cannot be\nmatched to the claim"))))
+    (is (str/includes? p "with the file:line\nreferences you read"))
+    (is (str/includes? p "cannot be\nmatched to the claim"))
+    (is (str/includes? p "CONFIRMED MEANS EVERY SENTENCE HELD")
+        "a false clause the counterexample does not name is still a finding, not a note in reason")
+    (is (str/includes? p "never\nfor a subject outside this round's checks")
+        "the every-caller rule refutes only what the round checks")))
 
 ;; ── a record that names its strata ───────────────────────────────────────────
 ;; The era a record was written in is read off :strata, and it picks the yardstick: the stratified

@@ -7,6 +7,7 @@
     "checks",
     "findings",
     "confirmed",
+    "unchecked",
     "asks"
   ],
   "properties": {
@@ -110,9 +111,57 @@
     },
     "confirmed": {
       "type": "array",
-      "description": "The IDS of the design claims you checked and found to hold — the bracketed slugs, without the brackets. Empty when the design lists invariants with no ids. Ids, not sentences: a confirmation worded differently each round cannot be matched to the claim it is about.",
+      "description": "Every claim you were asked to check that you went and checked and found to hold, each with where you read it and whether the code you read already makes it true. By id, not by sentence. Empty when the design lists invariants with no ids.",
       "items": {
-        "type": "string"
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "evidence",
+          "at_this_tree"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The bracketed slug, without the brackets."
+          },
+          "evidence": {
+            "type": "array",
+            "description": "The file:line references you read that show it holds. Never empty: a confirmation citing nothing is not counted.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "at_this_tree": {
+            "type": "string",
+            "enum": [
+              "holds",
+              "owed"
+            ],
+            "description": "holds: the code you read already makes the claim true. owed: the claim is a sound commitment, and the code you read does not meet it yet — the build has to make it true."
+          }
+        }
+      }
+    },
+    "unchecked": {
+      "type": "array",
+      "description": "Each subject you were asked to check and COULD NOT check here, with why — its evidence is not in the code (production data, a deploy history, a service you cannot reach). A subject listed here is ruled on, visibly unconfirmed. Not for a subject you simply did not get to: that one you go and check.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "reason"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The bracketed slug, without the brackets."
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
       }
     },
     "asks": {

@@ -1685,6 +1685,7 @@
    ::still-refuted "the same claims are refuted again after being corrected — the amender did its work and the judge found another way each one is false, so these are not going to be settled by wording"
    :unfixable "everything fixable was fixed; what remains was raised three rounds running and did not move — these are for you"
    :disputed   "the judge restated a finding the amender objected to twice — neither can settle it, so you do"
+   :unruled    "the judge would have ended the run leaving checks it neither confirmed, refuted nor called uncheckable, and asked again it still did not rule — the record does not hold over them; the report's judge phase names them"
    :amend-noop "the amender produced no record — nothing was appended"
    :amend-unreadable "the amender's answer would not parse as EDN"
    :amend-invalid "the ledger refused the amended record, and refused the amender's repairs of it too"

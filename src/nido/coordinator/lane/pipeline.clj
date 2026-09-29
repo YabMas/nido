@@ -823,6 +823,9 @@
    :cleared              :advance   ; a proceeding decision that owed nobody a grant
    :proceed              :escalate  ; the design round's ask, when a person IS owed one
    :disputed             :escalate  ; judge and amender deadlocked
+   ;; A record round that would have held, asked twice, and left checks without a ruling both
+   ;; times. The record does not hold over them, and another round re-reads the same judge.
+   :unruled              :escalate
    :underivable          :escalate  ; no yardstick to derive against
    ;; A design round that would not proceed, derived every check, broke none, and made no
    ;; finding an amender could act on. Not :retry: the decision is already on the ledger,

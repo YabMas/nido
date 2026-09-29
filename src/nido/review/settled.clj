@@ -1,18 +1,22 @@
-;; src/nido/review/settled.clj
 (ns nido.review.settled
   "Which subjects of a record a round need not ask its judge to check.
 
    The record-side counterpart of `nido.review.cache`, with the same bias: a subject re-checked for
    nothing costs one judge's attention, a subject skipped when it should not have been lets a false
    claim stand under a design. So every doubt resolves to checking — no identity, an unreadable
-   ledger, a round that read no single tree, a retracted record, a finding at the key.
+   ledger, a round that read no single tree, a retracted record, a finding at the key, a
+   confirmation that cites nothing it read.
 
    Derived, never stored. What it reads are observations only a judge can make, and each is on the
-   judgement already: the ids it says it checked, and what it read them against. Whether a subject
-   is settled is a fold over those, asked afresh each round.
+   judgement already: the ids it says it checked, where it read each, and what it read them against.
+   Whether a subject is settled is a fold over those, asked afresh each round.
 
-   A subject is keyed by its id, its content, and what it was checked against. The id alone is not
-   a subject — an id confirmed and then amended names a claim nobody has checked. What it was
+   A subject is keyed by its id, its content, what the record it sits in says around it, and what it
+   was checked against. The id alone is not a subject — an id confirmed and then amended names a
+   claim nobody has checked. Nor is the content alone: a claim is judged in the context of its
+   record, so the record's own entries for the elements it is about, the other claims about those
+   elements, and the intent and baseline the record cites are part of the key — amending any of
+   them leaves a claim whose words did not move unchecked under what it now sits beside. What it was
    checked against depends on what it rests on. A claim or element of a model, in a project that
    declares a design, rests on the declared elements it names: each one's declaration and the code
    its module pairs with, so a change anywhere else leaves it settled. Anything else — a health
@@ -22,9 +26,11 @@
 
    A confirmation counts from a baseline review or a design decision, on the workstream's own
    ledger, on the parent ledger its :fork entry cites, and on the child ledger a merged design's
-   :merges cites."
+   :merges cites — and only where the judgement says what it read to confirm it (`:checked-at`). A
+   bare id is the judge's word, and a word settles nothing."
   (:require
    [babashka.fs :as fs]
+   [babashka.process :as p]
    [clojure.string :as str]
    [nido.coordinator.record.fork :as fork]
    [nido.coordinator.record.workstream :as ws]
@@ -36,27 +42,65 @@
    `SymlinkId(\"…\")`, one per side of a conflict."
   #"Id\(\"[0-9a-f]+\"\)")
 
+(defn- git!
+  "Run git in `dir`, answering {:exit :out}. `index` names the index file it stages into."
+  [dir index & args]
+  (let [{:keys [exit out]} (apply p/shell {:dir dir :out :string :err :string :continue true
+                                           :extra-env (cond-> {} index (assoc "GIT_INDEX_FILE" index))}
+                                  "git" args)]
+    {:exit exit :out (str/trim (str out))}))
+
+(defn- git-identity
+  "A hash of the tree git would commit from `cwd` — every tracked and untracked file that is not
+   ignored — or nil when `cwd` is in no git repository.
+
+   Staged into a copy of the repository's index, so the real one is never touched and git's stat
+   cache still spares it re-hashing every file."
+  [cwd]
+  (let [top (git! cwd nil "rev-parse" "--show-toplevel")]
+    (when (zero? (long (:exit top)))
+      (let [tmp (str (fs/create-temp-file {:prefix "nido-identity-" :suffix ".index"}))]
+        (try
+          (let [idx (:out (git! cwd nil "rev-parse" "--path-format=absolute" "--git-path" "index"))]
+            (if (and (not (str/blank? idx)) (fs/exists? idx))
+              (fs/copy idx tmp {:replace-existing true})
+              (fs/delete-if-exists tmp))
+            (when (zero? (long (:exit (git! (:out top) tmp "add" "-A"))))
+              (let [{:keys [exit out]} (git! (:out top) tmp "write-tree")]
+                (when (and (zero? (long exit)) (re-matches #"[0-9a-f]{40,64}" out))
+                  (digest/sha256-hex (str "git-tree " out))))))
+          (finally (fs/delete-if-exists tmp)))))))
+
 (defn ^{:malli/schema [:=> [:cat :Path] [:maybe :string]]}
   code-identity
-  "A hash of the tree jj lists at `cwd`, or nil.
+  "A hash of the tree at `cwd`, or nil.
 
-   Listing the tree snapshots the working copy first, so an uncommitted edit moves
-   the hash; a description edit, or a rebase that leaves the tree as it was, does
-   not. The executable bit and symlinks are part of the listing and move it too.
+   In a jj repository it is the tree jj lists. Listing it snapshots the working copy first, so an
+   uncommitted edit moves the hash; a description edit, or a rebase that leaves the tree as it was,
+   does not. The executable bit and symlinks are part of the listing and move it too. In a plain git
+   repository — which jj is never asked about again once it has said it is not one — it is the tree
+   git would commit from the working copy: tracked and untracked files, ignored ones left out.
+
+   jj is asked first and git only when jj says `cwd` is in no jj repository. A jj workspace nested
+   inside a git checkout is a directory git would silently read as the OUTER repository, so a jj
+   failure inside one is nil, never git's answer about somewhere else.
 
    `jj debug tree` is not an interface jj promises to keep. A listing line with no
    content id yields nil rather than a hash, because a format that dropped the ids
    would otherwise hash two different trees to one value — the single failure this
-   must not have. Anything else unexpected (not a jj repo, an empty tree, a throw)
-   is nil too."
+   must not have. Anything else unexpected (an empty tree, a throw) is nil too."
   [cwd]
   (try
     (let [{:keys [exit out]} (jj/jj! cwd "debug" "tree" "-r" "@")]
-      (when (and (zero? exit)
-                 (not (str/blank? out))
-                 (every? #(re-find content-id %) (str/split-lines out)))
-        (digest/sha256-hex out)))
+      (if (zero? (long exit))
+        (when (and (not (str/blank? out))
+                   (every? #(re-find content-id %) (str/split-lines out)))
+          (digest/sha256-hex out))
+        (when-not (zero? (long (:exit (jj/jj! cwd "root"))))
+          (git-identity cwd))))
     (catch Throwable _ nil)))
+
+(defn- stratum? [row] (= "stratum" (some-> (:sort row) name str/lower-case)))
 
 (defn ^{:malli/schema [:=> [:cat :DeclaredElements :Path] [:maybe [:map-of :string :string]]]}
   subject-identities
@@ -69,10 +113,14 @@
    cannot be read hashes as unreadable rather than as absent, so a later reading that can read it
    differs.
 
+   A stratum's reading is about the code of the modules providing it, so their files are part of its
+   identity: a `sound` read at one tree is not settled at a tree where its modules moved.
+
    A module or operation listed with no file has no identity. It is code-bearing, so a listing that
    pairs it with nothing either reads a module not yet realized or dropped code it could not read
-   — and the two look alike from here, so it is a doubt, and a doubt settles nothing. A role, or a
-   kind no module holds, has no code of its own and is identified by its declaration alone."
+   — and the two look alike from here, so it is a doubt, and a doubt settles nothing. A stratum one
+   of whose providers is such a module has none either. A role, or a kind no module holds, has no
+   code of its own and is identified by its declaration alone."
   [listing worktree]
   (when (= :listed (:status listing))
     (let [content      (memoize
@@ -80,15 +128,23 @@
                           (try (digest/sha256-hex
                                 (slurp (str (if (fs/absolute? file) file (fs/path worktree file)))))
                                (catch Throwable _ "unreadable"))))
-          code-bearing #(contains? #{"module" "operation"} (str/lower-case (name (:sort %))))]
+          code-bearing #(contains? #{"module" "operation"} (str/lower-case (name (:sort %))))
+          by-id        (group-by :id (:elements listing))
+          providers    (fn [rows]
+                         (for [row rows :when (stratum? row)
+                               id  (get-in row [:refs :provided-by])]
+                           [id (some :file (get by-id id))]))]
       (into {}
             (keep (fn [[id rows]]
-                    (when-not (some #(and (code-bearing %) (nil? (:file %))) rows)
-                      [id (digest/sha256-hex
-                           (pr-str (sort (map (fn [{:keys [sort declaration file]}]
-                                                [(str sort) (str declaration) (when file (content file))])
-                                              rows))))])))
-            (group-by :id (:elements listing))))))
+                    (let [provided (providers rows)]
+                      (when-not (or (some #(and (code-bearing %) (nil? (:file %))) rows)
+                                    (some (comp nil? second) provided))
+                        [id (digest/sha256-hex
+                             (pr-str [(sort (map (fn [{:keys [sort declaration file]}]
+                                                   [(str sort) (str declaration) (when file (content file))])
+                                                 rows))
+                                      (sort (map (fn [[pid file]] [pid (content file)]) provided))]))]))))
+            by-id))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   subjects
@@ -107,6 +163,18 @@
                             (get-in record [:model :claims]) (get-in record [:model :elements])))
       (some? (:shape record))       (add "shape" (:shape record))
       (some? (:composition record)) (add "composition" (:composition record)))))
+
+(defn ^{:malli/schema [:=> [:cat [:vector :any]] :boolean]}
+  nothing-to-check?
+  "Whether a subject carries nothing a judge could check: every part of it an element of a model
+   stating no more than its id and sort — a bare kind or operation, which says what exists and
+   nothing about it. Such a subject is shown for what the claims are about and is never owed a
+   ruling; a judge has nothing to confirm it by and nothing to refute."
+  [content]
+  (every? #(and (map? %) (contains? % :sort) (not (contains? % :about))
+                (every? (fn [k] (let [v (get % k)] (or (nil? v) (and (coll? v) (empty? v)))))
+                        [:hides :interface :readings :plays]))
+          content))
 
 (def ^:private ledger-kinds [:baseline-review :design-decision :baseline :design :retraction])
 
@@ -164,6 +232,44 @@
       (set (mapcat #(if (contains? % :about) (mapcat played (:about %)) (played (:id %)))
                    content)))))
 
+(defn ^{:malli/schema [:=> [:cat :map :map] [:set :string]]}
+  rested-on
+  "Every declared element some subject of `record` rests on, its roles played as `effective` plays
+   them — the only identities a judgement over `record` needs to keep. Empty for a record with no
+   model."
+  [record effective]
+  (into #{} (mapcat (fn [[_ content]] (rests-on record effective content))) (subjects record)))
+
+(defn- about
+  "The ids of the elements `content` is about in `record`'s own model: a claim's :about, an
+   element's own id, and the players the record gives any of them."
+  [record content]
+  (let [ids   (set (mapcat #(cond (contains? % :about) (:about %)
+                                  (contains? % :sort)  [(:id %)])
+                           (filter map? content)))
+        plays (mapcat :plays (filter (comp ids :id) (get-in record [:model :elements])))]
+    (into ids plays)))
+
+(defn- context
+  "What `record` says around its subject `id` that a judgement of it was made beside: the record's
+   own entries for the elements in `ids`, and every other claim of its own about one of them. Both
+   are the record's words and not the tree's, so no identity of the code moves when an amendment
+   rewrites them."
+  [record id ids]
+  {:elements (into (sorted-map) (keep #(when (ids (:id %)) [(:id %) %]))
+                   (get-in record [:model :elements]))
+   :siblings (into #{} (filter #(and (not= id (:id %)) (some ids (:about %))))
+                   (get-in record [:model :claims]))})
+
+(defn- cites-as?
+  "Whether `judged` cites the intent and the baseline `record` cites, wherever `record` cites one. A
+   design resting on a re-surveyed baseline, or on a goal that moved, is judged against a different
+   yardstick; a record citing neither asks nothing of the judged one."
+  [record judged]
+  (every? (fn [k] (or (nil? (get-in record [k :seq]))
+                      (= (get-in record [k :seq]) (get-in judged [k :seq]))))
+          [:intent :baseline]))
+
 (defn- at-key?
   "`judgement` read the subject as `reading` would now: the whole tree was this tree, or every
    element `needed` names had the identity it has now."
@@ -175,6 +281,12 @@
                        (and now (= now (get-in judgement [:subject-identities %]))))
                     needed)))))
 
+(defn- checked?
+  "Whether `judgement` confirmed `id` and said what it read to do so."
+  [judgement id]
+  (and (some #{id} (:confirmed judgement))
+       (seq (get-in judgement [:checked-at id]))))
+
 (defn ^{:malli/schema [:function
                        [:=> [:cat [:maybe [:vector :map]] :map :map] :map]
                        [:=> [:cat [:maybe [:vector :map]] :map :map :map] :map]]}
@@ -183,13 +295,14 @@
    judge is about to read — as `{id {:ws-id :seq}}`, naming the latest judgement that settled each.
 
    A subject is settled when a baseline review or a design decision, on any of `ledgers`, named its
-   id in :confirmed while judging a record nobody retracted whose subject with that id is identical
-   to this one, at this subject's key — and no judgement at that same content and key has found
-   against it since. The newest judgement at the key that bears on the subject decides, ordered by
-   :at whichever ledger it is on: a finding stands until a later confirmation answers it, so a record
+   id in :confirmed and said where it read it (:checked-at), while judging a record nobody retracted
+   that carries that subject identically, around the same context, under the same cited intent and
+   baseline, at this subject's key — and no judgement at that same content and key has found against
+   it since. The newest judgement at the key that bears on the subject decides, ordered by :at
+   whichever ledger it is on: a finding stands until a later confirmation answers it, so a record
    amended elsewhere in answer to a finding leaves the subject to be confirmed again rather than
    checked for ever. A holding verdict settles nothing by itself; only an id its judge says it
-   checked does.
+   checked, and where, does.
 
    Only `record`'s own subjects are candidates, but a role's players are read from `effective` — for
    a design, its model laid over its baseline's, since a role it keeps is not restated and a claim
@@ -205,12 +318,16 @@
                                           (map (juxt identity :design-seq) decisions))
                         :let [r (get records cited)]
                         :when r]
-                    {:ws-id ws-id :judgement j :subjects (subjects r)
+                    {:ws-id ws-id :judgement j :record r :subjects (subjects r)
                      :retracted? (contains? retracted cited)})]
        (into {}
              (keep (fn [[id content]]
                      (let [needed  (rests-on record effective content)
+                           ids     (about record content)
+                           around  (context record id ids)
                            at-key  (filter #(and (= content (get (:subjects %) id))
+                                                 (= around (context (:record %) id ids))
+                                                 (cites-as? record (:record %))
                                                  (at-key? reading needed (:judgement %)))
                                            judged)
                            ;; What bears on the subject at this key: a finding over any record, and a
@@ -218,7 +335,7 @@
                            bearing (keep (fn [{j :judgement :as m}]
                                            (cond
                                              (some #(= id (:claim-id %)) (:findings j)) (assoc m :found? true)
-                                             (and (not (:retracted? m)) (some #{id} (:confirmed j))) m))
+                                             (and (not (:retracted? m)) (checked? j id)) m))
                                          at-key)
                            latest  (last (sort-by (fn [{j :judgement}] [(str (:at j)) (or (:seq j) 0)])
                                                   bearing))]

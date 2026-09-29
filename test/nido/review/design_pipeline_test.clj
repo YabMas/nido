@@ -249,6 +249,22 @@
       (is (= :escalate (:control out)))
       (is (= :proceed (:status out))))))
 
+(deftest a-proceed-over-unruled-claims-is-asked-again-then-refused
+  ;; A proceed reached the person with claims the judge was handed and never ruled on, and nothing
+  ;; recorded that they were never checked. Asked once more; then the run ends :unruled, and the
+  ;; decision does not proceed on any reader's reading of it.
+  (let [appended (atom [])]
+    (with-redefs [record/design-decision! (fn [_] (assoc (decision :proceed :checks [(check :relation-honest :held)])
+                                                        :unruled ["lines-exact"]))
+                  record/append! (fn [_ r] (swap! appended conj r) nil)]
+      (let [first (run record/design-judge-stage (ctx))]
+        (is (= :next-round (:control first)))
+        (is (nil? (:status first)))
+        (is (= 1 (count @appended)) "the round is on the ledger all the same")
+        (let [second (run record/design-judge-stage (ctx :carry (:carry first)))]
+          (is (= :unruled (:status second)))
+          (is (= :escalate (:control second))))))))
+
 (deftest a-clearance-the-ledger-kept-refusing-is-not-an-ask
   ;; Contention is not a grant being owed. Escalating as :proceed would park a
   ;; design whose declarations owe nobody on interference alone.
@@ -1317,6 +1333,12 @@
   (is (nil? (record/parse-stratum-reading (json/generate-string {:verdict "proceed" :reason "r"}) "s")))
   (is (nil? (record/parse-stratum-reading (json/generate-string {:verdict "fits" :reason " "}) "s")))
   (is (nil? (record/parse-stratum-reading "not json" "s"))))
+
+(deftest a-runs-figures-count-the-checks-left-without-a-ruling
+  (let [f (record/run-figures [{:format :baseline-review :verdict :sufficient :unruled ["h1"]}
+                               {:format :design-decision :checks [] :unruled ["h1" "c2"]}])]
+    (is (= {"c2" 1 "h1" 2} (:unruled f))))
+  (is (nil? (:unruled (record/run-figures [{:format :baseline-review :verdict :sufficient}])))))
 
 (deftest a-runs-level-figures-are-read-off-its-decisions
   (let [f (record/run-figures [{:format :design-decision :checks []

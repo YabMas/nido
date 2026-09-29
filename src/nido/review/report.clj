@@ -406,6 +406,10 @@
       ;; fork's or a merge's confirmations are on another ledger — the one account of a
       ;; skip a reader can check against the ledger, rather than a quiet round that
       ;; looked at less.
+      ;; :checks is how many subjects the judge WAS asked about, :unruled which of them it left
+      ;; without a ruling, and :unbanked why nothing it confirmed can settle, when nothing can —
+      ;; a round whose confirmations bank looks exactly like one whose confirmations are lost,
+      ;; unless the report says which.
       ;; :detail and :answer are what an outcome carries in place of a review, and
       ;; the ledger holds neither: :detail says why there is no verdict, :answer is
       ;; a judgment that was made and refused (`:code-moved`), findings and all.
@@ -417,6 +421,10 @@
                 (seq (:settled ctx))
                 (assoc :settled (mapv (fn [[id {:keys [ws-id seq]}]] {:id id :by seq :ws-id ws-id})
                                       (sort-by key (:settled ctx))))
+                (:checks ctx)                           (assoc :checks (:checks ctx))
+                (seq (get-in ctx [:record :unruled]))   (assoc :unruled (get-in ctx [:record :unruled]))
+                (seq (get-in ctx [:record :unchecked])) (assoc :unchecked (get-in ctx [:record :unchecked]))
+                (:unbanked ctx)                         (assoc :unbanked (:unbanked ctx))
                 (and (get-in ctx [:record :outcome]) (get-in ctx [:record :detail]))
                 (assoc :detail (get-in ctx [:record :detail]))
                 (get-in ctx [:record :answer])
