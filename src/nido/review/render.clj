@@ -483,10 +483,12 @@
   [ph]
   (if-let [v (:verdict ph)]
     (let [n (count (:findings ph))
-          u (count (:unruled ph))]
+          u (count (:unruled ph))
+          r (count (:read-once ph))]
       (str v (when (pos? n)
                (str " · " n " finding" (when (not= 1 n) "s")))
            (when (pos? u) (str " · " u " unruled"))
+           (when (pos? r) (str " · " r " read once"))
            (settled-detail (:settled ph))))
     (when-let [o (:outcome ph)]
       (str o " — no judgment" (settled-detail (:settled ph))))))

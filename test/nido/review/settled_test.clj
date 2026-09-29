@@ -428,3 +428,46 @@
   (let [dir (str (fs/create-temp-dir))]
     (try (is (nil? (settled/code-identity dir)))
          (finally (fs/delete-tree dir)))))
+
+;; ── Two readings, and what a reversal overturns ─────────────────────────────
+
+(deftest a-subject-settles-on-its-second-consecutive-confirmation
+  ;; One judge held and broke the same claim a round apart on text nobody touched, and a record
+  ;; loop ended on the one clean reading between. A single confirmation is a sample.
+  (let [once  (ledger :baselines [(baseline 1 c1)] :reviews [(review 2 1 :confirmed ["c1"])])
+        twice (ledger :baselines [(baseline 1 c1)]
+                      :reviews [(review 2 1 :confirmed ["c1"]) (review 4 1 :confirmed ["c1"])])]
+    (is (= #{"c1"} (settled/single-readings [once] (baseline 5 c1) tree-a))
+        "one reading is still put to the judge")
+    (is (= #{} (settled/single-readings [twice] (baseline 5 c1) tree-a))
+        "the second consecutive reading at the same key settles it")
+    (testing "a finding between two confirmations ends the pair"
+      (let [l (ledger :baselines [(baseline 1 c1)]
+                      :reviews [(review 2 1 :confirmed ["c1"])
+                                (review 3 1 :verdict :falsified :findings [{:claim-id "c1"}])
+                                (review 4 1 :confirmed ["c1"])])]
+        (is (= #{"c1"} (settled/single-readings [l] (baseline 5 c1) tree-a)))))
+    (testing "a confirmation at another tree is no first reading here"
+      (let [l (ledger :baselines [(baseline 1 c1)]
+                      :reviews [(review 2 1 :confirmed ["c1"] :code-identity "tree-b")
+                                (review 4 1 :confirmed ["c1"])])]
+        (is (= #{"c1"} (settled/single-readings [l] (baseline 5 c1) tree-a)))))))
+
+(deftest only-a-confirmation-that-says-where-it-read-counts
+  (is (= #{"c1"} (settled/checked-confirmations
+                  {:confirmed ["c1" "c2"] :checked-at {"c1" ["src/a.clj:1"]}}))))
+
+(deftest an-earlier-runs-finding-is-what-a-confirmation-now-overturns
+  (let [found (fn [n run] (review n 1 :verdict :falsified :run-id run
+                                  :findings [{:claim-id "c1" :cites ["x"] :claim "a second path"}]))]
+    (testing "the newest finding by another run, with whether the subject moved since"
+      (let [l (ledger :baselines [(baseline 1 c1)] :reviews [(found 2 "old") (found 4 "older")])]
+        (is (= {"c1" {:ws-id "ws-1" :seq 4 :restated? false
+                      :finding {:claim-id "c1" :cites ["x"] :claim "a second path"}}}
+               (settled/prior-findings [l] (baseline 5 c1) "now")))
+        (is (true? (get-in (settled/prior-findings [l] (baseline 5 (assoc c1 :property "reworded")) "now")
+                           ["c1" :restated?]))
+            "restated, so the judge knows a confirmation is not a pure reversal")))
+    (testing "this run's own findings reached its amender already, and are left out"
+      (let [l (ledger :baselines [(baseline 1 c1)] :reviews [(found 2 "now")])]
+        (is (= {} (settled/prior-findings [l] (baseline 5 c1) "now")))))))

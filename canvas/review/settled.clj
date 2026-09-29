@@ -28,6 +28,11 @@
    module pairs with — so a change elsewhere in the tree leaves it settled. Everything else, and
    every subject in a project that declares no design, rests on the whole tree.
 
+   One confirmation is a reading, not a settlement: a round skips a subject only on its second
+   consecutive confirmation at the same content and key. A judge is not deterministic at an
+   unchanged record, so the first is a sample; the two need not be in one run, and a finding
+   between them ends the pair.
+
    Confirmations count from the workstream's own ledger, from the parent ledger its :fork entry
    cites, and from the child ledger a merged design's :merges cites.
 
@@ -80,9 +85,32 @@
      judge is about to read — each with the workstream and seq of the judgement that settled it.
      Pure: the ledgers are handed in, and nil ledgers or a reading with no identity settle nothing.
      Only the record's own subjects are candidates; a role's players are read from the effective
-     record when one is given — a design's model laid over its baseline's — and the record's when not."
+     record when one is given — a design's model laid over its baseline's — and the record's when not.
+     Names every subject whose latest judgement at the key confirmed it; those on one reading are
+     `single-readings`, and a round still asks them."
     {:signature [:function
                  [:=> [:catn [:ledgers [:maybe [:vector :map]]] [:record :map] [:reading :map]] :map]
                  [:=> [:catn [:ledgers [:maybe [:vector :map]]] [:record :map] [:reading :map]
                        [:effective :map]] :map]]
+     :delegates [subjects]})
+  (Operation single-readings
+    "The subjects `settled` names on one reading: the confirmation standing at the key is not
+     itself preceded there by another. Still put to the judge; the next confirmation settles them.
+     Pure."
+    {:signature [:function
+                 [:=> [:catn [:ledgers [:maybe [:vector :map]]] [:record :map] [:reading :map]]
+                  [:set :string]]
+                 [:=> [:catn [:ledgers [:maybe [:vector :map]]] [:record :map] [:reading :map]
+                       [:effective :map]] [:set :string]]]
+     :delegates [subjects]})
+  (Operation checked-confirmations
+    "The ids a judgement confirmed and said where it read — the only confirmations that count.
+     Pure."
+    {:signature [:=> [:catn [:judgement :map]] [:set :string]]})
+  (Operation prior-findings
+    "For each subject of a record, the newest finding against its id by a judgement of another run,
+     at any content or key, with the judgement that made it and whether the subject was restated
+     since — what confirming it now would overturn. Pure."
+    {:signature [:=> [:catn [:ledgers [:maybe [:vector :map]]] [:record :map]
+                  [:run-id [:maybe :string]]] :map]
      :delegates [subjects]}))

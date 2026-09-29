@@ -203,6 +203,34 @@
                disputes))
          "\n")))
 
+(defn ^{:malli/schema [:=> [:cat :any] :string]}
+  prior-findings-block
+  "The last finding an earlier run made against each subject this round checks, put in front of
+   the judge — `nido.review.settled/prior-findings`, less the subjects the round does not ask.
+
+   A judge reading a record cold has reversed its own held/broken on text nobody touched, and the
+   reversal was recorded as if nothing had been said before. Shown, a confirmation is judged
+   against the finding it overturns. Shown as a finding and not as a verdict: it may be the one
+   that was wrong, so the judge is told to look, not to defer. Whether the subject was restated
+   since is said, and how it was is not — the judge still reads the record as it stands
+   (`judged-alone`)."
+  [prior]
+  (when (seq prior)
+    (str "\nFOUND AGAINST BEFORE — an earlier run's judge found against these subjects, and\n"
+         "they have not been confirmed twice since. That finding is not an authority and may\n"
+         "have been wrong. But confirming one of them now overturns it, so confirm one only\n"
+         "when what you read answers the finding, and cite what answers it in that id's\n"
+         "evidence. If the finding still holds, report it again under the same id.\n\n"
+         (str/join
+          "\n\n"
+          (for [[id {n :seq :keys [finding restated?]}] (sort-by key prior)]
+            (str "- [" id "] found at entry " n
+                 (if restated? " — the subject has been restated since" " — the subject reads the same now")
+                 "\n  it found: " (:claim finding)
+                 (when (seq (:cites finding)) (str "\n  citing: " (str/join ", " (:cites finding))))
+                 (when (seq (:evidence finding)) (str "\n  evidence: " (str/join ", " (:evidence finding)))))))
+         "\n")))
+
 (defn ^{:malli/schema [:=> [:cat] :string]}
   lens-block
   "The perspectives in play, with their verdicts and where each comes from.
@@ -520,7 +548,7 @@
    subjects follow the checks (`settled-block`), because the record-level
    derivations are still made against the whole record. Below, `full` is the
    record and `baseline` is its checks."
-  [{:keys [baseline disputes settled stance]}]
+  [{:keys [baseline disputes settled stance prior]}]
   (let [full     (judged-alone baseline)
         baseline (checks-of full (set (keys settled)))]
    (str
@@ -675,6 +703,7 @@
    "Return sufficient when they held and the four derivations are makeable. Do\n"
    "not manufacture findings to look thorough — on this round, thoroughness is\n"
    "checking the claims that are there, not finding more to say."
+   (prior-findings-block (apply dissoc prior (keys settled)))
    (disputes-block disputes)
    ;; Last thing in the window before the judge starts work. The level is stated
    ;; near the top, thousands of tokens back by the time the record has been
@@ -796,7 +825,7 @@
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   design-prompt
   "The decision prompt. Derives what can be derived; hands the rest over."
-  [{:keys [design baseline stance intent disputes settled levels]}]
+  [{:keys [design baseline stance intent disputes settled levels prior]}]
   (let [design   (judged-alone design)
         baseline (judged-alone baseline)]
    (str
@@ -921,6 +950,7 @@
    "asks is REQUIRED whatever you recommend: state the question the human still\n"
    "has to answer, in one or two sentences, with everything you derived already\n"
    "taken off the table. Never answer it yourself."
+   (prior-findings-block (apply dissoc prior (keys settled)))
    (disputes-block disputes)
    (level-reminder :commitment))))
 
@@ -1318,7 +1348,8 @@
    the tree did not move — they are what a model claim is settled on in a
    project that declares a design, and only those the baseline's subjects rest on. Settled subjects
    are shown and are not checks; the review's ruling is held to its checks by `rule`, so a check the
-   judge left without one is named under :unruled. And a round handed
+   judge left without one is named under :unruled. `:prior` is what earlier runs found against
+   the subjects it checks (`prior-findings-block`). And a round handed
    settled subjects whose tree moved appends nothing — it answers
    {:outcome :code-moved :answer <the review>} — because those subjects were
    settled against a tree its judge did not read throughout.
@@ -1327,7 +1358,7 @@
    judge reads before a judge is launched, and before either identity is read —
    see `undeclared-subjects`."
   [{:keys [cwd code-cwd run-id label disputes baseline settled listing subject-identities
-           reviewer] :as opts}]
+           reviewer prior] :as opts}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [baseline (or baseline (ws/latest-entry project ws-id :baseline))]
       (if (baseline-round-worth-running? baseline)
@@ -1342,6 +1373,7 @@
                                                 :prompt (baseline-prompt {:baseline baseline
                                                                           :disputes disputes
                                                                           :settled settled
+                                                                          :prior prior
                                                                           :stance (stages/read-stance project)})})
                                    #(parse-baseline-review % (:seq baseline)))
                   after    (settled/code-identity code-cwd)
@@ -1553,7 +1585,7 @@
    settled claims whose tree moved appends nothing, answering
    {:outcome :code-moved :answer <the decision>}."
   [{:keys [cwd code-cwd run-id label disputes design settled listing subject-identities
-           reviewer] :as opts}]
+           reviewer prior] :as opts}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [design (or design (ws/latest-entry project ws-id :design))]
       (or (unverified-premise project ws-id design)
@@ -1580,6 +1612,7 @@
                                              :intent   (discover-intent cwd design)
                                              :disputes disputes
                                              :settled  settled
+                                             :prior    prior
                                              :levels   levels})})
                                  #(parse-design-decision % (:seq design)))
                 after    (settled/code-identity code-cwd)
@@ -2434,6 +2467,62 @@
     (assoc ctx :control :stop :status :unruled)
     (-> ctx (assoc :control :next-round) (assoc-in [:carry :reasked-unruled] true))))
 
+(defn- judge-inputs
+  "What a judge stage reads off the ledgers for `subject` at `reading`, before it launches a judge:
+   :standing, every subject whose latest judgement at the key confirmed it; :settled, the part of
+   it the judge is not asked — those confirmed twice running (`settled/single-readings`); and
+   :prior, what earlier runs found against its subjects. `effective` as `settled/settled` takes it."
+  [project ws-id subject reading effective run-id]
+  (let [ls       (when (and project subject) (settled/ledgers project ws-id subject))
+        standing (if (and project subject) (settled/settled ls subject reading effective) {})]
+    {:standing standing
+     :settled  (apply dissoc standing (settled/single-readings ls subject reading effective))
+     :prior    (when subject (settled/prior-findings ls subject run-id))}))
+
+(defn- carried-readings
+  "The ids an earlier quiet round of this run confirmed of `subject` — the same record, since a
+   quiet round is followed by no amendment. What pairs a reading when the tree has no identity to
+   pair it on the ledger."
+  [ctx subject]
+  (let [q (get-in ctx [:carry :quiet])]
+    (when (= (:seq subject) (:seq q)) (:confirmed q))))
+
+(defn- with-readings
+  "`record` — what the judge returned, before it is appended — carrying :overturns, each earlier
+   run's finding (`prior`) against an id it confirmed; and, when `holds?` says it would end the run
+   clean, :read-once, what it confirmed on a first reading.
+
+   A confirmation is a second reading when one stands before it at the key it was read at
+   (`standing`, taken at that key, so only when the record read one tree), or when an earlier quiet
+   round of this run confirmed the same id of the same record (`carried`)."
+  [record holds? standing carried prior]
+  (if-not (:format record)
+    record
+    (let [confirmed (settled/checked-confirmations record)
+          paired    (into (set carried) (when (:code-identity record) (keys standing)))
+          once      (when (holds? record) (vec (sort (remove paired confirmed))))
+          overturns (vec (for [[id {:keys [ws-id] n :seq}] (sort-by key prior)
+                               :when (confirmed id)]
+                           {:id id :seq n :ws-id ws-id}))]
+      (cond-> record
+        (seq once)      (assoc :read-once once)
+        (seq overturns) (assoc :overturns overturns)))))
+
+(defn- second-reading
+  "A round that would have ended the run clean on subjects it confirmed once. The run goes on to
+   another judgement with nothing amended; those subjects are not settled, so the next judge is
+   handed them again, cold — it is not told it is a second reading — and a subject it confirms is
+   paired. What this round confirmed is carried for the pairing a tree with no identity cannot get
+   from the ledger. Bounded: each such round pairs what the one before confirmed, so it recurs only
+   for a subject no earlier quiet round confirmed, and the engine's cap holds either way."
+  [ctx subject record]
+  (-> ctx
+      (assoc :control :next-round)
+      (assoc-in [:carry :quiet]
+                {:seq       (:seq subject)
+                 :confirmed (into (set (carried-readings ctx subject))
+                                  (settled/checked-confirmations record))})))
+
 (defn- run-judge-stage
   [ctx]
   (let [{:keys [cwd code-cwd run-id reviewer]} (:config ctx)
@@ -2451,20 +2540,19 @@
         [project ws-id] (stages/project+ws-from-cwd cwd)
         subject (or target (when project (ws/latest-entry project ws-id :baseline)))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) subject)
-        settled (if (and project subject)
-                  (settled/settled (settled/ledgers project ws-id subject) subject reading)
-                  {})
-        record (stamp-run
-                (baseline-review!
-                 {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
-                  :baseline subject
-                  :settled settled
-                  :listing listing
-                  :code-identity (:code-identity reading)
-                  :subject-identities (:subject-identities reading)
-                  :label (str "baseline-review-round-" (:iter ctx))
-                  :disputes (disputes-for-judge (:history ctx))})
-                (:config ctx))
+        {:keys [standing settled prior]} (judge-inputs project ws-id subject reading subject run-id)
+        record (-> (baseline-review!
+                    {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
+                     :baseline subject
+                     :settled settled
+                     :prior prior
+                     :listing listing
+                     :code-identity (:code-identity reading)
+                     :subject-identities (:subject-identities reading)
+                     :label (str "baseline-review-round-" (:iter ctx))
+                     :disputes (disputes-for-judge (:history ctx))})
+                   (stamp-run (:config ctx))
+                   (with-readings report/review-holds? standing (carried-readings ctx subject) prior))
         ctx    (merge (assoc ctx :settled settled)
                       (when subject (banking subject settled reading record)))]
     (append! cwd record)
@@ -2474,6 +2562,9 @@
 
       (and (= :sufficient (:verdict record)) (seq (:unruled record)))
       (unruled-stop (assoc ctx :record record :findings []))
+
+      (and (= :sufficient (:verdict record)) (seq (:read-once record)))
+      (second-reading (assoc ctx :record record :findings []) subject record)
 
       (= :sufficient (:verdict record))
       (assoc ctx :record record :findings [] :control :stop :status :sufficient)
@@ -2503,7 +2594,9 @@
 
    A sufficient verdict ends the run only over checks it ruled on. One leaving
    some :unruled is judged once more, with no amendment between; still unruled,
-   the run ends :unruled (`unruled-stop`)."
+   the run ends :unruled (`unruled-stop`). And only on a second reading: one
+   confirming a subject no confirmation at its key preceded is appended as
+   :read-once, holds nothing, and is judged again (`second-reading`)."
   {:name :judge
    :run
    run-judge-stage})
@@ -2959,19 +3052,17 @@
         [project ws-id] (stages/project+ws-from-cwd cwd)
         design  (when project (ws/latest-entry project ws-id :design))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) design)
-        settled (if design
-                  (settled/settled (settled/ledgers project ws-id design) design reading
-                                   (effective-design cwd design))
-                  {})
-        record (stamp-run
-                (design-decision!
-                 {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
-                  :design design :settled settled :listing listing
-                  :code-identity (:code-identity reading)
-                  :subject-identities (:subject-identities reading)
-                  :label (str "design-decision-round-" (:iter ctx))
-                  :disputes (disputes-for-judge (:history ctx))})
-                (:config ctx))
+        {:keys [standing settled prior]}
+        (judge-inputs project ws-id design reading (when design (effective-design cwd design)) run-id)
+        record (-> (design-decision!
+                    {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
+                     :design design :settled settled :prior prior :listing listing
+                     :code-identity (:code-identity reading)
+                     :subject-identities (:subject-identities reading)
+                     :label (str "design-decision-round-" (:iter ctx))
+                     :disputes (disputes-for-judge (:history ctx))})
+                   (stamp-run (:config ctx))
+                   (with-readings report/proceeds? standing (carried-readings ctx design) prior))
         ctx    (merge (assoc ctx :settled settled)
                       (when design (banking design settled reading record)))
         traj   (trajectory (:history ctx))
@@ -2980,6 +3071,14 @@
       (:outcome record)
       (do (append! cwd record)
           (assoc ctx :record record :status (:outcome record)))
+
+      ;; Would proceed, on claims it read once: appended as the reading it is — it does not
+      ;; proceed, so it clears nothing — and read again before a person is asked.
+      (seq (:read-once record))
+      (do (append! cwd record)
+          (second-reading (assoc ctx :record record :findings []
+                                 :underivable (underivable-checks record))
+                          design record))
 
       ;; The judge's own recommendation, or — whatever it recommended — a round
       ;; whose only broken check is the advisory one: `report/proceeds?`, the
@@ -3084,7 +3183,10 @@
    contradicting itself. A finding stated a third time after two objections
    escalates. A round that would proceed but left claims it was handed :unruled
    does not proceed: it is judged once more, and still unruled it escalates
-   :unruled. Everything else is another round.
+   :unruled. Nor does one that would proceed on a claim it confirmed on a first
+   reading: it is appended :read-once and judged again (`second-reading`), so a
+   proceed rests on two consecutive clean readings. Everything else is another
+   round.
 
    What reaches the amender is every finding the round made, whether it broke one
    of the four derivations or none. `Nothing broke` is not `nothing to repair`:

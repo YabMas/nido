@@ -991,8 +991,12 @@
 ;; ── What the ledger already settled ─────────────────────────────────────────
 
 (def ^:private settling-ledger
-  "A ledger on which a review that read tree-a confirmed c1 of `a-baseline`."
-  {:reviews     [{:format :baseline-review :seq 2 :baseline-seq 1 :verdict :sufficient
+  "A ledger on which two reviews running, both reading tree-a, confirmed c1 of `a-baseline` — the
+   two readings that settle it."
+  {:reviews     [{:format :baseline-review :seq 0 :baseline-seq 1 :verdict :sufficient
+                  :reason "ok" :confirmed ["c1"] :checked-at {"c1" ["src/order/aggregate.clj:12"]}
+                  :code-identity "tree-a"}
+                 {:format :baseline-review :seq 2 :baseline-seq 1 :verdict :sufficient
                   :reason "ok" :confirmed ["c1"] :checked-at {"c1" ["src/order/aggregate.clj:12"]}
                   :code-identity "tree-a"}]
    :baselines   [(assoc a-baseline :seq 1)]
@@ -1065,11 +1069,12 @@
                   :falsified-by "a summer that visits a line twice" :evidence {:by :round}}
         design   {:format :design :strata [] :seq 1 :baseline {:seq 0} :model {:elements [] :claims [claim]}}
         ids      {"canvas.order/aggregate" "agg-1" "canvas.order/summers" "role-1"}
+        decided  (fn [n] {:format :design-decision :seq n :design-seq 1 :recommend :proceed
+                          :confirmed ["summers-sum-once"]
+                          :checked-at {"summers-sum-once" ["src/order/aggregate.clj:3"]}
+                          :subject-identities ids})
         ledger   {:ws-id "ws-1" :reviews [] :baselines [] :retractions [] :designs [design]
-                  :decisions [{:format :design-decision :seq 2 :design-seq 1 :recommend :proceed
-                               :confirmed ["summers-sum-once"]
-                               :checked-at {"summers-sum-once" ["src/order/aggregate.clj:3"]}
-                               :subject-identities ids}]}
+                  :decisions [(decided 0) (decided 2)]}
         settled-at (fn [now]
                      (let [seen (atom nil)]
                        (with-redefs [record/design-decision! (fn [opts] (reset! seen opts)
@@ -1402,3 +1407,72 @@
                                   :writes (fn [p] (spit p (pr-str {:record corrected})))}
                                  (ctx :findings [a-finding]))]
     (is (nil? (:supersedes (read-string appended))))))
+
+;; ── Two clean readings, and what a confirmation overturns ───────────────────
+
+(defn- judged-over
+  "The judge stage's ctx over `a-baseline` at seq 1, its judge answering `review` and the
+   workstream holding `reviews`, at `tree`. Everything it appends lands in `appended`; what the
+   judge was handed in `seen`."
+  [{:keys [review reviews tree appended seen] :or {tree "tree-a"}} c]
+  (with-redefs [record/baseline-review! (fn [opts] (some-> seen (reset! opts)) review)
+                record/append! (fn [_ r] (some-> appended (swap! conj r)) nil)
+                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                ws/latest-entry (fn [_ _ _] (assoc a-baseline :seq 1))
+                settled/code-identity (fn [_] tree)
+                settled/ledgers (fn [_ _ _] [{:ws-id "ws-1" :reviews (vec reviews)
+                                              :baselines [(assoc a-baseline :seq 1)]
+                                              :decisions [] :designs [] :retractions []}])]
+    (run record/judge-stage c)))
+
+(def ^:private confirming
+  {:format :baseline-review :baseline-seq 1 :verdict :sufficient :reason "ok"
+   :confirmed ["invoice-resums"] :checked-at {"invoice-resums" ["src/order/invoice.clj:88"]}
+   :code-identity "tree-a"})
+
+(deftest a-sufficient-verdict-on-a-first-reading-is-read-again
+  ;; A baseline loop ended :sufficient on one clean reading, and the same judge refuted a claim a
+  ;; round later on text nobody touched. The first reading is kept and holds nothing; the second
+  ;; ends the run.
+  (let [appended (atom [])
+        seen     (atom nil)
+        r1       (judged-over {:review confirming :appended appended} (ctx))
+        reading  (first @appended)]
+    (is (= :next-round (:control r1)) "another judgement, with nothing amended")
+    (is (nil? (:status r1)))
+    (is (= ["invoice-resums"] (:read-once reading)) "the ledger says which subjects were read once")
+    (is (not (ledger-report/review-holds? reading))
+        "and no reader takes the baseline as verified on it")
+    (let [r2 (judged-over {:review confirming :appended appended :seen seen
+                               :reviews [(assoc reading :seq 2)]}
+                              (ctx :carry (:carry r1)))]
+      (is (not (contains? (:settled @seen) "invoice-resums"))
+          "the subject read once is put to the next judge again, not skipped")
+      (is (= :sufficient (:status r2)) "the second consecutive clean reading ends the run")
+      (is (nil? (:read-once (last @appended)))))))
+
+(deftest a-tree-with-no-identity-pairs-its-readings-within-the-run
+  ;; Nothing banks on the ledger without an identity, so a rule paired only there would read such a
+  ;; record for ever.
+  (let [review (dissoc confirming :code-identity)
+        r1     (judged-over {:review review :tree nil} (ctx))]
+    (is (= :next-round (:control r1)))
+    (is (= :sufficient (:status (judged-over {:review review :tree nil} (ctx :carry (:carry r1))))))))
+
+(deftest an-earlier-runs-refutation-is-put-to-the-judge-and-its-reversal-recorded
+  ;; A falsified->sufficient flip on an unchanged record rested on one uninformed reading, and was
+  ;; recorded with no word of what it overturned.
+  (let [refuted  {:format :baseline-review :seq 2 :baseline-seq 1 :verdict :falsified :reason "no"
+                  :run-id "r0" :code-identity "tree-a"
+                  :findings [{:claim-id "invoice-resums" :cites ["two summing paths"]
+                              :claim "the invoice no longer sums on its own"}]}
+        appended (atom [])
+        seen     (atom nil)]
+    (judged-over {:review confirming :reviews [refuted] :appended appended :seen seen} (ctx))
+    (is (= 2 (get-in @seen [:prior "invoice-resums" :seq])) "the judge is handed the finding")
+    (is (= [{:id "invoice-resums" :seq 2 :ws-id "ws-1"}] (:overturns (first @appended)))
+        "and the confirmation says what it overturns")
+    (let [p (record/baseline-prompt {:baseline a-baseline :prior (:prior @seen)})]
+      (is (str/includes? p "FOUND AGAINST BEFORE"))
+      (is (str/includes? p "the invoice no longer sums on its own"))
+      (is (str/includes? p "reads the same now") "an unchanged subject makes a confirmation a pure reversal"))))

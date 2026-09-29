@@ -48,11 +48,15 @@
     {:signature [:=> [:catn [:settled :map] [:record :map]] :string]})
   (Operation disputes-block "What an earlier amendment disputed, for the prompt."
     {:signature [:=> [:catn [:disputes :any]] :string]})
+  (Operation prior-findings-block
+    "What an earlier run found against the subjects a round checks, for the prompt — what a
+     confirmation now would overturn."
+    {:signature [:=> [:catn [:prior :any]] :string]})
   (Operation lens-block "The perspectives in play, and what each is for."
     {:signature [:=> [:catn] :string]})
   (Operation baseline-prompt "The verification prompt for a baseline."
     {:signature [:=> [:catn [:opts :map]] :string]
-     :delegates [settled-block disputes-block lens-block]})
+     :delegates [settled-block prior-findings-block disputes-block lens-block]})
   (Operation stratum-prompt
     "The prompt for one stratum's judge: that level's declared vocabulary, its modules, the strata
      it rests on and those resting on it, and what the design asks of it — asked first whether it is
@@ -62,7 +66,7 @@
     "A stratum judge's answer as the reading a decision records, or nil when it is unusable."
     {:signature [:=> [:catn [:json :string] [:stratum :string]] [:maybe :map]]})
   (Operation design-prompt "The decision prompt for a design."
-    {:signature [:=> [:catn [:opts :map]] :string] :delegates [disputes-block]})
+    {:signature [:=> [:catn [:opts :map]] :string] :delegates [prior-findings-block disputes-block]})
   (Operation parse-baseline-review "The agent's answer as a baseline review record."
     {:signature [:=> [:catn [:json-str :string] [:baseline-seq :any]] :map]})
   (Operation parse-design-decision "The agent's answer as a design decision record."

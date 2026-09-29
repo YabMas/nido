@@ -2311,10 +2311,18 @@
    in the code (production data, a deploy history), say. A ruling, visibly not a confirmation.
    :unruled is every check the judge left without any ruling: not confirmed with evidence, not
    found against, not declared unchecked (nor, on a decision, :owed). Derived by the round, never
-   by the judge, and it is what stops the judgement holding — see `review-holds?` and `proceeds?`."
+   by the judge, and it is what stops the judgement holding — see `review-holds?` and `proceeds?`.
+   :read-once is every id this judgement confirmed that no confirmation before it, at the same
+   content and tree, had: a first reading. Derived by the round, and it stops the judgement
+   holding too — one clean reading of a record is a sample, and the round reads it again.
+   :overturns names each earlier run's finding against an id this judgement confirmed: the
+   reversal, recorded where it was made."
   [[:checked-at {:optional true} [:map-of string? [:vector {:min 1} string?]]]
    [:unchecked  {:optional true} [:vector [:map {:closed true} [:id string?] [:reason string?]]]]
-   [:unruled    {:optional true} [:vector string?]]])
+   [:unruled    {:optional true} [:vector string?]]
+   [:read-once  {:optional true} [:vector string?]]
+   [:overturns  {:optional true} [:vector [:map {:closed true}
+                                           [:id string?] [:seq int?] [:ws-id string?]]]]])
 
 (def BaselineReview
   "The verification round over a baseline: is this true, and is it ENOUGH?
@@ -2899,7 +2907,8 @@
    not say :proceed: a clean round reads as its own recommendation.
 
    Never while the round left a check it was handed :unruled — a decision that did not rule on a
-   claim has not derived that nothing blocks it, whatever it recommended.
+   claim has not derived that nothing blocks it, whatever it recommended — nor while it is the first
+   reading of a claim it confirmed (:read-once).
 
    ONE definition, over the record alone, for every reader that asks it: the
    judge that ends the round, the clearance writer and the boundary that admits
@@ -2909,6 +2918,7 @@
   [decision]
   (let [broken (filter #(= :broken (:status %)) (:checks decision))]
     (boolean (and (empty? (:unruled decision))
+                  (empty? (:read-once decision))
                   (or (= :proceed (:recommend decision))
                       (and (seq broken) (every? #(= advisory-check (:check %)) broken)))))))
 
@@ -3746,14 +3756,16 @@
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
   review-holds?
   "Whether a baseline review says the baseline was checked against the code and held: a verdict in
-   `verdict-holds`, over a round that left none of its checks :unruled. A sufficient verdict with a
-   check nobody ruled on is a judge that stopped reading, not a baseline that held.
+   `verdict-holds`, over a round that left none of its checks :unruled and none on its first reading
+   (:read-once). A sufficient verdict with a check nobody ruled on is a judge that stopped reading,
+   not a baseline that held; one resting on a single confirmation is a sample of it.
 
    The record-level reading for every reader that asks whether a baseline was verified; the
    verdict alone answers only what the judge SAID."
   [review]
   (boolean (and (verdict-holds (:verdict review))
-                (empty? (:unruled review)))))
+                (empty? (:unruled review))
+                (empty? (:read-once review)))))
 
 (def verdict-invalidates
   "The design verdicts that put the design itself in question rather than its

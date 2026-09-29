@@ -24,6 +24,10 @@
    subject in a project that declares no design — rests on the whole tree, so any change anywhere
    unsettles it.
 
+   One confirmation is a reading, not a settlement: a round skips a subject only on the second
+   consecutive one at the same content and key (`single-readings`), because a judge is not
+   deterministic at an unchanged record.
+
    A confirmation counts from a baseline review or a design decision, on the workstream's own
    ledger, on the parent ledger its :fork entry cites, and on the child ledger a merged design's
    :merges cites — and only where the judgement says what it read to confirm it (`:checked-at`). A
@@ -287,58 +291,130 @@
   (and (some #{id} (:confirmed judgement))
        (seq (get-in judgement [:checked-at id]))))
 
+(defn- judged
+  "Every judgement on `ledgers` with the record it judged — nil-record judgements dropped — as
+   `{:ws-id :judgement :record :subjects :retracted?}`."
+  [ledgers]
+  (for [{:keys [ws-id reviews decisions baselines designs retractions]} ledgers
+        :let [retracted (into #{} (map #(get-in % [:retracts :seq])) retractions)
+              records   (into {} (map (juxt :seq identity)) (concat baselines designs))]
+        [j cited] (concat (map (juxt identity :baseline-seq) reviews)
+                          (map (juxt identity :design-seq) decisions))
+        :let [r (get records cited)]
+        :when r]
+    {:ws-id ws-id :judgement j :record r :subjects (subjects r)
+     :retracted? (contains? retracted cited)}))
+
+(defn- chronological [ms] (sort-by (fn [{j :judgement}] [(str (:at j)) (or (:seq j) 0)]) ms))
+
+(defn- bearings
+  "Per subject id of `record`, oldest first, every judgement at its content, context, cited
+   yardstick and key (`reading`) that bears on it — a finding over any record (`:found? true`), or
+   a checked confirmation over one nobody retracted. Empty when nothing can be keyed."
+  [ledgers record reading effective]
+  (if (or (nil? ledgers) (and (nil? (:code-identity reading)) (nil? (:subject-identities reading))))
+    {}
+    (let [js (judged ledgers)]
+      (into {}
+            (map (fn [[id content]]
+                   (let [needed (rests-on record effective content)
+                         ids    (about record content)
+                         around (context record id ids)]
+                     [id (->> js
+                              (filter #(and (= content (get (:subjects %) id))
+                                            (= around (context (:record %) id ids))
+                                            (cites-as? record (:record %))
+                                            (at-key? reading needed (:judgement %))))
+                              ;; A judgement doing both found.
+                              (keep (fn [{j :judgement :as m}]
+                                      (cond
+                                        (some #(= id (:claim-id %)) (:findings j)) (assoc m :found? true)
+                                        (and (not (:retracted? m)) (checked? j id)) m)))
+                              chronological
+                              vec)])))
+            (subjects record)))))
+
 (defn ^{:malli/schema [:function
                        [:=> [:cat [:maybe [:vector :map]] :map :map] :map]
                        [:=> [:cat [:maybe [:vector :map]] :map :map :map] :map]]}
   settled
-  "The subjects of `record` settled at `reading` — `{:code-identity :subject-identities}`, what the
-   judge is about to read — as `{id {:ws-id :seq}}`, naming the latest judgement that settled each.
+  "The subjects of `record` whose latest judgement at `reading` — `{:code-identity
+   :subject-identities}`, what the judge is about to read — confirmed them, as `{id {:ws-id :seq}}`,
+   naming that judgement.
 
-   A subject is settled when a baseline review or a design decision, on any of `ledgers`, named its
-   id in :confirmed and said where it read it (:checked-at), while judging a record nobody retracted
-   that carries that subject identically, around the same context, under the same cited intent and
-   baseline, at this subject's key — and no judgement at that same content and key has found against
-   it since. The newest judgement at the key that bears on the subject decides, ordered by :at
-   whichever ledger it is on: a finding stands until a later confirmation answers it, so a record
-   amended elsewhere in answer to a finding leaves the subject to be confirmed again rather than
-   checked for ever. A holding verdict settles nothing by itself; only an id its judge says it
-   checked, and where, does.
+   A subject is confirmed here when a baseline review or a design decision, on any of `ledgers`,
+   named its id in :confirmed and said where it read it (:checked-at), while judging a record nobody
+   retracted that carries that subject identically, around the same context, under the same cited
+   intent and baseline, at this subject's key — and no judgement at that same content and key has
+   found against it since. The newest judgement at the key that bears on the subject decides,
+   ordered by :at whichever ledger it is on: a finding stands until a later confirmation answers
+   it, so a record amended elsewhere in answer to a finding leaves the subject to be confirmed
+   again rather than checked for ever. A holding verdict settles nothing by itself; only an id its
+   judge says it checked, and where, does.
+
+   ONE such confirmation is a reading, not yet a settlement: a round skips only what is here and not
+   in `single-readings`. It is kept as the fold because a confirmation standing at the key is also
+   what a new confirmation pairs with.
 
    Only `record`'s own subjects are candidates, but a role's players are read from `effective` — for
    a design, its model laid over its baseline's, since a role it keeps is not restated and a claim
    about it still rests on its players. `record` itself when omitted."
   ([ledgers record reading] (settled ledgers record reading record))
   ([ledgers record reading effective]
-   (if (or (nil? ledgers) (and (nil? (:code-identity reading)) (nil? (:subject-identities reading))))
-     {}
-     (let [judged (for [{:keys [ws-id reviews decisions baselines designs retractions]} ledgers
-                        :let [retracted (into #{} (map #(get-in % [:retracts :seq])) retractions)
-                              records   (into {} (map (juxt :seq identity)) (concat baselines designs))]
-                        [j cited] (concat (map (juxt identity :baseline-seq) reviews)
-                                          (map (juxt identity :design-seq) decisions))
-                        :let [r (get records cited)]
-                        :when r]
-                    {:ws-id ws-id :judgement j :record r :subjects (subjects r)
-                     :retracted? (contains? retracted cited)})]
-       (into {}
-             (keep (fn [[id content]]
-                     (let [needed  (rests-on record effective content)
-                           ids     (about record content)
-                           around  (context record id ids)
-                           at-key  (filter #(and (= content (get (:subjects %) id))
-                                                 (= around (context (:record %) id ids))
-                                                 (cites-as? record (:record %))
-                                                 (at-key? reading needed (:judgement %)))
-                                           judged)
-                           ;; What bears on the subject at this key: a finding over any record, and a
-                           ;; confirmation over one nobody retracted. A judgement doing both found.
-                           bearing (keep (fn [{j :judgement :as m}]
-                                           (cond
-                                             (some #(= id (:claim-id %)) (:findings j)) (assoc m :found? true)
-                                             (and (not (:retracted? m)) (checked? j id)) m))
-                                         at-key)
-                           latest  (last (sort-by (fn [{j :judgement}] [(str (:at j)) (or (:seq j) 0)])
-                                                  bearing))]
-                       (when (and latest (not (:found? latest)))
-                         [id {:ws-id (:ws-id latest) :seq (get-in latest [:judgement :seq])}]))))
-             (subjects record))))))
+   (into {}
+         (keep (fn [[id bearing]]
+                 (let [latest (peek bearing)]
+                   (when (and latest (not (:found? latest)))
+                     [id {:ws-id (:ws-id latest) :seq (get-in latest [:judgement :seq])}]))))
+         (bearings ledgers record reading effective))))
+
+(defn ^{:malli/schema [:function
+                       [:=> [:cat [:maybe [:vector :map]] :map :map] [:set :string]]
+                       [:=> [:cat [:maybe [:vector :map]] :map :map :map] [:set :string]]]}
+  single-readings
+  "The ids `settled` names on ONE reading: the confirmation standing at the key is not itself
+   preceded, at that key, by another. A subject settles on the second consecutive confirmation of
+   the same content at the same key, so these are still put to the judge.
+
+   A judge is not deterministic at a byte-identical record — the same one has held and broken one
+   claim a round apart on text neither round touched — so a single confirmation is a sample. The
+   two readings need not be in one run; a finding between them ends the pair."
+  ([ledgers record reading] (single-readings ledgers record reading record))
+  ([ledgers record reading effective]
+   (into #{}
+         (keep (fn [[id bearing]]
+                 (let [n      (count bearing)
+                       latest (peek bearing)
+                       before (when (> n 1) (nth bearing (- n 2)))]
+                   (when (and latest (not (:found? latest))
+                              (or (nil? before) (:found? before)))
+                     id))))
+         (bearings ledgers record reading effective))))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:set :string]]}
+  checked-confirmations
+  "The ids `judgement` confirmed and said where it read — the only confirmations that count."
+  [judgement]
+  (into #{} (filter #(checked? judgement %)) (:confirmed judgement)))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe [:vector :map]] :map [:maybe :string]] :map]}
+  prior-findings
+  "For each subject of `record`, the newest finding against its id by a judgement of another run
+   than `run-id`, on any of `ledgers`, at any content or key — as `{id {:ws-id :seq :finding
+   :restated?}}`, :restated? true when the record that judgement read carried the subject
+   differently.
+
+   What a confirmation now would overturn. At any key, because a finding at another tree or text is
+   still the last word said against the id, and whether the text moved since is exactly what a
+   reversal has to answer; from other runs only, because a run's own findings already reached its
+   amender and came back as its disputes."
+  [ledgers record run-id]
+  (let [now   (subjects record)
+        found (for [{j :judgement :as m} (chronological (judged ledgers))
+                    :when (not (and run-id (= (str run-id) (:run-id j))))
+                    f (:findings j)
+                    :let [id (some-> (:claim-id f) str not-empty)]
+                    :when (contains? now id)]
+                [id {:ws-id (:ws-id m) :seq (:seq j) :finding f
+                     :restated? (not= (get now id) (get (:subjects m) id))}])]
+    (into {} found)))

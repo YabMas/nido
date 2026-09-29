@@ -77,7 +77,7 @@
     {:signature [:=> [:catn [:design :map]] :boolean]})
   (Operation proceeds?
     "Whether a design decision lets its design proceed: it left no check it was handed `:unruled`,
-     and it recommends `:proceed` or everything it found broken is the advisory `decomposable` check,
+     confirmed no claim on its first reading (`:read-once`), and it recommends `:proceed` or everything it found broken is the advisory `decomposable` check,
      whatever it recommended.
 
      ONE definition over the record alone, read by every reader that asks — the judge ending
@@ -87,7 +87,8 @@
     {:signature [:=> [:catn [:decision [:maybe :map]]] :boolean]})
   (Operation review-holds?
     "Whether a baseline review says its baseline was checked against the code and held: a verdict
-     that holds, over a round that left none of its checks `:unruled`. The record-level reading
+     that holds, over a round that left none of its checks `:unruled` and none on its first reading
+     (`:read-once`). The record-level reading
      every reader asking whether a baseline was verified goes through."
     {:signature [:=> [:catn [:review [:maybe :map]]] :boolean]})
   (Operation derivations-of

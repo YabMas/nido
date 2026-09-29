@@ -1368,3 +1368,20 @@
         p (:prompt (second calls))]
     (is (str/includes? p "LEVEL — every stratum the design declares or restates is"))
     (is (str/includes? p "Four\n                      questions of the COMMITMENT"))))
+
+(deftest a-proceed-on-a-first-reading-is-read-again-before-anyone-is-asked
+  ;; A design loop proceeded on one clean reading, and the next run broke the same claims on text
+  ;; that had not changed. The first reading is kept, proceeds on no reader's reading of it, and so
+  ;; clears nothing; the second is the one that proceeds.
+  (let [appended (atom [])
+        read     (assoc (decision :proceed :checks [(check :relation-honest :held)])
+                        :confirmed ["lines-exact"] :checked-at {"lines-exact" ["src/a.clj:1"]})]
+    (with-redefs [record/design-decision! (fn [_] read)
+                  record/append! (fn [_ r] (swap! appended conj r) nil)]
+      (let [r1 (run record/design-judge-stage (ctx))]
+        (is (= :next-round (:control r1)))
+        (is (= ["lines-exact"] (:read-once (first @appended))))
+        (is (false? (report/proceeds? (first @appended))) "so appending it writes no clearance")
+        (let [r2 (run record/design-judge-stage (ctx :carry (:carry r1)))]
+          (is (= :proceed (:status r2)))
+          (is (= :escalate (:control r2))))))))
