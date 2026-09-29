@@ -78,6 +78,16 @@
         (is (str/includes? body "4 undecided"))
         (is (not (str/includes? body "Apply ")) "nothing approved, nothing to apply")))))
 
+(deftest an-expanded-write-stays-expanded-across-the-poll
+  ;; The poll re-patches the whole fragment, so open/closed cannot be DOM state.
+  (with-plan
+    (fn [_ _]
+      (let [body (get-body "/_fragment/operations/review-queue")]
+        (is (str/includes? body "What changed: …") "the full text is on the page")
+        (is (not (str/includes? body "<details")) "not a native element the patch resets")
+        (is (str/includes? body "data-signals__ifmissing=\"{rqOpen2: false}\"")
+            "a signal a re-patch leaves as the reader set it")))))
+
 (deftest a-decision-is-recorded-and-an-unknown-verdict-is-not
   (with-plan
     (fn [run-id _]

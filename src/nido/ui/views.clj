@@ -388,7 +388,9 @@
         .rq-rank { color:#fbbf24; min-width:28px; }
         .rq-title { color:#cfd8e3; }
         .rq-why { font-size:12px; color:#a8b4c0; margin:0 0 6px; }
-        .rq-detail summary { font-size:11px; color:#777; cursor:pointer; }
+        .rq-toggle { font-size:11px; color:#777; cursor:pointer; }
+        .rq-pre { display:none; }
+        .rq-pre.rq-shown { display:block; }
         .rq-pre { font-size:12px; color:#cfd8e3; background:#101018;
                   border-left:2px solid #3a5a7a; padding:8px 10px; margin:6px 0; }
         .rq-order { margin:0 0 10px; padding-left:22px; font-size:13px; }
@@ -3045,12 +3047,22 @@
         [:span {:class (str "prop-verdict rq-o-" (name outcome))}
          (str (name outcome) (when note (str " — " note)))])]
      (when-not (str/blank? (str detail))
-       ;; Line by line rather than pre-wrapped: a brief's line breaks are its
-       ;; structure (sections, numbered steps), and the stylesheet keeps no
-       ;; pre-wrap rule.
-       [:details.rq-detail [:summary "show"]
-        [:div.rq-pre (for [l (str/split-lines (str detail))]
-                       [:div (if (str/blank? l) (h/raw "&nbsp;") l)])]])
+       ;; A signal rather than <details>: the 5s poll re-patches #review-queue, and
+       ;; a native element's open state is DOM state the patch overwrites, so an
+       ;; expanded brief snapped shut under the reader. __ifmissing keeps the
+       ;; signal across patches; the text is hidden by CSS and revealed by class,
+       ;; so a poll never flashes it open.
+       (let [sig (str "rqOpen" n)]
+         [:div.rq-detail {:data-signals__ifmissing (str "{" sig ": false}")}
+          [:span.rq-toggle {"data-on:click" (str "$" sig " = !$" sig)}
+           [:span {:data-show (str "!$" sig)} "show"]
+           [:span {:data-show (str "$" sig)} "hide"]]
+          ;; Line by line rather than pre-wrapped: a brief's line breaks are its
+          ;; structure (sections, numbered steps), and the stylesheet keeps no
+          ;; pre-wrap rule.
+          [:div.rq-pre {:data-class (str "{'rq-shown': $" sig "}")}
+           (for [l (str/split-lines (str detail))]
+             [:div (if (str/blank? l) (h/raw "&nbsp;") l)])]]))
      (when (= :deciding stage)
        [:div.actions
         [:button {:class (str "btn" (when (not= :approved decision) " btn-primary"))
