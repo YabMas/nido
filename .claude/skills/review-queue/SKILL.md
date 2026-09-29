@@ -132,9 +132,9 @@ no QA brief; flag that its Status reads as QA work when it is not.
 
 ### Cleanup
 
-The goal is a page a reviewer can read top-down: the brief first, the report
-that started it next, and the engineering record out of the way but kept.
-Propose, per ticket, from these and only these:
+The goal is a page whose body is the brief and nothing else: everything that
+led to it is kept, collapsed, underneath. Propose, per ticket, from these and
+only these:
 
 - **Delete machine leftovers** — an empty bug-report template ("Can you
   reproduce the bug? Yes / No"), a superseded `QA instructions` callout, blank
@@ -142,16 +142,25 @@ Propose, per ticket, from these and only these:
 - **Delete stale text** — what the release has made false: "not released yet",
   a workaround "until this ships", "ready for review, stacked on PR …".
   Quote each deleted line in the plan.
+- **Fold the original report** into one collapsed toggle directly under the
+  brief, `Original report` — what the reporter or requester wrote, its quotes,
+  its screenshots and videos, in their order. It is folded whole and never edited:
+  it is the record of what the reporter saw, and the brief already says what a
+  reviewer needs from it (self-contained, `docs/reference/qa-brief.md`).
 - **Fold the engineering record** into one collapsed toggle at the bottom,
   `Engineering notes & history` — handoffs, root-cause analyses, file paths,
   plans that have since been carried out.
 
-**Folding is delete-and-recreate** — Notion's API has no move. So some blocks
-cannot be folded, and stay where they are:
+A ticket with no brief keeps its report in the body: without one the report is
+the only account of the problem on the page.
 
-- **Uploaded media** — an image, video, file or PDF whose type is `file`. Its
-  URL expires within the hour, and the API cannot re-attach an upload.
-  (`external` media folds fine.)
+**Folding is delete-and-recreate** — Notion's API has no move. **Uploaded media**
+(an image, video, file or PDF whose type is `file`) is copied by uploading it
+again: its URL expires within the hour, so the apply leg reads it fresh just
+before the copy. Some blocks still cannot be folded, and stay where they are:
+
+- **An upload that fails** — too large for the workspace, or a URL that expired
+  mid-copy.
 - **`child_page`, `child_database`, `synced_block`, `link_preview`** — the API
   cannot create them.
 - **A block with an inline comment thread** —
@@ -161,9 +170,6 @@ cannot be folded, and stay where they are:
 Say in the plan which blocks stay put and why, so the human is not surprised by
 a half-folded page.
 
-**Everything a person reported stays in the body** — the original report, its
-quotes, its screenshots and videos. That is the record of what the reporter
-saw, and a reviewer checking the fix needs it.
 
 ## 4. Rank the queue
 
@@ -206,7 +212,9 @@ exactly this shape — the dashboard renders it, and the apply leg is held to it
            {:n 2 :br "BR-6348" :kind :brief  :summary "prepend a QA brief (none on the page)"
             :detail "<the full brief, exactly as it will appear>"}
            {:n 3 :br "BR-6348" :kind :fold   :summary "fold 118 blocks into Engineering notes & history"
-            :detail "stays put: 3 uploaded images (cannot be re-attached)\n<block ids>"}
+            :detail "stays put: 1 inline-commented paragraph\n<block ids>"}
+           {:n 5 :br "BR-6348" :kind :fold   :summary "fold the original report (9 blocks, 2 images) into Original report"
+            :detail "<block ids>"}
            {:n 4 :br "BR-6454" :kind :delete :summary "delete the empty bug-report template (16 blocks)"
             :detail "<every deleted line, quoted>\n<block ids>"}
            {:n 9 :br nil       :kind :schema :summary "add number property Review rank to the Task Database"}
@@ -324,9 +332,16 @@ existing blocks' text (`notion api PATCH /v1/blocks/<block-id>`), not a new brie
 
 **Folding, in this order, so nothing is lost if a call fails midway:**
 
-1. Append the toggle `Engineering notes & history` at the bottom, with copies of
-   the blocks inside it. A request nests two levels; append deeper children to
-   the returned child ids.
+1. Create the toggle with copies of the blocks inside it — `Original report`
+   with `"position": {"type": "after_block", "after_block": {"id": <brief-id>}}`,
+   `Engineering notes & history` at the bottom. If Notion puts the report toggle
+   anywhere else, say so in the result; it is still collapsed. A request nests
+   two levels; append deeper children to the returned child ids.
+   An uploaded media block is copied by re-reading the block for a fresh URL,
+   `notion file upload <url> --name <its name>`, and creating the copy as
+   `{"type": "image", "image": {"type": "file_upload", "file_upload": {"id": <upload-id>}}}`
+   (`video`, `file`, `pdf` alike). A failed upload leaves that block where it
+   is; the rest still fold.
 2. Read the toggle back and check every copied block is there.
 3. Only then delete the originals.
 
@@ -348,7 +363,7 @@ Review queue applied · plan <plan-run-id> · <a> of <w> approved writes applied
 
 Applied
 - [2] BR-6348 brief prepended (top of page)
-- [3] BR-6348 118 blocks folded; 3 images stayed put
+- [3] BR-6348 118 blocks folded; 1 commented paragraph stayed put
 Skipped
 - [8] BR-6454 — page edited at 10:02 after it was read
 Failed
