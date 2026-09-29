@@ -496,8 +496,15 @@
     {:signature [:=> [:catn [:history :any]] :any]})
   (Operation working-copy-dirty? "Whether the working copy has uncommitted changes."
     {:signature [:=> [:catn [:cwd Path]] :boolean]})
-  (Operation working-copy-state "What the working copy currently is."
+  (Operation working-copy-state
+    "What the working copy's tree holds, path by path, with an identity for the whole — or that
+     it could not be read, which is never the same answer as an empty tree."
     {:signature [:=> [:catn [:cwd Path]] :map]})
+  (Operation amender-trespass
+    "What moved in the tree while a record amender ran, and which of those paths its own
+     transcript reached. Only those count against it; a path moved by anyone else in a live
+     worktree is reported, and a move inside a permitted dir never counts."
+    {:signature [:=> [:catn [:opts :map]] :map]})
   (Operation layer-label "A layer's label."
     {:signature [:=> [:catn [:layer :map]] :string]})
   (Operation reshape-plan

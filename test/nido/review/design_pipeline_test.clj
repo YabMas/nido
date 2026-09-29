@@ -578,28 +578,84 @@
 ;; ── The amend stage ─────────────────────────────────────────────────────────
 
 (defn- with-amend
-  [{:keys [prev writes recommend append-throws? refusals prompts]
+  "Run the design amend stage with every seam stubbed. `writes` stands in for the
+   answer the amender left at the out-path; `moves` for the paths it wrote in the
+   tree, each named in its transcript by an Edit; `declared` for the project's
+   design configuration."
+  [{:keys [prev writes recommend append-throws? refusals prompts moves declared]
     :or {prev a-design recommend :amend refusals 0}} c]
   (let [appended (atom nil)
-        refused  (atom 0)]
+        refused  (atom 0)
+        state    (atom {:identity "t0" :entries {}})]
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] prev)
                   stages/discover-baseline (fn [_ _] nil)
-                  stages/working-copy-state (fn [_] "")
+                  design-check/design-of (fn [_ _] declared)
+                  stages/working-copy-state (fn [_] @state)
                   ws/append-entry! (fn [_ _ _ payload]
                                      (when (or append-throws? (< @refused refusals))
                                        (swap! refused inc)
                                        (throw (ex-info "schema said no" {})))
                                      (reset! appended payload)
                                      "/ws/entries/0005-design.edn")
-                  agent/launch! (fn [{:keys [first-message]}]
+                  agent/launch! (fn [{:keys [first-message out-file]}]
                                   (some-> prompts (swap! conj first-message))
                                   (when writes
                                     (writes (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))))
+                                  (when (seq moves)
+                                    (reset! state {:identity "t1" :entries (zipmap moves (repeat "new"))})
+                                    (spit out-file
+                                          (str/join "\n"
+                                                    (for [m moves]
+                                                      (json/generate-string
+                                                       {:type "assistant"
+                                                        :message {:content [{:type "tool_use" :name "Edit"
+                                                                             :input {:file_path (str "/w/" m)}}]}})))))
                                   {:num-turns 3})]
       [(run record/design-amend-stage
             (assoc-in c [:record :recommend] recommend))
        @appended])))
+
+(deftest the-canvas-edit-a-declared-design-requires-is-part-of-the-amendment
+  ;; The element-id rule makes a moved element's id valid only once the canvas
+  ;; lists it, so a faithful amendment in a modelled project edits canvas/ — and
+  ;; the guard used to discard every one of them, leaving the canvas declaring an
+  ;; amendment the ledger never received.
+  (let [fixed (assoc a-design :effort :L)
+        [out appended] (with-amend {:declared {:spec-dirs ["canvas"]}
+                                    :moves ["canvas/review/core.clj"]
+                                    :writes (fn [p] (spit p (pr-str {:record fixed})))}
+                                   (ctx :findings [(check :relation-honest :broken)]
+                                        :record (decision :amend)))]
+    (is (nil? (:status out)) "the round goes on, and the next judge reads the canvas edit")
+    (is (= fixed (read-string appended)))
+    (is (= ["canvas/review/core.clj"] (get-in out [:amend-tree :permitted])))))
+
+(deftest a-design-amender-writing-outside-the-declaration-is-still-caught
+  (let [[out appended] (with-amend {:declared {:spec-dirs ["canvas"]}
+                                    :moves ["canvas/review/core.clj" "src/nido/review/record.clj"]
+                                    :writes (fn [p] (spit p (pr-str {:record a-design})))}
+                                   (ctx :findings [(check :relation-honest :broken)]
+                                        :record (decision :amend)))]
+    (is (= :amend-touched-code (:status out)))
+    (is (= ["src/nido/review/record.clj"] (get-in out [:amend-tree :attributed])))
+    (is (nil? appended))))
+
+(deftest a-project-declaring-no-design-permits-no-edit-at-all
+  (let [[out _] (with-amend {:moves ["canvas/review/core.clj"]
+                             :writes (fn [p] (spit p (pr-str {:record a-design})))}
+                            (ctx :findings [(check :relation-honest :broken)]
+                                 :record (decision :amend)))]
+    (is (= :amend-touched-code (:status out)))))
+
+(deftest the-design-amender-is-told-the-canvas-edit-is-its-to-make
+  (let [p (record/design-amend-prompt {:design a-design :recommend :amend :raised []
+                                       :out-path "/x" :declared? true})]
+    (is (str/includes? p "change its declaration\nunder canvas/ to match")))
+  (is (not (str/includes? (record/design-amend-prompt {:design a-design :recommend :amend
+                                                       :raised [] :out-path "/x"})
+                          "under canvas/"))
+      "a project with no declaration is not told to edit one"))
 
 (deftest a-superseding-design-is-appended-and-the-loop-continues
   (let [fixed (assoc a-design :invariants ["one rounding boundary" "totals never re-round"])
@@ -664,7 +720,7 @@
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
                   stages/discover-baseline (fn [_ _] nil)
-                  stages/working-copy-state (fn [_] "")
+                  stages/working-copy-state (fn [_] {:identity "t" :entries {}})
                   agent/launch! (fn [{:keys [first-message]}]
                                   (swap! prompts conj first-message) {:num-turns 1})]
       (doseq [r [:amend :recut]]
@@ -696,7 +752,7 @@
                   ws/latest-entry (fn [_ _ kind]
                                     (if (= :baseline kind) corrected-baseline a-design))
                   stages/discover-baseline (fn [_ _] {:format :baseline :seq 8})
-                  stages/working-copy-state (fn [_] "")
+                  stages/working-copy-state (fn [_] {:identity "t" :entries {}})
                   ws/append-entry! (fn [_ _ _ payload] (reset! appended payload) "/e")
                   agent/launch! (fn [{:keys [first-message]}]
                                   (reset! prompt first-message)
@@ -750,7 +806,7 @@
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ kind] (if (= :baseline kind) corrected-baseline a-design))
                   stages/discover-baseline (fn [_ _] {:format :baseline :seq 8})
-                  stages/working-copy-state (fn [_] "")
+                  stages/working-copy-state (fn [_] {:identity "t" :entries {}})
                   agent/launch! (fn [_] {:num-turns 1})]
       (doseq [config [{:cwd "/w" :run-id "r1" :code-cwd "/design-tree"}
                       {:cwd "/w" :run-id "r1" :code-cwd "/named" :survey-cwd "/named"}]]
@@ -794,7 +850,7 @@
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
                   stages/discover-baseline (fn [_ _] {:format :baseline :seq 8})
-                  stages/working-copy-state (fn [_] "")
+                  stages/working-copy-state (fn [_] {:identity "t" :entries {}})
                   agent/launch! (fn [_] {:num-turns 0})]
       (run record/design-amend-stage
            (assoc (ctx :findings []) :record (decision :resurvey)))
@@ -830,7 +886,7 @@
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
                   stages/discover-baseline (fn [_ _] nil)
-                  stages/working-copy-state (fn [_] "")
+                  stages/working-copy-state (fn [_] {:identity "t" :entries {}})
                   agent/launch! (fn [_] {:num-turns 0})]
       (doseq [prior (range 5)]
         (let [hist (vec (repeat prior {:resurveyed :sufficient}))
@@ -852,7 +908,7 @@
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
                   stages/discover-baseline (fn [_ _] nil)
-                  stages/working-copy-state (fn [_] "")
+                  stages/working-copy-state (fn [_] {:identity "t" :entries {}})
                   ws/append-entry! (fn [_ _ _ _] "/ws/entries/0005-design.edn")
                   agent/launch! (fn [{:keys [first-message]}]
                                   (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
@@ -870,7 +926,7 @@
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                 ws/latest-entry (fn [_ _ _] a-design)
                 stages/discover-baseline (fn [_ _] nil)
-                stages/working-copy-state (fn [_] "")
+                stages/working-copy-state (fn [_] {:identity "t" :entries {}})
                 ws/append-entry! (fn [_ _ _ _] "/ws/entries/0005-design.edn")
                 agent/launch! (fn [{:keys [first-message]}]
                                 (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))

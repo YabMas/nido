@@ -290,32 +290,60 @@
 
 ;; ── The amend stage ─────────────────────────────────────────────────────────
 
+(defn- persisted-phase
+  "`out`, a stage's finished ctx, folded into a run report as `phase` and read
+   back off disk — what a reader of the finished run actually has, as against
+   what the stage returned."
+  [phase out]
+  (let [path (str (fs/create-temp-file {:suffix ".json"}))]
+    (try
+      (-> (report/init {:run-id "r1" :cwd "/w" :base nil :started-at "t0"})
+          (report/apply-event {:event :phase-started :iter 1 :phase phase :at "t1"} nil)
+          (report/apply-event {:event :phase-finished :iter 1 :phase phase :at "t2" :ctx out} nil)
+          (report/persist! path))
+      (-> (json/parse-string (slurp path) true) :rounds first :phases first)
+      (finally (fs/delete-if-exists path)))))
+
+(defn- tree
+  "A working-copy reading holding `entries`, path to content."
+  [entries]
+  {:identity (str (hash entries)) :entries entries})
+
+(defn- transcript!
+  "Stand in for an amender's transcript at `path`: `calls` as the tool_use blocks claude streams."
+  [path calls]
+  (spit path (str/join "\n" (for [c calls]
+                              (json/generate-string
+                               {:type "assistant" :message {:content [(assoc c :type "tool_use")]}})))))
+
 (defn- with-amend
   "Run amend-stage with every seam stubbed. `writes` is called with the out-path
-   and stands in for what the amender did (or did not) leave behind; `tree-before`
-   and `tree-after` are what the working copy's diff contained either side of it.
-   The ledger refuses every append under `append-throws?`, or the first `refusals`
-   of them; each prompt an amender is launched over is added to `prompts`."
-  [{:keys [prev writes tree-before tree-after append-throws? refusals prompts]
-    :or {prev a-baseline tree-before "" tree-after nil refusals 0}} c]
-  (let [tree (atom tree-before)
+   and stands in for the answer the amender did (or did not) leave behind;
+   `tree-before` and `tree-after` are the code tree's readings either side of it,
+   and `calls` the tool calls its transcript shows. The ledger refuses every
+   append under `append-throws?`, or the first `refusals` of them; each prompt an
+   amender is launched over is added to `prompts`."
+  [{:keys [prev writes tree-before tree-after calls append-throws? refusals prompts]
+    :or {prev a-baseline tree-before (tree {}) refusals 0}} c]
+  (let [state (atom tree-before)
         appended (atom nil)
         refused (atom 0)]
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] prev)
-                  stages/working-copy-state (fn [_] @tree)
+                  stages/working-copy-state (fn [_] @state)
                   ws/append-entry! (fn [_ _ _ payload]
                                      (when (or append-throws? (< @refused refusals))
                                        (swap! refused inc)
                                        (throw (ex-info "schema said no" {})))
                                      (reset! appended payload)
                                      "/ws/entries/0002-baseline.edn")
-                  agent/launch! (fn [{:keys [first-message]}]
+                  agent/launch! (fn [{:keys [first-message out-file]}]
                                   (some-> prompts (swap! conj first-message))
                                   (when writes
                                     (writes (second (re-find #"Write EDN to:\n\n  (\S+)"
                                                              first-message))))
-                                  (reset! tree (or tree-after @tree))
+                                  (transcript! out-file calls)
+                                  (reset! state (or tree-after @state))
                                   {:num-turns 3})]
       [(run record/amend-stage c) @appended])))
 
@@ -329,32 +357,66 @@
 (deftest an-amender-that-wrote-code-is-terminal
   ;; No stage of a record loop may touch the working copy. Whatever it wrote is
   ;; left in place — this halts for a human rather than tidying up after it.
-  (let [[out _] (with-amend {:tree-before "" :tree-after "diff --git a/x b/x"}
+  (let [[out _] (with-amend {:tree-after (tree {"src/x.clj" "new"})
+                             :calls [{:name "Edit" :input {:file_path "/w/src/x.clj"}}]}
                             (ctx :findings [a-finding]))]
     (is (= :amend-touched-code (:status out)))
     (is (= :stop (:control out)))))
 
 (deftest an-already-dirty-worktree-is-not-blamed-on-the-amender
   ;; A session worktree routinely carries a human's uncommitted work, and it is
-  ;; still there afterwards. Comparing the diff rather than a dirty flag is what
+  ;; still there afterwards. Comparing readings rather than a dirty flag is what
   ;; lets that pass while an actual edit does not.
-  (let [[out appended] (with-amend {:tree-before "a human's work"
+  (let [[out appended] (with-amend {:tree-before (tree {"src/human.clj" "work"})
                                     :writes (fn [p] (spit p (pr-str a-baseline)))}
                                    (ctx :findings [a-finding]))]
     (is (not= :amend-touched-code (:status out)))
     (is (some? appended))))
 
 (deftest an-amender-that-writes-on-top-of-a-dirty-tree-is-caught
-  ;; The hole the boolean left, and the one that mattered: the old guard only
-  ;; fired on a clean-to-dirty transition, so on an already-dirty tree — which is
-  ;; most real sessions — an amender could write code and nothing noticed. Found
-  ;; by a live round judging this very namespace.
-  (let [[out appended] (with-amend {:tree-before "a human's work"
-                                    :tree-after "a human's work\n+ and the amender's"
+  ;; The hole a dirty flag left, and the one that mattered: it only fired on a
+  ;; clean-to-dirty transition, so on an already-dirty tree — which is most real
+  ;; sessions — an amender could write code and nothing noticed.
+  (let [[out appended] (with-amend {:tree-before (tree {"src/human.clj" "work"})
+                                    :tree-after (tree {"src/human.clj" "work" "src/x.clj" "new"})
+                                    :calls [{:name "Bash" :input {:command "cat > src/x.clj <<EOF"}}]
                                     :writes (fn [p] (spit p (pr-str a-baseline)))}
                                    (ctx :findings [a-finding]))]
     (is (= :amend-touched-code (:status out)))
     (is (nil? appended) "and the record it returned never reaches the ledger")))
+
+(deftest a-tree-moved-by-someone-else-keeps-the-amendment
+  ;; Forty runs lost a correct amendment this way: the amender read the code and
+  ;; wrote its answer into the run dir while the person working in the session
+  ;; worktree went on editing it, and the guard blamed the amender for their
+  ;; edits. What moved is still reported, so nothing about the tree goes unsaid.
+  (let [[out appended] (with-amend {:tree-before (tree {"src/human.clj" "work"})
+                                    :tree-after (tree {"src/human.clj" "more work"})
+                                    :calls [{:name "Bash" :input {:command "sed -n 1,40p src/order/invoice.clj"}}]
+                                    :writes (fn [p] (spit p (pr-str a-baseline)))}
+                                   (ctx :findings [a-finding]))]
+    (is (nil? (:status out)) "the round goes on to be judged")
+    (is (some? appended) "the amendment reaches the ledger")
+    (is (= ["src/human.clj"] (get-in out [:amend-tree :moved])))
+    (is (= [] (get-in out [:amend-tree :attributed])))))
+
+(deftest a-trespass-stop-names-the-paths-and-the-unappended-answer
+  ;; A stop that said only its status sent every reader to the amender's
+  ;; transcript and the reviewed repo's op log to learn what moved, and left the
+  ;; amendment — the thing they then re-typed by hand — named by nothing.
+  (let [[out appended] (with-amend {:tree-after (tree {"src/x.clj" "new" "src/human.clj" "work"})
+                                    :calls [{:name "Write" :input {:file_path "/w/src/x.clj"}}]
+                                    :writes (fn [p] (spit p (pr-str a-baseline)))}
+                                   (ctx :findings [a-finding]))
+        phase (persisted-phase :amend out)]
+    (is (= :amend-touched-code (:status out)))
+    (is (nil? appended))
+    (is (str/includes? (:amend-error out) "src/x.clj"))
+    (is (str/includes? (:amend-error out) "also moved, not by it: src/human.clj"))
+    (is (str/includes? (:amend-error out) "amend-round-1.edn"))
+    (is (= ["src/x.clj"] (get-in phase [:tree :attributed])) "and the report keeps what tripped it")
+    (is (= "record" (get-in phase [:tree :amendment :state]))
+        "and says the answer it did not append was a readable amendment")))
 
 (deftest an-amender-that-wrote-nothing-leaves-the-ledger-alone
   (let [[out appended] (with-amend {} (ctx :findings [a-finding]))]
@@ -378,20 +440,6 @@
                                    (ctx :findings [a-finding]))]
     (is (= :amend-unreadable (:status out)))
     (is (nil? appended))))
-
-(defn- persisted-phase
-  "`out`, a stage's finished ctx, folded into a run report as `phase` and read
-   back off disk — what a reader of the finished run actually has, as against
-   what the stage returned."
-  [phase out]
-  (let [path (str (fs/create-temp-file {:suffix ".json"}))]
-    (try
-      (-> (report/init {:run-id "r1" :cwd "/w" :base nil :started-at "t0"})
-          (report/apply-event {:event :phase-started :iter 1 :phase phase :at "t1"} nil)
-          (report/apply-event {:event :phase-finished :iter 1 :phase phase :at "t2" :ctx out} nil)
-          (report/persist! path))
-      (-> (json/parse-string (slurp path) true) :rounds first :phases first)
-      (finally (fs/delete-if-exists path)))))
 
 (deftest a-record-the-ledger-refuses-is-its-own-outcome
   (let [[out _] (with-amend {:append-throws? true
@@ -451,19 +499,23 @@
     (is (nil? appended))))
 
 (deftest a-repair-that-writes-code-is-caught
-  (let [tree     (atom "")
+  (let [state    (atom (tree {}))
         launches (atom 0)
         out (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                           ws/latest-entry (fn [_ _ _] a-baseline)
-                          stages/working-copy-state (fn [_] @tree)
+                          stages/working-copy-state (fn [_] @state)
                           ws/append-entry! (fn [& _] (throw (ex-info "schema said no" {})))
-                          agent/launch! (fn [{:keys [first-message]}]
-                                          (when (= 2 (swap! launches inc)) (reset! tree "diff"))
+                          agent/launch! (fn [{:keys [first-message out-file]}]
+                                          (if (= 2 (swap! launches inc))
+                                            (do (reset! state (tree {"src/x.clj" "new"}))
+                                                (transcript! out-file [{:name "Edit" :input {:file_path "/w/src/x.clj"}}]))
+                                            (transcript! out-file []))
                                           (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
                                                 (pr-str a-baseline))
                                           {:num-turns 1})]
               (run record/amend-stage (ctx :findings [a-finding])))]
-    (is (= :amend-touched-code (:status out)))))
+    (is (= :amend-touched-code (:status out)))
+    (is (= ["src/x.clj"] (get-in out [:amend-tree :attributed])))))
 
 (deftest the-amender-is-told-which-edits-travel-together
   (let [p (record/amend-prompt {:baseline (assoc a-baseline :strata []) :findings [a-finding]

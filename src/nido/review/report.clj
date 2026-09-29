@@ -427,12 +427,18 @@
       ;; the judge phase's :detail, for this stage, and held nowhere else either.
       ;; :refusals is every refusal the amender was handed back to repair, so an
       ;; amendment appended on a re-ask does not read as one accepted first time.
+      ;; :tree is what moved in the code tree while the amender ran, which of it
+      ;; its own calls reached, and where its answer is — present whenever
+      ;; anything moved, since a tree moved under an amender and an amender that
+      ;; wrote look alike from every other field, and the tree itself will have
+      ;; moved on by the time anyone reads this.
       :amend  (cond-> (assoc ph :retreats (vec (:retreats ctx))
                                 :disputes (vec (:disputes ctx))
                                 :amended? (boolean (:amended? ctx))
                                 :resurveyed (some-> (:resurveyed ctx) name))
                 (:amend-error ctx) (assoc :amend-error (:amend-error ctx))
-                (seq (:amend-refusals ctx)) (assoc :refusals (vec (:amend-refusals ctx))))
+                (seq (:amend-refusals ctx)) (assoc :refusals (vec (:amend-refusals ctx)))
+                (:amend-tree ctx) (assoc :tree (:amend-tree ctx)))
 
       ;; :conflicted is what ended THIS round, where the copy on the target is
       ;; what the stack looked like when the run last asked. A round that stopped

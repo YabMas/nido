@@ -1687,7 +1687,7 @@
    :amend-noop "the amender produced no record — nothing was appended"
    :amend-unreadable "the amender's answer would not parse as EDN"
    :amend-invalid "the ledger refused the amended record, and refused the amender's repairs of it too"
-   :amend-touched-code "a record pass wrote to the working copy; whatever it wrote is still there"
+   :amend-touched-code "the amender wrote to the paths named above; whatever it wrote is still there, and its answer was not appended"
    :dry-run    "nothing was amended"
    ;; Only reachable when a caller asked for a cap. The loop has no default one
    ;; — it ends on its own merits — so this is the reader's own bound coming

@@ -2797,22 +2797,121 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
       (not (str/blank? (:out r)))
       (throw (layers/refusal "could not read what the fixer wrote" r {:cwd cwd})))))
 
+(def ^:private tree-entry
+  "One line of `jj debug tree`: the path, then what it holds. Greedy on the path, because the entry
+   is the part with a known opening and a path may itself contain `: `."
+  #"^(.*): ((?:Ok|Err)\(.*)$")
+
 (defn ^{:malli/schema [:=> [:cat :Path] :map]}
   working-copy-state
-  "What the working copy currently contains, as a value to compare against later.
+  "What the working copy's tree currently holds, path by path, as a value to compare against a later
+   reading: `{:identity <hash of the listing> :entries {path entry}}`, or `{:unreadable <why>}`.
 
-   A record round cannot use `working-copy-dirty?`, and the difference is not
-   pedantry. That predicate answers `is anything uncommitted`, and a session
-   worktree almost always carries a human's uncommitted work — so a round that
-   treated dirty-after as a violation would halt on every real session. The
-   guard therefore only fired on a clean-to-dirty transition, which means it did
-   not fire at all in the case that matters: on an already-dirty tree an amender
-   could write code and nothing would notice.
+   The TREE of @, not `jj diff --git`. The diff is @ against its parent, so it moves when a caller
+   commits, squashes or rebases while the tree stays byte-identical, and the text of it attributes a
+   change to no path anyone could check. Listing the tree snapshots the working copy first, so an
+   uncommitted edit moves it, and each entry carries the content id of what the path holds.
 
-   Comparing the diff itself has neither problem. Whatever was there stays there
-   and compares equal; anything the pass adds does not."
+   Unreadable is its own answer and never an empty tree. A failed read that compared as a value
+   would say the tree moved on the one occasion nobody looked at it."
   [cwd]
-  (str (:out (jj/jj! cwd "diff" "--git"))))
+  (let [{:keys [exit out err]} (try (jj/jj! cwd "debug" "tree" "-r" "@")
+                                    (catch Throwable t {:exit -1 :err (ex-message t)}))
+        lines   (when (zero? exit) (str/split-lines out))
+        entries (keep #(re-find tree-entry %) lines)]
+    (if (and (zero? exit) (= (count lines) (count entries)))
+      {:identity (digest/sha256-hex out)
+       :entries  (into {} (map (fn [[_ path entry]] [path entry])) entries)}
+      {:unreadable (if (zero? exit)
+                     "jj debug tree listed a line with no path"
+                     (str "jj debug tree exited " exit
+                          (when-not (str/blank? err) (str ": " err))))})))
+
+(defn- moved-paths
+  "Every path whose entry differs between two tree readings, added and removed included; nil when
+   either could not be read, which is not the same answer as nothing having moved."
+  [before after]
+  (when-not (or (:unreadable before) (:unreadable after))
+    (let [a (:entries before) b (:entries after)]
+      (vec (sort (filter #(not= (get a %) (get b %))
+                         (into (set (keys a)) (keys b))))))))
+
+(def ^:private file-writing-tools
+  "The tool calls that name the one file they write."
+  #{"Edit" "MultiEdit" "Write" "NotebookEdit"})
+
+(defn- transcript-calls
+  "What an agent's stream-json transcript shows it asking for: `:files`, every path a file-writing
+   tool was pointed at, and `:commands`, every shell command it ran. An absent or unparseable
+   transcript shows nothing."
+  [transcript]
+  (let [calls (when (and transcript (fs/exists? transcript))
+                (for [line  (str/split-lines (slurp transcript))
+                      :let  [event (try (json/parse-string line keyword) (catch Exception _ nil))]
+                      block (when (= "assistant" (:type event)) (get-in event [:message :content]))
+                      :when (= "tool_use" (:type block))]
+                  block))]
+    {:files    (vec (keep (fn [{:keys [name input]}]
+                            (when (file-writing-tools name)
+                              (or (:file_path input) (:notebook_path input))))
+                          calls))
+     :commands (vec (keep (fn [{:keys [name input]}]
+                            (when (= "Bash" name) (:command input)))
+                          calls))}))
+
+(defn- under
+  "`file` as a path relative to `root`, or nil when it lies outside it. Both are canonicalized, since
+   the amender is launched from a session home whose worktree is a symlink."
+  [root file]
+  (let [root (str (fs/canonicalize root))
+        f    (str (fs/canonicalize (if (fs/absolute? file) file (fs/path root file))))]
+    (when (str/starts-with? f (str root "/"))
+      (subs f (inc (count root))))))
+
+(defn- names-path?
+  "Whether shell `command` names `path` — whole, or by any tail of two segments or more, since a
+   command run after a `cd` names a file from wherever it stands. One segment is too little: a
+   bare `lock` or `core.clj` names half the tree."
+  [command path]
+  (let [segs (str/split path #"/")]
+    (or (str/includes? command path)
+        (some #(str/includes? command (str/join "/" (drop % segs)))
+              (range 1 (dec (count segs)))))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  amender-trespass
+  "What moved in `cwd` while an amender ran, and which of it the amender could have written.
+
+   `before` and `after` are `working-copy-state` readings either side of the launch; `transcript`
+   is the amender's own stream-json log; `permitted` holds dirs relative to `cwd` the amender may
+   write in, whose moves are reported and never held against it. Returns
+
+     {:before id :after id :moved [path] :permitted [path] :attributed [path]}
+
+   plus `:unreadable` when either reading failed. The amender trespassed iff `:attributed` is
+   non-empty.
+
+   ATTRIBUTED, not detected. An amender runs in a live session worktree that a person, their
+   agent, an editor's cache and the REPL all write to, so a moved path is only the amender's if its
+   transcript pointed a file-writing tool at it or named it in a command. That still convicts an
+   amender whose command merely read a path somebody else edited — the bias a guard should have —
+   and cannot see a write made by a script file whose command line names no target. With the tree
+   unreadable nothing is known to have moved, and only file-writing tools aimed inside `cwd` count."
+  [{:keys [before after transcript cwd permitted]}]
+  (let [moved      (moved-paths before after)
+        {:keys [files commands]} (transcript-calls transcript)
+        written    (set (keep #(under cwd %) files))
+        permitted? (fn [p] (some #(or (= p %) (str/starts-with? p (str % "/"))) permitted))
+        suspects   (if moved
+                     (filter #(or (written %) (some (fn [c] (names-path? c %)) commands)) moved)
+                     written)
+        unreadable (or (:unreadable before) (:unreadable after))]
+    (cond-> {:before     (:identity before)
+             :after      (:identity after)
+             :moved      (vec moved)
+             :permitted  (vec (filter permitted? moved))
+             :attributed (vec (sort (remove permitted? suspects)))}
+      unreadable (assoc :unreadable unreadable))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   layer-label

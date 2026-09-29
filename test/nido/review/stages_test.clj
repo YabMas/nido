@@ -4722,3 +4722,96 @@
   ;; stop on its second round no matter what the judge said.
   (is (= (stages/default-finding-key {:cites ["a"] :claim "one"})
          (stages/default-finding-key {:cites ["b"] :claim "two"}))))
+
+;; ── Whether an amender wrote to the tree ────────────────────────────────────
+
+(defn- a-jj-repo []
+  (let [dir (str (fs/create-temp-dir {:prefix "nido-amend-tree"}))]
+    (jj/jj! dir "git" "init" ".")
+    (spit (str (fs/path dir "a.clj")) "a\n")
+    dir))
+
+(defn- transcript!
+  "An agent transcript at `path` holding `calls` as tool_use blocks, in the stream-json claude writes."
+  [path & calls]
+  (spit path (str/join "\n" (for [c calls]
+                              (json/generate-string
+                               {:type "assistant"
+                                :message {:content [(assoc c :type "tool_use")]}}))))
+  path)
+
+(deftest the-tree-reading-ignores-a-commit-that-leaves-the-tree-as-it-was
+  ;; Two runs lost an amendment with @'s tree byte-identical either side of the
+  ;; amend window: a caller's `jj commit` moved @'s parent, so `jj diff --git` —
+  ;; @ against that parent — moved while nothing in the tree did.
+  (let [dir (a-jj-repo)]
+    (try
+      (let [before (stages/working-copy-state dir)]
+        (jj/jj! dir "commit" "-m" "a caller commits")
+        (is (= (:identity before) (:identity (stages/working-copy-state dir)))
+            "a commit is not a write, and must not read as one")
+        (spit (str (fs/path dir "a.clj")) "b\n")
+        (is (= ["a.clj"] (:moved (stages/amender-trespass
+                                  {:before before :after (stages/working-copy-state dir)
+                                   :cwd dir})))
+            "an edit moves the tree, and names the path it moved"))
+      (finally (fs/delete-tree dir)))))
+
+(deftest a-tree-jj-cannot-read-is-unreadable-never-empty
+  ;; A failed `jj diff` read as "" compared unequal to the other side, so a
+  ;; round that could not look at the tree reported that the amender wrote to it.
+  (let [dir (str (fs/create-temp-dir {:prefix "nido-not-a-repo"}))]
+    (try
+      (let [state (stages/working-copy-state dir)]
+        (is (string? (:unreadable state)))
+        (is (not (contains? state :entries)))
+        (is (= [] (:attributed (stages/amender-trespass {:before state :after state :cwd dir})))
+            "and nothing unreadable is held against an amender that wrote nothing"))
+      (finally (fs/delete-tree dir)))))
+
+(def ^:private before-tree {:identity "t1" :entries {"src/human.clj" "h1" "src/x.clj" "x1"}})
+
+(defn- trespass [after & calls]
+  (let [t (str (fs/create-temp-file {:suffix ".log"}))]
+    (try
+      (stages/amender-trespass {:before before-tree :after after :cwd "/w"
+                                :transcript (apply transcript! t calls)})
+      (finally (fs/delete-if-exists t)))))
+
+(deftest a-path-somebody-else-moved-is-reported-not-attributed
+  ;; The commonest misfire: a person, their agent, or an editor cache writes to
+  ;; the live session worktree while the amender only reads and writes its answer
+  ;; into the run dir.
+  (let [t (trespass (assoc-in before-tree [:entries "src/human.clj"] "h2")
+                    {:name "Bash" :input {:command "grep -n foo src/x.clj"}}
+                    {:name "Write" :input {:file_path "/runs/r1/amend-round-1.edn"}})]
+    (is (= ["src/human.clj"] (:moved t)))
+    (is (= [] (:attributed t)))))
+
+(deftest a-path-the-amender-pointed-a-tool-at-is-attributed
+  (let [t (trespass (assoc-in before-tree [:entries "src/x.clj"] "x2")
+                    {:name "Edit" :input {:file_path "/w/src/x.clj"}})]
+    (is (= ["src/x.clj"] (:attributed t)))))
+
+(deftest a-path-the-amender-named-in-a-command-is-attributed-from-any-cwd
+  ;; A command after a `cd` names a file from wherever it stands, so a tail of
+  ;; the path is enough — but never a single segment, which names half the tree.
+  (let [moved (assoc-in before-tree [:entries "src/deep/pkg/x.clj"] "new")]
+    (is (= ["src/deep/pkg/x.clj"]
+           (:attributed (trespass moved {:name "Bash" :input {:command "cd src/deep && sed -i s/a/b/ pkg/x.clj"}}))))
+    (is (= [] (:attributed (trespass moved {:name "Bash" :input {:command "grep -rn x.clj ."}}))))))
+
+(deftest a-permitted-dir-moves-without-counting-against-the-amender
+  (let [t (stages/amender-trespass {:before before-tree
+                                    :after (assoc-in before-tree [:entries "canvas/strata.clj"] "c")
+                                    :cwd "/w" :permitted ["canvas"]
+                                    :transcript (transcript! (str (fs/create-temp-file))
+                                                             {:name "Edit" :input {:file_path "/w/canvas/strata.clj"}})})]
+    (is (= ["canvas/strata.clj"] (:permitted t)))
+    (is (= [] (:attributed t)))))
+
+(deftest with-the-tree-unreadable-only-a-file-writing-tool-convicts
+  (let [gone {:unreadable "jj debug tree exited 1"}]
+    (is (= [] (:attributed (trespass gone {:name "Bash" :input {:command "cat src/x.clj"}}))))
+    (is (= ["src/x.clj"] (:attributed (trespass gone {:name "Write" :input {:file_path "/w/src/x.clj"}}))))
+    (is (= "jj debug tree exited 1" (:unreadable (trespass gone))))))
