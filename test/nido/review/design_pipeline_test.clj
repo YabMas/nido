@@ -1389,3 +1389,59 @@
         (let [r2 (run record/design-judge-stage (ctx :carry (:carry r1)))]
           (is (= :proceed (:status r2)))
           (is (= :escalate (:control r2))))))))
+
+;; ── A decision that is a person's to make ───────────────────────────────────
+
+(deftest a-scope-decision-stops-for-a-person-instead-of-reaching-the-amender
+  ;; Handed a finding whose only repair was the scope question in :asks, amenders dropped a
+  ;; 309-line module the branch was building and reversed a decision the record's :open stated.
+  ;; An :ask ends the run there, and nothing is handed to an amender.
+  (let [appended (atom [])]
+    (with-redefs [record/design-decision!
+                  (fn [_] (decision :ask :checks [(check :goal-served :broken)]
+                                    :findings [{:cites ["c"] :claim "over-serves the goal"
+                                                :check :goal-served :claim-id "pool-in-scope"}]))
+                  record/append! (fn [_ r] (swap! appended conj r) nil)]
+      (let [out (run record/design-judge-stage (ctx))]
+        (is (= :asked (:status out)))
+        (is (= :escalate (:control out)))
+        (is (= [] (:findings out)) "the amender is handed nothing to settle")
+        (is (= [:ask] (mapv :recommend @appended)) "the decision is on the ledger for the person")))))
+
+(deftest an-ask-parks-even-where-a-proceed-would-clear
+  ;; A design declaring :conforms/:within owes nobody a grant, so a proceed clears it and nobody
+  ;; reads its ask. The judge's way to reach a person there is :ask, and nothing may read an :ask
+  ;; as proceeding — not even when the only check it broke is the advisory one.
+  (is (false? (report/proceeds? (decision :ask :checks [(check :decomposable :broken)]))))
+  (let [modest (assoc a-design :standing {:relation :conforms}
+                      :baseline {:seq 1 :relation :within})]
+    (with-redefs [record/design-decision!
+                  (fn [_] (decision :ask :checks [(check :goal-served :held)]))
+                  record/append! (fn [_ _] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/entries-of (constantly [])
+                  ws/entry-at-seq (constantly modest)
+                  standing/of-design (constantly {:decidable? true})]
+      (is (= :asked (:status (run record/design-judge-stage (ctx))))))))
+
+(deftest the-amender-is-shown-the-question-it-may-not-answer
+  ;; It was handed :reason and never :asks, and its only way to decline was a finding wrong about
+  ;; the code — so a finding right about the code whose repair was the ask got answered by it.
+  (let [p (record/design-amend-prompt {:design a-design :recommend :amend :reason "r"
+                                       :asks "is the candidate pool in scope?"
+                                       :raised [(check :goal-served :broken)] :out-path "/o"})]
+    (is (str/includes? p "is the candidate pool in scope?"))
+    (is (str/includes? p "ITS ONLY REPAIR IS ANSWERING")
+        "declining to answer it goes through the objection channel, back to the judge")))
+
+(deftest the-amend-stage-passes-the-decision-s-ask-through
+  (let [seen (atom nil)]
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ k] (when (= :design k) a-design))
+                  stages/discover-baseline (fn [_ _] nil)
+                  design-check/design-of (constantly nil)
+                  record/launch-amender! (fn [_ {:keys [first-message]}] (reset! seen first-message) {})]
+      (run record/design-amend-stage
+           (ctx :record (decision :amend :findings [{:cites ["c"] :claim "x"}])
+                :findings [(check :relation-honest :broken)]))
+      (is (str/includes? @seen "is this worth doing now?")))))

@@ -822,11 +822,95 @@
                            (str "\n    its judge did not answer (" (name (:outcome reading)) ")")))))
          "\n")))
 
+(defn- claim-delta
+  "Which claims `design` adds, changes and drops against `granted`, by id — nil when either lists
+   invariants with no ids, which leave nothing to compare by."
+  [granted design]
+  (let [by-id (fn [d] (into {} (map (juxt :id #(select-keys % [:statement :about])))
+                            (get-in d [:model :claims])))
+        was   (by-id granted)
+        is    (by-id design)]
+    (when (and (seq was) (seq is))
+      {:added   (vec (sort (remove was (keys is))))
+       :changed (vec (sort (filter #(and (was %) (not= (was %) (is %))) (keys is))))
+       :dropped (vec (sort (remove is (keys was))))})))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
+  answered
+  "What a person has already answered about `design`, read off the ledger for its judge's `asks`:
+
+     :grant  the nearest design in its :supersedes chain a person approved, itself included —
+             {:seq :self? :note :delta} — or absent when nobody has granted any of them
+     :asked  the newest decision's :asks on this workstream, when no grant has been written
+             since it; a question put to a person and not yet answered
+
+   Only what bears on the ask. The judge still derives every check over the whole record, and is
+   told so beside this: a grant is evidence that a person decided, never that a claim holds."
+  [project ws-id design]
+  (let [chain     (loop [d design, seen #{}, acc []]
+                    (if (or (nil? d) (seen (:seq d)))
+                      acc
+                      (recur (some->> (get-in d [:supersedes :seq]) (ws/entry-at-seq project ws-id))
+                             (conj seen (:seq d)) (conj acc d))))
+        approvals (ws/entries-of project ws-id :design-approved)
+        approved  (into {} (map (juxt #(get-in % [:design :seq]) identity)) approvals)
+        granted   (some #(when (approved (:seq %)) %) chain)
+        last-ask  (last (ws/entries-of project ws-id :design-decision))
+        answered? (some #(> (long (or (:seq %) 0)) (long (or (:seq last-ask) 0))) approvals)]
+    (cond-> {}
+      granted (assoc :grant (cond-> {:seq (:seq granted) :self? (= (:seq granted) (:seq design))}
+                              (:note (approved (:seq granted)))
+                              (assoc :note (:note (approved (:seq granted))))
+                              (claim-delta granted design)
+                              (assoc :delta (claim-delta granted design))))
+      (and last-ask (not answered?) (not (str/blank? (:asks last-ask))))
+      (assoc :asked (:asks last-ask)))))
+
+(defn- answered-block
+  "Who reads `asks`, and what is already off the table for it: the design's :open notes, a grant a
+   person gave, a question already put to one. `owes?` is `report/owes-a-person?` of the design."
+  [owes? open {:keys [grant asked]}]
+  (str
+   (if owes?
+     (str "\nWHO READS asks: a person. This design declares a move they must grant\n"
+          "(:challenges or :revisit), so a proceed stops for them and asks is what they read.\n")
+     (str "\nWHO READS asks: NOBODY, on a proceed. This design declares nothing a person\n"
+          "must grant, so a proceed clears it and the build starts; asks is recorded and\n"
+          "no one is stopped to read it. A question the build must not start without —\n"
+          "what the intent means, whether this scope is the one wanted, whether it is\n"
+          "worth its cost — is recommend ask, never a proceed with the question in asks.\n"))
+   (when (seq open)
+     (str "\nTHE RECORD'S OPEN NOTES — what its author states is decided, or left open on purpose:\n"
+          (bullets open) "\n"
+          "A note stating a decision is answered: asks does not pose it again. A finding\n"
+          "that sets the intent against one is a question for a person — ask, not amend.\n"))
+   (when grant
+     (str "\nALREADY GRANTED. A person approved "
+          (if (:self? grant) "this design" (str "entry " (:seq grant) ", which this design replaces"))
+          (when (:note grant) (str " — \"" (:note grant) "\""))
+          ".\nThe grant is not evidence for any check: derive every one over the whole record\n"
+          "as if it were new. It bears on asks alone, which poses only what the grant does\n"
+          "not already cover"
+          (if-let [{:keys [added changed dropped]} (:delta grant)]
+            (str " — the claims changed since it:"
+                 (when (seq added) (str "\n  added: " (str/join ", " added)))
+                 (when (seq changed) (str "\n  changed: " (str/join ", " changed)))
+                 (when (seq dropped) (str "\n  dropped: " (str/join ", " dropped)))
+                 (when-not (or (seq added) (seq changed) (seq dropped)) " none")
+                 "\n")
+            ".\n")))
+   (when asked
+     (str "\nASKED BEFORE, AND NO GRANT WRITTEN SINCE:\n  " asked "\n"
+          "If what you find can only be repaired by answering this, recommend ask: an\n"
+          "amender handed it answers it without the person, and the next round refutes\n"
+          "the answer.\n"))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   design-prompt
   "The decision prompt. Derives what can be derived; hands the rest over."
-  [{:keys [design baseline stance intent disputes settled levels prior]}]
-  (let [design   (judged-alone design)
+  [{:keys [design baseline stance intent disputes settled levels prior answers]}]
+  (let [owes?    (report/owes-a-person? design)
+        design   (judged-alone design)
         baseline (judged-alone baseline)]
    (str
    "You are deciding whether a change should be EXECUTED, before any code is\n"
@@ -923,7 +1007,13 @@
    "                      different story make this two changes.\n\n"
    "Then recommend:\n"
    "  proceed  — nothing derivable blocks it.\n"
-   "  amend    — a derivable defect in the record itself.\n"
+   "  ask      — stop for a person. What you found can only be repaired by a\n"
+   "             decision the record may not make for itself: the scope, what the\n"
+   "             intent means, whether it is worth its cost. An amender handed it\n"
+   "             settles it by guessing — narrowing a goal the person wanted, or\n"
+   "             reversing a decision the record states. Findings are optional.\n"
+   "  amend    — a derivable defect in the record itself, which the record can\n"
+   "             repair without anyone deciding anything new.\n"
    "  recut    — the decomposition does not hold.\n"
    "  resurvey — the PREMISE is wrong, not the commitment. A design can be sound\n"
    "             on a baseline that was not. Redesign and re-survey are different\n"
@@ -949,7 +1039,9 @@
    "ruling is asked again, and a proceed over it does not stand.\n\n"
    "asks is REQUIRED whatever you recommend: state the question the human still\n"
    "has to answer, in one or two sentences, with everything you derived already\n"
-   "taken off the table. Never answer it yourself."
+   "taken off the table — and with it what the record's open notes state is\n"
+   "decided and what a grant already covers. Never answer it yourself.\n"
+   (answered-block owes? (:open design) answers)
    (prior-findings-block (apply dissoc prior (keys settled)))
    (disputes-block disputes)
    (level-reminder :commitment))))
@@ -1137,10 +1229,12 @@
                        (:checks m))
           findings (normalize-findings (:findings m))
           asks     (str (:asks m))]
-      (when (and (#{:proceed :amend :recut :resurvey} r)
+      ;; An :ask needs no finding: what it hands on is the question, and a doubt the build must not
+      ;; start without is one whether or not it breaks a check.
+      (when (and (#{:proceed :amend :recut :resurvey :ask} r)
                  (seq checks)
                  (not (str/blank? asks))
-                 (or (= :proceed r) (seq findings)))
+                 (or (#{:proceed :ask} r) (seq findings)))
         (cond-> (with-ruling {:format :design-decision
                               :recommend r
                               :design-seq design-seq
@@ -1148,7 +1242,7 @@
                               :checks checks
                               :asks asks}
                              m)
-          (not= :proceed r) (assoc :findings findings))))
+          (and (not= :proceed r) (seq findings)) (assoc :findings findings))))
     (catch Exception _ nil)))
 
 (defn- run-round!
@@ -1613,7 +1707,8 @@
                                              :disputes disputes
                                              :settled  settled
                                              :prior    prior
-                                             :levels   levels})})
+                                             :levels   levels
+                                             :answers  (answered project ws-id design)})})
                                  #(parse-design-decision % (:seq design)))
                 after    (settled/code-identity code-cwd)
                 one-tree (when (= before after) before)
@@ -2946,7 +3041,7 @@
    answerable and both are disputable, and the number is how: the amender
    objects by ordinal and never by matching text. `:findings` is the judge's own
    prose beneath them, which says more and is keyed to nothing."
-  [{:keys [design baseline recommend reason raised findings out-path declared? check-cmd]}]
+  [{:keys [design baseline recommend reason asks raised findings out-path declared? check-cmd]}]
   (str
    "A read-only judge derived what could be derived about this DESIGN record,\n"
    "before any code is written, and it did not come out clean.\n\n"
@@ -3020,9 +3115,14 @@
    "fresh chance for a check that held to stop holding. Rounds have gone by\n"
    "watching one derivation get answered while a rewritten neighbour became the\n"
    "next one to fail. Fix what failed; leave the rest exactly as it stands.\n"
-   "\n\nIF A NUMBERED LINE IS WRONG ABOUT THE CODE, SAY SO INSTEAD OF AMENDING\n"
-   "FOR IT. You do not settle it — the judge is asked again with your objection\n"
-   "in front of it. An objection with no reason is dropped.\n\n"
+   (when-not (str/blank? (str asks))
+     (str "\n\nWHAT THE JUDGE LEFT FOR A PERSON — not yours to answer:\n  " asks "\n"))
+   "\n\nIF A NUMBERED LINE IS WRONG ABOUT THE CODE, OR ITS ONLY REPAIR IS ANSWERING\n"
+   "THE QUESTION LEFT FOR A PERSON, SAY SO INSTEAD OF AMENDING FOR IT. Narrowing\n"
+   "the scope, dropping what the intent asks for, or reversing a decision the\n"
+   "record's :open states is answering it. You do not settle it — the judge is\n"
+   "asked again with your objection in front of it, and may stop for the person.\n"
+   "An objection with no reason is dropped.\n\n"
    "Write EDN to:\n\n  " out-path "\n\n"
    "  {:record   <the COMPLETE superseding design — every field, not a diff>\n"
    "   :disputes [{:finding 1 :because \"...\" :evidence [\"src/x.clj:41\"]}]}\n\n"
@@ -3115,6 +3215,13 @@
                           :proceed :escalate
                           :stop)))
 
+      ;; The judge's own stop for a person. Ahead of the findings, which an amender would otherwise
+      ;; be handed: the question they raise is the one it is not the amender's to answer.
+      (= :ask (:recommend record))
+      (final! (assoc ctx :record record :findings []
+                     :underivable (underivable-checks record)
+                     :control :escalate :status :asked))
+
       :else
       (let [claims-of (fn [{c :check}]
                         (into [] (comp (filter #(= c (:check %)))
@@ -3181,7 +3288,9 @@
 (def design-judge-stage
   "Derive everything derivable, and stop the moment nothing is left.
 
-   Five ways to end here and only one of them is convergence-shaped. :proceed
+   Six ways to end here and only one of them is convergence-shaped. :asked
+   escalates whoever the design owes: the judge said the repair is a person's
+   decision, and an amender would make it for them. :proceed
    escalates because the ask is the point — unless nobody is owed one: a design
    the round cleared advances, and one whose clearance is still unwritten ends
    :clearance-contended, which the clearance stage finishes without re-running
@@ -3309,6 +3418,7 @@
                                           :baseline baseline
                                           :recommend recommend
                                           :reason (get-in ctx [:record :reason])
+                                          :asks (get-in ctx [:record :asks])
                                           :raised (:findings ctx)
                                           :findings (get-in ctx [:record :findings])
                                           :out-path out-path

@@ -822,6 +822,7 @@
    ;; ── only a human can settle it ──
    :cleared              :advance   ; a proceeding decision that owed nobody a grant
    :proceed              :escalate  ; the design round's ask, when a person IS owed one
+   :asked                :escalate  ; the judge stopped for a person, whoever the design owes
    :disputed             :escalate  ; judge and amender deadlocked
    ;; A record round that would have held, asked twice, and left checks without a ruling both
    ;; times. The record does not hold over them, and another round re-reads the same judge.

@@ -15,6 +15,7 @@
    puts the row in front of a human now."
   (:require
    [babashka.fs :as fs]
+   [clojure.string :as str]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.report :as report]
@@ -62,6 +63,30 @@
                              " — everything derivable has been derived"))}
     (seq tried)   (assoc :tried (mapv attempt tried))
     (seq options) (assoc :options (vec options))))
+
+(defn ^{:malli/schema [:=> [:cat :keyword [:sequential :map]] [:maybe :string]]}
+  decision-needs
+  "What a person is asked when a design round stops at `outcome`, from the `decisions` that round
+   appended, oldest first — or nil when it appended none, and the fallback is all there is to say.
+
+   The newest decision is where the run stopped, so the question is its: what it recommended, the
+   checks it left broken and the claims they name, and its :asks verbatim. An earlier ask of the
+   same run is kept beside it, since an amendment between them answered it for nobody. A decision
+   that named a repair says so: a run that stopped on one did not derive everything derivable."
+  [outcome decisions]
+  (when-let [{:keys [recommend asks checks findings reason] :as last-d} (last decisions)]
+    (let [broken  (keep #(when (= :broken (:status %)) (:check %)) checks)
+          claims  (distinct (keep #(not-empty (str (:claim-id %))) findings))
+          earlier (remove #{asks} (distinct (keep :asks (butlast decisions))))]
+      (str "a decision on the design round, which stopped at " (name outcome)
+           " on the decision at entry " (:seq last-d) " recommending " (name recommend)
+           (when (seq broken) (str " — broken: " (str/join ", " (map name broken))))
+           (when (seq claims) (str " — claims: " (str/join ", " claims)))
+           (when (#{:amend :recut :resurvey} recommend)
+             (str ". It named a repair the run did not carry out: " reason))
+           (when-not (str/blank? (str asks)) (str "\nFor you to decide: " asks))
+           (when (seq earlier)
+             (str "\nAsked earlier in the same run: " (str/join " / " earlier)))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   park!
@@ -284,6 +309,17 @@
     (let [home (str (session-state/session-home-dir (name project) (:name s)))]
       (when (fs/exists? home) home))))
 
+(defn- newest-decision-seq
+  "The ledger position of this workstream's newest design decision, or 0 when it holds none."
+  [project ws-id]
+  (or (:seq (last (ws/entries-of project ws-id :design-decision))) 0))
+
+(defn- decisions-since
+  "The design decisions appended after position `since`, oldest first — what one run of the design
+   round wrote, and never a decision an earlier run left behind."
+  [project ws-id since]
+  (filterv #(> (long (:seq %)) (long since)) (ws/entries-of project ws-id :design-decision)))
+
 (def max-attempts
   "How many times the driver runs one stage before it stops trying.
 
@@ -359,7 +395,8 @@
                                                    " stage needs a worktree to run in")})
        :else
        (loop [attempt 1, tried []]
-         (let [status  (try ((requiring-resolve task) {:cwd cwd})
+         (let [since   (when (= :decide-design stage) (newest-decision-seq project ws-id))
+               status  (try ((requiring-resolve task) {:cwd cwd})
                             (catch Throwable t
                               (binding [*out* *err*]
                                 (println (str "nido drive: " label " stage threw on "
@@ -379,8 +416,12 @@
              ;; The round said something. Whatever it said, it is not a machine
              ;; failure, so trying again would be running a decided stage twice.
              (not= :retry (pipeline/disposition outcome))
-             (assoc (park-on-escalate! project ws-id
-                                       {:stage stage :outcome outcome :tried tried})
+             (assoc (park-on-escalate!
+                     project ws-id
+                     (cond-> {:stage stage :outcome outcome :tried tried}
+                       (= :decide-design stage)
+                       (assoc :needs (decision-needs outcome
+                                                     (decisions-since project ws-id since)))))
                     :outcome outcome :attempts attempt)
 
              (< attempt max-attempts)

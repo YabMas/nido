@@ -401,6 +401,14 @@
     (is (str/includes? h "Refused amendment, not appended: /r/design-amend-round-2.edn")))
   (is (not (str/includes? (:headline (analysis/payload a-design-run)) "refused"))))
 
+(deftest a-cleared-design-run-carries-its-ask-into-the-headline
+  ;; A cleared run stops nobody, and its headline read as five counters — an all-clear — while its
+  ;; decision held a live product question.
+  (is (str/includes? (:headline (analysis/payload (assoc a-design-run :asks "is that trade worth taking now?")))
+                     "Asked of a person: is that trade worth taking now?\n"))
+  (is (not (str/includes? (:headline (analysis/payload a-design-run)) "Asked of a person"))
+      "a baseline run, or one that ended before any decision, asks nothing"))
+
 (deftest a-diff-runs-envelope-keeps-its-fields-and-gains-a-headline
   (let [p (analysis/payload a-run)]
     (is (= (str "Status: converged · 3 rounds · 3 defects settled (5 repairs dispatched) · 1 still open · 0 kept\n"

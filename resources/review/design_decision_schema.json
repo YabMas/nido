@@ -17,9 +17,10 @@
         "proceed",
         "amend",
         "recut",
-        "resurvey"
+        "resurvey",
+        "ask"
       ],
-      "description": "proceed: nothing derivable blocks it. amend: a derivable defect in the record. recut: the decomposition does not hold. resurvey: the premise is wrong, not the commitment."
+      "description": "proceed: nothing derivable blocks it. amend: a derivable defect in the record. recut: the decomposition does not hold. resurvey: the premise is wrong, not the commitment. ask: stop for a person — the repair is a decision the record may not make for itself (scope, what the intent means, worth at this cost), and an amender would settle it by guessing."
     },
     "reason": {
       "type": "string"
@@ -63,7 +64,7 @@
     },
     "findings": {
       "type": "array",
-      "description": "Empty when recommending proceed. Every entry must cite what it falsifies.",
+      "description": "Empty when recommending proceed; may be empty when recommending ask. Every entry must cite what it falsifies.",
       "items": {
         "type": "object",
         "additionalProperties": false,

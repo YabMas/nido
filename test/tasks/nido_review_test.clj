@@ -1380,6 +1380,7 @@
 (deftest every-design-terminal-status-names-its-own-remedy
   (doseq [[status marker]
           {:proceed            "only you can answer"
+           :asked              "only you can repair"
            :underivable        "no yardstick"
            :nothing-to-amend   "named nothing an amender could repair"
            :disputed           "neither can settle it"

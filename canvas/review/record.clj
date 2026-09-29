@@ -82,9 +82,14 @@
      a different answer from the design being wrong."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design :map]] [:maybe :map]]
      :delegates [standing/of-design]})
+  (Operation answered
+    "What a person has already answered about a design, for its judge's ask: the nearest grant up
+     its supersedes chain with the claims changed since, and a question put to a person that no
+     grant has answered."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design :map]] :map]})
   (Operation design-decision! "Run the decision round over a design."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [design-prompt parse-design-decision unresolved-subjects design/elements]})
+     :delegates [design-prompt parse-design-decision unresolved-subjects design/elements answered]})
   (Operation append! "Append a round's record to the ledger."
     {:signature [:=> [:catn [:cwd Path] [:record :map]] :any]})
   (Operation clear!

@@ -272,10 +272,10 @@
 (defn- record-payload
   "The envelope for a baseline or design run. Its headline says what a record run DID — how many of
    its rounds judged, amended, gave something up, or were argued with — and, for a design run, which
-   checks were still broken when it ended; the figures per check are the ledger's, read by
-   `bb nido:review:figures`, never carried here."
+   checks were still broken when it ended and what its last decision asked of a person; the figures
+   per check are the ledger's, read by `bb nido:review:figures`, never carried here."
   [{:keys [loop run-id report-path status rounds judged amended unappended weakened disputed
-           record-seq still-broken reviewed-project reviewed-session reviewed-ws-id] :as run}]
+           record-seq still-broken asks reviewed-project reviewed-session reviewed-ws-id] :as run}]
   (let [kind   (name loop)
         broken (seq (map name still-broken))]
     (cond-> {:adapter     :review-run
@@ -298,6 +298,9 @@
                                "Record: the " kind (when record-seq (str " at entry " record-seq))
                                (when broken (str " · broken at the end: " (str/join ", " broken)))
                                " · figures: bb nido:review:figures :run-id " run-id "\n"
+                               ;; A cleared run stops nobody, so this line is the only place its
+                               ;; question surfaces outside the ledger.
+                               (when-not (str/blank? (str asks)) (str "Asked of a person: " asks "\n"))
                                (reviewed-line run (when reviewed-ws-id (str " (workstream " reviewed-ws-id ")"))))}
       record-seq       (assoc :record-seq record-seq)
       reviewed-project (assoc :reviewed-project (name reviewed-project))

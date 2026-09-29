@@ -78,6 +78,10 @@
     {:signature [:=> [:catn [:opts :map]] :map]})
   (Operation halt-for "The halt record for a stage that reached an outcome."
     {:signature [:=> [:catn [:opts :map]] :map]})
+  (Operation decision-needs
+    "What a person is asked when a design round stops: the question its newest decision left them,
+     the checks and claims it stopped on, and any earlier ask of the same run."
+    {:signature [:=> [:catn [:outcome :keyword] [:decisions [:sequential :map]]] [:maybe :string]]})
   (Operation park! "Stop a workstream and record why."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:halt :map]] :map]
      :delegates [workstream/append-entry! session/set-phase!]})
@@ -107,7 +111,7 @@
   (Operation run-stage! "Run one mechanical stage to a settled outcome, then act on it."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:stage :keyword]
                             [:opts [:? :map]]] :map]
-     :delegates [park-on-escalate!]})
+     :delegates [park-on-escalate! decision-needs workstream/entries-of]})
   (Operation in-flight? "Whether a drive run already claims this workstream."
     {:signature [:=> [:catn [:ws-id WorkstreamId]] :boolean] :delegates [runs/list-run-ids runs/read-run]})
   (Operation tick!

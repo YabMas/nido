@@ -1879,6 +1879,7 @@
       :record-seq       (or (:design-seq rec) (:baseline-seq rec))
       :still-broken     (when (= :design-decision (:format rec))
                           (sort (keep #(when (= :broken (:status %)) (:check %)) (:checks rec))))
+      :asks             (when (= :design-decision (:format rec)) (:asks rec))
       :reviewed-project project
       :reviewed-session session
       :reviewed-ws-id   ws-id})))
@@ -2103,6 +2104,7 @@
 
 (def ^:private design-remedies
   {:proceed "nothing derivable blocks it — what is left is the part only you can answer"
+   :asked "the judge found something only you can repair — answer the question below, then amend the design or its intent to say so"
    :clearance-contended "the design owes nobody a grant and the decision stands, but its clearance is not written yet — the clearance stage writes it, and no round re-runs"
    :underivable "a check has no yardstick to derive against, which is not a defect an amender can repair"
    :nothing-to-amend "the round would not proceed and named nothing an amender could repair — read its reason on the ledger and decide by hand"

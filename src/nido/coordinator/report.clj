@@ -2566,12 +2566,20 @@
    derivable is derived into :checks, and :asks carries the irreducible judgement
    — worth doing, now, at this cost — to a human. :asks is required on every
    branch, :recommend included: this round prepares an approval, it does not
-   grant one.
+   grant one. A person reads it only where one is stopped: a :proceed on a design
+   that `owes-a-person?`, or an :ask. A :proceed on a design owing nobody clears it
+   (`DesignCleared`) and its :asks is recorded for nobody in particular, which the
+   judge is told before it answers.
 
    :recommend is what the derivation supports. :proceed means nothing derivable
-   blocks it. The other three each name a different remedy, and saying the wrong
+   blocks it. The other four each name a different remedy, and saying the wrong
    one is worse than saying nothing: :amend fixes the record, :recut redoes the
-   decomposition, :resurvey fixes the premise and leaves the commitment alone."
+   decomposition, :resurvey fixes the premise and leaves the commitment alone,
+   and :ask stops for a person — a defect whose only repair is a decision the
+   record may not make for itself (scope, what the intent means, worth at this
+   cost), which an amender handed it would settle by guessing. Its :findings may
+   be empty: a doubt the build must not start without is an :ask whether or not
+   it breaks a check."
   (let [common [[:format     [:= :design-decision]]
                 [:design-seq int?]
                 [:reason     string?]
@@ -2608,7 +2616,8 @@
      [:proceed  (shape :proceed)]
      [:amend    (shape :amend    [:findings [:vector {:min 1} RecordFinding]])]
      [:recut    (shape :recut    [:findings [:vector {:min 1} RecordFinding]])]
-     [:resurvey (shape :resurvey [:findings [:vector {:min 1} RecordFinding]])]]))
+     [:resurvey (shape :resurvey [:findings [:vector {:min 1} RecordFinding]])]
+     [:ask      (shape :ask      [:findings {:optional true} [:vector RecordFinding]])]]))
 
 (def DesignDecisionPreUnderivable
   "READ SHAPE for :design-decision — the same record with two-outcome checks.
@@ -2981,7 +2990,7 @@
   "Does this design decision let its design proceed?
 
    It does when it recommends :proceed, and when everything the round found
-   broken is the advisory check, whatever it recommended — a complaint about the
+   broken is the advisory check, whatever it recommended but :ask — a complaint about the
    cut alone may not hold a design. False when nothing broke on a round that did
    not say :proceed: a clean round reads as its own recommendation.
 
@@ -2996,7 +3005,10 @@
    be parked for a person whose grant nothing then accepted."
   [decision]
   (let [broken (filter #(= :broken (:status %)) (:checks decision))]
-    (boolean (and (empty? (:unruled decision))
+    ;; An :ask is exempt from the advisory reading: it names a question for a person, and a
+    ;; question is not answered by the check it happens to break being the cut.
+    (boolean (and (not= :ask (:recommend decision))
+                  (empty? (:unruled decision))
                   (empty? (:read-once decision))
                   (or (= :proceed (:recommend decision))
                       (and (seq broken) (every? #(= advisory-check (:check %)) broken)))))))

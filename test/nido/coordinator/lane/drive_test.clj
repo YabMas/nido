@@ -493,3 +493,58 @@
           (is (= 1 (count @submitted)))
           (is (empty? (blockers-of id))
               "and it is fired rather than parked, which is what this layer changes"))))))
+
+;; ── What a stopped design round asks ────────────────────────────────────────
+
+(defn- a-decision [n recommend asks & {:as over}]
+  (merge {:format :design-decision :seq n :design-seq 4 :recommend recommend
+          :reason "two derivable gaps can be fixed in the record" :asks asks
+          :checks [{:check :goal-served :status :broken :note "narrows the done-when"}
+                   {:check :relation-honest :status :held :note "ok"}]
+          :findings [{:cites ["c"] :claim "x" :check :goal-served
+                      :claim-id "pipelines-are-comparable"}]}
+         over))
+
+(deftest a-stopped-design-round-hands-the-person-its-question
+  ;; The blocker is what the gate renders, and it said `everything derivable has been derived`
+  ;; while the one question the person had to answer sat in the decision's :asks, an entry back.
+  (let [needs (drive/decision-needs :no-progress
+                                    [(a-decision 7 :amend "is the harness worth M now?")
+                                     (a-decision 9 :amend "is this one-course harness worth M now?")])]
+    (is (str/includes? needs "For you to decide: is this one-course harness worth M now?")
+        "the terminal decision's ask, verbatim")
+    (is (str/includes? needs "Asked earlier in the same run: is the harness worth M now?")
+        "an earlier ask of the run is not dropped because an amendment came between")
+    (is (str/includes? needs "broken: goal-served"))
+    (is (str/includes? needs "claims: pipelines-are-comparable")
+        "the stopping check names the claims it was broken on")
+    (is (str/includes? needs "did not carry out: two derivable gaps")
+        "a run that stopped on a named repair did not derive everything derivable")
+    (is (not (str/includes? needs "everything derivable")))))
+
+(deftest a-round-that-appended-no-decision-keeps-the-honest-fallback
+  (is (nil? (drive/decision-needs :subjects-undeclared [])))
+  (is (not (str/includes? (drive/decision-needs :asked [(a-decision 3 :ask "scope?" :findings [])])
+                          "did not carry out"))
+      "an :ask named no repair — it is the person's call"))
+
+(deftest a-parked-design-round-writes-its-ask-onto-the-blocker
+  ;; Only the decisions this run appended: one left by an earlier run describes a round that is
+  ;; over, and is exactly what a person would mistake for the reason this one stopped.
+  (with-tmp
+    (fn []
+      (let [id      (a-ws)
+            ran?    (atom false)
+            entries ws/entries-of]
+        (with-redefs [drive/mechanical-stages {:decide-design {:task ::fake :label "design"}}
+                      requiring-resolve (fn [_] (fn [_] (reset! ran? true) :asked))
+                      ws/entries-of (fn [p w k]
+                                      (if (= :design-decision k)
+                                        (cond-> [(a-decision 3 :amend "a stale question")]
+                                          @ran? (conj (a-decision 8 :ask "is the pool in scope?"
+                                                                  :findings [])))
+                                        (entries p w k)))]
+          (drive/run-stage! :brian id :decide-design {:cwd "/tmp" :sleep-fn (fn [_])}))
+        (let [needs (:needs (ws/latest-entry :brian id :blocker))]
+          (is (str/includes? needs "For you to decide: is the pool in scope?"))
+          (is (not (str/includes? needs "a stale question"))))))))

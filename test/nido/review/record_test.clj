@@ -653,3 +653,69 @@
     (is (= ["canvas.order.strata/totals"]
            (record/unresolved-subjects strata-design (update listing :elements pop)))
         "a named stratum the declaration does not hold is undeclared, whether or not a claim is about it")))
+
+;; ── Who reads asks, and what is already answered ────────────────────────────
+
+(deftest an-ask-needs-no-finding-and-the-ledger-takes-it
+  ;; A doubt the build must not start without is a person's question whether or not it breaks a
+  ;; check — the done-when caveat two judges in a row parked in the asks of a self-clearing design.
+  (let [r (record/parse-design-decision
+           (json/generate-string
+            {:recommend "ask" :reason "the intent can be read two ways"
+             :checks [{:check "goal_served" :status "held" :note "on one reading"}]
+             :findings [] :asks "does a dead session count as working?"})
+           4)]
+    (is (= :ask (:recommend r)))
+    (is (not (contains? r :findings)))
+    (is (= r (report/validate-event :design-decision r)))))
+
+(deftest the-judge-is-told-when-nobody-will-read-its-ask
+  ;; A design declaring :conforms/:within clears on a proceed, and its required ask reached no
+  ;; report, gate or view. Said before the judge answers, so a question the build must not start
+  ;; without is recommended `ask` instead of parked where nobody looks.
+  (let [modest (record/design-prompt {:design design})
+        owing  (record/design-prompt {:design (assoc design :standing {:relation :challenges :note "n"})})]
+    (is (str/includes? modest "WHO READS asks: NOBODY, on a proceed"))
+    (is (str/includes? owing "WHO READS asks: a person"))
+    (is (str/includes? modest "  ask      — stop for a person"))))
+
+(deftest the-judge-is-shown-what-is-already-decided
+  ;; Shown neither the record's :open nor its grant, the judge re-posed a product decision the
+  ;; record stated as made, and asked the worth-executing question a person had already granted.
+  (let [p (record/design-prompt
+           {:design  (assoc design :open ["The name-order flip is confirmed as a product decision."])
+            :answers {:grant {:seq 16 :self? false :note "approved in session"
+                              :delta {:added ["drafts-not-scored"] :changed ["pipeline-boundary"]
+                                      :dropped []}}
+                      :asked "is the compression worth it now?"}})]
+    (is (str/includes? p "- The name-order flip is confirmed as a product decision."))
+    (is (str/includes? p "asks does not pose it again"))
+    (is (str/includes? p "A person approved entry 16, which this design replaces"))
+    (is (str/includes? p "added: drafts-not-scored"))
+    (is (str/includes? p "changed: pipeline-boundary"))
+    (is (str/includes? p "The grant is not evidence for any check")
+        "the grant narrows the ask and nothing else; every check is still derived whole")
+    (is (str/includes? p "ASKED BEFORE, AND NO GRANT WRITTEN SINCE:\n  is the compression worth it now?"))))
+
+(deftest what-is-answered-is-read-off-the-ledger
+  (let [claims  (fn [& cs] {:claims (mapv (fn [[id st]] {:id id :statement st :about ["m"]}) cs)})
+        granted (assoc design :seq 16 :model (claims ["a" "one"] ["b" "two"]))
+        current (assoc design :seq 20 :supersedes {:seq 16 :why "w"}
+                       :model (claims ["a" "one"] ["b" "TWO"] ["c" "three"]))
+        ledger  (fn [approvals decisions]
+                  (with-redefs [ws/entry-at-seq (fn [_ _ n] ({16 granted 20 current} n))
+                                ws/entries-of (fn [_ _ k] (case k
+                                                            :design-approved approvals
+                                                            :design-decision decisions
+                                                            []))]
+                    (record/answered :nido "ws-1" current)))]
+    (testing "the nearest grant up the supersedes chain, with the claims changed since it"
+      (let [a (ledger [{:seq 17 :design {:seq 16} :at-seq 16 :note "ok"}] [])]
+        (is (= {:seq 16 :self? false :note "ok"
+                :delta {:added ["c"] :changed ["b"] :dropped []}}
+               (:grant a)))))
+    (testing "a question put to a person stays open until a grant is written after it"
+      (is (= "worth it?" (:asked (ledger [] [{:seq 18 :asks "worth it?"}]))))
+      (is (nil? (:asked (ledger [{:seq 19 :design {:seq 16} :at-seq 18}]
+                                [{:seq 18 :asks "worth it?"}])))))
+    (is (= {} (ledger [] [])) "nothing granted and nothing asked")))
