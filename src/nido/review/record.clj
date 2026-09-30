@@ -3316,8 +3316,16 @@
                     (let [;; Only the claims the prompt offered removal for: a reason
                           ;; given for any other drop does not make it a withdrawal.
                           offered  (withdrawable prev (:findings ctx) (:refuted-running ctx))
+                          ;; Where the judge pointed, per claim: the sites a repair
+                          ;; re-points a citation onto, which is not a citation lost.
+                          judged   (reduce (fn [m {:keys [claim-id evidence]}]
+                                             (cond-> m
+                                               (and (not (str/blank? (str claim-id))) (seq evidence))
+                                               (update (str claim-id) (fnil into []) (map str evidence))))
+                                           {} (:findings ctx))
                           retreats (retreat/baseline-retreats
-                                    prev record (select-keys (:withdrawn answer) (keys offered)))
+                                    prev record (select-keys (:withdrawn answer) (keys offered))
+                                    judged)
                           ;; Stamped, not as the amender wrote it. The judge
                           ;; labels its verdict with the :seq of the record it
                           ;; read, and the design loop's re-survey hands this

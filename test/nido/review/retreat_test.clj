@@ -228,12 +228,44 @@
     (is (= "src/a/t.clj:729 is cited by no load-bearing property any more"
            (:detail (first rs))))))
 
-(deftest a-shifted-line-is-reported-because-nothing-can-tell-it-from-a-loss
-  ;; :386 → :390 is either a corrected anchor or a dropped one, and the record
-  ;; carries nothing that distinguishes them. Reporting is the honest answer.
+(deftest a-citation-re-pointed-within-its-file-is-not-a-loss
+  ;; Seen live: a cite moved seven lines onto the judge's own site while the claim grew from three
+  ;; cites to five, and it was the run's only counted weakening. A claim still citing every file it
+  ;; cited, as many times, has claimed nothing less.
   (let [prev (with-evidence "src/a/progress.clj:386")
         curr (with-evidence "src/a/progress.clj:390")]
-    (is (= [:evidence-dropped] (map :what (retreat/baseline-retreats prev curr))))))
+    (is (= [] (retreat/baseline-retreats prev curr))))
+  (let [prev (with-evidence "src/c.clj:410" "src/c.clj:417" "src/c.clj:430")
+        curr (with-evidence "src/c.clj:410" "src/c.clj:424" "src/c.clj:430" "src/c.clj:440" "src/c.clj:450")]
+    (is (= [] (retreat/baseline-retreats prev curr)))))
+
+(deftest fewer-cites-is-a-loss-even-when-the-rest-moved
+  (let [prev (with-evidence "src/a/t.clj:386" "src/a/t.clj:500")
+        curr (with-evidence "src/a/t.clj:390")
+        rs   (retreat/baseline-retreats prev curr)]
+    (is (= ["src/a/t.clj:386 is cited by no load-bearing property any more"
+            "src/a/t.clj:500 is cited by no load-bearing property any more"]
+           (map :detail rs))
+        "nothing tells which of the two the new line replaced, so both are named")))
+
+(deftest a-file-the-claim-stops-citing-is-a-loss-whatever-the-count
+  (let [prev (with-evidence "src/a.clj:10" "src/b.clj:20")
+        curr (with-evidence "src/a.clj:10" "src/a.clj:15")]
+    (is (= ["src/b.clj:20 is cited by no load-bearing property any more"]
+           (map :detail (retreat/baseline-retreats prev curr))))))
+
+(deftest a-cite-moved-onto-the-judges-site-answers-for-the-one-it-replaced
+  ;; The count fell, so something was given up — but the move onto the site the judge named is the
+  ;; repair the finding asked for, and only the place nothing replaced is a loss.
+  (let [prev   (with-evidence "reporting.clj:166" "reporting.clj:216" "reporting.clj:300")
+        curr   (with-evidence "reporting.clj:159" "reporting.clj:216")
+        judged {"c7" ["reporting.clj:159 (the post happens before prep)"]}]
+    (is (= ["reporting.clj:300 is cited by no load-bearing property any more"]
+           (map :detail (retreat/baseline-retreats prev curr nil judged))))
+    (is (= ["reporting.clj:166 is cited by no load-bearing property any more"
+            "reporting.clj:300 is cited by no load-bearing property any more"]
+           (map :detail (retreat/baseline-retreats prev curr nil {"other" ["reporting.clj:159"]})))
+        "the judge's evidence against a different claim excuses nothing here")))
 
 (deftest evidence-that-names-no-file-is-not-a-place
   (is (= [] (retreat/baseline-retreats (with-evidence "the schema comment")

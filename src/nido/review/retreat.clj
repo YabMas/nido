@@ -90,14 +90,59 @@
   [b]
   (mapcat locations (mapcat :evidence (:load-bearing b))))
 
+(defn- overlaps?
+  [[file a b] [f c d]]
+  (and (= file f) (<= a d) (<= c b)))
+
+(defn- claim-places
+  [claim]
+  (distinct (mapcat locations (:evidence claim))))
+
+(defn- given-up
+  "Of `lost` — places claim `p` cited that nothing cites any more — the ones its successor `c` gave
+   up rather than re-pointed. `judged` is the judge's evidence strings against this claim this round.
+
+   An amender answering a finding moves the citation onto the site the finding named, and a moved
+   citation shares nothing with the place it left: `:166` → `:159` reads exactly like a loss. Two
+   things tell them apart. A claim that still cites every file it cited, at least as many times,
+   has lost nothing — the count and the files are what survive a re-pointing. Where either fell,
+   each newly cited place the judge named answers for one lost place in its file, the nearest: that
+   is the citation the finding moved."
+  [p c lost judged]
+  (let [was   (claim-places p)
+        now   (claim-places c)
+        files #(set (map first %))]
+    (if (and (>= (count now) (count was))
+             (every? (files now) (files was)))
+      []
+      (let [judge (mapcat locations judged)
+            moved (filter (fn [loc] (and (not-any? #(overlaps? % loc) was)
+                                         (some #(overlaps? % loc) judge)))
+                          now)]
+        (reduce (fn [lost [f s _]]
+                  (if-let [near (->> lost
+                                     (filter #(= f (first %)))
+                                     (sort-by #(abs (- s (second %))))
+                                     first)]
+                    (vec (remove #{near} lost))
+                    lost))
+                (vec lost) moved)))))
+
 (defn- evidence-lost
-  "Places the old record cited that the new one no longer points at. A place is
-   still cited when ANY remaining reference in that file covers its line, so a
-   widened range keeps everything inside it."
-  [prev curr]
-  (let [now (vec (baseline-evidence curr))]
-    (->> (baseline-evidence prev)
-         (remove (fn [loc] (some #(covers? % loc) now)))
+  "Places the old record cited that the new one no longer points at and did not re-point
+   (`given-up`). A place is still cited when ANY remaining reference in that file covers
+   its line, so a widened range keeps everything inside it. A claim with no id, or one the new
+   record no longer makes, has no successor to re-point to: everything only it cited is lost."
+  [prev curr judged]
+  (let [now   (vec (baseline-evidence curr))
+        lost? (fn [loc] (not-any? #(covers? % loc) now))
+        kept  (into {} (keep #(when (:id %) [(:id %) %])) (:load-bearing curr))]
+    (->> (:load-bearing prev)
+         (mapcat (fn [p]
+                   (let [lost (filter lost? (claim-places p))]
+                     (if-let [c (some-> (:id p) kept)]
+                       (given-up p c lost (get judged (:id p)))
+                       lost))))
          distinct
          (sort-by (juxt first second)))))
 
@@ -182,7 +227,10 @@
                           (keep :id (:load-bearing prev))))]
     (into (sorted-map) (filter (comp gone key)) withdrawn)))
 
-(defn ^{:malli/schema [:=> [:cat :map :map [:? [:maybe [:map-of :string :string]]]] :any]}
+(defn ^{:malli/schema [:=> [:cat :map :map
+                            [:? [:maybe [:map-of :string :string]]]
+                            [:? [:maybe [:map-of :string [:sequential :string]]]]]
+                      :any]}
   baseline-retreats
   "Everything the superseding baseline claims less of than the one before it.
 
@@ -190,7 +238,7 @@
    what :id is for, and what lets a dropped observation be named rather than
    counted. Load-bearing properties have no id, so they are compared two ways
    that survive rewording: how many there are, and which file:line references
-   nothing cites any more. A property genuinely corrected keeps pointing at the
+   nothing cites any more and no claim re-pointed. A property genuinely corrected keeps pointing at the
    code that corrected it; one quietly dropped takes its evidence with it.
 
    `withdrawn`, `{claim-id reason}`, names claims removed on purpose: ones the
@@ -198,9 +246,13 @@
    no longer makes is one `:claim-withdrawn` carrying that reason, and is measured
    nowhere else — the count, evidence and readings that left with it are that
    withdrawal, and reporting them again would call a stated removal an unexplained
-   weakening four times over."
-  ([prev curr] (baseline-retreats prev curr nil))
-  ([prev curr withdrawn]
+   weakening four times over.
+
+   `judged`, `{claim-id [evidence]}`, is the judge's evidence against each claim this round — the
+   sites an amender re-points a citation onto, which `evidence-lost` does not count as dropped."
+  ([prev curr] (baseline-retreats prev curr nil nil))
+  ([prev curr withdrawn] (baseline-retreats prev curr withdrawn nil))
+  ([prev curr withdrawn judged]
    (let [prev (as-survey prev)
          curr (as-survey curr)
          taken (withdrawals prev curr withdrawn)
@@ -229,7 +281,7 @@
                         :when (and c (:invisibly-incomplete? p)
                                    (not (:invisibly-incomplete? c)))]
                     id)
-         ev-gone (evidence-lost prev curr)]
+         ev-gone (evidence-lost prev curr judged)]
      (vec
       (concat
        (for [[id why] taken]
