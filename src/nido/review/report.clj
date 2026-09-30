@@ -446,6 +446,22 @@
       (seq (:conflicted ctx))  (assoc :conflicted (vec (:conflicted ctx)))
       (seq (:unattempted ctx)) (assoc :unattempted (vec (:unattempted ctx))))))
 
+(defn- with-filed
+  "A judge phase's finding `rows`, each that stands for a broken check — it has a :status, which
+   only a check row does — carrying `:filed`: the claim, cites and evidence of every one of the
+   judgement's own `findings` filed under that check. The row is keyed on the check so no
+   amendment can move it, and so says what broke but not the judge's case for it; that case is
+   what makes a finding disputable, and without it the report shows a refutation resting on
+   documentation exactly as it shows one resting on the code."
+  [rows findings]
+  (mapv (fn [row]
+          (let [filed (when (and (:check row) (:status row))
+                        (into [] (comp (filter #(= (:check row) (:check %)))
+                                       (map #(select-keys % [:claim-id :claim :cites :evidence])))
+                              findings))]
+            (cond-> row (seq filed) (assoc :filed filed))))
+        rows))
+
 (defn- finish-phase
   [ph phase ctx at]
   (let [ph (assoc ph :status "ok" :ended-at at)]
@@ -486,9 +502,15 @@
       ;; counterexample is one no rewording is settling, and nothing else in a round says so.
       ;; :overrides-settled is each subject the judge was shown as settled and found against anyway —
       ;; a confirmation settlement was shielding, caught.
+      ;; :judged-seq is the entry the judge read and :appended-seq the entry its judgement became —
+      ;; absent when the round appended none — so a round is joined to the ledger by number rather
+      ;; than by filtering the ledger on :run-id and counting.
+      ;; A finding row standing for a broken check carries :filed — see `with-filed`.
       :judge  (cond-> (assoc ph :verdict (some-> (get-in ctx [:record :verdict]) name)
                                 :outcome (some-> (get-in ctx [:record :outcome]) name)
-                                :findings (vec (:findings ctx)))
+                                :findings (with-filed (:findings ctx) (get-in ctx [:record :findings])))
+                (:judged-seq ctx)   (assoc :judged-seq (:judged-seq ctx))
+                (:appended-seq ctx) (assoc :appended-seq (:appended-seq ctx))
                 (get-in ctx [:record :recommend])
                 (assoc :recommend (name (get-in ctx [:record :recommend]))
                        :findings-made (count (get-in ctx [:record :findings])))
@@ -542,6 +564,8 @@
       ;; amendment is a complete answer to the round, held nowhere else.
       ;; :stale is the untouched subjects the amender said the accepted findings
       ;; made false — put back to the next judge, and recorded nowhere else.
+      ;; :delta is the subjects the appended amendment added, changed and dropped, by id: what the
+      ;; next judge is asked about again, which otherwise takes diffing two ledger entries.
       :amend  (cond-> (assoc ph :retreats (vec (:retreats ctx))
                                 :disputes (vec (:disputes ctx))
                                 :amended? (boolean (:amended? ctx))
@@ -549,6 +573,7 @@
                 (:amend-error ctx) (assoc :amend-error (:amend-error ctx))
                 (seq (:amend-refusals ctx)) (assoc :refusals (vec (:amend-refusals ctx)))
                 (seq (:stale ctx)) (assoc :stale (vec (:stale ctx)))
+                (:amend-delta ctx) (assoc :delta (:amend-delta ctx))
                 (:amend-tree ctx) (assoc :tree (:amend-tree ctx))
                 (:amend-unappended ctx) (assoc :status "refused"
                                                :unappended (:amend-unappended ctx)))
@@ -857,15 +882,22 @@
        (mapv (fn [[[reviewer instead-of] n]] {:reviewer reviewer :instead-of instead-of :readings n}))))
 
 (defn- finalize
+  "`report` sealed on the terminal ctx.
+
+   `:summary` carries `:max-iters`, the cap, when the run had one. The loop has no default, so a
+   cap is always the number whoever invoked the run passed; without it a `max-iters` status names
+   the stop and not how short the leash was."
   [report status ctx at]
-  (let [s (name status)]
+  (let [s   (name status)
+        cap (get-in ctx [:config :max-iters])]
     (assoc report
            :status   s
            :ended-at at
            :reason   (stopped-on ctx)
-           :summary  {:rounds       (count (:rounds report))
-                      :fix-attempts (fix-attempts report)
-                      :final-status s})))
+           :summary  (cond-> {:rounds       (count (:rounds report))
+                              :fix-attempts (fix-attempts report)
+                              :final-status s}
+                       cap (assoc :max-iters cap)))))
 
 (def orphaned-status
   "What a run whose process vanished is recorded as.

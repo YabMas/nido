@@ -349,6 +349,19 @@
                                   {:num-turns 3})]
       [(run record/amend-stage c) @appended])))
 
+(deftest an-amendment-names-the-subjects-it-moved
+  ;; What the next judge re-reads is what the amendment moved, and until now that took diffing the
+  ;; answer file against the entry it repaired.
+  (let [amended (-> a-baseline
+                    (assoc-in [:load-bearing 0 :property] "the aggregate sums; the invoice reads it")
+                    (update :health conj {:id "new-obs" :axis :design :observation "o"
+                                          :evidence ["src/x.clj:1"]}))
+        [out _] (with-amend {:writes (fn [p] (spit p (pr-str amended)))}
+                            (ctx :findings [a-finding]))]
+    (is (= {:changed ["c1"] :added ["new-obs"]} (:amend-delta out)))
+    (is (= {:changed ["c1"] :added ["new-obs"]} (:delta (persisted-phase :amend out)))
+        "and the report a reader has keeps it")))
+
 (deftest a-dry-run-never-launches-an-amender
   (let [launched (atom false)]
     (with-redefs [agent/launch! (fn [_] (reset! launched true) {})]

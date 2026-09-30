@@ -294,11 +294,26 @@
           (is (= :unruled (:status second)))
           (is (= :escalate (:control second))))))))
 
+(deftest a-judged-round-names-the-entry-its-decision-became
+  ;; The seq is read off the append that wrote it and nowhere else: the newest entry once the lock
+  ;; is released may be another writer's.
+  (with-redefs [record/design-decision! (fn [_] (decision :amend
+                                                          :findings [{:cites ["c"] :claim "x"
+                                                                      :check :relation-honest}]))
+                record/append! (fn [_ _] {:seq 17})]
+    (is (= 17 (:appended-seq (run record/design-judge-stage (ctx))))))
+  (with-redefs [record/design-decision! (fn [_] (decision :amend
+                                                          :findings [{:cites ["c"] :claim "x"
+                                                                      :check :relation-honest}]))
+                record/append! (fn [_ _] nil)]
+    (is (not (contains? (run record/design-judge-stage (ctx)) :appended-seq))
+        "a round whose append was lost names no entry rather than a wrong one")))
+
 (deftest a-clearance-the-ledger-kept-refusing-is-not-an-ask
   ;; Contention is not a grant being owed. Escalating as :proceed would park a
   ;; design whose declarations owe nobody on interference alone.
   (with-redefs [record/design-decision! (fn [_] (decision :proceed))
-                record/append! (fn [_ _] :contended)]
+                record/append! (fn [_ _] {:contended true})]
     (let [out (run record/design-judge-stage (ctx))]
       (is (= :clearance-contended (:status out)))
       (is (not= :escalate (:control out))))))

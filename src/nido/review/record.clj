@@ -933,6 +933,20 @@
        :changed (vec (sort (filter #(and (was %) (not= (was %) (is %))) (keys is))))
        :dropped (vec (sort (remove is (keys was))))})))
 
+(defn- subject-delta
+  "Which subjects (`settled/subjects`) an amendment `record` adds, changes and drops against `prev`,
+   the record it repairs, by id — only the non-empty of the three, and nil when it moves none. A
+   subject whose text an amendment left alone is still settled next round; these are the ones the
+   next judge is asked about again."
+  [prev record]
+  (let [was (settled/subjects prev)
+        is  (settled/subjects record)]
+    (not-empty
+     (into {} (filter (comp seq val))
+           {:added   (vec (sort (remove was (keys is))))
+            :changed (vec (sort (filter #(and (was %) (not= (was %) (is %))) (keys is))))
+            :dropped (vec (sort (remove is (keys was))))}))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   answered
   "What a person has already answered about `design`, read off the ledger for its judge's `asks`:
@@ -2001,24 +2015,35 @@
 
    A decision that proceeds (`report/proceeds?`) may also CLEAR the design, and
    that happens here rather than in either loop so that no round can append a
-   decision and forget the clearance it implies. Returns `:contended` when that
-   clearance was
-   still owed and could not be written. Nothing this returns means `a person is
-   owed the grant` — a write that threw answers nil too — so a caller asks the
-   design itself, as `proceeding-status` does."
+   decision and forget the clearance it implies.
+
+   Returns `{:seq n}`, the :seq the ledger gave the record — the only answer to which entry this
+   round wrote, since the newest entry once the lock is released may be another writer's — plus
+   `:contended true` when a clearance was still owed and could not be written. nil when nothing
+   was appended: an outcome, no workstream, or a write that threw. Nothing this returns means `a
+   person is owed the grant`, so a caller asks the design itself, as `proceeding-status` does."
   [cwd record]
   (try
     (when (:format record)
       (when-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
-        (ws/append-entry! project ws-id {:kind (:format record)} (pr-str record))
-        (when (and (= :design-decision (:format record))
-                   (report/proceeds? record))
-          (clear-if-owed-nobody! project ws-id (:design-seq record)))))
+        (let [n (ws/seq-of-path (ws/append-entry! project ws-id {:kind (:format record)} (pr-str record)))]
+          (cond-> {:seq n}
+            (and (= :design-decision (:format record))
+                 (report/proceeds? record)
+                 (= :contended (clear-if-owed-nobody! project ws-id (:design-seq record))))
+            (assoc :contended true)))))
     (catch Exception _ nil)))
+
+(defn- with-appended
+  "`ctx` naming the entry `append!` answered it wrote, as `:appended-seq` — untouched when it
+   wrote none."
+  [ctx answer]
+  (cond-> ctx (:seq answer) (assoc :appended-seq (:seq answer))))
 
 (defn- proceeding-status
   "The status a decision that `report/proceeds?` ends on, once the clearance it
-   may imply has been asked for; `answer` is what asking returned.
+   may imply has been asked for; `answer` is shaped as `append!`'s, whose `:contended` says it was
+   asked for and could not be written.
 
      :cleared              a clearance names the design
      :proceed              a person is owed the grant — the round's ask
@@ -2036,7 +2061,7 @@
         design          (when project (ws/entry-at-seq project ws-id n))]
     (cond
       (cleared? cwd n)                                  :cleared
-      (= :contended answer)                             :clearance-contended
+      (:contended answer)                               :clearance-contended
       (or (nil? design) (report/owes-a-person? design)) :proceed
       :else (let [st (standing/of-design project ws-id design)]
               (if (:decidable? st)
@@ -2067,7 +2092,7 @@
             (report/owes-a-person? design)) :nothing-to-clear
         (cleared? cwd (:seq design))        :cleared
         :else (proceeding-status cwd decision
-                                 (clear-if-owed-nobody! project ws-id (:seq design)))))
+                                 {:contended (= :contended (clear-if-owed-nobody! project ws-id (:seq design)))})))
     :no-workstream))
 
 ;; ── The baseline round as a loop ────────────────────────────────────────────
@@ -3136,33 +3161,36 @@
         ;; An amender's :stale speaks for the one round after it.
         ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
                           (update :carry dissoc :stale))
+                      (when (:seq subject) {:judged-seq (:seq subject)})
                       (when subject (banking subject settled reading record)))]
-    (append! cwd record)
-    (cond
-      (:outcome record)
-      (assoc ctx :record record :status (:outcome record))
+    (let [answer (append! cwd record)]
+      (with-appended
+       (cond
+        (:outcome record)
+        (assoc ctx :record record :status (:outcome record))
 
-      (and (= :sufficient (:verdict record)) (seq (:unruled record)))
-      (unruled-stop (assoc ctx :record record :findings []))
+        (and (= :sufficient (:verdict record)) (seq (:unruled record)))
+        (unruled-stop (assoc ctx :record record :findings []))
 
-      (and (= :sufficient (:verdict record)) (seq (:read-once record)))
-      (second-reading (assoc ctx :record record :findings []) subject record)
+        (and (= :sufficient (:verdict record)) (seq (:read-once record)))
+        (second-reading (assoc ctx :record record :findings []) subject record)
 
-      (= :sufficient (:verdict record))
-      (assoc ctx :record record :findings [] :control :stop :status :sufficient)
+        (= :sufficient (:verdict record))
+        (assoc ctx :record record :findings [] :control :stop :status :sufficient)
 
-      :else
-      (let [findings (mapv #(assoc % :disputed-n
-                                   (disputed-n (:history ctx) baseline-finding-base-key %))
-                           (:findings record))]
-        ;; Twice objected to and stated a third time. Neither side is giving
-        ;; way and neither can settle it: the judge cannot be overruled by the
-        ;; pass it is judging, and that pass may not amend a record it believes
-        ;; is already true. That is a human's call, not another round's.
-        (if (some #(>= (:disputed-n %) 2) findings)
-          (assoc ctx :record record :findings findings
-                 :control :escalate :status :disputed)
-          (assoc ctx :record record :findings findings))))))
+        :else
+        (let [findings (mapv #(assoc % :disputed-n
+                                     (disputed-n (:history ctx) baseline-finding-base-key %))
+                             (:findings record))]
+          ;; Twice objected to and stated a third time. Neither side is giving
+          ;; way and neither can settle it: the judge cannot be overruled by the
+          ;; pass it is judging, and that pass may not amend a record it believes
+          ;; is already true. That is a human's call, not another round's.
+          (if (some #(>= (:disputed-n %) 2) findings)
+            (assoc ctx :record record :findings findings
+                   :control :escalate :status :disputed)
+            (assoc ctx :record record :findings findings))))
+       answer))))
 
 (def judge-stage
   "The same read-only pass the one-shot round ran, with its verdict appended to
@@ -3301,6 +3329,7 @@
                                       :retreats retreats
                                       :disputes disputes
                                       :amend-refusals (:refusals written)
+                                      :amend-delta (subject-delta prev record)
                                       :history (conj (vec (:history ctx)) (entry retreats true)))]
                       ;; :as-authored is set once and never overwritten — it is
                       ;; the record the RUN started from, which is what growth
@@ -3773,21 +3802,23 @@
                                          record)))
         ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
                           (update :carry dissoc :stale))
+                      (when (:seq design) {:judged-seq (:seq design)})
                       (when design (banking design settled reading record)))
         traj   (trajectory (:history ctx))
-        final! (fn [c] (append! cwd (cond-> record (seq traj) (assoc :trajectory traj))) c)]
+        final! (fn [c] (with-appended c (append! cwd (cond-> record (seq traj) (assoc :trajectory traj)))))]
     (cond
       (:outcome record)
-      (do (append! cwd record)
-          (assoc ctx :record record :status (:outcome record)))
+      (with-appended (assoc ctx :record record :status (:outcome record))
+                     (append! cwd record))
 
       ;; Would proceed, on claims it read once: appended as the reading it is — it does not
       ;; proceed, so it clears nothing — and read again before a person is asked.
       (seq (:read-once record))
-      (do (append! cwd record)
-          (second-reading (assoc ctx :record record :findings []
-                                 :underivable (underivable-checks record))
-                          design record))
+      (let [answer (append! cwd record)]
+        (with-appended (second-reading (assoc ctx :record record :findings []
+                                              :underivable (underivable-checks record))
+                                       design record)
+                       answer))
 
       ;; The judge's own recommendation, or — whatever it recommended — a round
       ;; whose only broken check is the advisory one: `report/proceeds?`, the
@@ -3807,13 +3838,14 @@
       ;; a write, not an ask, for the same reason — see `proceeding-status`.
       (let [answer (append! cwd (cond-> record (seq traj) (assoc :trajectory traj)))
             status (proceeding-status cwd record answer)]
-        (assoc ctx :record record :findings []
-               :underivable (underivable-checks record)
-               :status status
-               :control (case status
-                          :cleared :advance
-                          :proceed :escalate
-                          :stop)))
+        (with-appended (assoc ctx :record record :findings []
+                              :underivable (underivable-checks record)
+                              :status status
+                              :control (case status
+                                         :cleared :advance
+                                         :proceed :escalate
+                                         :stop))
+                       answer))
 
       ;; The judge's own stop for a person. Ahead of the findings, which an amender would otherwise
       ;; be handed: the question they raise is the one it is not the amender's to answer.
@@ -3860,9 +3892,9 @@
                          :control :escalate :status :disputed))
 
           (seq findings)
-          (do (append! cwd record)
-              (assoc ctx :record record :findings findings
-                     :underivable (underivable-checks record)))
+          (with-appended (assoc ctx :record record :findings findings
+                                :underivable (underivable-checks record))
+                         (append! cwd record))
 
           ;; Nothing to repair, and claims it was handed that it neither confirmed nor refuted: a
           ;; proceed over them does not proceed (`report/proceeds?`), so the round is asked again
@@ -3872,7 +3904,7 @@
                                        :underivable (underivable-checks record)))]
             (if (= :unruled (:status c))
               (final! (assoc c :control :escalate))
-              (do (append! cwd record) c)))
+              (with-appended c (append! cwd record))))
 
           ;; Nothing an amender could repair, and a check the round could not derive at
           ;; all: what is left is the missing yardstick. An amender told to fix one would
@@ -4097,6 +4129,7 @@
                          :retreats retreats
                          :disputes disputes
                          :amend-refusals (:refusals written)
+                         :amend-delta (subject-delta prev record)
                          :history (conj (vec (:history ctx)) (entry retreats true))))))))))))
 
 (defn- run-design-amend-stage

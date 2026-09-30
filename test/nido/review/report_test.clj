@@ -632,6 +632,54 @@
                                        :checks [{:check :stratified :status :held :note "n"}]})]
     (is (= "clean" (:status round)))))
 
+(deftest a-broken-check-row-carries-the-judges-case-for-it
+  ;; The row is keyed on the check, and the case behind it was left in the judge's out.json: a
+  ;; refutation resting on a package page read exactly like one resting on the code.
+  (let [finding {:check :goal-served :claim-id "c1" :claim "hashing works on macOS"
+                 :cites ["ci/lib.sh:17"] :evidence ["Homebrew's formula page"]}
+        r  (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+               (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+               (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                    :ctx {:record {:format :design-decision :recommend :amend
+                                                   :findings [finding
+                                                              {:claim-id "c2" :claim "other"
+                                                               :cites ["x"]}]}
+                                          :findings [{:check :goal-served :status :broken :note "n"
+                                                      :claim-ids ["c1"]}
+                                                     {:claim-ids ["c2"] :claim "other" :cites ["x"]}]}}
+                                   nil))
+        [row claim-row] (:findings (first (:phases (first (:rounds r)))))]
+    (is (= [(dissoc finding :check)] (:filed row))
+        "the claim, cites and evidence are what a reader weighs a disputable finding by")
+    (is (nil? (:filed claim-row))
+        "a claim finding is the judge's own finding already, and carries its case on itself")))
+
+(deftest a-record-round-names-the-entries-it-judged-and-appended
+  (let [r  (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+               (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+               (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                    :ctx {:record {:format :design-decision :recommend :amend}
+                                          :findings [] :judged-seq 14 :appended-seq 15}} nil)
+               (report/apply-event {:event :phase-started :iter 1 :phase :amend :at "t3"} nil)
+               (report/apply-event {:event :phase-finished :iter 1 :phase :amend :at "t4"
+                                    :ctx {:retreats [] :amended? true
+                                          :amend-delta {:changed ["c1"] :added ["c9"]}}} nil))
+        [judge amend] (:phases (first (:rounds r)))]
+    (is (= [14 15] [(:judged-seq judge) (:appended-seq judge)])
+        "without them a round maps to the ledger only by filtering entries on the run id")
+    (is (= {:changed ["c1"] :added ["c9"]} (:delta amend))
+        "what an amendment moved is what the next judge re-reads, and it was only in the answer file")))
+
+(deftest a-capped-run-says-what-its-cap-was
+  (let [finish (fn [ctx] (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+                             (report/apply-event {:event :run-finalized :status :max-iters
+                                                  :ctx ctx :at "t1"} nil)
+                             :summary))]
+    (is (= 2 (:max-iters (finish {:config {:max-iters 2}})))
+        "a max-iters stop says nothing about the record without the cap somebody asked for")
+    (is (not (contains? (finish {:config {}}) :max-iters))
+        "an uncapped run has no cap to report, and nil would read as one")))
+
 (deftest a-record-report-names-the-tree-its-judges-read
   (let [r (report/with-judged-tree (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
                                    "/runs/r/tree" {:rev "abc" :ahead 3})]
