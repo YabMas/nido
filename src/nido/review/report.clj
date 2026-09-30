@@ -483,6 +483,8 @@
       ;; :refuted-running is how many readings in a row have refuted each claim whose newest reading
       ;; refuted it, across the workstream's judgements: a claim refuted every round by a different
       ;; counterexample is one no rewording is settling, and nothing else in a round says so.
+      ;; :overrides-settled is each subject the judge was shown as settled and found against anyway —
+      ;; a confirmation settlement was shielding, caught.
       :judge  (cond-> (assoc ph :verdict (some-> (get-in ctx [:record :verdict]) name)
                                 :outcome (some-> (get-in ctx [:record :outcome]) name)
                                 :findings (vec (:findings ctx)))
@@ -511,6 +513,8 @@
                 (:checks ctx)                           (assoc :checks (:checks ctx))
                 (seq (get-in ctx [:record :unruled]))   (assoc :unruled (get-in ctx [:record :unruled]))
                 (seq (get-in ctx [:record :read-once])) (assoc :read-once (get-in ctx [:record :read-once]))
+                (seq (get-in ctx [:record :overrides-settled]))
+                (assoc :overrides-settled (get-in ctx [:record :overrides-settled]))
                 (seq (get-in ctx [:record :unchecked])) (assoc :unchecked (get-in ctx [:record :unchecked]))
                 (:unbanked ctx)                         (assoc :unbanked (:unbanked ctx))
                 (seq (:refuted-running ctx))            (assoc :refuted-running (into (sorted-map) (:refuted-running ctx)))
@@ -533,12 +537,15 @@
       ;; :unappended is the answer file holding an amendment the ledger refused
       ;; past every repair, and marks the phase refused rather than ok: that
       ;; amendment is a complete answer to the round, held nowhere else.
+      ;; :stale is the untouched subjects the amender said the accepted findings
+      ;; made false — put back to the next judge, and recorded nowhere else.
       :amend  (cond-> (assoc ph :retreats (vec (:retreats ctx))
                                 :disputes (vec (:disputes ctx))
                                 :amended? (boolean (:amended? ctx))
                                 :resurveyed (some-> (:resurveyed ctx) name))
                 (:amend-error ctx) (assoc :amend-error (:amend-error ctx))
                 (seq (:amend-refusals ctx)) (assoc :refusals (vec (:amend-refusals ctx)))
+                (seq (:stale ctx)) (assoc :stale (vec (:stale ctx)))
                 (:amend-tree ctx) (assoc :tree (:amend-tree ctx))
                 (:amend-unappended ctx) (assoc :status "refused"
                                                :unappended (:amend-unappended ctx)))

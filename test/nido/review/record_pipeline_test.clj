@@ -1551,6 +1551,61 @@
       (is (str/includes? p "the invoice no longer sums on its own"))
       (is (str/includes? p "reads the same now") "an unchanged subject makes a confirmation a pure reversal"))))
 
+;; ── Known staleness: a route out of settlement ──────────────────────────────
+
+(deftest a-finding-against-a-settled-id-is-recorded-as-overriding-the-settlement
+  ;; A false confirmation stayed settled for eight rounds and, when a judge finally found against it,
+  ;; the figures read it as an ordinary refutation — so how often settlement shields a false claim
+  ;; could not be counted.
+  (let [appended (atom [])
+        refuting {:format :baseline-review :verdict :falsified :reason "no"
+                  :findings [{:claim-id "c1" :cites ["[c1] only the aggregate sums"] :claim "a second path"}]}]
+    (with-redefs [record/baseline-review! (fn [_] refuting)
+                  record/append! (fn [_ r] (swap! appended conj r) nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] a-baseline)
+                  settled/code-identity (fn [_] "tree-a")
+                  settled/ledgers (fn [_ _ _] [(assoc settling-ledger :ws-id "ws-1")])]
+      (run record/judge-stage (ctx)))
+    (is (= [{:id "c1" :seq 2 :ws-id "ws-1"}] (:overrides-settled (first @appended)))
+        "the finding names the confirmation it overrides, where it was made")
+    (is (= {"c1" 1} (:settled-then-found (record/run-figures [(first @appended)])))
+        "and the figures tally it apart from an ordinary refutation")))
+
+(deftest an-amender-can-name-a-sibling-it-believes-stale
+  (is (= #{"c1"} (:stale (record/parse-amend-answer {:record a-baseline :stale ["c1" " "]}
+                                                    [a-finding] record/baseline-finding-base-key)))
+      "a blank id names nothing")
+  (is (= #{} (:stale (record/parse-amend-answer a-baseline [a-finding] record/baseline-finding-base-key)))
+      "a bare record says nothing is stale")
+  (let [[out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record a-baseline :stale ["c1"]})))}
+                            (ctx :findings [a-finding]))]
+    (is (= #{"c1"} (get-in out [:carry :stale])) "carried to the next round's judge")
+    (is (= ["c1"] (:stale (persisted-phase :amend out))) "and the report says it was named")))
+
+(deftest a-subject-named-stale-is-put-to-the-next-judge-once
+  ;; The amender that saw a confirmed sibling become false was forbidden to touch it, and unchanged
+  ;; it stayed settled on a confirmation older than the finding that contradicted it.
+  (let [seen (atom nil)]
+    (with-redefs [record/baseline-review! (fn [opts] (reset! seen opts)
+                                            {:format :baseline-review :verdict :sufficient :reason "ok"})
+                  record/append! (fn [_ _] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] a-baseline)
+                  settled/code-identity (fn [_] "tree-a")
+                  settled/ledgers (fn [_ _ _] [(assoc settling-ledger :ws-id "ws-1")])]
+      (let [out (run record/judge-stage (ctx :carry {:stale #{"c1"}}))]
+        (is (not (contains? (:settled @seen) "c1")) "the judge is asked to check it")
+        (is (nil? (get-in out [:carry :stale]))
+            "and only once: the round after reads the ledger's settlement as it then stands")))))
+
+(deftest the-amenders-are-told-how-to-name-a-stale-sibling
+  (is (str/includes? (record/amend-prompt {:baseline a-baseline :findings [a-finding] :out-path "/x"})
+                     ":stale"))
+  (is (str/includes? (record/design-amend-prompt {:design {:format :design} :raised [] :findings []
+                                                  :out-path "/x"})
+                     ":stale")))
+
 ;; ── What an amendment has to stay true beside ───────────────────────────────
 
 (def ^:private an-audit-baseline

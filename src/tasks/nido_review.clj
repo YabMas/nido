@@ -2212,8 +2212,8 @@
   "Many runs' figures, per check, per check-less refuted claim and per derivation: in how many runs
    it was broken, in how many rounds, in how many of those alone, and in how many runs it was still
    broken at the end — and for a check, in how many rounds it was derived, held and underivable. Per
-   stratum, its level judges' readings summed; per claim found false, per subject confirmed or left
-   unruled, and per reviewer that answered, the runs' counts summed."
+   stratum, its level judges' readings summed; per claim found false, per subject confirmed, left
+   unruled or found against while settled, and per reviewer that answered, the runs' counts summed."
   [figures]
   (letfn [(add [acc tallies]
             (reduce-kv (fn [a k {:keys [broken alone at-end] :as t}]
@@ -2235,6 +2235,7 @@
      :falsified   (counts :falsified)
      :confirmed   (counts :confirmed)
      :unruled     (counts :unruled)
+     :settled-then-found (counts :settled-then-found)
      :judged-by   (counts :judged-by)
      :strata      (reduce (fn [acc t] (merge-with #(merge-with + %1 %2) acc t))
                           (sorted-map) (keep :strata figures))}))

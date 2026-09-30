@@ -2435,13 +2435,17 @@
    content and tree, had: a first reading. Derived by the round, and it stops the judgement
    holding too — one clean reading of a record is a sample, and the round reads it again.
    :overturns names each earlier run's finding against an id this judgement confirmed: the
-   reversal, recorded where it was made."
+   reversal, recorded where it was made. :overrides-settled is its mirror: each id this judgement
+   was shown as settled and found against anyway, naming the confirmation that had settled it —
+   a settlement that was shielding a false claim, recorded where it was caught."
   [[:checked-at {:optional true} [:map-of string? [:vector {:min 1} string?]]]
    [:unchecked  {:optional true} [:vector [:map {:closed true} [:id string?] [:reason string?]]]]
    [:unruled    {:optional true} [:vector string?]]
    [:read-once  {:optional true} [:vector string?]]
    [:overturns  {:optional true} [:vector [:map {:closed true}
-                                           [:id string?] [:seq int?] [:ws-id string?]]]]])
+                                           [:id string?] [:seq int?] [:ws-id string?]]]]
+   [:overrides-settled {:optional true} [:vector [:map {:closed true}
+                                                  [:id string?] [:seq int?] [:ws-id string?]]]]])
 
 (def BaselineReview
   "The verification round over a baseline: is this true, and is it ENOUGH?

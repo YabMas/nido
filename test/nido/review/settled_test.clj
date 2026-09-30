@@ -101,6 +101,23 @@
                                                  (review 6 5 :confirmed ["c1"])])]
                               (baseline 7 c1) tree-a))))))
 
+(deftest a-finding-quoting-a-sibling-unsettles-the-sibling-too
+  (let [confirmed (review 2 1 :confirmed ["c1" "c2"])
+        found     (review 4 1 :verdict :falsified
+                          :findings [{:claim-id "c1" :claim "wrong"
+                                      :cites ["[c1] only the aggregate sums lines"
+                                              "[c2] totals are derived"]}])]
+    (is (= {} (settled/settled [(ledger :baselines [(baseline 1 c1 c2)] :reviews [confirmed found])]
+                               (baseline 5 c1 c2) tree-a))
+        "a counterexample quoting c2's text puts c2 in doubt; filing it under c1 must not leave c2
+         shielded from the next judge")
+    (testing "an id that only appears unbracketed in the prose names nothing"
+      (is (= {"c2" (by 2)}
+             (settled/settled [(ledger :baselines [(baseline 1 c1 c2)]
+                                       :reviews [confirmed
+                                                 (assoc-in found [:findings 0 :cites] ["see c2's wording"])])]
+                              (baseline 5 c1 c2) tree-a))))))
+
 (deftest a-retracted-baseline-settles-nothing
   (let [l (ledger :baselines [(baseline 1 c1)]
                   :reviews [(review 2 1 :confirmed ["c1"])]

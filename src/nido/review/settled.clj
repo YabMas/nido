@@ -305,12 +305,23 @@
     {:ws-id ws-id :judgement j :record r :subjects (subjects r)
      :retracted? (contains? retracted cited)}))
 
+(defn- names?
+  "Whether `finding` is about the subject `id`: filed under it, or quoting it in a :cites line the
+   way the judge prompt renders it — `[id] …`. A finding filed under one id whose counterexample
+   quotes a sibling has shown the sibling's text in doubt too, and a subject is settled only while
+   nothing at its key has."
+  [finding id]
+  (or (= id (:claim-id finding))
+      (let [bracketed (str "[" id "]")]
+        (some #(str/includes? (str %) bracketed) (:cites finding)))))
+
 (defn- chronological [ms] (sort-by (fn [{j :judgement}] [(str (:at j)) (or (:seq j) 0)]) ms))
 
 (defn- bearings
   "Per subject id of `record`, oldest first, every judgement at its content, context, cited
-   yardstick and key (`reading`) that bears on it — a finding over any record (`:found? true`), or
-   a checked confirmation over one nobody retracted. Empty when nothing can be keyed."
+   yardstick and key (`reading`) that bears on it — a finding naming it (`names?`) over any record
+   (`:found? true`), or a checked confirmation over one nobody retracted. Empty when nothing can be
+   keyed."
   [ledgers record reading effective]
   (if (or (nil? ledgers) (and (nil? (:code-identity reading)) (nil? (:subject-identities reading))))
     {}
@@ -328,7 +339,7 @@
                               ;; A judgement doing both found.
                               (keep (fn [{j :judgement :as m}]
                                       (cond
-                                        (some #(= id (:claim-id %)) (:findings j)) (assoc m :found? true)
+                                        (some #(names? % id) (:findings j)) (assoc m :found? true)
                                         (and (not (:retracted? m)) (checked? j id)) m)))
                               chronological
                               vec)])))
@@ -346,7 +357,8 @@
    named its id in :confirmed and said where it read it (:checked-at), while judging a record nobody
    retracted that carries that subject identically, around the same context, under the same cited
    intent and baseline, at this subject's key — and no judgement at that same content and key has
-   found against it since. The newest judgement at the key that bears on the subject decides,
+   found against it since, whether under its id or by quoting it in a finding filed under another.
+   The newest judgement at the key that bears on the subject decides,
    ordered by :at whichever ledger it is on: a finding stands until a later confirmation answers
    it, so a record amended elsewhere in answer to a finding leaves the subject to be confirmed
    again rather than checked for ever. A holding verdict settles nothing by itself; only an id its

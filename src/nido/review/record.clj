@@ -2095,7 +2095,8 @@
   parse-amend-answer
   "What an amender may hand back: an amended record, objections to what it was
    asked to amend for, or both — and, with the record, the reason for each claim it
-   removed on purpose (:withdrawn).
+   removed on purpose (:withdrawn). With either, :stale: the ids of subjects it was
+   told to leave alone and believes the findings it accepted have made false.
 
    A bare record — no wrapper — is still accepted, because that is what the
    answer was before there was anything to say back, and a shape change is not a
@@ -2131,7 +2132,11 @@
                                    (when-not (or (str/blank? (str id)) (str/blank? (str because)))
                                      [(str id) (str because)])))
                         (when-not (:format raw)
-                          (let [w (:withdrawn raw)] (when (sequential? w) (filter map? w)))))})))
+                          (let [w (:withdrawn raw)] (when (sequential? w) (filter map? w)))))
+       ;; Not checked against the record here: an id no subject carries unsettles nothing.
+       :stale (into #{} (comp (map #(str/trim (str %))) (remove str/blank?))
+                    (when-not (:format raw)
+                      (let [s (:stale raw)] (when (sequential? s) s))))})))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   disputes-for-judge
@@ -2506,6 +2511,21 @@
     (:unappended written)  (assoc :amend-unappended (:unappended written))
     (:amend-tree written)  (assoc :amend-tree (:amend-tree written))))
 
+(def ^:private stale-rule
+  "What an amender does with a claim it was told to leave alone and now believes false. Without a
+   channel it can only keep the claim or break the rule, and a claim kept word for word stays
+   settled on a confirmation made before the finding it contradicts — the judge is never asked
+   again. Naming it changes no text, so the rule it answers to still holds."
+  (str "IF A FINDING YOU ACCEPT MAKES A CLAIM NOBODY CHALLENGED FALSE, NAME IT.\n"
+       "Leave its text exactly as it stands — the rule above still holds — and list its\n"
+       "id under :stale. It will not be treated as settled next round: the judge is\n"
+       "asked to check it. Name only a claim a finding you accepted contradicts, never\n"
+       "one you would merely word differently.\n\n"))
+
+(def ^:private stale-field
+  "The answer-file line for `stale-rule`."
+  "Add :stale [\"id\" ...] only for a claim you left unchanged and believe false.\n")
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   amend-prompt
   "Instruction to repair a baseline the round found wanting.
@@ -2594,6 +2614,7 @@
           "unchanged — not restated, not sharpened, not made more precise.\n\n")
      (str "CHANGE ONLY WHAT WAS REFUTED. A claim nobody challenged this round must come\n"
           "back unchanged — not restated, not sharpened, not made more precise.\n\n"))
+   stale-rule
    ;; The rule above says WHICH statements to touch. This one says HOW, and its
    ;; absence is what actually ran this loop out. Measured over six rounds on
    ;; one baseline: the composition went 405 characters to 4091 and the shape 271
@@ -2666,6 +2687,7 @@
      "   :disputes [{:finding 2 :because \"...\" :evidence [\"src/x.clj:41\"]}]}\n\n")
    "Omit :record entirely if every finding is disputed and the baseline needs no\n"
    "change. Omit :disputes if you accepted all of them.\n"
+   stale-field
    (when (seq spent)
      "Omit :withdrawn unless you removed a claim named under A CLAIM NO REWORDING HAS SETTLED.\n")
    "\n"
@@ -2846,13 +2868,15 @@
 (defn- judge-inputs
   "What a judge stage reads off the ledgers for `subject` at `reading`, before it launches a judge:
    :standing, every subject whose latest judgement at the key confirmed it; :settled, the part of
-   it the judge is not asked — those confirmed twice running (`settled/single-readings`); and
-   :prior, what earlier runs found against its subjects. `effective` as `settled/settled` takes it."
-  [project ws-id subject reading effective run-id]
+   it the judge is not asked — those confirmed twice running (`settled/single-readings`), less the
+   ids the last amender called `stale`; and :prior, what earlier runs found against its subjects.
+   `effective` as `settled/settled` takes it."
+  [project ws-id subject reading effective run-id stale]
   (let [ls       (when (and project subject) (settled/ledgers project ws-id subject))
         standing (if (and project subject) (settled/settled ls subject reading effective) {})]
     {:standing standing
-     :settled  (apply dissoc standing (settled/single-readings ls subject reading effective))
+     :settled  (apply dissoc standing (concat (settled/single-readings ls subject reading effective)
+                                              stale))
      :prior    (when subject (settled/prior-findings ls subject run-id))}))
 
 (defn- carried-readings
@@ -2865,16 +2889,21 @@
 
 (defn- with-readings
   "`record` — what the judge returned, before it is appended — carrying :overturns, each earlier
-   run's finding (`prior`) against an id it confirmed; and, when `holds?` says it would end the run
-   clean, :read-once, what it confirmed on a first reading.
+   run's finding (`prior`) against an id it confirmed; :overrides-settled, the confirmation that
+   settled (`settled`) each id it was shown as outside its checks and found against anyway; and,
+   when `holds?` says it would end the run clean, :read-once, what it confirmed on a first reading.
 
    A confirmation is a second reading when one stands before it at the key it was read at
    (`standing`, taken at that key, so only when the record read one tree), or when an earlier quiet
    round of this run confirmed the same id of the same record (`carried`)."
-  [record holds? standing carried prior]
+  [record holds? standing settled carried prior]
   (if-not (:format record)
     record
     (let [confirmed (settled/checked-confirmations record)
+          found     (into #{} (keep :claim-id) (:findings record))
+          overrides (vec (for [[id {:keys [ws-id] n :seq}] (sort-by key settled)
+                               :when (found id)]
+                           {:id id :seq n :ws-id ws-id}))
           paired    (into (set carried) (when (:code-identity record) (keys standing)))
           once      (when (holds? record) (vec (sort (remove paired confirmed))))
           overturns (vec (for [[id {:keys [ws-id] n :seq}] (sort-by key prior)
@@ -2882,7 +2911,8 @@
                            {:id id :seq n :ws-id ws-id}))]
       (cond-> record
         (seq once)      (assoc :read-once once)
-        (seq overturns) (assoc :overturns overturns)))))
+        (seq overturns) (assoc :overturns overturns)
+        (seq overrides) (assoc :overrides-settled overrides)))))
 
 (defn- second-reading
   "A round that would have ended the run clean on subjects it confirmed once. The run goes on to
@@ -2915,7 +2945,8 @@
         [project ws-id] (stages/project+ws-from-cwd cwd)
         subject (or target (when project (ws/latest-entry project ws-id :baseline)))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) subject)
-        {:keys [standing settled prior]} (judge-inputs project ws-id subject reading subject run-id)
+        {:keys [standing settled prior]} (judge-inputs project ws-id subject reading subject run-id
+                                                       (get-in ctx [:carry :stale]))
         record (-> (baseline-review!
                     {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
                      :baseline subject
@@ -2927,13 +2958,15 @@
                      :label (str "baseline-review-round-" (:iter ctx))
                      :disputes (disputes-for-judge (:history ctx))})
                    (stamp-run (:config ctx))
-                   (with-readings report/review-holds? standing (carried-readings ctx subject) prior))
+                   (with-readings report/review-holds? standing settled (carried-readings ctx subject) prior))
         ;; Read before this round's record is appended, and this round added by hand, so it is
         ;; counted exactly once whether or not the best-effort append lands.
         running (when (:format record)
                   (refuted-running (conj (if project (vec (ws/entries-of project ws-id :baseline-review)) [])
                                          record)))
-        ctx    (merge (assoc ctx :settled settled :refuted-running running)
+        ;; An amender's :stale speaks for the one round after it.
+        ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
+                          (update :carry dissoc :stale))
                       (when subject (banking subject settled reading record)))]
     (append! cwd record)
     (cond
@@ -3015,9 +3048,11 @@
               raw      (when (fs/exists? out-path)
                          (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
               answer   (parse-amend-answer raw (:findings ctx) baseline-finding-base-key)
-              ctx      (cond-> ctx
+              ctx      (cond-> (assoc ctx :stale (vec (sort (:stale answer))))
                          (amend-tree trespass out-path answer)
-                         (assoc :amend-tree (amend-tree trespass out-path answer)))]
+                         (assoc :amend-tree (amend-tree trespass out-path answer))
+                         (seq (:stale answer))
+                         (assoc-in [:carry :stale] (:stale answer)))]
           (cond
             (seq (:attributed trespass))
             (trespass-stop ctx trespass out-path answer)
@@ -3335,7 +3370,8 @@
                    :falsified   {claim-id n}
       :confirmed {id n}
       :judged-by {reviewer n}
-      :unruled   {id n}}
+      :unruled   {id n}
+      :settled-then-found {id n}}
 
    Every check a decision derived has a row, so a run whose checks all held says what it answered
    rather than printing an empty map. :alone and :at-end are over every defect a decision found — a
@@ -3347,7 +3383,9 @@
    judgements per reviewer that answered, a stand-in as `claude for codex`, so a comparison across
    runs can hold the instrument fixed; a judgement from before that was kept counts in neither.
    :unruled counts, per subject, the judgements handed it as a check that left it without a ruling.
-   Each of these three is present only when non-empty.
+   :settled-then-found counts, per subject, the judgements that found against it while it was
+   settled (`:overrides-settled`) — beside :confirmed, the rate at which settlement shields a false
+   confirmation. Each of these four is present only when non-empty.
 
    Read from the decisions rather than the run's report, because a decision holds every check's
    status and it outlives the run dir. Derived on every read; nothing stores it."
@@ -3357,6 +3395,7 @@
         judgements (concat decisions reviews)
         unruled   (frequencies (mapcat :unruled judgements))
         confirmed (frequencies (mapcat :confirmed judgements))
+        overridden (frequencies (mapcat #(map :id (:overrides-settled %)) judgements))
         judges    (frequencies (keep (comp judge-name :judged-by) judgements))
         statuses  (mapv check-statuses decisions)
         ;; One round's defects, each tagged by the tally it belongs to: a check keyword and a claim id
@@ -3374,6 +3413,7 @@
     (cond-> {}
       (seq unruled)   (assoc :unruled (into (sorted-map) unruled))
       (seq confirmed) (assoc :confirmed (into (sorted-map) confirmed))
+      (seq overridden) (assoc :settled-then-found (into (sorted-map) overridden))
       (seq judges)    (assoc :judged-by (into (sorted-map) judges))
 
       (seq decisions)
@@ -3495,7 +3535,8 @@
    "record each round, so a part nobody challenged that you restate anyway is a\n"
    "fresh chance for a check that held to stop holding. Rounds have gone by\n"
    "watching one derivation get answered while a rewritten neighbour became the\n"
-   "next one to fail. Fix what failed; leave the rest exactly as it stands.\n"
+   "next one to fail. Fix what failed; leave the rest exactly as it stands.\n\n"
+   (str/trimr stale-rule) "\n"
    "\n" (str/trimr (sound-rewrite-rules (some? baseline))) "\n"
    (when-not (str/blank? (str asks))
      (str "\n\nWHAT THE JUDGE LEFT FOR A PERSON — not yours to answer:\n  " asks "\n"))
@@ -3508,7 +3549,8 @@
    "Write EDN to:\n\n  " out-path "\n\n"
    "  {:record   <the COMPLETE superseding design — every field, not a diff>\n"
    "   :disputes [{:finding 1 :because \"...\" :evidence [\"src/x.clj:41\"]}]}\n\n"
-   "Omit :record if you dispute every line and the design needs no change.\n\n"
+   "Omit :record if you dispute every line and the design needs no change.\n"
+   stale-field "\n"
    "Write it in the shared model — :model {:elements :claims} in place of\n"
    ":invariants, with :holds keyed by claim id when the design is phased — whatever\n"
    "shape the current one is in. An invariant becomes a claim with an id, the\n"
@@ -3543,7 +3585,8 @@
         design  (when project (ws/latest-entry project ws-id :design))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) design)
         {:keys [standing settled prior]}
-        (judge-inputs project ws-id design reading (when design (effective-design cwd design)) run-id)
+        (judge-inputs project ws-id design reading (when design (effective-design cwd design)) run-id
+                      (get-in ctx [:carry :stale]))
         record (-> (design-decision!
                     {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
                      :design design :settled settled :prior prior :listing listing
@@ -3552,12 +3595,13 @@
                      :label (str "design-decision-round-" (:iter ctx))
                      :disputes (disputes-for-judge (:history ctx))})
                    (stamp-run (:config ctx))
-                   (with-readings report/proceeds? standing (carried-readings ctx design) prior))
+                   (with-readings report/proceeds? standing settled (carried-readings ctx design) prior))
         ;; As the baseline round counts it, over this workstream's decisions and this one.
         running (when-not (:outcome record)
                   (refuted-running (conj (if project (vec (ws/entries-of project ws-id :design-decision)) [])
                                          record)))
-        ctx    (merge (assoc ctx :settled settled :refuted-running running)
+        ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
+                          (update :carry dissoc :stale))
                       (when design (banking design settled reading record)))
         traj   (trajectory (:history ctx))
         final! (fn [c] (append! cwd (cond-> record (seq traj) (assoc :trajectory traj))) c)]
@@ -3826,9 +3870,11 @@
           raw      (when (fs/exists? out-path)
                      (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
           answer   (parse-amend-answer raw (:findings ctx) design-finding-base-key)
-          ctx      (cond-> ctx
+          ctx      (cond-> (assoc ctx :stale (vec (sort (:stale answer))))
                      (amend-tree trespass out-path answer)
-                     (assoc :amend-tree (amend-tree trespass out-path answer)))]
+                     (assoc :amend-tree (amend-tree trespass out-path answer))
+                     (seq (:stale answer))
+                     (assoc-in [:carry :stale] (:stale answer)))]
       (cond
         (seq (:attributed trespass))
         (trespass-stop ctx trespass out-path answer)

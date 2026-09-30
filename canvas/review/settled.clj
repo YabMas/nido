@@ -17,7 +17,8 @@
    with where it was read in `:checked-at`, while judging a record whose subject with that id is
    byte-identical — beside the same entries for the elements it is about, the same other claims
    about them, and the same cited intent and baseline — at this subject's key; when
-   no judgement at that same content and key has found against it since that confirmation; and
+   no judgement at that same content and key has found against it since that confirmation — under
+   its id, or by quoting it in the :cites of a finding filed under another; and
    when the record the confirming judgement judged is not retracted. A finding stands until a later
    confirmation at the same key answers it, so a record amended elsewhere in answer to a finding
    leaves the subject confirmable rather than checked for ever. The id alone is never the key: an id
