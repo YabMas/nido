@@ -139,6 +139,12 @@
    zero, because a `sound` verdict over no implementation findings is the
    sentence that says the run is genuinely done.
 
+   `:verdict-unverified` is the invariants that verdict could not confirm, and it
+   sits on the open side of the headline, after `still open`: each is evidence a
+   person owes before merge. Beside `kept` it read as a decision already made,
+   and one run published `0 still open · 1 kept` over a verdict whose own
+   `:needs` said the Linux path was never run. Carried only when non-zero.
+
    A `Design:` line says the verdict in the headline too, and that it was
    carried when it was: the kept count may include what that verdict found, and
    a reader has to know whether a judge read THIS run's code to weigh it.
@@ -192,6 +198,7 @@
            findings-remaining findings-kept remaining-handed remaining-parked
            targets-reviewed targets-skipped unfixable parked standing
            drift unavailable stood-in base in-flight errored design-verdict verdict-implementation
+           verdict-unverified
            design-carried-from review-entry reviewed-project reviewed-session reviewed-ws-id
            machinery] :as run}]
   ;; `:in-flight` is the reconciler's reading of an orphan's report and is the
@@ -243,6 +250,10 @@
                                       " rounds · " (n defects-settled) " defects settled ("
                                       (n fix-attempts) " repairs dispatched) · "
                                       (n findings-remaining) " still open · "
+                                      (when (pos? (or verdict-unverified 0))
+                                        (str verdict-unverified " verification"
+                                             (when (not= 1 verdict-unverified) "s")
+                                             " owed · "))
                                       (n findings-kept) " kept\n"
                                       "Coverage: " (or targets-reviewed 0) " targets read this run, "
                                       (or targets-skipped 0) " carried from an earlier run\n"
@@ -280,6 +291,7 @@
       died-in          (assoc :died-in died-in)
       verdict          (assoc :design-verdict verdict
                               :verdict-implementation (or verdict-implementation 0))
+      (pos? (or verdict-unverified 0)) (assoc :verdict-unverified verdict-unverified)
       design-carried-from (assoc :design-carried-from design-carried-from)
       reviewed-project (assoc :reviewed-project (name reviewed-project))
       reviewed-session (assoc :reviewed-session reviewed-session)

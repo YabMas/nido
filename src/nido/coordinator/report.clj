@@ -2229,6 +2229,15 @@
    [:where string?]
    [:what  string?]])
 
+(def UnverifiedInvariant
+  "An invariant the design judge could not confirm from what it could read, and
+   the evidence that would confirm it — a run it could not make, a platform it
+   could not reach. Somebody owes that evidence before the branch ships, so it is
+   open work, never held and never kept."
+  [:map {:closed true}
+   [:invariant string?]
+   [:missing   string?]])
+
 (def StandingAnswer
   "One of the terminal warden's standing items the judge answered from the code.
    `:item` is the warden's text, verbatim; items the judge did not answer are
@@ -2265,6 +2274,7 @@
    ;; Held by the design, contradicted by a finding still open: the design
    ;; stands and the code falls short of it. Never listed as held.
    [:invariants-unmet {:optional true} [:vector BrokenInvariant]]
+   [:invariants-unverified {:optional true} [:vector UnverifiedInvariant]]
    [:load-bearing-held {:optional true} [:vector string?]]
    [:load-bearing-broken {:optional true} [:vector BrokenInvariant]]
    [:findings-classified {:optional true} [:vector ClassifiedFinding]]
@@ -4049,8 +4059,8 @@
 
 (defn- design-verdict->markdown
   [{:keys [verdict round reason invariants-held invariants-broken invariants-unmet
-           load-bearing-held load-bearing-broken findings-classified unraised
-           standing-answered needs carried-from]}]
+           invariants-unverified load-bearing-held load-bearing-broken findings-classified
+           unraised standing-answered needs carried-from]}]
   (str/join
    "\n"
    (remove nil?
@@ -4072,6 +4082,10 @@
         (cons "\n## Invariants the code does not meet yet — the design stands"
               (for [{:keys [invariant finding]} invariants-unmet]
                 (str "- " invariant "\n  - open: " finding))))
+      (when (seq invariants-unverified)
+        (cons "\n## Invariants not verified — the evidence is owed before merge"
+              (for [{:keys [invariant missing]} invariants-unverified]
+                (str "- " invariant "\n  - missing: " missing))))
       (when (seq load-bearing-held)
         (cons "\n## Load-bearing properties still standing"
               (for [i load-bearing-held] (str "- " i))))

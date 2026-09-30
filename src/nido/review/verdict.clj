@@ -299,9 +299,11 @@
    "THE DESIGN THIS CHANGE COMMITTED TO:\n"
    "Shape: " (:shape design) "\n"
    ;; A design in the shared model names its claims, and the judge names them back by id in
-   ;; invariants_held and invariants_broken; the shape before it lists bare clauses.
+   ;; invariants_held, invariants_unverified and invariants_broken; the shape before it
+   ;; lists bare clauses.
    (if (contains? design :model)
-     (str "Claims — name a claim by its id in invariants_held and invariants_broken:\n"
+     (str "Claims — name a claim by its id in invariants_held, invariants_unverified and\n"
+          "invariants_broken:\n"
           (bullets (map (fn [{:keys [id statement]}]
                           (str "[" id "] " statement
                                " [holds " (name (get (:holds design) id :always)) "]"))
@@ -367,6 +369,7 @@
    "{\"verdict\": \"sound|strained|invalidated|standing_challenged\",\n"
    " \"reason\": \"...\",\n"
    " \"invariants_held\": [\"...\"],\n"
+   " \"invariants_unverified\": [{\"invariant\": \"...\", \"missing\": \"...\"}],\n"
    " \"invariants_broken\": [{\"invariant\": \"...\", \"finding\": \"...\"}],\n"
    " \"load_bearing_held\": [\"...\"],\n"
    " \"load_bearing_broken\": [{\"invariant\": \"...\", \"finding\": \"...\"}],\n"
@@ -381,6 +384,11 @@
    "  the only way such a defect reaches the next run's reviewers. A row\n"
    "  about a finding the rounds did raise names its handle in `finding`;\n"
    "  it is already counted, so prefer leaving it out.\n"
+   "- invariants_unverified: every invariant you could not confirm from what\n"
+   "  you could read or run, each with the evidence that would confirm it —\n"
+   "  a test only run on one platform, a path nobody exercised. An invariant\n"
+   "  your needs says is still to be verified belongs HERE and never in\n"
+   "  invariants_held: held means you confirmed it.\n"
    "- needs: what a PERSON should do or decide — advice, a record to amend,\n"
    "  a chore before landing. Never a defect in the code; those go in\n"
    "  unraised. Leave it empty when there is nothing to say.\n"
@@ -416,6 +424,15 @@
                    :reason (str (:reason m))}
             (seq (:invariants_held m))
             (assoc :invariants-held (mapv str (:invariants_held m)))
+
+            (seq (:invariants_unverified m))
+            (assoc :invariants-unverified
+                   (into []
+                         (keep (fn [{:keys [invariant missing]}]
+                                 (when-not (str/blank? (str invariant))
+                                   {:invariant (str/trim (str invariant))
+                                    :missing   (str/trim (str missing))})))
+                         (:invariants_unverified m)))
 
             (seq (:invariants_broken m))
             (assoc :invariants-broken
@@ -934,6 +951,10 @@
    state is dropped: a confirmation of nothing loses nothing true by going. A broken one makes the
    whole answer a non-answer, because dropping it could turn an accusation into a clean verdict.
 
+   An unverified one is kept whatever it names, bare when it is an id: it is evidence somebody
+   owes, and dropping it would turn an owed verification into a clean verdict just as dropping a
+   broken one turns an accusation into one.
+
    Ids are compared bare — see `bare-claim`.
    `claim-ids` nil, for a design from before the shared model whose invariants carry no ids,
    leaves the verdict as parsed."
@@ -941,10 +962,12 @@
   (if (nil? claim-ids)
     verdict
     (let [broken (mapv #(update % :invariant bare-claim) (:invariants-broken verdict))
-          held   (into [] (comp (map bare-claim) (filter claim-ids)) (:invariants-held verdict))]
+          held   (into [] (comp (map bare-claim) (filter claim-ids)) (:invariants-held verdict))
+          unver  (mapv #(update % :invariant bare-claim) (:invariants-unverified verdict))]
       (when (every? #(contains? claim-ids (:invariant %)) broken)
-        (cond-> (dissoc verdict :invariants-held :invariants-broken)
+        (cond-> (dissoc verdict :invariants-held :invariants-broken :invariants-unverified)
           (seq held)   (assoc :invariants-held held)
+          (seq unver)  (assoc :invariants-unverified unver)
           (seq broken) (assoc :invariants-broken broken))))))
 
 (defn- raised-identities
@@ -961,7 +984,7 @@
 (defn ^{:malli/schema [:=> [:cat :map :map :any] :map]}
   against-the-run
   "A parsed verdict, reconciled with the run it judged, as the ledger records
-   it. Four things the judge cannot be trusted to keep straight, each decided
+   it. Five things the judge cannot be trusted to keep straight, each decided
    here mechanically:
 
    - An `:unraised` row naming a finding the run raised is a restatement, and
@@ -970,7 +993,11 @@
    - An invariant the judge lists as held that a finding still open
      `:contradicts` moves to `:invariants-unmet`. A sound verdict had no slot
      for a design the code falls short of, so it listed the contradicted claim
-     as confirmed.
+     as confirmed. That applies to an unverified invariant too: a finding
+     contradicting it answers the question the missing evidence was for.
+   - An invariant the judge lists as unverified is not held, whatever else it
+     says. Listed as both, it read as confirmed beside a `:needs` asking a
+     person to go and confirm it.
    - Standing answers name an item by index into `standing`, and are recorded
      with the item's text; an index outside it names nothing and is dropped.
    - `:patch-hashes` is stamped when the tree the judge read is known — the
@@ -986,18 +1013,28 @@
                                            [(bare-claim c)
                                             (str (or (:handle f) (:id f) (:title f)))])))
                         (open-across-run final))
-        unmet     (into [] (keep #(when-let [f (contra (bare-claim %))]
-                                    {:invariant (str %) :finding f}))
+        unver     (into [] (remove #(contains? contra (bare-claim (:invariant %))))
+                        (:invariants-unverified v))
+        owed      (into #{} (map (comp bare-claim :invariant)) (:invariants-unverified v))
+        unmet     (reduce (fn [acc i]
+                            (let [f (contra (bare-claim i))]
+                              (if (and f (not-any? #(= (bare-claim i) (bare-claim (:invariant %))) acc))
+                                (conj acc {:invariant (str i) :finding f})
+                                acc)))
+                          []
+                          (concat (:invariants-held v) (map :invariant (:invariants-unverified v))))
+        held      (into [] (remove #(or (contains? contra (bare-claim %))
+                                        (contains? owed (bare-claim %))))
                         (:invariants-held v))
-        held      (into [] (remove #(contains? contra (bare-claim %))) (:invariants-held v))
         answered  (into [] (keep (fn [{:keys [index answer]}]
                                    (when (< -1 index (count standing))
                                      {:item (str (nth standing index)) :answer answer})))
                         (::standing-answers v))
         hashes    (sort (map str (:patch-hashes final)))]
-    (cond-> (dissoc v ::standing-answers :unraised :invariants-held)
+    (cond-> (dissoc v ::standing-answers :unraised :invariants-held :invariants-unverified)
       (seq unraised) (assoc :unraised unraised)
       (seq held)     (assoc :invariants-held held)
+      (seq unver)    (assoc :invariants-unverified unver)
       (seq unmet)    (assoc :invariants-unmet unmet)
       (seq answered) (assoc :standing-answered answered)
       (and (seq hashes) (empty? (:fixes final)))

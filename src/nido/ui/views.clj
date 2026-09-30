@@ -1527,8 +1527,8 @@
    record; a carry is the same judgment standing, and letting the two look alike
    turns a held position into repeated confirmation."
   [{:keys [verdict round reason invariants-held invariants-broken invariants-unmet
-           load-bearing-held load-bearing-broken findings-classified unraised
-           standing-answered needs carried-from]}]
+           invariants-unverified load-bearing-held load-bearing-broken findings-classified
+           unraised standing-answered needs carried-from]}]
   [:div.md
    [:h2 "Design verdict"]
    [:div.report-meta
@@ -1550,6 +1550,11 @@
       (into [:ul]
             (for [{:keys [invariant finding]} invariants-unmet]
               [:li invariant [:div.meta "open: " finding]]))])
+   (when (seq invariants-unverified)
+     [:div [:h3 "Not verified — evidence owed before merge"]
+      (into [:ul]
+            (for [{:keys [invariant missing]} invariants-unverified]
+              [:li invariant [:div.meta "missing: " missing]]))])
    (when (seq load-bearing-broken)
      [:div [:h3 "Broken without being declared"]
       [:p.meta "Properties the area relied on that this change did not say it

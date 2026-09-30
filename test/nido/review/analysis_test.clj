@@ -128,6 +128,17 @@
     (is (str/includes? (:title p) "fix/thing"))
     (is (str/includes? (:title p) "3 rounds"))))
 
+(deftest an-owed-verification-is-on-the-open-side-of-the-headline
+  ;; One run published `0 still open · 1 kept` over a verdict whose :needs said
+  ;; an invariant was never verified on Linux.
+  (let [p (analysis/payload (assoc a-run :design-verdict "sound" :verdict-unverified 1))]
+    (is (str/includes? (:headline p) "still open · 1 verification owed · ")
+        "evidence somebody owes is open work, and reads as such before `kept`")
+    (is (= 1 (:verdict-unverified p))))
+  (let [p (analysis/payload (assoc a-run :design-verdict "sound"))]
+    (is (not (str/includes? (:headline p) "owed")))
+    (is (not (contains? p :verdict-unverified)))))
+
 (deftest the-payload-carries-what-the-design-judge-decided
   ;; The pass judges the whole run, so it answers after the status is fixed and
   ;; nothing the loop published knows what it said. One run reached the analysis

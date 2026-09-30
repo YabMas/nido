@@ -1292,6 +1292,21 @@
         "a finding the run already settled is the loop working, not repair it
          owes — counted, `sound + 0` was unreachable for a run that fixed anything")))
 
+(deftest the-summary-counts-the-invariants-the-judge-could-not-verify
+  (let [r (report/with-verdict
+            (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+            {:outcome :answered :ledger :appended
+             :verdict (assoc a-verdict :invariants-unverified
+                             [{:invariant "linux-unchanged" :missing "the Linux run"}])})]
+    (is (= 1 (:verdict-unverified (report/verdict-summary r #{})))
+        "an owed verification must reach the headline, which is all a board reader sees"))
+  (is (not (contains? (report/verdict-summary
+                       (report/with-verdict
+                         (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+                         {:outcome :answered :ledger :appended :verdict a-verdict})
+                       #{})
+                      :verdict-unverified))))
+
 (deftest a-carried-verdict-says-so-in-the-summary
   (let [r (report/with-verdict
             (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})

@@ -321,6 +321,8 @@
    the only thing that has ever refused a verdict."
   {"reason"              "the rounding boundary held; the break is local"
    "invariants_held"     ["a total is rounded exactly once"]
+   "invariants_unverified" [{"invariant" "the aggregate rounds half-even"
+                             "missing"   "a run over a negative total"}]
    "invariants_broken"   [{"invariant" "a total is rounded exactly once"
                            "finding"   "the invoice reader re-rounds"}]
    "load_bearing_held"   ["a line item's amount is never rounded in place"]
@@ -361,7 +363,7 @@
                           2 3)
                          (verdict/against-the-run {} ["confirm the suite passes"]))]
           (is (= #{:format :verdict :round :design-seq :reason
-                   :invariants-held :invariants-broken
+                   :invariants-held :invariants-unverified :invariants-broken
                    :load-bearing-held :load-bearing-broken
                    :findings-classified :unraised :standing-answered :needs}
                  (set (keys parsed)))
@@ -1085,6 +1087,48 @@
     (is (= [{:invariant "[parsed-before-kept]" :finding "54a44beb"}] (:invariants-unmet v))
         "the design stands and the code falls short, which is a different entry")
     (is (= v (report/validate-event :design-verdict v)))))
+
+(deftest an-invariant-the-judge-could-not-verify-is-never-held
+  ;; A sound verdict listed `linux-unchanged` as confirmed while its own :needs
+  ;; said the Linux path was never run, and the owed verification read as
+  ;; nobody owing anything.
+  (let [v (verdict/parse
+           (fenced (str "{\"verdict\":\"sound\",\"reason\":\"r\","
+                        "\"invariants_held\":[\"[linux-unchanged]\",\"one-writer\"],"
+                        "\"invariants_unverified\":[{\"invariant\":\"linux-unchanged\","
+                        "\"missing\":\"the cgroup tests on Linux\"},{\"invariant\":\" \"}]}"))
+           2 3)
+        r (verdict/against-the-run v {:findings [] :history []} [])]
+    (is (= [{:invariant "linux-unchanged" :missing "the cgroup tests on Linux"}]
+           (:invariants-unverified r))
+        "the evidence that would confirm it is what the person owes, so it travels with the row")
+    (is (= ["one-writer"] (:invariants-held r))
+        "held means the judge confirmed it — an invariant it says it could not confirm is not held")
+    (is (= r (report/validate-event :design-verdict r)))))
+
+(deftest an-unverified-invariant-an-open-finding-contradicts-is-unmet
+  (let [final {:findings [{:handle "54a44beb" :title "t" :disposition :fix
+                           :contradicts "linux-unchanged"}]
+               :history []}
+        v     (verdict/against-the-run
+               (assoc judged
+                      :invariants-held ["linux-unchanged"]
+                      :invariants-unverified [{:invariant "[linux-unchanged]" :missing "m"}])
+               final [])]
+    (is (= [{:invariant "linux-unchanged" :finding "54a44beb"}] (:invariants-unmet v))
+        "the finding answers what the missing evidence was for, and it is counted once")
+    (is (nil? (:invariants-unverified v)))
+    (is (nil? (:invariants-held v)))))
+
+(deftest an-unverified-row-survives-the-claim-id-check
+  (let [held-to-claims #'verdict/held-to-claims]
+    (is (= [{:invariant "rounded-once" :missing "m"} {:invariant "not-a-claim" :missing "m"}]
+           (:invariants-unverified
+            (held-to-claims {:verdict :sound
+                             :invariants-unverified [{:invariant "[rounded-once]" :missing "m"}
+                                                     {:invariant "not-a-claim" :missing "m"}]}
+                            #{"rounded-once"})))
+        "dropping an owed verification would turn it into a clean verdict")))
 
 (deftest a-standing-answer-is-recorded-with-the-item-it-answers
   (let [v (verdict/against-the-run

@@ -1342,7 +1342,11 @@
    Shape-agnostic on the classification and the verdict alike, because the same
    value is a keyword in the process that folded it and a string once the report
    has been through JSON, and a reader that silently answered 0 for the second
-   would be wrong exactly where the report outlived its process."
+   would be wrong exactly where the report outlived its process.
+
+   `:verdict-unverified` counts the invariants the judge could not confirm, only
+   when there are any. Each is evidence somebody owes before the branch ships —
+   open work the rounds never saw, since no finding stands for it."
   [report owed]
   (let [v     (get-in report [:design-verdict :verdict])
         owed? (fn [text] (some #(and (not (str/blank? (str %))) (str/includes? (str text) (str %)))
@@ -1353,6 +1357,7 @@
                                                                (owed? (:finding %)))
                                                          (:findings-classified v)))
                                           (count (:unraised v)))}
+        (seq (:invariants-unverified v)) (assoc :verdict-unverified (count (:invariants-unverified v)))
         (:carried-from v) (assoc :design-carried-from (:carried-from v))))))
 
 ;; ---- the rest of what the run's tail wrote -------------------------------
