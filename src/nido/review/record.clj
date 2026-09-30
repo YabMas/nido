@@ -1970,12 +1970,64 @@
 
 (def baseline-finding-key (dispute-aware baseline-finding-base-key))
 
+(def ^:private withdrawable-after
+  "How many consecutive readings must refute a claim before its amender may remove it. Two, because
+   the second refutation came after a rewording made for the first: rewording has been tried once,
+   and was itself the next finding."
+  2)
+
+(defn ^{:malli/schema [:=> [:cat [:sequential :map]] [:map-of :string :int]]}
+  refuted-running
+  "How many readings in a row have refuted each claim, counting back from its newest — `{claim-id n}`
+   for every id whose newest reading in `reviews`, oldest first, refuted it.
+
+   A reading of a claim is a review that ruled on it: confirmed it, or filed a refutation under its
+   id. A review that did neither — the claim was settled, or left unruled — is no reading and
+   neither breaks nor extends a run; a confirmation ends one. A gap finding (:blocks) refutes
+   nothing, so it is no reading either."
+  [reviews]
+  (reduce (fn [runs {:keys [confirmed findings]}]
+            (let [refuted (into #{} (comp (remove :blocks) (keep :claim-id)) findings)]
+              (as-> runs rs
+                (apply dissoc rs (remove refuted confirmed))
+                (reduce #(update %1 %2 (fnil inc 0)) rs refuted))))
+          {} reviews))
+
+(defn- withdrawable
+  "The claims of `baseline` that `findings` refute and `refuted-running` counts at
+   `withdrawable-after` or more, as a sorted `{claim-id n}` — the claims its amender may remove with
+   a reason. A refuted module or health observation is never one: its removal is measured as what it
+   is, and offering it would promise a withdrawal the report will not show."
+  [baseline findings refuted-running]
+  (let [claims (retreat/claim-ids baseline)]
+    (into (sorted-map)
+          (keep (fn [id] (let [n (get refuted-running id 0)]
+                           (when (and (claims id) (>= n withdrawable-after)) [id n]))))
+          (distinct (keep :claim-id (remove :blocks findings))))))
+
+(defn- withdrawal-block
+  "What an amender is told about the claims in `spent` (`withdrawable`), or nil when there are none."
+  [spent]
+  (when (seq spent)
+    (str "\n\nA CLAIM NO REWORDING HAS SETTLED. "
+         (str/join ", " (for [[id n] spent] (str "[" id "] has been refuted " n " readings running")))
+         ",\neach time after a rewording of it. Restating it at the same strength is off the\n"
+         "table: that has been tried, and it was the next finding. Two honest repairs are\n"
+         "left, and you choose between them:\n\n"
+         "  - WEAKEN it to what the cited code guarantees, including on its failure path —\n"
+         "    what the code tries, not what it achieves when every call succeeds.\n"
+         "  - REMOVE it, when no other claim, element or derivation in the record rests on\n"
+         "    it, and give the reason under :withdrawn. That removal is the repair, not a\n"
+         "    retreat from one: it is reported to a human as a withdrawal carrying your\n"
+         "    reason. A removal without a reason is reported as a claim dropped.")))
+
 ;; ── The appeal channel ──────────────────────────────────────────────────────
 
 (defn ^{:malli/schema [:=> [:cat :any :any :any] :map]}
   parse-amend-answer
   "What an amender may hand back: an amended record, objections to what it was
-   asked to amend for, or both.
+   asked to amend for, or both — and, with the record, the reason for each claim it
+   removed on purpose (:withdrawn).
 
    A bare record — no wrapper — is still accepted, because that is what the
    answer was before there was anything to say back, and a shape change is not a
@@ -2002,7 +2054,14 @@
                                                  (str f))
                                    :because  (str because)
                                    :evidence (vec (map str evidence))})))
-                            disputes))})))
+                            disputes))
+       ;; `{id reason}`. Which of these a round honours is its caller's to say; one without a
+       ;; reason is not a withdrawal, only a claim dropped.
+       :withdrawn (into {} (keep (fn [{:keys [id because]}]
+                                   (when-not (or (str/blank? (str id)) (str/blank? (str because)))
+                                     [(str id) (str because)])))
+                        (when-not (:format raw)
+                          (let [w (:withdrawn raw)] (when (sequential? w) (filter map? w)))))})))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   dispute-counts
@@ -2399,9 +2458,15 @@
    handed the second under the first's wording corrects a claim that was already
    right — and the fields that say which it is, :blocks and :needs, were on the
    record and printed nowhere. Only the gap branch is new; the refutation wording
-   is the one that converged and is left alone."
-  [{:keys [baseline findings out-path stance declared? check-cmd settled]}]
-  (let [gaps? (boolean (some :blocks findings))]
+   is the one that converged and is left alone.
+
+   `refuted-running` is what `refuted-running` counts over this workstream's
+   reviews, this round's included. A refuted claim it counts at `withdrawable-after` or more has already
+   been reworded and refuted again, so its amender is told that a restatement is
+   off the table and offered removal with a reason (`withdrawable`)."
+  [{:keys [baseline findings out-path stance declared? check-cmd settled refuted-running]}]
+  (let [gaps?  (boolean (some :blocks findings))
+        spent  (withdrawable baseline findings refuted-running)]
    (str
    (if gaps?
      (str "A read-only judge checked this workstream's BASELINE — the baseline of how\n"
@@ -2514,8 +2579,11 @@
               (str "refutes: " (str/join "; " (:cites f)) "\n"
                    "   claim:   " (:claim f)))
             (when (seq (:evidence f))
-              (str "\n   evidence: " (str/join ", " (:evidence f))))))
+              (str "\n   evidence: " (str/join ", " (:evidence f))))
+            (when-let [n (and (not (:blocks f)) (get spent (:claim-id f)))]
+              (str "\n   running: refuted " n " readings in a row — see A CLAIM NO REWORDING HAS SETTLED"))))
      findings))
+   (withdrawal-block spent)
    (some->> (bearing-block (bearing-subjects {:record baseline :findings findings :settled settled}))
             (str "\n\n") str/trimr)
    (if gaps?
@@ -2528,9 +2596,15 @@
    "worst available answer: it makes the record false AND ends the argument.\n\n"
    "Write EDN to:\n\n  " out-path "\n\n"
    "  {:record   <the COMPLETE corrected baseline — every field, not a diff>\n"
-   "   :disputes [{:finding 2 :because \"...\" :evidence [\"src/x.clj:41\"]}]}\n\n"
+   (if (seq spent)
+     (str "   :disputes [{:finding 2 :because \"...\" :evidence [\"src/x.clj:41\"]}]\n"
+          "   :withdrawn [{:id \"" (key (first spent)) "\" :because \"...\"}]}\n\n")
+     "   :disputes [{:finding 2 :because \"...\" :evidence [\"src/x.clj:41\"]}]}\n\n")
    "Omit :record entirely if every finding is disputed and the baseline needs no\n"
-   "change. Omit :disputes if you accepted all of them.\n\n"
+   "change. Omit :disputes if you accepted all of them.\n"
+   (when (seq spent)
+     "Omit :withdrawn unless you removed a claim named under A CLAIM NO REWORDING HAS SETTLED.\n")
+   "\n"
    "Write the record in the shared model — :model {:elements :claims} in place of\n"
    ":modules, :composition and :load-bearing — whatever shape the current one is in.\n"
    "Re-stating an older one changes nothing it says: each module becomes an element\n"
@@ -2791,7 +2865,12 @@
                      :disputes (disputes-for-judge (:history ctx))})
                    (stamp-run (:config ctx))
                    (with-readings report/review-holds? standing (carried-readings ctx subject) prior))
-        ctx    (merge (assoc ctx :settled settled)
+        ;; Read before this round's record is appended, and this round added by hand, so it is
+        ;; counted exactly once whether or not the best-effort append lands.
+        running (when (:format record)
+                  (refuted-running (conj (if project (vec (ws/entries-of project ws-id :baseline-review)) [])
+                                         record)))
+        ctx    (merge (assoc ctx :settled settled :refuted-running running)
                       (when subject (banking subject settled reading record)))]
     (append! cwd record)
     (cond
@@ -2865,6 +2944,7 @@
                                                            :out-path  out-path
                                                            :check-cmd (when check-cmd (check-cmd out-path))
                                                            :settled   (:settled ctx)
+                                                           :refuted-running (:refuted-running ctx)
                                                            :stance    (stages/read-stance project)
                                                            :declared? (some? (design-check/design-of project code-cwd))})})
               ;; Read before the tree is judged, so an answer the round will not
@@ -2938,7 +3018,11 @@
                       record  (:record written)]
                   (if (:status written)
                     (refused-stop ctx written disputes)
-                    (let [retreats (retreat/baseline-retreats prev record)
+                    (let [;; Only the claims the prompt offered removal for: a reason
+                          ;; given for any other drop does not make it a withdrawal.
+                          offered  (withdrawable prev (:findings ctx) (:refuted-running ctx))
+                          retreats (retreat/baseline-retreats
+                                    prev record (select-keys (:withdrawn answer) (keys offered)))
                           ;; Stamped, not as the amender wrote it. The judge
                           ;; labels its verdict with the :seq of the record it
                           ;; read, and the design loop's re-survey hands this

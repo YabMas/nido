@@ -335,8 +335,14 @@
 
    A round that replaces a record can quietly drop what the previous one claimed; naming the
    retreat is what makes that a decision rather than an erasure."
-  (Operation baseline-retreats "What a superseding baseline no longer claims."
-    {:signature [:=> [:catn [:prev :map] [:curr :map]] :any]})
+  (Operation baseline-retreats
+    "What a superseding baseline no longer claims. `:withdrawn` names the claims removed on purpose,
+     each with its reason; one the new record no longer makes is reported once, as a withdrawal
+     carrying that reason, and not again as the count and evidence that left with it."
+    {:signature [:=> [:catn [:prev :map] [:curr :map]
+                            [:withdrawn [:? [:maybe [:map-of :string :string]]]]] :any]})
+  (Operation claim-ids "The ids of a baseline's claims as the retreats read them."
+    {:signature [:=> [:catn [:b :map]] [:set :string]]})
   (Operation design-retreats "What a superseding design no longer claims."
     {:signature [:=> [:catn [:prev :map] [:curr :map]] :any]})
   (Operation growth "The prose fields that grew rather than shrank."

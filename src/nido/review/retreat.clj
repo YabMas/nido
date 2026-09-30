@@ -167,7 +167,22 @@
         (dissoc :model))
     b))
 
-(defn ^{:malli/schema [:=> [:cat :map :map] :any]}
+(defn ^{:malli/schema [:=> [:cat :map] [:set :string]]}
+  claim-ids
+  "The ids of baseline `b`'s claims as `baseline-retreats` reads them — the only ids a withdrawal
+   can name."
+  [b]
+  (into #{} (keep :id) (:load-bearing (as-survey b))))
+
+(defn- withdrawals
+  "The claims of `prev` that `curr` no longer makes and `withdrawn` — `{id reason}` — gives a reason
+   for, as `{id reason}`. A reason for a claim `curr` still makes withdraws nothing."
+  [prev curr withdrawn]
+  (let [gone (set (remove (set (keep :id (:load-bearing curr)))
+                          (keep :id (:load-bearing prev))))]
+    (into (sorted-map) (filter (comp gone key)) withdrawn)))
+
+(defn ^{:malli/schema [:=> [:cat :map :map [:? [:maybe [:map-of :string :string]]]] :any]}
   baseline-retreats
   "Everything the superseding baseline claims less of than the one before it.
 
@@ -176,78 +191,90 @@
    counted. Load-bearing properties have no id, so they are compared two ways
    that survive rewording: how many there are, and which file:line references
    nothing cites any more. A property genuinely corrected keeps pointing at the
-   code that corrected it; one quietly dropped takes its evidence with it."
-  [prev curr]
-  (let [prev (as-survey prev)
-        curr (as-survey curr)
-        ;; By id now, not by name. A module renamed while the decomposition grew
-        ;; read as a module lost, because its own description was its identity and
-        ;; the amender rewrites descriptions.
-        id-or-name (fn [m] (or (:id m) (:module m)))
-        pmods (into {} (map (juxt id-or-name identity)) (:modules prev))
-        cmods (set (map id-or-name (:modules curr)))
-        mods-gone (remove cmods (keys pmods))
-        ;; Readings are where the analysis lives, so losing one loses analysis
-        ;; whatever the prose still says. There is no id on a claim to track a
-        ;; reading through a rewrite, so what is counted is how many readings
-        ;; the baseline carries and which perspectives it still applies at all —
-        ;; both of which survive an amender rewriting every word.
-        readings (fn [b] (concat (mapcat :readings (:load-bearing b))
-                                 (mapcat :readings (:modules b))))
-        plenses (set (map :lens (readings prev)))
-        clenses (set (map :lens (readings curr)))
-        pids  (into {} (map (juxt :id identity)) (:health prev))
-        cids  (into {} (map (juxt :id identity)) (:health curr))
-        gone  (remove (set (keys cids)) (keys pids))
-        unveiled (for [[id p] pids
-                       :let [c (cids id)]
-                       :when (and c (:invisibly-incomplete? p)
-                                  (not (:invisibly-incomplete? c)))]
-                   id)
-        ev-gone (evidence-lost prev curr)]
-    (vec
-     (concat
-      (keep identity
-            [(fewer :load-bearing-fewer "load-bearing" (:load-bearing prev) (:load-bearing curr))
-             (fewer :modules-fewer "modules" (:modules prev) (:modules curr))
-             (fewer :read-narrowed "read" (:read prev) (:read curr))])
-      ;; Named only when the count also fell. A module's identity is its own
-      ;; descriptive name, which the amender rewrites like everything else —
-      ;; "codex — the judge launch" became "codex — the read-only judge launch"
-      ;; while the decomposition GREW by two, and comparing the strings called
-      ;; that a module lost. The count is the signal that survives a rewording;
-      ;; the names are the best detail available once it fires, and offering
-      ;; them when it has not is asserting a loss the data does not support.
-      ;; With ids the count gate is no longer needed to suppress renames — a
-      ;; dropped id is a dropped module whatever else changed.
-      (for [m (sort mods-gone)]
-        (retreat :module-dropped
-                 (str "module " m " is no longer part of the decomposition")))
-      (let [pids (set (keep :id (:load-bearing prev)))
-            cids (set (keep :id (:load-bearing curr)))]
-        (for [c (sort (remove cids pids))]
-          (retreat :claim-dropped
-                   (str "claim " c " is no longer made"))))
-      (keep identity
-            [(fewer :readings-fewer "readings" (readings prev) (readings curr))])
-      (for [l (sort (remove clenses plenses))]
-        (retreat :lens-abandoned
-                 (str "nothing is read through " (namespace l) "/" (name l)
-                      " any more; a perspective dropped is analysis dropped")))
-      (for [id (sort gone)]
-        (retreat :health-dropped (str "observation " id " is no longer recorded")))
-      ;; The veto is the whole reason :invisibly-incomplete? exists — an
-      ;; observation carrying it can never be spun out. Clearing the flag is
-      ;; therefore not a baseline correction with a side effect; it is the one
-      ;; edit that converts a defect into a deferrable.
-      (for [id (sort unveiled)]
-        (retreat :veto-lifted
-                 (str "observation " id " was invisibly-incomplete? and no longer is")))
-      (for [[file start end] ev-gone]
-        (retreat :evidence-dropped
-                 (str file ":" start (when (not= start end) (str "-" end))
-                      " is cited by no load-bearing property any more")))
-      (emptied prev curr)))))
+   code that corrected it; one quietly dropped takes its evidence with it.
+
+   `withdrawn`, `{claim-id reason}`, names claims removed on purpose: ones the
+   caller let the amender take out, with the reason it gave. Each one the new record
+   no longer makes is one `:claim-withdrawn` carrying that reason, and is measured
+   nowhere else — the count, evidence and readings that left with it are that
+   withdrawal, and reporting them again would call a stated removal an unexplained
+   weakening four times over."
+  ([prev curr] (baseline-retreats prev curr nil))
+  ([prev curr withdrawn]
+   (let [prev (as-survey prev)
+         curr (as-survey curr)
+         taken (withdrawals prev curr withdrawn)
+         prev (update prev :load-bearing #(vec (remove (comp taken :id) %)))
+         ;; By id now, not by name. A module renamed while the decomposition grew
+         ;; read as a module lost, because its own description was its identity and
+         ;; the amender rewrites descriptions.
+         id-or-name (fn [m] (or (:id m) (:module m)))
+         pmods (into {} (map (juxt id-or-name identity)) (:modules prev))
+         cmods (set (map id-or-name (:modules curr)))
+         mods-gone (remove cmods (keys pmods))
+         ;; Readings are where the analysis lives, so losing one loses analysis
+         ;; whatever the prose still says. There is no id on a claim to track a
+         ;; reading through a rewrite, so what is counted is how many readings
+         ;; the baseline carries and which perspectives it still applies at all —
+         ;; both of which survive an amender rewriting every word.
+         readings (fn [b] (concat (mapcat :readings (:load-bearing b))
+                                  (mapcat :readings (:modules b))))
+         plenses (set (map :lens (readings prev)))
+         clenses (set (map :lens (readings curr)))
+         pids  (into {} (map (juxt :id identity)) (:health prev))
+         cids  (into {} (map (juxt :id identity)) (:health curr))
+         gone  (remove (set (keys cids)) (keys pids))
+         unveiled (for [[id p] pids
+                        :let [c (cids id)]
+                        :when (and c (:invisibly-incomplete? p)
+                                   (not (:invisibly-incomplete? c)))]
+                    id)
+         ev-gone (evidence-lost prev curr)]
+     (vec
+      (concat
+       (for [[id why] taken]
+         (retreat :claim-withdrawn (str "claim " id " was removed: " why)))
+       (keep identity
+             [(fewer :load-bearing-fewer "load-bearing" (:load-bearing prev) (:load-bearing curr))
+              (fewer :modules-fewer "modules" (:modules prev) (:modules curr))
+              (fewer :read-narrowed "read" (:read prev) (:read curr))])
+       ;; Named only when the count also fell. A module's identity is its own
+       ;; descriptive name, which the amender rewrites like everything else —
+       ;; "codex — the judge launch" became "codex — the read-only judge launch"
+       ;; while the decomposition GREW by two, and comparing the strings called
+       ;; that a module lost. The count is the signal that survives a rewording;
+       ;; the names are the best detail available once it fires, and offering
+       ;; them when it has not is asserting a loss the data does not support.
+       ;; With ids the count gate is no longer needed to suppress renames — a
+       ;; dropped id is a dropped module whatever else changed.
+       (for [m (sort mods-gone)]
+         (retreat :module-dropped
+                  (str "module " m " is no longer part of the decomposition")))
+       (let [pids (set (keep :id (:load-bearing prev)))
+             cids (set (keep :id (:load-bearing curr)))]
+         (for [c (sort (remove cids pids))]
+           (retreat :claim-dropped
+                    (str "claim " c " is no longer made"))))
+       (keep identity
+             [(fewer :readings-fewer "readings" (readings prev) (readings curr))])
+       (for [l (sort (remove clenses plenses))]
+         (retreat :lens-abandoned
+                  (str "nothing is read through " (namespace l) "/" (name l)
+                       " any more; a perspective dropped is analysis dropped")))
+       (for [id (sort gone)]
+         (retreat :health-dropped (str "observation " id " is no longer recorded")))
+       ;; The veto is the whole reason :invisibly-incomplete? exists — an
+       ;; observation carrying it can never be spun out. Clearing the flag is
+       ;; therefore not a baseline correction with a side effect; it is the one
+       ;; edit that converts a defect into a deferrable.
+       (for [id (sort unveiled)]
+         (retreat :veto-lifted
+                  (str "observation " id " was invisibly-incomplete? and no longer is")))
+       (for [[file start end] ev-gone]
+         (retreat :evidence-dropped
+                  (str file ":" start (when (not= start end) (str "-" end))
+                       " is cited by no load-bearing property any more")))
+       (emptied prev curr))))))
 
 ;; ── Design ──────────────────────────────────────────────────────────────────
 

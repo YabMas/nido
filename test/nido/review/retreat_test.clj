@@ -73,6 +73,35 @@
         "counted, named by id, and its orphaned evidence named too")
     (is (some #(= "src/b.clj:2 is cited by no load-bearing property any more" (:detail %)) rs))))
 
+(deftest a-claim-withdrawn-with-a-reason-is-reported-once-with-that-reason
+  ;; The removal was the repair — a claim reworded and refuted again that nothing rested on. Told
+  ;; as load-bearing-fewer, claim-dropped and evidence-dropped it reads as three unexplained
+  ;; weakenings, which is exactly what sent a person to make the same removal by hand.
+  (let [curr (update base-baseline :load-bearing pop)
+        rs   (retreat/baseline-retreats base-baseline curr {"c5" "refuted each round; nothing rests on it"})]
+    (is (= [{:what :claim-withdrawn
+             :detail "claim c5 was removed: refuted each round; nothing rests on it"}]
+           rs)
+        "one withdrawal carrying its reason, and nothing it took with it reported again")))
+
+(deftest a-reason-withdraws-only-what-the-record-actually-removed
+  (testing "a reason for a claim still made changes nothing"
+    (is (= [] (retreat/baseline-retreats base-baseline base-baseline {"c5" "gone"}))))
+  (testing "a second claim dropped beside a withdrawn one is still a plain drop"
+    (let [curr (assoc base-baseline :load-bearing [])
+          rs   (retreat/baseline-retreats base-baseline curr {"c5" "gone"})]
+      (is (= #{:claim-withdrawn :load-bearing-fewer :claim-dropped :evidence-dropped} (whats rs)))
+      (is (some #(= "claim c4 is no longer made" (:detail %)) rs)
+          "the reason given for one removal does not excuse another")
+      (is (some #(= "src/a.clj:1 is cited by no load-bearing property any more" (:detail %)) rs))
+      (is (not-any? #(= "src/b.clj:2 is cited by no load-bearing property any more" (:detail %)) rs)))))
+
+(deftest a-model-claim-can-be-withdrawn
+  (let [rs (retreat/baseline-retreats model-baseline (update-in model-baseline [:model :claims] pop)
+                                      {"k2" "no derivation reads it"})]
+    (is (= #{:claim-withdrawn} (whats rs)))
+    (is (= #{"k1" "k2"} (retreat/claim-ids model-baseline)))))
+
 (deftest rewording-a-property-is-not-a-retreat
   ;; The whole point of comparing evidence rather than prose: a baseline that
   ;; corrects how it states a property, while still pointing at the same code,

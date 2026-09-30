@@ -100,6 +100,10 @@
     {:signature [:=> [:catn [:f :map]] :any]})
   (Operation dispute-aware "A key that folds in how many times a finding has been disputed."
     {:signature [:=> [:catn [:base-key :any]] :any]})
+  (Operation refuted-running
+    "How many readings in a row have refuted each claim, counting back from its newest. What
+     decides whether an amender may remove a refuted claim with a reason rather than reword it."
+    {:signature [:=> [:catn [:reviews [:sequential :map]]] [:map-of :string :int]]})
   (Operation parse-amend-answer "What an amender may hand back."
     {:signature [:=> [:catn [:raw :any] [:findings :any] [:base-key :any]] :map]})
   (Operation dispute-counts "How many times each finding has been disputed."

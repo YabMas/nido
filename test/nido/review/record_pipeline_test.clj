@@ -1562,3 +1562,76 @@
     (is (str/includes? p "a counterexample the record itself states is a contradiction"))
     (is (not (str/includes? p "a quantifier you widen must not"))
         "a baseline amender has no baseline beneath it to cross")))
+
+;; ── A claim no rewording settles ────────────────────────────────────────────
+
+(defn- review [& {:keys [confirmed refuted gaps]}]
+  {:format :baseline-review :verdict :falsified
+   :confirmed (vec confirmed)
+   :findings (into (mapv #(hash-map :claim-id % :cites ["x"] :claim "y") refuted)
+                   (map #(hash-map :claim-id % :blocks :goal-served :cites ["x"] :claim "y" :needs "z") gaps))})
+
+(deftest refutations-are-counted-per-claim-across-the-readings-that-ruled-on-it
+  (is (= {"c1" 2} (record/refuted-running [(review :refuted ["c1"]) (review :refuted ["c1"])])))
+  (is (= {"c1" 1} (record/refuted-running [(review :refuted ["c1"]) (review :confirmed ["c1"])
+                                           (review :refuted ["c1"])]))
+      "a confirmation ends a run: the claim was true at some rewording")
+  (is (= {"c1" 2} (record/refuted-running [(review :refuted ["c1"]) (review :confirmed ["c2"])
+                                           (review :refuted ["c1"])]))
+      "a review that did not rule on the claim is no reading of it, and neither breaks nor extends")
+  (is (= {} (record/refuted-running [(review :refuted ["c1"]) (review :confirmed ["c1"])]))
+      "a claim whose newest reading held has no run at all")
+  (is (= {"c1" 1} (record/refuted-running [(review :gaps ["c1"]) (review :refuted ["c1"])]))
+      "a gap refutes nothing"))
+
+(def ^:private a-claim-finding (assoc a-finding :claim-id "c1"))
+
+(deftest a-claim-refuted-two-readings-running-is-offered-removal-with-a-reason
+  (let [p (record/amend-prompt {:baseline a-baseline :findings [a-claim-finding] :out-path "/x"
+                                :refuted-running {"c1" 2}})]
+    (is (str/includes? p "A CLAIM NO REWORDING HAS SETTLED. [c1] has been refuted 2 readings running"))
+    (is (str/includes? p "Restating it at the same strength is off the\ntable")
+        "a third rewording at the same strength is what the claim's history says will fail")
+    (is (str/includes? p "WEAKEN it to what the cited code guarantees, including on its failure path"))
+    (is (str/includes? p "give the reason under :withdrawn"))
+    (is (str/includes? p ":withdrawn [{:id \"c1\" :because \"...\"}]")
+        "the answer shape names the field the removal's reason travels in")
+    (is (str/includes? p "running: refuted 2 readings in a row")
+        "the finding itself says it is one of them"))
+  (testing "one refutation is an ordinary round: the amender is not invited to give up on a claim"
+    (let [p (record/amend-prompt {:baseline a-baseline :findings [a-claim-finding] :out-path "/x"
+                                  :refuted-running {"c1" 1}})]
+      (is (not (str/includes? p "A CLAIM NO REWORDING HAS SETTLED")))
+      (is (not (str/includes? p ":withdrawn")))))
+  (testing "a refuted health observation is not a claim, and no withdrawal of it would be reported"
+    (let [p (record/amend-prompt {:baseline a-baseline
+                                  :findings [(assoc a-finding :claim-id "invoice-resums")]
+                                  :out-path "/x" :refuted-running {"invoice-resums" 3}})]
+      (is (not (str/includes? p "A CLAIM NO REWORDING HAS SETTLED"))))))
+
+(deftest the-judge-counts-this-round-once-beside-the-ledgers-readings
+  (with-redefs [record/baseline-review! (fn [_] (review :refuted ["c1"]))
+                record/append! (fn [_ _] nil)
+                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                ws/latest-entry (fn [_ _ _] a-baseline)
+                ws/entries-of (fn [_ _ kind] (if (= :baseline-review kind) [(review :refuted ["c1"])] []))]
+    (is (= {"c1" 2} (:refuted-running (run record/judge-stage (ctx)))))))
+
+(defn- without-c1 [b] (assoc b :load-bearing []))
+
+(deftest a-withdrawal-the-round-offered-is-reported-with-its-reason
+  (let [[out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record (without-c1 a-baseline)
+                                                               :withdrawn [{:id "c1" :because "nothing rests on it"}]})))}
+                            (ctx :findings [a-claim-finding] :refuted-running {"c1" 2}))]
+    (is (nil? (:status out)) "a withdrawal is a repair; the loop goes on to judge it")
+    (is (= [{:what :claim-withdrawn :detail "claim c1 was removed: nothing rests on it"}]
+           (:retreats out))
+        "the human reads why the claim went, not three weakenings with no reason")))
+
+(deftest a-reason-for-a-removal-the-round-did-not-offer-is-not-a-withdrawal
+  (let [[out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record (without-c1 a-baseline)
+                                                               :withdrawn [{:id "c1" :because "nothing rests on it"}]})))}
+                            (ctx :findings [a-claim-finding] :refuted-running {"c1" 1}))]
+    (is (contains? (set (map :what (:retreats out))) :claim-dropped)
+        "a claim refuted once has not been shown unfixable by rewording, so its removal stays a drop")
+    (is (not (contains? (set (map :what (:retreats out))) :claim-withdrawn)))))
