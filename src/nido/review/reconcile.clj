@@ -230,7 +230,8 @@
             :review-entry       recorded
             :in-flight          in-flight
             :targets-reviewed   (:reviewed cover)
-            :targets-skipped    (:skipped cover)}
+            :targets-skipped    (:skipped cover)
+            :machinery          (:machinery report)}
            reviewed)))
 
 (defn- ruled-ids

@@ -449,3 +449,15 @@
                                         :review-entry {:ledger "superseded"}}))]
     (is (str/includes? h "had already written its own record, which stands"))
     (is (not (str/includes? h "inherits the one before it")))))
+
+(deftest the-headline-says-when-the-machinery-was-stale
+  ;; Nine analyses in one day re-filed defects main had already fixed, because
+  ;; the run's own report said which revision ran and not that it was behind.
+  (let [stale {:root "/n/src" :rev "abc" :lacks ["5969d23d Hand a refused amendment back"]}]
+    (doseq [run [(assoc a-run :machinery stale)
+                 (assoc a-run :loop :design :machinery stale)]]
+      (is (str/includes? (:headline (analysis/payload run)) "5969d23d")
+          "the headline is the analysis session's whole briefing, so the lag has to be in it"))
+    (is (not (str/includes? (:headline (analysis/payload (assoc a-run :machinery {:root "/n/src" :rev "abc" :lacks []})))
+                            "warning"))
+        "a copy current with main on the loop is not worth a line")))

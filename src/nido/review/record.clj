@@ -1048,10 +1048,18 @@
 
 ;; ── Running a round ─────────────────────────────────────────────────────────
 
-(def ^:private schema-resources
-  {:stratum-reading "review/stratum_reading_schema.json"
-   :baseline-review "review/baseline_review_schema.json"
-   :design-decision "review/design_decision_schema.json"})
+(def ^:private schemas
+  "Each round kind's output schema, read once as this namespace loads.
+
+   Load time, not round time, because the prompt that describes the answer and
+   the parser that reads it are fixed when this namespace loads. Read per round,
+   a schema is whatever the disk holds that minute, and an answer shaped by a
+   schema newer than its parser is dropped without an error — the ledger then
+   records a judge that confirmed nothing."
+  (update-vals {:stratum-reading "review/stratum_reading_schema.json"
+                :baseline-review "review/baseline_review_schema.json"
+                :design-decision "review/design_decision_schema.json"}
+               #(slurp (jio/resource %))))
 
 (def ^:private derivation-keys
   "Every derivation a round may answer about, of either era. What an answer names is kept only if it
@@ -1269,7 +1277,7 @@
           schema-path (str (fs/path dir (str n "-schema.json")))
           out-path    (str (fs/path dir (str n "-out.json")))
           log-path    (str (fs/path dir (str n ".log")))]
-      (spit schema-path (slurp (jio/resource (schema-resources kind))))
+      (spit schema-path (schemas kind))
       (let [{:keys [exit judged-by] ran-log :log-path}
             (codex/run-reviewer! {:reviewer reviewer :cwd cwd :schema-path schema-path
                                   :out-path out-path :log-path log-path

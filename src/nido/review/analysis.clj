@@ -27,7 +27,8 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [nido.coordinator.control :as control]
-   [nido.coordinator.record.state :as cstate]))
+   [nido.coordinator.record.state :as cstate]
+   [nido.review.provenance :as provenance]))
 
 (def target
   "Where the envelope is aimed. `:nido` is the project whose triggers.edn
@@ -191,7 +192,8 @@
            findings-remaining findings-kept remaining-handed remaining-parked
            targets-reviewed targets-skipped unfixable parked standing
            drift unavailable stood-in base in-flight errored design-verdict verdict-implementation
-           design-carried-from review-entry reviewed-project reviewed-session reviewed-ws-id] :as run}]
+           design-carried-from review-entry reviewed-project reviewed-session reviewed-ws-id
+           machinery] :as run}]
   ;; `:in-flight` is the reconciler's reading of an orphan's report and is the
   ;; same value `worth-analysing?` gates on; the phase is the half of it that
   ;; means something to a reader, so it is published and the round is not.
@@ -253,6 +255,7 @@
                                       (when unavailable
                                         (str "\nReviewer unavailable: " (:message unavailable)))
                                       (some->> (stood-in-line stood-in) (str "\n"))
+                                      (some->> (provenance/warning machinery) (str "\n"))
                                       (when (= "superseded" ledger)
                                         (str "\nNot recorded: settled after a later run on "
                                              (or reviewed-ws-id "this workstream")
@@ -288,7 +291,8 @@
    checks were still broken when it ended and what its last decision asked of a person; the figures
    per check are the ledger's, read by `bb nido:review:figures`, never carried here."
   [{:keys [loop run-id report-path status rounds judged amended unappended weakened disputed
-           record-seq still-broken asks stood-in reviewed-project reviewed-session reviewed-ws-id] :as run}]
+           record-seq still-broken asks stood-in reviewed-project reviewed-session reviewed-ws-id
+           machinery] :as run}]
   (let [kind   (name loop)
         broken (seq (map name still-broken))]
     (cond-> {:adapter     :review-run
@@ -317,7 +321,8 @@
                                ;; question surfaces outside the ledger.
                                (when-not (str/blank? (str asks)) (str "Asked of a person: " asks "\n"))
                                (some-> (stood-in-line stood-in) (str "\n"))
-                               (reviewed-line run (when reviewed-ws-id (str " (workstream " reviewed-ws-id ")"))))}
+                               (reviewed-line run (when reviewed-ws-id (str " (workstream " reviewed-ws-id ")")))
+                               (some->> (provenance/warning machinery) (str "\n")))}
       record-seq       (assoc :record-seq record-seq)
       (seq stood-in)   (assoc :stood-in (vec stood-in))
       reviewed-project (assoc :reviewed-project (name reviewed-project))

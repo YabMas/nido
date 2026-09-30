@@ -109,8 +109,18 @@
    code that did the reviewing. Without it a finding about the loop cannot be told from an
    artefact of a stale invocation — a run eleven commits behind main reproduced four record
    defects those commits had already fixed, and nothing in it said so."
-  (Operation loaded-from "The source root the review namespaces came from, and the commit it stands at."
-    {:signature [:=> [:catn] [:maybe :map]]}))
+  (Operation loaded-from
+    "The source root the review namespaces came from, the commit it stands at, a hash of the
+     machinery as loaded, how far that copy lags main and whether a commit holds it at all — and,
+     given the tree under review, whether the copy predates its fork point and whether the reviewed
+     branch changes the loop itself."
+    {:signature [:function
+                 [:=> [:catn] [:maybe :map]]
+                 [:=> [:catn [:target-cwd [:maybe Path]]] [:maybe :map]]]})
+  (Operation warning
+    "One line saying why a run's machinery should not be trusted to be main's, or nil. Pure over
+     `loaded-from`'s answer, so the loop's first line and the analysis headline say the same thing."
+    {:signature [:=> [:catn [:machinery [:maybe :map]]] [:maybe :string]]}))
 
 (Module review-report
   "The run's own record, built up event by event and written as it goes."

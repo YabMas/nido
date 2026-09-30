@@ -575,6 +575,7 @@
        ;; see `analysis/payload`.
        :errored            (report/errored report)
        :stood-in           (report/stood-in report)
+       :machinery          (:machinery report)
        :reviewed-project   project
        :reviewed-session   session
        :reviewed-ws-id     ws-id
@@ -1709,7 +1710,8 @@
         report-atom (atom (report/init {:run-id run-id :cwd cwd :base base
                                         :started-at (str (clock))
                                         :context context
-                                        :machinery (provenance/loaded-from)}))
+                                        :machinery (provenance/loaded-from cwd)}))
+        _ (some-> (provenance/warning (:machinery @report-atom)) println)
         _ (when (seq (:missing context))
             (println (str "review-loop: running WITHOUT "
                           (str/join ", " (:missing context))
@@ -1892,6 +1894,7 @@
                                                                              "the record")))
                                                         (:findings rec))))))
       :stood-in         (report/stood-in report)
+      :machinery        (:machinery report)
       :asks             (when (= :design-decision (:format rec)) (:asks rec))
       :reviewed-project project
       :reviewed-session session
@@ -2019,12 +2022,13 @@
         report-path (str (fs/path (cstate/run-dir run-id) "report.json"))
         report-atom (atom (report/init {:run-id run-id :cwd cwd :base nil
                                         :started-at (str (clock))
-                                        :machinery (provenance/loaded-from)}))
+                                        :machinery (provenance/loaded-from cwd)}))
         plain  (frontend/plain?)
         emit   (frontend/emit-fn report-atom report-path clock plain)
         reading (if code-cwd
                   {:dir code-cwd}
                   (tree/reading (keyword kind) (first (stages/project+ws-from-cwd cwd)) cwd))]
+    (some-> (provenance/warning (:machinery @report-atom)) println)
     (some-> (off-position-line cwd (record-loop-kinds kind)) println)
     (some-> (tree/line reading) println)
     ;; Under the claim from here, exactly as the diff loop is: two record rounds

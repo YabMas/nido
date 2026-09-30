@@ -122,13 +122,17 @@
                              {:type "array" :items {:type "string"}})
                    (update :required #(into (vec %) ["kind" "remedy" "layers"]))))))
 
+(def ^:private findings-schema
+  "The findings schema, read once as this namespace loads so every round of a
+   run hands its reviewers the schema the prompt and parser were loaded with —
+   see `nido.review.record/schemas`."
+  (json/parse-string (slurp (io/resource "review/findings_schema.json")) true))
+
 (defn ^{:malli/schema [:=> [:cat :boolean] :string]}
   schema-json
   "The output schema to hand codex for this review, as JSON."
   [composition?]
-  (let [base (json/parse-string
-              (slurp (io/resource "review/findings_schema.json")) true)]
-    (json/generate-string (cond-> base composition? composition-schema))))
+  (json/generate-string (cond-> findings-schema composition? composition-schema)))
 
 (defn ^{:malli/schema [:=> [:cat :Path :any] :string]}
   merge-base
