@@ -640,6 +640,11 @@
    :doc "Dry-run a record amender's answer file: would the ledger take its :record as a :baseline or :design amendment now, citing what the loop would have it cite? Writes nothing; exit 1 prints the refusal. :project <p> :ws-id <id> :kind baseline|design :file <answer.edn>"
    :task (apply nido-review/amend-check-cmd *command-line-args*)}
 
+  nido:review:amend:append
+  {:requires ([tasks.nido-review :as nido-review])
+   :doc "Append the answer an amend-touched-code stop left unappended, verbatim — the loop's citation and ledger checks, its weakenings printed — then run the round again from it. Refuses when the ledger already holds a newer record of the kind. :run <run-id> [:max-iters <n>] [:budget 30m] [:reviewer codex|claude]"
+   :task (apply nido-review/amend-append-cmd *command-line-args*)}
+
   nido:review:design
   {:requires ([tasks.nido-review :as nido-review])
    :doc "Loop the decision round over the latest design record: derive, amend, re-survey if the premise is wrong, escalate only the ask. The design is judged at the worktree's fork point with main under the worktree's canvas/ unless :code-cwd names another tree. [:cwd <dir>] [:code-cwd <dir>] [:max-iters <n>] [:budget 30m] [:dry-run? true] [:reviewer codex|claude]"

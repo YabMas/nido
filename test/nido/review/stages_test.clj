@@ -4831,13 +4831,68 @@
                     {:name "Edit" :input {:file_path "/w/src/x.clj"}})]
     (is (= ["src/x.clj"] (:attributed t)))))
 
-(deftest a-path-the-amender-named-in-a-command-is-attributed-from-any-cwd
-  ;; A command after a `cd` names a file from wherever it stands, so a tail of
-  ;; the path is enough — but never a single segment, which names half the tree.
-  (let [moved (assoc-in before-tree [:entries "src/deep/pkg/x.clj"] "new")]
-    (is (= ["src/deep/pkg/x.clj"]
-           (:attributed (trespass moved {:name "Bash" :input {:command "cd src/deep && sed -i s/a/b/ pkg/x.clj"}}))))
-    (is (= [] (:attributed (trespass moved {:name "Bash" :input {:command "grep -rn x.clj ."}}))))))
+(deftest a-shell-command-convicts-nothing
+  ;; A run lost a correct amendment because its amender ran `sed -n` and `grep -n` on
+  ;; changelog.clj while the implementing session edited it: on a live worktree the amender reads
+  ;; exactly the area the implementer writes. Its shell is confined to reads, so a command
+  ;; naming a moved path is evidence of nothing.
+  (let [moved (assoc-in before-tree [:entries "src/x.clj"] "x2")]
+    (is (= [] (:attributed (trespass moved {:name "Bash" :input {:command "sed -n 730,775p src/x.clj"}})))
+        "a read of a path somebody else moved is not a write")
+    (is (= ["src/x.clj"] (:moved (trespass moved {:name "Bash" :input {:command "grep -n foo src/x.clj"}})))
+        "and the move is still reported")))
+
+(deftest a-write-that-came-back-an-error-convicts-nothing
+  ;; A confined amender's Write outside its answer file is DENIED, and the transcript still
+  ;; carries the tool_use. It wrote nothing; the error result says so.
+  (let [t    (str (fs/create-temp-file {:suffix ".log"}))
+        line (fn [e] (json/generate-string e))]
+    (try
+      (spit t (str/join "\n"
+                        [(line {:type "assistant"
+                                :message {:content [{:type "tool_use" :id "w1" :name "Write"
+                                                     :input {:file_path "/w/src/x.clj"}}]}})
+                         (line {:type "user"
+                                :message {:content [{:type "tool_result" :tool_use_id "w1"
+                                                     :is_error true :content "Permission denied"}]}})
+                         (line {:type "assistant"
+                                :message {:content [{:type "tool_use" :id "w2" :name "Edit"
+                                                     :input {:file_path "/w/src/human.clj"}}]}})]))
+      (let [r (stages/amender-trespass
+               {:before before-tree :cwd "/w" :transcript t
+                :after (-> before-tree (assoc-in [:entries "src/x.clj"] "x2")
+                           (assoc-in [:entries "src/human.clj"] "h2"))})]
+        (is (= ["src/human.clj"] (:attributed r))
+            "a denied write is not the amender's; one with no error result, as when it was killed mid-write, is"))
+      (finally (fs/delete-if-exists t)))))
+
+(deftest the-amender-may-write-only-its-answer-and-permitted-dirs
+  ;; The confinement is what makes attribution from write tools exact: nothing else the
+  ;; amender can run writes a path.
+  (let [dir (str (fs/canonicalize (fs/create-temp-dir {:prefix "nido-amender-tools"})))]
+    (try
+      (let [{:keys [tools allowed]} (stages/amender-tools
+                                     {:cwd dir :out-path (str dir "/run/amend-round-1.edn")
+                                      :permitted ["canvas"] :check-cmd "bb nido:review:amend:check :file a.edn"})
+            writes (filter #(str/starts-with? % "Edit(") allowed)
+            shell  (filter #(str/starts-with? % "Bash(") allowed)]
+        (is (= "Read,Grep,Glob,Write,Edit,Bash" tools))
+        (is (= #{(str "Edit(/" dir "/run/amend-round-1.edn)") (str "Edit(/" dir "/canvas/**)")} (set writes))
+            "an absolute Edit rule per writable place — Edit rules are what govern Write")
+        (let [link (str (fs/create-temp-dir) "/wt")]
+          (fs/create-sym-link link dir)
+          (is (every? (set (filter #(str/starts-with? % "Edit(")
+                                   (:allowed (stages/amender-tools {:cwd link :out-path (str link "/a.edn")
+                                                                    :permitted ["canvas"]}))))
+                      [(str "Edit(/" link "/a.edn)") (str "Edit(/" dir "/a.edn)")
+                       (str "Edit(/" link "/canvas/**)") (str "Edit(/" dir "/canvas/**)")])
+              "a place reached through a symlink is writable under either spelling — a rule matches the path as written"))
+        (is (every? #(or (str/starts-with? % "Bash(jj ")
+                         (= % "Bash(bb nido:review:amend:check :file a.edn)"))
+                    shell)
+            "the shell runs read-only jj and the exact check command, nothing else")
+        (is (not-any? #{"Bash(jj new:*)" "Bash(jj describe:*)" "Bash(jj squash:*)" "Bash"} allowed)))
+      (finally (fs/delete-tree dir)))))
 
 (deftest a-permitted-dir-moves-without-counting-against-the-amender
   (let [t (stages/amender-trespass {:before before-tree

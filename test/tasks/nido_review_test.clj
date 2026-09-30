@@ -2266,3 +2266,60 @@
     (is (= ["ip" "if"] (mapv :id (:owed final)))
         "and the remainder the status was decided on rides on the terminal ctx,
          which is where the report reads why")))
+
+;; ── A stopped run's answer, appended as written ─────────────────────────────
+
+(defn- stopped-run!
+  "A baseline run's report on disk, ended `status` in round 2 with its judge having read entry 4
+   and its answer set aside at the returned path."
+  [status]
+  (let [run-id (str "baseline-loop-" (random-uuid))
+        dir    (cstate/run-dir run-id)
+        answer (str (fs/path dir "amend-round-2.edn"))]
+    (fs/create-dirs dir)
+    (spit (str (fs/path dir "report.json"))
+          (json/generate-string
+           {:status status :target {:cwd "/wt"}
+            :rounds [{:round 2
+                      :phases [{:phase "judge" :judged-seq 4}
+                               {:phase "amend" :tree {:amendment {:path answer :state "record"}}}]}]}))
+    [run-id answer]))
+
+(defn- append-stopped
+  "Run amend:append over `run-id` with the ledger's newest baseline at `latest`; what it appended
+   and which loop it re-entered, with its exit code."
+  [run-id latest]
+  (let [appended (atom nil) entered (atom nil)]
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/entry-at-seq (fn [_ _ n] {:format :baseline :seq n})
+                  ws/latest-entry (fn [_ _ _] {:format :baseline :seq latest})
+                  record/append-stopped-answer! (fn [m] (reset! appended m)
+                                                  {:record {:seq (inc latest)} :retreats []})
+                  t/baseline-cmd* (fn [opts] (reset! entered opts) :sufficient)]
+      (let [exit (with-out-str (t/amend-append-cmd* {:run run-id}))]
+        {:appended @appended :entered @entered :out exit}))))
+
+(deftest a-stopped-answer-is-appended-verbatim-and-the-round-runs-again
+  ;; A correct amendment lost to the amend guard was re-typed by hand, reworded, and landed as a
+  ;; baseline no round judged. The verb is the cheaper path, and it ends in a judge.
+  (let [[run-id answer] (stopped-run! "amend-touched-code")
+        {:keys [appended entered]} (append-stopped run-id 4)]
+    (is (= answer (:answer appended)) "the answer file itself is what is appended")
+    (is (= 4 (get-in appended [:prev :seq])) "as an amendment of the record the stopped round judged")
+    (is (= 2 (:iter appended)))
+    (is (= {:cwd "/wt" :seq 5} entered) "and the round re-enters on the entry it became")))
+
+(deftest a-stopped-answer-is-not-appended-over-a-newer-record
+  ;; The hand re-type is exactly the newer record: appending the answer after it would fork the
+  ;; lineage with two records both correcting entry 4.
+  (let [[run-id _] (stopped-run! "amend-touched-code")
+        {:keys [appended entered out]} (append-stopped run-id 6)]
+    (is (nil? appended) "nothing is appended")
+    (is (nil? entered) "and no round runs")
+    (is (str/includes? out "entry 6 is a newer baseline"))))
+
+(deftest only-an-amend-touched-code-stop-sets-an-answer-aside
+  (let [[run-id _] (stopped-run! "amend-invalid")
+        {:keys [appended out]} (append-stopped run-id 4)]
+    (is (nil? appended) "an answer the ledger refused would be refused again")
+    (is (str/includes? out "not amend-touched-code"))))

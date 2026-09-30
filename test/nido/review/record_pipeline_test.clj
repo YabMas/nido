@@ -394,7 +394,7 @@
   ;; sessions — an amender could write code and nothing noticed.
   (let [[out appended] (with-amend {:tree-before (tree {"src/human.clj" "work"})
                                     :tree-after (tree {"src/human.clj" "work" "src/x.clj" "new"})
-                                    :calls [{:name "Bash" :input {:command "cat > src/x.clj <<EOF"}}]
+                                    :calls [{:name "Write" :input {:file_path "/w/src/x.clj"}}]
                                     :writes (fn [p] (spit p (pr-str a-baseline)))}
                                    (ctx :findings [a-finding]))]
     (is (= :amend-touched-code (:status out)))
@@ -432,6 +432,53 @@
     (is (= ["src/x.clj"] (get-in phase [:tree :attributed])) "and the report keeps what tripped it")
     (is (= "record" (get-in phase [:tree :amendment :state]))
         "and says the answer it did not append was a readable amendment")))
+
+;; A test that does not launch the amender through the real `agent/launch!` pins the options it
+;; is handed: those, not the prompt, are what keep its shell from writing.
+(deftest the-amender-launches-confined-to-its-answer-file
+  (let [launched (atom nil)]
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] a-baseline)
+                  stages/working-copy-state (fn [_] (tree {}))
+                  agent/launch! (fn [opts] (reset! launched opts) {:num-turns 1})]
+      (run record/amend-stage (ctx :findings [a-finding])))
+    (let [{:keys [tools allowed first-message]} @launched]
+      (is (some? tools) "a confined launch names its tools")
+      (is (some #(and (str/starts-with? % "Edit(/") (str/ends-with? % "amend-round-1.edn)")) allowed)
+          "the one file it may write is this round's answer")
+      (is (some #(str/includes? % "nido:review:amend:check") allowed)
+          "and the check command it is told to run is one it can run")
+      (is (str/includes? first-message "Read, Grep and Glob")
+          "the prompt says how it reads, so its first shell read is not spent finding out"))))
+
+(deftest a-stopped-answer-appends-as-its-amender-wrote-it
+  ;; A round stopped :amend-touched-code set aside a correct amendment, and the caller re-typed
+  ;; it by hand 39s later with its claims reworded — a record no round judged, whose weakenings
+  ;; nothing measured. Appending the file itself is what makes a re-type the dearer path.
+  (let [prev    (assoc a-baseline :seq 4)
+        amended (update a-baseline :health (constantly []))
+        answer  (str (fs/create-temp-file {:suffix ".edn"}))
+        payload (atom nil)]
+    (spit answer (pr-str {:record amended}))
+    (with-redefs [ws/append-entry! (fn [_ _ _ p] (reset! payload p) "/ws/entries/0006-baseline.edn")
+                  ws/entry-at-seq  (fn [_ _ n] (case n 6 (assoc (read-string @payload) :seq 6) prev))]
+      (let [{:keys [record retreats err]}
+            (record/append-stopped-answer! {:project :nido :ws-id "ws-1" :kind :baseline :prev prev
+                                            :answer answer :run-id "baseline-loop-r" :iter 2})
+            written (read-string @payload)]
+        (is (nil? err))
+        (is (= (:health amended) (:health written)) "the record goes in as it was written")
+        (is (= 4 (get-in written [:supersedes :seq])) "citing the record the stopped round amended")
+        (is (str/includes? (get-in written [:supersedes :why]) "round 2 of run baseline-loop-r"))
+        (is (= 6 (:seq record)) "and comes back stamped, so the round it re-enters can name it")
+        (is (some #(str/includes? (str (:detail %)) "invoice-resums") retreats)
+            "a dropped observation is still counted as the weakening it is")))
+    (with-redefs [ws/append-entry! (fn [& _] (reset! payload :written))]
+      (spit answer "{:disputes []}")
+      (reset! payload nil)
+      (is (some? (:err (record/append-stopped-answer! {:project :nido :ws-id "ws-1" :kind :baseline
+                                                       :prev prev :answer answer :run-id "r" :iter 1}))))
+      (is (nil? @payload) "an answer with no record appends nothing"))))
 
 (deftest an-amender-that-wrote-nothing-leaves-the-ledger-alone
   (let [[out appended] (with-amend {} (ctx :findings [a-finding]))]

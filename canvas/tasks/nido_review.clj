@@ -168,6 +168,13 @@
   (Operation amend-check-cmd
     "The `amend-check` entry point."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation amend-append-cmd*
+    "Append the answer an amend-touched-code stop set aside, verbatim, and run the round again from
+     it; refused when the ledger already holds a newer record of the kind."
+    {:signature [:=> [:catn [:opts :map]] :any]})
+  (Operation amend-append-cmd
+    "The `amend:append` entry point."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation run-context
     "What this run can and cannot reach, as {:has [..] :missing [..]}. A run outside a session
      silently loses the cache and the ledger; this is what says so before it starts."

@@ -151,6 +151,11 @@
     "An amendment citing the record it corrects under :supersedes — the loop's to set, not the
      amender's — keeping a :why its author wrote and carrying the corrected record's own."
     {:signature [:=> [:catn [:kind :keyword] [:prev [:maybe :map]] [:record :map] [:at :map]] :map]})
+  (Operation append-stopped-answer!
+    "Append the amendment a stopped run left unappended, as its amender wrote it, through the loop's
+     own citation and ledger checks; the record stamped and what it weakened, or why nothing was
+     written."
+    {:signature [:=> [:catn [:opts :map]] :map]})
   (Operation amendment-refusal
     "What the ledger would refuse of an amendment appended now, citing what the loop would have it
      cite; nil when it would be taken. Writes nothing."

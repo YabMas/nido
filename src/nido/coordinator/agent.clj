@@ -95,18 +95,22 @@
    gate reply; otherwise it RECORDS under it (--session-id) — the first burst.
    first-message is the trailing positional argument."
   [{:keys [claude-bin first-message system-prompt claude-session-id resume?
-           mcp-config add-dirs tools model]}]
+           mcp-config add-dirs tools allowed model]}]
   (cond-> (into [claude-bin
                  "--print"
                  ;; Stream-json output requires --verbose per claude-code's
                  ;; --print mode validation; without it claude refuses to run.
                  "--verbose"
-                 "--output-format=stream-json"
-                 "--dangerously-skip-permissions"
-                 ;; Variadic: the next option ends its list, and the `--`
-                 ;; terminator below keeps it off the prompt.
-                 "--disallowedTools"]
-                headless-disallowed-tools)
+                 "--output-format=stream-json"]
+                ;; Under --dangerously-skip-permissions an allow rule restricts
+                ;; nothing, so a confined launch trades it for dontAsk: every
+                ;; call its rules do not match is denied, not asked about.
+                (if allowed
+                  (into ["--permission-mode" "dontAsk" "--allowedTools"] allowed)
+                  ["--dangerously-skip-permissions"]))
+    ;; Variadic: the next option ends its list, and the `--` terminator below
+    ;; keeps it off the prompt.
+    :always                               (into (cons "--disallowedTools" headless-disallowed-tools))
     ;; --resume is dormant until gate-reply turns start passing :resume? true;
     ;; reactivates the moment a caller resumes a parked agent with new input.
     ;; Omitted by default, which is not the same as naming the default: a launch
@@ -164,6 +168,13 @@
      :resume?       — optional; nil/false records a new transcript under
                       --session-id, true continues the recorded one via --resume
                       (a gate reply). Requires :claude-session-id.
+     :allowed       — optional; permission rules (`Read`, `Bash(jj log:*)`,
+                      `Edit(//abs/path)`) that are ALL this agent may do. Every
+                      call no rule matches is denied — nothing is asked, and
+                      nothing is skipped. Without it the agent runs with
+                      permissions skipped entirely. A path-scoped write is an
+                      `Edit(...)` rule: it governs Write too, and a `Write(...)`
+                      rule is ignored (claude 2.x).
      :out-file      — optional; the file this agent's stdout transcript is
                       written to, INSTEAD of the run's shared agent.log. Unlike
                       :err-file it is not a child-process redirect — stdout is
@@ -188,7 +199,7 @@
    :usage-limit is non-nil when the account's usage limit rejected the agent
    (see usage-limit) — a fact about the account, not about the Run."
   [{:keys [run-id cwd first-message system-prompt claude-bin env budget claude-session-id resume?
-           mcp-config add-dirs tools model err-file out-file]
+           mcp-config add-dirs tools allowed model err-file out-file]
     :or   {claude-bin "claude"}}]
   (let [;; BEFORE the spawn, and that ordering is the whole point. Parsed where
         ;; it used to be — beside the timer it arms — the refusal would fire with
@@ -199,7 +210,7 @@
         cmd       (build-cmd {:claude-bin claude-bin :first-message first-message
                               :system-prompt system-prompt :claude-session-id claude-session-id
                               :resume? resume? :mcp-config mcp-config :add-dirs add-dirs
-                              :tools tools :model model})
+                              :tools tools :allowed allowed :model model})
         proc      (p/process cmd (cond-> {:dir cwd
                                           :env (merge (into {} (System/getenv)) (or env {})
                                                       headless-env)

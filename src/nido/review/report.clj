@@ -555,7 +555,7 @@
       ;; :refusals is every refusal the amender was handed back to repair, so an
       ;; amendment appended on a re-ask does not read as one accepted first time.
       ;; :tree is what moved in the code tree while the amender ran, which of it
-      ;; its own calls reached, and where its answer is — present whenever
+      ;; its own writes reached, and where its answer is — present whenever
       ;; anything moved, since a tree moved under an amender and an amender that
       ;; wrote look alike from every other field, and the tree itself will have
       ;; moved on by the time anyone reads this.

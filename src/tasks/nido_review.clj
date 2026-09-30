@@ -1805,7 +1805,7 @@
    :amend-noop "the amender produced no record — nothing was appended"
    :amend-unreadable "the amender's answer would not parse as EDN"
    :amend-invalid "the ledger refused the amended record, and refused the amender's repairs of it too"
-   :amend-touched-code "the amender wrote to the paths named above; whatever it wrote is still there, and its answer was not appended"
+   :amend-touched-code "the amender wrote to the paths named above; whatever it wrote is still there, and its answer was not appended — if the answer is right, append it with the command above rather than re-typing it"
    :dry-run    "nothing was amended"
    ;; Only reachable when a caller asked for a cap. The loop has no default one
    ;; — it ends on its own merits — so this is the reader's own bound coming
@@ -1954,6 +1954,9 @@
       (println (str "  " detail)))
     (when-let [path (:amend-unappended final)]
       (println (str "  the refused amendment, not appended: " path)))
+    (when (= :amend-touched-code status)
+      (println (str "  to append its answer as written and judge it: bb nido:review:amend:append :run "
+                    run-id)))
     (doseq [k (:unfixable final)]
       (println (str "  ↯ " (finding-name k)
                     " — raised and re-raised, never resolved")))
@@ -2193,6 +2196,84 @@
   [& args]
   (let [[_ opts] (task-args/split-args args)]
     (design-cmd* opts)))
+
+;; ── A stopped run's answer, appended as written ─────────────────────────────
+
+(defn- stopped-answer
+  "What `run-id`'s report says its stop left unappended, or `{:refused why}`:
+
+     {:kind :cwd :iter :answer :judged-seq}
+
+   Only an :amend-touched-code stop qualifies. It is the one stop that sets aside a readable
+   amendment the ledger never saw — an :amend-invalid answer is one the ledger already refused,
+   and appending it again is refused again. `:judged-seq` is the record the round's judge read,
+   which is the record the answer amends."
+  [run-id]
+  (let [kind   (some #(when (str/starts-with? (str run-id) (str % "-loop-")) (keyword %))
+                     ["baseline" "design"])
+        report (frontend/read-report (str (fs/path (cstate/run-dir run-id) "report.json")))
+        round  (last (:rounds report))
+        phase  #(some (fn [ph] (when (= % (:phase ph)) ph)) (:phases round))
+        amend  (get-in (phase "amend") [:tree :amendment])]
+    (cond
+      (nil? kind)   {:refused (str run-id " is not a baseline or design loop run")}
+      (nil? report) {:refused (str "no readable report for " run-id)}
+      (not= "amend-touched-code" (:status report))
+      {:refused (str run-id " ended " (:status report) ", not amend-touched-code — it set nothing aside")}
+      (not= "record" (:state amend))
+      {:refused (str "its answer " (or (:path amend) "(unnamed)") " was "
+                     (or (:state amend) "not recorded") ", not an amendment")}
+      (nil? (:judged-seq (phase "judge")))
+      {:refused (str "its report does not name the record the stopped round judged, so which one"
+                     " the answer amends is a guess — append it by hand")}
+      :else
+      {:kind kind :cwd (get-in report [:target :cwd]) :iter (:round round)
+       :answer (:path amend) :judged-seq (:judged-seq (phase "judge"))})))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  amend-append-cmd*
+  "Append the amendment an :amend-touched-code stop left unappended, verbatim, then run the round
+   again from it, so the record is judged like any other amendment. The loop options
+   (:max-iters :budget :reviewer) pass through.
+
+   Refuses, appending nothing, when the ledger holds a newer record of the kind than the one the
+   answer amends: that is the answer re-typed by hand already, or another run's, and appending
+   over it would fork the lineage."
+  [{:keys [run] :as opts}]
+  (let [run    (some-> run str)
+        {:keys [refused kind cwd iter answer judged-seq]}
+        (if run (stopped-answer run) {:refused ":run <run-id> is required"})
+        [project ws-id] (when cwd (stages/project+ws-from-cwd cwd))
+        prev   (when ws-id (ws/entry-at-seq project ws-id judged-seq))
+        latest (when ws-id (:seq (ws/latest-entry project ws-id kind)))
+        {:keys [err record retreats]}
+        (cond
+          refused              {:err refused}
+          (nil? ws-id)         {:err (str "no nido workstream at " cwd)}
+          (not= kind (:format prev))
+          {:err (str "entry " judged-seq " is not a readable " (name kind))}
+          (not= judged-seq latest)
+          {:err (str "entry " latest " is a newer " (name kind) " than entry " judged-seq
+                     ", the one this answer amends — nothing appended")}
+          :else
+          (record/append-stopped-answer! {:project project :ws-id ws-id :kind kind :prev prev
+                                          :answer answer :run-id run :iter iter}))]
+    (if err
+      (do (println (str "amend:append: " err)) 1)
+      (let [loop-opts (-> (select-keys opts [:max-iters :budget :reviewer])
+                          (assoc :cwd cwd))]
+        (println (str "amend:append: " answer " appended as entry " (:seq record)))
+        (some-> (retreat/summary retreats) println)
+        (if (= :design kind)
+          (design-cmd* loop-opts)
+          (baseline-cmd* (assoc loop-opts :seq (:seq record))))
+        0))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  amend-append-cmd
+  [& args]
+  (let [[_ opts] (task-args/split-args args)]
+    (System/exit (amend-append-cmd* opts))))
 
 ;; ── What record runs did, read back off the ledger ──────────────────────────
 

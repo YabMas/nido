@@ -567,9 +567,14 @@
     "What the working copy's tree holds, path by path, with an identity for the whole — or that
      it could not be read, which is never the same answer as an empty tree."
     {:signature [:=> [:catn [:cwd Path]] :map]})
+  (Operation amender-tools
+    "The launch options that confine a record amender: it may write its answer file and under its
+     permitted dirs, and run read-only jj and its check command, and nothing else — so a path it
+     moved is one a file-writing tool of its own names."
+    {:signature [:=> [:catn [:opts :map]] :map]})
   (Operation amender-trespass
     "What moved in the tree while a record amender ran, and which of those paths its own
-     transcript reached. Only those count against it; a path moved by anyone else in a live
+     file-writing tools wrote. Only those count against it; a path moved by anyone else in a live
      worktree is reported, and a move inside a permitted dir never counts."
     {:signature [:=> [:catn [:opts :map]] :map]})
   (Operation layer-label "A layer's label."

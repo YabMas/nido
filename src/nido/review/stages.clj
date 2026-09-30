@@ -3095,24 +3095,54 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   "The tool calls that name the one file they write."
   #{"Edit" "MultiEdit" "Write" "NotebookEdit"})
 
-(defn- transcript-calls
-  "What an agent's stream-json transcript shows it asking for: `:files`, every path a file-writing
-   tool was pointed at, and `:commands`, every shell command it ran. An absent or unparseable
-   transcript shows nothing."
+(def ^:private amender-jj-reads
+  "The jj subcommands an amender may run: each reads the repo and none writes a path in its tree.
+   jj snapshots the working copy first, which moves no path's content."
+  ["jj log" "jj show" "jj diff" "jj st" "jj status" "jj file show" "jj file list" "jj file annotate"])
+
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  amender-tools
+  "The launch options that confine an amender — `agent/launch!`'s `:tools` and `:allowed` — so that
+   the only paths it can write are its answer file at `out-path` and the dirs under `cwd` named in
+   `permitted`, and the only commands it can run are read-only jj, `check-cmd` verbatim (nil for
+   none) and the plain reads (`cat`, `sed -n`, `grep`) claude itself classes as read-only.
+
+   The confinement is what makes `amender-trespass` exact. A shell command can write a path it
+   never names and name a path it only reads, so attribution read off commands convicted amenders
+   that had only read a file somebody else was editing — structural on a live worktree, where the
+   amender reads the area the implementer edits. With no command that writes, only file-writing
+   tools can move a path, and each names the one path it wrote."
+  [{:keys [cwd out-path permitted check-cmd]}]
+  (let [;; A rule matches the path as the agent spells it, which may run through a symlink
+        ;; (/tmp, a session home's worktree) or not, so each place gets both spellings.
+        edit (fn [p] (map #(str "Edit(/" % ")")
+                          (distinct [(str (fs/absolutize p)) (str (fs/canonicalize p))])))]
+    {:tools   "Read,Grep,Glob,Write,Edit,Bash"
+     :allowed (vec (concat ["Read" "Grep" "Glob"]
+                           (edit out-path)
+                           (mapcat #(map (fn [r] (str/replace r #"\)$" "/**)"))
+                                         (edit (fs/path cwd %)))
+                                   permitted)
+                           (map #(str "Bash(" % ":*)") amender-jj-reads)
+                           (when check-cmd [(str "Bash(" check-cmd ")")])))}))
+
+(defn- transcript-writes
+  "Every path a file-writing tool in an agent's stream-json transcript was pointed at, less the
+   calls whose result came back an error — a write the permission rules denied, an edit whose
+   old text was not there — since those wrote nothing. A call with no result yet (the agent was
+   killed mid-write) counts. An absent or unparseable transcript shows nothing."
   [transcript]
-  (let [calls (when (and transcript (fs/exists? transcript))
-                (for [line  (str/split-lines (slurp transcript))
-                      :let  [event (try (json/parse-string line keyword) (catch Exception _ nil))]
-                      block (when (= "assistant" (:type event)) (get-in event [:message :content]))
-                      :when (= "tool_use" (:type block))]
-                  block))]
-    {:files    (vec (keep (fn [{:keys [name input]}]
-                            (when (file-writing-tools name)
-                              (or (:file_path input) (:notebook_path input))))
-                          calls))
-     :commands (vec (keep (fn [{:keys [name input]}]
-                            (when (= "Bash" name) (:command input)))
-                          calls))}))
+  (let [events (when (and transcript (fs/exists? transcript))
+                 (keep #(try (json/parse-string % keyword) (catch Exception _ nil))
+                       (str/split-lines (slurp transcript))))
+        blocks (fn [type] (for [e events, b (get-in e [:message :content])
+                                :when (and (map? b) (= type (:type b)))]
+                            b))
+        failed (set (keep #(when (:is_error %) (:tool_use_id %)) (blocks "tool_result")))]
+    (vec (keep (fn [{:keys [id name input]}]
+                 (when (and (file-writing-tools name) (not (failed id)))
+                   (or (:file_path input) (:notebook_path input))))
+               (blocks "tool_use")))))
 
 (defn- under
   "`file` as a path relative to `root`, or nil when it lies outside it. Both are canonicalized, since
@@ -3123,19 +3153,9 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
     (when (str/starts-with? f (str root "/"))
       (subs f (inc (count root))))))
 
-(defn- names-path?
-  "Whether shell `command` names `path` — whole, or by any tail of two segments or more, since a
-   command run after a `cd` names a file from wherever it stands. One segment is too little: a
-   bare `lock` or `core.clj` names half the tree."
-  [command path]
-  (let [segs (str/split path #"/")]
-    (or (str/includes? command path)
-        (some #(str/includes? command (str/join "/" (drop % segs)))
-              (range 1 (dec (count segs)))))))
-
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   amender-trespass
-  "What moved in `cwd` while an amender ran, and which of it the amender could have written.
+  "What moved in `cwd` while an amender ran, and which of it the amender wrote.
 
    `before` and `after` are `working-copy-state` readings either side of the launch; `transcript`
    is the amender's own stream-json log; `permitted` holds dirs relative to `cwd` the amender may
@@ -3147,19 +3167,15 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    non-empty.
 
    ATTRIBUTED, not detected. An amender runs in a live session worktree that a person, their
-   agent, an editor's cache and the REPL all write to, so a moved path is only the amender's if its
-   transcript pointed a file-writing tool at it or named it in a command. That still convicts an
-   amender whose command merely read a path somebody else edited — the bias a guard should have —
-   and cannot see a write made by a script file whose command line names no target. With the tree
-   unreadable nothing is known to have moved, and only file-writing tools aimed inside `cwd` count."
+   agent, an editor's cache and the REPL all write to, so a moved path is the amender's only when
+   a file-writing tool of its own wrote it. That is exact only for an amender launched under
+   `amender-tools`, whose shell cannot write; a command is not read. With the tree unreadable
+   nothing is known to have moved, and every write aimed inside `cwd` counts."
   [{:keys [before after transcript cwd permitted]}]
   (let [moved      (moved-paths before after)
-        {:keys [files commands]} (transcript-calls transcript)
-        written    (set (keep #(under cwd %) files))
+        written    (set (keep #(under cwd %) (transcript-writes transcript)))
         permitted? (fn [p] (some #(or (= p %) (str/starts-with? p (str % "/"))) permitted))
-        suspects   (if moved
-                     (filter #(or (written %) (some (fn [c] (names-path? c %)) commands)) moved)
-                     written)
+        suspects   (if moved (filter written moved) written)
         unreadable (or (:unreadable before) (:unreadable after))]
     (cond-> {:before     (:identity before)
              :after      (:identity after)

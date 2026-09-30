@@ -256,6 +256,20 @@
     (is (and (some #{"--strict-mcp-config"} cmd) (some #{"/grant.json"} cmd))
         "a server granted outright is the only one it holds")))
 
+(deftest a-confined-launch-is-denied-whatever-its-rules-do-not-allow
+  ;; Under --dangerously-skip-permissions an allow rule restricts nothing: the amender's
+  ;; confinement exists only if the skip is traded for dontAsk.
+  (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi" :tools "Read,Bash"
+                                :allowed ["Read" "Bash(jj log:*)"]})]
+    (is (not (some #{"--dangerously-skip-permissions"} cmd)) "a confined launch skips no permission")
+    (is (= ["--permission-mode" "dontAsk" "--allowedTools" "Read" "Bash(jj log:*)" "--disallowedTools"]
+           (->> cmd (drop-while #(not= "--permission-mode" %)) (take 6)))
+        "every call the rules do not match is denied rather than asked about")
+    (is (= ["--" "hi"] (take-last 2 cmd))))
+  (is (some #{"--dangerously-skip-permissions"}
+            (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"}))
+      "an unconfined launch is unchanged"))
+
 (deftest build-cmd-omits-tools-when-absent
   (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"})]
     (is (not (some #{"--tools"} cmd)) "no --tools flag when :tools is not given")

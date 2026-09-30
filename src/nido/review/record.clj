@@ -2402,6 +2402,14 @@
          "from here, and a number you guess names someone else's: where a remainder has\n"
          "no ref yet, route it otherwise and say under :open that it needs filing.\n\n")))
 
+(def ^:private amender-reading
+  "How an amender reads, which the launch enforces (`stages/amender-tools`): told here, so its
+   first shell read is not spent finding out."
+  (str "Read code with the Read, Grep and Glob tools. Your shell runs read-only jj\n"
+       "(jj file show, jj diff, jj log, jj show, jj st), the check command and plain\n"
+       "reads; any command that writes is denied, and so is a write to any file but\n"
+       "your answer.\n\n"))
+
 (defn- check-block
   "How an author checks its answer file against the ledger before handing it over, or nil with no
    command to offer. The append still decides; this only lets the author find out first."
@@ -2560,6 +2568,7 @@
        (pr-str (ws/unstamp record))
        "\n\nWrite EDN to:\n\n  " out-path "\n\n"
        "  {:record <the COMPLETE repaired record — every field, not a diff>}\n\n"
+       amender-reading
        (check-block check-cmd)
        "nido reads this file, validates it and appends it. Do not append it yourself, do\n"
        "not commit anything, and do NOT edit any source file."))
@@ -2569,10 +2578,14 @@
    tree: `stages/amender-trespass` over a reading either side, with `permitted` as the dirs its
    writes are allowed in.
 
+   Confined by `stages/amender-tools`: it may write `out-path` and under `permitted`, and its
+   shell runs only reads and `check-cmd` (the command string, or nil). That confinement is what
+   lets `amender-trespass` ignore the shell.
+
    The amender's transcript goes to `<label>.log` in the run dir rather than the run's shared
    agent.log, because it is the evidence: a moved path is held against the amender only when its
-   own tool calls reach it, and its lines interleaved with a judge's could not be told apart."
-  [ctx {:keys [label first-message permitted]}]
+   own writes reach it, and its lines interleaved with a judge's could not be told apart."
+  [ctx {:keys [label first-message permitted out-path check-cmd]}]
   (let [{:keys [cwd run-id budget]} (:config ctx)
         code-cwd   (or (:code-cwd (:config ctx)) cwd)
         dir        (cstate/run-dir run-id)
@@ -2581,10 +2594,12 @@
     (fs/create-dirs dir)
     (fs/delete-if-exists transcript)
     (agent/launch!
-     {:run-id run-id :cwd code-cwd :budget budget
-      :first-message first-message
-      :err-file (str (fs/path dir (str label ".err.log")))
-      :out-file transcript})
+     (merge {:run-id run-id :cwd code-cwd :budget budget
+             :first-message first-message
+             :err-file (str (fs/path dir (str label ".err.log")))
+             :out-file transcript}
+            (stages/amender-tools {:cwd code-cwd :out-path out-path
+                                   :permitted permitted :check-cmd check-cmd})))
     (stages/amender-trespass {:before before :after (stages/working-copy-state code-cwd)
                               :transcript transcript :cwd code-cwd :permitted permitted})))
 
@@ -2611,14 +2626,14 @@
   (if id (subs id 0 (min 12 (count id))) "unread"))
 
 (defn- trespass-stop
-  "End the round on an amender whose own calls reached paths that moved. Whatever it wrote is left
+  "End the round on an amender whose own writes reached paths that moved. Whatever it wrote is left
    in place for a human, and the reason names those paths and the unappended answer, since that
    answer is the first thing the human will want and nothing else points at it."
   [ctx trespass out-path answer]
   (let [tree (amend-tree trespass out-path answer)]
     (assoc ctx :control :stop :status :amend-touched-code
            :amend-tree tree
-           :amend-error (str "the amender's own calls reached "
+           :amend-error (str "the amender's own writes reached "
                              (str/join ", " (:attributed trespass))
                              (when-let [others (seq (remove (set (:attributed trespass))
                                                             (:moved trespass)))]
@@ -2644,7 +2659,7 @@
    refusal the round was re-asked over, oldest first; or, when the round ends here, `{:status s}`
    with `:refusals` and — for `:amend-invalid` — the last refusal as `:amend-error` and the answer
    file holding the last record refused as `:unappended`. A re-ask answered with no readable
-   record ends the round on the refusal it failed to repair, and one whose own calls reached a
+   record ends the round on the refusal it failed to repair, and one whose own writes reached a
    path that moved ends it `:amend-touched-code`, with that stop's `:amend-error` and
    `:amend-tree`. `permitted` is the dirs a repair may write in, as for the amendment it repairs.
    `path` is the answer file `record` was read from; `check-cmd`, given an answer file, is the
@@ -2667,12 +2682,13 @@
                 label    (str stem "-reask-" (count refusals))
                 out-path (str (fs/path dir (str label ".edn")))
                 _        (fs/delete-if-exists out-path)
+                check    (when check-cmd (check-cmd out-path))
                 trespass (launch-amender!
                           ctx {:label label :permitted permitted
+                               :out-path out-path :check-cmd check
                                :first-message (refusal-prompt {:kind kind :record (:record written)
                                                                :refusal err :out-path out-path
-                                                               :check-cmd (when check-cmd
-                                                                            (check-cmd out-path))})})
+                                                               :check-cmd check})})
                 raw      (when (fs/exists? out-path)
                            (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
                 answer   (parse-amend-answer raw [] nil)
@@ -2833,6 +2849,7 @@
      "Fix what was refuted; leave the rest exactly as it stands.\n\n")
    (sound-rewrite-rules false)
    "Read the cited code before you change a word of the record.\n\n"
+   amender-reading
    "Do NOT edit any source file. This pass writes one file and nothing else.\n\n"
    "THE CURRENT BASELINE:\n\n"
    (pr-str (ws/unstamp baseline))
@@ -3024,6 +3041,34 @@
   (or (some->> path fs/file-name (re-find #"^(\d+)-") second parse-long
                (ws/entry-at-seq project ws-id))
       record))
+
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  append-stopped-answer!
+  "Append the amendment a stopped run left unappended, as its amender wrote it: `answer` is the
+   answer file's path, `prev` the `kind` record round `iter` of `run-id` was amending. It goes
+   through the loop's own append — the citation `cite-corrected` sets, the ledger's checks — so
+   a person who agrees with the answer has no reason to re-type it.
+
+   Returns `{:record r :retreats [...]}`, `r` stamped as appended, or `{:err why}` with nothing
+   written: the file holds no readable :record, or the ledger refused it. The retreats are
+   measured without the round's findings, so a claim withdrawn on purpose or a citation re-pointed
+   onto the judge's evidence reads as a weakening: louder than the loop, never quieter."
+  [{:keys [project ws-id kind prev answer run-id iter]}]
+  (let [raw    (when (fs/exists? answer)
+                 (try (edn/read-string (slurp answer)) (catch Exception _ nil)))
+        record (:record (parse-amend-answer raw [] nil))]
+    (if-not record
+      {:err (str answer " holds no readable {:record ...}")}
+      (let [record (cite-corrected kind prev record
+                                   {:iter iter :run-id run-id
+                                    :resolve #(ws/entry-at-seq project ws-id %)})]
+        (try
+          (let [path (ws/append-entry! project ws-id {:kind kind} (pr-str (ws/unstamp record)))]
+            {:record   (appended project ws-id path record)
+             :retreats (if (= :design kind)
+                         (retreat/design-retreats prev record)
+                         (retreat/baseline-retreats prev record))})
+          (catch Exception e {:err (ledger-refusal e)}))))))
 
 (defn- stamp-run
   "`record` naming the run that appended it, the revision its judge read (`:judged-tree`,
@@ -3232,6 +3277,8 @@
         (fs/delete-if-exists out-path)
         (let [trespass (launch-amender!
                         ctx {:label (str "amend-round-" (:iter ctx))
+                             :out-path out-path
+                             :check-cmd (when check-cmd (check-cmd out-path))
                              :first-message (amend-prompt {:baseline  prev
                                                            :findings  (:findings ctx)
                                                            :out-path  out-path
@@ -3358,7 +3405,7 @@
    different failures:
 
      the pass wrote code, which no record loop may do — a path that moved while it
-       ran and that its own tool calls reached (`stages/amender-trespass`). A path
+       ran and that its own writes reached (`stages/amender-trespass`). A path
        somebody else moved in a live worktree is reported, not held against it.
        Terminal, and loud: whatever it wrote is still there for a human, and the
        stop names it and the answer that was not appended.
@@ -3768,8 +3815,9 @@
      (str "So where the corrected design moves or adds an element, change its declaration\n"
           "under canvas/ to match: that edit is part of this amendment, and the next round\n"
           "judges it with the record. Any other file in the tree you only read — a write\n"
-          "there ends the round with this answer unappended.\n"))
-   (some->> (check-block check-cmd) (str "\n"))
+          "there is denied.\n"))
+   "\n" amender-reading
+   (check-block check-cmd)
    "nido reads this file, validates it, and appends it as the superseding design.\n"
    "Do not append it yourself and do not commit anything.\n\n"
    ;; The record above is printed unstamped, so an amender asked for this field
@@ -4066,6 +4114,8 @@
     (let [trespass (launch-amender!
                     ctx {:label (str "design-amend-round-" (:iter ctx))
                          :permitted permitted
+                         :out-path out-path
+                         :check-cmd (when check-cmd (check-cmd out-path))
                          :first-message (design-amend-prompt
                                          {:design prev
                                           :baseline baseline
