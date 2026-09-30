@@ -1921,25 +1921,21 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   baseline-finding-base-key
-  "What makes two baseline findings the same finding.
+  "What makes two baseline findings the same finding: the derivation a gap blocks, else the id of
+   the claim a refutation names, else the code it cites, else the record text it quotes — first
+   present wins, each tagged so no two kinds of key collide.
 
-   The claim's ID when the finding names one, because that is the only handle
-   that survives the claim being amended. Measured before ids existed: over five
-   rounds on one baseline, of six claims one kept its text and none kept an
-   evidence reference — so a claim that was fixed and is STILL WRONG produced a
-   key nothing had seen, and the stall detector could not fire on the one case it
-   exists for.
+   The claim's id, because it is the only handle that survives the claim being amended. Measured
+   before ids existed: over five rounds on one baseline, of six claims one kept its text and none
+   kept an evidence reference — so a claim that was fixed and is STILL WRONG produced a key nothing
+   had seen, and the stall detector could not fire on the one case it exists for. A different
+   counterexample to an amended claim therefore keys the same as the first; what tells the two
+   apart is `record-round-changed?`, not this.
 
-   Keyed on the CODE the finding cites, because that is the one thing the
-   amender does not move: amending a record rewrites `:cites` — it quotes the
-   property text being refuted — while `src/x.clj:41` still says what it said.
-   Keying on the quoted text instead would make every round look like new
-   findings and no-progress? would never fire.
-
-   Tagged, so an evidence key can never collide with the text key a finding
-   without evidence falls back to. The schema requires evidence, so that branch
-   is the degenerate one, and it is keyed on the unstable thing deliberately —
-   a finding that cites no code is one the loop should stop on early."
+   The code, for a finding that names no claim, because the amender does not move it: amending
+   rewrites the property text `:cites` quotes, while `src/x.clj:41` still says what it said. The
+   quoted text is the degenerate last resort — the schema requires evidence — and keyed on the
+   unstable thing deliberately: a finding that cites no code is one the loop should stop on early."
   [f]
   (cond
     ;; A GAP is named by the derivation it blocks, which is one of four closed
@@ -1969,6 +1965,33 @@
   (fn [f] [(base-key f) (:disputed-n f 0)]))
 
 (def baseline-finding-key (dispute-aware baseline-finding-base-key))
+
+(defn- sites
+  "The code a finding points at — its :evidence, else the record text its :cites quote — as a set.
+   Empty when it points at neither, which is a finding nothing can tell apart from another."
+  [f]
+  (set (or (seq (:evidence f)) (:cites f))))
+
+(defn- same-defect?
+  "Whether two site sets (`sites`) can be one defect: they share a site, or either is empty and so
+   cannot say. Overlap rather than equality, because a judge restating a defect re-reads the code
+   and rarely cites the identical lines; one sharing none is a different counterexample."
+  [a b]
+  (or (empty? a) (empty? b) (boolean (some a b))))
+
+(defn ^{:malli/schema [:=> [:cat :any :any :map] :int]}
+  disputed-n
+  "How many times this run has objected to `f` itself: disputes under its identity (`base-key`)
+   whose disputed finding pointed at the same code (`same-defect?`).
+
+   Not every objection under the identity. An identity is a claim or a check, and a claim can be
+   wrong in several ways: an objection to the first counterexample does not answer the second, and
+   counting it against one the amender accepted and repaired escalates a correct finding as twice
+   disputed."
+  [history base-key f]
+  (let [k (base-key f) s (sites f)]
+    (count (filter #(and (= k (:key %)) (same-defect? (set (:sites %)) s))
+                   (mapcat :disputes history)))))
 
 (def ^:private withdrawable-after
   "How many consecutive readings must refute a claim before its amender may remove it. Two, because
@@ -2021,6 +2044,51 @@
          "    retreat from one: it is reported to a human as a withdrawal carrying your\n"
          "    reason. A removal without a reason is reported as a claim dropped.")))
 
+(defn- refuted-ids
+  "The claims a record finding refutes: a design finding's :claim-ids, a baseline refutation's
+   :claim-id. A gap (:blocks) refutes nothing."
+  [f]
+  (if (:blocks f)
+    []
+    (into [] (keep (comp not-empty str)) (or (seq (:claim-ids f)) [(:claim-id f)]))))
+
+(defn ^{:malli/schema [:=> [:cat :any :map :any] :boolean]}
+  record-round-changed?
+  "Whether a record round that repeats the last round's findings, by `base-key`, is still moving —
+   the engine's `:changed?`, which vetoes `nido.review.loop/no-progress?`.
+
+   A record finding is keyed on the claim it refutes, so a claim amended for one counterexample and
+   refuted by another keys the same both times; without this, one repeat of a claim id ends the
+   run, after one amendment. True when the round before this one amended the record and every
+   repeated identity points at code disjoint from what it pointed at last round (`sites`) — a new
+   counterexample to a rewritten claim, not the old one surviving its rewrite. An identity whose
+   sites overlap, or that either round points at nothing for, is no evidence of movement.
+
+   Bounded twice. `unfixable` still gives up on a claim raised in four consecutive rounds, which
+   this does not touch. And the veto YIELDS once a repeated claim has been refuted more than
+   `withdrawable-after` readings running (`:refuted-running` on the round's ctx): its amender has
+   then reworded it twice and been refuted each time — on a baseline, after being offered its
+   withdrawal — and a claim no rewording settles wants a person or a drop, not a third rewording."
+  [base-key ctx prior]
+  (let [prev    (last (filter #(= (dec (:iter ctx)) (:iter %)) prior))
+        was     (group-by base-key (:findings prev))
+        now     (group-by base-key (:findings ctx))
+        site-of #(into #{} (mapcat sites) %)
+        moved?  (fn [[k fs]]
+                  (let [a (site-of (get was k)) b (site-of fs)]
+                    (and (seq a) (seq b) (not-any? a b))))
+        spent?  (fn [id] (> (get (:refuted-running ctx) id 0) withdrawable-after))]
+    (boolean (and (:amended? prev)
+                  (every? moved? (filter (comp was key) now))
+                  (not-any? spent? (into #{} (comp (filter (comp was base-key)) (mapcat refuted-ids))
+                                         (:findings ctx)))))))
+
+(defn ^{:malli/schema [:=> [:cat :map :any] :boolean]}
+  baseline-round-changed?
+  "`record-round-changed?` for the baseline loop."
+  [ctx prior]
+  (record-round-changed? baseline-finding-base-key ctx prior))
+
 ;; ── The appeal channel ──────────────────────────────────────────────────────
 
 (defn ^{:malli/schema [:=> [:cat :any :any :any] :map]}
@@ -2049,6 +2117,8 @@
                                         (nth findings i))]
                                 (when (and f (not (str/blank? (str because))))
                                   {:key      (base-key f)
+                                   ;; What `disputed-n` tells this defect from another under the key by.
+                                   :sites    (vec (sort (sites f)))
                                    :claim    (or (:claim f)
                                                  (some-> (:check f) name)
                                                  (str f))
@@ -2062,12 +2132,6 @@
                                      [(str id) (str because)])))
                         (when-not (:format raw)
                           (let [w (:withdrawn raw)] (when (sequential? w) (filter map? w)))))})))
-
-(defn ^{:malli/schema [:=> [:cat :any] :any]}
-  dispute-counts
-  "How many times each finding has been objected to across the whole run."
-  [history]
-  (frequencies (map :key (mapcat :disputes history))))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   disputes-for-judge
@@ -2838,7 +2902,6 @@
 (defn- run-judge-stage
   [ctx]
   (let [{:keys [cwd code-cwd run-id reviewer]} (:config ctx)
-        counts (dispute-counts (:history ctx))
         ;; The record this run is repairing: the one it was pointed at, then
         ;; each amendment it makes itself. Never re-read as "the latest",
         ;; which another session — or an earlier round of a different baseline —
@@ -2888,7 +2951,7 @@
 
       :else
       (let [findings (mapv #(assoc % :disputed-n
-                                   (get counts (baseline-finding-base-key %) 0))
+                                   (disputed-n (:history ctx) baseline-finding-base-key %))
                            (:findings record))]
         ;; Twice objected to and stated a third time. Neither side is giving
         ;; way and neither can settle it: the judge cannot be overruled by the
@@ -3127,10 +3190,25 @@
    accident: a record whose only defect is check-less would otherwise have no handle at all, and a
    finding with no handle cannot be disputed, counted as stalled, or given up on. A finding filed
    under a check the same decision ruled held broke none of the four either, and is carried the
-   same way (`claim-finding?`)."
+   same way (`claim-finding?`).
+
+   A finding naming NO claim — a goal the record does not serve is about a commitment it never
+   made — is told apart by the code it cites, as `baseline-finding-base-key` falls back: its
+   :evidence, else its :cites. On the check alone every such finding would share one handle:
+   unrelated defects would pool their disputes and their give-up count, and two rounds whose only
+   findings are different goal gaps would read as a stall."
   [c]
-  [:check (:check c) :claims (vec (sort (distinct (:claim-ids c))))])
+  (let [ids (vec (sort (distinct (:claim-ids c))))]
+    (cond-> [:check (:check c) :claims ids]
+      (and (empty? ids) (seq (:evidence c))) (conj :evidence (vec (sort (distinct (:evidence c)))))
+      (and (empty? ids) (empty? (:evidence c)) (seq (:cites c))) (conj :cites (vec (sort (distinct (:cites c))))))))
 (def design-finding-key (dispute-aware design-finding-base-key))
+
+(defn ^{:malli/schema [:=> [:cat :map :any] :boolean]}
+  design-round-changed?
+  "`record-round-changed?` for the design loop."
+  [ctx prior]
+  (record-round-changed? design-finding-base-key ctx prior))
 
 (defn- design-finding-label
   "What to call one of a round's findings in a line a person or an amender reads.
@@ -3457,7 +3535,6 @@
 (defn- run-design-judge-stage
   [ctx]
   (let [{:keys [cwd code-cwd run-id reviewer]} (:config ctx)
-        counts (dispute-counts (:history ctx))
         ;; What the judge is not asked to check, read at the tree it is about to read, from
         ;; every ledger the design's unit reaches — never this run's history. A role's players
         ;; are the effective model's, as the round resolves them: a role kept from the baseline
@@ -3476,7 +3553,11 @@
                      :disputes (disputes-for-judge (:history ctx))})
                    (stamp-run (:config ctx))
                    (with-readings report/proceeds? standing (carried-readings ctx design) prior))
-        ctx    (merge (assoc ctx :settled settled)
+        ;; As the baseline round counts it, over this workstream's decisions and this one.
+        running (when-not (:outcome record)
+                  (refuted-running (conj (if project (vec (ws/entries-of project ws-id :design-decision)) [])
+                                         record)))
+        ctx    (merge (assoc ctx :settled settled :refuted-running running)
                       (when design (banking design settled reading record)))
         traj   (trajectory (:history ctx))
         final! (fn [c] (append! cwd (cond-> record (seq traj) (assoc :trajectory traj))) c)]
@@ -3527,12 +3608,13 @@
                      :control :escalate :status :asked))
 
       :else
-      (let [claims-of (fn [{c :check}]
-                        (into [] (comp (filter #(= c (:check %)))
-                                       (keep #(not-empty (str (:claim-id %))))
-                                       (distinct))
-                              (:findings record)))
-            handle    (fn [f] (assoc f :disputed-n (get counts (design-finding-base-key f) 0)))
+      (let [filed     (fn [{c :check}] (filter #(= c (:check %)) (:findings record)))
+            claims-of #(into [] (comp (keep (fn [f] (not-empty (str (:claim-id f))))) (distinct))
+                             (filed %))
+            ;; What a broken check with no claim to name is told apart by, and what tells one
+            ;; counterexample to it from the next: the code its findings cite.
+            evidence-of #(into [] (comp (mapcat :evidence) (distinct)) (filed %))
+            handle    (fn [f] (assoc f :disputed-n (disputed-n (:history ctx) design-finding-base-key f)))
             ;; A finding that broke none of the four, carried under the claim it is about.
             ;; `amend` is `a derivable defect in the record itself` and `resurvey` is `the
             ;; PREMISE is wrong`, and neither has a check a finding could name, so every
@@ -3552,7 +3634,8 @@
                                                                                  [(:claim-id %)])))
                                                           (:check %) (assoc :filed-under (:check %))))))
                                  (:findings record))
-            findings  (into (mapv #(handle (assoc % :claim-ids (claims-of %)))
+            findings  (into (mapv #(handle (cond-> (assoc % :claim-ids (claims-of %))
+                                             (seq (evidence-of %)) (assoc :evidence (evidence-of %))))
                                   (broken-checks record))
                             claim-findings)]
         (cond
@@ -3672,7 +3755,8 @@
                                   :baseline    cited
                                   :pipeline    baseline-pipeline
                                   :judged-after :judge
-                                  :finding-key baseline-finding-key}))
+                                  :finding-key baseline-finding-key
+                                  :changed?    baseline-round-changed?}))
         out (if survey-cwd
               (survey survey-cwd)
               (tree/with-reading! cwd reading nested-id

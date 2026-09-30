@@ -592,6 +592,17 @@
               (report/apply-event {:event :run-finalized :status :asked :ctx {} :at "t3"} nil))]
     [(first (:rounds r)) (first (:phases (first (:rounds r))))]))
 
+(deftest a-judge-phase-says-how-long-each-claim-has-been-refuted-running
+  ;; A claim refuted every round by a different counterexample is one no rewording is settling.
+  ;; Each round reads as an ordinary refutation; only the streak says the run is going round.
+  (let [r (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+              (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+              (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                   :ctx {:record {:format :baseline-review :verdict :falsified}
+                                         :findings [] :refuted-running {"shape" 3 "c1" 1}}} nil))
+        ph (first (:phases (first (:rounds r))))]
+    (is (= {"c1" 1 "shape" 3} (:refuted-running ph)))))
+
 (deftest a-design-judge-phase-keeps-what-the-round-decided
   (let [[_ ph] (design-judge-phase
                 {:format :design-decision :recommend :proceed :asks "worth it now?"

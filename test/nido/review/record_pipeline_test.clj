@@ -650,6 +650,79 @@
                                :finding-key record/baseline-finding-key})]
       (is (= :no-progress (:status out))))))
 
+;; ── A narrowing claim is not a stall ────────────────────────────────────────
+
+(defn- refuting [id evidence]
+  {:claim-id id :cites ["the claim"] :claim "a counterexample" :evidence evidence})
+
+(defn- after-an-amend [& {:keys [amended? now running] :or {amended? true}}]
+  (record/baseline-round-changed?
+   (cond-> {:iter 2 :findings [(refuting "shape" now)]}
+     running (assoc :refuted-running running))
+   [{:iter 1 :amended? amended? :findings [(refuting "shape" ["src/rec.clj:1512"])]}]))
+
+(deftest a-new-counterexample-to-an-amended-claim-is-movement
+  ;; Keyed on the claim id, the second counterexample looks exactly like the first. Watched over
+  ;; twenty runs: an amend fixed R1's counterexample, R2 refuted another sentence at code sharing
+  ;; no line with R1's, and the run ended :no-progress at round two of the four unfixable allows.
+  (is (true? (after-an-amend :now ["src/rec.clj:1153"])))
+  (testing "the same code refuting it again is the old defect surviving its rewrite"
+    (is (false? (after-an-amend :now ["src/rec.clj:1512" "src/rec.clj:1153"]))))
+  (testing "a round that amended nothing moved nothing, whatever the judge cited"
+    (is (false? (after-an-amend :amended? false :now ["src/rec.clj:1153"])))))
+
+(deftest a-claim-no-rewording-settles-is-let-stop
+  ;; Watched the other way: a claim refuted five times by five counterexamples, which nothing a
+  ;; derivation needed, and whose right repair was removing it. Its amender is offered that at
+  ;; two refutations running; refuted again after the offer, the veto has nothing left to protect.
+  (is (true? (after-an-amend :now ["src/rec.clj:1153"] :running {"shape" 2}))
+      "the round that first offers the withdrawal still runs, or the offer is never made")
+  (is (false? (after-an-amend :now ["src/rec.clj:1153"] :running {"shape" 3}))))
+
+(deftest an-objection-counts-against-the-defect-it-answered
+  ;; Keyed on the claim alone, an objection to a false finding was inherited by a later, correct
+  ;; one about the same claim — which the amender accepted and fixed — so two unrelated objections
+  ;; would escalate a defect nobody disputed.
+  (let [history [{:disputes [{:key [:claim-id "shape"] :sites ["src/rec.clj:1512"]
+                              :claim "c" :because "b"}]}]]
+    (is (= 1 (record/disputed-n history record/baseline-finding-base-key
+                                (refuting "shape" ["src/rec.clj:1512" "src/rec.clj:9"])))
+        "restated at the code it was objected to, it is the finding the objection answered")
+    (is (= 0 (record/disputed-n history record/baseline-finding-base-key
+                                (refuting "shape" ["src/rec.clj:1153"]))))
+    (is (= 1 (record/disputed-n [{:disputes [{:key [:claim-id "shape"] :claim "c" :because "b"}]}]
+                                record/baseline-finding-base-key (refuting "shape" ["src/rec.clj:1153"])))
+        "an objection that says nothing of its site cannot be told apart, and still counts")))
+
+(deftest the-loop-keeps-going-while-a-claim-narrows
+  (let [round (atom 0)
+        run!  (fn [changed?]
+                (reset! round 0)
+                (with-redefs [record/baseline-review!
+                              (fn [_] (case (swap! round inc)
+                                        1 {:format :baseline-review :verdict :falsified
+                                           :findings [(refuting "c1" ["src/order/invoice.clj:88"])]}
+                                        2 {:format :baseline-review :verdict :falsified
+                                           :findings [(refuting "c1" ["src/order/csv.clj:4"])]}
+                                        {:format :baseline-review :verdict :sufficient :reason "ok"}))
+                              record/append! (fn [_ _] nil)
+                              stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                              ws/latest-entry (fn [_ _ _] a-baseline)
+                              stages/working-copy-state (fn [_] "")
+                              ws/append-entry! (fn [_ _ _ _] "/ws/entries/0002-baseline.edn")
+                              agent/launch! (fn [{:keys [first-message]}]
+                                              (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
+                                                    (pr-str (assoc a-baseline :area (str "amended " @round))))
+                                              {:num-turns 3})]
+                  (rloop/run-loop (cond-> {:run-id "r-narrow" :cwd "/w"
+                                           :pipeline record/baseline-pipeline
+                                           :finding-key record/baseline-finding-key}
+                                    changed? (assoc :changed? changed?)))))]
+    (is (= :sufficient (:status (run! record/baseline-round-changed?)))
+        "the second counterexample was repaired in round two and the third reading found none")
+    (is (= :no-progress (:status (run! nil)))
+        "the engine alone cannot tell it from a stall — the pipeline has to say")))
+
 ;; ── The prompt ──────────────────────────────────────────────────────────────
 
 (deftest the-amend-prompt-names-the-job-and-the-cheap-wrong-answer
@@ -691,6 +764,7 @@
                 [a-finding] record/baseline-finding-base-key)]
     (is (nil? (:record answer)))
     (is (= [{:key (record/baseline-finding-base-key a-finding)
+             :sites ["src/order/invoice.clj:88"]
              :claim (:claim a-finding)
              :because "the renderer calls the aggregate"
              :evidence ["src/order/invoice.clj:90"]}]

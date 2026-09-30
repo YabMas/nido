@@ -1905,7 +1905,7 @@
    `record-loop-cmd*` only so the claim can wrap it — everything here is what the
    command always did."
   [{:keys [cwd code-cwd survey-cwd kind run-id clock title report-path report-atom
-           plain emit pipeline finding-key max-iters dry-run? budget baseline
+           plain emit pipeline finding-key changed? max-iters dry-run? budget baseline
            remedies epilogue reviewer judged-tree]}]
   (let [final  (try
                  (frontend/with-live-frame
@@ -1934,6 +1934,7 @@
                                  ;; nothing has shown the same cost there.
                                  :judged-after :judge
                                  :finding-key finding-key}
+                          changed?    (assoc :changed? changed?)
                           baseline    (assoc :baseline baseline)
                           survey-cwd  (assoc :survey-cwd survey-cwd)
                           judged-tree (assoc :judged-tree judged-tree))))))
@@ -2001,7 +2002,7 @@
 
    The final block prints from a `finally`, so a loop that throws still leaves
    its rounds, its weakenings and its objections on screen."
-  [{:keys [kind pipeline finding-key remedies epilogue]}
+  [{:keys [kind pipeline finding-key changed? remedies epilogue]}
    ;; `seq-n`, not `seq` — see baseline-cmd*. Read here only to publish it as
    ;; the claim's target; which entry it names is baseline-at's business.
    {:keys [cwd code-cwd max-iters dry-run? budget baseline reviewer] seq-n :seq
@@ -2068,7 +2069,7 @@
               :judged-tree judged-tree
               :clock clock :title title :report-path report-path
               :report-atom report-atom :plain plain :emit emit :pipeline pipeline
-              :finding-key finding-key :max-iters max-iters :dry-run? dry-run?
+              :finding-key finding-key :changed? changed? :max-iters max-iters :dry-run? dry-run?
               :budget budget :reviewer reviewer
               :baseline baseline :remedies remedies :epilogue epilogue}))))))))
 
@@ -2118,6 +2119,7 @@
   (record-loop-cmd* {:kind "baseline"
                      :pipeline    record/baseline-pipeline
                      :finding-key record/baseline-finding-key
+                     :changed?    record/baseline-round-changed?
                      :remedies    baseline-remedies}
                     (cond-> opts
                       seq-n (assoc :baseline
@@ -2164,6 +2166,7 @@
   (record-loop-cmd* {:kind "design"
                      :pipeline    record/design-pipeline
                      :finding-key record/design-finding-key
+                     :changed?    record/design-round-changed?
                      :remedies    design-remedy
                      :epilogue    design-epilogue}
                     opts))

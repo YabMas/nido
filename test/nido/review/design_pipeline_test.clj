@@ -240,6 +240,35 @@
         (is (= [[:check nil :claims ["consistency-reported"]]]
                (mapv record/design-finding-base-key (:findings out))))))))
 
+(deftest a-finding-about-no-claim-is-told-apart-by-the-code-it-cites
+  ;; A goal the record does not serve names no claim, so on the check alone every such finding
+  ;; shared one handle: unrelated goal gaps pooled their disputes and their give-up count, and two
+  ;; rounds holding different ones read as a stall.
+  (let [gap #(assoc (check :goal-served :broken) :evidence %)]
+    (is (not= (record/design-finding-base-key (gap ["src/queue.clj:40"]))
+              (record/design-finding-base-key (gap ["src/view.clj:12"]))))
+    (is (= (record/design-finding-base-key (gap ["b:2" "a:1"]))
+           (record/design-finding-base-key (gap ["a:1" "b:2" "a:1"]))))
+    (is (= (record/design-finding-base-key (assoc (gap ["src/queue.clj:40"]) :claim-ids ["c"]))
+           (record/design-finding-base-key (assoc (gap ["src/view.clj:12"]) :claim-ids ["c"])))
+        "a claim is still the whole identity of a finding that names one"))
+  (testing "the judge stage hands a broken check the evidence of the findings filed under it"
+    (with-redefs [record/design-decision!
+                  (fn [_] (decision :amend :checks [(check :goal-served :broken)]
+                                    :findings [{:cites ["c"] :claim "x" :check :goal-served
+                                                :evidence ["src/queue.clj:40"]}
+                                               {:cites ["d"] :claim "y" :check :goal-served
+                                                :evidence ["src/view.clj:12"]}]))
+                  record/append! (fn [_ _] nil)]
+      (is (= [[:check :goal-served :claims [] :evidence ["src/queue.clj:40" "src/view.clj:12"]]]
+             (mapv record/design-finding-base-key (:findings (run record/design-judge-stage (ctx)))))))))
+
+(deftest a-design-claim-refuted-again-elsewhere-after-an-amend-is-movement
+  (let [against (fn [ev] (assoc (check :goal-served :broken) :claim-ids ["one-rendering"] :evidence ev))
+        prior   [{:iter 1 :amended? true :findings [(against ["standing.clj:425"])]}]]
+    (is (true? (record/design-round-changed? {:iter 2 :findings [(against ["pipeline.clj:544"])]} prior)))
+    (is (false? (record/design-round-changed? {:iter 2 :findings [(against ["standing.clj:425"])]} prior)))))
+
 ;; ── The judge stage ─────────────────────────────────────────────────────────
 
 (deftest proceed-escalates-because-the-ask-is-the-point

@@ -1208,6 +1208,8 @@
       (with-out-str (t/baseline-cmd ":cwd" "/w"))
       (is (= record/baseline-pipeline (:pipeline @seen)))
       (is (= record/baseline-finding-key (:finding-key @seen)))
+      (is (= record/baseline-round-changed? (:changed? @seen))
+          "without it one repeat of a claim id ends the run, however the claim was rewritten")
       (is (= "/w" (:cwd @seen)))
       (is (str/starts-with? (:run-id @seen) "baseline-loop-"))
       (is (fn? (:emit @seen))))))
@@ -1357,6 +1359,8 @@
       (with-out-str (t/design-cmd ":cwd" "/w"))
       (is (= record/design-pipeline (:pipeline @seen)))
       (is (= record/design-finding-key (:finding-key @seen)))
+      (is (= record/design-round-changed? (:changed? @seen))
+          "without it one repeat of a claim id ends the run, however the claim was rewritten")
       (is (nil? (:max-iters @seen)))
       (is (str/starts-with? (:run-id @seen) "design-loop-")))))
 

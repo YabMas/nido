@@ -106,8 +106,19 @@
     {:signature [:=> [:catn [:reviews [:sequential :map]]] [:map-of :string :int]]})
   (Operation parse-amend-answer "What an amender may hand back."
     {:signature [:=> [:catn [:raw :any] [:findings :any] [:base-key :any]] :map]})
-  (Operation dispute-counts "How many times each finding has been disputed."
-    {:signature [:=> [:catn [:history :any]] :any]})
+  (Operation disputed-n
+    "How many times the run has objected to one finding: disputes under its identity whose disputed
+     finding pointed at the same code — an objection to one counterexample does not answer another."
+    {:signature [:=> [:catn [:history :any] [:base-key :any] [:f :map]] :int]})
+  (Operation record-round-changed?
+    "Whether a record round repeating the last round's findings is still moving: the last round
+     amended, every repeated identity now points at disjoint code, and no repeated claim has been
+     refuted past the readings its withdrawal is offered at. The record loops' :changed? veto."
+    {:signature [:=> [:catn [:base-key :any] [:ctx :map] [:prior :any]] :boolean]})
+  (Operation baseline-round-changed? "record-round-changed? over baseline finding identity."
+    {:signature [:=> [:catn [:ctx :map] [:prior :any]] :boolean]})
+  (Operation design-round-changed? "record-round-changed? over design finding identity."
+    {:signature [:=> [:catn [:ctx :map] [:prior :any]] :boolean]})
   (Operation disputes-for-judge "Every standing objection, for the judge."
     {:signature [:=> [:catn [:history :any]] :any]})
   (Operation amend-prompt "The instruction to repair a baseline."

@@ -480,6 +480,9 @@
       ;; :confirmed is what the round kept of the judge's confirmations.
       ;; :judged-by is who answered — a stand-in's judgement is not the configured reviewer's,
       ;; on a phase or on the ledger — and :code-identity the tree its confirmations are keyed on.
+      ;; :refuted-running is how many readings in a row have refuted each claim whose newest reading
+      ;; refuted it, across the workstream's judgements: a claim refuted every round by a different
+      ;; counterexample is one no rewording is settling, and nothing else in a round says so.
       :judge  (cond-> (assoc ph :verdict (some-> (get-in ctx [:record :verdict]) name)
                                 :outcome (some-> (get-in ctx [:record :outcome]) name)
                                 :findings (vec (:findings ctx)))
@@ -510,6 +513,7 @@
                 (seq (get-in ctx [:record :read-once])) (assoc :read-once (get-in ctx [:record :read-once]))
                 (seq (get-in ctx [:record :unchecked])) (assoc :unchecked (get-in ctx [:record :unchecked]))
                 (:unbanked ctx)                         (assoc :unbanked (:unbanked ctx))
+                (seq (:refuted-running ctx))            (assoc :refuted-running (into (sorted-map) (:refuted-running ctx)))
                 (and (get-in ctx [:record :outcome]) (get-in ctx [:record :detail]))
                 (assoc :detail (get-in ctx [:record :detail]))
                 (get-in ctx [:record :answer])
