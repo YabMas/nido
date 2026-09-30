@@ -3125,7 +3125,9 @@
    is a defect under no derivation — and such a finding is carried under no check, so the claim it
    is about is the whole of its identity. That is why nil is a legal check here rather than an
    accident: a record whose only defect is check-less would otherwise have no handle at all, and a
-   finding with no handle cannot be disputed, counted as stalled, or given up on."
+   finding with no handle cannot be disputed, counted as stalled, or given up on. A finding filed
+   under a check the same decision ruled held broke none of the four either, and is carried the
+   same way (`claim-finding?`)."
   [c]
   [:check (:check c) :claims (vec (sort (distinct (:claim-ids c))))])
 (def design-finding-key (dispute-aware design-finding-base-key))
@@ -3208,15 +3210,30 @@
                                :else          :held)]))
         (:checks decision)))
 
+(defn- claim-finding?
+  "Whether one of a design decision's findings is carried under the claim it is about rather than
+   under a check. `statuses` is the decision's `check-statuses`.
+
+   True when the finding names no check, or names one the same decision ruled held: either way it
+   broke none of the four, and the check it names — if any — is the judge filing a defect under a
+   derivation it then passed. Read off the decision's own statuses and not off the name, because a
+   finding dropped for naming a held check is still repaired by the amender, which is handed the
+   judge's raw findings, and a repair nobody counted is invisible to the report, the figures and
+   every stall and dispute identity. False under a broken check, which carries it, and under an
+   underivable one, which has no yardstick for an amender to answer to."
+  [statuses {:keys [check]}]
+  (not (#{:broken :underivable} (get statuses check))))
+
 (defn- refuted-claims
   "The claims a design decision found against with no check broken — a record contradicting itself
-   or a claim it rests on, a defect under none of the four derivations — by claim id, or \"the
-   record\" for one naming none. Its only handle, as in `design-finding-label`."
+   or a claim it rests on, a defect under none of the four derivations (`claim-finding?`) — by claim
+   id, or \"the record\" for one naming none. Its only handle, as in `design-finding-label`."
   [decision]
-  (into #{} (keep (fn [{:keys [check claim-id]}]
-                    (when (str/blank? (some-> check name))
-                      (or (not-empty (str claim-id)) "the record"))))
-        (:findings decision)))
+  (let [statuses (check-statuses decision)]
+    (into #{} (keep (fn [{:keys [claim-id] :as f}]
+                      (when (claim-finding? statuses f)
+                        (or (not-empty (str claim-id)) "the record"))))
+          (:findings decision))))
 
 (defn- judge-name
   "Who answered a judgement, as the figures count it — the stand-in named with whom it stood in for.
@@ -3522,11 +3539,18 @@
             ;; finding motivating one names none BY CONSTRUCTION — which is also the shape
             ;; `settled-block` asks the judge for when a settled claim turns out false. A
             ;; round that carried only its broken checks would hand an amender nothing on
-            ;; exactly the two recommendations that mean repair the record.
-            claim-findings (into [] (comp (remove :check)
-                                          (map #(handle (assoc % :claim-ids
-                                                               (into [] (keep (comp not-empty str))
-                                                                     [(:claim-id %)])))))
+            ;; exactly the two recommendations that mean repair the record. One filed under a
+            ;; check this decision ruled held is carried the same way, the check it named kept
+            ;; as :filed-under: the amender is handed it regardless, so leaving it out here
+            ;; only hides the repair from the report and from every identity read off these.
+            statuses       (check-statuses record)
+            claim-findings (into [] (comp (filter #(claim-finding? statuses %))
+                                          (map #(handle (cond-> (-> %
+                                                                    (dissoc :check)
+                                                                    (assoc :claim-ids
+                                                                           (into [] (keep (comp not-empty str))
+                                                                                 [(:claim-id %)])))
+                                                          (:check %) (assoc :filed-under (:check %))))))
                                  (:findings record))
             findings  (into (mapv #(handle (assoc % :claim-ids (claims-of %)))
                                   (broken-checks record))
@@ -3563,10 +3587,10 @@
                          :underivable (underivable-checks record)
                          :control :escalate :status :underivable))
 
-          ;; The round will not proceed, derived every check, broke none, and every finding
-          ;; it made names a check it says held. It has contradicted itself, so there is
-          ;; nothing to hand an amender and no yardstick to blame. The decision is appended
-          ;; and its reason is what the person reads.
+          ;; The round will not proceed, derived every check, broke none, and made no
+          ;; finding. It has contradicted itself, so there is nothing to hand an amender and
+          ;; no yardstick to blame. The decision is appended and its reason is what the
+          ;; person reads.
           :else
           (final! (assoc ctx :record record :findings []
                          :underivable []
@@ -3594,7 +3618,8 @@
    round.
 
    What reaches the amender is every finding the round made, whether it broke one
-   of the four derivations or none. `Nothing broke` is not `nothing to repair`:
+   of the four derivations or none — one filed under a check the round ruled held
+   broke none. `Nothing broke` is not `nothing to repair`:
    an amend or a resurvey has no check its findings could name, so on exactly the
    recommendations that mean repair the record, the checks say nothing."
   {:name :judge

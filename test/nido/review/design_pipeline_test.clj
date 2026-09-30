@@ -512,14 +512,45 @@
   ;; contradicting itself, and a person is told that rather than told a yardstick is
   ;; missing.
   (with-redefs [record/design-decision!
-                (fn [_] (decision :amend :checks [(check :goal-served :held)]
-                                  ;; names a check the same decision says held
-                                  :findings [{:cites ["c"] :claim "x" :check :routing-coherent}]))
+                (fn [_] (decision :amend :checks [(check :goal-served :held)]))
                 record/append! (fn [_ _] nil)]
     (let [out (run record/design-judge-stage (ctx))]
       (is (= :nothing-to-amend (:status out)))
       (is (= :escalate (:control out)))
       (is (= [] (:findings out))))))
+
+(deftest a-finding-filed-under-a-check-the-round-held-is-carried-under-its-claim
+  ;; The amender is handed the judge's raw findings and repairs this one whatever the round
+  ;; carries, so a round that dropped it hid a repair from the report, the figures and every
+  ;; stall and dispute identity — and a round whose only finding was one ended
+  ;; :nothing-to-amend over a defect it had named.
+  (with-redefs [record/design-decision!
+                (fn [_] (decision :amend :checks [(check :goal-served :broken)
+                                                  (check :stratified :held)]
+                                  :findings [{:cites ["a"] :claim "x" :check :goal-served
+                                              :claim-id "goal"}
+                                             {:cites ["b"] :claim "y" :check :stratified
+                                              :claim-id "stale-page-untouched"}]))
+                record/append! (fn [_ _] nil)]
+    (let [out  (run record/design-judge-stage (ctx))
+          held (last (:findings out))]
+      (is (nil? (:status out)) "there is something to repair, so the round goes on")
+      (is (= [:goal-served nil] (mapv :check (:findings out)))
+          "a held check is not a broken one: the amender is never told stratified failed")
+      (is (= ["stale-page-untouched"] (:claim-ids held)))
+      (is (= :stratified (:filed-under held)) "what the judge named still reaches the report")
+      (is (= (record/design-finding-base-key {:claim-ids ["stale-page-untouched"]})
+             (record/design-finding-base-key held))
+          "its identity is its claim's, the same as a check-less finding about it")))
+  (with-redefs [record/design-decision!
+                (fn [_] (decision :amend :checks [(check :goal-served :held)]
+                                  :findings [{:cites ["c"] :claim "x" :check :routing-coherent
+                                              :claim-id "r"}]))
+                record/append! (fn [_ _] nil)]
+    (let [out (run record/design-judge-stage (ctx))]
+      (is (nil? (:status out))
+          "a round whose only finding names a held check has named a defect, not nothing")
+      (is (= [["r"]] (mapv :claim-ids (:findings out)))))))
 
 (deftest a-check-less-finding-is-handed-over-even-beside-a-missing-yardstick
   ;; The two are independent: a yardstick nobody could reach does not make the defect the
@@ -1242,6 +1273,16 @@
         "a run whose only defect was a check-less refutation read as a clean one")
     (is (= 0 (get-in f [:checks :stratified :alone]))
         "a check is not the only defect of a round that also refuted a claim")))
+
+(deftest a-claim-refuted-under-a-check-the-decision-held-is-counted
+  (let [d (fn [findings & checks] {:format :design-decision :checks (vec checks) :findings findings})
+        f (record/run-figures [(d [{:check :stratified :claim-id "c1"}]
+                                  (check :stratified :held) (check :goal-served :broken))
+                               (d [{:check :relation-honest :claim-id "c2"}]
+                                  (check :relation-honest :underivable))])]
+    (is (= {"c1" {:broken 1 :alone 0 :at-end false}} (:claims f))
+        "a refutation the amender repaired must not vanish from the figures for naming a held check")
+    (is (= 0 (get-in f [:checks :stratified :broken])) "and the check it named stays held")))
 
 (deftest a-runs-figures-count-confirmations-and-who-judged
   (let [f (record/run-figures [{:format :baseline-review :verdict :sufficient :confirmed ["c1" "c2"]
