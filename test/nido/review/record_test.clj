@@ -371,6 +371,15 @@
         "an inferred goal is the one the design serves, so the check could
          never fail")))
 
+(deftest a-host-finding-cites-an-observation-made-on-the-host
+  ;; Watched: a judge broke goal-served on `sha256sum` being absent on macOS, cited from a
+  ;; Homebrew formula page; `command -v sha256sum` on the host answered /sbin/sha256sum.
+  (let [p (record/design-prompt {:design design})]
+    (is (str/includes? p "MISSING on this host")
+        "a host-environment finding is settled by the host, never by reading about it")
+    (is (str/includes? p "the output of running it here")
+        "documentation describes some host, so only an observation made here can break a check")))
+
 (deftest only-an-intent-is-a-goal
   ;; The append boundary refuses a design citing anything but an :intent, so a citation that
   ;; resolves to another kind was never written through it and projects no goal.

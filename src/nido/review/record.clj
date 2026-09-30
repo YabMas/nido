@@ -1144,6 +1144,13 @@
    "that shows one of the four broken names it in check; one that bears on none\n"
    "of them leaves check empty — a record contradicting itself or a claim it\n"
    "rests on is a defect under no derivation, and it is repaired like any other.\n\n"
+   ;; A host fact read off a man page or a package page describes SOME host, not this one; one
+   ;; such finding broke goal-served on a tool that was installed, and cost a round to withdraw.
+   "A finding that a tool or command is MISSING on this host, or BEHAVES differently\n"
+   "on it, cites what you observed on the host — the output of running it here\n"
+   "(`command -v <tool>`, `<tool> --version`). Documentation, a man page or a\n"
+   "package page says what is true of some host, not of this one; it is not\n"
+   "evidence for a host finding. Cannot run it? Leave the claim unchecked with why.\n\n"
    compound-clause-rule
    "Populate confirmed with the claims you checked and found to hold — each by its\n"
    "id, the bracketed slug without the brackets, with the file:line references you\n"
