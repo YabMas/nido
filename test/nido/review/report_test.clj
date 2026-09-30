@@ -1777,6 +1777,24 @@
                              r {:event :run-interrupted :at "2026-06-30T14:05:01Z"}
                              clock))))))
 
+(deftest standing-carries-what-the-last-run-left-and-what-the-yardstick-lacks
+  ;; A run named a misattached design record as standing; the next, quiet run
+  ;; had no warden and wrote an entry with no trace of it.
+  (let [prior {:what "the wrong design record was attached" :why-no-finding "a person checks"}
+        off   {:what "the design record names none of this stack"}]
+    (is (= [prior off]
+           (:standing (report/stopped-on {:carry {:inherited-standing [prior]}
+                                          :off-yardstick off})))
+        "a quiet run carries the last run's standing, beside its own yardstick item")
+    (is (= [{:what "still true"}]
+           (:standing (report/stopped-on {:warden {:standing [{:what "still true"}]}
+                                          :carry {:inherited-standing []}})))
+        "a warden shown the list answered it: what it left out is gone")
+    (is (= [prior]
+           (:standing (report/stopped-on {:warden {:standing [prior]}
+                                          :carry {:inherited-standing [prior]}})))
+        "an item restated verbatim is one item")))
+
 (deftest the-report-says-which-inherited-rows-left-the-run-unresolved
   ;; report.json read `unresolved` with a null reason and a clean last round;
   ;; the rows that decided the status were in the ledger entry and nowhere here.

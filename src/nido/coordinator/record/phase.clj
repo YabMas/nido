@@ -67,3 +67,24 @@
     :between-phases
     :done))
 
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map] [:sequential :map]] :boolean]}
+  delivered?
+  "Whether `design` — an entry carrying its `:seq` — has landed all the work it planned: a
+   `:merged` row follows it, and it holds no phase after the one that landed. False for a
+   nil design.
+
+   Read by POSITION, not by the landing's `:design` citation. A landing names a design
+   without standing on it — one PR may carry work from several units — and the citation
+   is not reliable either: a merge poller has cited a design two units older than the one
+   whose door the PR opened. A `:merged` appended after the design is the fact that the
+   code it described is on main.
+
+   A phased design with a phase still to come is NOT delivered at its first landing: the
+   next phase's work is judged against the same record, so it stays the yardstick."
+  [design entries]
+  (boolean
+   (when-let [n (:seq design)]
+     (and (some #(and (= :merged (:kind %)) (> (:seq %) n)) entries)
+          (let [p (progress design entries)]
+            (or (nil? p) (and (nil? (:next p)) (:landed? p))))))))

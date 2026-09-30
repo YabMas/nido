@@ -808,7 +808,8 @@
           targets)))
 
 ;; Defined below, with the other readings taken off the workstream's ledger.
-(declare standing-needs prior-open discover-design-record)
+(declare standing-needs prior-open prior-standing discover-design-record discover-baseline
+         off-yardstick)
 
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   with-standing-needs
@@ -1437,12 +1438,23 @@
         ;; the design verdict read it from.
         {inherit :rows unplaced-rows :unplaced} (place-inherited cwd toc (prior-open cwd))
         inherit (with-answers inherit (get-in ctx [:carry :inherited-answers]))
-        ctx     (cond-> ctx (seq inherit) (assoc-in [:carry :inherited-open] inherit))
+        ctx     (cond-> ctx
+                  (seq inherit) (assoc-in [:carry :inherited-open] inherit)
+                  ;; Read at the first round only: the first warden to answer
+                  ;; empties it, and a later round re-reading the ledger would
+                  ;; hand back what that warden let go. See `prior-standing`.
+                  (not (contains? (:carry ctx) :inherited-standing))
+                  (assoc-in [:carry :inherited-standing] (prior-standing cwd)))
         ;; Once per round rather than per target: every reviewer of a round is
         ;; judging one change against one design, so a second read could only
         ;; differ by racing an author editing the ledger mid-round — which would
         ;; put two reviewers of the same change on two yardsticks.
-        ctx     (assoc ctx :design (discover-design-record cwd))
+        design  (discover-design-record cwd)
+        ctx     (cond-> (assoc ctx :design design)
+                  design (assoc :off-yardstick
+                                (off-yardstick design (discover-baseline cwd design)
+                                               (into [] (comp (mapcat :files) (distinct))
+                                                     targets))))
         all     (with-patch-hashes
                  cwd (-> targets
                          (with-composition-memory (:history ctx))
@@ -1631,17 +1643,45 @@
   {:name :review
    :run  run-review-stage})
 
+(defn- ledger-rows
+  "`ws-id`'s index rows, or `[]` when the ledger cannot be read. An unreadable
+   ledger shows no `:merged`, so a design it holds is offered rather than
+   withheld: the refusal is for a design known to have landed."
+  [project ws-id]
+  (or (try (:entries (ws/read-ws project ws-id)) (catch Exception _ nil)) []))
+
 (defn ^{:malli/schema [:=> [:cat :Path] [:maybe :map]]}
   discover-design-record
-  "This workstream's latest :design record, or nil.
+  "This workstream's latest :design record, or nil — nil too when that record is
+   DELIVERED (`delivered-design`).
 
    Replaces a glob for the newest `docs/superpowers/specs/*-design.md`, which
    picked a file by filename order — in a project with a specs directory that is
    almost never the design of the change under review. The yardstick has to be the
-   design *this* change committed to, and the ledger is where that lives."
+   design *this* change committed to, and the ledger is where that lives.
+
+   A delivered design is absent rather than offered, and so refused at the same
+   gate as a workstream holding none: its code is on main, so a diff reviewed on
+   this workstream afterwards is other work reusing the branch. Judged against it,
+   every invariant it names holds vacuously over files it never mentions, and the
+   verdict comes back :sound for a change nobody designed."
   [cwd]
   (when-let [[project ws-id] (project+ws-from-cwd cwd)]
-    (ws/latest-entry project ws-id :design)))
+    (when-let [d (ws/latest-entry project ws-id :design)]
+      (when-not (phase/delivered? d (ledger-rows project ws-id))
+        d))))
+
+(defn ^{:malli/schema [:=> [:cat :Path] [:maybe :map]]}
+  delivered-design
+  "This workstream's latest :design record when it is delivered — a `:merged`
+   follows it and no phase of its plan is left — else nil. What
+   `discover-design-record` declines, named so the refusal can say why the
+   workstream holds a design and still has no yardstick."
+  [cwd]
+  (when-let [[project ws-id] (project+ws-from-cwd cwd)]
+    (when-let [d (ws/latest-entry project ws-id :design)]
+      (when (phase/delivered? d (ledger-rows project ws-id))
+        d))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :map] [:maybe :map]]}
   discover-baseline
@@ -1658,6 +1698,72 @@
     (when-let [[project ws-id] (project+ws-from-cwd cwd)]
       (let [e (ws/entry-at-seq project ws-id n)]
         (when (= :baseline (:format e)) e)))))
+
+(def ^:private named-file-re
+  #"[A-Za-z0-9_./-]*[A-Za-z][A-Za-z0-9_./-]*\.(?:clj|cljs|cljc|bb|edn|sql|md|js|ts|tsx|py|java)\b")
+
+(def ^:private named-ns-re
+  #"\b[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*){2,}\b")
+
+(defn- extensionless [path]
+  (str/replace path #"\.[A-Za-z]+$" ""))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map] [:maybe :map]] [:set :string]]}
+  named-locations
+  "The places in the code `design` and the `baseline` it cites name, as
+   extension-less path fragments: every file the baseline `:read` (line ranges
+   dropped), every file path the design's text mentions, and every namespace of
+   three or more segments it mentions, as the path it would live at.
+
+   Read out of prose because no field carries it — a design's model names
+   modules by id and its strata by level — so this is the evidence of what the
+   record is ABOUT, never a bound on what the change may touch. Over-reading is
+   the safe direction: a stray fragment can only make a stack look covered."
+  [design baseline]
+  (let [text (pr-str (dissoc design :baseline :intent :supersedes))
+        tidy #(-> % (str/replace #"^\./" "") extensionless)]
+    (into #{}
+          (remove str/blank?)
+          (concat (map #(tidy (str/replace % #":[0-9].*$" "")) (:read baseline))
+                  (map tidy (re-seq named-file-re text))
+                  (map #(-> % (str/replace "." "/") (str/replace "-" "_"))
+                       (re-seq named-ns-re text))))))
+
+(defn- covers?
+  "Whether the location fragment `loc` names `file`: the same path, a suffix of
+   it, or a directory or namespace prefix above it."
+  [loc file]
+  (let [f (extensionless file)]
+    (or (= f loc)
+        (str/ends-with? f (str "/" loc))
+        (str/starts-with? f (str loc "/"))
+        (str/includes? f (str "/" loc "/")))))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map] [:maybe :map] [:sequential :string]] [:maybe :map]]}
+  off-yardstick
+  "A standing item saying `design` is not the yardstick of a stack changing
+   `files`, or nil.
+
+   Only when the record NAMES places — `named-locations` — and the stack changes
+   none of them. A record naming none says nothing either way, and an empty
+   stack has nothing to be off. Standing rather than a finding: it is about
+   which record the loop was handed, and no fixer can change that. The verdict
+   pass does not run under one (`tasks.nido-review/append-design-verdict!`) —
+   every invariant of such a record holds vacuously, and that pass came back
+   :sound four runs running over another story's record."
+  [design baseline files]
+  (let [locs (named-locations design baseline)]
+    (when (and design (seq locs) (seq files)
+               (not-any? (fn [f] (some #(covers? % f) locs)) files))
+      {:what (str "The design record" (when-let [n (:seq design)] (str " at entry " n))
+                  " names " (count locs) " places in the code — "
+                  (str/join ", " (take 5 (sort locs)))
+                  (when (> (count locs) 5) ", …")
+                  " — and this stack changes none of them, so it is not this change's"
+                  " yardstick: every invariant it states holds here vacuously.")
+       :why-no-finding (str "It is about which record the loop was judged against, not a"
+                            " defect in any layer's code. A person decides whether this"
+                            " work needs its own design record or its own workstream.")})))
 
 (defn- same-phase?
   "Whether `prior` was reached in the phase of `design`'s plan the workstream is in
@@ -1826,6 +1932,29 @@
                       #(and (:inherited %) (not= :park (:disposition %))
                             (str/blank? (str (:belongs-in %))))))
             (:open entry)))))
+
+(defn ^{:malli/schema [:=> [:cat :Path] [:vector :map]]}
+  prior-standing
+  "What the last review of this workstream left STANDING — `last-review`'s
+   `:standing`, the items its warden knew were open and handed to nobody — or
+   `[]` when a person has answered on the ledger since, or cwd maps to no
+   workstream.
+
+   Carried as a park is, and for its reason: a standing item is addressed to a
+   person, and no number of quiet runs answers it. Written once and read by
+   nothing, the one run that named a misattached design record said so, and the
+   run after — quiet, so no warden — wrote an entry holding no trace of it.
+
+   Two things end the carry. A person answering after that entry, as
+   `answered-by-a-person?` reads it. And a warden of this run, which is shown
+   the list and restates what still stands; one it leaves out is its answer.
+   The second is `nido.review.report/stopped-on`'s to apply."
+  [cwd]
+  (or (when-let [[project ws-id] (project+ws-from-cwd cwd)]
+        (let [entry (last-review project ws-id)]
+          (when-not (answered-by-a-person? project ws-id (:seq entry))
+            (vec (:standing entry)))))
+      []))
 
 (def ^:private stance-char-cap
   "The most of a stance a judge is shown. A guard against a runaway file blowing up a prompt, never a
@@ -2941,6 +3070,7 @@
                  :toc      (:toc ctx)
                  :parked   (vals (get-in ctx [:carry :parks] {}))
                  :inherited inherited
+                 :inherited-standing (get-in ctx [:carry :inherited-standing])
                  :fix-outcomes (fix-outcomes (:history ctx) (:carry ctx))
                  :answered (answered-by-layer ctx)})
         {:keys [num-turns result-error? result-text] :as launch}
@@ -3013,7 +3143,11 @@
                                                      ruled)
                                       :parks parks
                                       :fixer-declines declines
-                                      :rolled-back refused)
+                                      :rolled-back refused
+                                      ;; Shown the last run's standing list, this
+                                      ;; warden restated what still holds in its
+                                      ;; own; what it left out is answered.
+                                      :inherited-standing [])
                         ;; A promotion outranks a `stop` in the same answer.
                         ;; They are two fields answering one question — is there
                         ;; work — and the promotion is the specific one: it names

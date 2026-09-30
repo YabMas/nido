@@ -33,4 +33,10 @@
     "The outcome a landing closes a workstream with, given the same: :between-phases when the
      plan has a phase after the one that just landed, :done otherwise."
     {:signature [:=> [:catn [:design [:maybe :map]] [:entries [:sequential :map]]] :keyword]
+     :delegates [progress]})
+  (Operation delivered?
+    "Whether a design has landed all the work it planned: a :merged follows it and no phase of
+     its plan is left. Read by position, never by the landing's citation — a landing names a
+     design without standing on it. A delivered design is no yardstick for later work."
+    {:signature [:=> [:catn [:design [:maybe :map]] [:entries [:sequential :map]]] :boolean]
      :delegates [progress]}))

@@ -85,6 +85,16 @@
    why a later round dropping an item is that warden's answer rather than a
    loss.
 
+   Beside it, what the LAST run left standing that no warden of this one was
+   shown — `nido.review.stages/prior-standing`, emptied by the first warden that
+   answers it. A standing item is addressed to a person, so a quiet run is no
+   answer to it.
+
+   And `:off-yardstick`, when the design record names places in the code and
+   the stack changes none of them — `nido.review.stages/off-yardstick`. That is
+   the run's own finding about its yardstick rather than a warden's, and it is
+   here because a verdict judged against such a record holds vacuously.
+
    Beside the warden's list, `:unplaced`: what the last run left owed that the
    terminal round could place on no layer of this stack — see
    `nido.review.stages/placed-on`. The loop's own entries rather than a
@@ -104,7 +114,9 @@
   [ctx]
   (let [parks    (get-in ctx [:carry :parks])
         standing (into [] (distinct) (concat (get-in ctx [:warden :standing])
-                                             (:unplaced ctx)))
+                                             (get-in ctx [:carry :inherited-standing])
+                                             (:unplaced ctx)
+                                             (some-> (:off-yardstick ctx) vector)))
         inherited (into [] (comp (filter :inherited)
                                  (map #(select-keys % [:id :title :where :disposition :layer])))
                         (:owed ctx))]

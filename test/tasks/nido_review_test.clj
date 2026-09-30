@@ -1749,6 +1749,22 @@
           "the budget was spent; a run has to be able to tell that from a pass that never started")
       (is (nil? (:verdict outcome))))))
 
+(deftest a-design-naming-none-of-the-stack-spends-no-design-verdict
+  ;; Judged against another story's record, every invariant holds over files it
+  ;; never mentions: the pass came back :sound four runs running on such a
+  ;; stack. The run has already named the mismatch as standing; a vacuous
+  ;; verdict beside it would contradict it.
+  (let [ran (atom false)]
+    (with-redefs [stages/discover-design-record (fn [_] a-design)
+                  verdict/run! (fn [_] (reset! ran true) a-verdict)]
+      (let [outcome (t/append-design-verdict!
+                     "/w" {:status :converged :findings [{:title "x"}]
+                           :off-yardstick {:what "names none of it"}}
+                     {} {:run-id "r"})]
+        (is (false? @ran) "no agent is spent judging a record against work it does not describe")
+        (is (= :skipped (:outcome outcome)))
+        (is (str/includes? (:because outcome) "yardstick"))))))
+
 (deftest a-tree-holding-conflict-markers-spends-no-design-verdict
   ;; The pass gives an agent tools and points it at the working copy, so
   ;; committed markers arrive as source and the design is judged against text jj
@@ -2120,16 +2136,32 @@
   ;; and write a design. The ledger already knows which stage it is owed.
   (with-redefs [stages/project+ws-from-cwd (constantly [:p "ws-1"])
                 stages/discover-design-record (constantly nil)
+                stages/delivered-design (constantly nil)
                 pipeline/of (constantly {:next {:stage :write-baseline}})]
     (let [{:keys [reason lines]} (gate "/w")]
       (is (= :no-design-record reason))
       (is (some #(str/includes? % "owed write-baseline") lines))))
   (with-redefs [stages/project+ws-from-cwd (constantly [:p "ws-1"])
                 stages/discover-design-record (constantly nil)
+                stages/delivered-design (constantly nil)
                 pipeline/of (constantly {:next nil})]
     (is (some #(str/includes? % "Write the design record first")
               (:lines (gate "/w")))
         "a workstream owed nothing still gets an actionable line")))
+
+(deftest a-workstream-whose-design-has-landed-is-refused-as-holding-none
+  ;; Four runs of unrelated explore work were judged against a DataPrivacy
+  ;; design that had merged entries earlier, and each verdict came back :sound
+  ;; with six data-privacy invariants "held" over files they never mention.
+  (with-redefs [stages/project+ws-from-cwd (constantly [:p "ws-1"])
+                stages/discover-design-record (constantly nil)
+                stages/delivered-design (constantly {:seq 45 :shape "x"})
+                pipeline/of (fn [& _] (throw (ex-info "not asked" {})))]
+    (let [{:keys [reason lines]} (gate "/w")]
+      (is (= :design-delivered reason)
+          "a landed design is its own ground: the remedy is new work's design, not the stage the ledger owes")
+      (is (some #(str/includes? % "entry 45") lines) "the refusal names the record it declined")))
+  (is (= 1 (t/exit-code :design-delivered)) "a refused run produced no review"))
 
 (deftest a-workstream-holding-a-design-record-is-not-refused
   (with-redefs [stages/project+ws-from-cwd (constantly [:p "ws-1"])

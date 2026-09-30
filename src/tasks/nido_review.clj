@@ -53,8 +53,8 @@
          ;; `no-yardstick`'s refusals. A run that never started produced no
          ;; review either, and the caller most likely to read this is a driver
          ;; deciding whether the stage it asked for happened — which for these
-         ;; two it did not, and no report was written for it to find out from.
-         :no-design-record :no-workstream
+         ;; it did not, and no report was written for it to find out from.
+         :no-design-record :design-delivered :no-workstream
          ;; `recently-unavailable`'s refusal, on the same ground.
          :reviewer-recently-unavailable} status)
     1 0))
@@ -679,25 +679,32 @@
     ;; record it is the authority on finding.
     (let [design (stages/discover-design-record cwd)]
       (when (and design (verdict-worth-running? (:status final) final design))
-        (if-let [markers (unreadable-tree cwd (:base config))]
-          ;; Recorded rather than dropped. Every other reason this pass does not
-          ;; run is legible from the status sitting beside it in the report; a
-          ;; conflicted tree is legible from nothing the run wrote, so a reader
-          ;; would find the field the pass exists to fill simply absent.
+        (if (:off-yardstick final)
+          ;; The run already said the record names none of what this stack
+          ;; changes, as a standing item on its :review entry. Judged anyway,
+          ;; every invariant holds vacuously and the answer is :sound.
           {:outcome :skipped
-           :because (str "the branch is holding conflict markers on "
-                         (str/join ", " markers)
-                         " — resolve them and re-run; the pass reads the worktree"
-                         " with tools and would judge the design against them")}
-          (if-let [v (verdict/run! {:cwd cwd
-                                    :run-id (:run-id config)
-                                    :budget (:budget config)
-                                    :final final
-                                    :report report})]
-            (assoc (append-verdict-to-ledger! cwd v) :outcome :answered :verdict v)
-            {:outcome :no-answer
-             :because (str "the pass ran and its answer carried no verdict"
-                           " — the transcript is agent.log in this run dir")}))))
+           :because (str "the design record names none of the files this stack changes,"
+                         " so it is not this change's yardstick — see the run's standing")}
+          (if-let [markers (unreadable-tree cwd (:base config))]
+            ;; Recorded rather than dropped. Every other reason this pass does not
+            ;; run is legible from the status sitting beside it in the report; a
+            ;; conflicted tree is legible from nothing the run wrote, so a reader
+            ;; would find the field the pass exists to fill simply absent.
+            {:outcome :skipped
+             :because (str "the branch is holding conflict markers on "
+                           (str/join ", " markers)
+                           " — resolve them and re-run; the pass reads the worktree"
+                           " with tools and would judge the design against them")}
+            (if-let [v (verdict/run! {:cwd cwd
+                                      :run-id (:run-id config)
+                                      :budget (:budget config)
+                                      :final final
+                                      :report report})]
+              (assoc (append-verdict-to-ledger! cwd v) :outcome :answered :verdict v)
+              {:outcome :no-answer
+               :because (str "the pass ran and its answer carried no verdict"
+                             " — the transcript is agent.log in this run dir")})))))
     (catch Exception e
       (binding [*out* *err*]
         (println (str "review-loop: design verdict skipped — " (ex-message e))))
@@ -1256,25 +1263,42 @@
    rather than the remedy being guessed, so a workstream that never got a
    baseline is not told to go and write a design.
 
+   A third ground shares the second's check: a workstream whose design has
+   LANDED holds a record and no yardstick — `stages/delivered-design` — and the
+   diff on it is other work. Its remedy is a design for that work, never the
+   stage the ledger says is owed, which for a closed workstream is nothing.
+
    The record loops are not gated by this and must not be: `bb nido:review:baseline`
    and `bb nido:review:design` are how a workstream comes to HAVE a record, and
    they run through `record-loop-cmd*`, not here."
   [cwd]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (when-not (stages/discover-design-record cwd)
-      (let [due (:stage (:next (pipeline/of project ws-id)))]
-        {:reason :no-design-record
-         :lines  (cond-> ["review-loop: REFUSED — this workstream holds no design record."
-                          ""
-                          "  The loop judges an implementation against the design it"
-                          "  committed to. With no record the warden holds no invariant to"
-                          "  weigh a finding against, so a finding that puts the DESIGN in"
-                          "  question is handed to a fixer as an ordinary defect — which"
-                          "  settles it by making it invisible."
-                          ""]
-                   due       (conj (str "  This workstream is owed " (name due)
-                                        " — run that, then review."))
-                   (nil? due) (conj "  Write the design record first, then review."))}))
+      (if-let [spent (stages/delivered-design cwd)]
+        {:reason :design-delivered
+         :lines  [(str "review-loop: REFUSED — this workstream's design record (entry "
+                       (:seq spent) ") has already landed.")
+                  ""
+                  "  A :merged follows it, so its code is on main and the diff here is"
+                  "  other work. Judged against it, every invariant it names holds"
+                  "  vacuously over files it never mentions, and the verdict is :sound"
+                  "  for a change nobody designed."
+                  ""
+                  "  Give this work its own workstream (bb nido:workstream:fork), or"
+                  "  write a design record for it here, then review."]}
+        (let [due (:stage (:next (pipeline/of project ws-id)))]
+          {:reason :no-design-record
+           :lines  (cond-> ["review-loop: REFUSED — this workstream holds no design record."
+                            ""
+                            "  The loop judges an implementation against the design it"
+                            "  committed to. With no record the warden holds no invariant to"
+                            "  weigh a finding against, so a finding that puts the DESIGN in"
+                            "  question is handed to a fixer as an ordinary defect — which"
+                            "  settles it by making it invisible."
+                            ""]
+                     due       (conj (str "  This workstream is owed " (name due)
+                                          " — run that, then review."))
+                     (nil? due) (conj "  Write the design record first, then review."))})))
     {:reason :no-workstream
      :lines  ["review-loop: REFUSED — this directory belongs to no nido workstream."
               ""

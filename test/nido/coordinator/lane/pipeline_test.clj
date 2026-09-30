@@ -606,7 +606,7 @@
   ;; derives its target by re-reading the ledger next tick, and the refusal
   ;; writes nothing, so the position re-read is the one that just fired the
   ;; review. The driver would fire, be refused, and fire again forever.
-  (doseq [s [:no-design-record :no-workstream]]
+  (doseq [s [:no-design-record :design-delivered :no-workstream]]
     (is (= :escalate (p/disposition s)) (str s " parks rather than re-firing"))
     (is (contains? @#'p/disposition-of-status s)
         (str s " is classified, not defaulted"))))

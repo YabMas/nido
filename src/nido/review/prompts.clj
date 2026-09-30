@@ -1717,6 +1717,28 @@
               (str/join "\n"))
          "\n\n")))
 
+(defn- inherited-standing-block
+  "What the last run of this workstream left standing — open, and handed to
+   nobody — for this warden to restate or let go. Its `standing` answer replaces
+   the list whole, so an item left out of it is that answer rather than a loss;
+   and with no warden in a run the list is carried as it is, which is why the
+   warden has to be the one to drop it."
+  [standing]
+  (when (seq standing)
+    (str "LEFT STANDING BY THE LAST RUN OF THIS WORKSTREAM — not raised this run\n"
+         "That run's warden knew these were open and could hand them to no one.\n"
+         "Nothing since has answered them. Put each one that still holds into\n"
+         "your `standing`, as it is or restated; leave out one this run's code\n"
+         "shows is gone. Do not rule on them — they carry no id:\n"
+         (->> standing
+              (map (fn [{:keys [what why-no-finding]}]
+                     (str "- " what
+                          (when-not (str/blank? (str why-no-finding))
+                            (str "\n    " why-no-finding))
+                          "\n")))
+              (apply str))
+         "\n")))
+
 (defn- inherited-block
   "What the last run of this workstream left owed and nothing in this run has
    answered, each under its own id, with how that run left it.
@@ -1958,7 +1980,8 @@
    rather than a dispatch: what it knows to be open that this round is handing
    to nobody. It is asked for on every answer, not only on a `stop`, because the
    round that turns out to be the last one is not knowable while it is running."
-  [{:keys [findings history design stance toc answered seen parked inherited fix-outcomes]}]
+  [{:keys [findings history design stance toc answered seen parked inherited inherited-standing
+           fix-outcomes]}]
   ;; A branch with no layers is reviewed flat, and there is then no layer label
   ;; for a finding to be attributed to. Asked for one anyway, the warden supplied
   ;; the only stack-shaped thing it had — a file path — on every ruling of the
@@ -2171,6 +2194,7 @@
                (apply str))
           "\n"))
    (inherited-block inherited)
+   (inherited-standing-block inherited-standing)
    (fixer-declines-block fixer-declines)
    (refused-repairs-block refused)
    (unstarted-block unstarted)

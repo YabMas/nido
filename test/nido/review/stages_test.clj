@@ -5279,3 +5279,87 @@
         "an account about somebody else's files is not handed over")
     (is (empty? (stages/accounts-naming said nil))
         "a layer with no file list is handed nothing")))
+
+;; ── A delivered design is not a yardstick ───────────────────────────────────
+
+(deftest a-design-a-merge-has-followed-is-not-offered-as-the-yardstick
+  ;; A workstream whose design landed and whose branch then carried unrelated
+  ;; work: four runs were judged against the landed record and each came back
+  ;; :sound over files the design never names.
+  (let [rows (fn [& kinds] (vec (map-indexed (fn [i k] {:kind k :seq (inc i)}) kinds)))]
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] {:seq 1 :shape "the door"})
+                  ws/read-ws (fn [_ _] {:entries (rows :design :review :merged :review)})]
+      (is (nil? (stages/discover-design-record "/w"))
+          "its code is on main, so the diff under review is not what it describes")
+      (is (= 1 (:seq (stages/delivered-design "/w")))
+          "and the gate is told which record it declined"))
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] {:seq 1 :shape "the door"})
+                  ws/read-ws (fn [_ _] {:entries (rows :design :review)})]
+      (is (= 1 (:seq (stages/discover-design-record "/w"))) "unlanded, it is the yardstick")
+      (is (nil? (stages/delivered-design "/w"))))
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] {:seq 1 :shape "the door"})
+                  ws/read-ws (fn [_ _] (throw (ex-info "unreadable" {})))]
+      (is (= 1 (:seq (stages/discover-design-record "/w")))
+          "a ledger nobody can read shows no landing, so the design is not withheld"))))
+
+;; ── A design that names none of the stack ───────────────────────────────────
+
+(def ^:private data-privacy-design
+  "ws-20260831-bee656's seq 45, reduced to what names the code."
+  {:seq 45
+   :shape "Transport reaches brian.domain.data-privacy through the door; brian.persistence.data-privacy owns every statement, and job/identity_cutover.clj still reads the approval table by name."
+   :strata ["policy-row-level" "policy-resolution-level"]})
+
+(def ^:private data-privacy-baseline
+  {:read ["src/main/brian/database/data_privacy.clj"
+          "src/main/brian/handlers/auth.clj:150-235"]})
+
+(deftest named-locations-reads-the-places-a-design-and-its-survey-name
+  (is (= #{"brian/domain/data_privacy" "brian/persistence/data_privacy" "job/identity_cutover"
+           "src/main/brian/database/data_privacy" "src/main/brian/handlers/auth"}
+         (stages/named-locations data-privacy-design data-privacy-baseline))
+      "surveyed files with their line ranges dropped, namespaces as the paths they live at"))
+
+(deftest a-design-naming-none-of-the-stack-is-standing-not-a-yardstick
+  ;; The Organization-domains stack was judged four times against this record and
+  ;; passed :sound with six data-privacy invariants "held".
+  (let [domains ["src/main/brian/database/organization_domain.clj"
+                 "src/main/brian/domain/organization/domains.clj"
+                 "src/main/brian/handlers/admin_domains.clj"]
+        item    (stages/off-yardstick data-privacy-design data-privacy-baseline domains)]
+    (is (some? item) "a record about other code is flagged")
+    (is (str/includes? (:what item) "entry 45") "naming the record it is about")
+    (is (:why-no-finding item) "and saying why no fixer can act on it"))
+  (is (nil? (stages/off-yardstick data-privacy-design data-privacy-baseline
+                                  ["src/main/brian/domain/data_privacy/door.clj"
+                                   "src/main/brian/database/organization_domain.clj"]))
+      "one file under a namespace it names is enough: the record speaks to this stack")
+  (is (nil? (stages/off-yardstick data-privacy-design data-privacy-baseline
+                                  ["src/main/brian/handlers/auth.clj"]))
+      "a file its baseline surveyed is covered")
+  (is (nil? (stages/off-yardstick {:seq 1 :shape "one level, no names"} nil
+                                  ["src/main/brian/anything.clj"]))
+      "a record that names no place says nothing either way, so nothing is flagged")
+  (is (nil? (stages/off-yardstick data-privacy-design data-privacy-baseline []))
+      "an empty stack is off nothing"))
+
+;; ── The last run's standing, carried ────────────────────────────────────────
+
+(deftest the-last-runs-standing-is-carried-until-a-person-answers
+  ;; ws-20260831-bee656 entry 59 said "the wrong design record was attached";
+  ;; the quiet run after it wrote an entry with no :standing at all.
+  (let [item {:what "the wrong design record was attached" :why-no-finding "a person checks"}]
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ kind]
+                                    (when (= :review kind) {:seq 5 :standing [item]}))]
+      (with-redefs [ws/read-ws (fn [& _] {:entries [{:kind :review :seq 5}]})]
+        (is (= [item] (stages/prior-standing "/w"))
+            "a quiet run is no answer to an item addressed to a person"))
+      (with-redefs [ws/read-ws (fn [& _] {:entries [{:kind :review :seq 5}
+                                                    {:kind :blocker-answered :seq 7}]})]
+        (is (= [] (stages/prior-standing "/w")) "a person answering after it ends the carry"))))
+  (with-redefs [stages/project+ws-from-cwd (fn [_] nil)]
+    (is (= [] (stages/prior-standing "/w")))))

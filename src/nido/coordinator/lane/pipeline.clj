@@ -948,6 +948,11 @@
    ;; parks a blocker, `fireable` then skips the workstream, and a person
    ;; decides whether the answer is to write the design or to stop driving it.
    :no-design-record     :escalate
+   ;; The same refusal over a design that has already landed: the workstream
+   ;; holds a record, and it is not this diff's. It writes nothing either, and
+   ;; the answer — a design for the new work, or a workstream of its own — is a
+   ;; person's.
+   :design-delivered     :escalate
    :unreadable-ledger    :escalate  ; standing is indeterminate, so nothing may proceed
    ;; A driver never asks for one, so a dry run reaching this table means
    ;; something upstream is misconfigured — which is a human's to see, not a

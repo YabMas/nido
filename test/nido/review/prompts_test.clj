@@ -34,6 +34,20 @@
     (is (str/includes? out "challenges — money math needs an accumulator"))
     (is (not (str/includes? out "Design doc")) "no path-handoff, no glob'd spec")))
 
+(deftest warden-prompt-puts-the-last-runs-standing-to-the-warden
+  ;; The warden's `standing` replaces the carried list, so it has to be shown
+  ;; that list for leaving an item out to be an answer rather than a loss.
+  (let [out (prompts/warden-prompt
+             {:findings findings :history [] :design design
+              :inherited-standing [{:what "the wrong design record was attached"
+                                    :why-no-finding "a person checks the record"}]})]
+    (is (str/includes? out "LEFT STANDING BY THE LAST RUN"))
+    (is (str/includes? out "the wrong design record was attached"))
+    (is (str/includes? out "a person checks the record")))
+  (is (not (str/includes? (prompts/warden-prompt {:findings findings :history [] :design design})
+                          "LEFT STANDING BY THE LAST RUN"))
+      "nothing carried, no block"))
+
 (deftest warden-prompt-carries-rejected-alternatives-as-answered
   (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "round at render time"))

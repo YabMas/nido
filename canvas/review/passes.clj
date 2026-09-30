@@ -365,8 +365,28 @@
      P1. A dissent carries through VERBATIM: an answer outside the vocabulary is a reviewer
      that said something, and normalising it would hide that it was never asked for."
     {:signature [:=> [:catn [:results :any]] [:maybe :string]]})
-  (Operation discover-design-record "This workstream's latest design record."
+  (Operation discover-design-record
+    "This workstream's latest design record, unless it is DELIVERED — a :merged follows it and
+     no phase is left. Then it is absent, and the diff loop refuses as for a workstream holding
+     none: the diff on the branch is other work, and every invariant of the landed record holds
+     vacuously over it."
     {:signature [:=> [:catn [:cwd Path]] [:maybe :map]]})
+  (Operation delivered-design
+    "The latest design record when it is delivered, else nil — what `discover-design-record`
+     declines, named so the refusal can say why a workstream holding a design has no yardstick."
+    {:signature [:=> [:catn [:cwd Path]] [:maybe :map]]})
+  (Operation named-locations
+    "The places in the code a design and its cited baseline name, as path fragments: the files
+     the baseline read, and the file paths and namespaces the design's text mentions. Evidence
+     of what the record is ABOUT, never a bound on what a change may touch."
+    {:signature [:=> [:catn [:design [:maybe :map]] [:baseline [:maybe :map]]] [:set :string]]})
+  (Operation off-yardstick
+    "A standing item saying a design is not the yardstick of a stack, when the design names
+     places in the code and the stack changes none of them — or nil. The verdict pass does not
+     run under one: judged against another story's record, every invariant holds vacuously."
+    {:signature [:=> [:catn [:design [:maybe :map]] [:baseline [:maybe :map]]
+                  [:files [:sequential :string]]] [:maybe :map]]
+     :delegates [named-locations]})
   (Operation discover-baseline
     "The baseline a design CITED, not the newest one. A design committed to a particular
      reading, and judging it against a later baseline checks it against a premise it never made."
@@ -412,6 +432,13 @@
      ever. A PARK is carried until a person answers on the ledger: no quiet run answers a
      question put to one."
     {:signature [:=> [:catn [:cwd Path]] :any]
+     :delegates [last-review]})
+  (Operation prior-standing
+    "What the LAST review of this workstream left standing — open, and handed to nobody. Carried
+     as a park is, because it is addressed to a person and no quiet run answers it: until a
+     person answers on the ledger, or a warden of the next run, shown the list, restates what
+     still holds."
+    {:signature [:=> [:catn [:cwd Path]] [:vector :map]]
      :delegates [last-review]})
   (Operation placed-on
     "The layer a finding NO REVIEWER RAISED is owed of: the layer it names when the stack still

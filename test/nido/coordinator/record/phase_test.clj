@@ -67,3 +67,24 @@
   (is (= :between-phases (phase/landing-outcome plan (rows :design :merged (gate "reads move to the new column")))))
   (is (= :done (phase/landing-outcome plan (rows :design :merged (gate "reads move to the new column")
                                                   :merged (gate "the old column is dropped"))))))
+
+(deftest a-design-is-delivered-once-a-merge-follows-its-last-phase
+  (testing "unphased: any :merged after the design"
+    (is (phase/delivered? {:seq 1} (rows :design :review :merged))
+        "a merged design judging later work is how four unrelated runs got a vacuous :sound")
+    (is (not (phase/delivered? {:seq 3} (rows :design :merged :design)))
+        "a :merged BEFORE the newest design landed the old one; the new design is live")
+    (is (not (phase/delivered? {:seq 1} (rows :design :review)))
+        "unlanded work is judged against its design"))
+  (testing "phased: only the landing of the last phase delivers it"
+    (let [d (assoc plan :seq 1)]
+      (is (not (phase/delivered? d (rows :design :merged)))
+          "phase 2's work still answers to this record")
+      (is (phase/delivered?
+           d (rows :design :merged (gate "reads move to the new column") :merged
+                   (gate "the old column is dropped") :merged)))
+      (is (not (phase/delivered?
+                d (rows :design :merged (gate "reads move to the new column") :merged
+                        (gate "the old column is dropped"))))
+          "the last phase is open and has not landed")))
+  (is (not (phase/delivered? nil (rows :merged)))))
