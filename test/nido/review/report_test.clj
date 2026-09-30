@@ -583,6 +583,62 @@
     (is (= "falsified" (:verdict ph)))
     (is (= 1 (count (:findings ph))))))
 
+(defn- design-judge-phase
+  [record]
+  (let [r (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+              (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+              (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                   :ctx {:record record :findings []}} nil)
+              (report/apply-event {:event :run-finalized :status :asked :ctx {} :at "t3"} nil))]
+    [(first (:rounds r)) (first (:phases (first (:rounds r))))]))
+
+(deftest a-design-judge-phase-keeps-what-the-round-decided
+  (let [[_ ph] (design-judge-phase
+                {:format :design-decision :recommend :proceed :asks "worth it now?"
+                 :confirmed ["c1"]
+                 :checks [{:check :stratified :status :held :note "n"}
+                          {:check :relation-honest :status :underivable :note "n"}]
+                 :judged-by {:reviewer :claude :instead-of :codex}
+                 :code-identity "tree-1"})]
+    (is (= "proceed" (:recommend ph))
+        "a design decision carries no :verdict, and the phase recorded verdict null for every one")
+    (is (= "worth it now?" (:asks ph)))
+    (is (= 0 (:findings-made ph)))
+    (is (= [{:check "stratified" :status "held"} {:check "relation-honest" :status "underivable"}]
+           (:derived ph))
+        "held and underivable checks are what tell a proceed from a round that answered nothing")
+    (is (= ["c1"] (:confirmed ph)))
+    (is (= {:reviewer :claude :instead-of :codex} (:judged-by ph))
+        "a stand-in's decision must not read as the configured reviewer's")
+    (is (= "tree-1" (:code-identity ph)))))
+
+(deftest a-design-round-that-asked-a-person-is-not-clean
+  (let [[round _] (design-judge-phase {:format :design-decision :recommend :ask :asks "scope?"
+                                       :checks [{:check :stratified :status :held :note "n"}]})]
+    (is (not= "clean" (:status round))
+        "it handed an amender nothing because the repair is a person's, not because nothing was wrong"))
+  (let [[round _] (design-judge-phase {:format :design-decision :recommend :proceed :asks ""
+                                       :checks [{:check :stratified :status :held :note "n"}]})]
+    (is (= "clean" (:status round)))))
+
+(deftest a-record-report-names-the-tree-its-judges-read
+  (let [r (report/with-judged-tree (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+                                   "/runs/r/tree" {:rev "abc" :ahead 3})]
+    (is (= "/w" (get-in r [:target :cwd])) "the ledger's worktree is still the run's cwd")
+    (is (= "/runs/r/tree" (get-in r [:target :code-cwd])))
+    (is (= {:rev "abc" :ahead 3} (get-in r [:target :tree]))
+        "the directory is gone after the run; the revision is what says what was judged")))
+
+(deftest a-run-counts-the-readings-its-stand-ins-made
+  (let [by-claude {:reviewer :claude :instead-of :codex}
+        r {:rounds [{:phases [{:phase "review" :layers [{:label "a" :judged-by by-claude}
+                                                         {:label "b" :judged-by {:reviewer :codex}}]}]}
+                    {:phases [{:phase "review" :layers [{:label "a" :judged-by by-claude}]}]}
+                    {:phases [{:phase "judge" :judged-by by-claude}]}]}]
+    (is (= [{:reviewer :claude :instead-of :codex :readings 3}] (report/stood-in r))
+        "a run that completed on a reviewer nobody chose must say so somewhere durable"))
+  (is (= [] (report/stood-in {:rounds [{:phases [{:phase "judge" :judged-by {:reviewer :codex}}]}]}))))
+
 (deftest an-amend-phase-keeps-what-it-gave-up
   (let [r (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
               (report/apply-event {:event :phase-started :iter 1 :phase :amend :at "t1"} nil)

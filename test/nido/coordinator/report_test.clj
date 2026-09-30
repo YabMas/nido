@@ -1728,6 +1728,16 @@
     (is (report/validate-event :design-decision a-decision)
         "and optional — a one-shot round has no trajectory")))
 
+(deftest a-decision-may-say-who-judged-it-and-at-which-revision
+  (is (report/validate-event :design-decision
+                             (assoc a-decision
+                                    :judged-by {:reviewer :claude :instead-of :codex :because "quota"}
+                                    :tree {:rev "abc" :overlay ["canvas"] :ahead :unknown}))
+      "a stand-in's decision can clear a design, so the ledger has to be able to say whose it was")
+  (is (thrown? Exception (report/validate-event :design-decision
+                                                (assoc a-decision :judged-by {:reviewer "claude"})))
+      "closed, like the rest of the entry"))
+
 (deftest the-trajectory-reaches-the-reader-before-the-question
   ;; A weakening discovered after you have answered is discovered too late.
   (let [md (report/report->markdown

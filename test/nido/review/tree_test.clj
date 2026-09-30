@@ -130,3 +130,21 @@
 
 (deftest a-reading-naming-a-directory-is-handed-through
   (is (= "/some/where" (tree/with-reading! "/w" {:dir "/some/where"} "x" "/unused" identity))))
+
+(deftest a-round-stamps-the-revision-it-judges
+  (let [{:keys [root work base]} (repo!)]
+    (try
+      (testing "a produced tree is the fork point, however far the worktree is ahead of it"
+        (is (= {:rev base :overlay ["canvas"] :ahead 1}
+               (tree/stamp {:rev base :overlay ["canvas"] :ahead 1} "/runs/r/tree"))))
+      (testing "a worktree read in place is named by its working-copy commit, not left anonymous"
+        (let [at (:out (jj/jj! work "log" "--no-graph" "-r" "@" "-T" "commit_id"))
+              st (tree/stamp {:dir work} work)]
+          (is (= {:rev (str/trim at)} st))
+          (is (not= base (:rev st)) "the working copy is not the fork point, and a reader must not take it for one")))
+      (finally (fs/delete-tree root))))
+  (let [dir (str (fs/create-temp-dir {:prefix "nido-tree-plain"}))]
+    (try
+      (is (= {:unresolved "no fork point"} (tree/stamp {:dir dir :unresolved "no fork point"} dir))
+          "a tree nothing names a revision for says why, and guesses none")
+      (finally (fs/delete-tree dir)))))

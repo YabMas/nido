@@ -184,7 +184,8 @@
         ;; of one value — `report/stopped-on` — and cannot disagree about what
         ;; the run left behind.
         standing (get-in report [:reason :standing])
-        errored  (report/errored report)]
+        errored  (report/errored report)
+        stood-in (report/stood-in report)]
     (cond-> {:format             :review-report
              :status             (:status final)
              :base               (get-in report [:target :base])
@@ -210,6 +211,10 @@
       ;; the report lives in a run dir that is routinely gone by the time anyone
       ;; reads the workstream, and the reviewer's own log is gone with it.
       (:unavailable final) (assoc :unavailable (:unavailable final))
+      ;; Readings a stand-in made, on a run that completed without the reviewer it chose: durable
+      ;; for the reason :unavailable is, and the only place a run with no independent reviewer
+      ;; says so once the run dir is gone.
+      (seq stood-in)       (assoc :stood-in stood-in)
       errored              (assoc :errored errored)
       ;; Only a run that ended on a conflicted stack has these, and it is the
       ;; run whose status a reader cannot act on without them: the conflict is
@@ -569,6 +574,7 @@
        ;; Where a throw ended the run, which the payload titles as `died in` —
        ;; see `analysis/payload`.
        :errored            (report/errored report)
+       :stood-in           (report/stood-in report)
        :reviewed-project   project
        :reviewed-session   session
        :reviewed-ws-id     ws-id
@@ -1877,8 +1883,15 @@
       :weakened         (count (mapcat :retreats history))
       :disputed         (count (mapcat :disputes history))
       :record-seq       (or (:design-seq rec) (:baseline-seq rec))
+      ;; A claim refuted with no check broken is as broken at the end as a check is, and is the
+      ;; whole defect of a run whose checks all held.
       :still-broken     (when (= :design-decision (:format rec))
-                          (sort (keep #(when (= :broken (:status %)) (:check %)) (:checks rec))))
+                          (concat (sort (keep #(when (= :broken (:status %)) (name (:check %))) (:checks rec)))
+                                  (sort (distinct (keep #(when-not (:check %)
+                                                           (str "claim " (or (not-empty (str (:claim-id %)))
+                                                                             "the record")))
+                                                        (:findings rec))))))
+      :stood-in         (report/stood-in report)
       :asks             (when (= :design-decision (:format rec)) (:asks rec))
       :reviewed-project project
       :reviewed-session session
@@ -1890,7 +1903,7 @@
    command always did."
   [{:keys [cwd code-cwd survey-cwd kind run-id clock title report-path report-atom
            plain emit pipeline finding-key max-iters dry-run? budget baseline
-           remedies epilogue reviewer]}]
+           remedies epilogue reviewer judged-tree]}]
   (let [final  (try
                  (frontend/with-live-frame
                    {:frame-fn #(render/record-frame @report-atom % {:title title})
@@ -1918,8 +1931,9 @@
                                  ;; nothing has shown the same cost there.
                                  :judged-after :judge
                                  :finding-key finding-key}
-                          baseline   (assoc :baseline baseline)
-                          survey-cwd (assoc :survey-cwd survey-cwd))))))
+                          baseline    (assoc :baseline baseline)
+                          survey-cwd  (assoc :survey-cwd survey-cwd)
+                          judged-tree (assoc :judged-tree judged-tree))))))
                  (finally
                    (println (render/record-final @report-atom {:title title}))))
         status (:status final)]
@@ -2040,13 +2054,19 @@
        (tree/with-reading!
         cwd reading run-id (str (fs/path (cstate/run-dir run-id) "tree"))
         (fn [dir]
-          (record-loop-body
-           {:cwd cwd :code-cwd dir :survey-cwd code-cwd :kind kind :run-id run-id
-            :clock clock :title title :report-path report-path
-            :report-atom report-atom :plain plain :emit emit :pipeline pipeline
-            :finding-key finding-key :max-iters max-iters :dry-run? dry-run?
-            :budget budget :reviewer reviewer
-            :baseline baseline :remedies remedies :epilogue epilogue})))))))
+          ;; Which tree the judges read, on the report and on every judgement the run appends:
+          ;; `dir` is often produced for this run and gone after it, and :cwd is the worktree,
+          ;; which is exactly the tree a baseline must not be judged against.
+          (let [judged-tree (tree/stamp reading dir)]
+            (swap! report-atom report/with-judged-tree dir judged-tree)
+            (record-loop-body
+             {:cwd cwd :code-cwd dir :survey-cwd code-cwd :kind kind :run-id run-id
+              :judged-tree judged-tree
+              :clock clock :title title :report-path report-path
+              :report-atom report-atom :plain plain :emit emit :pipeline pipeline
+              :finding-key finding-key :max-iters max-iters :dry-run? dry-run?
+              :budget budget :reviewer reviewer
+              :baseline baseline :remedies remedies :epilogue epilogue}))))))))
 
 (def ^:private baseline-remedies
   "Only :sufficient ends a run. :insufficient is a VERDICT and never a status —
@@ -2182,22 +2202,33 @@
               e)))
 
 (defn- summed
-  "Many runs' figures, per check and per derivation: in how many runs it was broken, in how many
-   rounds, in how many of those alone, and in how many runs it was still broken at the end; and per
-   stratum, its level judges' readings summed."
+  "Many runs' figures, per check, per check-less refuted claim and per derivation: in how many runs
+   it was broken, in how many rounds, in how many of those alone, and in how many runs it was still
+   broken at the end — and for a check, in how many rounds it was derived, held and underivable. Per
+   stratum, its level judges' readings summed; per claim found false, per subject confirmed or left
+   unruled, and per reviewer that answered, the runs' counts summed."
   [figures]
   (letfn [(add [acc tallies]
-            (reduce-kv (fn [a k {:keys [broken alone at-end]}]
+            (reduce-kv (fn [a k {:keys [broken alone at-end] :as t}]
                          (update a k (fn [m]
-                                       (-> (or m {:runs 0 :rounds 0 :alone 0 :at-end 0})
-                                           (update :runs inc)
-                                           (update :rounds + broken)
-                                           (update :alone + alone)
-                                           (update :at-end + (if at-end 1 0))))))
-                       acc tallies))]
+                                       (cond-> (-> (or m {:runs 0 :rounds 0 :alone 0 :at-end 0})
+                                                   (update :runs + (if (pos? broken) 1 0))
+                                                   (update :rounds + broken)
+                                                   (update :alone + alone)
+                                                   (update :at-end + (if at-end 1 0)))
+                                         (:derived t) (update :derived (fnil + 0) (:derived t))
+                                         (:held t) (update :held (fnil + 0) (:held t))
+                                         (:underivable t) (update :underivable (fnil + 0) (:underivable t))))))
+                       acc tallies))
+          (counts [k] (reduce #(merge-with + %1 %2) (sorted-map) (keep k figures)))]
     {:runs        (count figures)
      :checks      (reduce add (sorted-map) (keep :checks figures))
+     :claims      (reduce add (sorted-map) (keep :claims figures))
      :derivations (reduce add (sorted-map) (keep :derivations figures))
+     :falsified   (counts :falsified)
+     :confirmed   (counts :confirmed)
+     :unruled     (counts :unruled)
+     :judged-by   (counts :judged-by)
      :strata      (reduce (fn [acc t] (merge-with #(merge-with + %1 %2) acc t))
                           (sorted-map) (keep :strata figures))}))
 

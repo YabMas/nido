@@ -2102,6 +2102,15 @@
      ;; instant would be nido inventing a precision the source does not carry.
      ;; Absent when nothing said; a credential failure has no reset time.
      [:retry-at {:optional true} string?]]]
+   ;; The readings a stand-in made because the configured reviewer could not be run, per stand-in —
+   ;; beside :unavailable rather than inside it, since that says NO reviewer could run and this is
+   ;; a run that completed on a reviewer nobody chose. Absent when every reading was the
+   ;; configured reviewer's.
+   [:stood-in {:optional true}
+    [:vector [:map {:closed true}
+              [:reviewer   keyword?]
+              [:instead-of keyword?]
+              [:readings   pos-int?]]]]
    ;; The phase whose throw ended the run, and what it said — on every status a
    ;; throw ends a run on, and nowhere else. The message is the whole diagnosis
    ;; — what refused, in its own words, and the remedy nido appended — and
@@ -2378,6 +2387,37 @@
    ;; and confirmed it has found, and only a kept id lets anything read it that way.
    [:claim-id {:optional true} string?]])
 
+(def JudgedBy
+  "Which reviewer answered: `:reviewer`, and — when it stood in for the configured one, which could
+   not be run — `:instead-of` and `:because`, the line that made it stand in. Not an enum: the
+   reviewers are `nido.review.codex`'s table, which this band may not read, and a closed enum
+   refusing a new one would lose the whole judgement over its signature.
+
+   Kept on the judgement because a record's confirmations settle subjects for later rounds whoever
+   made them, and a stand-in judging for a quota-blocked reviewer is not the instrument a reader of
+   the ledger would otherwise assume — on a design run, it can be the amender's own model."
+  [:map {:closed true}
+   [:reviewer   keyword?]
+   [:instead-of {:optional true} keyword?]
+   [:because    {:optional true} string?]])
+
+(def JudgedTree
+  "The revision a judge read, as the round chose it. `:rev` is the commit: the worktree's fork point
+   with main when `:ahead` is present — that many paths of the worktree differ from it, or
+   `:unknown` — with the worktree's spec dirs laid over it when `:overlay` names them; otherwise the
+   working-copy commit of the tree the round was pointed at, uncommitted edits and all. Absent when
+   no revision could be read, and `:unresolved` says why the fork point could not be, when that is
+   why the worktree was read in its place.
+
+   Beside `:code-identity`, not instead of it: the identity pins the content and is present only
+   when the tree held still, while this names WHICH tree, so a reader can tell a confirmation made
+   at the base from one made at the tip without the judge's transcript."
+  [:map {:closed true}
+   [:rev        {:optional true} string?]
+   [:overlay    {:optional true} [:vector string?]]
+   [:ahead      {:optional true} [:or int? [:= :unknown]]]
+   [:unresolved {:optional true} string?]])
+
 (def Ruling
   "What a judge said about the subjects it was asked to check, beyond the findings — on a baseline
    review and a design decision alike, and optional on both because a judgement from before rulings
@@ -2438,7 +2478,11 @@
                 ;; (`nido.review.record/run-figures`); a review appended before they existed
                 ;; names neither.
                 [:run-id     {:optional true} string?]
-                [:within-run {:optional true} string?]]
+                [:within-run {:optional true} string?]
+                ;; Who answered and which revision it read; a review appended before either was
+                ;; kept names neither.
+                [:judged-by  {:optional true} JudgedBy]
+                [:tree       {:optional true} JudgedTree]]
         common (into common Ruling)
         shape  (fn [verdict & extra]
                  (into [:map {:closed true}]
@@ -2607,7 +2651,10 @@
                 [:run-id             {:optional true} string?]
                 ;; What each declared stratum the design names concluded, read by a judge of its own
                 ;; before the deciding one — present when the design named any.
-                [:strata-read        {:optional true} [:vector StratumReading]]]
+                [:strata-read        {:optional true} [:vector StratumReading]]
+                ;; As on a baseline review.
+                [:judged-by          {:optional true} JudgedBy]
+                [:tree               {:optional true} JudgedTree]]
         common (into common Ruling)
         shape  (fn [recommend & extra]
                  (into [:map {:closed true}]

@@ -478,12 +478,13 @@
          ")")))
 
 (defn- judge-detail
-  "A verdict, or — when there is none — why there is none.
+  "A verdict — a design round's recommendation, which is what it decided — or, when there is none,
+   why there is none; and who answered, when a stand-in did.
 
    Never blank. A ✓ with nothing after it reads as `judged, found nothing`, and
    that is the one reading a round which could not run must never invite."
   [ph]
-  (if-let [v (:verdict ph)]
+  (if-let [v (or (:verdict ph) (:recommend ph))]
     (let [n (count (:findings ph))
           u (count (:unruled ph))
           r (count (:read-once ph))]
@@ -491,9 +492,10 @@
                (str " · " n " finding" (when (not= 1 n) "s")))
            (when (pos? u) (str " · " u " unruled"))
            (when (pos? r) (str " · " r " read once"))
-           (settled-detail (:settled ph))))
+           (settled-detail (:settled ph))
+           (stand-in-text (:judged-by ph))))
     (when-let [o (:outcome ph)]
-      (str o " — no judgment" (settled-detail (:settled ph))))))
+      (str o " — no judgment" (settled-detail (:settled ph)) (stand-in-text (:judged-by ph))))))
 
 (defn- amend-detail
   "What the round did, in the order it did it.

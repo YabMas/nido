@@ -389,8 +389,17 @@
     (is (= "design-loop cleared · record-round-analysis · 2 rounds · stratified still broken" (:title p)))
     (is (str/includes? (:headline p) "2 rounds, 2 judged · 1 amended · 3 weakenings · 0 disputed"))
     (is (str/includes? (:headline p) "Record: the design at entry 14 · broken at the end: stratified"))
-    (is (str/includes? (:headline p) "bb nido:review:figures :run-id design-loop-1"))
+    (is (str/includes? (:headline p) "bb nido:review:figures :project nido :run-id design-loop-1")
+        "without :project the command answers that no ledger names the run, for any project but nido")
     (is (not (contains? p :fix-attempts)) "a record run dispatches no repairs to count")))
+
+(deftest a-record-run-judged-by-a-stand-in-says-so
+  (let [p (analysis/payload (assoc a-design-run
+                                   :stood-in [{:reviewer :claude :instead-of :codex :readings 2}]))]
+    (is (str/includes? (:headline p) "Stood in: claude for codex on 2 readings")
+        "the amender's own model judging its amendments must not read like an independent judge")
+    (is (= [{:reviewer :claude :instead-of :codex :readings 2}] (:stood-in p))))
+  (is (not (str/includes? (:headline (analysis/payload a-design-run)) "Stood in"))))
 
 (deftest a-record-run-that-ended-on-a-refused-amendment-says-where-it-is
   ;; `0 amended` read the same for an amender that did nothing and one whose

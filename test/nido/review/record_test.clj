@@ -4,11 +4,14 @@
    look like to be recorded. The codex call itself is a seam and is not exercised
    here."
   (:require
+   [babashka.fs :as fs]
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
+   [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.report :as report]
+   [nido.review.codex :as codex]
    [nido.review.record :as record]
    [nido.review.stages :as stages]))
 
@@ -719,3 +722,47 @@
       (is (nil? (:asked (ledger [{:seq 19 :design {:seq 16} :at-seq 18}]
                                 [{:seq 18 :asks "worth it?"}])))))
     (is (= {} (ledger [] [])) "nothing granted and nothing asked")))
+
+;; ── Who judged, and at which revision ───────────────────────────────────────
+
+(def ^:private stand-in {:reviewer :claude :instead-of :codex :because "You've hit your usage limit"})
+
+(deftest a-round-a-stand-in-answered-says-so
+  (let [dir (str (fs/create-temp-dir))]
+    (try
+      (with-redefs [cstate/run-dir       (constantly dir)
+                    codex/run-reviewer!  (fn [{:keys [out-path]}]
+                                           (spit out-path "{}")
+                                           {:exit 0 :log-path "l" :judged-by stand-in})]
+        (is (= stand-in (:judged-by (#'record/run-round! {:run-id "r" :kind :baseline-review
+                                                          :prompt "p"})))
+            "a successful round dropped who answered, so every stand-in's verdict read as codex's"))
+      (finally (fs/delete-tree dir)))))
+
+(deftest a-judgement-keeps-who-made-it
+  (let [json (baseline-json {:verdict "sufficient" :reason "r" :confirmed [] :findings []})
+        r    (#'record/judged {:ok json :judged-by stand-in} #(record/parse-baseline-review % 3))]
+    (is (= stand-in (:judged-by r))
+        "a stand-in's confirmations settle subjects for later rounds exactly as codex's would")
+    (is (= r (report/validate-event :baseline-review r))
+        "the ledger refuses a judgement whole, so what is kept must be what it admits"))
+  (is (= {:reviewer :claude}
+         (:judged-by (#'record/judged {:ok (baseline-json {:verdict "sufficient" :reason "r"
+                                                          :confirmed [] :findings []})
+                                       :judged-by {:reviewer :claude :because nil}}
+                                      #(record/parse-baseline-review % 3))))
+      "a field the schema would refuse is left out rather than losing the entry")
+  (is (nil? (:judged-by (#'record/judged {:ok (json/generate-string {:verdict "fits" :reason "r"
+                                                                    :cites []})
+                                         :judged-by stand-in}
+                                        #(record/parse-stratum-reading % "s"))))
+      "a level reading is evidence inside a decision, not a judgement the ledger holds alone"))
+
+(deftest a-judgement-names-the-revision-its-judge-read
+  (let [r (#'record/stamp-run {:format :baseline-review :baseline-seq 3 :reason "r" :verdict :sufficient}
+                              {:run-id "baseline-loop-1" :judged-tree {:rev "abc123" :ahead 2}})]
+    (is (= {:rev "abc123" :ahead 2} (:tree r))
+        "a confirmation made at the base and one made at the tip must be told apart without a transcript")
+    (is (= r (report/validate-event :baseline-review r))))
+  (is (not (contains? (#'record/stamp-run {:outcome :codex-failed} {:judged-tree {:rev "a"}}) :tree))
+      "an outcome is not a judgement and names no tree"))

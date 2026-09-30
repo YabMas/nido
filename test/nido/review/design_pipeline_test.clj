@@ -1214,11 +1214,45 @@
             (d (check :stratified :broken))]
         f  (record/run-figures es)]
     (is (= 3 (:decisions f)))
-    (is (= {:broken 2 :alone 1 :at-end true} (get-in f [:checks :stratified])))
-    (is (= {:broken 1 :alone 1 :at-end false} (get-in f [:checks :decomposable]))
+    (is (= {:derived 2 :held 0 :underivable 0 :broken 2 :alone 1 :at-end true}
+           (get-in f [:checks :stratified])))
+    (is (= {:derived 1 :held 0 :underivable 0 :broken 1 :alone 1 :at-end false}
+           (get-in f [:checks :decomposable]))
         "a check a proceeding round broke is counted")
-    (is (= {:broken 1 :alone 0 :at-end false} (get-in f [:checks :relation-honest])))
-    (is (not (contains? (:checks f) :goal-served)) "a check never broken has no figures")))
+    (is (= {:derived 1 :held 0 :underivable 0 :broken 1 :alone 0 :at-end false}
+           (get-in f [:checks :relation-honest])))
+    (is (= {:derived 1 :held 1 :underivable 0 :broken 0 :alone 0 :at-end false}
+           (get-in f [:checks :goal-served]))
+        "a check that only ever held still has a row, or a clean run prints what a run that derived nothing prints")))
+
+(deftest a-clean-runs-figures-say-what-it-answered
+  (let [d (fn [& checks] {:format :design-decision :checks (vec checks)})
+        f (record/run-figures [(d (check :stratified :held) (check :relation-honest :underivable))])]
+    (is (seq (:checks f)) "four held checks and none derived must not print the same empty map")
+    (is (= 1 (get-in f [:checks :stratified :held])))
+    (is (= 1 (get-in f [:checks :relation-honest :underivable]))
+        "an underivable check is the status most worth watching across runs")))
+
+(deftest a-claim-refuted-with-no-check-broken-is-counted
+  (let [d (fn [findings & checks] {:format :design-decision :checks (vec checks) :findings findings})
+        f (record/run-figures [(d [{:check :stratified :claim-id "c1"} {:claim-id "c2"}]
+                                  (check :stratified :broken))
+                               (d [{:claim-id "c2"}] (check :stratified :held))])]
+    (is (= {"c2" {:broken 2 :alone 1 :at-end true}} (:claims f))
+        "a run whose only defect was a check-less refutation read as a clean one")
+    (is (= 0 (get-in f [:checks :stratified :alone]))
+        "a check is not the only defect of a round that also refuted a claim")))
+
+(deftest a-runs-figures-count-confirmations-and-who-judged
+  (let [f (record/run-figures [{:format :baseline-review :verdict :sufficient :confirmed ["c1" "c2"]
+                                :judged-by {:reviewer :claude :instead-of :codex}}
+                               {:format :baseline-review :verdict :sufficient :confirmed ["c1"]
+                                :judged-by {:reviewer :codex}}
+                               {:format :baseline-review :verdict :sufficient}])]
+    (is (= {"c1" 2 "c2" 1} (:confirmed f))
+        "a clean baseline run says which subjects were checked, not only that it ended")
+    (is (= {"claude for codex" 1 "codex" 1} (:judged-by f))
+        "a comparison across runs has to be able to hold the instrument fixed")))
 
 (deftest a-baseline-runs-figures-count-gaps-and-falsified-claims
   (let [es [{:format :baseline-review :verdict :insufficient
@@ -1230,6 +1264,16 @@
     (is (= 3 (:reviews f)))
     (is (= {:broken 1 :alone 1 :at-end false} (get-in f [:derivations :relation-honest])))
     (is (= {"one-gate" 1} (:falsified f)))))
+
+(deftest a-gap-is-counted-under-the-derivation-it-blocks-whatever-the-verdict
+  (let [f (record/run-figures
+           [{:format :baseline-review :verdict :falsified
+             :findings [{:blocks :relation-honest :cites ["a"] :claim "c" :needs "n" :claim-id "shape"}
+                        {:blocks :goal-served :cites ["a"] :claim "c" :needs "n" :claim-id "shape"}
+                        {:cites ["a"] :claim "c" :claim-id "one-gate"}]}])]
+    (is (= #{:relation-honest :goal-served} (set (keys (:derivations f))))
+        "two gaps blocking different derivations are two derivations, not one claim")
+    (is (= {"one-gate" 1} (:falsified f)) "only a finding blocking no derivation is a falsified claim")))
 
 (deftest a-run-that-launched-no-judge-counts-none
   (let [round (fn [outcome] {:phases [{:phase :judge :outcome outcome} {:phase :amend}]})]

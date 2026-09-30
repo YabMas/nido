@@ -1248,8 +1248,8 @@
 (defn- run-round!
   "One read-only reviewer pass over a record — `:reviewer`, or codex, with
    codex's stand-in when codex has run out of quota (`codex/run-reviewer!`).
-   Returns {:ok <json-string>} or {:outcome <kw> :detail <str>} — never nil, and
-   never throws.
+   Returns {:ok <json-string> :judged-by <map>} or {:outcome <kw> :detail <str>} — never nil,
+   and never throws. :judged-by is `codex/run-reviewer!`'s, naming a stand-in when one answered.
 
    The outcome is tagged rather than collapsed because a judgment surface cannot
    afford one confusion above all others: a round that never ran must not read
@@ -1283,19 +1283,30 @@
                                        :detail (str who " exited " exit " — see " ran-log)}
           (not (fs/exists? out-path)) {:outcome :no-output
                                        :detail (str who " wrote no answer to " out-path)}
-          :else                       {:ok (slurp out-path)})))
+          :else                       (cond-> {:ok (slurp out-path)}
+                                        judged-by (assoc :judged-by judged-by)))))
     (catch Throwable t
       {:outcome :round-crashed :detail (or (ex-message t) (str (class t)))})))
 
 (defn- judged
   "Apply `parse` to a round result, keeping the outcome tagged the whole way.
    An answer that will not parse is its own outcome — the judge spoke and was
-   unusable, which is a different fact from the judge never speaking."
+   unusable, which is a different fact from the judge never speaking.
+
+   A judgement — a parse carrying :format — keeps who answered as :judged-by, so a stand-in's
+   ruling is appended and reported as the stand-in's."
   [result parse]
   (if-let [json (:ok result)]
-    (or (parse json)
-        {:outcome :unusable-answer
-         :detail "the answer did not satisfy what a round must return"})
+    (if-let [parsed (parse json)]
+      (let [{:keys [reviewer instead-of because]} (:judged-by result)]
+        ;; Only the shape the ledger's closed schema admits: an append it refuses is lost whole.
+        (cond-> parsed
+          (and (:format parsed) (keyword? reviewer))
+          (assoc :judged-by (cond-> {:reviewer reviewer}
+                              (keyword? instead-of) (assoc :instead-of instead-of)
+                              (string? because)     (assoc :because because)))))
+      {:outcome :unusable-answer
+       :detail "the answer did not satisfy what a round must return"})
     result))
 
 (defn ^{:malli/schema [:=> [:cat :map :DeclaredElements] [:vector :string]]}
@@ -2533,12 +2544,14 @@
       record))
 
 (defn- stamp-run
-  "`record` naming the run that appended it, and — for a re-survey — the design run it is nested in.
-   An outcome is not a record and is left alone."
-  [record {:keys [run-id within-run]}]
+  "`record` naming the run that appended it, the revision its judge read (`:judged-tree`,
+   `nido.review.tree/stamp`), and — for a re-survey — the design run it is nested in. An outcome
+   is not a record and is left alone."
+  [record {:keys [run-id within-run judged-tree]}]
   (cond-> record
-    (and (:format record) run-id)     (assoc :run-id (str run-id))
-    (and (:format record) within-run) (assoc :within-run (str within-run))))
+    (and (:format record) run-id)            (assoc :run-id (str run-id))
+    (and (:format record) within-run)        (assoc :within-run (str within-run))
+    (and (:format record) (seq judged-tree)) (assoc :tree judged-tree)))
 
 (defn- banking
   "What the report says about whether a round's confirmations can settle anything: how many subjects
@@ -2970,43 +2983,101 @@
                 :alone  (count (filter #(= #{k} %) rounds))
                 :at-end (contains? end k)}]))))
 
-(defn- broken-check-names
-  "The checks a design decision marks broken, in either era's shape — :status on a current one,
-   :held? false on one from before the third outcome existed."
+(defn- check-statuses
+  "Each check a design decision derived, by name, with its status in either era's shape — :status on
+   a current one, :held? on one from before the third outcome existed."
   [decision]
-  (into #{} (keep (fn [{:keys [check status held?]}]
-                    (when (or (= :broken status) (false? held?)) check)))
+  (into {} (map (fn [{:keys [check status held?]}]
+                  [check (cond status        status
+                               (false? held?) :broken
+                               :else          :held)]))
         (:checks decision)))
+
+(defn- refuted-claims
+  "The claims a design decision found against with no check broken — a record contradicting itself
+   or a claim it rests on, a defect under none of the four derivations — by claim id, or \"the
+   record\" for one naming none. Its only handle, as in `design-finding-label`."
+  [decision]
+  (into #{} (keep (fn [{:keys [check claim-id]}]
+                    (when (str/blank? (some-> check name))
+                      (or (not-empty (str claim-id)) "the record"))))
+        (:findings decision)))
+
+(defn- judge-name
+  "Who answered a judgement, as the figures count it — the stand-in named with whom it stood in for.
+   nil for a judgement appended before who answered was kept."
+  [{:keys [reviewer instead-of]}]
+  (when reviewer
+    (str (name reviewer) (when instead-of (str " for " (name instead-of))))))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :map]] :map]}
   run-figures
   "What one record run's rounds did, from the entries it appended, in the ledger's order: its design
-   decisions give each derived check's figures, and its baseline reviews — a baseline run's own, or a
-   design run's re-survey — give each derivation's gaps and the claims found false.
+   decisions give each derived check's figures and each claim refuted with no check broken, and its
+   baseline reviews — a baseline run's own, or a design run's re-survey — give each derivation's gaps
+   and the claims found false.
 
-     {:decisions n :checks      {check {:broken n :alone n :at-end bool}}
+     {:decisions n :checks      {check {:derived n :held n :broken n :underivable n
+                                        :alone n :at-end bool}}
+                   :claims      {claim-id {:broken n :alone n :at-end bool}}
                    :strata      {stratum {:read n :fits n :widens n :misplaced n :not-a-level n :failed n}}
       :reviews   n :derivations {derivation {:broken n :alone n :at-end bool}}
                    :falsified   {claim-id n}
+      :confirmed {id n}
+      :judged-by {reviewer n}
       :unruled   {id n}}
 
-   :unruled counts, per subject, the judgements of either kind that were handed it as a check and
-   left it without a ruling — present only when one did.
+   Every check a decision derived has a row, so a run whose checks all held says what it answered
+   rather than printing an empty map. :alone and :at-end are over every defect a decision found — a
+   broken check or a check-less refutation — so a check is never `alone` in a round that also
+   refuted a claim. A gap is counted under the derivation it :blocks, whatever the review's verdict
+   and whatever claim it cites; :falsified counts the findings of a falsified review that block none.
+
+   :confirmed counts, per subject, the judgements of either kind that confirmed it. :judged-by counts
+   judgements per reviewer that answered, a stand-in as `claude for codex`, so a comparison across
+   runs can hold the instrument fixed; a judgement from before that was kept counts in neither.
+   :unruled counts, per subject, the judgements handed it as a check that left it without a ruling.
+   Each of these three is present only when non-empty.
 
    Read from the decisions rather than the run's report, because a decision holds every check's
-   status — a check a proceeding round broke included, which the report drops — and it outlives the
-   run dir. Derived on every read; nothing stores it."
+   status and it outlives the run dir. Derived on every read; nothing stores it."
   [entries]
   (let [decisions (filterv #(= :design-decision (:format %)) entries)
         reviews   (filterv #(= :baseline-review (:format %)) entries)
-        unruled   (frequencies (mapcat :unruled (concat decisions reviews)))]
+        judgements (concat decisions reviews)
+        unruled   (frequencies (mapcat :unruled judgements))
+        confirmed (frequencies (mapcat :confirmed judgements))
+        judges    (frequencies (keep (comp judge-name :judged-by) judgements))
+        statuses  (mapv check-statuses decisions)
+        ;; One round's defects, each tagged by the tally it belongs to: a check keyword and a claim id
+        ;; do not compare, and `alone` has to see both.
+        defects   (mapv (fn [st d]
+                          (into (into #{} (keep (fn [[c v]] (when (= :broken v) [:check c]))) st)
+                                (map (fn [id] [:claim id]))
+                                (refuted-claims d)))
+                        statuses decisions)
+        defect-tally (tally defects)
+        of-kind   (fn [kind] (into (sorted-map)
+                                   (keep (fn [[[k v] figures]] (when (= kind k) [v figures])))
+                                   defect-tally))
+        derived   (fn [c status] (count (filter #(= status (get % c)) statuses)))]
     (cond-> {}
-      (seq unruled)
-      (assoc :unruled (into (sorted-map) unruled))
+      (seq unruled)   (assoc :unruled (into (sorted-map) unruled))
+      (seq confirmed) (assoc :confirmed (into (sorted-map) confirmed))
+      (seq judges)    (assoc :judged-by (into (sorted-map) judges))
 
       (seq decisions)
       (assoc :decisions (count decisions)
-             :checks    (tally (mapv broken-check-names decisions)))
+             :checks    (let [broken (of-kind :check)]
+                          (into (sorted-map)
+                                (for [c (into (sorted-set) (mapcat keys) statuses)]
+                                  [c (merge {:derived     (count (filter #(contains? % c) statuses))
+                                             :held        (derived c :held)
+                                             :underivable (derived c :underivable)}
+                                            (get broken c {:broken 0 :alone 0 :at-end false}))]))))
+
+      (some seq (map refuted-claims decisions))
+      (assoc :claims (of-kind :claim))
 
       (some :strata-read decisions)
       (assoc :strata (reduce (fn [acc {:keys [stratum verdict]}]
@@ -3018,14 +3089,11 @@
                              (mapcat :strata-read decisions)))
       (seq reviews)
       (assoc :reviews     (count reviews)
-             :derivations (tally (mapv (fn [r] (if (= :insufficient (:verdict r))
-                                                 (into #{} (keep :blocks) (:findings r))
-                                                 #{}))
-                                       reviews))
+             :derivations (tally (mapv #(into #{} (keep :blocks) (:findings %)) reviews))
              :falsified   (into (sorted-map)
                                 (frequencies
                                  (for [r reviews :when (= :falsified (:verdict r))
-                                       f (:findings r) :when (:claim-id f)]
+                                       f (:findings r) :when (and (:claim-id f) (nil? (:blocks f)))]
                                    (:claim-id f))))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
@@ -3345,9 +3413,11 @@
         ;; Not the design round's tree: that one carries the design's declaration,
         ;; which a baseline describing the area before the change must not be
         ;; judged against. A tree the caller named is read as given.
+        reading (if survey-cwd {:dir survey-cwd} (tree/reading :baseline project cwd))
         survey (fn [dir]
                  (rloop/run-loop {:cwd cwd
                                   :code-cwd dir
+                                  :judged-tree (tree/stamp reading dir)
                                   :run-id nested-id
                                   ;; Named, not left in the id's suffix: its reviews are read as this
                                   ;; run's by this field, never by parsing the id they were given.
@@ -3361,7 +3431,7 @@
                                   :finding-key baseline-finding-key}))
         out (if survey-cwd
               (survey survey-cwd)
-              (tree/with-reading! cwd (tree/reading :baseline project cwd) nested-id
+              (tree/with-reading! cwd reading nested-id
                                   (str (fs/path (cstate/run-dir nested-id) "tree")) survey))]
         (if (= :sufficient (:status out))
           ;; No history entry here. The re-survey is only HALF the repair — the

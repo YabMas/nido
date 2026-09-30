@@ -302,6 +302,18 @@
         "the enum is closed and a refused append is swallowed to stderr, so an
          entry this schema will not take is an entry that silently never exists")))
 
+(deftest the-ledger-entry-says-which-readings-a-stand-in-made
+  (let [by-claude {:reviewer :claude :instead-of :codex :because "usage limit"}
+        ev (t/review-event {:status :clean :history [] :findings []}
+                           {:target {:base "main" :base-rev nil}
+                            :rounds [{:phases [{:phase "review"
+                                                :layers [{:label "a" :status "reviewed" :judged-by by-claude}
+                                                         {:label "b" :status "reviewed" :judged-by by-claude}]}]}]}
+                           "/runs/r/report.json")]
+    (is (= [{:reviewer :claude :instead-of :codex :readings 2}] (:stood-in ev))
+        ":unavailable fires only when no reviewer ran, so a run the stand-in read whole recorded nothing")
+    (is (nil? (m/explain report/ReviewReport ev)))))
+
 (deftest review-event-carries-the-open-findings-not-only-a-count
   ;; The handover. A run that ends holding a park is the loop asking a human for
   ;; a decision, and until now it recorded that request as the integer 1 — with
@@ -2160,7 +2172,29 @@
         (is (= {:broken 1 :alone 1 :at-end true} (get-in one [:derivations :stratified]))))
       (let [all (read-string (with-out-str (t/figures-cmd* {:project "nido"})))]
         (is (= 2 (:runs all)) "a review naming no run is attributed to none")
-        (is (= {:runs 1 :rounds 1 :alone 1 :at-end 1} (get-in all [:checks :goal-served])))))))
+        (is (= {:runs 1 :rounds 1 :alone 1 :at-end 1 :derived 1 :held 0 :underivable 0}
+               (get-in all [:checks :goal-served])))))))
+
+(deftest a-check-that-only-held-sums-to-no-broken-run
+  (let [entries {:design-decision [{:format :design-decision :run-id "d1" :seq 3
+                                    :checks [{:check :stratified :status :held :note "n"}]
+                                    :findings [{:claim-id "c1"}]
+                                    :judged-by {:reviewer :claude :instead-of :codex}}
+                                   {:format :design-decision :run-id "d2" :seq 9
+                                    :checks [{:check :stratified :status :held :note "n"}]
+                                    :findings [{:claim-id "c1"}]}]
+                 :baseline-review [{:format :baseline-review :run-id "b1" :verdict :falsified :seq 4
+                                    :findings [{:cites ["a"] :claim "c" :claim-id "one-gate"}]}]}]
+    (with-redefs [ws/list-ids    (constantly ["ws-1"])
+                  ws/entries-of  (fn [_ _ kind] (get entries kind))]
+      (let [all (read-string (with-out-str (t/figures-cmd* {:project "nido"})))]
+        (is (= {:runs 0 :rounds 0 :alone 0 :at-end 0 :derived 2 :held 2 :underivable 0}
+               (get-in all [:checks :stratified]))
+            ":runs counts runs a check was broken in; a held check says so under :held")
+        (is (= {:runs 2 :rounds 2 :alone 2 :at-end 2} (get-in all [:claims "c1"]))
+            "a claim refuted with no check broken is visible in the project-wide view")
+        (is (= {"one-gate" 1} (:falsified all)) "a refuted baseline claim was dropped from the roll-up")
+        (is (= {"claude for codex" 1} (:judged-by all)))))))
 
 (deftest the-level-judges-readings-sum-across-runs
   (let [entries {:design-decision [{:format :design-decision :run-id "d1" :seq 3 :checks []

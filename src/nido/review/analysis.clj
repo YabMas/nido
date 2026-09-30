@@ -175,11 +175,22 @@
    zero, and the two are opposite instructions to whoever reads the board."
   #{"orphaned" "interrupted"})
 
+(defn- stood-in-line
+  "What a run's stand-ins judged, as a headline line — `report/stood-in`'s rows — or nil when every
+   reading was the configured reviewer's. A run with no independent reviewer must not read like one
+   that had it."
+  [stood-in]
+  (when (seq stood-in)
+    (str "Stood in: "
+         (str/join ", " (for [{:keys [reviewer instead-of readings]} stood-in]
+                          (str (name reviewer) " for " (name instead-of) " on " readings
+                               " reading" (when (not= 1 readings) "s")))))))
+
 (defn- diff-payload
   [{:keys [run-id report-path status rounds fix-attempts defects-settled
            findings-remaining findings-kept remaining-handed remaining-parked
            targets-reviewed targets-skipped unfixable parked standing
-           drift unavailable base in-flight errored design-verdict verdict-implementation
+           drift unavailable stood-in base in-flight errored design-verdict verdict-implementation
            design-carried-from review-entry reviewed-project reviewed-session reviewed-ws-id] :as run}]
   ;; `:in-flight` is the reconciler's reading of an orphan's report and is the
   ;; same value `worth-analysing?` gates on; the phase is the half of it that
@@ -241,6 +252,7 @@
                                                     " — not read again"))))
                                       (when unavailable
                                         (str "\nReviewer unavailable: " (:message unavailable)))
+                                      (some->> (stood-in-line stood-in) (str "\n"))
                                       (when (= "superseded" ledger)
                                         (str "\nNot recorded: settled after a later run on "
                                              (or reviewed-ws-id "this workstream")
@@ -259,6 +271,7 @@
       (seq standing)   (assoc :standing (vec standing))
       drift            (assoc :drift drift)
       unavailable      (assoc :unavailable unavailable)
+      (seq stood-in)   (assoc :stood-in (vec stood-in))
       review-entry     (assoc :review-entry review-entry)
       base             (assoc :base base)
       died-in          (assoc :died-in died-in)
@@ -275,7 +288,7 @@
    checks were still broken when it ended and what its last decision asked of a person; the figures
    per check are the ledger's, read by `bb nido:review:figures`, never carried here."
   [{:keys [loop run-id report-path status rounds judged amended unappended weakened disputed
-           record-seq still-broken asks reviewed-project reviewed-session reviewed-ws-id] :as run}]
+           record-seq still-broken asks stood-in reviewed-project reviewed-session reviewed-ws-id] :as run}]
   (let [kind   (name loop)
         broken (seq (map name still-broken))]
     (cond-> {:adapter     :review-run
@@ -297,12 +310,16 @@
                                (when unappended (str "Refused amendment, not appended: " unappended "\n"))
                                "Record: the " kind (when record-seq (str " at entry " record-seq))
                                (when broken (str " · broken at the end: " (str/join ", " broken)))
-                               " · figures: bb nido:review:figures :run-id " run-id "\n"
+                               " · figures: bb nido:review:figures"
+                               (when reviewed-project (str " :project " (name reviewed-project)))
+                               " :run-id " run-id "\n"
                                ;; A cleared run stops nobody, so this line is the only place its
                                ;; question surfaces outside the ledger.
                                (when-not (str/blank? (str asks)) (str "Asked of a person: " asks "\n"))
+                               (some-> (stood-in-line stood-in) (str "\n"))
                                (reviewed-line run (when reviewed-ws-id (str " (workstream " reviewed-ws-id ")"))))}
       record-seq       (assoc :record-seq record-seq)
+      (seq stood-in)   (assoc :stood-in (vec stood-in))
       reviewed-project (assoc :reviewed-project (name reviewed-project))
       reviewed-session (assoc :reviewed-session reviewed-session)
       reviewed-ws-id   (assoc :reviewed-ws-id reviewed-ws-id))))

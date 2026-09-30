@@ -117,6 +117,12 @@
   {:child [ReviewReport]}
   (Operation init "A fresh report for a run about to start."
     {:signature [:=> [:catn [:opts :map]] ReviewReport]})
+  (Operation with-judged-tree
+    "The report naming the tree a record run's judges read — the directory, and the revision it
+     holds — beside the worktree whose ledger the run amends, which is not that tree whenever the
+     change is in it. The directory is often gone after the run; the revision is what remains."
+    {:signature [:=> [:catn [:report ReviewReport] [:code-cwd Path] [:tree [:maybe :map]]]
+                 ReviewReport]})
   (Operation in-stack-order "Rows in the order the stack has them, bottom first."
     {:signature [:=> [:catn [:rows :any]] :any]})
   (Operation review-layers "One entry per review target."
@@ -149,6 +155,14 @@
      Over the report for the same reason `applied-reshapes` is: a skip is decided per round
      and the question is about the run."
     {:signature [:=> [:catn [:report ReviewReport]] :map]})
+  (Operation stood-in
+    "How many of the run's readings a stand-in made because the configured reviewer could not be
+     run, per stand-in — a diff run's review rows and a record run's judge phases alike.
+
+     Public because the run dir is reclaimed and the stand-in is recorded nowhere else: the
+     `:review` entry and the analysis payload carry it, beside the unavailability that says no
+     reviewer ran at all."
+    {:signature [:=> [:catn [:report ReviewReport]] [:vector :map]]})
   (Operation in-flight
     "The round, and the phase within it, a report was still in when it was last written — nil
      for one whose run closed its own rounds.

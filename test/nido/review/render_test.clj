@@ -392,6 +392,15 @@
   (let [s (render/record-frame record-report now-10s {:title "t"})]
     (is (re-find #"✓ judge\s+falsified · 2 findings" s))))
 
+(deftest a-design-judge-shows-what-it-decided-and-who-decided-it
+  (let [r (assoc-in record-report [:rounds 0 :phases 0]
+                    {:phase "judge" :status "ok" :started-at "2026-01-01T00:00:00Z"
+                     :ended-at "2026-01-01T00:00:04Z" :recommend "proceed" :findings []
+                     :judged-by {:reviewer :claude :instead-of :codex}})
+        s (render/record-frame r now-10s {:title "t"})]
+    (is (re-find #"✓ judge\s+proceed · by claude, codex unavailable" s)
+        "a bare ✓ reads as judged-and-found-nothing, and the stand-in is not the reviewer the run chose")))
+
 (deftest an-amendment-says-where-it-gave-something-up
   (let [r (assoc-in record-report [:rounds 0 :phases 1]
                     {:phase "amend" :status "ok" :started-at "2026-01-01T00:00:04Z"

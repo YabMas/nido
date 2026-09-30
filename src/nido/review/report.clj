@@ -41,6 +41,17 @@
    ;; nil at the end of one whose status is the whole story. See `stopped-on`.
    :reason     nil})
 
+(defn ^{:malli/schema [:=> [:cat :ReviewReport :Path [:maybe :map]] :ReviewReport]}
+  with-judged-tree
+  "`report` naming the tree a record run's judges read: `:code-cwd`, the directory — often one
+   produced for the run and removed after it, so it identifies nothing once the run is over — and
+   `:tree`, the revision it holds as `nido.coordinator.report/JudgedTree` names it, which outlives
+   the directory. `:cwd` stays the worktree whose ledger the run reads and amends, which is not
+   the tree judged whenever the change is in it."
+  [report code-cwd tree]
+  (cond-> (assoc-in report [:target :code-cwd] code-cwd)
+    (seq tree) (assoc-in [:target :tree] tree)))
+
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
   stopped-on
   "What the run stopped ON, read off its terminal ctx — as against `:status`,
@@ -168,7 +179,10 @@
       (and judge (:outcome judge) (nil? (:verdict judge)))         "unjudged"
       ;; A record round, whose two stages tell the same story the review's three
       ;; do: nothing left to say, something given up, or another round earned.
-      (and judge (= "ok" (:status judge)) (empty? (:findings judge))) "clean"
+      ;; A design round is clean only when it proceeds: one that asked a person, or found a check
+      ;; it could not derive, hands an amender no findings and is not clean for it.
+      (and judge (= "ok" (:status judge)) (empty? (:findings judge))
+           (contains? #{nil "proceed"} (:recommend judge)))        "clean"
       (and amend (:unappended amend))                              "amend-refused"
       (and amend (seq (:retreats amend)))                          "weakened"
       (and judge amend)                                            "continued"
@@ -458,9 +472,36 @@
       ;; a judgment that was made and refused (`:code-moved`), findings and all.
       ;; The report is the only place either can be read, so a fold that drops
       ;; them loses them.
+      ;; A design decision carries no :verdict; what it decided is :recommend, with :asks for a
+      ;; person and each derived check's status under :derived — held and underivable included,
+      ;; which :findings never holds — so a proceed over four held checks is not read as a round
+      ;; that answered nothing. :findings-made is how many findings the decision itself holds, since
+      ;; :findings carries one row per broken check whatever number of findings named it.
+      ;; :confirmed is what the round kept of the judge's confirmations.
+      ;; :judged-by is who answered — a stand-in's judgement is not the configured reviewer's,
+      ;; on a phase or on the ledger — and :code-identity the tree its confirmations are keyed on.
       :judge  (cond-> (assoc ph :verdict (some-> (get-in ctx [:record :verdict]) name)
                                 :outcome (some-> (get-in ctx [:record :outcome]) name)
                                 :findings (vec (:findings ctx)))
+                (get-in ctx [:record :recommend])
+                (assoc :recommend (name (get-in ctx [:record :recommend]))
+                       :findings-made (count (get-in ctx [:record :findings])))
+                (not (str/blank? (str (get-in ctx [:record :asks]))))
+                (assoc :asks (get-in ctx [:record :asks]))
+                (seq (get-in ctx [:record :checks]))
+                (assoc :derived (mapv (fn [{:keys [check status held?]}]
+                                        {:check  (some-> check name)
+                                         :status (cond status        (name status)
+                                                       (false? held?) "broken"
+                                                       :else          "held")})
+                                      (get-in ctx [:record :checks])))
+                (seq (get-in ctx [:record :confirmed]))
+                (assoc :confirmed (vec (get-in ctx [:record :confirmed])))
+                (or (get-in ctx [:record :judged-by]) (get-in ctx [:record :answer :judged-by]))
+                (assoc :judged-by (or (get-in ctx [:record :judged-by])
+                                      (get-in ctx [:record :answer :judged-by])))
+                (get-in ctx [:record :code-identity])
+                (assoc :code-identity (get-in ctx [:record :code-identity]))
                 (seq (:settled ctx))
                 (assoc :settled (mapv (fn [[id {:keys [ws-id seq]}]] {:id id :by seq :ws-id ws-id})
                                       (sort-by key (:settled ctx))))
@@ -776,6 +817,30 @@
         skipped? (fn [group] (every? #(= "skipped" %) (statuses group)))]
     {:reviewed (count (filter read? by-label))
      :skipped  (count (filter skipped? by-label))}))
+
+(defn ^{:malli/schema [:=> [:cat :ReviewReport] [:vector :map]]}
+  stood-in
+  "How many of this run's readings a stand-in made because the configured reviewer could not be
+   run, one `{:reviewer :instead-of :readings n}` per pair, over every round's review rows and
+   judge phases — a diff run's and a record run's alike. Empty when every reading was the
+   reviewer's the run chose.
+
+   A reading, not a target: a layer read in three rounds by the stand-in is three readings, since
+   each round's verdict on it was the stand-in's. Read off the report rather than the terminal ctx
+   for the reason `coverage` is."
+  [report]
+  (->> (:rounds report)
+       (mapcat :phases)
+       (mapcat (fn [ph]
+                 (case (some-> (:phase ph) name)
+                   "review" (keep :judged-by (:layers ph))
+                   "judge"  (some-> (:judged-by ph) vector)
+                   nil)))
+       (filter :instead-of)
+       (map (fn [{:keys [reviewer instead-of]}] [(keyword (name reviewer)) (keyword (name instead-of))]))
+       frequencies
+       (sort-by key)
+       (mapv (fn [[[reviewer instead-of] n]] {:reviewer reviewer :instead-of instead-of :readings n}))))
 
 (defn- finalize
   [report status ctx at]

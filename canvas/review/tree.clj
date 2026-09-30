@@ -30,6 +30,11 @@
     "What a round says about its tree before it launches anything, or nil when it reads the
      worktree as it is."
     {:signature [:=> [:catn [:reading :map]] [:maybe :string]]})
+  (Operation stamp
+    "Which revision a round reading a tree in a directory judges, as a judgement records it: the
+     fork point, or the working-copy commit of a tree read as it stands. Reads jj, or git, and
+     never throws."
+    {:signature [:=> [:catn [:reading :map] [:dir Path]] :map]})
   (Operation with-reading!
     "Call a function with the directory a reading names, producing it first when it names a
      revision and removing it when the function returns or throws."

@@ -16,6 +16,7 @@
    point for the length of the round and removed after it."
   (:require
    [babashka.fs :as fs]
+   [babashka.process :as p]
    [clojure.string :as str]
    [nido.design.check :as design]
    [nido.review.pass :as pass]
@@ -88,6 +89,38 @@
                  "jj would not say which paths here differ from it"
                  (str ahead " path(s) here differ from it"))
          ". Name :code-cwd to judge another tree.")))
+
+(defn- working-copy-rev
+  "The commit `dir`'s working copy is at — jj's @, which holds its uncommitted edits, or git's HEAD
+   in a plain git checkout — or nil. git is asked only when jj says `dir` is in no jj repository: a
+   jj workspace nested in a git checkout is one git would read as the outer repository."
+  [dir]
+  (try
+    (let [{:keys [exit out]} (jj/jj! dir "log" "-r" "@" "--no-graph" "-T" "commit_id")]
+      (if (zero? (long exit))
+        (not-empty (str/trim out))
+        (when-not (zero? (long (:exit (jj/jj! dir "root"))))
+          (let [{:keys [exit out]} (p/shell {:dir dir :out :string :err :string :continue true}
+                                            "git" "rev-parse" "HEAD")]
+            (when (zero? (long exit)) (not-empty (str/trim out)))))))
+    (catch Throwable _ nil)))
+
+(defn ^{:malli/schema [:=> [:cat :map :Path] :map]}
+  stamp
+  "Which revision a round reading `plan` in `dir` judges, as `nido.coordinator.report/JudgedTree`
+   records it: the fork point with its overlay and how far the worktree is ahead of it, or — when
+   the round reads a tree as it stands — the commit `dir`'s working copy is at, with why no fork
+   point could be read when that is why. Reads jj, or git, and never throws; a revision nothing
+   would name is left out rather than guessed."
+  [{:keys [rev overlay ahead unresolved]} dir]
+  (if rev
+    (cond-> {:rev rev}
+      (seq overlay) (assoc :overlay (vec overlay))
+      (some? ahead) (assoc :ahead ahead))
+    (let [at (working-copy-rev dir)]
+      (cond-> {}
+        at         (assoc :rev at)
+        unresolved (assoc :unresolved unresolved)))))
 
 (defn- remove-workspace!
   "Take the round's workspace out of the repo and off the disk. Its working-copy commit is
