@@ -1476,3 +1476,89 @@
       (is (str/includes? p "FOUND AGAINST BEFORE"))
       (is (str/includes? p "the invoice no longer sums on its own"))
       (is (str/includes? p "reads the same now") "an unchanged subject makes a confirmation a pure reversal"))))
+
+;; ── What an amendment has to stay true beside ───────────────────────────────
+
+(def ^:private an-audit-baseline
+  {:format :baseline :strata [] :area "adoption" :bounded-by "the audit table"
+   :model {:elements [{:id "adoption-audit-persistence" :sort :module
+                       :hides "the org_adoption_audit table"
+                       :interface "record-adoption!"}
+                      {:id "org-model" :sort :module :hides "organization rows"}
+                      {:id "billing" :sort :module :hides "invoices"}]
+           :claims   [{:id "composition"
+                       :about ["adoption-audit-persistence" "org-model"]
+                       :statement "the adoption audit is stored by adoption-audit-persistence alone"
+                       :falsified-by "a write to org_adoption_audit outside it"
+                       :evidence {:by :round}
+                       :read-at ["src/org/adopt.clj:175"]}
+                      {:id "audit-append-only" :about ["adoption-audit-persistence"]
+                       :statement "an audit row is never updated"
+                       :falsified-by "an UPDATE on org_adoption_audit"
+                       :evidence {:by :round}}
+                      {:id "user-writes" :about ["billing"]
+                       :statement "user.clj writes no organization row"
+                       :falsified-by "an insert from user.clj"
+                       :evidence {:by :round}
+                       :read-at ["src/model/user.clj:775"]}
+                      {:id "invoices-numbered" :about ["billing"]
+                       :statement "every invoice has a number"
+                       :falsified-by "an invoice with no number"
+                       :evidence {:by :round}}]}})
+
+(def ^:private an-audit-finding
+  {:claim-id "composition"
+   :cites ["[composition] stored by adoption-audit-persistence alone"]
+   :claim "model/user.clj also writes the table"
+   :evidence ["src/model/user.clj:775"]})
+
+(deftest an-amender-is-shown-what-the-claim-it-rewrites-must-agree-with
+  ;; An amender wrote a composition sentence contradicting a module claim settled in the same
+  ;; record, and the only check it had was its memory of a long record. The listing is the set
+  ;; it checks against: the modules the claim is about, the claims about them, and the claims read
+  ;; at the code the finding cites.
+  (let [rows (#'record/bearing-subjects {:record an-audit-baseline :findings [an-audit-finding]
+                                       :settled {"audit-append-only" {:ws-id "ws-1" :seq 3}}})
+        ids  (set (map :id rows))]
+    (is (contains? ids "adoption-audit-persistence")
+        "the module the refuted claim is about states what it hides — the thing a rewrite contradicts")
+    (is (contains? ids "audit-append-only") "a claim about the same module bears on the rewrite")
+    (is (contains? ids "user-writes")
+        "a claim read at the very line the counterexample cites bears on it, whatever it is about")
+    (is (not (contains? ids "composition")) "the claim being rewritten is not its own constraint")
+    (is (not (contains? ids "invoices-numbered"))
+        "a claim sharing nothing with the finding is noise that buries the ones that matter")
+    (is (not (contains? ids "billing")) "a module the claim is not about is not listed")
+    (is (= {:ws-id "ws-1" :seq 3} (:settled (first (filter #(= "audit-append-only" (:id %)) rows))))
+        "a settled claim says so, because the amender may not move it and must fit beside it")))
+
+(deftest the-baseline-amend-prompt-lists-what-a-rewrite-must-agree-with
+  (let [p (record/amend-prompt {:baseline an-audit-baseline :findings [an-audit-finding]
+                                :out-path "/x" :settled {"audit-append-only" {:seq 3}}})]
+    (is (str/includes? p "WHAT YOUR REWRITE MUST STAY TRUE BESIDE"))
+    (is (str/includes? p "- [audit-append-only] (settled by entry 3) an audit row is never updated")
+        "a settled claim is named with the entry that settled it")
+    (is (str/includes? p "hides:      the org_adoption_audit table")
+        "a module is listed by what it hides, which is what a responsibility sentence can contradict")
+    (is (not (str/includes? p "[invoices-numbered] every")))))
+
+(deftest a-round-with-nothing-bearing-lists-nothing
+  ;; A heading over an empty list reads as a record with nothing to agree with.
+  (is (not (str/includes? (record/amend-prompt {:baseline a-baseline :findings [a-finding]
+                                                :out-path "/x"})
+                          "WHAT YOUR REWRITE MUST STAY TRUE BESIDE."))))
+
+(deftest the-baseline-amender-is-told-how-a-rewrite-stays-true
+  ;; Each rule answers a rewrite that was the next round's finding: a cited site repaired while
+  ;; its siblings stayed false, an `alone` nobody searched for, a new closed list false over code
+  ;; just read, a :falsified-by narrower than its statement or satisfied by the record itself.
+  (let [p (record/amend-prompt {:baseline a-baseline :findings [a-finding] :out-path "/x"})]
+    (is (str/includes? p "REPAIR THE CLASS, NOT THE INSTANCE"))
+    (is (str/includes? p "NO UNIVERSAL YOU HAVE NOT CHECKED"))
+    (is (str/includes? p "name that search in :read-at")
+        "an exclusivity is only as good as the search behind it, and the next reader must re-run it")
+    (is (str/includes? p "do not write a new list"))
+    (is (str/includes? p ":falsified-by COVERS EVERY UNIVERSAL THE STATEMENT MAKES"))
+    (is (str/includes? p "a counterexample the record itself states is a contradiction"))
+    (is (not (str/includes? p "a quantifier you widen must not"))
+        "a baseline amender has no baseline beneath it to cross")))

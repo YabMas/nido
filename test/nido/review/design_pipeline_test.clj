@@ -1489,3 +1489,26 @@
            (ctx :record (decision :amend :findings [{:cites ["c"] :claim "x"}])
                 :findings [(check :relation-honest :broken)]))
       (is (str/includes? @seen "is this worth doing now?")))))
+
+(deftest a-design-amender-is-shown-the-baseline-properties-its-claims-rest-on
+  ;; An amender widened a claim to `every child the run spawns` across a baseline property saying
+  ;; one path runs outside the run. The baseline was in the prompt; what was missing was which of
+  ;; its properties bear on the claim being rewritten.
+  (let [baseline {:format :baseline :strata [] :seq 6
+                  :model {:elements [{:id "canvas.order/aggregate" :sort :module}]
+                          :claims [{:id "band-runs-outside" :about ["canvas.order/aggregate"]
+                                    :statement "a band run takes no lock and keeps no record"
+                                    :falsified-by "a band run holding the lock"
+                                    :evidence {:by :round}}
+                                   {:id "unrelated" :about ["canvas.other/x"]
+                                    :statement "something else"
+                                    :falsified-by "x" :evidence {:by :round}}]}}
+        p (record/design-amend-prompt
+           {:design a-model-design :baseline baseline :recommend :amend :reason "r"
+            :raised [{:claim-ids ["rounded-once"] :claim "a band run rounds twice"}]
+            :findings [{:claim-id "rounded-once" :cites ["[rounded-once]"] :claim "twice"}]
+            :out-path "/run/a.edn"})]
+    (is (str/includes? p "- [band-runs-outside] (the baseline's, load-bearing) a band run takes no lock"))
+    (is (not (str/includes? p "- [unrelated]")))
+    (is (str/includes? p "a quantifier you widen must not\ncross a property the baseline holds"))
+    (is (str/includes? p "REPAIR THE CLASS, NOT THE INSTANCE"))))

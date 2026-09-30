@@ -2092,6 +2092,125 @@
          "and writes nothing. It prints what the ledger would refuse; repair that and run\n"
          "it again until it prints ok.\n\n")))
 
+(defn- sound-rewrite-rules
+  "What makes an amender's rewrite of a refuted claim true beyond the one counterexample it was
+   handed. Every clause answers a way a rewrite has read as a repair and been the next round's
+   finding: the cited site repaired while its siblings stayed false, an `only` exchanged for a new
+   closed list false over code the amender had just read, a :falsified-by the record itself
+   satisfies, and — for a design, which `baseline?` says is shown one — a widened quantifier that
+   crosses a property the baseline already holds of the code."
+  [baseline?]
+  (str "REPAIR THE CLASS, NOT THE INSTANCE. A counterexample is one member of the\n"
+       "failure it exhibits. Name that class — not the launcher the judge cited but\n"
+       "every process that can create the resource; not the writer it found but every\n"
+       "writer of the table — find its other members, and restate the claim so it is\n"
+       "true of all of them. A claim repaired at the cited site alone is refuted next\n"
+       "round by the member beside it.\n\n"
+       "NO UNIVERSAL YOU HAVE NOT CHECKED. `only`, `alone`, `none`, `no other`,\n"
+       "`every`, `exactly when`, and any closed list of members are claims about\n"
+       "everything the code does, and one missing member refutes them. Write one only\n"
+       "after the search that establishes it, and name that search in :read-at beside\n"
+       "the sites it found — the grep over every writer, every caller, every public fn\n"
+       "of the namespaces surveyed — so the next reader can run it again. When a missing\n"
+       "member refuted a closed list, do not write a new list: state the promise the\n"
+       "list stood for, or check every member of the surveyed namespaces against the\n"
+       "new one first. A universal the code you just read contradicts is not a\n"
+       "correction.\n\n"
+       ":falsified-by COVERS EVERY UNIVERSAL THE STATEMENT MAKES. A statement with two\n"
+       "exclusivities needs a counterexample for each; a statement widened while its\n"
+       ":falsified-by is narrowed leaves the new clause unfalsifiable. And check it\n"
+       "against the record's own elements, interfaces and claims before you write it:\n"
+       "a counterexample the record itself states is a contradiction, not a claim.\n\n"
+       "STAY TRUE BESIDE WHAT THE RECORD ALREADY SAYS. A sentence that assigns a\n"
+       "responsibility — who stores, reads, writes or owns something — must agree with\n"
+       "the record's module claims about that thing"
+       (if baseline?
+         (str ", and a quantifier you widen must not\n"
+              "cross a property the baseline holds of the code: a design claim over `every`\n"
+              "child the run spawns is false if a baseline property says one path spawns\n"
+              "outside the run.\n")
+         ".\n")
+       "Where this prompt has a list headed WHAT YOUR REWRITE MUST STAY TRUE BESIDE,\n"
+       "check against it, not against what you remember of the record.\n\n"))
+
+(defn- cited-files
+  "The files `citations` point at: every `path:line` citation's path, and every token naming a path
+   under a directory. What lets a finding and a claim be recognised as about the same code when
+   neither names the other's id."
+  [citations]
+  (into #{}
+        (mapcat #(concat (map second (re-seq #"([\w.-]+(?:/[\w.-]+)*\.\w+):\d" (str %)))
+                         (re-seq #"(?:[\w.-]+/)+[\w.-]+\.\w+" (str %))))
+        citations))
+
+(defn- bearing-subjects
+  "What an amendment answering `findings` about `record` has to stay true beside, as
+   `{:id :from :subject :settled}` rows: `:from` is `:record` or `:baseline`, `:subject` the element
+   or claim as the record states it, `:settled` the `{:seq}` of the judgement that settled it — from
+   `settled`, the round's `{id {:seq}}` — or nil.
+
+   A finding's subjects are the ids it names — :claim-id, :claim-ids, or `[id]` quoted in its text.
+   What bears on them is each element they are about, and every other claim of `record` — and, for a
+   design, of the `baseline` it cites — that is about one of those elements, is one of those ids, or
+   was read at a file the finding or a subject cites. A claim about every module (a composition)
+   therefore bears on the whole model; the listing is then the record's model, which is what such a
+   claim has to agree with. Elements stating neither what they hide nor an interface say nothing to
+   contradict and are left out. The subjects themselves are left out: they are what is being
+   rewritten."
+  [{:keys [record baseline findings settled]}]
+  (let [elements (model/elements record)
+        claims   (filter :id (model/claims record))
+        own      (into {} (map (juxt :id identity)) (concat elements claims))
+        texts    (mapcat #(cons (:claim %) (:cites %)) findings)
+        quoted   (filter (fn [id] (some #(str/includes? (str %) (str "[" id "]")) texts)) (keys own))
+        targets  (into (set quoted)
+                       (comp (mapcat #(cons (:claim-id %) (:claim-ids %)))
+                             (keep #(some-> % str not-empty)))
+                       findings)
+        stated   (keep #(let [s (own %)] (when (contains? s :statement) s)) targets)
+        abouts   (into (into #{} (filter (set (map :id elements))) targets) (mapcat :about stated))
+        files    (cited-files (concat (mapcat :cites findings) (mapcat :evidence findings)
+                                      (mapcat :read-at stated)))
+        bears?   (fn [c] (or (some abouts (:about c)) (targets (:id c))
+                             (some files (cited-files (:read-at c)))))
+        row      (fn [from s] {:id (:id s) :from from :subject s
+                               :settled (when (= :record from) (get settled (:id s)))})]
+    (vec (concat
+          (for [e elements
+                :when (and (abouts (:id e)) (not (targets (:id e))) (or (:hides e) (:interface e)))]
+            (row :record e))
+          (for [c claims :when (and (not (targets (:id c))) (bears? c))]
+            (row :record c))
+          (for [c (filter :id (model/claims baseline)) :when (bears? c)]
+            (row :baseline c))))))
+
+(defn- bearing-block
+  "The rows of `bearing-subjects` as an amender reads them, or nil when there are none — a heading
+   over an empty list reads as a record with nothing to agree with."
+  [rows]
+  (when (seq rows)
+    (str "WHAT YOUR REWRITE MUST STAY TRUE BESIDE. These are the statements that share\n"
+         "an element, an id or a cited file with what the round found wrong. They stand\n"
+         "as written — a settled one was confirmed against the code and is not judged\n"
+         "again — so a responsibility you assign, a quantifier you widen or a\n"
+         ":falsified-by you write that one of them contradicts or satisfies is a new\n"
+         "defect, not a repair:\n\n"
+         (str/join
+          "\n"
+          (for [{:keys [id from subject settled]} rows
+                :let [{element-sort :sort :keys [hides interface statement falsified-by]} subject]]
+            (str "- [" id "] "
+                 (cond (= :baseline from) "(the baseline's, load-bearing) "
+                       settled            (str "(settled by entry " (:seq settled) ") ")
+                       :else              "")
+                 (if element-sort
+                   (str "(" (name element-sort) ")"
+                        (when hides (str "\n    hides:      " hides))
+                        (when interface (str "\n    interface:  " interface)))
+                   (str statement
+                        (when falsified-by (str "\n    refuted by: " falsified-by)))))))
+         "\n\n")))
+
 (defn- amend-check-cmd
   "The shell command that dry-runs the answer at `out-path` as a `kind` record on this ledger —
    through nido's own bb.edn, because an amender runs in the reviewed project's tree."
@@ -2281,7 +2400,7 @@
    right — and the fields that say which it is, :blocks and :needs, were on the
    record and printed nowhere. Only the gap branch is new; the refutation wording
    is the one that converged and is left alone."
-  [{:keys [baseline findings out-path stance declared? check-cmd]}]
+  [{:keys [baseline findings out-path stance declared? check-cmd settled]}]
   (let [gaps? (boolean (some :blocks findings))]
    (str
    (if gaps?
@@ -2370,6 +2489,7 @@
    (if gaps?
      "Answer what was asked; leave the rest exactly as it stands.\n\n"
      "Fix what was refuted; leave the rest exactly as it stands.\n\n")
+   (sound-rewrite-rules false)
    "Read the cited code before you change a word of the record.\n\n"
    "Do NOT edit any source file. This pass writes one file and nothing else.\n\n"
    "THE CURRENT BASELINE:\n\n"
@@ -2396,6 +2516,8 @@
             (when (seq (:evidence f))
               (str "\n   evidence: " (str/join ", " (:evidence f))))))
      findings))
+   (some->> (bearing-block (bearing-subjects {:record baseline :findings findings :settled settled}))
+            (str "\n\n") str/trimr)
    (if gaps?
      "\n\nIF A DERIVATION CAN BE MADE ALREADY, SAY SO INSTEAD OF ADDING FOR IT.\n"
      "\n\nIF A FINDING IS WRONG ABOUT THE CODE, SAY SO INSTEAD OF AMENDING FOR IT.\n")
@@ -2742,6 +2864,7 @@
                                                            :findings  (:findings ctx)
                                                            :out-path  out-path
                                                            :check-cmd (when check-cmd (check-cmd out-path))
+                                                           :settled   (:settled ctx)
                                                            :stance    (stages/read-stance project)
                                                            :declared? (some? (design-check/design-of project code-cwd))})})
               ;; Read before the tree is judged, so an answer the round will not
@@ -3117,7 +3240,7 @@
    answerable and both are disputable, and the number is how: the amender
    objects by ordinal and never by matching text. `:findings` is the judge's own
    prose beneath them, which says more and is keyed to nothing."
-  [{:keys [design baseline recommend reason asks raised findings out-path declared? check-cmd]}]
+  [{:keys [design baseline recommend reason asks raised findings out-path declared? check-cmd settled]}]
   (str
    "A read-only judge derived what could be derived about this DESIGN record,\n"
    "before any code is written, and it did not come out clean.\n\n"
@@ -3178,6 +3301,9 @@
                        (when (seq (:evidence f))
                          (str "\n  evidence: " (str/join ", " (:evidence f))))))
                 findings))))
+   (some->> (bearing-block (bearing-subjects {:record design :baseline baseline :settled settled
+                                              :findings (concat raised findings)}))
+            str/trimr (str "\n\n"))
    ;; A design in the shared model states elements of its own, and they and its claims carry
    ;; readings — which the ledger refuses outside the registry whichever record they are on.
    (when (contains? design :model)
@@ -3191,6 +3317,7 @@
    "fresh chance for a check that held to stop holding. Rounds have gone by\n"
    "watching one derivation get answered while a rewritten neighbour became the\n"
    "next one to fail. Fix what failed; leave the rest exactly as it stands.\n"
+   "\n" (str/trimr (sound-rewrite-rules (some? baseline))) "\n"
    (when-not (str/blank? (str asks))
      (str "\n\nWHAT THE JUDGE LEFT FOR A PERSON — not yours to answer:\n  " asks "\n"))
    "\n\nIF A NUMBERED LINE IS WRONG ABOUT THE CODE, OR ITS ONLY REPAIR IS ANSWERING\n"
@@ -3501,6 +3628,7 @@
                                           :findings (get-in ctx [:record :findings])
                                           :out-path out-path
                                           :check-cmd (when check-cmd (check-cmd out-path))
+                                          :settled (:settled ctx)
                                           :declared? (some? declared)})})
           raw      (when (fs/exists? out-path)
                      (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
