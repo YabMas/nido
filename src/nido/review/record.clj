@@ -542,6 +542,21 @@
    "                      no phase plan is the ordinary case and is NOT a finding.\n"
    "                      This check blocks like the others.\n"))
 
+(def ^:private compound-clause-rule
+  "What a record judge owes a subject that says several things. A judge left to itself stops at
+   the first counterexample it finds, the amender repairs exactly what the finding names, and a
+   clause the judge had already read false becomes the next round's finding on text it was shown
+   — a whole round spent on nothing new. One finding per subject, not one per clause: findings
+   are keyed on the subject, so a second finding against the same id would be the same identity."
+  (str "A SUBJECT THAT SAYS SEVERAL THINGS IS RULED CLAUSE BY CLAUSE. A statement, the\n"
+       "counterexample it names, an interface and what it hides, each exclusivity it\n"
+       "asserts — check every one, not until the first falls. Report ONE finding for\n"
+       "the subject naming EVERY clause you found false, each with its counterexample:\n"
+       "the amender repairs what the finding names, so a false clause you saw and did\n"
+       "not report costs a whole round to find again. Hold each stated counterexample\n"
+       "against the record's own text as well — one the record itself already\n"
+       "satisfies is a contradiction, and a false clause like any other.\n\n"))
+
 (defn- strata-era?
   "Whether `record` names its strata — the field that marks a record written since strata entered
    the model, and so the one a round reads to pick the yardstick it holds the record to."
@@ -768,6 +783,7 @@
       "the counterexample the subject states does not name that clause. Leave the id\n"
       "out of confirmed, and do not park the correction in reason: nothing reads it\n"
       "there.\n\n"
+      compound-clause-rule
       "Ids, not sentences. A confirmation worded differently each round cannot be\n"
       "matched to the claim it is about, so the next round cannot tell what is\n"
       "settled and checks it again instead of checking what nobody has looked at\n"
@@ -1077,6 +1093,14 @@
    "                      the baseline line it moves (that module's interface\n"
    "                      or what it hides, or the property) is what the\n"
    "                      :revisit names under :breaks. Say which line.\n"
+   "                      Derive it PER BASELINE CLAIM, never as one reading of\n"
+   "                      the relation and its note: for each load-bearing\n"
+   "                      claim and each module the baseline states, ask which\n"
+   "                      of them this design stops being true of. Every one it\n"
+   "                      stops being true of belongs under :breaks, whatever\n"
+   "                      the relation is called — and a note that itself says\n"
+   "                      the design moves something the baseline records is\n"
+   "                      that claim broken, not a lenient reading to hold.\n"
    "  goal-served       — does it serve the goal, and ONLY the goal? Under-\n"
    "                      serving is easy to see. OVER-serving is the common\n"
    "                      one: the goal plus a good deal more, every piece\n"
@@ -1106,6 +1130,7 @@
    "that shows one of the four broken names it in check; one that bears on none\n"
    "of them leaves check empty — a record contradicting itself or a claim it\n"
    "rests on is a defect under no derivation, and it is repaired like any other.\n\n"
+   compound-clause-rule
    "Populate confirmed with the claims you checked and found to hold — each by its\n"
    "id, the bracketed slug without the brackets, with the file:line references you\n"
    "read, and at_this_tree: `holds` when the code you read already makes the claim\n"

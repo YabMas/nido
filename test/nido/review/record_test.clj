@@ -583,6 +583,27 @@
     (is (str/includes? p "never\nfor a subject outside this round's checks")
         "the every-caller rule refutes only what the round checks")))
 
+(deftest a-record-judge-rules-every-clause-of-a-compound-subject
+  ;; Watched: a judge reported one counterexample to an amended composition claim and missed a
+  ;; self-contradiction already in its text; the next round found it on text unchanged since.
+  (doseq [[kind p] [[:baseline (record/baseline-prompt {:baseline {:format :baseline}})]
+                    [:design (record/design-prompt {:design design})]]]
+    (is (str/includes? p "RULED CLAUSE BY CLAUSE")
+        (str kind ": a clause the judge read false and did not report costs a round to find again"))
+    (is (str/includes? p "naming EVERY clause you found false")
+        (str kind ": one finding per subject — a second finding on the same id is the same identity"))
+    (is (str/includes? p "one the record itself already\nsatisfies is a contradiction")
+        (str kind ": a refuter the record satisfies is a false clause, not a claim"))))
+
+(deftest relation-honest-is-derived-per-baseline-claim
+  ;; Watched: a relation note that itself said the rules move out of where the baseline records
+  ;; them held relation-honest in two readings of three.
+  (let [p (record/design-prompt {:design design})]
+    (is (str/includes? p "PER BASELINE CLAIM, never as one reading of")
+        "one judgement over the relation note lets a self-declared move pass on a lenient reading")
+    (is (str/includes? p "which\n                      of them this design stops being true of")
+        "the question is asked of each claim, so a broken one has to be named")))
+
 ;; ── a record that names its strata ───────────────────────────────────────────
 ;; The era a record was written in is read off :strata, and it picks the yardstick: the stratified
 ;; check and derivation for a record that names its strata, decomposable as before for one that
