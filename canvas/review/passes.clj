@@ -151,6 +151,16 @@
      A run's last round contributes nothing here by construction: its repairs are exactly the
      ones nobody has read, which is what `handed-to-a-fixer` is for."
     {:signature [:=> [:catn [:final :map]] :any]})
+  (Operation settled-the-loop-made
+    "The part of `settled-by-fixing` the loop's own repairs had put on the branch, on the
+     warden's `:introduced-by-round` attribution.
+
+     A defect a fixer creates and the next round removes is settled like any other, so a run
+     whose repairs kept breaking what they touched read as a run that found and fixed more.
+     The attribution is a judgement, not a diff, so an unattributed defect is one nobody named
+     as the loop's, not one proven to be the branch's."
+    {:signature [:=> [:catn [:final :map]] :any]
+     :delegates [settled-by-fixing]})
   (Operation handed-to-a-fixer
     "The findings a landed fix commit named as its own, across every round.
 

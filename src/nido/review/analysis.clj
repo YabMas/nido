@@ -66,6 +66,11 @@
    the first and at most one of the second, so one number for both overstates
    what the loop achieved by roughly its own persistence.
 
+   `:defects-introduced` is the part of `:defects-settled` the loop made itself —
+   see `verdict/settled-the-loop-made`. Carried at zero, since it is a warden's
+   attribution and not a derivation, so a settled run's entry that predates it
+   reads the same as one where nothing was attributed.
+
    `:targets-reviewed` and `:targets-skipped` say what the status is a status
    OF. A skipped target was converged in an earlier run and not re-opened, so a
    `clean` over three of eight targets is mostly a memory — and an analysis
@@ -194,7 +199,7 @@
                                " reading" (when (not= 1 readings) "s")))))))
 
 (defn- diff-payload
-  [{:keys [run-id report-path status rounds fix-attempts defects-settled
+  [{:keys [run-id report-path status rounds fix-attempts defects-settled defects-introduced
            findings-remaining findings-kept remaining-handed remaining-parked
            targets-reviewed targets-skipped unfixable parked standing
            drift unavailable stood-in base in-flight errored design-verdict verdict-implementation
@@ -242,12 +247,15 @@
              :rounds             (or rounds 0)
              :fix-attempts       (n fix-attempts)
              :defects-settled    (n defects-settled)
+             :defects-introduced (or defects-introduced 0)
              :findings-remaining (n findings-remaining)
              :findings-kept      (n findings-kept)
              :targets-reviewed   (or targets-reviewed 0)
              :targets-skipped    (or targets-skipped 0)
              :headline           (str "Status: " (name (or status :unknown)) " · " (or rounds 0)
                                       " rounds · " (n defects-settled) " defects settled ("
+                                      (when (pos? (or defects-introduced 0))
+                                        (str defects-introduced " made by the loop's own repairs; "))
                                       (n fix-attempts) " repairs dispatched) · "
                                       (n findings-remaining) " still open · "
                                       (when (pos? (or verdict-unverified 0))

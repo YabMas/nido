@@ -1940,6 +1940,11 @@
    ;; A run's last round can contribute nothing, so a one-round run settles
    ;; nothing by fixing however many fixers it launched.
    [:defects-settled    int?]
+   ;; How many of those the loop's OWN repairs had put there, on the warden's
+   ;; attribution: a fixer's edit created the defect and a later round's fixer
+   ;; removed it. Without it a run whose repairs kept breaking what they touched
+   ;; reads as a run that found and fixed more. Optional, and omitted at zero.
+   [:defects-introduced {:optional true} int?]
    [:findings-remaining int?]
    ;; How many of the remaining a fixer already landed a repair for that no round
    ;; re-reviewed. It is the overlap between `:fix-attempts` and the count above,
@@ -3736,7 +3741,7 @@
                         (when because (str "\n  - " because)))))))
 
 (defn- review->markdown [{:keys [status base base-rev rounds findings-fixed
-                                 fix-attempts defects-settled
+                                 fix-attempts defects-settled defects-introduced
                                  findings-remaining findings-kept remaining-handed
                                  remaining-parked targets-reviewed targets-skipped
                                  report-path
@@ -3763,7 +3768,10 @@
        ;; the question it had stopped for as though it were unfinished work.
        (str (if fix-attempts
               (str defects-settled " defect" (when (not= 1 defects-settled) "s")
-                   " settled (" fix-attempts " repair"
+                   " settled ("
+                   (when (pos? (or defects-introduced 0))
+                     (str defects-introduced " made by the loop's own repairs; "))
+                   fix-attempts " repair"
                    (when (not= 1 fix-attempts) "s") " dispatched)")
               (str findings-fixed " dispatched"))
             "  ·  " findings-remaining " remaining"

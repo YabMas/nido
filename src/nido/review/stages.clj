@@ -415,6 +415,11 @@
                  ;; unprompted — it says so in `because`, in prose, every time —
                  ;; and had no field to say it in.
                  :sweep       (boolean (:sweep r))
+                 ;; Which earlier round's repair created this defect. Only a
+                 ;; positive integer is a round; anything else is no attribution.
+                 ;; Whether it names a round BEFORE this one is `attributed-before`.
+                 :introduced-by-round (let [n (:introduced_by_round r)]
+                                        (when (and (integer? n) (pos? n)) n))
                  :because     (:because r)}]
     ;; The demotion runs FIRST: the field it clears is sometimes `because`
     ;; itself — a decline is not one without a reason — and clearing it after
@@ -2683,6 +2688,7 @@
                                  :of          (:of r)
                                  :duplicate-of (:duplicate-of r)
                                  :sweep       (boolean (:sweep r))
+                                 :introduced-by-round (:introduced-by-round r)
                                  :because     (or (:because r)
                                                   (when-not r "the warden did not rule on this finding"))})]
               (advisory-ruling
@@ -3035,6 +3041,18 @@
        (sort-by (juxt :round (comp str :layer)))
        vec))
 
+(defn- attributed-before
+  "`rulings` with every `:introduced-by-round` that does not name a round before
+   `iter` cleared. A repair from this round or a later one has not landed yet, so
+   it cannot have introduced anything this round's reviewers read; an
+   attribution to one is a slip, and a slip here would count a defect the branch
+   arrived with as one the loop made."
+  [iter rulings]
+  (mapv #(cond-> %
+           (not (< (or (:introduced-by-round %) iter) iter))
+           (assoc :introduced-by-round nil))
+        rulings))
+
 (defn- run-warden-stage
   [ctx]
   (let [{:keys [cwd run-id budget]} (:config ctx)
@@ -3066,6 +3084,7 @@
                                                 (partial mapv (fn [f] (dissoc f :account))))))
                                  (:history ctx))
                  :design   design
+                 :round    (:iter ctx)
                  :stance   (read-stance (first (project+ws-from-cwd cwd)))
                  :toc      (:toc ctx)
                  :parked   (vals (get-in ctx [:carry :parks] {}))
@@ -3078,7 +3097,8 @@
                         :first-message prompt :budget budget
                         :tools ""
                         :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})
-        decision (parse-warden-decision result-text design)]
+        decision (-> (parse-warden-decision result-text design)
+                     (update :rulings #(some->> % (attributed-before (:iter ctx)))))]
     (if (or (zero? (or num-turns 0)) result-error?
             (= :indeterminate (:decision decision)))
       (assoc ctx :warden (merge decision (warden-failure launch decision))

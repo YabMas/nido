@@ -675,6 +675,26 @@ layers, it is not yours"))
     (is (str/includes? out "misplaced-cut"))
     (is (str/includes? out "spans core, wiring"))))
 
+(deftest a-fixer-that-moves-a-resource-checks-every-exit-of-the-scope
+  ;; A sweep looks for siblings of the finding. A reorder that opens a leak on
+  ;; another exit of the same with-open is no sibling of anything, and one run
+  ;; settled two such leaks its own fixers had made, a round each. The clause is
+  ;; unconditional: nothing before the fixer runs can tell a repair that moves a
+  ;; resource's lifetime from one that does not.
+  (let [out (prompts/fix-prompt {:findings [{:priority 1 :title "t" :body "b"}]})]
+    (is (str/includes? out "SCOPES YOU RESTRUCTURE"))
+    (is (str/includes? out "for EVERY resource the scope holds")
+        "the second leak was on a resource the finding never named")
+    (is (str/includes? out "a throw from a release itself")
+        "a throwing close skipping the cleanup after it is the exit a reorder most often opens")))
+
+(deftest the-warden-is-asked-which-round-made-a-new-defect
+  ;; Without the question and the current round the warden has nothing to put
+  ;; in the field, and the settled count cannot separate the loop's own defects.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :round 3})]
+    (is (str/includes? out "\"introduced_by_round\""))
+    (is (str/includes? out "This is round 3."))))
+
 (deftest the-fixer-is-bounded-by-the-layer-it-is-working-on
   ;; "Make the MINIMAL change" is the only guidance a fixer had, and for a defect
   ;; spanning a seam the minimal change is a patch on whichever side it was

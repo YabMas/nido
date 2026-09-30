@@ -624,6 +624,20 @@
   (:repaired (fold-rulings final)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
+  settled-the-loop-made
+  "The part of `settled-by-fixing` the loop itself put on the branch: findings
+   the warden ruled were introduced by an earlier round's repair, as against
+   defects the branch arrived with.
+
+   A defect a fixer creates and the next round removes counts as settled like
+   any other, so without this split a run whose repairs kept breaking what they
+   touched reads as a run that found and fixed more. The attribution is the
+   warden's judgement, not a diff — it is the one reader holding every round —
+   so a nil here means no one said so, not that the loop is innocent."
+  [final]
+  (filterv :introduced-by-round (settled-by-fixing final)))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
   open-across-run
   "Everything the run is still OWED when it ends — a fixer's work nobody
    checked, a question put to a human, a finding no round ruled on. See

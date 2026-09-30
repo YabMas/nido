@@ -440,6 +440,16 @@
                :targets-reviewed :targets-skipped :base :reviewed-project :reviewed-session]]
       (is (contains? p k) (str "a template that still names " k " renders a diff run as before")))))
 
+(deftest the-headline-says-how-many-settled-defects-the-loop-made
+  ;; Two of six settled defects in one run were leaks the loop's own fixers had
+  ;; opened, and the headline counted them with the ones the branch arrived with.
+  (let [p (analysis/payload (assoc a-run :defects-introduced 2))]
+    (is (str/includes? (:headline p)
+                       "3 defects settled (2 made by the loop's own repairs; 5 repairs dispatched)"))
+    (is (= 2 (:defects-introduced p))))
+  (is (str/includes? (:headline (analysis/payload a-run)) "3 defects settled (5 repairs dispatched)")
+      "nothing attributed is said as nothing, not as a zero"))
+
 (deftest a-settled-run-publishes-a-count-it-could-not-make-as-unknown
   ;; A run killed holding a P1 was headlined `0 still open`. Zero and unknown
   ;; are opposite instructions to whoever reads the board.

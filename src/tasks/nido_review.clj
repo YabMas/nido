@@ -185,7 +185,8 @@
         ;; the run left behind.
         standing (get-in report [:reason :standing])
         errored  (report/errored report)
-        stood-in (report/stood-in report)]
+        stood-in (report/stood-in report)
+        made     (verdict/settled-the-loop-made final)]
     (cond-> {:format             :review-report
              :status             (:status final)
              :base               (get-in report [:target :base])
@@ -197,6 +198,7 @@
              :report-path        report-path}
       (seq open)      (assoc :open open)
       (seq kept)      (assoc :kept kept :findings-kept (count kept))
+      (seq made)      (assoc :defects-introduced (count made))
       (pos? repaired) (assoc :remaining-handed repaired)
       (pos? parked)   (assoc :remaining-parked parked)
       ;; Both or neither, and `0 skipped` is worth saying: it is the entry
@@ -564,6 +566,7 @@
        :rounds             (or (get-in report [:summary :rounds]) 0)
        :fix-attempts       (or (get-in report [:summary :fix-attempts]) 0)
        :defects-settled    (count (verdict/settled-by-fixing final))
+       :defects-introduced (count (verdict/settled-the-loop-made final))
        :findings-remaining (count open)
        :findings-kept      (+ (count (verdict/kept-across-run final))
                               (count judged))

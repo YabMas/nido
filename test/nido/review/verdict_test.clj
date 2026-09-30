@@ -463,6 +463,22 @@
         "a repair in the final round settles nothing — no reviewer has read it,
          and counting it is how a run publishes fixes nobody checked")))
 
+(deftest the-loop-made-counts-only-settled-defects-the-warden-attributed
+  ;; Two defects removed in round 2: one the branch arrived with, one round 1's
+  ;; own repair created. Both are settled; only the second is the loop's.
+  (let [final {:status :converged
+               :history [{:iter 1 :fixes [{:layer "core" :commit "c1" :handed ["a"]}]
+                          :findings [{:handle "a" :title "arrived" :disposition :fix}]}
+                         {:iter 2 :fixes [{:layer "core" :commit "c2" :handed ["b"]}]
+                          :findings [{:handle "b" :title "made" :disposition :fix
+                                      :introduced-by-round 1}]}
+                         {:iter 3 :findings []}]
+               :findings []}]
+    (is (= ["arrived" "made"] (mapv :title (verdict/settled-by-fixing final))))
+    (is (= ["made"] (mapv :title (verdict/settled-the-loop-made final)))
+        "a run whose repairs broke what they touched must not read as one that
+         simply found and fixed more")))
+
 (deftest a-repair-that-did-not-take-settles-nothing
   ;; The fixer reported success and the next round raised the finding again. The
   ;; later report is the one that survives the fold, so the finding is owed and

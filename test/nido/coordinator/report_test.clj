@@ -696,6 +696,13 @@
       "readable is not writable — a new entry must carry the count that says
        what the run removed"))
 
+(deftest a-review-entry-splits-out-what-the-loop-made
+  (let [e (assoc valid-review :defects-introduced 1)]
+    (is (= e (report/validate-event :review e)))
+    (is (str/includes? (report/report->markdown e)
+                       "2 defects settled (1 made by the loop's own repairs; 3 repairs dispatched)")
+        "a settled defect a fixer created is the loop's cost, not its yield")))
+
 (deftest report->markdown-review-has-verdict-and-counts
   (let [md (report/report->markdown valid-review)]
     (is (str/includes? md "Review"))

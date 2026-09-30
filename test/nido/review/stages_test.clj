@@ -29,9 +29,30 @@
         d   (stages/parse-warden-decision txt)]
     (is (= :continue (:decision d)))
     (is (= [{:id "aa11" :same-as nil :owner-layer "drop-legacy" :disposition :fix
-             :authority nil :of nil :duplicate-of nil :sweep false :because "real"}]
+             :authority nil :of nil :duplicate-of nil :sweep false
+             :introduced-by-round nil :because "real"}]
            (:rulings d))
         "sweep defaults false — a ruling that does not claim a class is not one")))
+
+(deftest a-ruling-attributes-a-defect-to-a-round-only-by-its-number
+  ;; The attribution splits the settled count, so what is not a round number
+  ;; must be no attribution at all: a string or a zero read as one would count a
+  ;; defect the branch arrived with as one the loop made.
+  (let [rule (fn [v] (-> (str "```json\n{\"decision\":\"continue\",\"findings\":"
+                              "[{\"id\":\"aa11\",\"disposition\":\"fix\","
+                              "\"introduced_by_round\":" v "}]}\n```")
+                         stages/parse-warden-decision :rulings first :introduced-by-round))]
+    (is (= 2 (rule "2")))
+    (doseq [v ["null" "0" "-1" "\"2\""]]
+      (is (nil? (rule v)) (str v " names no round, so it attributes nothing")))))
+
+(deftest an-attribution-rides-onto-the-ruled-finding
+  ;; The fold reads rulings off the FINDINGS, so a field the merge drops is a
+  ;; field no settled count ever sees.
+  (let [[f] (stages/apply-rulings [{:id "aa11" :title "t"}]
+                                  [{:id "aa11" :disposition :fix :introduced-by-round 1}]
+                                  {})]
+    (is (= 1 (:introduced-by-round f)))))
 
 (deftest parse-warden-decision-reads-an-unknown-disposition-as-fix
   ;; The fail-safe direction: an unrecognised ruling is worked on, never dropped.

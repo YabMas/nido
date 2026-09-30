@@ -413,9 +413,14 @@
    :duplicate-of is the finding a `duplicate` close repeats. The close holds its
    layer open for as long as that finding is owed, so whether the layer should
    have converged is answered by the target's ruling, and this is how a reader
-   gets from one to the other."
+   gets from one to the other.
+
+   :introduced-by-round is the round whose repair the warden says created this
+   defect. A settled count read off a rebuilt report needs it to tell defects the
+   branch arrived with from ones the loop made — see
+   `verdict/settled-the-loop-made`."
   [:id :handle :same-as :owner-layer :disposition :authority :of :duplicate-of
-   :because :sweep])
+   :because :sweep :introduced-by-round])
 
 (defn- rulings
   "One entry per finding the warden's decision was applied to, projected to

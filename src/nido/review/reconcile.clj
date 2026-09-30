@@ -222,6 +222,7 @@
             :rounds             (or (get-in report [:summary :rounds]) 0)
             :fix-attempts       (:fix-attempts entry)
             :defects-settled    (:defects-settled entry)
+            :defects-introduced (or (:defects-introduced entry) 0)
             :findings-remaining (:findings-remaining entry)
             :findings-kept      (or (:findings-kept entry) 0)
             :remaining-handed   (:remaining-handed entry)
@@ -294,6 +295,7 @@
                       (stages/unanswered-of prior (ruled-ids final)))
         open    (into own carried)
         kept    (verdict/ledger-findings #{} (verdict/kept-across-run final))
+        made    (verdict/settled-the-loop-made final)
         handed  (count (filter :handed open))
         parked  (count (filter #(= :park (:disposition %)) open))
         cover   (report/coverage post)
@@ -318,6 +320,7 @@
              :report-path        report-path}
       (seq open)       (assoc :open open)
       (seq kept)       (assoc :kept kept :findings-kept (count kept))
+      (seq made)       (assoc :defects-introduced (count made))
       (pos? handed)    (assoc :remaining-handed handed)
       (pos? parked)    (assoc :remaining-parked parked)
       (pos? (+ (:reviewed cover) (:skipped cover)))

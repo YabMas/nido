@@ -1294,7 +1294,15 @@
    may make it, running minutes later in the same stage.
 
    Each finding carries the id the fix stage knows it by, because a finding the
-   fixer leaves unrepaired is answered by that id — see `unrepaired-block`."
+   fixer leaves unrepaired is answered by that id — see `unrepaired-block`.
+
+   The SCOPES clause is unconditional because nothing before the fixer runs can
+   tell a repair that restructures a resource's lifetime from one that does not.
+   It asks for the exits of the scope the fixer moved, which is a different
+   search from a sweep's: a sweep looks for the finding's siblings, and a leak a
+   reorder opens on another exit of the same `with-open` is no sibling of
+   anything. It is also different from the whole-artifact re-read above, which
+   checks the text for consistency and not each control path for each resource."
   [{:keys [findings layer stack settled handoffs]}]
   (str
    "Fix the following code-review findings in this working directory. Make the\n"
@@ -1320,6 +1328,15 @@
    "reviewer's account of what is wrong there. Start from those lines. It is\n"
    "the ORIENTING read that is deferred here, not the re-read above: that one\n"
    "belongs to finishing a repair, and this rule is about starting one.\n\n"
+   "SCOPES YOU RESTRUCTURE — if a repair moves where a resource is acquired or\n"
+   "released relative to the scope that releases it (with-open, try/finally,\n"
+   "defer, using, a cleanup handler), the scope you changed is now yours, not\n"
+   "only the finding. List every exit of it — the normal return, each early\n"
+   "return, each throw, and a throw from a release itself — and check each one\n"
+   "for EVERY resource the scope holds, not just the one the finding named.\n"
+   "Name in your final message the resources and exits you checked. A sweep\n"
+   "looks for this defect elsewhere; this is the defect your own edit can make\n"
+   "here, and it is the one the next round otherwise reports as new.\n\n"
    (stacked-change-block stack layer)
    (handoffs-block handoffs)
    (settled-block settled)
@@ -1981,7 +1998,7 @@
    to nobody. It is asked for on every answer, not only on a `stop`, because the
    round that turns out to be the last one is not knowable while it is running."
   [{:keys [findings history design stance toc answered seen parked inherited inherited-standing
-           fix-outcomes]}]
+           fix-outcomes round]}]
   ;; A branch with no layers is reviewed flat, and there is then no layer label
   ;; for a finding to be attributed to. Asked for one anyway, the warden supplied
   ;; the only stack-shaped thing it had — a file path — on every ruling of the
@@ -2011,6 +2028,9 @@
    " \"findings\": [{\"id\": \"<finding id>\",\n"
    "               \"same_as\": \"<id of the earlier-round finding this is the\n"
    "                             same defect as, or null>\",\n"
+   "               \"introduced_by_round\": <the earlier round whose REPAIR\n"
+   "                             created this defect, or null when the branch\n"
+   "                             arrived with it>,\n"
    (if layered?
      "               \"owner_layer\": \"<layer label from the stack below>\",\n"
      "")
@@ -2135,6 +2155,18 @@
    "This is what lets the loop tell a defect it cannot move from a run that is\n"
    "still making progress. Guessing costs more than leaving it null: two defects\n"
    "welded together are reported as one, and the second is never fixed.\n\n"
+   "INTRODUCED_BY_ROUND — did the loop make this defect?\n"
+   (when round (str "This is round " round ".\n"))
+   "A NEW defect — not `same_as` anything — can be one an earlier round's fixer\n"
+   "created: a repair that moved where a resource is opened relative to the\n"
+   "scope that closes it, and left some exit of that scope leaking. When the\n"
+   "history shows a fix in round N changing the very lines this finding is\n"
+   "about, and the defect is what that change did rather than what it failed\n"
+   "to reach, put N here and say so in `because`. Otherwise null — including\n"
+   "for a recurrence, which the branch had before any fixer touched it.\n"
+   "The run counts what it settled with and without these, so a run whose\n"
+   "repairs kept breaking what they touched does not read as one that found\n"
+   "more.\n\n"
    (disposition-block)
    "Each finding carries a reach the reviewer assigned, and the reviewer was\n"
    "holding the same design record you are: local (the design settles it and the\n"
