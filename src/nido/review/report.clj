@@ -480,6 +480,7 @@
       ;; :confirmed is what the round kept of the judge's confirmations.
       ;; :judged-by is who answered — a stand-in's judgement is not the configured reviewer's,
       ;; on a phase or on the ledger — and :code-identity the tree its confirmations are keyed on.
+      ;; :carried-from is the review whose verdict a round restated with no judge launched.
       ;; :refuted-running is how many readings in a row have refuted each claim whose newest reading
       ;; refuted it, across the workstream's judgements: a claim refuted every round by a different
       ;; counterexample is one no rewording is settling, and nothing else in a round says so.
@@ -507,6 +508,8 @@
                                       (get-in ctx [:record :answer :judged-by])))
                 (get-in ctx [:record :code-identity])
                 (assoc :code-identity (get-in ctx [:record :code-identity]))
+                (get-in ctx [:record :carried-from])
+                (assoc :carried-from (get-in ctx [:record :carried-from]))
                 (seq (:settled ctx))
                 (assoc :settled (mapv (fn [[id {:keys [ws-id seq]}]] {:id id :by seq :ws-id ws-id})
                                       (sort-by key (:settled ctx))))

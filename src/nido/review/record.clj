@@ -167,8 +167,8 @@
                  (str "[" id "] [" (name axis) "] " observation)))]
     (when (seq lines)
       (str "\nOUTSIDE THIS ROUND'S CHECKS. These are part of the record, and the four\n"
-           "derivations are made against them as much as against anything above, so\n"
-           "read them. They are not what you are checking: do not go looking for\n"
+           "derivations are made against them as much as against anything else in this\n"
+           "prompt, so read them. They are not what you are checking: do not go looking for\n"
            "counterexamples to them, and do not list them in confirmed. If making a\n"
            "derivation shows you one of them is false, report it like any other\n"
            "finding, naming its id.\n"
@@ -408,6 +408,43 @@
       (ids "shape")                    (dissoc :shape)
       (ids "composition")              (dissoc :composition))))
 
+(defn- owed-rulings
+  "The ids of `record` a round owes its judge's ruling on: every subject `settled` does not name,
+   less those carrying nothing a judge could check (`settled/nothing-to-check?`). Sorted, because
+   the prompt restates them to the judge as the list its answer is drawn from."
+  [record settled]
+  (let [subjects (settled/subjects record)]
+    (into (sorted-set)
+          (remove #(or (contains? settled %) (settled/nothing-to-check? (subjects %))))
+          (keys subjects))))
+
+(defn- subject-text
+  "What carries a subject id, in a line: a claim's statement, a module's name, an observation, an
+   element's sort, or the text of [shape] and [composition]."
+  [content]
+  (str/join " / " (map #(if (string? %)
+                          %
+                          (or (:statement %) (:property %) (:module %) (:observation %)
+                              (some-> (:sort %) name)))
+                       content)))
+
+(defn- moved-block
+  "What a record whose every subject is settled differs by from the last verified one — the
+   question its round asks, since nothing in it is a check. `moved` is {:from :dropped :fields}, or
+   nil when no verified record precedes it on the ledger."
+  [{:keys [from dropped fields] :as moved}]
+  (if moved
+    (str "\nWHAT MOVED — this record reads as the one at entry " from ", which was\n"
+         "checked and found sufficient, except for:\n"
+         (if (or (seq dropped) (seq fields))
+           (bullets (concat (for [[id content] dropped]
+                              (str "dropped [" id "] " (subject-text content)))
+                            (for [k fields] (str (name k) " reads differently"))))
+           "- nothing a subject id or a field names: only how its lists are arranged")
+         "\n")
+    (str "\nNo verified record precedes this one on the ledger, so there is nothing\n"
+         "narrower to ask than the whole record.\n")))
+
 (def ^:private decomposable-check
   "The decomposition check put to a design written before strata: the cut it states, held to the
    level test, and never blocking — the cut does not survive the landing."
@@ -522,8 +559,8 @@
    claim like any other, and a tension it finds has to reach the design as health."
   [strata]
   (str "\nSTRATA — the levels this area declares, floor first"
-       (if (seq strata) (str ":\n" (bullets strata)) ": none declared within the bound.\n")
-       "Each is an element above, saying what it provides and read through\n"
+       (if (seq strata) (str ":\n" (bullets strata) "\n") ": none declared within the bound.\n")
+       "Each is an element listed in this prompt, saying what it provides and read through\n"
        "stratified/level. That reading is refutable like any other: `sound` is\n"
        "refuted by one of its modules written in another's vocabulary (mixed), by code\n"
        "resting on it that reaches past it (bypassed), by an interface offering\n"
@@ -544,17 +581,33 @@
    counterexample that would refute it, so the question is never `is this any
    good` but `does that specific thing exist`.
 
-   Only what `settled` does not name is put to the judge as a check. The settled
-   subjects follow the checks (`settled-block`), because the record-level
-   derivations are still made against the whole record. Below, `full` is the
-   record and `baseline` is its checks."
-  [{:keys [baseline disputes settled stance prior]}]
+   Only what `settled` does not name is put to the judge as a check, and the checks come LAST,
+   after the settled subjects (`settled-block`) and ahead of the instructions that restate them by
+   id: a judge shown the settled block after its checks confirmed ten of those ids and skipped one
+   of its two checks. The settled subjects are shown at all because the record-level derivations
+   are made against the whole record. Below, `full` is the record and `baseline` is its checks.
+
+   A round over a record whose every subject is settled owes no ruling at all, and is asked only
+   whether the four derivations can still be made — against what `moved` names, the difference
+   from the last verified record (`moved-block`). That is the one prompt told what changed: with no
+   subject to judge there is no delta to read a subject through, and the delta is the question."
+  [{:keys [baseline disputes settled stance prior moved]}]
   (let [full     (judged-alone baseline)
-        baseline (checks-of full (set (keys settled)))]
+        baseline (checks-of full (set (keys settled)))
+        owed     (owed-rulings full settled)
+        ;; Nothing owed and something settled: the judge checks no subject. A record with nothing
+        ;; settled and nothing owed claims nothing, and keeps the prompt it always had.
+        derive?  (and (seq settled) (empty? owed))]
    (str
-   "You are checking whether a BASELINE of an area is TRUE, and whether it is\n"
-   "ENOUGH. You are NOT designing anything, you are not reviewing the code for\n"
-   "defects, and you are not judging whether the area is good.\n\n"
+   (if derive?
+     (str "You are checking whether a BASELINE of an area is ENOUGH. None of it is put\n"
+          "to you as a check of whether it is TRUE, so you are not verifying any claim,\n"
+          "module or observation against the code. You are NOT designing anything, you\n"
+          "are not reviewing the code for defects, and you are not judging whether the\n"
+          "area is good.\n\n")
+     (str "You are checking whether a BASELINE of an area is TRUE, and whether it is\n"
+          "ENOUGH. You are NOT designing anything, you are not reviewing the code for\n"
+          "defects, and you are not judging whether the area is good.\n\n"))
    "ENOUGH FOR WHAT — this is the whole of the second question, and it is not\n"
    "completeness. A baseline exists so a later round can derive four things about a\n"
    "proposed change:\n"
@@ -581,21 +634,22 @@
    "line of SQL is not a finding here however real it is — that belongs to code\n"
    "review, and reporting it here is how a round finds true things forever\n"
    "without ever answering the question that was asked.\n\n"
-   "EVERY CLAIM CARRIES WHAT WOULD REFUTE IT. That is what you go looking for.\n"
-   "Not `does this feel right` — `does that specific counterexample exist in the\n"
-   "code`. Report a finding only when you found one, and say what it is.\n\n"
-   "A COUNTEREXAMPLE THAT NEEDS AN AUDIT OF EVERY CALLER IS THE WRONG ONE, and\n"
-   "when a claim you are checking names one, that is itself the finding — never\n"
-   "for a subject outside this round's checks, which only a counterexample you\n"
-   "actually found can refute. A property about what a\n"
-   "MODULE promises is checked by reading that module. A property phrased as\n"
-   "`every client does X` is not a decomposition claim at all — it is a\n"
-   "conformance claim over N implementations, it has a counterexample for every\n"
-   "client that deviates, and chasing those is how this round finds true things\n"
-   "forever. Where a client deviates from a contract the baseline states, the\n"
-   "deviation belongs in HEALTH — :implementation when the contract is right and\n"
-   "the code drifted, :design when the deviation shows the contract itself is\n"
-   "wrong. Say which, and say it once.\n\n"
+   (when-not derive?
+     (str "EVERY CLAIM CARRIES WHAT WOULD REFUTE IT. That is what you go looking for.\n"
+          "Not `does this feel right` — `does that specific counterexample exist in the\n"
+          "code`. Report a finding only when you found one, and say what it is.\n\n"
+          "A COUNTEREXAMPLE THAT NEEDS AN AUDIT OF EVERY CALLER IS THE WRONG ONE, and\n"
+          "when a claim you are checking names one, that is itself the finding — never\n"
+          "for a subject outside this round's checks, which only a counterexample you\n"
+          "actually found can refute. A property about what a\n"
+          "MODULE promises is checked by reading that module. A property phrased as\n"
+          "`every client does X` is not a decomposition claim at all — it is a\n"
+          "conformance claim over N implementations, it has a counterexample for every\n"
+          "client that deviates, and chasing those is how this round finds true things\n"
+          "forever. Where a client deviates from a contract the baseline states, the\n"
+          "deviation belongs in HEALTH — :implementation when the contract is right and\n"
+          "the code drifted, :design when the deviation shows the contract itself is\n"
+          "wrong. Say which, and say it once.\n\n"))
    ;; Gated on the baseline being ABLE to carry readings, not on it having any.
    ;; Gating on presence hid the vocabulary from exactly the baseline that needed
    ;; it — one with a decomposition and no analysis — so nothing ever told anyone
@@ -604,12 +658,13 @@
    (when (or (contains? baseline :modules) (contains? baseline :model))
      (str (if (some (comp seq :readings)
                     (concat (model/claims full) (model/elements full)))
-            (str "A READING IS A CLAIM TOO, and refutable on its own terms. State read\n"
-                 "as essential is refuted by a derivation that computes it. An ordering\n"
-                 "read as required is refuted by showing the two things commute. A module\n"
-                 "read as deep is refuted by an interface that costs about what it hides.\n"
-                 "A dependency read as on-interface is refuted by a caller reaching past\n"
-                 "it. Check the readings as well as the properties.\n")
+            (when-not derive?
+              (str "A READING IS A CLAIM TOO, and refutable on its own terms. State read\n"
+                   "as essential is refuted by a derivation that computes it. An ordering\n"
+                   "read as required is refuted by showing the two things commute. A module\n"
+                   "read as deep is refuted by an interface that costs about what it hides.\n"
+                   "A dependency read as on-interface is refuted by a caller reaching past\n"
+                   "it. Check the readings as well as the properties.\n"))
             (str "THIS BASELINE READS NOTHING THROUGH ANY PERSPECTIVE. It could — the\n"
                  "vocabulary is below and the record is in a shape that carries readings.\n"
                  "A decomposition recorded with no reading of it is structure without\n"
@@ -621,89 +676,116 @@
           (lens-block)))
    "AREA: " (:area baseline) "\n"
    "BOUNDED BY: " (:bounded-by baseline) "\n"
-   ;; Bracketed like every other subject. An id the judge is never shown is one
-   ;; it cannot cite back, and these two are the ones a decomposition round
-   ;; challenges most.
-   (when-let [s (:shape baseline)] (str "SHAPE: [shape] " s "\n"))
-   (module-block (:modules baseline))
-   (when-let [c (:composition baseline)]
-     (str "\nCOMPOSITION — how those are claimed to produce the behaviour:\n"
-          "[composition] " c "\n"))
-   ;; A baseline in the shared model states its properties as claims about its elements, shown
-   ;; for what is still to check; the survey shape it replaces lists load-bearing properties,
-   ;; headed only while there are claims to check — a record whose every claim is settled has
-   ;; none here, and a header over an empty list reads as a baseline that claims nothing.
-   (if (contains? baseline :model)
-     (model-block (:model baseline) nil)
-     (when (or (seq (:load-bearing baseline)) (empty? (:load-bearing full)))
-       (str "\nLOAD-BEARING — what is claimed to break if violated"
-            (if (some :falsified-by (:load-bearing full))
-              ", each with the\ncounterexample that would refute it:\n"
-              (str ".\n\nThis baseline predates the rule that a claim must name its own\n"
-                   "counterexample, so none of them do. Judge the claims as stated, and treat\n"
-                   "a claim you cannot see any way to refute as a finding in its own right.\n"))
-            (claim-block (:load-bearing baseline)) "\n")))
+   ;; What the record says that no id names — context for the checks, never one of them — ahead
+   ;; of the settled subjects, so that everything after those is a check.
    (when (strata-era? full)
      (strata-block (:strata full)))
-   (when-let [h (seq (:health baseline))]
-     (str "\nHEALTH — claimed about whether what holds is sound. :design means a\n"
-          "weak design cleanly executed; :implementation means a strong design\n"
-          "shakily executed. A mis-axed observation is a finding:\n"
-          ;; Its id first, and it was the one subject with an id that the prompt
-          ;; never printed — so a judge asked to confirm by id could not confirm
-          ;; a health observation at all.
-          (bullets (map #(str (when (:id %) (str "[" (:id %) "] "))
-                              "[" (name (:axis %)) "] " (:observation %)
-                              " [" (str/join ", " (:evidence %)) "]"
-                              (about-strata %))
-                        h))
-          "\n"))
    (when-let [u (seq (:unknowns baseline))]
      (str "\nDECLARED NOT DETERMINED — already honest, not findings:\n" (bullets u) "\n"))
-   (settled-block settled full)
-   "\nTwo distinct failures, and they have different remedies:\n"
-   "1. FALSIFIED — a claim's own counterexample EXISTS. The module hides a\n"
-   "   decision something outside depends on; the `essential` fact is derivable\n"
-   "   from something else the system holds; the `derived` value is also stored\n"
-   "   and edited independently; the composition does not produce the behaviour\n"
-   "   claimed. Show the counterexample, with where it is.\n"
-   "2. INSUFFICIENT — one of the four derivations cannot be made against this\n"
-   "   baseline. Say WHICH (`blocks`) and what the baseline would have to say for it\n"
-   "   to be makeable (`needs`) — the specific missing claim, not `more detail`.\n"
-   "   A gap that blocks none of the four is not a finding here; at most it is a\n"
-   "   health observation, and more often it is the next baseline's business.\n\n"
-   "SUFFICIENT IS THE EXPECTED OUTCOME on any baseline that has done its job. It is\n"
-   "not a high bar and it is not praise — it means a decision can be made against\n"
-   "this, which is all a baseline is for.\n\n"
-   "Every finding MUST cite what it is about — the exact property, module or\n"
-   "composition text. A finding that cites nothing is not a finding; do not\n"
-   "report it. Neither is a finding that reports a bug in code the baseline\n"
-   "correctly describes.\n\n"
-   "Populate confirmed with what you actually went and checked and found to hold —\n"
-   "each by its id, the bracketed slug without the brackets, with the file:line\n"
-   "references you read that show it holds. Every subject carries an id: claims,\n"
-   "modules, health observations, and [shape] and [composition] too. A\n"
-   "confirmation citing nothing you read is not counted.\n\n"
-   "CONFIRMED MEANS EVERY SENTENCE HELD. A clause of a subject that you found\n"
-   "false is a finding against that subject's id — a falsification — even when\n"
-   "the counterexample the subject states does not name that clause. Leave the id\n"
-   "out of confirmed, and do not park the correction in reason: nothing reads it\n"
-   "there.\n\n"
-   "RULE ON EVERY SUBJECT YOU ARE ASKED TO CHECK — everything above, and nothing\n"
-   "listed as outside this round's checks. Each one ends up confirmed, named by a\n"
-   "finding, or in unchecked with why it cannot be checked here: its evidence is\n"
-   "not in the code (production data, a deploy history). An element that is only\n"
-   "an id and a sort says nothing to check and needs no ruling. A subject you\n"
-   "leave without a ruling is not counted as held: the round is asked again, and\n"
-   "a sufficient verdict over it does not stand.\n\n"
-   "Ids, not sentences. A confirmation worded differently each round cannot be\n"
-   "matched to the claim it is about, so the next round cannot tell what is\n"
-   "settled and checks it again instead of checking what nobody has looked at\n"
-   "yet.\n\n"
-   "Return sufficient when they held and the four derivations are makeable. Do\n"
-   "not manufacture findings to look thorough — on this round, thoroughness is\n"
-   "checking the claims that are there, not finding more to say."
-   (prior-findings-block (apply dissoc prior (keys settled)))
+   (settled-block (if derive?
+                    ;; Every subject, bare elements included: the derivations are made against them all.
+                    (merge (zipmap (keys (settled/subjects full)) (repeat {})) settled)
+                    settled)
+                  full)
+   (if derive?
+     (str (moved-block moved)
+          "\nTHE QUESTION THIS ROUND ANSWERS: can the four derivations still be made\n"
+          "against this record as it stands"
+          (when moved ", without what it dropped and with what moved")
+          "? Every\n"
+          "subject listed in this prompt is part of the record and none is a check.\n\n"
+          "Return sufficient when all four can be made. Return INSUFFICIENT when one\n"
+          "cannot: say WHICH (`blocks`) and what the baseline would have to say for it\n"
+          "to be makeable (`needs`) — the specific missing claim, not `more detail`.\n"
+          "Return FALSIFIED only when making a derivation showed you a subject is\n"
+          "false: name it by id and show the counterexample, with where it is.\n\n"
+          "Every finding MUST cite what it is about — the exact property, module or\n"
+          "composition text. A finding that cites nothing is not a finding.\n\n"
+          "Leave confirmed and unchecked empty. Nothing here is put to you as a check,\n"
+          "so a confirmation is not asked for and is not counted.")
+     (str
+      "\nWHAT YOU ARE CHECKING — every subject from here to the instructions below, and\n"
+      "no other:\n"
+      ;; Bracketed like every other subject. An id the judge is never shown is one
+      ;; it cannot cite back, and these two are the ones a decomposition round
+      ;; challenges most.
+      (when-let [s (:shape baseline)] (str "SHAPE: [shape] " s "\n"))
+      (module-block (:modules baseline))
+      (when-let [c (:composition baseline)]
+        (str "\nCOMPOSITION — how those are claimed to produce the behaviour:\n"
+             "[composition] " c "\n"))
+      ;; A baseline in the shared model states its properties as claims about its elements, shown
+      ;; for what is still to check; the survey shape it replaces lists load-bearing properties,
+      ;; headed only while there are claims to check — a record whose every claim is settled has
+      ;; none here, and a header over an empty list reads as a baseline that claims nothing.
+      (if (contains? baseline :model)
+        (model-block (:model baseline) nil)
+        (when (or (seq (:load-bearing baseline)) (empty? (:load-bearing full)))
+          (str "\nLOAD-BEARING — what is claimed to break if violated"
+               (if (some :falsified-by (:load-bearing full))
+                 ", each with the\ncounterexample that would refute it:\n"
+                 (str ".\n\nThis baseline predates the rule that a claim must name its own\n"
+                      "counterexample, so none of them do. Judge the claims as stated, and treat\n"
+                      "a claim you cannot see any way to refute as a finding in its own right.\n"))
+               (claim-block (:load-bearing baseline)) "\n")))
+      (when-let [h (seq (:health baseline))]
+        (str "\nHEALTH — claimed about whether what holds is sound. :design means a\n"
+             "weak design cleanly executed; :implementation means a strong design\n"
+             "shakily executed. A mis-axed observation is a finding:\n"
+             ;; Its id first, and it was the one subject with an id that the prompt
+             ;; never printed — so a judge asked to confirm by id could not confirm
+             ;; a health observation at all.
+             (bullets (map #(str (when (:id %) (str "[" (:id %) "] "))
+                                 "[" (name (:axis %)) "] " (:observation %)
+                                 " [" (str/join ", " (:evidence %)) "]"
+                                 (about-strata %))
+                           h))
+             "\n"))
+      "\nTwo distinct failures, and they have different remedies:\n"
+      "1. FALSIFIED — a claim's own counterexample EXISTS. The module hides a\n"
+      "   decision something outside depends on; the `essential` fact is derivable\n"
+      "   from something else the system holds; the `derived` value is also stored\n"
+      "   and edited independently; the composition does not produce the behaviour\n"
+      "   claimed. Show the counterexample, with where it is.\n"
+      "2. INSUFFICIENT — one of the four derivations cannot be made against this\n"
+      "   baseline. Say WHICH (`blocks`) and what the baseline would have to say for it\n"
+      "   to be makeable (`needs`) — the specific missing claim, not `more detail`.\n"
+      "   A gap that blocks none of the four is not a finding here; at most it is a\n"
+      "   health observation, and more often it is the next baseline's business.\n\n"
+      "SUFFICIENT IS THE EXPECTED OUTCOME on any baseline that has done its job. It is\n"
+      "not a high bar and it is not praise — it means a decision can be made against\n"
+      "this, which is all a baseline is for.\n\n"
+      "Every finding MUST cite what it is about — the exact property, module or\n"
+      "composition text. A finding that cites nothing is not a finding; do not\n"
+      "report it. Neither is a finding that reports a bug in code the baseline\n"
+      "correctly describes.\n\n"
+      "Populate confirmed with what you actually went and checked and found to hold —\n"
+      "each by its id, the bracketed slug without the brackets, drawn only from the\n"
+      "ids listed below, with the file:line references you read that show it holds.\n"
+      "A confirmation citing nothing you read is not counted.\n\n"
+      "CONFIRMED MEANS EVERY SENTENCE HELD. A clause of a subject that you found\n"
+      "false is a finding against that subject's id — a falsification — even when\n"
+      "the counterexample the subject states does not name that clause. Leave the id\n"
+      "out of confirmed, and do not park the correction in reason: nothing reads it\n"
+      "there.\n\n"
+      "Ids, not sentences. A confirmation worded differently each round cannot be\n"
+      "matched to the claim it is about, so the next round cannot tell what is\n"
+      "settled and checks it again instead of checking what nobody has looked at\n"
+      "yet.\n\n"
+      "Return sufficient when they held and the four derivations are makeable. Do\n"
+      "not manufacture findings to look thorough — on this round, thoroughness is\n"
+      "checking the claims that are there, not finding more to say.\n\n"
+      ;; Restated by id, last among the instructions: the list the judge's answer is drawn from,
+      ;; and the thing it is holding when it begins.
+      "RULE ON EVERY SUBJECT YOU ARE ASKED TO CHECK, and on no other. They are exactly\n"
+      "these ids:\n"
+      (if (seq owed) (bullets owed) "- none: this record names no subject a judge could check")
+      "\nEach one ends up confirmed, named by a finding, or in unchecked with why it\n"
+      "cannot be checked here: its evidence is not in the code (production data, a\n"
+      "deploy history). A subject you leave without a ruling is not counted as held:\n"
+      "the round is asked again, and a sufficient verdict over it does not stand."))
+   (when-not derive?
+     (prior-findings-block (apply dissoc prior (keys settled))))
    (disputes-block disputes)
    ;; Last thing in the window before the judge starts work. The level is stated
    ;; near the top, thousands of tokens back by the time the record has been
@@ -1435,6 +1517,54 @@
      :reading {:code-identity      tree
                :subject-identities (settled/subject-identities listing worktree)}}))
 
+(def ^:private provenance
+  "What a baseline carries about where it came from rather than what it says of the area: the
+   reader's stamps, the record it corrects, and the goal it cites."
+  [:seq :at :supersedes :intent])
+
+(defn- provenance-free [record] (apply dissoc record provenance))
+
+(defn- last-verified
+  "The newest baseline on `ledger` (`settled/ledger`) that a review found to hold and nobody
+   retracted, with the newest such review, as {:baseline :review} — or nil."
+  [{:keys [reviews baselines retractions]}]
+  (let [retracted (into #{} (map #(get-in % [:retracts :seq])) retractions)
+        holding   (fn [b] (last (filter #(and (= (:seq b) (:baseline-seq %)) (report/review-holds? %))
+                                        reviews)))]
+    (some (fn [b] (when-let [r (and (not (retracted (:seq b))) (holding b))]
+                    {:baseline b :review r}))
+          (rseq (vec baselines)))))
+
+(defn- moved-since
+  "How `record` differs from `verified`, for a round whose every subject is settled — so no
+   surviving subject moved, and what can have is what settlement cannot see: a subject dropped, or a
+   field no id names (:area, :bounded-by, :drift, :unknowns…). As `moved-block` reads it."
+  [record verified]
+  (let [was       (settled/subjects verified)
+        is        (settled/subjects record)
+        subjected #{:modules :load-bearing :health :model :shape :composition}
+        a         (provenance-free record)
+        b         (provenance-free verified)]
+    {:from    (:seq verified)
+     :dropped (vec (for [[id content] (sort-by key was) :when (not (contains? is id))] [id content]))
+     :fields  (vec (sort (for [k (distinct (concat (keys a) (keys b)))
+                               :when (and (not (subjected k)) (not= (get a k) (get b k)))]
+                           k)))}))
+
+(defn- carried-review
+  "A sufficient review of `baseline` appended with no judge, restating `verified`'s: every subject
+   is settled at this tree and nothing else in the record moved, so a judge would be asked nothing.
+   :carried-from names the review a judge actually reached, across any number of carries."
+  [baseline {:keys [review] v :baseline}]
+  (let [from (or (:carried-from review) (:seq review))]
+    {:format       :baseline-review
+     :verdict      :sufficient
+     :baseline-seq (:seq baseline)
+     :reason       (str "Every subject is settled at this tree, and the record reads as entry " (:seq v)
+                        " in all but where it came from, so the review at entry " from
+                        " that found it sufficient stands for it; no judge was launched.")
+     :carried-from from}))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   baseline-review!
   "Verify a baseline against the code. Returns the ledger record, or
@@ -1469,7 +1599,13 @@
 
    Its claims' subjects are resolved against the declared design at the tree the
    judge reads before a judge is launched, and before either identity is read —
-   see `undeclared-subjects`."
+   see `undeclared-subjects`.
+
+   A round whose every subject is settled owes its judge no ruling, and asks one only when the record
+   moved where settlement cannot see — a subject dropped, a field no id names — against the last
+   verified record on this workstream's ledger: its judge is asked whether the derivations still
+   hold (`moved-since`). A record reading as that one in all but its provenance launches no judge,
+   and is answered by the verdict that one reached (`carried-review`)."
   [{:keys [cwd code-cwd run-id label disputes baseline settled listing subject-identities
            reviewer prior] :as opts}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
@@ -1478,23 +1614,29 @@
         (or (undeclared-subjects project (or code-cwd cwd) baseline listing)
             (let [code-cwd (or code-cwd cwd)
                   settled  (or settled {})
-                  before   (if (contains? opts :code-identity)
-                             (:code-identity opts)
-                             (settled/code-identity code-cwd))
-                  result   (judged (run-round! {:cwd code-cwd :run-id run-id :kind :baseline-review
-                                                :label label :reviewer reviewer
-                                                :prompt (baseline-prompt {:baseline baseline
-                                                                          :disputes disputes
-                                                                          :settled settled
-                                                                          :prior prior
-                                                                          :stance (stages/read-stance project)})})
-                                   #(parse-baseline-review % (:seq baseline)))
-                  after    (settled/code-identity code-cwd)
-                  one-tree (when (= before after) before)
-                  subjects (settled/subjects baseline)
-                  checks   (set (keys (apply dissoc subjects (keys settled))))
-                  asked    (into #{} (remove #(settled/nothing-to-check? (subjects %))) checks)
-                  rests-on (settled/rested-on baseline baseline)]
+                  asked    (owed-rulings baseline settled)
+                  verified (when (and (seq settled) (empty? asked))
+                             (some-> (settled/ledger project ws-id) last-verified))]
+              (if (and verified (:seq baseline)
+                       (= (provenance-free baseline) (provenance-free (:baseline verified))))
+                (carried-review baseline verified)
+                (let [before   (if (contains? opts :code-identity)
+                                 (:code-identity opts)
+                                 (settled/code-identity code-cwd))
+                      result   (judged (run-round! {:cwd code-cwd :run-id run-id :kind :baseline-review
+                                                    :label label :reviewer reviewer
+                                                    :prompt (baseline-prompt {:baseline baseline
+                                                                              :disputes disputes
+                                                                              :settled settled
+                                                                              :prior prior
+                                                                              :moved (some->> (:baseline verified)
+                                                                                              (moved-since baseline))
+                                                                              :stance (stages/read-stance project)})})
+                                       #(parse-baseline-review % (:seq baseline)))
+                      after    (settled/code-identity code-cwd)
+                      one-tree (when (= before after) before)
+                      checks   (set (keys (apply dissoc (settled/subjects baseline) (keys settled))))
+                      rests-on (settled/rested-on baseline baseline)]
               (cond
                 (not (:format result)) result
 
@@ -1508,7 +1650,7 @@
                 (let [kept (select-keys subject-identities rests-on)]
                   (cond-> (rule result checks asked)
                     one-tree                  (assoc :code-identity one-tree)
-                    (and one-tree (seq kept)) (assoc :subject-identities kept))))))
+                    (and one-tree (seq kept)) (assoc :subject-identities kept))))))))
         {:outcome :nothing-to-check
          :detail "the baseline records no load-bearing property and no health observation"})
       {:outcome :no-record :detail "this workstream has no :baseline entry"})
@@ -2835,13 +2977,14 @@
 
 (defn- stamp-run
   "`record` naming the run that appended it, the revision its judge read (`:judged-tree`,
-   `nido.review.tree/stamp`), and — for a re-survey — the design run it is nested in. An outcome
-   is not a record and is left alone."
+   `nido.review.tree/stamp`) when a judge read one, and — for a re-survey — the design run it is
+   nested in. An outcome is not a record and is left alone."
   [record {:keys [run-id within-run judged-tree]}]
   (cond-> record
     (and (:format record) run-id)            (assoc :run-id (str run-id))
     (and (:format record) within-run)        (assoc :within-run (str within-run))
-    (and (:format record) (seq judged-tree)) (assoc :tree judged-tree)))
+    (and (:format record) (seq judged-tree)
+         (nil? (:carried-from record)))      (assoc :tree judged-tree)))
 
 (defn- banking
   "What the report says about whether a round's confirmations can settle anything: how many subjects
@@ -2852,7 +2995,8 @@
     (nil? (:code-identity reading))
     (assoc :unbanked "no identity could be read for this tree, so nothing this round confirms can settle")
 
-    (and (:code-identity reading) (:format record) (nil? (:code-identity record)))
+    (and (:code-identity reading) (:format record) (nil? (:code-identity record))
+         (nil? (:carried-from record)))
     (assoc :unbanked "the tree moved while the judge read it, so nothing this round confirmed can settle")))
 
 (defn- unruled-stop
@@ -3284,11 +3428,13 @@
   #{"codex-failed" "no-output" "round-crashed" "unusable-answer" "code-moved"})
 
 (defn- judge-launched?
-  "Whether a judge phase launched a judge: it reached a verdict, it carries no outcome — a design
-   round's judgement is not folded as a verdict — or its outcome is one of `judge-outcomes`."
+  "Whether a judge phase launched a judge: it reached a verdict no judge was carried from, it
+   carries no outcome — a design round's judgement is not folded as a verdict — or its outcome is
+   one of `judge-outcomes`."
   [ph]
   (let [outcome (some-> (:outcome ph) name)]
-    (boolean (or (:verdict ph) (nil? outcome) (judge-outcomes outcome)))))
+    (boolean (and (nil? (:carried-from ph))
+                  (or (:verdict ph) (nil? outcome) (judge-outcomes outcome))))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :int]}
   judges-launched

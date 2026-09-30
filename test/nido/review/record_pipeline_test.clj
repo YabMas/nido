@@ -1280,7 +1280,8 @@
 
 (deftest a-settled-subject-is-shown-but-is-not-a-check
   (let [p (record/baseline-prompt {:baseline a-baseline :settled {"c1" 2 "shape" 2}})
-        [checks outside] (str/split p #"OUTSIDE THIS ROUND'S CHECKS" 2)]
+        [outside checks] (-> p (str/split #"OUTSIDE THIS ROUND'S CHECKS" 2) second
+                             (str/split #"WHAT YOU ARE CHECKING" 2))]
     (is (some? outside) "every subject is still shown")
     (is (str/includes? outside "[c1] the aggregate is the only summing path"))
     (is (str/includes? outside "[shape] the aggregate is the only thing that sums lines"))
@@ -1289,12 +1290,104 @@
     (is (not (str/includes? checks "[shape]")))
     (is (str/includes? checks "[invoice-resums]") "an unsettled subject is still a check")))
 
+(deftest the-checks-come-last-and-are-restated-by-id
+  ;; Shown the settled block after its checks, a judge confirmed ten of those ids and skipped one of
+  ;; its two checks: what it read last was the list it drew its answer from.
+  (let [p     (record/baseline-prompt {:baseline a-baseline :settled {"c1" 2 "shape" 2}})
+        rule  (second (str/split p #"RULE ON EVERY SUBJECT YOU ARE ASKED TO CHECK" 2))]
+    (is (< (str/index-of p "OUTSIDE THIS ROUND'S CHECKS") (str/index-of p "WHAT YOU ARE CHECKING"))
+        "the settled subjects come before the checks, never after them")
+    (is (= #{"composition" "invoice-resums" "mod-the-order-aggregate"}
+           (set (map second (re-seq #"(?m)^- ([a-z-]+)$" rule))))
+        "the instructions name exactly the open checks, so the confirmed list is drawn from them")))
+
+(def ^:private every-subject
+  "Every subject of `a-baseline`, settled."
+  (into {} (map (fn [id] [id {:ws-id "ws-1" :seq 5}])) (keys (settled/subjects a-baseline))))
+
+(defn- verified-ledger
+  "A ledger on which `verified` was found sufficient, by the review at entry 5."
+  [verified]
+  {:ws-id       "ws-1"
+   :baselines   [(assoc verified :seq 2)]
+   :reviews     [{:format :baseline-review :seq 5 :baseline-seq 2 :verdict :sufficient :reason "ok"}]
+   :retractions []})
+
+(defn- all-settled
+  "What `baseline-review!` returns for `record`, every subject settled, over `ledger` — and the
+   options the judge was launched with, or nil when none was."
+  [record ledger]
+  (let [launched (atom nil)]
+    (with-redefs [record/run-round! (fn [opts] (reset! launched opts)
+                                      {:ok (json/generate-string {:verdict "sufficient" :reason "still derivable"
+                                                                  :findings [] :unchecked [] :confirmed []})})
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  stages/read-stance (constantly nil)
+                  settled/ledger (fn [_ _] ledger)
+                  settled/code-identity (fn [_] "tree-a")]
+      [(record/baseline-review! {:cwd "/w" :run-id "r1" :baseline (assoc record :seq 7)
+                                 :settled every-subject :code-identity "tree-a"})
+       @launched])))
+
+(deftest a-record-reading-as-the-verified-one-is-answered-without-a-judge
+  ;; A judge handed no check re-verified nineteen settled ids at 73k tokens, and every one of its
+  ;; confirmations was discarded. Nothing it could say was asked of it.
+  (let [[r launched] (all-settled (assoc a-baseline :supersedes {:seq 2 :why "restated"})
+                                  (verified-ledger a-baseline))]
+    (is (nil? launched) "no judge is launched")
+    (is (= {:verdict :sufficient :baseline-seq 7 :carried-from 5}
+           (select-keys r [:verdict :baseline-seq :carried-from]))
+        "the verdict the verified record reached stands for this one, naming where it was reached")
+    (is (ledger-report/review-holds? r) "so a design resting on it has a verified premise")
+    (is (= r (ledger-report/validate-event :baseline-review r)) "and the ledger takes it")))
+
+(deftest a-record-that-dropped-a-subject-is-asked-only-whether-the-derivations-hold
+  ;; Settlement is computed over the subjects that survive, so a removal is invisible to it: the one
+  ;; live question is whether the four derivations are still makeable without what was dropped.
+  (let [verified (-> a-baseline
+                     (update :load-bearing conj {:id "c2" :property "the invoice asks the aggregate"})
+                     (assoc :area "order totalling and invoicing"))
+        [r launched] (all-settled a-baseline (verified-ledger verified))
+        p (:prompt launched)]
+    (is (some? launched) "a judge is asked")
+    (is (str/includes? p "dropped [c2] the invoice asks the aggregate") "named with what it said")
+    (is (str/includes? p "- area reads differently") "and a field no id names, which settlement cannot see")
+    (is (str/includes? p "can the four derivations still be made"))
+    (is (not (str/includes? p "Populate confirmed")) "it is asked to confirm nothing")
+    (is (not (str/includes? p "WHAT YOU ARE CHECKING")) "and handed no check")
+    (is (str/includes? p "[c1] the aggregate is the only summing path")
+        "while every subject is still in front of it, since the derivations are made against them")
+    (is (= :sufficient (:verdict r)))
+    (is (nil? (:carried-from r)))))
+
+(deftest an-all-settled-round-with-no-verified-record-asks-about-the-whole-record
+  (let [[_ launched] (all-settled a-baseline (assoc (verified-ledger a-baseline) :reviews []))]
+    (is (str/includes? (:prompt launched) "No verified record precedes this one"))
+    (is (not (str/includes? (:prompt launched) "Populate confirmed")))))
+
+(deftest a-carried-verdict-is-not-counted-as-a-judge
+  (let [carried {:format :baseline-review :verdict :sufficient :reason "carried" :baseline-seq 1
+                 :carried-from 5}
+        out     (with-redefs [record/baseline-review! (fn [_] carried)
+                              record/append! (fn [_ _] nil)
+                              stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                              ws/latest-entry (fn [_ _ _] a-baseline)
+                              settled/code-identity (fn [_] "tree-a")
+                              settled/ledgers (fn [_ _ _] [(assoc settling-ledger :ws-id "ws-1")])]
+                  (run record/judge-stage (ctx)))
+        ph      (persisted-phase :judge out)]
+    (is (= :sufficient (:status out)))
+    (is (= 5 (:carried-from ph)) "the report says whose verdict it restated")
+    (is (nil? (:unbanked ph)) "and does not blame a tree that never moved under a judge")
+    (is (zero? (record/judges-launched {:rounds [{:phases [ph]}]}))
+        "a run whose only round carried a verdict judged nothing")))
+
 (deftest a-record-with-every-claim-settled-heads-no-empty-list
   ;; A header over nothing reads as a baseline that claims nothing, which is the
   ;; opposite of true: every claim is there, outside the checks.
   (let [all-claims (into {} (map (fn [c] [(:id c) 2])) (:load-bearing a-baseline))
-        [checks _] (str/split (record/baseline-prompt {:baseline a-baseline :settled all-claims})
-                              #"OUTSIDE THIS ROUND'S CHECKS" 2)]
+        [_ checks] (str/split (record/baseline-prompt {:baseline a-baseline :settled all-claims})
+                              #"WHAT YOU ARE CHECKING" 2)]
     ;; The header itself, not the word: the lens vocabulary above it says a claim
     ;; lens reads "a LOAD-BEARING CLAIM".
     (is (not (str/includes? checks "LOAD-BEARING — what is claimed"))))
@@ -1307,7 +1400,7 @@
   ;; that the rest are what changed, is judging a delta.
   (let [p (record/baseline-prompt {:baseline a-baseline :settled {"c1" 2}})
         section (-> p (str/split #"OUTSIDE THIS ROUND'S CHECKS" 2) second
-                    (str/split #"\n\nTwo distinct failures" 2) first str/lower-case)]
+                    (str/split #"WHAT YOU ARE CHECKING" 2) first str/lower-case)]
     (doseq [w ["earlier" "before" "previous" "already" "amend" "chang" "settled" "entry" "round of"]]
       (is (not (str/includes? section w)) (str "the section says \"" w "\"")))))
 

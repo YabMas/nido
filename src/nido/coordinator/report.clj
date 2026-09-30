@@ -2486,7 +2486,12 @@
                 ;; Who answered and which revision it read; a review appended before either was
                 ;; kept names neither.
                 [:judged-by  {:optional true} JudgedBy]
-                [:tree       {:optional true} JudgedTree]]
+                [:tree       {:optional true} JudgedTree]
+                ;; The review whose verdict this one restates, present exactly when no judge ran:
+                ;; every subject was settled and nothing else in the record moved since that one
+                ;; held. It names the review a judge reached, so a verdict carried five times
+                ;; does not read as five readings of the code.
+                [:carried-from {:optional true} int?]]
         common (into common Ruling)
         shape  (fn [verdict & extra]
                  (into [:map {:closed true}]
@@ -3982,6 +3987,8 @@
      (concat
       [(str "# Baseline review: " (name verdict))
        (str "of entry " baseline-seq)
+       (when-let [n (:carried-from review)]
+         (str "carried from the review at entry " n " — no judge ran"))
        "" reason]
       (when (seq confirmed)
         (cons "\n## Confirmed against the code"

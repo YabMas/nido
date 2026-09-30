@@ -576,7 +576,7 @@
 
 (deftest the-judge-is-asked-for-ids-not-sentences
   (let [p (record/baseline-prompt {:baseline {:format :baseline}})]
-    (is (str/includes? p "with the file:line\nreferences you read"))
+    (is (str/includes? p "with the file:line references you read"))
     (is (str/includes? p "cannot be\nmatched to the claim"))
     (is (str/includes? p "CONFIRMED MEANS EVERY SENTENCE HELD")
         "a false clause the counterexample does not name is still a finding, not a note in reason")
@@ -619,6 +619,13 @@
   (testing "one written before names the cut it was judged by then"
     (is (str/includes? (record/baseline-prompt {:baseline model-baseline})
                        "  decomposable      can its cut be stated"))))
+
+(deftest the-strata-list-ends-before-the-prose-that-reads-it
+  ;; Glued on, the last stratum read as the first word of the next sentence; and "above" pointed a
+  ;; judge whose every element was settled into the block it is told not to check.
+  (let [p (record/baseline-prompt {:baseline strata-baseline})]
+    (is (str/includes? p "- canvas.order.strata/totals\nEach is an element listed in this prompt")
+        "the list ends its own line, and the prose names where the elements are without a direction")))
 
 (deftest a-design-naming-its-strata-is-judged-on-its-levels-not-its-cut
   (let [p (record/design-prompt {:design strata-design :baseline strata-baseline})]
