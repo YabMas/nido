@@ -886,12 +886,38 @@
    It names the ORIGINAL entry, not the one just read, so a verdict carried
    across five runs still points at the single place a judgment was made.
 
+   What described that run's reading goes, because this run did none: the
+   :reason narrates the rounds and fixes a judge saw, and :findings-classified
+   sorts findings this run never raised. Kept whole, a carry after a clean round
+   read as a judgment about a fix it never made, and counted that run's
+   implementation findings as this one's. The :reason becomes a pointer to the
+   entry that holds the real one; `as-reached` follows it back for the next judge.
+
    `unstamp` because :seq and :at belong to the reader: the write schema is
    closed and refuses an entry carrying them."
   [prior]
-  (-> prior
-      ws/unstamp
-      (assoc :carried-from (or (:carried-from prior) (:seq prior)))))
+  (let [from (or (:carried-from prior) (:seq prior))]
+    (-> prior
+        ws/unstamp
+        (dissoc :findings-classified)
+        (assoc :carried-from from
+               :reason (str "Carried from entry " from ", unchanged: this run gave that"
+                            " verdict nothing to revisit, and no judge read the code for it.")))))
+
+(defn- as-reached
+  "`prior` with the :reason the judge that reached it wrote. A carried entry's own
+   :reason only points at entry :carried-from, and a fresh judge is asked to confirm
+   or move a line of reasoning, which a pointer is not. `prior` as it is when it was
+   not carried, or the original entry cannot be read — a thinner prompt, not a lost
+   run."
+  [cwd prior]
+  (or (when-let [n (:carried-from prior)]
+        (try
+          (when-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+            (when-let [r (:reason (ws/entry-at-seq project ws-id n))]
+              (assoc prior :reason r)))
+          (catch Exception _ nil)))
+      prior))
 
 (defn- bare-claim
   "A claim id as the design states it. The prompt renders ids in brackets and a
@@ -1022,7 +1048,7 @@
                        :fix-outcomes (stages/fix-outcomes (:history final) (:carry final))
                        :status (:status final)
                        :rounds rounds
-                       :prior prior
+                       :prior (as-reached cwd prior)
                        :progress (plan-progress cwd)
                        :standing standing})
               {:keys [num-turns result-error? result-text]}

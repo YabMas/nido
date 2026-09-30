@@ -841,6 +841,48 @@
         "an unmarked carry would claim a reading of the code that never happened,
          so the write contract has to admit the mark")))
 
+(deftest a-carried-verdict-does-not-narrate-the-run-it-came-from
+  (let [v (verdict/carried-forward
+           (assoc standing
+                  :reason "the only fix in round 3 capped the count, and it holds"
+                  :findings-classified [{:finding "3ac05c0b" :as :implementation}]))]
+    (is (not (str/includes? (:reason v) "round 3"))
+        "the reason narrates what a judge saw in the run it read; restated over a
+         run with no fixes it described a repair this run never made")
+    (is (str/includes? (:reason v) "entry 12")
+        "the real reasoning is on the entry the judgment was reached at, and the
+         carry is where a reader has to be sent to find it")
+    (is (nil? (:findings-classified v))
+        "a carry raised and classified nothing; kept, it counted the earlier run's
+         implementation findings as this run's")
+    (is (= (:unraised standing) (:unraised v))
+        "the judgment itself carries: what it found and left open is still open")
+    (is (= v (report/validate-event :design-verdict v)))))
+
+(deftest the-next-judge-reads-the-reasoning-not-the-pointer
+  ;; A carried entry becomes the latest verdict, so it is what the next fresh
+  ;; pass is offered as standing.
+  (let [seen    (atom nil)
+        carried (assoc (verdict/carried-forward standing) :seq 15)]
+    (with-redefs [stages/discover-design-record (fn [_] design)
+                  stages/discover-prior-verdict (fn [_ _] carried)
+                  stages/discover-baseline (fn [_ _] nil)
+                  stages/read-stance (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] ["nido" "ws-1"])
+                  ws/entry-at-seq (fn [_ _ n] (when (= 12 n) standing))
+                  agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! seen first-message)
+                                  {:num-turns 1
+                                   :result-text (fenced "{\"verdict\":\"strained\",\"reason\":\"unmoved\"}")})]
+      (verdict/run! {:cwd "/w" :run-id "r" :budget "30m"
+                     :final {:status :escalated
+                             :findings [{:title "t" :body "b" :disposition :park}]
+                             :history []}
+                     :report {:summary {:rounds 3 :fix-attempts 0}}})
+      (is (str/includes? @seen "the unread indicator is read in two places")
+          "a judge asked to confirm or move a verdict has to be shown why it was
+           reached; a pointer to another entry gives it nothing to weigh"))))
+
 (deftest a-carry-of-a-carry-still-names-the-entry-a-judge-reached-it-at
   ;; Five runs later the pointer must still land on the one place a judgment was
   ;; made, not on the last copy of it.
