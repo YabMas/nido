@@ -641,8 +641,9 @@
       ;; every cross-round question needs — did this fix stop that finding coming
       ;; back — and the report held one side of it and threw the other away.
       ;; :declined comes off the ctx rather than the history entry, because a
-      ;; round in which EVERY fixer declined writes no history entry at all —
-      ;; which is exactly the round whose reasons a reader needs.
+      ;; round in which EVERY fixer declined writes no history entry unless one
+      ;; of them settled a finding — which is exactly the round whose reasons a
+      ;; reader needs.
       ;; :rolled-back beside them, because a repair the stack refused leaves no
       ;; trace anywhere else: the commit is gone, the fixer's log says it
       ;; succeeded, and the findings come back next round looking untouched.
@@ -1110,26 +1111,40 @@
    everything downstream reads titles and files. A round whose warden never
    finished contributes its review's findings unruled, which is what they were.
    Dispositions come back as keywords: the report stores them as the strings
-   JSON left, and every reader of a ruling compares keywords."
+   JSON left, and every reader of a ruling compares keywords.
+
+   The fix phase can rule too: a finding its fixer found already absent at its
+   head is settled there, and the declined row carries that ruling under
+   `:absent`. It is laid over the warden's, as it was over the loop's copy.
+   `:absent` is the round's list of them, which is what enters a round that
+   landed nothing into the history."
   [round]
   (let [review (phase-named round "review")
         warden (phase-named round "warden")
+        fix    (phase-named round "fix")
         by-id  (into {} (map (juxt :id identity))
                      (concat (:findings review) (:promoted warden)))
+        absent (into {} (map (juxt :id #(dissoc % :id))) (mapcat :absent (:declined fix)))
         ruled  (fn [r] (cond-> (merge (by-id (:id r)) r)
-                         (:disposition r) (update :disposition keyword)))]
+                         (:disposition r) (update :disposition keyword)))
+        settle (fn [f] (if-let [a (get absent (or (:handle f) (:id f)))]
+                         (merge f (update a :disposition keyword))
+                         f))]
     {:iter     (:round round)
      :read?    (= "ok" (:status review))
-     :findings (if (= "ok" (:status warden))
-                 (mapv ruled (:rulings warden))
-                 (vec (:findings review)))
-     :fixes    (vec (:fixes (phase-named round "fix")))}))
+     :findings (mapv settle
+                     (if (= "ok" (:status warden))
+                       (mapv ruled (:rulings warden))
+                       (vec (:findings review))))
+     :fixes    (vec (:fixes fix))
+     :absent   (vec (keys absent))}))
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport] :map]}
   as-final
   "The loop's terminal value as far as `report` can rebuild one, for a run that
    never returned its own: `:findings` and `:fixes` of the round it stopped in,
-   `:history` of every earlier round that landed a repair, and
+   `:history` of every earlier round that landed a repair or settled a finding
+   absent, and
    `:review-aborted?` when the stopping round's review never finished.
 
    The shape `nido.review.verdict` folds, so a settled run's remainder, kept
@@ -1144,7 +1159,7 @@
   [report]
   (let [rounds (mapv round-as-ctx (:rounds report))]
     (if-let [stop (peek rounds)]
-      {:history         (into [] (comp (filter #(seq (:fixes %)))
+      {:history         (into [] (comp (filter #(or (seq (:fixes %)) (seq (:absent %))))
                                        (map #(select-keys % [:iter :fixes :findings])))
                               (pop rounds))
        :findings        (:findings stop)

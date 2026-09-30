@@ -593,6 +593,21 @@
      stands, so the branch and the run's published account of it come apart unwatched."
     {:signature [:=> [:catn [:stack :any] [:rounds :any]] :any]
      :delegates [layer-label settled?]})
+  (Operation fixer-answers
+    "What a fixer that changed nothing said about each finding it was handed: absent at its
+     head (with the line that shows it), belongs in a file its layer may not edit, or disputed.
+     The fix stage settles the first, hands the second to the layer that may make it, and stops
+     for a person only on the third — read as one refusal, a fixer showing its finding already
+     gone ended the run `fix-declined` over a tip that was right. Silence is a dispute: nothing
+     is settled or moved on nobody's word."
+    {:signature [:=> [:catn [:text :any] [:ids :any]] :map]})
+  (Operation plan-with-rerouted
+    "The fix plan with a finding added to the entry of a layer above the one whose fixer named
+     that layer's file, inserted at its place in the stack when the plan held no entry for it —
+     so that layer's fixer runs this stage instead of the finding being re-raised at the lower
+     head and routed back to the fixer that could not repair it."
+    {:signature [:=> [:catn [:plan :any] [:stack :any] [:i :int] [:to :any] [:findings :any]] :any]
+     :delegates [layer-label]})
   (Operation layer-fixer-session
     "A stable session id per layer, so a fixer resumed twice continues rather than restarts."
     {:signature [:=> [:catn [:impl-session-id :any] [:label :any]] :string]})
@@ -605,7 +620,7 @@
      that landed, one the stack refused and put back, a fixer's argument for writing nothing,
      a launch that never started — each with its layer, its round, the findings it was handed
      and what the fixer said. Off the history for what landed and the carry for the rest,
-     because a round enters the history only when a fix landed.
+     because a round that landed nothing enters the history only when it settled a finding.
 
      ONE record for every reader of these — the next reviewer of a layer, the warden, the
      design judge — because a reader reasons as if what it is not shown did not happen. Each

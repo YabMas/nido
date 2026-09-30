@@ -992,6 +992,25 @@
     (is (not (verdict/still-answers? {:verdict :sound} (assoc final :findings []) {}))
         "a verdict is not carried over a workstream still holding a row")))
 
+(deftest the-file-a-fixer-named-rides-on-the-owed-row
+  ;; prior-open carries a row past one hop on `:belongs-in`, and it can only read
+  ;; what the entry wrote — on this run's own rows and on the inherited ones alike.
+  (let [final {:history []
+               :findings [{:id "x" :title "t" :disposition :fix :belongs-in "org/domain.clj"}]
+               :carry {:inherited-open [{:id "b" :title "u" :disposition :fix
+                                         :belongs-in "org/other.clj"}]}}]
+    (is (= [["x" "org/domain.clj"] ["b" "org/other.clj"]]
+           (mapv (juxt :id :belongs-in) (verdict/owed-rows final))))))
+
+(deftest a-finding-settled-absent-and-not-raised-again-is-owed-by-nobody
+  ;; review-d28d73aa published 7 open where the tip held 1 park: two of them were
+  ;; findings a fixer had shown were already gone.
+  (let [final {:history [{:iter 1 :fixes []
+                          :findings [{:id "a" :title "t" :disposition :closed
+                                      :authority "absent-at-head"}]}]
+               :findings []}]
+    (is (empty? (verdict/still-owed final)))))
+
 ;; ── A verdict reconciled with the run it judged ────────────────────────────
 
 (def ^:private judged

@@ -1078,11 +1078,12 @@
                   "the rebase conflicts, and the whole attempt — every edit you\n"
                   "made this round, not just that one — is rolled back and lost.\n"
                   "If a finding cannot be resolved without touching one of those\n"
-                  "files, do everything else and NAME the file and what it needs\n"
-                  "in your final message. That is what reaches the layer that\n"
-                  "owns it; editing it here reaches nobody. A finding whose own\n"
-                  "file is listed there is never handed to you — it goes to the\n"
-                  "highest layer touching that file.\n\n"))))))
+                  "files, do everything else and answer it `belongs-in` that file\n"
+                  "(see IF YOU CHANGE NOTHING below). That is what reaches the\n"
+                  "layer that owns it — its fixer is launched this round with\n"
+                  "your words; editing the file here reaches nobody. A finding\n"
+                  "whose own file is listed there is never handed to you — it\n"
+                  "goes to the highest layer touching that file.\n\n"))))))
 
 (defn- handoffs-block
   "What fixers below this one said this stage about files this layer touches —
@@ -1171,6 +1172,29 @@
                           (when because (str "  the decision: " because "\n")))))
               (apply str))
          "\n")))
+
+(def ^:private unrepaired-block
+  "How a fixer answers a finding it leaves unrepaired, parsed by
+   `nido.review.stages/fixer-answers`.
+
+   Three answers because the fix stage does three different things with them:
+   settles an absent defect on the evidence and lets the next round confirm it,
+   hands a belongs-in one to the layer whose files it names, and stops the run
+   for a person only on a dispute. In prose they were one refusal, and a run
+   stopped `:fix-declined` over findings its own fixer had shown were already
+   gone. The evidence each needs is the one a later reader can check: a line
+   for absent, a file for belongs-in."
+  (str "IF YOU CHANGE NOTHING FOR A FINDING, answer it. End your final message\n"
+       "with one line per finding you left unrepaired, by its id, in exactly one\n"
+       "of these forms:\n"
+       "  UNREPAIRED <id> absent <file>:<line> — what the code there shows\n"
+       "  UNREPAIRED <id> belongs-in <file> — what that file needs\n"
+       "  UNREPAIRED <id> disputes — why the finding is wrong or not this branch's\n"
+       "`absent` is for a defect already gone from the code in front of you — the\n"
+       "line is where you saw that, and it settles the finding until a reviewer\n"
+       "reads it there again. `belongs-in` is for a repair in a file you may not\n"
+       "edit. `disputes` is everything else, and it is the one a person reads.\n"
+       "A finding you leave with no such line is taken as disputed.\n"))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   fix-prompt
@@ -1267,7 +1291,10 @@
    `:handoffs` is what the fixers below this one said this stage about this
    layer's files — see `handoffs-block`. It is the fence's other half: a lower
    fixer is told to NAME the change it may not make, and this is the fixer that
-   may make it, running minutes later in the same stage."
+   may make it, running minutes later in the same stage.
+
+   Each finding carries the id the fix stage knows it by, because a finding the
+   fixer leaves unrepaired is answered by that id — see `unrepaired-block`."
   [{:keys [findings layer stack settled handoffs]}]
   (str
    "Fix the following code-review findings in this working directory. Make the\n"
@@ -1299,6 +1326,7 @@
    (->> findings
         (map (fn [f]
                (str "- [P" (:priority f) "] " (:title f) "\n"
+                    "  id: " (or (:handle f) (:id f)) "\n"
                     "  file: " (:file f) ":" (:line-start f) "-" (:line-end f) "\n"
                     (when-let [k (:kind f)]
                       (str "  kind: " k
@@ -1348,7 +1376,9 @@
                              "  change — is to be NAMED in your final message, never\n"
                              "  silently left.\n")))
                     "  " (:body f))))
-        (str/join "\n\n"))))
+        (str/join "\n\n"))
+   "\n\n"
+   unrepaired-block))
 
 (defn- bullets [xs] (str/join "\n" (map #(str "- " %) xs)))
 
@@ -1750,9 +1780,12 @@
     (str "A FIXER WAS HANDED THESE AND CHANGED NOTHING\n"
          "It read the finding, refused to repair it, and said why. That is an\n"
          "argument, not a ruling: the finding is still open and nobody has\n"
-         "answered it. Answer it now — accept the argument and settle the\n"
-         "finding, or reject it and say what the fixer missed. Handing it back\n"
-         "unchanged buys another refusal from the same session:\n"
+         "answered it. Answer it now, by RULING on its id in `findings` even\n"
+         "though no reviewer raised it this round — accept the argument and\n"
+         "settle the finding, or rule it `fix` and say in `because` what the\n"
+         "fixer missed. Accepting it in your `reason` settles nothing: the\n"
+         "finding stays open on the ledger. Handing it back unchanged buys\n"
+         "another refusal from the same session:\n"
          (->> declines
               (map (fn [{:keys [layer round findings account]}]
                      (str "- " (or layer "the branch") ", refused in round " round "\n"
@@ -2001,6 +2034,9 @@
    (when (seq inherited)
      (str "A row under LEFT OWED BY THE LAST RUN may appear too, by its id — see\n"
           "that section.\n"))
+   (when (seq fixer-declines)
+     (str "So may a finding under A FIXER WAS HANDED THESE AND CHANGED NOTHING,\n"
+          "by its id — see that section.\n"))
    "\n"
    "DECISION:\n"
    "- continue: something is worth fixing now.\n"

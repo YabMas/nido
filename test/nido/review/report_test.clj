@@ -1741,6 +1741,27 @@
     (is (= [{:layer "a1" :commit "c" :handed ["h1"]}] (:fixes final)))
     (is (false? (:review-aborted? final)))))
 
+(deftest a-report-rebuilds-a-finding-its-fixer-settled-absent
+  ;; The fix phase rules too. Rebuilt from the warden's rulings alone, the settled
+  ;; finding comes back :fix and owed, and the round that landed nothing drops out
+  ;; of the history it is the only record of.
+  (let [round (fn [n phases] {:round n :status "ok" :phases phases})
+        r {:status "running"
+           :rounds [(round 1 [{:phase "review" :status "ok"
+                               :findings [{:id "f1" :title "Leaks" :file "a.clj"}]}
+                              {:phase "warden" :status "ok"
+                               :rulings [{:id "f1" :disposition "fix"}]}
+                              {:phase "fix" :status "ok"
+                               :declined [{:layer nil :handed ["f1"]
+                                           :absent [{:id "f1" :disposition "closed"
+                                                     :authority "absent-at-head"
+                                                     :because "gone at a.clj:3"}]}]}])
+                    (round 2 [{:phase "review" :status "ok" :findings []}
+                              {:phase "warden" :status "ok" :rulings []}])]}
+        final (report/as-final r)]
+    (is (= [[:closed "absent-at-head"]]
+           (mapv (juxt :disposition :authority) (mapcat :findings (:history final)))))))
+
 (deftest a-run-that-already-ended-is-not-restamped-as-stopped
   ;; A loop finalizes its report and then keeps going — the ledger entry, the
   ;; design verdict, the analysis envelope. Ctrl-C anywhere in there must not

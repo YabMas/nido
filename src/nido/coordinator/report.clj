@@ -1830,12 +1830,19 @@
    ;; put in front of a warden, and still went unreported and unruled, is not
    ;; evidence enough to hold the branch open for ever. A PARK is carried until
    ;; a person answers on the ledger — no quiet run answers a question put to
-   ;; one. It says to a reader that the last two runs were both asked.
+   ;; one — and so is a row carrying `:belongs-in`, below. It says to a reader
+   ;; that the last two runs were both asked.
    [:inherited   {:optional true} boolean?]
    ;; How many repairs for it have landed, across the runs that held it.
    ;; Present only when there was one: a row that has resisted two repairs is
    ;; a different question from one nobody has tried.
-   [:attempts    {:optional true} pos-int?]])
+   [:attempts    {:optional true} pos-int?]
+   ;; The file a fixer said the repair has to be made in — one its own layer may
+   ;; not edit. A row carrying it is not dropped after one hop the way
+   ;; `:inherited` says: the layer that reads the defect is not the one that may
+   ;; repair it, so a quiet run answers nothing, and only a repair, a ruling or
+   ;; a person does.
+   [:belongs-in  {:optional true} [:maybe string?]]])
 
 (def ReviewReport
   "The review-loop outcome as one terminal ledger event (verdict + counts). Points

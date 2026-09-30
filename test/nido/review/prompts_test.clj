@@ -709,7 +709,7 @@ layers, it is not yours"))
         "the file list is the whole point: a label cannot answer whose file this is")
     (is (str/includes? out "rolled back and lost")
         "what it costs to edit one is why the fixer should not")
-    (is (str/includes? out "NAME the file and what it needs")
+    (is (str/includes? out "answer it `belongs-in` that file")
         "a file it may not touch reaches the layer that owns it only if it is said")))
 
 (deftest the-top-layer-is-told-nothing-is-above-it
@@ -1219,7 +1219,18 @@ layers, it is not yours"))
     (is (str/includes? out "5cb720f4"))
     (is (str/includes? out "Datastar 1.0.2 ships one global signal root"))
     (is (str/includes? out "argument, not a ruling")
-        "the warden's own `declined` is a decision; a fixer refusing has decided nothing")))
+        "the warden's own `declined` is a decision; a fixer refusing has decided nothing")
+    (is (str/includes? out "RULING on its id")
+        "an argument accepted in prose left the finding :open :fix on the ledger")))
+
+(deftest the-fixer-answers-what-it-leaves-unrepaired-by-id
+  ;; The fix stage settles, re-routes or stops on the answer, so the fixer has to
+  ;; be told the id it answers by and the three forms it answers in.
+  (let [out (prompts/fix-prompt {:findings [{:priority 1 :title "t" :body "b"
+                                             :id "r1" :handle "h1"}]})]
+    (is (str/includes? out "id: h1") "the handle, as the stage names what it handed")
+    (doseq [form ["absent <file>:<line>" "belongs-in <file>" "disputes"]]
+      (is (str/includes? out (str "UNREPAIRED <id> " form))))))
 
 (deftest a-round-no-fixer-refused-anything-in-says-so-by-silence
   (let [out (prompts/warden-prompt {:findings findings :history []})]

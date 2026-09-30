@@ -581,6 +581,130 @@
       (is (empty? (:launch-failed ctx)) "it ran, so it is no launch failure")
       (is (str/includes? (:reason d) "spans two layers")))))
 
+;; ── A refusal that disputes nothing is not a decline ───────────────────────
+
+(deftest a-fixers-unrepaired-lines-are-read-by-kind
+  (let [text (str "I looked at both.\n\n"
+                  "- UNREPAIRED `aa11` absent `src/chat/message.clj:212` — reads file-id already\n"
+                  "UNREPAIRED bb22 belongs-in src/org/domain.clj — normalise the grouping key\n"
+                  "UNREPAIRED cc33 absent it was fixed somewhere\n"
+                  "UNREPAIRED dd44 disputes the reviewer misread the guard\n")
+        a    (stages/fixer-answers text ["aa11" "bb22" "cc33" "dd44" "ee55"])]
+    (is (= {:kind :absent :where "src/chat/message.clj:212"}
+           (select-keys (a "aa11") [:kind :where]))
+        "a bullet and code spans around the line are still an answer")
+    (is (= {:kind :belongs-in :file "src/org/domain.clj"}
+           (select-keys (a "bb22") [:kind :file])))
+    (is (= :disputes (:kind (a "cc33")))
+        "an absent claim with no line to check is an assertion, and it goes to a person")
+    (is (= :disputes (:kind (a "dd44"))))
+    (is (= :disputes (:kind (a "ee55")))
+        "silence is the refusal :fix-declined was always for; it must settle or move nothing")))
+
+(deftest a-rerouted-finding-joins-the-plan-above-the-layer-that-named-it
+  (let [stack [{:slug "a"} {:slug "b"} {:slug "c"}]
+        plan  [{:label "a" :findings [{:id "1"}]} {:label "c" :findings [{:id "3"}]}]]
+    (is (= [["a" ["1"]] ["b" ["x"]] ["c" ["3"]]]
+           (mapv (juxt :label #(mapv :id (:findings %)))
+                 (stages/plan-with-rerouted plan stack 0 "b" [{:id "x"}])))
+        "a layer the plan did not hold is inserted at its place in the stack, so the
+         stage still runs bottom→top")
+    (is (= [["a" ["1"]] ["c" ["3" "x"]]]
+           (mapv (juxt :label #(mapv :id (:findings %)))
+                 (stages/plan-with-rerouted plan stack 0 "c" [{:id "x"}])))
+        "a layer already owed a launch this stage takes the finding with the rest")))
+
+(deftest a-round-whose-fixer-found-its-finding-already-absent-goes-on
+  ;; review-d28d73aa: the fixer said both findings were already fixed in the
+  ;; tree, :fixes was empty, and the run stopped :fix-declined — a decision a
+  ;; person reads — over a tip that was right.
+  (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false
+                                       :result-text "UNREPAIRED aa11 absent chat/message.clj:212 — reads file-id"})
+                stages/working-copy-dirty? (fn [_] false)
+                jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 2 :control :continue
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})
+          [f] (:findings ctx)]
+      (is (nil? (:status ctx)) "nobody declined anything, so the run is not over")
+      (is (= :continue (:control ctx)) "the next round is the one that confirms the evidence")
+      (is (= [:closed "absent-at-head"] [(:disposition f) (:authority f)]))
+      (is (str/includes? (:because f) "chat/message.clj:212")
+          "the fixer's evidence is the authority, so it is what the ruling says")
+      (is (= 1 (count (:history ctx)))
+          "the round enters the history, or the next round's findings replace it and
+           the close is never folded")
+      (is (nil? (get-in ctx [:carry :fixer-declines]))
+          "a settled finding is not an argument for the next warden to answer"))))
+
+(deftest an-absent-answer-a-reviewer-raised-again-is-a-dispute
+  ;; The confirming round read the code after the fixer's evidence and raised the
+  ;; finding anyway. Settling it on the fixer's word a second time would end that
+  ;; disagreement for it.
+  (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false
+                                       :result-text "UNREPAIRED aa11 absent chat/message.clj:212 — gone"})
+                stages/working-copy-dirty? (fn [_] false)
+                jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 3
+                :history [{:iter 2 :fixes []
+                           :findings [{:id "aa11" :disposition :closed
+                                       :authority "absent-at-head"}]}]
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})]
+      (is (= :fix-declined (:status ctx)))
+      (is (= ["aa11"] (:disputed (first (:declined ctx))))))))
+
+(deftest a-repair-named-in-a-higher-layers-file-is-handed-to-that-layer-this-stage
+  ;; review-8d83f60d: the only fixer of the round named the file and the SQL
+  ;; change, as its prompt told it to, and the run ended :fix-declined before
+  ;; anything could reach the layer that owns the file.
+  (let [launches (atom [])]
+    (with-redefs [agent/launch! (fn [m]
+                                  (swap! launches conj m)
+                                  (if (str/includes? (str (:err-file m)) "fix-lower-")
+                                    {:num-turns 3 :result-error? false
+                                     :result-text "UNREPAIRED aa11 belongs-in b.clj — group on the normalised key"}
+                                    {:num-turns 4 :result-error? false :result-text "done"}))
+                  stages/working-copy-dirty? (let [n (atom 0)] (fn [_] (> (swap! n inc) 1)))
+                  stages/session-stack (fn [_ _] two-layer-stack)
+                  jj/jj! (jj-with-conflicts [])]
+      (let [ctx ((:run stages/fix-stage)
+                 {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 1
+                  :toc [{:label "lower" :files ["a.clj"]} {:label "upper" :files ["b.clj"]}]
+                  :findings [{:id "aa11" :title "x" :file "/w/a.clj"
+                              :disposition :fix :owner-layer "lower"}]})
+            [f] (:findings ctx)]
+        (is (= ["lower" "upper"] (fixers-run @launches))
+            "the upper layer had nothing of its own and is launched for this finding")
+        (is (str/includes? (:first-message (second @launches)) "group on the normalised key")
+            "the lower fixer's words are what the upper one is working from")
+        (is (nil? (:status ctx)) "a repair landed; the round goes on as any other")
+        (is (= [{:id "aa11" :to "upper"}] (:rerouted (first (:declined ctx)))))
+        (is (= ["aa11"] (:handed (first (:fixes ctx)))))
+        (is (= ["upper" "b.clj"] [(:owner-layer f) (:belongs-in f)])
+            "the round's copy owes it of the layer that may repair it, and keeps the
+             file an owed row is carried past one hop on")))))
+
+(deftest a-warden-can-settle-a-refused-finding-no-reviewer-raised-again
+  ;; review-d28d73aa: the round-4 warden wrote 'I accept the round-3 refusal' and
+  ;; the ledger still listed both findings :open :fix, because acceptance in a
+  ;; reason is not a ruling.
+  (let [declines {"lower" {:findings [{:id "h1" :title "x"}]}}
+        rounds   [[{:id "r3" :handle "h1" :title "x" :file "/w/a.clj"
+                    :disposition :fix :owner-layer "lower"}]]
+        ruled    (#'stages/ruled-declined
+                  declines
+                  [{:id "h1" :disposition :closed :authority "false-positive"
+                    :because "the fixer showed the guard is present"}]
+                  {} rounds [])]
+    (is (= [["h1" :closed "/w/a.clj"]] (mapv (juxt :id :disposition :file) ruled))
+        "the ruling lands on the finding as the run last held it")
+    (is (empty? (#'stages/ruled-declined declines [] {} rounds []))
+        "no ruling, no finding: silence leaves the refusal where it was")
+    (is (empty? (#'stages/ruled-declined declines [{:id "h1" :disposition :closed}]
+                                         {} rounds [{:id "h1"}]))
+        "a finding raised again this round is ruled as itself")))
+
 (def ^:private stale-err
   "jj 0.45's refusal of a working copy another operation rewrote, verbatim."
   (str "Error: The working copy is stale (not updated since operation 87994e892b2b).\n"
@@ -4409,6 +4533,17 @@
                                     {:id "b" :layer "core" :title "u" :disposition :fix
                                      :inherited true}])]
       (is (= ["a"] (mapv :id (stages/prior-open "/w"))))))
+
+  (testing "a row a fixer said belongs in another layer's file is carried past one hop"
+    ;; review-d1b147e8: 278bef8b was confirmed real and declined only on
+    ;; ownership, was inherited once, and lapsed to `clean` with the code unchanged.
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (review-ledger
+                                   [{:id "b" :layer "core" :title "u" :disposition :fix
+                                     :inherited true :belongs-in "org/domain.clj"}])]
+      (is (= ["b"] (mapv :id (stages/prior-open "/w")))
+          "the layer that reads it is not the one that may repair it, so quiet runs
+           answer nothing")))
 
   (testing "a workstream with no review behind it seeds nothing"
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
