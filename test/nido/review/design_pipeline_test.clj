@@ -895,6 +895,23 @@
     (is (true? (:amended? out)))
     (is (contains? (set (map :what (:retreats out))) :effort-lowered))))
 
+(deftest an-amendment-extending-breaks-shows-in-its-delta
+  ;; Extending :breaks is how an amendment repairs a broken relation-honest. A delta that
+  ;; omitted the citation reported that round as having moved nothing, so the report hid
+  ;; the one repair the round was for.
+  (let [extended (assoc-in a-design [:baseline :breaks] ["p" "q"])
+        [out _]  (with-amend {:writes (fn [p] (spit p (pr-str {:record extended})))}
+                             (ctx :findings [(check :relation-honest :broken)]
+                                  :record (decision :amend)))]
+    (is (= {:changed ["baseline"]} (:amend-delta out))
+        "the citation's change is named, under the key the report reads"))
+  (testing "and an amendment that leaves the citation alone does not name it"
+    (let [reworded (assoc a-design :shape "one rounding boundary, at the invoice")
+          [out _]  (with-amend {:writes (fn [p] (spit p (pr-str {:record reworded})))}
+                               (ctx :findings [(check :relation-honest :broken)]
+                                    :record (decision :amend)))]
+      (is (= {:changed ["shape"]} (:amend-delta out))))))
+
 (deftest recut-and-amend-are-given-different-jobs
   (let [prompts (atom [])]
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])

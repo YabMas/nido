@@ -981,10 +981,17 @@
   "Which subjects (`settled/subjects`) an amendment `record` adds, changes and drops against `prev`,
    the record it repairs, by id — only the non-empty of the three, and nil when it moves none. A
    subject whose text an amendment left alone is still settled next round; these are the ones the
-   next judge is asked about again."
+   next judge is asked about again.
+
+   A design's :baseline citation — its relation and :breaks — counts as one more subject, keyed
+   \"baseline\", because extending :breaks is how an amendment repairs relation-honest and a delta
+   without it reports that repair as no change. It is here and not in `settled/subjects`, which
+   decides what a judge owes a ruling on: the citation is judged by relation-honest, never by id."
   [prev record]
-  (let [was (settled/subjects prev)
-        is  (settled/subjects record)]
+  (let [with-citation #(cond-> (settled/subjects %)
+                         (some? (:baseline %)) (update "baseline" (fnil conj []) (:baseline %)))
+        was (with-citation prev)
+        is  (with-citation record)]
     (not-empty
      (into {} (filter (comp seq val))
            {:added   (vec (sort (remove was (keys is))))
