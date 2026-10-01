@@ -86,13 +86,13 @@
       (spit (str (fs/path work "canvas" "d.clj")) "the design's declaration\n")
       (spit (str (fs/path work "canvas" "e.clj")) "a new declaration\n")
       (let [seen (tree/with-reading!
-                  work {:rev base :overlay ["canvas"]} "round-1" dir
-                  (fn [d]
-                    {:dir  d
-                     :code (slurp (str (fs/path d "src" "a.clj")))
-                     :decl (slurp (str (fs/path d "canvas" "d.clj")))
-                     :new  (fs/exists? (fs/path d "canvas" "e.clj"))
-                     :ws   (workspaces home)}))]
+                   work {:rev base :overlay ["canvas"]} "round-1" dir
+                   (fn [d]
+                     {:dir  d
+                      :code (slurp (str (fs/path d "src" "a.clj")))
+                      :decl (slurp (str (fs/path d "canvas" "d.clj")))
+                      :new  (fs/exists? (fs/path d "canvas" "e.clj"))
+                      :ws   (workspaces home)}))]
         (is (= dir (:dir seen)))
         (is (= "base code\n" (:code seen)) "the code is the fork point's")
         (is (= "the design's declaration\n" (:decl seen)) "the declaration is the worktree's")
@@ -112,9 +112,22 @@
       (spit (str (fs/path work "src" "a.clj")) "the change\n")
       (is (thrown-with-msg? Exception #"boom"
                             (tree/with-reading! work {:rev base :overlay []} "round-2" dir
-                                                (fn [_] (throw (ex-info "boom" {}))))))
+                              (fn [_] (throw (ex-info "boom" {}))))))
       (is (not (fs/exists? dir)))
       (is (not (str/includes? (workspaces home) "round-2")))
+      (finally (fs/delete-tree root)))))
+
+(deftest a-produced-tree-whose-run-directory-does-not-exist-yet-is-produced
+  ;; A round produces its tree at <run-dir>/tree before anything else has written the run's
+  ;; directory, and jj will not add a workspace under a parent that does not exist.
+  (let [{:keys [root work base]} (repo!)
+        dir (str (fs/path root "runs" "design-loop-x" "tree"))]
+    (try
+      (spit (str (fs/path work "src" "a.clj")) "the change\n")
+      (is (= "base code\n"
+             (tree/with-reading! work {:rev base :overlay []} "round-4" dir
+               (fn [d] (slurp (str (fs/path d "src" "a.clj")))))))
+      (is (not (fs/exists? dir)))
       (finally (fs/delete-tree root)))))
 
 (deftest a-tree-that-cannot-be-produced-throws-before-the-round
@@ -123,8 +136,8 @@
     (try
       (is (thrown-with-msg? Exception #"could not check out"
                             (tree/with-reading! work {:rev "no-such-revision" :overlay []} "round-3"
-                                                (str (fs/path root "produced"))
-                                                (fn [_] (reset! called true)))))
+                              (str (fs/path root "produced"))
+                              (fn [_] (reset! called true)))))
       (is (false? @called))
       (finally (fs/delete-tree root)))))
 

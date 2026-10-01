@@ -170,14 +170,17 @@
    A plan naming a directory is handed through. A plan naming a revision is produced first — a
    jj workspace named `ws-name` at `dir`, checked out at the revision, with the worktree's
    overlay dirs copied over the revision's — and removed when `f` returns or throws, so the
-   repo lists no workspace of the round's after it. `dir` must not exist. Throws when the
+   repo lists no workspace of the round's after it. `dir` must not exist; its parent is
+   created when missing, because jj adds no workspace under a parent that does not exist and
+   a round's tree sits in a run directory nothing has written yet. Throws when the
    workspace cannot be added, before `f` is called: a round has no tree to fall back to that
    would not be the wrong one. Throws, too, when the workspace cannot be removed, rather than
    answer as though it were gone; when `f` threw as well, that failure rides on f's throw."
   [worktree {:keys [rev overlay] :as plan} ws-name dir f]
   (if-not rev
     (f (:dir plan))
-    (let [{:keys [exit err]} (jj/jj! worktree "workspace" "add" "--name" ws-name
+    (let [_ (fs/create-dirs (fs/parent (fs/absolutize dir)))
+          {:keys [exit err]} (jj/jj! worktree "workspace" "add" "--name" ws-name
                                      "--revision" rev (str dir))]
       (when-not (zero? (long exit))
         (let [failure (ex-info (str "could not check out " rev " to judge against: " err)
