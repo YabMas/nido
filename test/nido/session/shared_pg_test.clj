@@ -224,6 +224,21 @@
                 "script = 'V234__add_foo.sql' WHERE version = '100';")
            sql))))
 
+;; brian's migrations open by naming their own file, so the body main carries
+;; differs from the one the branch ran in exactly that line (brian's
+;; V20261001101000__derivatives_name_their_variant, applied as V20260929103000).
+(deftest advance-rekeys-a-re-versioned-migration-that-names-its-own-file
+  (let [body-as  #(str "-- " % "\nCREATE TABLE brian.foo (id int);\n")
+        checksum (let [f (fs/create-temp-file)]
+                   (spit (str f) (body-as "V100__add_foo.sql"))
+                   (try (pg/flyway-checksum (str f)) (finally (fs/delete f))))
+        {:keys [n sql]} (advance-with-history
+                         (str "100\u001f" checksum "\u001fadd foo\n")
+                         (body-as "V234__add_foo.sql"))]
+    (is (= 1 n))
+    (is (not (str/includes? sql "CREATE TABLE")) "the body is not run a second time")
+    (is (str/starts-with? sql "UPDATE brian.flyway_schema_history SET version = '234'"))))
+
 (deftest advance-still-applies-a-re-versioned-migration-whose-body-changed
   (let [{:keys [sql]} (advance-with-history "100\u001f12345\u001fadd foo\n"
                                             "CREATE TABLE brian.foo (id int);\n")]

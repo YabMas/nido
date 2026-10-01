@@ -350,6 +350,31 @@
                       [[c d] v]))))
           (remove str/blank? (str/split-lines (:out result))))))
 
+(defn- applied-as
+  "The [checksum description] key of the `reversioned` row that already ran
+   main's migration `file` (its body at `file-path`), or nil.
+
+   A row matches on description and on checksum, the checksum taken either over
+   main's body as it is or over it with every mention of its own script name
+   rewritten to the row's. brian's migrations open with a comment naming their
+   own file, so re-versioning one changes that line and nothing else — a match
+   on the raw checksum alone never fires for them, and the DDL is re-run."
+  [reversioned file-path file checksum desc]
+  (or (when (contains? reversioned [checksum desc]) [checksum desc])
+      (let [version (migration-file->version file)
+            tail    (subs file (count (str "V" version)))
+            body    (slurp file-path)]
+        (some (fn [[[c d :as k] from]]
+                (when (= d desc)
+                  (let [renamed (fs/create-temp-file {:suffix ".sql"})]
+                    (try
+                      (spit (str renamed)
+                            (str/replace body file (str "V" from tail))
+                            :encoding "UTF-8")
+                      (when (= c (pg/flyway-checksum (str renamed))) k)
+                      (finally (fs/delete-if-exists renamed))))))
+              reversioned))))
+
 (defn- history-rekey-sql
   "Move an applied history row from its branch version to main's, so the
    migration it records is not run a second time."
@@ -419,12 +444,13 @@
                     checksum  (pg/flyway-checksum file-path)
                     desc      (migration-file->description f)
                     version   (migration-file->version f)
-                    ;; Same checksum AND description as a row main dropped: this
-                    ;; body already ran here under its branch version. Re-key the
-                    ;; row rather than re-run DDL that would fail on its own
-                    ;; objects. A body that changed on the way to main does not
-                    ;; match, and is applied — and fails — as before.
-                    from      (get reversioned [checksum desc])
+                    ;; A row main dropped whose body is this one: it already ran
+                    ;; here under its branch version. Re-key the row rather than
+                    ;; re-run DDL that would fail on its own objects. A body that
+                    ;; changed on the way to main beyond naming its own file does
+                    ;; not match, and is applied — and fails — as before.
+                    matched   (applied-as reversioned file-path f checksum desc)
+                    from      (some->> matched (get reversioned))
                     combined  (if from
                                 (history-rekey-sql {:schema schema :from-version from
                                                     :version version :script f})
@@ -447,7 +473,7 @@
                   (core/log-step (str "  V" version " already applied as V" from
                                       " (re-versioned on main) — history re-keyed")))
                 (recur more (if from rank (inc rank)) (inc applied)
-                       (dissoc reversioned [checksum desc])))))
+                       (dissoc reversioned matched)))))
           (finally
             (fs/delete-tree tmp)))))))
 
