@@ -2451,7 +2451,8 @@
    :unchecked is what the judge declared it could not check here, and why — evidence that is not
    in the code (production data, a deploy history), say. A ruling, visibly not a confirmation.
    :unruled is every check the judge left without any ruling: not confirmed with evidence, not
-   found against, not declared unchecked (nor, on a decision, :owed). Derived by the round, never
+   found against, not declared unchecked (nor, on a decision, :owed) — and, on a decision, every
+   baseline id with no :relation-rulings entry. Derived by the round, never
    by the judge, and it is what stops the judgement holding — see `review-holds?` and `proceeds?`.
    :read-once is every id this judgement confirmed that no confirmation before it, at the same
    content and tree, had: a first reading. Derived by the round, and it stops the judgement
@@ -2683,6 +2684,15 @@
                 ;; What each declared stratum the design names concluded, read by a judge of its own
                 ;; before the deciding one — present when the design named any.
                 [:strata-read        {:optional true} [:vector StratumReading]]
+                ;; relation-honest ruled one baseline id at a time: each id the baseline names, and
+                ;; whether this design stops it being true. What the design's :breaks is held to.
+                ;; Optional because a decision made before the ruling was asked, or against a
+                ;; baseline naming no ids, carries none.
+                [:relation-rulings   {:optional true}
+                 [:vector [:map {:closed true}
+                           [:id     string?]
+                           [:ruling [:enum :breaks :stands]]
+                           [:reason string?]]]]
                 ;; As on a baseline review.
                 [:judged-by          {:optional true} JudgedBy]
                 [:tree               {:optional true} JudgedTree]]

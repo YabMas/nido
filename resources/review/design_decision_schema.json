@@ -8,6 +8,7 @@
     "findings",
     "confirmed",
     "unchecked",
+    "relation_rulings",
     "asks"
   ],
   "properties": {
@@ -161,6 +162,37 @@
           },
           "reason": {
             "type": "string"
+          }
+        }
+      }
+    },
+    "relation_rulings": {
+      "type": "array",
+      "description": "One ruling per baseline id listed under relation-honest — every one of them, and nothing else. Empty only when the prompt lists none.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "ruling",
+          "reason"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The baseline id as listed, without the brackets."
+          },
+          "ruling": {
+            "type": "string",
+            "enum": [
+              "breaks",
+              "stands"
+            ],
+            "description": "breaks: this design stops the id being true of the area, so it belongs under :breaks. stands: it is still true once this design is built."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why — for stands, what keeps it true; for breaks, what in the design moves it."
           }
         }
       }

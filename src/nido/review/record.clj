@@ -904,6 +904,50 @@
             [(str "\n    principles: " (str/join "; " p))])
           (when-let [n (:note m)] [(str "\n    because: " n)]))))
 
+(defn- relation-subjects
+  "Every id relation-honest is ruled on, as `[kind id]` with kind `:claim`, `:module` or
+   `:stratum`, in that order: the baseline's claims (load-bearing properties, in either shape), its
+   modules and its strata. Each once; empty for no baseline.
+
+   An enumeration and not a description, because a judge asked to sweep `each claim and each module`
+   sweeps what it happens to read: one design's :breaks grew six, eight, twelve over three rounds,
+   each round finding ids the last had not, and strata were never named to it at all."
+  [baseline]
+  (let [m      (:model baseline)
+        of     (fn [sort] (keep #(when (= sort (:sort %)) (:id %)) (:elements m)))
+        tagged (concat (map #(vector :claim %) (keep :id (concat (:claims m) (:load-bearing baseline))))
+                       (map #(vector :module %) (concat (of :module) (keep :id (:modules baseline))))
+                       (map #(vector :stratum %) (concat (of :stratum) (:strata baseline))))]
+    (first (reduce (fn [[acc seen] [k id]]
+                     (let [id (str id)]
+                       (if (or (str/blank? id) (seen id))
+                         [acc seen]
+                         [(conj acc [k id]) (conj seen id)])))
+                   [[] #{}]
+                   tagged))))
+
+(defn- relation-yardstick
+  "The ids `design` is ruled on per id: `baseline`'s (`relation-subjects`), when the design declares
+   a relation to it. A design from before the baseline event declares none and has no :breaks to hold
+   to them, so it gets none."
+  [design baseline]
+  (if (get-in design [:baseline :relation]) (relation-subjects baseline) []))
+
+(defn- relation-ids-lines
+  "`subjects` (`relation-subjects`) as a judge or an amender reads them: one line per kind, each
+   prefixed by `indent`. `rulings`, by id, is printed beside each id when given."
+  [subjects indent rulings]
+  (str/join
+   (for [[k label] [[:claim "claims"] [:module "modules"] [:stratum "strata"]]
+         :let [ids (keep (fn [[kind id]] (when (= k kind) id)) subjects)]
+         :when (seq ids)]
+     (str indent label ":\n"
+          (str/join (for [id ids
+                          :let [{:keys [ruling reason]} (get rulings id)]]
+                      (str indent "  [" id "]"
+                           (when ruling (str " " (name ruling) (when-not (str/blank? reason) (str " — " reason))))
+                           "\n")))))))
+
 (defn- levels-block
   "What each named stratum's own judge concluded, for the deciding judge: the level's declared
    vocabulary beside its verdict, or the outcome that stood in for one. Evidence, never the decision."
@@ -1021,9 +1065,10 @@
   design-prompt
   "The decision prompt. Derives what can be derived; hands the rest over."
   [{:keys [design baseline stance intent disputes settled levels prior answers]}]
-  (let [owes?    (report/owes-a-person? design)
-        design   (judged-alone design)
-        baseline (judged-alone baseline)]
+  (let [owes?        (report/owes-a-person? design)
+        design       (judged-alone design)
+        baseline     (judged-alone baseline)
+        relation-ids (relation-yardstick design baseline)]
    (str
    "You are deciding whether a change should be EXECUTED, before any code is\n"
    "written. This is the last cheap moment to say it should not be.\n\n"
@@ -1107,14 +1152,22 @@
    "                      the baseline line it moves (that module's interface\n"
    "                      or what it hides, or the property) is what the\n"
    "                      :revisit names under :breaks. Say which line.\n"
-   "                      Derive it PER BASELINE CLAIM, never as one reading of\n"
-   "                      the relation and its note: for each load-bearing\n"
-   "                      claim and each module the baseline states, ask which\n"
-   "                      of them this design stops being true of. Every one it\n"
-   "                      stops being true of belongs under :breaks, whatever\n"
-   "                      the relation is called — and a note that itself says\n"
-   "                      the design moves something the baseline records is\n"
-   "                      that claim broken, not a lenient reading to hold.\n"
+   (if (seq relation-ids)
+     (str "                      Derive it PER BASELINE ID, never as one reading of\n"
+          "                      the relation and its note. Rule on EVERY id below in\n"
+          "                      relation_rulings: `breaks` when this design stops it\n"
+          "                      being true, `stands` with why it is still true.\n"
+          "                      Every id ruled breaks belongs under :breaks, whatever\n"
+          "                      the relation is called, and an id under :breaks you\n"
+          "                      rule stands is a :breaks claiming too much; either\n"
+          "                      is relation-honest broken, and nido holds the check\n"
+          "                      to your rulings. A note that itself says the design\n"
+          "                      moves something the baseline records is that id\n"
+          "                      broken, not a lenient reading to hold.\n"
+          (relation-ids-lines relation-ids "                        " nil))
+     (str "                      The baseline names no ids to rule on one by one, so\n"
+          "                      relation_rulings stays empty; derive it from the\n"
+          "                      relation and what the baseline states.\n"))
    "  goal-served       — does it serve the goal, and ONLY the goal? Under-\n"
    "                      serving is easy to see. OVER-serving is the common\n"
    "                      one: the goal plus a good deal more, every piece\n"
@@ -1364,6 +1417,14 @@
                                        :note   (str (:note c))}))))
                        (:checks m))
           findings (normalize-findings (:findings m))
+          ;; One ruling per id — the first, so a repeated id cannot overturn itself in one answer.
+          rulings  (->> (if (sequential? (:relation_rulings m)) (:relation_rulings m) [])
+                        (keep (fn [r]
+                                (let [id (slug (:id r))
+                                      k  (keyword (str (:ruling r)))]
+                                  (when (and (not (str/blank? id)) (#{:breaks :stands} k))
+                                    {:id id :ruling k :reason (str (:reason r))}))))
+                        (reduce (fn [acc r] (if (some #(= (:id r) (:id %)) acc) acc (conj acc r))) []))
           asks     (str (:asks m))]
       ;; An :ask needs no finding: what it hands on is the question, and a doubt the build must not
       ;; start without is one whether or not it breaks a check.
@@ -1378,8 +1439,55 @@
                               :checks checks
                               :asks asks}
                              m)
-          (and (not= :proceed r) (seq findings)) (assoc :findings findings))))
+          (and (not= :proceed r) (seq findings)) (assoc :findings findings)
+          (seq rulings)                          (assoc :relation-rulings rulings))))
     (catch Exception _ nil)))
+
+(defn- relation-held
+  "`decision` held to its own per-id rulings on relation-honest, against the design's `:breaks`.
+
+   An id it never ruled on is :unruled, as a claim it never ruled on is, so the decision does not
+   proceed over it. An id ruled `breaks` that :breaks omits, or named under :breaks and ruled
+   `stands`, is relation-honest broken whatever the judge called the check — the ruling and the
+   check are its two answers to one question, and the ruling is the one made id by id. A :proceed
+   over such a mismatch becomes :amend, with one finding listing the ids and the judge's reasons.
+
+   `subjects` empty — a design with no baseline relation, or a baseline naming no ids — leaves the
+   decision as it is, and so does a relation-honest the judge could not derive: its rulings answer a
+   check with no yardstick, and holding them would turn the :underivable it reported into :unruled."
+  [decision subjects breaks]
+  (if (or (empty? subjects)
+          (some #(and (= :relation-honest (:check %)) (= :underivable (:status %))) (:checks decision)))
+    decision
+    (let [ruled     (into {} (map (juxt :id identity)) (:relation-rulings decision))
+          breaks    (into #{} (map slug) breaks)
+          ids       (mapv second subjects)
+          unruled   (remove ruled ids)
+          omitted   (filterv #(and (= :breaks (get-in ruled [% :ruling])) (not (breaks %))) ids)
+          overclaim (filterv #(and (= :stands (get-in ruled [% :ruling])) (breaks %)) ids)
+          wrong     (concat omitted overclaim)
+          why       (str "ruled per baseline id"
+                         (when (seq omitted)
+                           (str "; ruled breaks, absent from :breaks: " (str/join ", " omitted)))
+                         (when (seq overclaim)
+                           (str "; under :breaks, ruled standing: " (str/join ", " overclaim))))
+          check     {:check :relation-honest :status :broken :note why}
+          checks    (if (some #(= :relation-honest (:check %)) (:checks decision))
+                      (mapv #(if (= :relation-honest (:check %))
+                               (update check :note (fn [n] (str (:note %) " — " n)))
+                               %)
+                            (:checks decision))
+                      (conj (vec (:checks decision)) check))]
+      (cond-> decision
+        (seq unruled) (update :unruled #(vec (distinct (concat % unruled))))
+        (seq wrong)   (-> (assoc :checks checks)
+                          (update :findings (fnil conj [])
+                                  (cond-> {:check :relation-honest
+                                           :cites (vec wrong)
+                                           :claim (str ":breaks does not match the per-id rulings — " why)}
+                                    (seq (keep #(:reason (ruled %)) wrong))
+                                    (assoc :evidence (mapv #(str % ": " (:reason (ruled %))) wrong)))))
+        (and (seq wrong) (= :proceed (:recommend decision))) (assoc :recommend :amend)))))
 
 (defn- run-round!
   "One read-only reviewer pass over a record — `:reviewer`, or codex, with
@@ -1880,7 +1988,8 @@
    claims, the `:listing` and the identities they were settled at come from the
    stage that chose them. Settled claims are shown apart and are not checks; the
    decision's ruling is held to its checks by `rule`, and a claim it was handed and
-   left without a ruling is named under :unruled. It carries `:code-identity`, and
+   left without a ruling is named under :unruled — and so is a baseline id relation-honest is ruled
+   on per id, whose rulings the decision is then held to (`relation-held`). It carries `:code-identity`, and
    the `:subject-identities` of what the design's subjects rest on beside it, only when the tree read
    as the judge launched is the tree read as it returned — and a round holding
    settled claims whose tree moved appends nothing, answering
@@ -1893,6 +2002,7 @@
           (undeclared-subjects project (or code-cwd cwd) (effective-design cwd design) listing)
           (let [code-cwd  (or code-cwd cwd)
                 effective (effective-design cwd design)
+                baseline  (stages/discover-baseline cwd design)
                 settled  (or settled {})
                 before   (if (contains? opts :code-identity)
                            (:code-identity opts)
@@ -1908,7 +2018,7 @@
                                    :label label :reviewer reviewer
                                    :prompt (design-prompt
                                             {:design   design
-                                             :baseline (stages/discover-baseline cwd design)
+                                             :baseline baseline
                                              :stance   (stages/read-stance project)
                                              :intent   (discover-intent cwd design)
                                              :disputes disputes
@@ -1936,7 +2046,9 @@
 
               :else
               (let [kept (select-keys subject-identities rests-on)]
-                (cond-> (rule result checks asked)
+                (cond-> (-> (rule result checks asked)
+                            (relation-held (relation-yardstick design baseline)
+                                           (get-in design [:baseline :breaks])))
                   (seq levels)              (assoc :strata-read (mapv :reading levels))
                   one-tree                  (assoc :code-identity one-tree)
                   (and one-tree (seq kept)) (assoc :subject-identities kept))))))
@@ -3720,8 +3832,10 @@
    finding that broke none of the four and is about a claim instead. Both are
    answerable and both are disputable, and the number is how: the amender
    objects by ordinal and never by matching text. `:findings` is the judge's own
-   prose beneath them, which says more and is keyed to nothing."
-  [{:keys [design baseline recommend reason asks raised findings out-path declared? check-cmd settled]}]
+   prose beneath them, which says more and is keyed to nothing. `:rulings` is the judge's per-id
+   relation-honest ruling, printed beside each baseline id the amender has to hold :breaks to."
+  [{:keys [design baseline recommend reason asks raised findings rulings out-path declared? check-cmd
+           settled]}]
   (str
    "A read-only judge derived what could be derived about this DESIGN record,\n"
    "before any code is written, and it did not come out clean.\n\n"
@@ -3785,6 +3899,16 @@
    (some->> (bearing-block (bearing-subjects {:record design :baseline baseline :settled settled
                                               :findings (concat raised findings)}))
             str/trimr (str "\n\n"))
+   (when-let [ids (seq (relation-yardstick design baseline))]
+     (str "\n\nTHE BASELINE'S IDS, which relation-honest is ruled on one by one"
+          (if (seq rulings) ", as the judge ruled them" " — the judge ruled on none")
+          ".\n"
+          "Whatever else you change, :baseline :breaks names exactly the ids this record stops\n"
+          "being true of — each one ruled breaks, none ruled stands — and the next judge rules on\n"
+          "every id again and holds :breaks to it. Go through the whole list, not only the ids a\n"
+          "line above names: a :breaks repaired one omission at a time takes a round per omission.\n"
+          "Where a ruling is wrong about the code, dispute the relation-honest line instead.\n"
+          (relation-ids-lines ids "  " (into {} (map (juxt :id identity)) rulings))))
    ;; A design in the shared model states elements of its own, and they and its claims carry
    ;; readings — which the ledger refuses outside the registry whichever record they are on.
    (when (contains? design :model)
@@ -4131,6 +4255,7 @@
                                           :asks (get-in ctx [:record :asks])
                                           :raised (:findings ctx)
                                           :findings (get-in ctx [:record :findings])
+                                          :rulings (get-in ctx [:record :relation-rulings])
                                           :out-path out-path
                                           :check-cmd (when check-cmd (check-cmd out-path))
                                           :settled (:settled ctx)

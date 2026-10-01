@@ -604,15 +604,6 @@
     (is (str/includes? p "one the record itself already\nsatisfies is a contradiction")
         (str kind ": a refuter the record satisfies is a false clause, not a claim"))))
 
-(deftest relation-honest-is-derived-per-baseline-claim
-  ;; Watched: a relation note that itself said the rules move out of where the baseline records
-  ;; them held relation-honest in two readings of three.
-  (let [p (record/design-prompt {:design design})]
-    (is (str/includes? p "PER BASELINE CLAIM, never as one reading of")
-        "one judgement over the relation note lets a self-declared move pass on a lenient reading")
-    (is (str/includes? p "which\n                      of them this design stops being true of")
-        "the question is asked of each claim, so a broken one has to be named")))
-
 ;; ── a record that names its strata ───────────────────────────────────────────
 ;; The era a record was written in is read off :strata, and it picks the yardstick: the stratified
 ;; check and derivation for a record that names its strata, decomposable as before for one that
@@ -656,6 +647,109 @@
   (let [p (record/baseline-prompt {:baseline strata-baseline})]
     (is (str/includes? p "- canvas.order.strata/totals\nEach is an element listed in this prompt")
         "the list ends its own line, and the prose names where the elements are without a direction")))
+
+;; ── relation-honest, ruled per baseline id ──────────────────────────────────
+;; Watched: one design's :breaks grew six, eight, twelve over three rounds, each round's judge and
+;; amender sweeping "each claim and each module" and each finding ids the last had missed — strata
+;; among them, which the instruction never named. Enumerated, every id is ruled on in one round.
+
+(deftest relation-honest-is-ruled-on-every-baseline-id-by-name
+  (let [p (record/design-prompt {:design design :baseline strata-baseline})]
+    (is (str/includes? p "PER BASELINE ID, never as one reading of")
+        "one judgement over the relation note lets a self-declared move pass on a lenient reading")
+    (is (str/includes? p "claims:\n                          [one-summing-path]")
+        "the claims are listed by id")
+    (is (str/includes? p "modules:\n                          [canvas.order/aggregate]")
+        "the modules are listed by id")
+    (is (str/includes? p "strata:\n                          [canvas.order.strata/totals]")
+        "the strata are listed too — the instruction that named only claims and modules missed them")
+    (is (str/includes? p "relation_rulings") "the answer has a field to rule in")))
+
+(deftest a-design-declaring-no-baseline-relation-is-ruled-on-no-ids
+  ;; A design from before the baseline event has no :breaks to hold to any list.
+  (let [p (record/design-prompt {:design (dissoc design :baseline) :baseline strata-baseline})]
+    (is (not (str/includes? p "PER BASELINE ID")))
+    (is (str/includes? p "relation_rulings stays empty"))))
+
+(deftest the-legacy-baseline-shape-names-its-ids-too
+  (is (= [[:claim "c1"] [:module "mod-the-order-aggregate"] [:module "mod-the-invoice-reader"]]
+         (#'record/relation-subjects baseline))
+      "a survey-shaped baseline is ruled on by the same ids its review settles")
+  (is (= [] (#'record/relation-subjects nil))))
+
+(defn- decided
+  "A parsed proceed whose relation rulings are `rulings`."
+  [rulings]
+  (record/parse-design-decision
+   (json/generate-string {:recommend "proceed" :reason "r" :asks "worth it?"
+                          :checks [{:check "relation_honest" :status "held" :note "n"}]
+                          :findings [] :confirmed [] :unchecked []
+                          :relation_rulings rulings})
+   4))
+
+(def ^:private ids (#'record/relation-subjects strata-baseline))
+
+(defn- held [decision breaks] (#'record/relation-held decision ids breaks))
+
+(defn- every-id-stands []
+  (mapv (fn [[_ id]] {:id id :ruling "stands" :reason "untouched"}) ids))
+
+(deftest a-decision-keeps-its-relation-rulings
+  (let [r (decided [{:id "[one-summing-path]" :ruling "breaks" :reason "moves"}
+                    {:id "one-summing-path" :ruling "stands" :reason "a second word on it"}
+                    {:id "canvas.order/aggregate" :ruling "maybe" :reason "not a ruling"}])]
+    (is (= [{:id "one-summing-path" :ruling :breaks :reason "moves"}] (:relation-rulings r))
+        "brackets off, one ruling per id, and only the two rulings there are")
+    (is (report/validate-event :design-decision r) "and the ledger takes it")))
+
+(deftest rulings-that-match-breaks-leave-the-decision-alone
+  (let [r (decided (every-id-stands))]
+    (is (= r (held r [])))))
+
+(deftest an-id-left-without-a-ruling-stops-the-proceed
+  (let [r (held (decided (rest (every-id-stands))) [])]
+    (is (= ["one-summing-path"] (:unruled r))
+        "a sweep that skipped an id has not derived the relation, so the decision does not proceed")
+    (is (not (report/proceeds? r)))))
+
+(deftest an-id-ruled-broken-that-breaks-omits-is-relation-honest-broken
+  (let [rulings (assoc (every-id-stands) 2 {:id "canvas.order.strata/totals" :ruling "breaks"
+                                            :reason "the level's vocabulary moves"})
+        r       (held (decided rulings) [])]
+    (is (= :broken (:status (first (filter #(= :relation-honest (:check %)) (:checks r)))))
+        "the ruling and the check answer one question; the per-id one is what the check is held to")
+    (is (= :amend (:recommend r)) "a proceed over an omitted break would hand the omission to nobody")
+    (is (= ["canvas.order.strata/totals"] (:cites (last (:findings r)))))
+    (is (= ["canvas.order.strata/totals: the level's vocabulary moves"] (:evidence (last (:findings r))))
+        "the amender gets the judge's reason with the id")
+    (is (report/validate-event :design-decision r) "and the ledger takes the record it becomes")))
+
+(deftest a-breaks-naming-an-id-ruled-standing-claims-too-much
+  (let [r (held (decided (every-id-stands)) ["one-summing-path"])]
+    (is (str/includes? (:note (first (:checks r))) "under :breaks, ruled standing: one-summing-path"))
+    (is (= :amend (:recommend r)))))
+
+(deftest an-ask-stays-an-ask-over-a-mismatch
+  (let [r (held (assoc (decided (every-id-stands)) :recommend :ask) ["one-summing-path"])]
+    (is (= :ask (:recommend r)) "the question for a person still stops the run")))
+
+(deftest a-relation-honest-with-no-yardstick-is-not-held-to-rulings
+  (let [r (-> (decided [])
+              (assoc :checks [{:check :relation-honest :status :underivable :note "no stance"}]))]
+    (is (= r (held r ["one-summing-path"]))
+        "an underivable check stays underivable, rather than ending the run :unruled")))
+
+(deftest the-design-amender-is-handed-the-same-ids-with-the-judges-rulings
+  (let [p (record/design-amend-prompt
+           {:design design :baseline strata-baseline :recommend :amend :reason "r"
+            :raised [{:check :relation-honest :status :broken :note "n"}]
+            :rulings [{:id "canvas.order.strata/totals" :ruling :breaks :reason "the level moves"}]
+            :out-path "/run/a.edn"})]
+    (is (str/includes? p "THE BASELINE'S IDS, which relation-honest is ruled on one by one, as the judge ruled them"))
+    (is (str/includes? p "  [canvas.order.strata/totals] breaks — the level moves"))
+    (is (str/includes? p "  [one-summing-path]\n") "an id the judge did not rule is still listed")
+    (is (str/includes? p "Go through the whole list")
+        "a :breaks repaired one omission at a time takes a round per omission")))
 
 (deftest a-design-naming-its-strata-is-judged-on-its-levels-not-its-cut
   (let [p (record/design-prompt {:design strata-design :baseline strata-baseline})]
