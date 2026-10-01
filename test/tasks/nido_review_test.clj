@@ -1374,6 +1374,22 @@
       (is (str/includes? out "is this worth doing now, at this cost?"))
       (is (str/includes? out "the part only you can answer")))))
 
+(deftest an-ask-names-the-grant-a-go-is-recorded-as
+  ;; A go written into the design's prose is read by no grant reader, so the next round asks the
+  ;; same question again. The hand-over has to name the one record that is read.
+  (with-redefs [rloop/run-loop (fn [_] {:status :asked
+                                        :record {:recommend :ask :design-seq 50
+                                                 :asks "is this worth doing now, at this cost?"}})]
+    (let [out (with-out-str (t/design-cmd ":cwd" "/w"))]
+      (is (str/includes? out "bb nido:design:approve :project <p> :ws-id <id> :design-seq 50"))
+      (is (not (str/includes? out "amend the design or its intent to say so"))
+          "that advice is what sent a go into :summary prose")))
+  (with-redefs [rloop/run-loop (fn [_] {:status :nothing-to-amend
+                                        :record {:recommend :amend :design-seq 50
+                                                 :asks "?"}})]
+    (is (not (str/includes? (with-out-str (t/design-cmd ":cwd" "/w")) "nido:design:approve"))
+        "a record sent back is not a grant a person may give")))
+
 (deftest design-cmd-names-a-check-it-had-no-yardstick-for
   (with-redefs [rloop/run-loop (fn [_] {:status :underivable
                                         :underivable [{:check :relation-honest

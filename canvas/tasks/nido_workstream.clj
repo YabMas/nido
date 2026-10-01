@@ -77,6 +77,14 @@
   (Operation discharge-cmd
     "bb nido:improvement:discharge — the entry point for `discharge*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation approve*
+    "Record a person's go, given in chat, as the grant of a design. Exits non-zero on a refusal,
+     naming why — an agent told only `no` would fall back to writing the answer into the record
+     as prose, which no reader of a grant reads."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation approve-cmd
+    "bb nido:design:approve — the entry point for `approve*`."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
 
   (Operation fork*
     "Fork a unit into a child workstream, from a parent whose design stands. Prints the child's

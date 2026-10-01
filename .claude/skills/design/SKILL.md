@@ -1022,6 +1022,22 @@ commitment — in which case it re-runs the survey and re-states the design
 against the corrected one. Everything derivable is derived, so what reaches you
 at the end is only the judgement that could not be.
 
+**When the person answers that judgement go in chat, record it as the grant:**
+
+```bash
+bb nido:design:approve :project <p> :ws-id <id> :design-seq <n> \
+  :note "what the person said, in their words"
+```
+
+It writes the same `:design-approved` the gate's Approve writes, and answers a
+round that proceeded or asked; it refuses one that sent the record back. Never
+record a go anywhere else — not in a superseding design's `:summary`, not in its
+`:supersedes :why`. Nothing that reads grants reads prose, so the next round
+reports the question unanswered and asks it again, and a record that could
+declare its own question settled would be no record of a decision. An answer
+that is not a go — narrow the scope, mean something else by the intent — is an
+amendment, and goes into the design or the intent as one.
+
 Add `:seq <n>` to the baseline loop when the workstream holds more than one
 survey and you mean a particular one; the default is the newest, which is the
 wrong one whenever a narrow follow-up was written beside a broad survey.

@@ -2160,7 +2160,7 @@
 
 (def ^:private design-remedies
   {:proceed "nothing derivable blocks it — what is left is the part only you can answer"
-   :asked "the judge found something only you can repair — answer the question below, then amend the design or its intent to say so"
+   :asked "the judge found something only you can repair — answer the question below: a go is a grant (the command after it), anything else is an amendment of the design or its intent"
    :clearance-contended "the design owes nobody a grant and the decision stands, but its clearance is not written yet — the clearance stage writes it, and no round re-runs"
    :underivable "a check has no yardstick to derive against, which is not a defect an amender can repair"
    :nothing-to-amend "the round would not proceed and named nothing an amender could repair — read its reason on the ledger and decide by hand"
@@ -2186,7 +2186,15 @@
     (println (str "  — " (name check) " could not be derived: " note)))
   (when-let [asks (get-in final [:record :asks])]
     (println "\n  FOR YOU TO DECIDE:")
-    (println (str "  " asks))))
+    (println (str "  " asks))
+    ;; Named here because a go has exactly one record a later round reads: the grant. Written
+    ;; anywhere else — a design's :summary, a supersession's :why — it is prose, the judge
+    ;; reports the question unanswered, and the next round asks it again.
+    (when (#{:proceed :ask} (get-in final [:record :recommend]))
+      (println (str "\n  If the answer is go, record it as the grant — never as prose in the record:\n"
+                    "  bb nido:design:approve :project <p> :ws-id <id> :design-seq "
+                    (get-in final [:record :design-seq] "<n>")
+                    " :note \"<what the person said>\"")))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   design-cmd*

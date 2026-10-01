@@ -214,6 +214,18 @@
      to proceed is later sent back."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :boolean]
      :delegates [pipeline/design-decided?]})
+  (Operation grant-design!
+    "Record a person's grant of a design, given in chat rather than on the gate —
+     `bb nido:design:approve`. The same :design-approved the gate's Approve writes, because every
+     reader of a grant reads that shape and none reads prose: a go left in a design's :summary was
+     reported unanswered and asked again.
+
+     Admits what the gate admits plus an :ask, since an :ask is the round stopping for a person
+     and a person answering it is what this is for. Refuses a decision that sent the record back,
+     a design that is not the newest, and one that does not stand."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design-seq :int]
+                            [:note [:maybe :string]]] :map]
+     :delegates [workstream/append-entry!]})
   (Operation record-landing!
     "Record that an approved proposal is now carried by a revision.
 

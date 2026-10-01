@@ -1969,6 +1969,20 @@
           {:decision :answered-unresumed}))
       {:decision :option-stale})))
 
+(defn- grant!
+  "Append the :design-approved naming design `design-seq`, granted at ledger position `at-seq`.
+   `note` may be nil. The one writer of a grant: the gate's Approve, its Accept against an
+   invalidating verdict, and an answer given in chat all record the same act, so they write one
+   shape — every reader of a grant (`standing`, the design judge's `answered`) reads that shape
+   and nothing else."
+  [project ws-id design-seq at-seq note]
+  (cws/append-entry!
+   project ws-id {:kind :design-approved}
+   (pr-str (cond-> {:format :design-approved
+                    :design {:seq design-seq}
+                    :at-seq at-seq}
+             note (assoc :note note)))))
+
 (defn- approve!
   "GRANT the design, then tell whoever is listening.
 
@@ -2019,17 +2033,74 @@
                                        "on this design — re-run bb nido:review:design, "
                                        "or supersede the design first")})}
           (let [parked (parked-session project ws-id)]
-            (cws/append-entry!
-             project ws-id {:kind :design-approved}
-             (pr-str {:format :design-approved
-                      :design {:seq (:seq design)}
-                      :at-seq entry-seq}))
+            (grant! project ws-id (:seq design) entry-seq nil)
             (if parked
               (assoc (resume/resume! project ws-id approval-input) :decision :approved)
               ;; Nobody to tell, and that is a real outcome rather than a
               ;; failure: the grant is on the ledger and the next session reads
               ;; it — see ui.server/resolve-failure-msg.
               {:decision :approved-unresumed})))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int [:maybe :string]] :map]}
+  grant-design!
+  "Record a person's grant of the design at `design-seq`, given in a session's chat rather than
+   on the gate — `bb nido:design:approve`. `note` is what the person said, or nil.
+
+   Without this a go said in chat had nowhere to go but prose — a design's :summary, a
+   supersession's :why — and no reader of a grant reads prose. The design judge then reported
+   the question unanswered and the next round asked it again. Prose is refused as an answer on
+   purpose: a record that may declare its own question settled is no record of a decision.
+
+   It admits what the gate admits, with one difference. The gate offers Approve only on a
+   decision that `report/proceeds?`; this also takes an :ask, because an :ask is the round
+   stopping to put a question to a person, and a person answering it in chat is the case this
+   exists for. A decision that sent the record back (:amend, :recut, :resurvey) is still
+   refused — the next move there is the author's, and a grant would build what the round
+   rejected. Every refusal answers {:decision :approval-refused :because {:reason :detail}}.
+
+   The position is the decision being answered rather than a rendered page, so `design-seq`
+   must be the newest design: a grant names what stands now, never a superseded record. A
+   second grant of the same design after that decision writes nothing and answers
+   :already-granted, so an agent repeating the command does not stack grants. Resumes nobody —
+   the caller IS the session."
+  [project ws-id design-seq note]
+  (let [design   (cws/latest-entry project ws-id :design)
+        refused  (fn [reason detail] {:decision :approval-refused
+                                      :because {:reason reason :detail detail}})
+        st       (when design (standing/of-design project ws-id design))
+        decision (when design
+                   (->> (cws/entries-of project ws-id :design-decision)
+                        (filter #(= (:seq design) (:design-seq %)))
+                        last))]
+    (cond
+      (nil? (cws/read-ws project ws-id)) {:decision :no-workstream}
+      (nil? design) {:decision :no-design}
+
+      (not= design-seq (:seq design))
+      (refused :not-newest (str "entry " design-seq " is not this workstream's newest design — "
+                                "entry " (:seq design) " is; a grant names what stands now"))
+
+      (not (:decidable? st))
+      (refused :undecidable (or (:detail (:blocked st)) "the design does not stand"))
+
+      (nil? decision)
+      (refused :undecided (str "no decision round has judged entry " design-seq
+                               " — run bb nido:review:design first"))
+
+      (not (or (= :ask (:recommend decision)) (report/proceeds? decision)))
+      (refused :sent-back (str "the decision at entry " (:seq decision) " answered "
+                               (name (:recommend decision)) ", which sends the record back "
+                               "to its author — amend the design and re-run "
+                               "bb nido:review:design"))
+
+      (some #(and (= design-seq (get-in % [:design :seq]))
+                  (> (long (:seq %)) (long (:seq decision))))
+            (cws/entries-of project ws-id :design-approved))
+      {:decision :already-granted :design design-seq}
+
+      :else
+      (do (grant! project ws-id design-seq (:seq decision) note)
+          {:decision :approved :design design-seq :at-seq (:seq decision)}))))
 
 (defn- invalidation-at
   "The design and the unanswered invalidating verdict against it, or nil.
@@ -2128,12 +2199,8 @@
 
     :else
     (if-let [{:keys [design seq]} (invalidation-at project ws-id)]
-      (do (cws/append-entry!
-           project ws-id {:kind :design-approved}
-           (pr-str {:format :design-approved
-                    :design {:seq (:seq design)}
-                    :at-seq entry-seq
-                    :note (str "held against the design verdict at entry " seq)}))
+      (do (grant! project ws-id (:seq design) entry-seq
+                  (str "held against the design verdict at entry " seq))
           {:decision :held :design (:seq design)})
       {:decision :nothing-to-acknowledge})))
 

@@ -944,6 +944,58 @@
             (is (nil? (workstream/latest-entry :brian id :design-approved))
                 "and no approval is ever written for a premise that is gone")))))))
 
+(defn- decide!
+  "Append a design decision on `design-seq` recommending `r`; returns its seq."
+  [id design-seq r]
+  (workstream/append-entry! :brian id {:kind :design-decision}
+                            (pr-str (cond-> {:format :design-decision :recommend r
+                                             :design-seq design-seq :reason "r"
+                                             :checks [{:check :goal-served :status :held :note "n"}]
+                                             :asks "worth doing now?"}
+                                      (#{:amend} r)
+                                      (assoc :findings [{:check :goal-served :claim "c"
+                                                         :cites ["src/a.clj:1"]}]))))
+  (count (:entries (workstream/read-ws :brian id))))
+
+(deftest a-go-given-in-chat-answers-an-ask-with-the-grant-the-gate-writes
+  ;; The case the verb exists for. A round that stops on :ask is no grant the gate offers, so a
+  ;; person's go in chat had nowhere to go but prose the design judge does not read — and the
+  ;; next round asked the same question again.
+  (with-tmp
+    (fn [_]
+      (let [[id _ d _] (approvable)
+            ask (decide! id d :ask)
+            out (work/grant-design! :brian id d "go — worth it now")]
+        (is (= :approved (:decision out)))
+        (let [granted (workstream/latest-entry :brian id :design-approved)]
+          (is (= {:format :design-approved :design {:seq d} :at-seq ask :note "go — worth it now"}
+                 (dissoc granted :seq :at :kind :file))
+              "one shape for every grant: standing and the design judge read this and nothing else"))
+        (is (:decided? (standing/of-design :brian id
+                                           (workstream/latest-entry :brian id :design)))
+            "standing counts it as the grant it is")
+        (is (= :already-granted (:decision (work/grant-design! :brian id d nil)))
+            "an agent repeating the command does not stack a second grant")))))
+
+(deftest a-chat-grant-refuses-what-the-round-sent-back
+  (with-tmp
+    (fn [_]
+      (let [[id _ d _] (approvable)]
+        (decide! id d :amend)
+        (let [out (work/grant-design! :brian id d nil)]
+          (is (= :sent-back (get-in out [:because :reason]))
+              "the next move after :amend is the author's; a grant would build what the round rejected")
+          (is (nil? (workstream/latest-entry :brian id :design-approved))))))))
+
+(deftest a-chat-grant-names-the-design-that-stands-now
+  (with-tmp
+    (fn [_]
+      (let [[id _ d _] (approvable)
+            out (work/grant-design! :brian id (dec d) nil)]
+        (is (= :not-newest (get-in out [:because :reason]))
+            "a grant of a superseded record would be read as deciding the one that replaced it")
+        (is (nil? (workstream/latest-entry :brian id :design-approved)))))))
+
 (deftest approving-a-workstream-that-does-not-exist-is-a-no-op
   (with-tmp
     (fn [_]

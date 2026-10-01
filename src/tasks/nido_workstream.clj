@@ -252,7 +252,28 @@
                       (System/exit 1)))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  approve*
+  "Record a person's go, given in chat, as the grant of a design. Exits non-zero on a refusal,
+   naming why — an agent told `no` without the reason would fall back to writing the answer
+   into the record, which is the prose no reader of a grant reads."
+  [{:keys [project design-seq note] :as opts}]
+  (when-not design-seq
+    (println "Missing :design-seq <n> — a grant names the design it grants, by number")
+    (System/exit 2))
+  (let [n   (parse-long (str design-seq))
+        res (work/grant-design! (keyword project) (resolve-ws-id opts) n (some-> note str))]
+    (case (:decision res)
+      :approved        (println (str "granted design " n " (answering the decision at entry "
+                                     (:at-seq res) ")"))
+      :already-granted (println (str "design " n " is already granted since its decision — nothing written"))
+      (do (println (str "grant REFUSED — "
+                        (or (get-in res [:because :detail]) (name (:decision res)))))
+          (System/exit 1)))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   close-cmd     [& args] (run* close* args))
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  approve-cmd   [& args] (run* approve* args #{:note}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   ref-add       [& args] (run* ref-add* args ref-raw-string-keys))
 ;; :rev and :note are prose-by-luck under parse-token and must not be: a change
