@@ -221,7 +221,8 @@
     (is (= 1 n))
     (is (not (str/includes? sql "CREATE TABLE")) "the body is not run a second time")
     (is (= (str "UPDATE brian.flyway_schema_history SET version = '234', "
-                "script = 'V234__add_foo.sql' WHERE version = '100';")
+                "script = 'V234__add_foo.sql', checksum = " checksum
+                " WHERE version = '100';")
            sql))))
 
 ;; brian's migrations open by naming their own file, so the body main carries
@@ -232,12 +233,17 @@
         checksum (let [f (fs/create-temp-file)]
                    (spit (str f) (body-as "V100__add_foo.sql"))
                    (try (pg/flyway-checksum (str f)) (finally (fs/delete f))))
+        main-checksum (let [f (fs/create-temp-file)]
+                        (spit (str f) (body-as "V234__add_foo.sql"))
+                        (try (pg/flyway-checksum (str f)) (finally (fs/delete f))))
         {:keys [n sql]} (advance-with-history
                          (str "100\u001f" checksum "\u001fadd foo\n")
                          (body-as "V234__add_foo.sql"))]
     (is (= 1 n))
     (is (not (str/includes? sql "CREATE TABLE")) "the body is not run a second time")
-    (is (str/starts-with? sql "UPDATE brian.flyway_schema_history SET version = '234'"))))
+    (is (str/starts-with? sql "UPDATE brian.flyway_schema_history SET version = '234'"))
+    (is (str/includes? sql (str "checksum = " main-checksum " "))
+        "the row records main's checksum, or Flyway validate refuses the next boot")))
 
 (deftest advance-still-applies-a-re-versioned-migration-whose-body-changed
   (let [{:keys [sql]} (advance-with-history "100\u001f12345\u001fadd foo\n"

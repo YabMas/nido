@@ -377,10 +377,14 @@
 
 (defn- history-rekey-sql
   "Move an applied history row from its branch version to main's, so the
-   migration it records is not run a second time."
-  [{:keys [schema from-version version script]}]
+   migration it records is not run a second time. The row takes main's
+   `checksum` too: a row can match on a body that differs from main's in how
+   it names its own file (see `applied-as`), and Flyway validates the recorded
+   checksum against main's file, refusing every later boot on a mismatch."
+  [{:keys [schema from-version version script checksum]}]
   (str "UPDATE " schema ".flyway_schema_history SET version = '" version
-       "', script = '" script "' WHERE version = '" from-version "';"))
+       "', script = '" script "', checksum = " checksum
+       " WHERE version = '" from-version "';"))
 
 (def ^:private migrations-subdir "resources/db/migrations")
 
@@ -453,7 +457,8 @@
                     from      (some->> matched (get reversioned))
                     combined  (if from
                                 (history-rekey-sql {:schema schema :from-version from
-                                                    :version version :script f})
+                                                    :version version :script f
+                                                    :checksum checksum})
                                 (str "SET search_path TO " schema ", public;\n"
                                      (slurp file-path) "\n"
                                      (history-insert-sql
