@@ -1097,6 +1097,18 @@
         "the grant narrows the ask and nothing else; every check is still derived whole")
     (is (str/includes? p "ASKED BEFORE, AND NO GRANT WRITTEN SINCE:\n  is the compression worth it now?"))))
 
+(deftest a-clean-round-on-an-owing-design-proceeds-over-a-question-already-asked
+  ;; Two zero-finding rounds over the same open questions recorded :ask once and :proceed once:
+  ;; the ASKED BEFORE block ended "recommend ask" and said nothing for a round that found nothing.
+  (let [asked   {:asked "is the compression worth it now?"}
+        owing   (record/design-prompt {:design  (assoc design :standing {:relation :challenges :note "n"})
+                                      :answers asked})
+        clear   (record/design-prompt {:design design :answers asked})]
+    (is (str/includes? owing "If you find nothing, recommend proceed")
+        "a proceed already stops for the person, so a clean round has no reason to record :ask")
+    (is (not (str/includes? clear "If you find nothing, recommend proceed"))
+        "on a design that owes nobody a proceed starts the build, so the asked question must not be waved through")))
+
 (deftest what-is-answered-is-read-off-the-ledger
   (let [claims  (fn [& cs] {:claims (mapv (fn [[id st]] {:id id :statement st :about ["m"]}) cs)})
         granted (assoc design :seq 16 :model (claims ["a" "one"] ["b" "two"]))

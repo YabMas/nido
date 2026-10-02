@@ -1067,7 +1067,10 @@
      (str "\nASKED BEFORE, AND NO GRANT WRITTEN SINCE:\n  " asked "\n"
           "If what you find can only be repaired by answering this, recommend ask: an\n"
           "amender handed it answers it without the person, and the next round refutes\n"
-          "the answer.\n"))))
+          "the answer.\n"
+          (when owes?
+            (str "If you find nothing, recommend proceed: a proceed on this design already stops\n"
+                 "for the person, and asks carries this question to them.\n"))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   design-prompt
