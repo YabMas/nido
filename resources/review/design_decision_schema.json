@@ -175,12 +175,17 @@
         "required": [
           "id",
           "ruling",
-          "reason"
+          "reason",
+          "cause"
         ],
         "properties": {
           "id": {
             "type": "string",
             "description": "The baseline id as listed, without the brackets."
+          },
+          "cause": {
+            "type": "string",
+            "description": "Empty unless the prompt shows a previous ruling on this id and this ruling differs from it. Then: what moved since that ruling and makes it wrong — in the record, in the code, or in an objection shown to you. A reversal with no cause, on an id whose record did not move, is not taken."
           },
           "ruling": {
             "type": "string",

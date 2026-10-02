@@ -519,6 +519,10 @@
       ;; counterexample is one no rewording is settling, and nothing else in a round says so.
       ;; :overrides-settled is each subject the judge was shown as settled and found against anyway —
       ;; a confirmation settlement was shielding, caught.
+      ;; :relation-rulings is the per-id relation-honest ruling :breaks was held to, round by round —
+      ;; a reversal between rounds is otherwise readable only in the raw decision output — and
+      ;; beside it the judge's inconsistencies the round recorded rather than enforced
+      ;; (:relation-reversals, :relation-contradicted, :relation-misread).
       ;; :judged-seq is the entry the judge read and :appended-seq the entry its judgement became —
       ;; absent when the round appended none — so a round is joined to the ledger by number rather
       ;; than by filtering the ledger on :run-id and counting.
@@ -558,6 +562,14 @@
                 (seq (get-in ctx [:record :overrides-settled]))
                 (assoc :overrides-settled (get-in ctx [:record :overrides-settled]))
                 (seq (get-in ctx [:record :unchecked])) (assoc :unchecked (get-in ctx [:record :unchecked]))
+                (seq (get-in ctx [:record :relation-rulings]))
+                (assoc :relation-rulings (get-in ctx [:record :relation-rulings]))
+                (seq (get-in ctx [:record :relation-reversals]))
+                (assoc :relation-reversals (get-in ctx [:record :relation-reversals]))
+                (seq (get-in ctx [:record :relation-contradicted]))
+                (assoc :relation-contradicted (get-in ctx [:record :relation-contradicted]))
+                (seq (get-in ctx [:record :relation-misread]))
+                (assoc :relation-misread (get-in ctx [:record :relation-misread]))
                 (:unbanked ctx)                         (assoc :unbanked (:unbanked ctx))
                 (seq (:refuted-running ctx))            (assoc :refuted-running (into (sorted-map) (:refuted-running ctx)))
                 (and (get-in ctx [:record :outcome]) (get-in ctx [:record :detail]))

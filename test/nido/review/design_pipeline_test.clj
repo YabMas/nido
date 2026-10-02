@@ -206,6 +206,42 @@
     (is (= ["p" "m-rounding"] (mapv :id (:relation-rulings out))))
     (is (empty? (:unruled out)) "an id ruled on the second ask does not stop the proceed")))
 
+(deftest a-round-holds-a-reversal-on-an-unmoved-record-to-the-last-ruling
+  ;; Seen live: rulings re-derived cold each round flipped on text no amendment touched, and each
+  ;; flip was enforced against :breaks as an amend round the next flip undid.
+  (let [calls    (atom [])
+        baseline {:format :baseline :seq 1
+                  :load-bearing [{:id "p" :property "one rounding boundary"}]
+                  :modules [{:id "m-rounding" :module "rounding" :hides "h" :interface "i"}]}
+        design   (assoc a-design :seq 5)
+        last     {:format :design-decision :seq 6 :design-seq 5 :recommend :proceed
+                  :relation-rulings [{:id "p" :ruling :breaks :reason "moves"}
+                                     {:id "m-rounding" :ruling :stands :reason "kept"}]}
+        answer   {:recommend "proceed" :reason "r" :asks "worth it?"
+                  :checks [{:check "relation_honest" :status "held" :note "n"}]
+                  :findings [] :confirmed [] :unchecked []
+                  :relation_rulings [{:id "p" :ruling "breaks" :reason "moves" :cause ""}
+                                     {:id "m-rounding" :ruling "breaks" :reason "its interface moves"
+                                      :cause ""}]}
+        out      (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                               ws/latest-entry (fn [_ _ k] (case k :design design :design-decision last nil))
+                               ws/entry-at-seq (fn [_ _ n] (when (= 5 n) design))
+                               standing/of-design (constantly {:decidable? true})
+                               stages/discover-baseline (fn [_ _] baseline)
+                               stages/read-stance (constantly nil)
+                               record/discover-intent (constantly nil)
+                               record/run-round! (fn [opts]
+                                                   (swap! calls conj opts)
+                                                   {:ok (json/generate-string answer)})]
+                   (record/design-decision! {:cwd "/w" :run-id "r1" :label "l"}))]
+    (is (str/includes? (:prompt (first @calls)) "[m-rounding] stands — (unmoved) kept")
+        "the judge was shown the ruling it reversed")
+    (is (= [{:id "m-rounding" :ruling :breaks :reason "its interface moves"}] (:relation-reversals out)))
+    (is (= :stands (:ruling (second (:relation-rulings out)))))
+    (is (= :proceed (:recommend out)) "the judge's variance did not become an amend round")
+    (is (= 1 (count @calls)) "the held check now agrees with the rulings, so nothing is re-asked")
+    (is (report/validate-event :design-decision out) "and the ledger takes the decision")))
+
 (defn- decision [recommend & {:keys [checks findings]}]
   (cond-> {:format :design-decision :design-seq 4 :recommend recommend
            :reason "r" :asks "is this worth doing now?"

@@ -2329,7 +2329,8 @@
    it was broken, in how many rounds, in how many of those alone, and in how many runs it was still
    broken at the end — and for a check, in how many rounds it was derived, held and underivable. Per
    stratum, its level judges' readings summed; per claim found false, per subject confirmed, left
-   unruled or found against while settled, and per reviewer that answered, the runs' counts summed."
+   unruled or found against while settled, and per reviewer that answered, the runs' counts summed —
+   and per baseline id, its relation-ruling flips each way and its reversals not taken."
   [figures]
   (letfn [(add [acc tallies]
             (reduce-kv (fn [a k {:keys [broken alone at-end] :as t}]
@@ -2353,6 +2354,8 @@
      :unruled     (counts :unruled)
      :settled-then-found (counts :settled-then-found)
      :judged-by   (counts :judged-by)
+     :relation-flips     (reduce #(merge-with (partial merge-with +) %1 %2) (sorted-map) (keep :relation-flips figures))
+     :relation-reversals (counts :relation-reversals)
      :strata      (reduce (fn [acc t] (merge-with #(merge-with + %1 %2) acc t))
                           (sorted-map) (keep :strata figures))}))
 

@@ -2688,11 +2688,27 @@
                 ;; whether this design stops it being true. What the design's :breaks is held to.
                 ;; Optional because a decision made before the ruling was asked, or against a
                 ;; baseline naming no ids, carries none.
+                ;; :cause is the judge's stated ground for reversing the previous decision's ruling.
                 [:relation-rulings   {:optional true}
                  [:vector [:map {:closed true}
                            [:id     string?]
                            [:ruling [:enum :breaks :stands]]
+                           [:reason string?]
+                           [:cause  {:optional true} string?]]]]
+                ;; The judge's inconsistencies, recorded where they were made and never enforced.
+                ;; :relation-reversals is each ruling that reversed the previous decision's on an id
+                ;; the record did not move, gave no cause, and was not taken — :relation-rulings holds
+                ;; the earlier ruling in its place. :relation-contradicted is each id whose ruling
+                ;; contradicted the decision's own held relation-honest, re-asked once.
+                ;; :relation-misread is each id relation-honest called absent from a :breaks that
+                ;; lists it, while every ruling agreed with :breaks.
+                [:relation-reversals {:optional true}
+                 [:vector [:map {:closed true}
+                           [:id     string?]
+                           [:ruling [:enum :breaks :stands]]
                            [:reason string?]]]]
+                [:relation-contradicted {:optional true} [:vector string?]]
+                [:relation-misread      {:optional true} [:vector string?]]
                 ;; As on a baseline review.
                 [:judged-by          {:optional true} JudgedBy]
                 [:tree               {:optional true} JudgedTree]]

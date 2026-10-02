@@ -592,6 +592,19 @@
               (report/apply-event {:event :run-finalized :status :asked :ctx {} :at "t3"} nil))]
     [(first (:rounds r)) (first (:phases (first (:rounds r))))]))
 
+(deftest a-design-judge-phase-keeps-its-relation-rulings-and-inconsistencies
+  ;; A ruling reversed between rounds was findable only in the raw decision output; the report is
+  ;; where a reader compares one round with the next.
+  (let [[_ ph] (design-judge-phase {:recommend :proceed
+                                    :checks [{:check :relation-honest :status :held :note "n"}]
+                                    :relation-rulings [{:id "p" :ruling :stands :reason "kept"}]
+                                    :relation-reversals [{:id "p" :ruling :breaks :reason "moves"}]
+                                    :relation-contradicted ["p"]})]
+    (is (= [{:id "p" :ruling :stands :reason "kept"}] (:relation-rulings ph)))
+    (is (= [{:id "p" :ruling :breaks :reason "moves"}] (:relation-reversals ph))
+        "the reversal not taken is the judge's, and recorded beside the ruling that stood")
+    (is (= ["p"] (:relation-contradicted ph)))))
+
 (deftest a-judge-phase-says-how-long-each-claim-has-been-refuted-running
   ;; A claim refuted every round by a different counterexample is one no rewording is settling.
   ;; Each round reads as an ordinary refutation; only the streak says the run is going round.

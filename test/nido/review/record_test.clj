@@ -807,6 +807,148 @@
     (is (= (mapv second ids) (:unruled (held r []))) "what two asks left open is still named")
     (is (not (report/proceeds? (held r []))))))
 
+;; ── A ruling is a reading of a record, held to the last one ─────────────────
+;; Watched: rulings re-derived cold each round, while relation-held enforced each round's reading
+;; against :breaks. One id ruled breaks, stands, breaks across nine rounds on text no amendment
+;; touched, and the amender re-added and removed it each time — rounds that undid one another.
+
+(def ^:private breaks-design
+  (assoc strata-design :baseline {:seq 3 :relation :revisit :breaks ["one-summing-path"]
+                                  :note "the summing path moves"}))
+
+(deftest an-id-the-record-did-not-move-is-unmoved
+  (let [prior (#'record/relation-prior [{:id "one-summing-path" :ruling :breaks :reason "moves"}
+                                        {:id "canvas.order/aggregate" :ruling :stands :reason "kept"}]
+                                       [breaks-design strata-baseline]
+                                       [(assoc breaks-design :seq 9 :summary "Reworded, about nothing listed.")
+                                        strata-baseline])]
+    (is (= {:ruling :breaks :reason "moves" :moved? false} (prior "one-summing-path"))
+        "a rewrite naming none of the ids leaves every ruling standing on the same text")
+    (is (false? (:moved? (prior "canvas.order/aggregate"))))))
+
+(deftest an-id-moves-with-its-baseline-statement-or-the-design-text-naming-it
+  (let [ruled    [{:id "one-summing-path" :ruling :breaks :reason "moves"}
+                  {:id "canvas.order/aggregate" :ruling :stands :reason "kept"}]
+        reworded (update-in strata-baseline [:model :claims 0] assoc :statement "totals sum in two places")
+        renamed  (assoc-in breaks-design [:model :claims 0 :statement] "a total is rounded at most once")]
+    (is (:moved? ((#'record/relation-prior ruled [breaks-design strata-baseline] [breaks-design reworded])
+                  "one-summing-path"))
+        "a re-survey that restates the id is a new thing to rule on")
+    (is (:moved? ((#'record/relation-prior ruled [breaks-design strata-baseline] [renamed strata-baseline])
+                  "canvas.order/aggregate"))
+        "a claim about the module changed, so the module's ruling may change with it")
+    (is (not (:moved? ((#'record/relation-prior ruled [breaks-design strata-baseline] [renamed strata-baseline])
+                       "one-summing-path")))
+        "the same rewrite says nothing new about an id it does not name")))
+
+(deftest breaks-moving-toward-a-ruling-is-no-ground-to-reverse-it
+  (let [ruled  [{:id "canvas.order/aggregate" :ruling :breaks :reason "its interface moves"}]
+        before (assoc-in breaks-design [:baseline :breaks] [])
+        obeyed (assoc-in breaks-design [:baseline :breaks] ["canvas.order/aggregate"])]
+    (is (false? (:moved? ((#'record/relation-prior ruled [before strata-baseline] [obeyed strata-baseline])
+                          "canvas.order/aggregate")))
+        "the amender listing what was ruled broken is the ruling obeyed; counted as a move, every obeyed ruling could be undone next round")
+    (is (true? (:moved? ((#'record/relation-prior ruled [obeyed strata-baseline] [before strata-baseline])
+                         "canvas.order/aggregate")))
+        "a :breaks moved against the ruling — an amender that disputed it — is a move the judge may answer")))
+
+(defn- prior-of [& {:as by-id}]
+  (update-vals by-id (fn [[ruling moved?]] {:ruling ruling :reason "last time" :moved? moved?})))
+
+(deftest an-unexplained-reversal-on-an-unmoved-id-is-not-taken
+  (let [flipped (assoc (every-id-stands) 0 {:id "one-summing-path" :ruling "breaks" :reason "moves"})
+        r       (#'record/held-to-prior (decided flipped) (prior-of "one-summing-path" [:stands false]))]
+    (is (= {:id "one-summing-path" :ruling :stands :reason "last time"} (first (:relation-rulings r)))
+        "the earlier reading of the same record stands")
+    (is (= [{:id "one-summing-path" :ruling :breaks :reason "moves"}] (:relation-reversals r))
+        "the reversal is the judge's inconsistency, and a reader of the run is owed it")
+    (is (report/proceeds? (held r [])) "judge variance is not turned into an amend round")
+    (is (report/validate-event :design-decision (held r [])) "and the ledger takes it")))
+
+(deftest a-reversal-with-a-cause-or-on-a-moved-id-is-taken
+  (let [flipped (assoc (every-id-stands) 0 {:id "one-summing-path" :ruling "breaks" :reason "moves"
+                                            :cause "the aggregate now sums twice"})
+        caused  (#'record/held-to-prior (decided flipped) (prior-of "one-summing-path" [:stands false]))
+        moved   (#'record/held-to-prior (decided (update flipped 0 dissoc :cause))
+                                        (prior-of "one-summing-path" [:stands true]))]
+    (is (= :breaks (:ruling (first (:relation-rulings caused)))) "a stated cause is a reading, not variance")
+    (is (= "the aggregate now sums twice" (:cause (first (:relation-rulings caused)))))
+    (is (nil? (:relation-reversals caused)))
+    (is (= :breaks (:ruling (first (:relation-rulings moved)))) "a moved record is a new thing to read")
+    (is (= :amend (:recommend (held caused []))) "and :breaks is held to it as before")))
+
+(deftest the-judge-is-shown-its-last-rulings-and-what-moved
+  (let [p (record/design-prompt {:design design :baseline strata-baseline
+                                 :relation-prior (prior-of "one-summing-path" [:breaks false]
+                                                           "canvas.order/aggregate" [:stands true])})]
+    (is (str/includes? p "THE LAST DECISION RULED THEM SO"))
+    (is (str/includes? p "[one-summing-path] breaks — (unmoved) last time"))
+    (is (str/includes? p "[canvas.order/aggregate] stands — (moved since) last time"))
+    (is (str/includes? p "reversal with no cause is not taken")
+        "the judge learns what an uncaused reversal costs before it makes one"))
+  (is (not (str/includes? (record/design-prompt {:design design :baseline strata-baseline})
+                          "THE LAST DECISION RULED"))
+      "a first decision has nothing to be held to"))
+
+(defn- reconciled
+  "`decision` through the contradiction re-ask over :breaks `breaks`, the judge answering `answer`.
+   Returns [decision' every run-round! call]."
+  [decision breaks answer]
+  (let [calls (atom [])]
+    [(with-redefs [record/run-round! (fn [opts] (swap! calls conj opts)
+                                       (if answer {:ok (json/generate-string answer)}
+                                           {:outcome :no-output :detail "stub"}))]
+       (#'record/reconcile-relation-reading! decision ids breaks
+                                             {:run-id "r" :kind :design-decision :label "l"}
+                                             {:design design :baseline strata-baseline} nil))
+     @calls]))
+
+(deftest a-held-relation-honest-over-mismatched-rulings-is-asked-again
+  (let [contradicted   (decided (assoc (every-id-stands) 0 {:id "one-summing-path" :ruling "breaks"
+                                                            :reason "moves"}))
+        [r [call :as cs]] (reconciled contradicted []
+                                      {:relation_rulings [{:id "one-summing-path" :ruling "stands"
+                                                           :reason "the held reading was right" :cause ""}]})]
+    (is (= 1 (count cs)) "one more ask, not a loop")
+    (is (= ["one-summing-path"] (get-in (rulings-schema (:schema call)) [:items :properties :id :enum]))
+        "only the contradicted ids are asked")
+    (is (str/includes? (:prompt call) "it contradicts itself: it called relation-honest HELD"))
+    (is (= "l-contradicted-relations" (:label call)) "its artifacts do not overwrite the decision's")
+    (is (= ["one-summing-path"] (:relation-contradicted r)) "the inconsistency is recorded where it was made")
+    (is (= :stands (:ruling (first (:relation-rulings r)))) "the judge's second answer is the ruling")
+    (is (report/proceeds? (held r [])) "resolved toward the check, nothing forces an amend")
+    (is (report/validate-event :design-decision (held r [])) "and the ledger takes it"))
+  (testing "a broken relation-honest is no contradiction of a mismatch"
+    (let [broken (-> (decided (assoc (every-id-stands) 0 {:id "one-summing-path" :ruling "breaks" :reason "m"}))
+                     (assoc :checks [{:check :relation-honest :status :broken :note "n"}]))]
+      (is (= [broken []] (reconciled broken [] {:relation_rulings []}))))))
+
+(deftest an-omission-claimed-of-an-id-breaks-already-lists-is-flagged-for-the-amender
+  (let [r (-> (decided (assoc (every-id-stands) 0 {:id "one-summing-path" :ruling "breaks" :reason "moves"}))
+              (assoc :recommend :amend
+                     :checks [{:check :relation-honest :status :broken
+                               :note "one-summing-path is absent from :breaks."}]
+                     :findings [{:check :relation-honest :cites ["x"] :claim "the omission"}])
+              (held ["one-summing-path"]))]
+    (is (= ["one-summing-path"] (:relation-misread r)))
+    (is (str/includes? (:note (first (:checks r))) ":baseline :breaks already lists one-summing-path")
+        "the amender is told the record lists it, so it disputes the line instead of rewording around it")
+    (is (= :broken (:status (first (:checks r)))) "what else the judge said stays its own")
+    (is (report/validate-event :design-decision r) "and the ledger takes it")))
+
+(deftest figures-count-ruling-flips-and-the-reversals-not-taken
+  (let [d (fn [rulings & {:as more}]
+            (merge {:format :design-decision :recommend :proceed :checks [] :relation-rulings
+                    (mapv (fn [[id r]] {:id id :ruling r :reason ""}) rulings)}
+                   more))
+        f (record/run-figures [(d {"a" :breaks "b" :stands})
+                               (d {"a" :stands "b" :stands})
+                               (d {"a" :stands "b" :stands}
+                                  :relation-reversals [{:id "b" :ruling :breaks :reason "r"}])])]
+    (is (= {"a" {:breaks->stands 1} "b" {:stands->breaks 1}} (:relation-flips f))
+        "a reversal not taken is still the judge's variance, and the figure measures the judge")
+    (is (= {"b" 1} (:relation-reversals f)))))
+
 (deftest the-design-amender-is-handed-the-same-ids-with-the-judges-rulings
   (let [p (record/design-amend-prompt
            {:design design :baseline strata-baseline :recommend :amend :reason "r"

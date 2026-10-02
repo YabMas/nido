@@ -1070,8 +1070,11 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   design-prompt
-  "The decision prompt. Derives what can be derived; hands the rest over."
-  [{:keys [design baseline stance intent disputes settled levels prior answers]}]
+  "The decision prompt. Derives what can be derived; hands the rest over.
+
+   `:relation-prior` is `relation-prior`'s: the last decision's rulings, shown beside the ids to rule
+   on with whether the record moved under each since."
+  [{:keys [design baseline stance intent disputes settled levels prior answers relation-prior]}]
   (let [owes?        (report/owes-a-person? design)
         design       (judged-alone design)
         baseline     (judged-alone baseline)
@@ -1171,7 +1174,22 @@
           "                      to your rulings. A note that itself says the design\n"
           "                      moves something the baseline records is that id\n"
           "                      broken, not a lenient reading to hold.\n"
-          (relation-ids-lines relation-ids "                        " nil))
+          (relation-ids-lines relation-ids "                        " nil)
+          (when (seq relation-prior)
+            (str "                      THE LAST DECISION RULED THEM SO, each marked by whether\n"
+                 "                      the record moved under it since — its baseline\n"
+                 "                      statement, this design's text naming it, or :breaks\n"
+                 "                      moving away from that ruling. Rule afresh; a ruling\n"
+                 "                      that differs from the last says in `cause` what moved\n"
+                 "                      and makes the last one wrong. On an UNMOVED id a\n"
+                 "                      reversal with no cause is not taken: the last ruling\n"
+                 "                      stands, and the reversal is reported as yours.\n"
+                 (relation-ids-lines (filterv (comp relation-prior second) relation-ids)
+                                     "                        "
+                                     (update-vals relation-prior
+                                                  (fn [{:keys [moved? reason] :as p}]
+                                                    (assoc p :reason (str (if moved? "(moved since) " "(unmoved) ")
+                                                                          reason))))))))
      (str "                      The baseline names no ids to rule on one by one, so\n"
           "                      relation_rulings stays empty; derive it from the\n"
           "                      relation and what the baseline states.\n"))
@@ -1234,19 +1252,37 @@
    (disputes-block disputes)
    (level-reminder :commitment))))
 
+(def ^:private unruled-pass
+  "Why a re-ask asks, when the decision left ids unruled."
+  (str "THIS PASS ASKS ONE THING. The decision on this design is already made, and\n"
+       "it ruled on relation-honest per baseline id — but not on every id. Rule on\n"
+       "EACH id below, exactly as the relation-honest instruction above says, and\n"
+       "answer relation_rulings only; every other field above is not asked here.\n"
+       "Still to rule on:\n"))
+
+(defn- contradicted-pass
+  "Why a re-ask asks, when the decision called relation-honest held over rulings :breaks does not
+   match. `breaks` is what :breaks lists."
+  [breaks]
+  (str "THIS PASS ASKS ONE THING. The decision on this design is already made, and\n"
+       "it contradicts itself: it called relation-honest HELD — :breaks names exactly\n"
+       "what this design stops being true — and ruled the ids below so that :breaks\n"
+       "does not match them, ruled breaks and not listed, or listed and ruled stands.\n"
+       ":baseline :breaks lists: " (if (seq breaks) (str/join ", " breaks) "nothing") "\n"
+       "One of the two readings is wrong. Rule on EACH id below again, exactly as the\n"
+       "relation-honest instruction above says, and answer relation_rulings only. A\n"
+       "ruling you keep says in its reason why the held reading was wrong.\n"
+       "To rule on again:\n"))
+
 (defn- relation-reask-prompt
-  "The decision prompt over the same records, closed by a block asking only for rulings on
-   `missing` — the ids of `subjects` a judge's decision left unruled — beside the `rulings` it did
-   make. The whole prompt rather than the ids alone, because a ruling is a reading of the design
-   against the baseline, and a judge launched fresh has neither in front of it otherwise."
-  [opts subjects missing rulings]
+  "The decision prompt over the same records, closed by `pass` — why this pass asks — and a block
+   asking only for rulings on `missing`, ids of `subjects`, beside the `rulings` the decision made
+   on the rest. The whole prompt rather than the ids alone, because a ruling is a reading of the
+   design against the baseline, and a judge launched fresh has neither in front of it otherwise."
+  [opts subjects missing rulings pass]
   (let [missing (set missing)]
     (str (design-prompt opts)
-         "\n\nTHIS PASS ASKS ONE THING. The decision on this design is already made, and\n"
-         "it ruled on relation-honest per baseline id — but not on every id. Rule on\n"
-         "EACH id below, exactly as the relation-honest instruction above says, and\n"
-         "answer relation_rulings only; every other field above is not asked here.\n"
-         "Still to rule on:\n"
+         "\n\n" pass
          (relation-ids-lines (filterv (comp missing second) subjects) "  " nil)
          (when (seq rulings)
            (str "Already ruled, for context — not to rule again:\n"
@@ -1462,15 +1498,17 @@
     (catch Exception _ nil)))
 
 (defn- parse-rulings
-  "A judge's relation_rulings as `[{:id :ruling :reason}]`, brackets off. One ruling per id — the
-   first, so a repeated id cannot overturn itself in one answer — and only `breaks` or `stands`."
+  "A judge's relation_rulings as `[{:id :ruling :reason}]`, brackets off, with :cause when the judge
+   gave one for reversing its previous ruling. One ruling per id — the first, so a repeated id cannot
+   overturn itself in one answer — and only `breaks` or `stands`."
   [raw]
   (->> (if (sequential? raw) raw [])
        (keep (fn [r]
                (let [id (slug (:id r))
                      k  (keyword (str (:ruling r)))]
                  (when (and (not (str/blank? id)) (#{:breaks :stands} k))
-                   {:id id :ruling k :reason (str (:reason r))}))))
+                   (cond-> {:id id :ruling k :reason (str (:reason r))}
+                     (not (str/blank? (str (:cause r)))) (assoc :cause (str/trim (str (:cause r)))))))))
        (reduce (fn [acc r] (if (some #(= (:id r) (:id %)) acc) acc (conj acc r))) [])))
 
 (defn ^{:malli/schema [:=> [:cat :string :any] :map]}
@@ -1512,6 +1550,128 @@
           (seq rulings)                          (assoc :relation-rulings rulings))))
     (catch Exception _ nil)))
 
+(defn- mismatched
+  "The ids of `ids` whose ruling in `ruled` (by id) disagrees with `breaks`, the slugs :breaks lists:
+   `[omitted overclaim]` — ruled breaks and not listed, and listed but ruled stands. An id not ruled
+   is in neither."
+  [ruled breaks ids]
+  [(filterv #(and (= :breaks (get-in ruled [% :ruling])) (not (breaks %))) ids)
+   (filterv #(and (= :stands (get-in ruled [% :ruling])) (breaks %)) ids)])
+
+(defn- id-pattern
+  "Matches `id` written as a word in prose: case aside, and with its separators as hyphens,
+   underscores or spaces, because a judge or an amender writes `derivative-cache` as `derivative
+   cache` as often as not."
+  [id]
+  (re-pattern (str "(?i)(?<![\\w-])"
+                   (str/join "[-_ ]" (map #(java.util.regex.Pattern/quote %) (str/split id #"[-_ ]+")))
+                   "(?![\\w-])")))
+
+(defn- mentions
+  "Every part of `x` that names `id` (`id-pattern`), as a sorted set of strings: a map carrying an
+   :id — a claim, an element — whole, and of any other string the sentences that name it. Sentences
+   rather than whole strings, because :shape is one paragraph and a rewrite of one sentence in it is
+   not a rewrite of what it says about every id."
+  [x id]
+  (let [pat (id-pattern id)]
+    (letfn [(walk [x]
+              (cond (and (map? x) (contains? x :id)) (when (re-find pat (pr-str x)) [(pr-str x)])
+                    (map? x)    (mapcat walk (vals x))
+                    (coll? x)   (mapcat walk x)
+                    (string? x) (filter #(re-find pat %) (str/split x #"(?<=[.;])\s+|\n+"))
+                    :else       nil))]
+      (into (sorted-set) (walk x)))))
+
+(defn- baseline-statement
+  "What `baseline` states about its id `id`: every claim, property, module, element or stratum it
+   lists under that id, as a sorted set of strings."
+  [baseline id]
+  (let [m (:model baseline)]
+    (into (sorted-set)
+          (concat (keep #(when (= id (slug (:id %))) (pr-str %))
+                        (concat (:claims m) (:elements m) (:load-bearing baseline) (:modules baseline)))
+                  (keep #(when (= id (slug %)) id) (:strata baseline))))))
+
+(defn- relation-prior
+  "The previous decision's relation rulings, by id, each `{:ruling :reason :moved? bool}`: whether
+   the record that ruling read moved under that id before the record being ruled on now. `then` and
+   `now` are each `[design baseline]`; `rulings` the earlier decision's :relation-rulings.
+
+   An id moved when the baseline's statement of it changed, when the design's text naming it changed
+   (`mentions`, :breaks and the citation's bookkeeping aside), or when its :breaks membership moved
+   AWAY from the earlier ruling. Moving toward it is the amender doing what that ruling asked, and is
+   no ground for reversing it: counted as a move, every ruling an amender obeyed could be undone the
+   next round for free, which is the ping-pong this exists to stop."
+  [rulings [then then-baseline] [now now-baseline]]
+  (let [text     #(-> (ws/unstamp %) (dissoc :supersedes) (update :baseline dissoc :breaks))
+        listed   #(into #{} (map slug) (get-in % [:baseline :breaks]))
+        then-txt (text then)
+        now-txt  (text now)
+        then-in  (listed then)
+        now-in   (listed now)]
+    (into {}
+          (for [{:keys [id ruling reason]} rulings]
+            [id {:ruling ruling
+                 :reason (str reason)
+                 :moved? (boolean
+                          (or (not= (baseline-statement then-baseline id) (baseline-statement now-baseline id))
+                              (not= (mentions then-txt id) (mentions now-txt id))
+                              (and (not= (contains? then-in id) (contains? now-in id))
+                                   (not= (contains? now-in id) (= :breaks ruling)))))}]))))
+
+(defn- relation-prior!
+  "`relation-prior` for `design`, ruled on against `baseline`, from the newest decision on the
+   workstream and the design it read. nil when there is none, or it ruled on no id."
+  [project ws-id cwd design baseline]
+  (let [last (ws/latest-entry project ws-id :design-decision)
+        then (when-let [n (:design-seq last)] (ws/entry-at-seq project ws-id n))]
+    (when (and then (seq (:relation-rulings last)))
+      (relation-prior (:relation-rulings last)
+                      [then (stages/discover-baseline cwd then)]
+                      [design baseline]))))
+
+(defn- held-to-prior
+  "`decision` with every ruling that reverses `prior` (`relation-prior`) on an id the record did not
+   move, and gives no :cause, replaced by the prior ruling — and the reversal not taken kept under
+   :relation-reversals.
+
+   The ruling is the judge's reading of a record, and a record that did not move cannot be read two
+   ways by a judge with both readings in front of it. Taken, a reversal on an unmoved id is judge
+   variance that `relation-held` turns into an amend round, and the next round's variance undoes it.
+   Not taken, it is still recorded: a reversal is the judge's inconsistency, and a reader of the run
+   is owed it."
+  [decision prior]
+  (let [unexplained (fn [{:keys [id ruling cause]}]
+                      (when-let [p (get prior id)]
+                        (and (not= ruling (:ruling p)) (not (:moved? p)) (str/blank? cause))))
+        rulings     (:relation-rulings decision)
+        reversed    (filterv unexplained rulings)
+        already     (into #{} (map :id) (:relation-reversals decision))]
+    (if (empty? reversed)
+      decision
+      (-> decision
+          (assoc :relation-rulings
+                 (mapv #(if (unexplained %)
+                          (select-keys (assoc (get prior (:id %)) :id (:id %)) [:id :ruling :reason])
+                          %)
+                       rulings))
+          (update :relation-reversals (fnil into [])
+                  (comp (remove (comp already :id)) (map #(select-keys % [:id :ruling :reason])))
+                  reversed)))))
+
+(defn- relation-misread
+  "The ids `breaks` lists that `decision`'s relation-honest reading says are absent from it: a
+   sentence of the check's note, or of a finding filed under it, naming the id beside words of
+   absence. Only when the check is broken — a held one claims no omission."
+  [decision breaks]
+  (when (some #(and (= :relation-honest (:check %)) (= :broken (:status %))) (:checks decision))
+    (let [absent    #"(?i)\babsent\b|\bomit|\bmissing\b|\bnot (?:listed|named|included|under|in)\b|\bleaves? out\b|\black|does not (?:list|name|include)"
+          sentences (->> (concat (keep #(when (= :relation-honest (:check %)) (:note %)) (:checks decision))
+                                 (keep #(when (= :relation-honest (:check %)) (:claim %)) (:findings decision)))
+                         (mapcat #(str/split (str %) #"(?<=[.;])\s+|\n+"))
+                         (filter #(re-find absent %)))]
+      (filterv (fn [id] (some #(re-find (id-pattern id) %) sentences)) breaks))))
+
 (defn- relation-held
   "`decision` held to its own per-id rulings on relation-honest, against the design's `:breaks`.
 
@@ -1520,6 +1680,10 @@
    `stands`, is relation-honest broken whatever the judge called the check — the ruling and the
    check are its two answers to one question, and the ruling is the one made id by id. A :proceed
    over such a mismatch becomes :amend, with one finding listing the ids and the judge's reasons.
+
+   Rulings and :breaks agreeing, a relation-honest the judge broke for omitting an id :breaks already
+   lists (`relation-misread`) keeps its status — what else it says is the judge's — but its note says
+   the record lists the id, so the amender disputes the line rather than re-adding what is there.
 
    `subjects` empty — a design with no baseline relation, or a baseline naming no ids — leaves the
    decision as it is, and so does a relation-honest the judge could not derive: its rulings answer a
@@ -1532,9 +1696,10 @@
           breaks    (into #{} (map slug) breaks)
           ids       (mapv second subjects)
           unruled   (remove ruled ids)
-          omitted   (filterv #(and (= :breaks (get-in ruled [% :ruling])) (not (breaks %))) ids)
-          overclaim (filterv #(and (= :stands (get-in ruled [% :ruling])) (breaks %)) ids)
+          [omitted overclaim] (mismatched ruled breaks ids)
           wrong     (concat omitted overclaim)
+          misread   (when (and (empty? wrong) (empty? unruled))
+                      (relation-misread decision (filter breaks ids)))
           why       (str "ruled per baseline id"
                          (when (seq omitted)
                            (str "; ruled breaks, absent from :breaks: " (str/join ", " omitted)))
@@ -1549,6 +1714,15 @@
                       (conj (vec (:checks decision)) check))]
       (cond-> decision
         (seq unruled) (update :unruled #(vec (distinct (concat % unruled))))
+        (seq misread) (-> (assoc :relation-misread misread)
+                          (update :checks
+                                  (partial mapv #(if (= :relation-honest (:check %))
+                                                   (update % :note str
+                                                           " — nido: :baseline :breaks already lists "
+                                                           (str/join ", " misread)
+                                                           ", and every per-id ruling agrees with :breaks;"
+                                                           " a line resting only on their absence is a misreading to dispute")
+                                                   %))))
         (seq wrong)   (-> (assoc :checks checks)
                           (update :findings (fnil conj [])
                                   (cond-> {:check :relation-honest
@@ -1652,13 +1826,55 @@
                                            :label  (str (or (:label round) "design-decision") "-unruled-relations")
                                            :schema (relation-reask-schema missing)
                                            :prompt (relation-reask-prompt prompt-opts subjects missing
-                                                                          (:relation-rulings decision)))))
+                                                                          (:relation-rulings decision)
+                                                                          unruled-pass))))
             added  (when answer
                      (try (filterv (comp asked :id)
                                    (parse-rulings (:relation_rulings (json/parse-string answer true))))
                           (catch Exception _ nil)))]
         (cond-> decision
           (seq added) (update :relation-rulings (fnil into []) added))))))
+
+(defn- contradicted-relation-ids
+  "The ids of `subjects` whose ruling `decision` contradicts its own relation-honest reading: it
+   called the check held, and ruled them so `breaks` does not match (`mismatched`). None unless the
+   check was called held."
+  [decision subjects breaks]
+  (if (some #(and (= :relation-honest (:check %)) (= :held (:status %))) (:checks decision))
+    (into [] cat (mismatched (into {} (map (juxt :id identity)) (:relation-rulings decision))
+                             (into #{} (map slug) breaks)
+                             (mapv second subjects)))
+    []))
+
+(defn- reconcile-relation-reading!
+  "`decision` with the ids whose rulings contradict its own held relation-honest
+   (`contradicted-relation-ids`) ruled on once more, the contradiction in front of the judge, and
+   named under :relation-contradicted. `prior` is `relation-prior`'s, which the new rulings are held
+   to as the first ones were.
+
+   Asked rather than resolved by nido, because each reading is the judge's and nido has no ground
+   to prefer either: enforcing the ruling turns the judge's own disagreement into an amend round,
+   and trusting the check proceeds over a :breaks its rulings say is wrong. What the second answer
+   rules is held to like any other ruling; a re-ask that fails leaves the rulings as they were, and
+   `relation-held` holds :breaks to them."
+  [decision subjects breaks round prompt-opts prior]
+  (let [ids (contradicted-relation-ids decision subjects breaks)]
+    (if (or (not (:format decision)) (empty? ids))
+      decision
+      (let [asked  (set ids)
+            answer (:ok (run-round! (assoc round
+                                           :label  (str (or (:label round) "design-decision") "-contradicted-relations")
+                                           :schema (relation-reask-schema ids)
+                                           :prompt (relation-reask-prompt prompt-opts subjects ids
+                                                                          (:relation-rulings decision)
+                                                                          (contradicted-pass (map slug breaks))))))
+            again  (when answer
+                     (try (into {} (comp (filter (comp asked :id)) (map (juxt :id identity)))
+                                (parse-rulings (:relation_rulings (json/parse-string answer true))))
+                          (catch Exception _ nil)))]
+        (cond-> (assoc decision :relation-contradicted ids)
+          (seq again) (-> (update :relation-rulings (partial mapv #(get again (:id %) %)))
+                          (held-to-prior prior)))))))
 
 (defn ^{:malli/schema [:=> [:cat :map :DeclaredElements] [:vector :string]]}
   unresolved-subjects
@@ -2098,7 +2314,11 @@
    left without a ruling is named under :unruled — and so is a baseline id relation-honest is ruled
    on per id, whose rulings the decision is then held to (`relation-held`). The judge is handed a
    schema admitting exactly those ids, and asked once more for any it still skipped
-   (`rule-unruled-relations!`), so :unruled names what two asks left open. It carries `:code-identity`, and
+   (`rule-unruled-relations!`), so :unruled names what two asks left open. Each ruling is shown the
+   last decision's beside it and held to it where the record did not move (`held-to-prior`), and ids
+   whose rulings contradict the judge's own held relation-honest are asked once more
+   (`reconcile-relation-reading!`), so what reaches `relation-held` is the judge's reading and not
+   its variance. It carries `:code-identity`, and
    the `:subject-identities` of what the design's subjects rest on beside it, only when the tree read
    as the judge launched is the tree read as it returned — and a round holding
    settled claims whose tree moved appends nothing, answering
@@ -2123,6 +2343,8 @@
                                           :reviewer reviewer :design design
                                           :listing  (or listing (design-check/elements project code-cwd))}))
                 relation (relation-yardstick design baseline)
+                breaks   (get-in design [:baseline :breaks])
+                prior-rs (when (seq relation) (relation-prior! project ws-id cwd design baseline))
                 asking   {:design   design
                           :baseline baseline
                           :stance   (stages/read-stance project)
@@ -2131,14 +2353,17 @@
                           :settled  settled
                           :prior    prior
                           :levels   levels
-                          :answers  (answered project ws-id design)}
+                          :answers  (answered project ws-id design)
+                          :relation-prior prior-rs}
                 round    {:cwd code-cwd :run-id run-id :kind :design-decision
                           :label label :reviewer reviewer}
                 result   (-> (run-round! (assoc round
                                                 :schema (design-decision-schema relation)
                                                 :prompt (design-prompt asking)))
                              (judged #(parse-design-decision % (:seq design)))
-                             (rule-unruled-relations! relation round asking))
+                             (rule-unruled-relations! relation round asking)
+                             (held-to-prior prior-rs)
+                             (reconcile-relation-reading! relation breaks round asking prior-rs))
                 after    (settled/code-identity code-cwd)
                 one-tree (when (= before after) before)
                 subjects (settled/subjects design)
@@ -2159,7 +2384,7 @@
               :else
               (let [kept (select-keys subject-identities rests-on)]
                 (cond-> (-> (rule result checks asked)
-                            (relation-held relation (get-in design [:baseline :breaks])))
+                            (relation-held relation breaks))
                   (seq levels)              (assoc :strata-read (mapv :reading levels))
                   one-tree                  (assoc :code-identity one-tree)
                   (and one-tree (seq kept)) (assoc :subject-identities kept))))))
@@ -3840,6 +4065,23 @@
   (when reviewer
     (str (name reviewer) (when instead-of (str " for " (name instead-of))))))
 
+(defn- relation-flips
+  "Per baseline id, how often `decisions` — one run's, in ledger order — ruled it the other way from
+   the decision before: `{id {:stands->breaks n :breaks->stands n}}`, ids never flipped absent. Read
+   as the judge ruled, so a reversal the round did not take (:relation-reversals) still counts: it
+   is the judge's variance being measured, not what :breaks was held to."
+  [decisions]
+  (let [said (fn [d] (merge (into {} (map (juxt :id :ruling)) (:relation-rulings d))
+                            (into {} (map (juxt :id :ruling)) (:relation-reversals d))))]
+    (->> (map said decisions)
+         (partition 2 1)
+         (mapcat (fn [[before after]]
+                   (for [[id r] after
+                         :let [b (get before id)]
+                         :when (and b (not= b r))]
+                     [id (keyword (str (name b) "->" (name r)))])))
+         (reduce (fn [acc [id k]] (update-in acc [id k] (fnil inc 0))) (sorted-map)))))
+
 (defn ^{:malli/schema [:=> [:cat [:vector :map]] :map]}
   run-figures
   "What one record run's rounds did, from the entries it appended, in the ledger's order: its design
@@ -3856,7 +4098,9 @@
       :confirmed {id n}
       :judged-by {reviewer n}
       :unruled   {id n}
-      :settled-then-found {id n}}
+      :settled-then-found {id n}
+      :relation-flips     {id {:stands->breaks n :breaks->stands n}}
+      :relation-reversals {id n}}
 
    Every check a decision derived has a row, so a run whose checks all held says what it answered
    rather than printing an empty map. :alone and :at-end are over every defect a decision found — a
@@ -3872,6 +4116,11 @@
    settled (`:overrides-settled`) — beside :confirmed, the rate at which settlement shields a false
    confirmation. Each of these four is present only when non-empty.
 
+   :relation-flips counts, per baseline id, the decisions that ruled it the other way from the one
+   before (`relation-flips`), and :relation-reversals those of the flips the round did not take, for
+   a reversal on a record that had not moved. The first is the judge's variance on relation-honest,
+   the second how much of it nido kept from becoming an amend round. Both present only when non-empty.
+
    Read from the decisions rather than the run's report, because a decision holds every check's
    status and it outlives the run dir. Derived on every read; nothing stores it."
   [entries]
@@ -3882,6 +4131,8 @@
         confirmed (frequencies (mapcat :confirmed judgements))
         overridden (frequencies (mapcat #(map :id (:overrides-settled %)) judgements))
         judges    (frequencies (keep (comp judge-name :judged-by) judgements))
+        flips     (relation-flips decisions)
+        reversals (frequencies (mapcat #(map :id (:relation-reversals %)) decisions))
         statuses  (mapv check-statuses decisions)
         ;; One round's defects, each tagged by the tally it belongs to: a check keyword and a claim id
         ;; do not compare, and `alone` has to see both.
@@ -3900,6 +4151,8 @@
       (seq confirmed) (assoc :confirmed (into (sorted-map) confirmed))
       (seq overridden) (assoc :settled-then-found (into (sorted-map) overridden))
       (seq judges)    (assoc :judged-by (into (sorted-map) judges))
+      (seq flips)     (assoc :relation-flips flips)
+      (seq reversals) (assoc :relation-reversals (into (sorted-map) reversals))
 
       (seq decisions)
       (assoc :decisions (count decisions)
