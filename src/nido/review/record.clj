@@ -2609,6 +2609,9 @@
     ;; they word it or whatever they cite, and collapsing them is the point: a
     ;; key that never collides is a stall detector that never fires.
     (:blocks f)                            [:blocks (:blocks f)]
+    ;; Not under the subject's id alone: a refutation of the same id is a different finding, and
+    ;; one following this one is the amender's rewording being read — not this one repeating.
+    (:unsettled f)                         [:unsettled (str (:claim-id f))]
     (not (str/blank? (str (:claim-id f)))) [:claim-id (str (:claim-id f))]
     (seq (:evidence f))                    [:evidence (vec (sort (:evidence f)))]
     :else                                  [:cites (vec (sort (:cites f)))]))
@@ -2690,7 +2693,7 @@
     (into (sorted-map)
           (keep (fn [id] (let [n (get refuted-running id 0)]
                            (when (and (claims id) (>= n withdrawable-after)) [id n]))))
-          (distinct (keep :claim-id (remove :blocks findings))))))
+          (distinct (keep :claim-id (remove #(or (:blocks %) (:unsettled %)) findings))))))
 
 (defn- withdrawal-block
   "What an amender is told about the claims in `spent` (`withdrawable`), or nil when there are none."
@@ -2710,11 +2713,92 @@
 
 (defn- refuted-ids
   "The claims a record finding refutes: a design finding's :claim-ids, a baseline refutation's
-   :claim-id. A gap (:blocks) refutes nothing."
+   :claim-id. A gap (:blocks) refutes nothing, and neither does a subject no reading could rule on
+   (:unsettled)."
   [f]
-  (if (:blocks f)
+  (if (or (:blocks f) (:unsettled f))
     []
     (into [] (keep (comp not-empty str)) (or (seq (:claim-ids f)) [(:claim-id f)]))))
+
+(def ^:private unsettled-after
+  "How many readings running a subject may come back unchecked before its amender is handed it. Two:
+   one is a judge that could not reach the evidence this time; a second is a record asking for
+   evidence no reading of the code has, which a third reading will not have either."
+  2)
+
+(defn ^{:malli/schema [:=> [:cat [:sequential :map]] [:map-of :string :map]]}
+  unchecked-running
+  "How many readings in a row have declared each subject unchecked, counting back from its newest,
+   with the reason each gave — `{id {:n n :reasons [reason ...]}}`, reasons oldest first, for every
+   id whose newest reading in `judgements`, oldest first, declared it unchecked.
+
+   A reading of a subject is a judgement that ruled on it: confirmed it, held it :owed, found against
+   it, or declared it unchecked. One that did none — it was settled, or left unruled — neither breaks
+   nor extends a run; any other ruling ends one. The reasons are carried and never compared: no two
+   judges word one reason alike, so a match on them would never fire, and whether they are one
+   reason is for whoever is handed them to say."
+  [judgements]
+  (reduce (fn [runs {:keys [confirmed owed findings unchecked]}]
+            (let [why   (into {} (map (juxt :id :reason)) unchecked)
+                  ruled (concat confirmed owed (mapcat refuted-ids findings))]
+              (as-> runs rs
+                (apply dissoc rs (remove why ruled))
+                (reduce-kv (fn [rs id reason]
+                             (-> rs
+                                 (update-in [id :n] (fnil inc 0))
+                                 (update-in [id :reasons] (fnil conj []) reason)))
+                           rs why))))
+          {} judgements))
+
+(defn ^{:malli/schema [:=> [:cat :map [:map-of :string :map]] [:vector :map]]}
+  unsettled-findings
+  "A finding for each subject `record` declared unchecked that `running` (`unchecked-running`, this
+   judgement included) counts at `unsettled-after` or more — handed to the amender to rule on,
+   because the judge cannot and would be asked again every round while the record is called
+   sufficient over it.
+
+   :unsettled is the run's length and :reasons each reading's; :cites is empty, since what the
+   finding points at is the subject's absence of evidence, which no site holds."
+  [record running]
+  (vec (for [{:keys [id]} (:unchecked record)
+             :let [{:keys [n reasons]} (get running id)]
+             :when (and n (>= n unsettled-after))]
+         {:claim-id  id
+          :claim     (str "[" id "] has come back unchecked " n " readings running")
+          :unsettled n
+          :reasons   (vec reasons)
+          :cites     []})))
+
+(defn- unsettled-claims
+  "The claims of `baseline` among `findings` that no reading could rule on (`unsettled-findings`),
+   as a sorted `{claim-id n}` — what its amender may also remove with a reason. A module or health
+   observation is never one, for the reason `withdrawable` gives."
+  [baseline findings]
+  (let [claims (retreat/claim-ids baseline)]
+    (into (sorted-map)
+          (keep (fn [{:keys [claim-id unsettled]}]
+                  (when (and unsettled (claims claim-id)) [claim-id unsettled])))
+          findings)))
+
+(defn- unsettled-block
+  "What an amender is told about the subjects among `findings` no reading could rule on, or nil when
+   there are none."
+  [findings]
+  (when-let [ids (seq (keep #(when (:unsettled %) (:claim-id %)) findings))]
+    (str "\n\nA SUBJECT NO READING CAN RULE ON. "
+         (str/join ", " (map #(str "[" % "]") ids))
+         " came back unchecked reading after\n"
+         "reading: what it asserts is not in the code — production history, the contents of a\n"
+         "database — so the judge cannot settle it, asks again every round, and the record is\n"
+         "called sufficient over it unruled. A further reading will not have the evidence\n"
+         "either. Rule on it here, one of three ways:\n\n"
+         "  - REWORD it to what the code shows, so the next reading can confirm or refute it.\n"
+         "  - MOVE what the code cannot show into :unknowns — declared, not determined —\n"
+         "    keeping in the subject only what the code shows, or removing it if that is nothing.\n"
+         "  - DROP it, when no other claim, element or derivation in the record rests on it.\n\n"
+         "A claim removed either way is named under :withdrawn with why, and is reported to a\n"
+         "human as a withdrawal carrying your reason. Removed without one, it is reported as a\n"
+         "claim dropped.")))
 
 (defn ^{:malli/schema [:=> [:cat :any :map :any] :boolean]}
   record-round-changed?
@@ -3227,12 +3311,24 @@
    `refuted-running` is what `refuted-running` counts over this workstream's
    reviews, this round's included. A refuted claim it counts at `withdrawable-after` or more has already
    been reworded and refuted again, so its amender is told that a restatement is
-   off the table and offered removal with a reason (`withdrawable`)."
+   off the table and offered removal with a reason (`withdrawable`).
+
+   A finding carrying :unsettled is neither: no reading could rule on its subject
+   (`unsettled-findings`), and the amender is asked to rule on it instead, with removal of
+   a claim on offer the same way. A round that found nothing else was judged sufficient,
+   which the opening says rather than calling it a refutation."
   [{:keys [baseline findings out-path stance declared? check-cmd settled refuted-running]}]
-  (let [gaps?  (boolean (some :blocks findings))
-        spent  (withdrawable baseline findings refuted-running)]
+  (let [gaps?    (boolean (some :blocks findings))
+        unruled? (and (seq findings) (every? :unsettled findings))
+        spent    (withdrawable baseline findings refuted-running)
+        offered  (merge (unsettled-claims baseline findings) spent)]
    (str
-   (if gaps?
+   (cond
+     unruled?
+     (str "A read-only judge checked this workstream's BASELINE — the baseline of how the\n"
+          "area works today — against the code. It found true everything it could check,\n"
+          "and has been unable to check what is named below, reading after reading.\n\n")
+     gaps?
      (str "A read-only judge checked this workstream's BASELINE — the baseline of how\n"
           "the area works today — against the code. It found the baseline TRUE, and\n"
           "found it does not say enough to derive something a decision needs.\n\n"
@@ -3242,6 +3338,7 @@
           "claim the judge did not name: it already holds, and a baseline grows without\n"
           "limit if completeness is the target — which is the failure the named\n"
           "derivation exists to bound. Add what the derivation needs and stop.\n\n")
+     :else
      (str "A read-only judge checked this workstream's BASELINE — the baseline of how the\n"
           "area works today — against the code, and refuted part of it.\n\n"))
    (if gaps?
@@ -3292,7 +3389,8 @@
    (if gaps?
      (str "CHANGE ONLY WHAT WAS ASKED FOR. A claim nobody named must come back\n"
           "unchanged — not restated, not sharpened, not made more precise.\n\n")
-     (str "CHANGE ONLY WHAT WAS REFUTED. A claim nobody challenged this round must come\n"
+     (str (if unruled? "CHANGE ONLY WHAT IS NAMED BELOW." "CHANGE ONLY WHAT WAS REFUTED.")
+          " A claim nobody challenged this round must come\n"
           "back unchanged — not restated, not sharpened, not made more precise.\n\n"))
    stale-rule
    ;; The rule above says WHICH statements to touch. This one says HOW, and its
@@ -3325,9 +3423,10 @@
    "Do NOT edit any source file. This pass writes one file and nothing else.\n\n"
    "THE CURRENT BASELINE:\n\n"
    (pr-str (ws/unstamp baseline))
-   (if gaps?
-     "\n\nWHAT THE JUDGE COULD NOT DERIVE — numbered, and you answer them by number:\n\n"
-     "\n\nWHAT THE JUDGE REFUTED — numbered, and you answer them by number:\n\n")
+   (cond
+     gaps?    "\n\nWHAT THE JUDGE COULD NOT DERIVE — numbered, and you answer them by number:\n\n"
+     unruled? "\n\nWHAT NO JUDGE COULD RULE ON — numbered, and you answer them by number:\n\n"
+     :else    "\n\nWHAT THE JUDGE REFUTED — numbered, and you answer them by number:\n\n")
    (str/join
     "\n\n"
     (map-indexed
@@ -3337,19 +3436,29 @@
             ;; repairs, and the two fields that say which — :blocks and :needs —
             ;; were on the record and printed nowhere. An amender shown a gap
             ;; under the word "refutes" corrects a claim that was already true.
-            (if (:blocks f)
+            (cond
+              (:blocks f)
               (str "blocks:  " (name (:blocks f)) "\n"
                    "   needs:   " (:needs f) "\n"
                    "   about:   " (:claim f) "\n"
                    "   in:      " (str/join "; " (:cites f)))
+
+              (:unsettled f)
+              (str "unruled: [" (:claim-id f) "] — unchecked " (:unsettled f)
+                   " readings running, because:\n"
+                   (str/join "\n" (map #(str "     - " %) (:reasons f)))
+                   "\n   see A SUBJECT NO READING CAN RULE ON")
+
+              :else
               (str "refutes: " (str/join "; " (:cites f)) "\n"
                    "   claim:   " (:claim f)))
             (when (seq (:evidence f))
               (str "\n   evidence: " (str/join ", " (:evidence f))))
-            (when-let [n (and (not (:blocks f)) (get spent (:claim-id f)))]
+            (when-let [n (and (not (:blocks f)) (not (:unsettled f)) (get spent (:claim-id f)))]
               (str "\n   running: refuted " n " readings in a row — see A CLAIM NO REWORDING HAS SETTLED"))))
      findings))
    (withdrawal-block spent)
+   (unsettled-block findings)
    (some->> (bearing-block (bearing-subjects {:record baseline :findings findings :settled settled}))
             (str "\n\n") str/trimr)
    (if gaps?
@@ -3362,15 +3471,19 @@
    "worst available answer: it makes the record false AND ends the argument.\n\n"
    "Write EDN to:\n\n  " out-path "\n\n"
    "  {:record   <the COMPLETE corrected baseline — every field, not a diff>\n"
-   (if (seq spent)
+   (if (seq offered)
      (str "   :disputes [{:finding 2 :because \"...\" :evidence [\"src/x.clj:41\"]}]\n"
-          "   :withdrawn [{:id \"" (key (first spent)) "\" :because \"...\"}]}\n\n")
+          "   :withdrawn [{:id \"" (key (first offered)) "\" :because \"...\"}]}\n\n")
      "   :disputes [{:finding 2 :because \"...\" :evidence [\"src/x.clj:41\"]}]}\n\n")
    "Omit :record entirely if every finding is disputed and the baseline needs no\n"
    "change. Omit :disputes if you accepted all of them.\n"
    stale-field
-   (when (seq spent)
-     "Omit :withdrawn unless you removed a claim named under A CLAIM NO REWORDING HAS SETTLED.\n")
+   (when (seq offered)
+     (str "Omit :withdrawn unless you removed a claim named under "
+          (str/join " or " (cond-> []
+                             (seq spent)             (conj "A CLAIM NO REWORDING HAS SETTLED")
+                             (some :unsettled findings) (conj "A SUBJECT NO READING CAN RULE ON")))
+          ".\n"))
    "\n"
    "Write the record in the shared model — :model {:elements :claims} in place of\n"
    ":modules, :composition and :load-bearing — whatever shape the current one is in.\n"
@@ -3709,9 +3822,10 @@
                                    :unread-amendment? (unread-amendment? ctx)}))
         ;; Read before this round's record is appended, and this round added by hand, so it is
         ;; counted exactly once whether or not the best-effort append lands.
-        running (when (:format record)
-                  (refuted-running (conj (if project (vec (ws/entries-of project ws-id :baseline-review)) [])
-                                         record)))
+        reviews   (when (:format record)
+                    (conj (if project (vec (ws/entries-of project ws-id :baseline-review)) []) record))
+        running   (when reviews (refuted-running reviews))
+        unsettled (if reviews (unsettled-findings record (unchecked-running reviews)) [])
         ;; An amender's :stale speaks for the one round after it.
         ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
                           (update :carry dissoc :stale))
@@ -3726,16 +3840,18 @@
         (and (= :sufficient (:verdict record)) (seq (:unruled record)))
         (unruled-stop (assoc ctx :record record :findings []))
 
-        (and (= :sufficient (:verdict record)) (read-once? record))
+        ;; A sufficient verdict over a subject no reading can rule on is not one the run may end
+        ;; on: it goes to the amender with the rest below, and is read again after.
+        (and (= :sufficient (:verdict record)) (empty? unsettled) (read-once? record))
         (second-reading (assoc ctx :record record :findings []) subject record)
 
-        (= :sufficient (:verdict record))
+        (and (= :sufficient (:verdict record)) (empty? unsettled))
         (assoc ctx :record record :findings [] :control :stop :status :sufficient)
 
         :else
         (let [findings (mapv #(assoc % :disputed-n
                                      (disputed-n (:history ctx) baseline-finding-base-key %))
-                             (:findings record))]
+                             (into (vec (:findings record)) unsettled))]
           ;; Twice objected to and stated a third time. Neither side is giving
           ;; way and neither can settle it: the judge cannot be overruled by the
           ;; pass it is judging, and that pass may not amend a record it believes
@@ -3761,7 +3877,9 @@
    the run ends :unruled (`unruled-stop`). And only on a second reading: one
    confirming a subject no confirmation at its key preceded, or reading a record
    this run amended for the first time, is appended as :read-once or
-   :amendment-read-once, holds nothing, and is judged again (`second-reading`)."
+   :amendment-read-once, holds nothing, and is judged again (`second-reading`).
+   Nor over a subject it declared unchecked for the second reading running
+   (`unsettled-findings`): that one is the amender's to rule on, whatever the verdict."
   {:name :judge
    :run
    run-judge-stage})
@@ -3872,7 +3990,8 @@
                     (refused-stop ctx written disputes)
                     (let [;; Only the claims the prompt offered removal for: a reason
                           ;; given for any other drop does not make it a withdrawal.
-                          offered  (withdrawable prev (:findings ctx) (:refuted-running ctx))
+                          offered  (merge (unsettled-claims prev (:findings ctx))
+                                          (withdrawable prev (:findings ctx) (:refuted-running ctx)))
                           ;; Where the judge pointed, per claim: the sites a repair
                           ;; re-points a citation onto, which is not a citation lost.
                           judged   (reduce (fn [m {:keys [claim-id evidence]}]
@@ -4153,6 +4272,8 @@
       :confirmed {id n}
       :judged-by {reviewer n}
       :unruled   {id n}
+      :unchecked {id n}
+      :still-unchecked [id]
       :relation-unruled {id n}
       :settled-then-found {id n}
       :relation-flips     {id {:stands->breaks n :breaks->stands n}}
@@ -4169,9 +4290,12 @@
    runs can hold the instrument fixed; a judgement from before that was kept counts in neither.
    :unruled counts, per subject, the judgements handed it as a check that left it without a ruling;
    :relation-unruled, per baseline id, the decisions that left it without a relation ruling.
+   :unchecked counts, per subject, the judgements that declared it unchecked, and :still-unchecked
+   names the subjects whose last reading in the run did (`unchecked-running`) — what the run ended
+   without anyone ruling on, which a sufficient status does not say.
    :settled-then-found counts, per subject, the judgements that found against it while it was
    settled (`:overrides-settled`) — beside :confirmed, the rate at which settlement shields a false
-   confirmation. Each of these five is present only when non-empty.
+   confirmation. Each of these seven is present only when non-empty.
 
    :relation-flips counts, per baseline id, the decisions that ruled it the other way from the one
    before (`relation-flips`), and :relation-reversals those of the flips the round did not take, for
@@ -4185,6 +4309,11 @@
         reviews   (filterv #(= :baseline-review (:format %)) entries)
         judgements (concat decisions reviews)
         unruled   (frequencies (mapcat :unruled judgements))
+        unchecked (frequencies (mapcat #(map :id (:unchecked %)) judgements))
+        ;; By :seq across both kinds, because `entries` arrive kind by kind and a design run's
+        ;; re-survey interleaves its reviews with the decisions. Stable, so entries with none keep
+        ;; the order they came in.
+        still     (keys (unchecked-running (sort-by :seq judgements)))
         relation-unruled (frequencies (mapcat :relation-unruled decisions))
         confirmed (frequencies (mapcat :confirmed judgements))
         overridden (frequencies (mapcat #(map :id (:overrides-settled %)) judgements))
@@ -4206,6 +4335,8 @@
         derived   (fn [c status] (count (filter #(= status (get % c)) statuses)))]
     (cond-> {}
       (seq unruled)   (assoc :unruled (into (sorted-map) unruled))
+      (seq unchecked) (assoc :unchecked (into (sorted-map) unchecked))
+      (seq still)     (assoc :still-unchecked (vec (sort still)))
       (seq relation-unruled) (assoc :relation-unruled (into (sorted-map) relation-unruled))
       (seq confirmed) (assoc :confirmed (into (sorted-map) confirmed))
       (seq overridden) (assoc :settled-then-found (into (sorted-map) overridden))

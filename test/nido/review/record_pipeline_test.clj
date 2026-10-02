@@ -1945,3 +1945,81 @@
     (is (contains? (set (map :what (:retreats out))) :claim-dropped)
         "a claim refuted once has not been shown unfixable by rewording, so its removal stays a drop")
     (is (not (contains? (set (map :what (:retreats out))) :claim-withdrawn)))))
+
+;; ── A subject no reading can rule on ────────────────────────────────────────
+
+(defn- unchecked [id reason & {:keys [verdict] :or {verdict :sufficient}}]
+  {:format :baseline-review :verdict verdict :confirmed [] :findings []
+   :unchecked [{:id id :reason reason}]})
+
+(deftest a-subject-left-unchecked-is-counted-across-the-readings-that-ruled-on-it
+  (is (= {"c1" {:n 2 :reasons ["needs production history" "deploy history, not code"]}}
+         (record/unchecked-running [(unchecked "c1" "needs production history")
+                                    (unchecked "c1" "deploy history, not code")]))
+      "two judges never word one reason alike, so the run is of the subject and both reasons are kept")
+  (is (= {"c1" {:n 1 :reasons ["b"]}}
+         (record/unchecked-running [(unchecked "c1" "a") (review :confirmed ["c1"]) (unchecked "c1" "b")]))
+      "a confirmation ends a run: the claim was checkable at some wording")
+  (is (= {} (record/unchecked-running [(unchecked "c1" "a") (review :refuted ["c1"])]))
+      "a refutation is a ruling too")
+  (is (= {"c1" {:n 2 :reasons ["a" "b"]}}
+         (record/unchecked-running [(unchecked "c1" "a") (review :confirmed ["c2"]) (unchecked "c1" "b")]))
+      "a judgement that did not rule on the subject — settled, or unruled — neither breaks nor extends"))
+
+(deftest a-subject-unchecked-two-readings-running-goes-to-the-amender-not-past-a-sufficient-verdict
+  ;; Watched: a claim only production history could settle was unchecked in all four rounds of a
+  ;; run that ended sufficient, and was never handed to the amender.
+  (with-redefs [record/baseline-review! (fn [_] (unchecked "c1" "deploy history, not code"))
+                record/append! (fn [_ _] nil)
+                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                ws/latest-entry (fn [_ _ _] a-baseline)
+                ws/entries-of (fn [_ _ kind]
+                                (if (= :baseline-review kind) [(unchecked "c1" "needs production history")] []))]
+    (let [out (run record/judge-stage (ctx))]
+      (is (nil? (:status out)) "a sufficient verdict over a subject nobody can rule on does not end the run")
+      (is (not= :stop (:control out)))
+      (is (= [{:claim-id "c1" :unsettled 2
+               :reasons ["needs production history" "deploy history, not code"]}]
+             (map #(select-keys % [:claim-id :unsettled :reasons]) (:findings out)))
+          "the amender is handed it with every reason the judges gave"))))
+
+(deftest a-subject-unchecked-once-is-a-judge-that-could-not-reach-it-this-time
+  (with-redefs [record/baseline-review! (fn [_] (unchecked "c1" "needs production history"))
+                record/append! (fn [_ _] nil)
+                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                ws/latest-entry (fn [_ _ _] a-baseline)
+                ws/entries-of (fn [_ _ _] [])]
+    (is (= :sufficient (:status (run record/judge-stage (ctx))))
+        "one declared gap is a ruling the record may hold over")))
+
+(def ^:private an-unsettled-finding
+  {:claim-id "c1" :claim "[c1] has come back unchecked 2 readings running" :unsettled 2
+   :reasons ["needs production history" "deploy history, not code"] :cites []})
+
+(deftest an-unsettled-subject-is-a-different-finding-from-a-refutation-of-it
+  (is (not= (record/baseline-finding-base-key an-unsettled-finding)
+            (record/baseline-finding-base-key a-claim-finding))
+      "the round after the amender reworded it may refute it, and that is not this finding repeating"))
+
+(deftest the-amender-is-asked-to-rule-on-what-no-judge-could
+  (let [p (record/amend-prompt {:baseline a-baseline :findings [an-unsettled-finding] :out-path "/x"})]
+    (is (str/includes? p "It found true everything it could check")
+        "the judge refuted nothing, and an amender told it did corrects a claim nobody found wrong")
+    (is (not (str/includes? p "refuted part of it")))
+    (is (str/includes? p "unruled: [c1] — unchecked 2 readings running, because:\n     - needs production history"))
+    (is (str/includes? p "A SUBJECT NO READING CAN RULE ON. [c1]"))
+    (is (str/includes? p "REWORD it to what the code shows"))
+    (is (str/includes? p "MOVE what the code cannot show into :unknowns"))
+    (is (str/includes? p "DROP it"))
+    (is (str/includes? p ":withdrawn [{:id \"c1\" :because \"...\"}]")
+        "a claim removed for having no evidence in the code is reported with why")
+    (is (not (str/includes? p "A CLAIM NO REWORDING HAS SETTLED"))
+        "it was never refuted, so it is not offered as one that no rewording settles")))
+
+(deftest a-withdrawal-of-a-subject-no-reading-could-rule-on-is-reported-with-its-reason
+  (let [[out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record (without-c1 a-baseline)
+                                                               :withdrawn [{:id "c1" :because "only deploy history shows it"}]})))}
+                            (ctx :findings [an-unsettled-finding]))]
+    (is (= [{:what :claim-withdrawn :detail "claim c1 was removed: only deploy history shows it"}]
+           (:retreats out))
+        "moved to :unknowns or dropped, the human reads why it went rather than a claim dropped")))

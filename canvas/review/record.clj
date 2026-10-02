@@ -104,6 +104,15 @@
     "How many readings in a row have refuted each claim, counting back from its newest. What
      decides whether an amender may remove a refuted claim with a reason rather than reword it."
     {:signature [:=> [:catn [:reviews [:sequential :map]]] [:map-of :string :int]]})
+  (Operation unchecked-running
+    "How many readings in a row have declared each subject unchecked, counting back from its newest,
+     with every reason given. The reasons are carried, never compared — no two judges word one alike."
+    {:signature [:=> [:catn [:judgements [:sequential :map]]] [:map-of :string :map]]})
+  (Operation unsettled-findings
+    "A finding for each subject a judgement declared unchecked for the second reading running: the
+     amender's to reword, move to the record's unknowns or drop, since no judge can rule on it and a
+     sufficient verdict would otherwise stand over it."
+    {:signature [:=> [:catn [:record :map] [:running [:map-of :string :map]]] [:vector :map]]})
   (Operation parse-amend-answer "What an amender may hand back."
     {:signature [:=> [:catn [:raw :any] [:findings :any] [:base-key :any]] :map]})
   (Operation disputed-n

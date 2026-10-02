@@ -2329,8 +2329,9 @@
    it was broken, in how many rounds, in how many of those alone, and in how many runs it was still
    broken at the end — and for a check, in how many rounds it was derived, held and underivable. Per
    stratum, its level judges' readings summed; per claim found false, per subject confirmed, left
-   unruled or found against while settled, and per reviewer that answered, the runs' counts summed —
-   and per baseline id, the decisions leaving it with no relation ruling, its relation-ruling flips
+   unruled, declared unchecked or found against while settled, and per reviewer that answered, the
+   runs' counts summed; per subject, in how many runs it was still unchecked at the end — and per
+   baseline id, the decisions leaving it with no relation ruling, its relation-ruling flips
    each way and its reversals not taken."
   [figures]
   (letfn [(add [acc tallies]
@@ -2353,6 +2354,8 @@
      :falsified   (counts :falsified)
      :confirmed   (counts :confirmed)
      :unruled     (counts :unruled)
+     :unchecked   (counts :unchecked)
+     :still-unchecked (into (sorted-map) (frequencies (mapcat :still-unchecked figures)))
      :relation-unruled (counts :relation-unruled)
      :settled-then-found (counts :settled-then-found)
      :judged-by   (counts :judged-by)

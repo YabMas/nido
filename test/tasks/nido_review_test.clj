@@ -2248,6 +2248,20 @@
         (is (= {"one-gate" 1} (:falsified all)) "a refuted baseline claim was dropped from the roll-up")
         (is (= {"claude for codex" 1} (:judged-by all)))))))
 
+(deftest the-subjects-still-unchecked-sum-to-the-runs-that-ended-without-a-ruling-on-them
+  (let [u (fn [run n & ids] {:format :baseline-review :run-id run :verdict :sufficient :seq n
+                             :unchecked (mapv #(hash-map :id % :reason "r") ids)})
+        entries {:design-decision []
+                 :baseline-review [(u "b1" 1 "rows-span") (u "b1" 2 "rows-span")
+                                   (u "b2" 3 "rows-span" "tools-unused")
+                                   (assoc (u "b2" 4) :confirmed ["tools-unused"])]}]
+    (with-redefs [ws/list-ids   (constantly ["ws-1"])
+                  ws/entries-of (fn [_ _ kind] (get entries kind))]
+      (let [all (read-string (with-out-str (t/figures-cmd* {:project "nido"})))]
+        (is (= {"rows-span" 3 "tools-unused" 1} (:unchecked all)))
+        (is (= {"rows-span" 2} (:still-unchecked all))
+            "a subject that comes back unruled run after run is visible as such across runs")))))
+
 (deftest the-level-judges-readings-sum-across-runs
   (let [entries {:design-decision [{:format :design-decision :run-id "d1" :seq 3 :checks []
                                     :strata-read [{:stratum "s" :verdict :widens :reason "r"}]}

@@ -1555,6 +1555,19 @@
     (is (= {"c2" 1 "h1" 2} (:unruled f))))
   (is (nil? (:unruled (record/run-figures [{:format :baseline-review :verdict :sufficient}])))))
 
+(deftest a-runs-figures-name-what-it-ended-without-anyone-ruling-on
+  ;; A run ended sufficient with one claim unchecked in all four of its judgements, and its figures
+  ;; printed confirmed and falsified only — the one subject nobody ruled on was nowhere.
+  (let [u (fn [& ids] {:format :baseline-review :verdict :sufficient
+                       :unchecked (mapv #(hash-map :id % :reason "needs production history") ids)})
+        f (record/run-figures [(u "tools-unused" "rows-span")
+                               (assoc (u "tools-unused") :confirmed ["rows-span"])
+                               (u "tools-unused")])]
+    (is (= {"rows-span" 1 "tools-unused" 3} (:unchecked f)))
+    (is (= ["tools-unused"] (:still-unchecked f))
+        "a subject confirmed after it was unchecked was ruled on, and is not still owed"))
+  (is (nil? (:still-unchecked (record/run-figures [{:format :baseline-review :verdict :sufficient}])))))
+
 (deftest a-runs-figures-count-relation-ids-apart-from-unruled-checks
   (let [f (record/run-figures [{:format :design-decision :checks [] :unruled ["c1"]
                                 :relation-unruled ["c1" "m1"]}
