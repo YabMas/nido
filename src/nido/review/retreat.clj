@@ -129,22 +129,87 @@
                 (vec lost) moved)))))
 
 (defn- evidence-lost
-  "Places the old record cited that the new one no longer points at and did not re-point
-   (`given-up`). A place is still cited when ANY remaining reference in that file covers
-   its line, so a widened range keeps everything inside it. A claim with no id, or one the new
-   record no longer makes, has no successor to re-point to: everything only it cited is lost."
+  "Citations the old record made that lost a place: one `{:claim-id :citation :places}` per
+   evidence string of a claim in `prev`, `:places` being the ones nothing in `curr`'s load-bearing
+   properties points at any more and the claim's successor did not re-point (`given-up`).
+
+   Per string, not per place, because the string is what the amender kept or deleted: one grep
+   line naming three sites in a file is one decision, and reporting it as three weakenings put a
+   single narrowing at the top of the headline three times. A place is still cited when ANY
+   remaining reference in that file covers its line, so a widened range keeps everything inside
+   it. A claim with no id, or one the new record no longer makes, has no successor to re-point to:
+   everything only it cited is lost."
   [prev curr judged]
   (let [now   (vec (baseline-evidence curr))
         lost? (fn [loc] (not-any? #(covers? % loc) now))
         kept  (into {} (keep #(when (:id %) [(:id %) %])) (:load-bearing curr))]
     (->> (:load-bearing prev)
          (mapcat (fn [p]
-                   (let [lost (filter lost? (claim-places p))]
-                     (if-let [c (some-> (:id p) kept)]
-                       (given-up p c lost (get judged (:id p)))
-                       lost))))
-         distinct
-         (sort-by (juxt first second)))))
+                   (let [lost (filter lost? (claim-places p))
+                         gone (set (if-let [c (some-> (:id p) kept)]
+                                     (given-up p c lost (get judged (:id p)))
+                                     lost))]
+                     ;; A place two of the claim's strings name is reported under the first only.
+                     (first
+                      (reduce (fn [[out seen] s]
+                                (let [places (remove seen (filter gone (distinct (locations s))))]
+                                  (if (seq places)
+                                    [(conj out {:claim-id (:id p) :citation s :places (vec places)})
+                                     (into seen places)]
+                                    [out seen])))
+                              [[] #{}] (distinct (map str (:evidence p))))))))
+         (sort-by (comp (juxt first second) first :places)))))
+
+(def ^:private relocation-asked
+  "A finding's `:needs` asking for evidence to go somewhere else rather than away. Read off the
+   judge's prose, so it can miss; a miss leaves the retreat reading as an ordinary requested
+   narrowing, never as no request at all."
+  #"(?i)relocat|re-?file|\bmov(?:e|ing)\b|\bas (?:bounded|health)|\binto (?:the )?(?:health|bounded)")
+
+(defn- place-str
+  [[file start end]]
+  (str file ":" start (when (not= start end) (str "-" end))))
+
+(defn- dropped-evidence
+  "One `:evidence-dropped` per lost citation, worded by why it might have gone — the only thing
+   that tells a narrowing the judge asked for from one nobody asked for, which otherwise read
+   alike in the headline.
+
+   `needs` is `{claim-id [needs]}`, the `:needs` of every finding at that claim this round; a
+   retreat with one carries them as `:answering`. `elsewhere` is every place the new record cites
+   anywhere at all, health and prose included: a place still in it was moved out of the claim,
+   not removed. A place in none of it, at a claim whose finding asked for evidence to be
+   relocated, is `:relocation-dropped?` — the amender deleted what it was told to move."
+  [{:keys [claim-id citation places]} needs elsewhere]
+  (let [asked     (get needs claim-id)
+        removed?  (not-every? (fn [loc] (some #(covers? % loc) elsewhere)) places)
+        relocate? (and removed? (some #(re-find relocation-asked %) asked))
+        where     (str/join ", " (map place-str places))
+        detail    (cond
+                    (nil? claim-id)
+                    (str where " is cited by no load-bearing property any more")
+
+                    (not removed?)
+                    (str "claim " claim-id " no longer cites " where
+                         "; the record still cites it outside the load-bearing claims")
+
+                    relocate?
+                    (str "claim " claim-id " no longer cites " where
+                         ", which its finding asked to relocate and the record no longer cites anywhere — "
+                         (str/join " / " asked))
+
+                    (seq asked)
+                    (str "claim " claim-id " no longer cites " where
+                         " — narrowed at its finding's request: " (str/join " / " asked))
+
+                    :else
+                    (str "claim " claim-id " no longer cites " where
+                         ", and no finding at it this round asked it to"))]
+    (cond-> (assoc (retreat :evidence-dropped detail)
+                   :citation citation :places (mapv place-str places))
+      claim-id    (assoc :claim-id claim-id)
+      (seq asked) (assoc :answering (vec asked))
+      relocate?   (assoc :relocation-dropped? true))))
 
 (defn- blanked
   "The fields of `p` that said something and say nothing in `c`.
@@ -229,7 +294,7 @@
 
 (defn ^{:malli/schema [:=> [:cat :map :map
                             [:? [:maybe [:map-of :string :string]]]
-                            [:? [:maybe [:map-of :string [:sequential :string]]]]]
+                            [:? [:maybe [:sequential :map]]]]
                       :any]}
   baseline-retreats
   "Everything the superseding baseline claims less of than the one before it.
@@ -248,12 +313,27 @@
    withdrawal, and reporting them again would call a stated removal an unexplained
    weakening four times over.
 
-   `judged`, `{claim-id [evidence]}`, is the judge's evidence against each claim this round — the
-   sites an amender re-points a citation onto, which `evidence-lost` does not count as dropped."
+   `findings` are the round's judge findings the amendment answers, each read for its `:claim-id`,
+   `:evidence` and `:needs`. The evidence is where the judge pointed — the sites an amender
+   re-points a citation onto, which `evidence-lost` does not count as dropped — and the needs are
+   what each dropped citation is read against, so a narrowing that answers a finding says so."
   ([prev curr] (baseline-retreats prev curr nil nil))
   ([prev curr withdrawn] (baseline-retreats prev curr withdrawn nil))
-  ([prev curr withdrawn judged]
-   (let [prev (as-survey prev)
+  ([prev curr withdrawn findings]
+   (let [by-claim (fn [k]
+                    (reduce (fn [m f]
+                              (let [id (str (:claim-id f))
+                                    vs (keep #(when-not (str/blank? (str %)) (str %))
+                                             (let [v (get f k)] (if (sequential? v) v [v])))]
+                                (cond-> m
+                                  (and (not (str/blank? id)) (seq vs))
+                                  (update id (fnil (comp vec distinct into) []) vs))))
+                            {} findings))
+         judged    (by-claim :evidence)
+         needs     (by-claim :needs)
+         elsewhere (into [] (comp (filter string?) (mapcat locations))
+                         (tree-seq coll? seq curr))
+         prev (as-survey prev)
          curr (as-survey curr)
          taken (withdrawals prev curr withdrawn)
          prev (update prev :load-bearing #(vec (remove (comp taken :id) %)))
@@ -322,10 +402,7 @@
        (for [id (sort unveiled)]
          (retreat :veto-lifted
                   (str "observation " id " was invisibly-incomplete? and no longer is")))
-       (for [[file start end] ev-gone]
-         (retreat :evidence-dropped
-                  (str file ":" start (when (not= start end) (str "-" end))
-                       " is cited by no load-bearing property any more")))
+       (map #(dropped-evidence % needs elsewhere) ev-gone)
        (emptied prev curr))))))
 
 ;; ── Design ──────────────────────────────────────────────────────────────────

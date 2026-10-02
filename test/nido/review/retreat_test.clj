@@ -71,7 +71,7 @@
         rs   (retreat/baseline-retreats base-baseline curr)]
     (is (= #{:load-bearing-fewer :evidence-dropped :claim-dropped} (whats rs))
         "counted, named by id, and its orphaned evidence named too")
-    (is (some #(= "src/b.clj:2 is cited by no load-bearing property any more" (:detail %)) rs))))
+    (is (some #(= {:claim-id "c5" :places ["src/b.clj:2"]} (select-keys % [:claim-id :places])) rs))))
 
 (deftest a-claim-withdrawn-with-a-reason-is-reported-once-with-that-reason
   ;; The removal was the repair — a claim reworded and refuted again that nothing rested on. Told
@@ -93,7 +93,7 @@
       (is (= #{:claim-withdrawn :load-bearing-fewer :claim-dropped :evidence-dropped} (whats rs)))
       (is (some #(= "claim c4 is no longer made" (:detail %)) rs)
           "the reason given for one removal does not excuse another")
-      (is (some #(= "src/a.clj:1 is cited by no load-bearing property any more" (:detail %)) rs))
+      (is (some #(= {:claim-id "c4" :places ["src/a.clj:1"]} (select-keys % [:claim-id :places])) rs))
       (is (not-any? #(= "src/b.clj:2 is cited by no load-bearing property any more" (:detail %)) rs)))))
 
 (deftest a-model-claim-can-be-withdrawn
@@ -225,7 +225,7 @@
         curr (with-evidence "src/a/t.clj:800 (still here)")
         rs   (retreat/baseline-retreats prev curr)]
     (is (= [:evidence-dropped] (map :what rs)))
-    (is (= "src/a/t.clj:729 is cited by no load-bearing property any more"
+    (is (= "claim c7 no longer cites src/a/t.clj:729, and no finding at it this round asked it to"
            (:detail (first rs))))))
 
 (deftest a-citation-re-pointed-within-its-file-is-not-a-loss
@@ -243,15 +243,15 @@
   (let [prev (with-evidence "src/a/t.clj:386" "src/a/t.clj:500")
         curr (with-evidence "src/a/t.clj:390")
         rs   (retreat/baseline-retreats prev curr)]
-    (is (= ["src/a/t.clj:386 is cited by no load-bearing property any more"
-            "src/a/t.clj:500 is cited by no load-bearing property any more"]
+    (is (= ["claim c7 no longer cites src/a/t.clj:386, and no finding at it this round asked it to"
+            "claim c7 no longer cites src/a/t.clj:500, and no finding at it this round asked it to"]
            (map :detail rs))
         "nothing tells which of the two the new line replaced, so both are named")))
 
 (deftest a-file-the-claim-stops-citing-is-a-loss-whatever-the-count
   (let [prev (with-evidence "src/a.clj:10" "src/b.clj:20")
         curr (with-evidence "src/a.clj:10" "src/a.clj:15")]
-    (is (= ["src/b.clj:20 is cited by no load-bearing property any more"]
+    (is (= ["claim c7 no longer cites src/b.clj:20, and no finding at it this round asked it to"]
            (map :detail (retreat/baseline-retreats prev curr))))))
 
 (deftest a-cite-moved-onto-the-judges-site-answers-for-the-one-it-replaced
@@ -259,13 +259,56 @@
   ;; repair the finding asked for, and only the place nothing replaced is a loss.
   (let [prev   (with-evidence "reporting.clj:166" "reporting.clj:216" "reporting.clj:300")
         curr   (with-evidence "reporting.clj:159" "reporting.clj:216")
-        judged {"c7" ["reporting.clj:159 (the post happens before prep)"]}]
-    (is (= ["reporting.clj:300 is cited by no load-bearing property any more"]
-           (map :detail (retreat/baseline-retreats prev curr nil judged))))
-    (is (= ["reporting.clj:166 is cited by no load-bearing property any more"
-            "reporting.clj:300 is cited by no load-bearing property any more"]
-           (map :detail (retreat/baseline-retreats prev curr nil {"other" ["reporting.clj:159"]})))
+        found  [{:claim-id "c7" :evidence ["reporting.clj:159 (the post happens before prep)"]}]]
+    (is (= [["reporting.clj:300"]]
+           (map :places (retreat/baseline-retreats prev curr nil found))))
+    (is (= [["reporting.clj:166"] ["reporting.clj:300"]]
+           (map :places (retreat/baseline-retreats prev curr nil [{:claim-id "other"
+                                                                    :evidence ["reporting.clj:159"]}])))
         "the judge's evidence against a different claim excuses nothing here")))
+
+;; ── Which claim gave a citation up, and whether anyone asked it to ──────────
+
+(deftest one-citation-naming-three-places-is-one-retreat
+  ;; Seen live: one grep line on one claim named three call sites, and the headline counted three
+  ;; weakenings with no claim id between them — one decision the amender made, reported as three
+  ;; it did not.
+  (let [prev (with-evidence "src/a.clj:1" "content/ingest.clj:105, :161 and :178 call the blob API")
+        curr (with-evidence "src/a.clj:1")
+        rs   (retreat/baseline-retreats prev curr)]
+    (is (= [:evidence-dropped] (map :what rs)))
+    (is (= "c7" (:claim-id (first rs))) "the claim that gave it up is named")
+    (is (= ["content/ingest.clj:105" "content/ingest.clj:161" "content/ingest.clj:178"]
+           (:places (first rs))))))
+
+(deftest a-narrowing-the-judge-asked-for-says-so
+  ;; A requested narrowing and an over-narrowing read the same unless the retreat carries the
+  ;; request; a reader then has to re-derive from the run which of the two each one was.
+  (let [prev  (with-evidence "src/a.clj:1" "src/out.clj:40")
+        curr  (with-evidence "src/a.clj:1")
+        asked [{:claim-id "c7" :evidence ["src/a.clj:1"]
+                :needs "drop the outside-caller clause; it is a client conformance claim"}]
+        [r]   (retreat/baseline-retreats prev curr nil asked)]
+    (is (= ["drop the outside-caller clause; it is a client conformance claim"] (:answering r)))
+    (is (re-find #"narrowed at its finding's request" (:detail r)))
+    (is (not (:relocation-dropped? r)) "it was asked to go, not to move")
+    (is (nil? (:answering (first (retreat/baseline-retreats prev curr nil [{:claim-id "c4"
+                                                                            :needs "elsewhere"}]))))
+        "a finding at another claim requested nothing of this one")))
+
+(deftest evidence-the-judge-asked-to-move-and-the-amender-deleted-is-flagged
+  ;; Seen live: the finding asked for three surfaces to be restated as bounded evidence or health,
+  ;; and the amended record mentioned none of them anywhere — dropped, not relocated.
+  (let [prev  (with-evidence "src/a.clj:1" "src/sse_adapter.clj:293")
+        asked [{:claim-id "c7" :needs "restate the surfaces as bounded evidence or health"}]
+        moved (update (with-evidence "src/a.clj:1") :health conj
+                      {:id "h9" :axis :design :observation "o" :evidence ["src/sse_adapter.clj:293"]})]
+    (is (:relocation-dropped? (first (retreat/baseline-retreats
+                                      prev (with-evidence "src/a.clj:1") nil asked))))
+    (let [[r] (filter (comp #{:evidence-dropped} :what)
+                      (retreat/baseline-retreats prev moved nil asked))]
+      (is (not (:relocation-dropped? r)) "a citation the record still makes in its health was moved")
+      (is (re-find #"still cites it outside the load-bearing claims" (:detail r))))))
 
 (deftest evidence-that-names-no-file-is-not-a-place
   (is (= [] (retreat/baseline-retreats (with-evidence "the schema comment")
