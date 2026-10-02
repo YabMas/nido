@@ -905,6 +905,67 @@
     (shell {:out :string :err :string} "open" (warp-new-tab-uri path))
     path))
 
+(def ^:private kickoff-file
+  "Name of the staged kickoff in a session-home. Spelled here and in
+   `kickoff-hook-snippet`, nowhere else."
+  ".nido-kickoff")
+
+(def kickoff-hook-snippet
+  "The zsh hook that runs a staged kickoff, for `~/.zshrc`. It MOVES the file
+   out before running it, so of two shells opening in one session-home only the
+   one whose move succeeds starts an agent. It stays installed rather than
+   removing itself, as the tab-title hook does, because one shell may see
+   several spawns over its life."
+  (str "# Start the agent `nido session:spawn` staged for this session-home, once.\n"
+       "autoload -Uz add-zsh-hook\n"
+       "_nido_kickoff() {\n"
+       "  [[ \"$PWD\" == \"$HOME/.nido/sessions/\"* && -f " kickoff-file " ]] || return 0\n"
+       "  local f\n"
+       "  f=$(mktemp -t nido-kickoff) || return 0\n"
+       "  mv " kickoff-file " \"$f\" 2>/dev/null || { rm -f \"$f\"; return 0; }\n"
+       "  zsh \"$f\"\n"
+       "  rm -f \"$f\"\n"
+       "}\n"
+       "add-zsh-hook precmd _nido_kickoff\n"))
+
+(defn ^{:malli/schema [:=> [:cat] :boolean]}
+  kickoff-hook-installed?
+  "Whether `~/.zshrc` defines the kickoff hook. A text search, so a hook
+   sourced from another file reads as absent — the cost is a warning, never
+   a refusal."
+  []
+  (let [rc (fs/path (System/getProperty "user.home") ".zshrc")]
+    (boolean (and (fs/exists? rc) (str/includes? (slurp (str rc)) "_nido_kickoff")))))
+
+(defn- sh-quote [s]
+  (str "'" (str/replace (str s) "'" "'\\''") "'"))
+
+(defn ^{:malli/schema [:=> [:cat :string :map] :string]}
+  stage-kickoff!
+  "Leave a kickoff in the session-home that starts its agent through
+   `nido work` in the worktree, named `:agent-name` and given `:prompt` as its
+   first turn. A shell opening in the session-home runs it through the hook.
+   Returns the command that runs it by hand, for when no hook will. The
+   prompt is kept beside it rather than inlined, because a brief of any
+   length survives a file where it would not survive quoting.
+
+   Staging again before the hook ran replaces the earlier kickoff; nothing
+   queues."
+  [name {:keys [agent-name prompt] :as opts}]
+  (let [home     (resolve-cd-target name (assoc opts :cd :home))
+        worktree (resolve-cd-target name (assoc opts :cd :worktree))
+        prompt-f (str (fs/path home (str kickoff-file "-prompt.md")))
+        script   (str "cd " (sh-quote worktree) " || exit 1\n"
+                      "bb --config " (sh-quote (str (fs/path (core/nido-source-dir) "bb.edn")))
+                      " nido:work :name " (sh-quote agent-name)
+                      " :prompt-file " (sh-quote prompt-f) "\n")]
+    (spit prompt-f prompt)
+    ;; Written aside and renamed in, so the hook never runs a half-written file.
+    (let [tmp (str (fs/path home (str kickoff-file ".tmp")))]
+      (spit tmp script)
+      (fs/move tmp (fs/path home kickoff-file) {:replace-existing true :atomic-move true}))
+    (str "cd " (sh-quote home) " && zsh " kickoff-file)))
+
 (defn- worktree-dir?
   "True if `dir` is a session worktree root. A git worktree's root has a
    `.git` entry (a file in linked worktrees, a directory in the main

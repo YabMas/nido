@@ -27,19 +27,22 @@
 
 (def known-types
   "Recognised link types. The :other bucket is the escape hatch for URLs
-   that don't fit a known category."
-  #{:notion-ticket :pr :gh-issue :slack-thread :other})
+   that don't fit a known category. A :session link names another nido
+   session as `nido://session/<project>/<session>` — no web URL exists for
+   one, and that URI is unique and stable, which is all dedupe needs."
+  #{:notion-ticket :pr :gh-issue :slack-thread :session :other})
 
 (def display-order
   "Order types render in for the briefing and the TUI info panel.
    Anything not in this list falls under :other."
-  [:notion-ticket :pr :gh-issue :slack-thread :other])
+  [:notion-ticket :pr :gh-issue :slack-thread :session :other])
 
 (def display-labels
   {:notion-ticket "notion ticket"
    :pr            "PR"
    :gh-issue      "GitHub issue"
    :slack-thread  "slack thread"
+   :session       "nido session"
    :other         "other"})
 
 (defn ^{:malli/schema [:=> [:cat :InstanceId] :Path]}
@@ -123,7 +126,7 @@
     (when-not (contains? known-types t)
       (throw (ex-info (str "Unknown link :type " (pr-str t))
                       {:value t :valid known-types
-                       :hint  "Use one of :notion-ticket :pr :gh-issue :slack-thread :other"})))
+                       :hint  "Use one of :notion-ticket :pr :gh-issue :slack-thread :session :other"})))
     (cond-> {:type t :url (normalize-url url)}
       (and title (seq (str title))) (assoc :title (str title)))))
 

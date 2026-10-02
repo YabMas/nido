@@ -116,6 +116,28 @@ _nido_tab_title() {
 add-zsh-hook precmd _nido_tab_title
 ```
 
+### Spawned sessions start their own agent
+
+`bb nido:session:spawn` (driven by the `spawn-session` skill) opens a tab on a
+child session and leaves a one-shot kickoff in its session home; this hook runs
+it on the tab's first prompt, so the child's agent is already on its brief when
+the tab appears. Without it the tab is a bare shell and spawn prints the command
+to run instead — it warns when the hook is missing. Add to `~/.zshrc`:
+
+```zsh
+# Start the agent `nido session:spawn` staged for this session-home, once.
+autoload -Uz add-zsh-hook
+_nido_kickoff() {
+  [[ "$PWD" == "$HOME/.nido/sessions/"* && -f .nido-kickoff ]] || return 0
+  local f
+  f=$(mktemp -t nido-kickoff) || return 0
+  mv .nido-kickoff "$f" 2>/dev/null || { rm -f "$f"; return 0; }
+  zsh "$f"
+  rm -f "$f"
+}
+add-zsh-hook precmd _nido_kickoff
+```
+
 ### Notion token in the agent's environment
 
 A project's `bb notion:*` tasks read `NOTION_TOKEN`, and projects load it with

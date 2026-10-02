@@ -39,6 +39,14 @@
   (Operation enter
     "Hand off a cwd to the parent shell via `~/.nido/.last-cd`. Paired with"
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation kickoff-prompt
+    "A spawned child agent's first turn: whom it answers to, when to write, then the brief."
+    {:signature [:=> [:catn [:opts :map]] :string]})
+  (Operation spawn
+    "Bring a child session up through `up`, record it and the session spawning it as each other's
+     :session link, stage a kickoff that starts its agent on a brief addressed back to the parent's
+     agent, and open a tab on it. `:ws-id` is passed to `up` and nothing else."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation status
     "Print status for the named session."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

@@ -168,6 +168,38 @@
         (println (str "  (fleet budget unavailable: " (ex-message e) ")"))
         true))))
 
+(defn- up*
+  "Bring `session` up on `ws-id` (nil: the name's holder, else a minted
+   one-off) and print where it lives. Returns the session-home, or nil when
+   the person declined at the budget question. Exits 1 — before anything is
+   provisioned — when the session cannot join `ws-id`."
+  [project session ws-id opts]
+  (let [p (keyword project)]
+    (when-let [why (and ws-id (scratch/joinable p session ws-id))]
+      (println (str "Refused — " session " cannot start on " ws-id ": "
+                    (case (:reason why)
+                      :no-such-workstream "no such workstream"
+                      :closed             "that workstream is closed"
+                      :name-held          (str "the name already belongs to workstream " (:holder why)))))
+      (exit! 1))
+    (if-not (budget-ok? project session opts)
+      ;; Declining is an ordinary outcome, not a failure — it prints one line
+      ;; and stops, rather than throwing a task error at someone who said no.
+      (do (println "Aborted — no session started.") nil)
+      (do
+        (when ws-id (scratch/birth! p session nil ws-id))
+        (lifecycle/up! session opts)
+        ;; Weight is read back AFTER up! — up! persists the resolved profile, so
+        ;; the record describes what was really provisioned, not what was asked for.
+        (scratch/birth! p session (lifecycle/session-weight session opts) ws-id)
+        (let [home (state/session-home-dir project session)]
+          (println)
+          (println (str "Session ready: " project "/" session
+                        (when ws-id (str " on workstream " ws-id))))
+          (println (str "  cd " home))
+          (println (str "  bb nido:session:enter :project " project " " session))
+          home)))))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   up
   "Bring the named session up. Creates the worktree (if missing) + starts
@@ -189,33 +221,108 @@
   [& args]
   (let [[pos opts] (task-args/split-args args)
         project (require-project opts)
-        session (require-session-name pos)
-        ws-id   (some-> (:ws-id opts) str)
-        opts    (dissoc opts :ws-id)
-        p       (keyword project)]
-    (when-let [why (and ws-id (scratch/joinable p session ws-id))]
-      (println (str "Refused — " session " cannot start on " ws-id ": "
-                    (case (:reason why)
-                      :no-such-workstream "no such workstream"
-                      :closed             "that workstream is closed"
-                      :name-held          (str "the name already belongs to workstream " (:holder why)))))
-      (exit! 1))
-    (if-not (budget-ok? project session opts)
-      ;; Declining is an ordinary outcome, not a failure — it prints one line
-      ;; and stops, rather than throwing a task error at someone who said no.
-      (println "Aborted — no session started.")
-      (do
-        (when ws-id (scratch/birth! p session nil ws-id))
-        (lifecycle/up! session opts)
-        ;; Weight is read back AFTER up! — up! persists the resolved profile, so
-        ;; the record describes what was really provisioned, not what was asked for.
-        (scratch/birth! p session (lifecycle/session-weight session opts) ws-id)
-        (let [home (state/session-home-dir project session)]
-          (println)
-          (println (str "Session ready: " project "/" session
-                        (when ws-id (str " on workstream " ws-id))))
-          (println (str "  cd " home))
-          (println (str "  bb nido:session:enter :project " project " " session)))))))
+        session (require-session-name pos)]
+    (up* project session (some-> (:ws-id opts) str) (dissoc opts :ws-id))
+    nil))
+
+;; ── spawn: a child session with an agent already on its brief ────────────────
+
+(defn- session-uri
+  "The :session link URL naming a session. A URI rather than a web URL because
+   a session has none; it only has to be unique and stable for link dedupe."
+  [project session]
+  (str "nido://session/" project "/" session))
+
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  kickoff-prompt
+  "The child agent's first turn: who it answers to, when to write, then the
+   brief verbatim. Only the child's half of the protocol lives here; the
+   parent's half is in the spawn-session skill, which is what chooses to spawn."
+  [{:keys [parent-agent parent-project parent-session child brief]}]
+  (str "You are the agent of a child nido session, `" child "`, spawned by the agent `"
+       parent-agent "` (session " parent-project "/" parent-session ") to work on the brief "
+       "below in its own focus area.\n"
+       "\n"
+       "## Talking to your parent\n"
+       "\n"
+       "Your parent is reachable with SendMessage to `" parent-agent "`; it reaches you as `"
+       child "`. Message it:\n"
+       "\n"
+       "- when the brief is done — what landed, where, and anything you left open;\n"
+       "- when you are blocked on a decision that is the parent's or the person's to make;\n"
+       "- when you find something that changes the brief's premise or touches another part "
+       "of the parent's arc.\n"
+       "\n"
+       "Not for progress narration. Each message must stand on its own — it may be read "
+       "long after you send it. A message from your parent is direction on this work; the "
+       "person at this terminal outranks you both.\n"
+       "\n"
+       "## Brief\n"
+       "\n"
+       brief "\n"))
+
+(defn- parent-coords!
+  "[project session] of the session this command runs inside — the parent."
+  []
+  (or (when-let [s (lifecycle/session-from-cwd)] [(:project s) (:session s)])
+      (lifecycle/session-home-coords-from-cwd)
+      (throw (ex-info "spawn must run inside the parent session — its worktree or session home"
+                      {:cwd (System/getProperty "user.dir")}))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  spawn
+  "Bring a child session up and start its agent on a brief, in a new Warp tab
+   beside the caller. Run from inside the parent session.
+
+     bb nido:session:spawn :project <p> <child> :parent-agent <name> :brief-file <path>
+                           [:ws-id <id>] [any up option]
+
+   `:parent-agent` is the caller's own agent name, the one SendMessage reaches
+   it by. The child goes through exactly what `up` does — `:ws-id` included,
+   which is how a forked child is spawned — then each session gets a :session
+   link naming the other, a kickoff is staged, and a tab opens on the child.
+   The child's agent answers to the child's session name.
+
+   The kickoff runs from a zsh hook; without it the tab is a bare shell and
+   the printed command starts the agent by hand. Outside Warp no tab opens."
+  [& args]
+  (let [[pos opts]   (task-args/split-args args #{:parent-agent :brief-file})
+        project      (require-project opts)
+        child        (require-session-name pos)
+        parent-agent (or (:parent-agent opts)
+                         (throw (ex-info "Missing :parent-agent <your agent name>"
+                                         {:hint "Your own name as other sessions message you — ListAgents prints it."})))
+        brief-file   (or (:brief-file opts)
+                         (throw (ex-info "Missing :brief-file <path>" {})))
+        brief        (slurp brief-file)
+        [pp ps]      (parent-coords!)
+        hook?        (lifecycle/kickoff-hook-installed?)]
+    (when (and (= pp project) (= ps child))
+      (throw (ex-info "A session cannot spawn itself" {:session child})))
+    (when-not hook?
+      (println "The kickoff hook is not in ~/.zshrc, so the child's agent will not start by itself.")
+      (println "Add this once, then open new shells:")
+      (println)
+      (println lifecycle/kickoff-hook-snippet))
+    (when-let [home (up* project child (some-> (:ws-id opts) str)
+                         (dissoc opts :ws-id :parent-agent :brief-file))]
+      (lifecycle/link-add! ps {:project pp :type :session :url (session-uri project child)
+                               :title (str "child · agent " child)})
+      (lifecycle/link-add! child {:project project :type :session :url (session-uri pp ps)
+                                  :title (str "parent · agent " parent-agent)})
+      (let [by-hand (lifecycle/stage-kickoff!
+                     child {:project project :agent-name child
+                            :prompt (kickoff-prompt {:parent-agent parent-agent :parent-project pp
+                                                     :parent-session ps :child child :brief brief})})
+            tab?    (lifecycle/warp?)]
+        (when tab? (lifecycle/spawn-tab! child {:project project :cd :home}))
+        (println)
+        (println (str "Spawned " project "/" child " — its agent answers to `" child "`."))
+        (cond
+          (not tab?) (println (str "  Not in Warp: open a terminal and run  " by-hand))
+          hook?      (println "  Its tab is open; the agent starts on the tab's first prompt.")
+          :else      (println (str "  Its tab is open; start the agent there with  " by-hand)))
+        home))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   down

@@ -528,3 +528,41 @@
 (deftest an-output-shape-nobody-recognises-is-refused-rather-than-assumed-good
   ;; Failing closed: a landing is what gets recorded on the strength of this.
   (is (= :rejected (:outcome (lifecycle/classify-push {:exit 0 :out "???" :err ""})))))
+
+(deftest stage-kickoff-starts-nido-work-named-on-the-prompt
+  (let [home (str (fs/create-temp-dir))
+        wt   "/wt/it's"]
+    (with-redefs [lifecycle/resolve-cd-target   (fn [_ o] (if (= :home (:cd o)) home wt))
+                  nido.platform.core/nido-source-dir (fn [] "/opt/nido")]
+      (let [by-hand (lifecycle/stage-kickoff! "kid" {:project "nido" :agent-name "kid" :prompt "Go.\n"})
+            script  (slurp (str (fs/path home @#'lifecycle/kickoff-file)))]
+        (is (str/includes? script "cd '/wt/it'\\''s' || exit 1") "the worktree, quoted for the shell")
+        (is (str/includes? script "bb --config '/opt/nido/bb.edn' nido:work :name 'kid' :prompt-file "))
+        (is (= "Go.\n" (slurp (str (fs/path home (str @#'lifecycle/kickoff-file "-prompt.md"))))))
+        (is (= (str "cd '" home "' && zsh " @#'lifecycle/kickoff-file) by-hand))))))
+
+(deftest the-hook-runs-a-staged-kickoff-once-and-only-in-a-session-home
+  (if-not (fs/which "zsh")
+    (println "skipped: no zsh")
+    ;; Real path: on macOS the temp dir sits under the /var symlink, and zsh's
+    ;; $PWD is the resolved path, so an unresolved $HOME would never prefix it.
+    (let [fake-home (str (fs/real-path (fs/create-temp-dir)))
+          sess      (str (fs/path fake-home ".nido" "sessions" "p" "s"))
+          other     (str (fs/path fake-home "elsewhere"))
+          marker    (str (fs/path fake-home "ran"))
+          kick      @#'lifecycle/kickoff-file
+          run-hook  (fn [dir]
+                      (babashka.process/shell
+                       {:dir dir :out :string :err :string :continue true
+                        :extra-env {"HOME" fake-home}}
+                       "zsh" "-f" "-c" (str lifecycle/kickoff-hook-snippet "\n_nido_kickoff\n")))]
+      (fs/create-dirs sess)
+      (fs/create-dirs other)
+      (spit (str (fs/path other kick)) (str "echo other >> " marker "\n"))
+      (spit (str (fs/path sess kick)) (str "echo ran >> " marker "\n"))
+      (run-hook other)
+      (is (not (fs/exists? marker)) "a kickoff outside a session home never runs")
+      (run-hook sess)
+      (run-hook sess)
+      (is (= "ran\n" (slurp marker)) "two shells, one agent")
+      (is (not (fs/exists? (fs/path sess kick))) "the staging is consumed"))))

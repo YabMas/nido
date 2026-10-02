@@ -84,3 +84,25 @@
               "http servers are omitted rather than emitted with a null command")))
       (finally
         (fs/delete-tree tmp)))))
+
+(deftest a-name-and-prompt-file-start-claude-named-on-that-turn
+  (let [prompt (str (fs/create-temp-file))]
+    (spit prompt "Do the thing.\nThen report.")
+    (with-redefs [lifecycle/session-from-cwd
+                  (fn [] {:project "nido" :session "kid" :worktree "/wt" :instance-id "nido--kid"})
+                  launcher/session-briefing (fn [_ _ _] "B")
+                  state/session-mcp-path    (fn [_] "/does/not/exist.json")
+                  launcher/nido-add-dirs    (fn [] ["/opt/nido"])]
+      (let [{:keys [cmd]} (work/work-cmd* {:claude-bin "claude" :name "kid" :prompt-file prompt})]
+        (is (= ["claude" "Do the thing.\nThen report."] (take 2 cmd))
+            "the prompt precedes every flag, so the variadic --add-dir cannot swallow it")
+        (is (= ["--name" "kid"] (->> cmd (drop-while #(not= % "--name")) (take 2))))))))
+
+(deftest neither-option-leaves-the-invocation-as-it-was
+  (with-redefs [lifecycle/session-from-cwd
+                (fn [] {:project "nido" :session "kid" :worktree "/wt" :instance-id "nido--kid"})
+                launcher/session-briefing (fn [_ _ _] "B")
+                state/session-mcp-path    (fn [_] "/does/not/exist.json")
+                launcher/nido-add-dirs    (fn [] ["/opt/nido"])]
+    (is (= ["claude" "--append-system-prompt" "B" "--add-dir" "/opt/nido"]
+           (:cmd (work/work-cmd* {:claude-bin "claude"}))))))

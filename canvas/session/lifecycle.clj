@@ -77,8 +77,19 @@
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any] :delegates [resolve-cd-target cd-target-file]})
   (Operation warp? "Whether this is running inside Warp — the one terminal that can open a tab where we want it."
     {:signature [:=> [:catn] :boolean]})
-  (Operation spawn-tab! "Open a terminal tab at a session's worktree."
+  (Operation spawn-tab! "Open a terminal tab at a session's cd target — its home unless :cd says
+     worktree. The tab is a bare shell: Warp's URI can carry neither a command nor a title."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any] :delegates [resolve-cd-target]})
+  (Operation stage-kickoff!
+    "Leave a one-shot kickoff in a session's home that starts its agent with a name and a first
+     prompt, through `nido work` in the worktree, and return the command that runs it by hand. The
+     shell hook that runs it moves it away first, so one staging starts at most one agent. The
+     kickoff's file name is this module's and the hook's alone."
+    {:signature [:=> [:catn [:name :string] [:opts :map]] :string] :delegates [resolve-cd-target]})
+  (Operation kickoff-hook-installed?
+    "Whether the person's ~/.zshrc defines the kickoff hook — a text search, so a hook sourced
+     from elsewhere reads as absent and costs a warning, never a refusal."
+    {:signature [:=> [:catn] :boolean]})
   (Operation list-all-data "Every session for a project, as data."
     {:signature [:=> [:catn [:opts :map]] :map] :delegates [resolve-project sstate/read-registry]})
   (Operation list-all "Every session for a project, printed."

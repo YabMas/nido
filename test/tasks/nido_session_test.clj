@@ -147,3 +147,68 @@
     (is (some #(str/includes? % "No idle sessions") lines)
         "the honest answer when concurrency, not neglect, is the constraint")
     (is (not-any? #(str/includes? % "down one to make room") lines))))
+
+(defn- spawn-calls
+  "Run spawn with every effect recorded instead of performed. Returns
+   [calls printed-output]."
+  [{:keys [joinable hook? warp?] :or {hook? true warp? true}} & args]
+  (let [calls (atom [])
+        brief (str (babashka.fs/create-temp-file))]
+    (spit brief "Build the widget.")
+    (with-redefs [lifecycle/session-from-cwd            (fn [] {:project "nido" :session "parent"})
+                  lifecycle/kickoff-hook-installed?     (fn [] hook?)
+                  lifecycle/warp?                       (fn [] warp?)
+                  lifecycle/up!                         (fn [s _] (swap! calls conj [:up s]))
+                  lifecycle/session-weight              (fn [_ _] :heavy)
+                  lifecycle/link-add!                   (fn [s o] (swap! calls conj [:link s (select-keys o [:project :type :url :title])]))
+                  lifecycle/stage-kickoff!              (fn [s o] (swap! calls conj [:kickoff s o]) "cd /h && zsh k")
+                  lifecycle/spawn-tab!                  (fn [s o] (swap! calls conj [:tab s (:cd o)]))
+                  state/session-home-dir                (fn [_ _] "/tmp/home")
+                  scratch/joinable                      (or joinable (fn [& _] nil))
+                  scratch/birth!                        (fn [p s _w ws] (swap! calls conj [:birth p s ws]))
+                  task/exit!                            (fn [c] (throw (ex-info (str "exit " c) {})))]
+      (let [out (with-out-str
+                  (try (apply task/spawn (concat [":project" "nido" "kid" ":parent-agent" "parent-a1"
+                                                  ":brief-file" brief]
+                                                 args))
+                       (catch clojure.lang.ExceptionInfo _ nil)))]
+        [@calls out]))))
+
+(deftest spawn-goes-through-up-and-hands-it-the-workstream
+  (let [[calls _] (spawn-calls {} ":ws-id" "ws-child")]
+    (is (= [[:birth :nido "kid" "ws-child"] [:up "kid"] [:birth :nido "kid" "ws-child"]]
+           (filterv #(#{:birth :up} (first %)) calls))
+        ":ws-id reaches the workstream claim exactly as up passes it, and nowhere else")))
+
+(deftest spawn-refused-by-up-links-and-stages-nothing
+  (let [[calls out] (spawn-calls {:joinable (fn [& _] {:reason :closed})} ":ws-id" "ws-child")]
+    (is (str/includes? out "closed"))
+    (is (= [] calls))))
+
+(deftest spawn-links-both-sessions-to-each-other
+  (let [[calls _] (spawn-calls {})]
+    (is (= #{[:link "parent" {:project "nido" :type :session :url "nido://session/nido/kid"
+                              :title "child · agent kid"}]
+             [:link "kid" {:project "nido" :type :session :url "nido://session/nido/parent"
+                           :title "parent · agent parent-a1"}]}
+           (set (filter #(= :link (first %)) calls))))))
+
+(deftest spawn-stages-a-kickoff-addressed-back-to-the-parent
+  (let [[calls _] (spawn-calls {})
+        [_ s o]   (first (filter #(= :kickoff (first %)) calls))]
+    (is (= "kid" s))
+    (is (= "kid" (:agent-name o)) "the child's agent answers to the child's session name")
+    (is (str/includes? (:prompt o) "SendMessage to `parent-a1`"))
+    (is (str/ends-with? (:prompt o) "Build the widget.\n") "the brief verbatim, last")
+    (is (some #(= [:tab "kid" :home] %) calls) "the tab opens at the home, where the hook looks")))
+
+(deftest spawn-without-the-hook-says-so-and-what-to-run
+  (let [[calls out] (spawn-calls {:hook? false})]
+    (is (str/includes? out "_nido_kickoff()") "the snippet to install")
+    (is (str/includes? out "cd /h && zsh k") "the command that starts the agent by hand")
+    (is (some #(= :kickoff (first %)) calls) "the kickoff is still staged")))
+
+(deftest spawn-outside-warp-opens-no-tab
+  (let [[calls out] (spawn-calls {:warp? false})]
+    (is (not-any? #(= :tab (first %)) calls))
+    (is (str/includes? out "cd /h && zsh k"))))
