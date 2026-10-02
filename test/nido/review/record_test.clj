@@ -739,6 +739,74 @@
     (is (= r (held r ["one-summing-path"]))
         "an underivable check stays underivable, rather than ending the run :unruled")))
 
+;; ── Every listed id ruled on, by construction ───────────────────────────────
+;; Watched: told to rule on seventeen ids, a judge returned the six claims and skipped every module
+;; and stratum, in five rounds of one run and in two runs running — and an unruled id stops the
+;; proceed, so that lineage could never proceed.
+
+(defn- rulings-schema [schema-json]
+  (get-in (json/parse-string schema-json true) [:properties :relation_rulings]))
+
+(deftest the-decision-schema-admits-exactly-the-listed-ids
+  (let [s (rulings-schema (#'record/design-decision-schema ids))]
+    (is (= (mapv second ids) (get-in s [:items :properties :id :enum]))
+        "an id outside the list is no ruling the record can be held to")
+    (is (= [(count ids) (count ids)] [(:minItems s) (:maxItems s)])
+        "a claims-only answer is not one the schema admits")
+    (is (= (set (map name (keys (get-in s [:items :properties])))) (set (get-in s [:items :required])))
+        "the provider rejects a schema whose required is not every property"))
+  (testing "a design ruled on no ids may rule on none"
+    (let [s (rulings-schema (#'record/design-decision-schema []))]
+      (is (= [0 0] [(:minItems s) (:maxItems s)]))
+      (is (nil? (get-in s [:items :properties :id :enum])) "an empty enum is no schema a provider takes"))))
+
+(defn- reasked
+  "`decision` through the in-round re-ask, the judge answering `answer` (or failing, for nil).
+   Returns [decision' every run-round! call]."
+  [decision answer]
+  (let [calls (atom [])]
+    [(with-redefs [record/run-round! (fn [opts] (swap! calls conj opts)
+                                       (if answer {:ok (json/generate-string answer)}
+                                           {:outcome :no-output :detail "stub"}))]
+       (#'record/rule-unruled-relations! decision ids {:run-id "r" :kind :design-decision :label "l"}
+                                         {:design design :baseline strata-baseline}))
+     @calls]))
+
+(deftest the-ids-a-decision-skipped-are-asked-again-within-the-round
+  (let [claims-only     (decided [{:id "one-summing-path" :ruling "stands" :reason "untouched"}])
+        skipped         (mapv second (rest ids))
+        [r [call :as cs]] (reasked claims-only
+                                   {:relation_rulings
+                                    (conj (mapv #(hash-map :id % :ruling "stands" :reason "kept") skipped)
+                                          {:id "one-summing-path" :ruling "breaks" :reason "a second word"})})]
+    (is (= 1 (count cs)) "one more ask, not a loop")
+    (is (= skipped (get-in (rulings-schema (:schema call)) [:items :properties :id :enum]))
+        "only the ids still owed are asked")
+    (is (str/includes? (:prompt call) "Still to rule on:\n  modules:\n    [canvas.order/aggregate]"))
+    (is (str/includes? (:prompt call) "[one-summing-path] stands — untouched")
+        "the rulings already made are shown, not asked again")
+    (is (= "l-unruled-relations" (:label call)) "its artifacts do not overwrite the decision's")
+    (is (= {:id "one-summing-path" :ruling :stands :reason "untouched"}
+           (first (:relation-rulings r)))
+        "the re-ask cannot overturn a ruling the decision made")
+    (is (empty? (:unruled (held r []))) "every id ruled, so nothing stops the proceed")
+    (is (report/proceeds? (held r [])))
+    (is (report/validate-event :design-decision (held r [])) "and the ledger takes it")))
+
+(deftest a-decision-that-ruled-every-id-is-not-asked-again
+  (let [r (decided (every-id-stands))]
+    (is (= [r []] (reasked r {:relation_rulings []})))))
+
+(deftest an-underivable-relation-honest-is-not-asked-for-rulings
+  (let [r (-> (decided []) (assoc :checks [{:check :relation-honest :status :underivable :note "n"}]))]
+    (is (= [] (second (reasked r {:relation_rulings []})))
+        "relation-held holds it to no ruling, so asking for one buys nothing")))
+
+(deftest a-failed-re-ask-leaves-the-ids-unruled
+  (let [[r] (reasked (decided []) nil)]
+    (is (= (mapv second ids) (:unruled (held r []))) "what two asks left open is still named")
+    (is (not (report/proceeds? (held r []))))))
+
 (deftest the-design-amender-is-handed-the-same-ids-with-the-judges-rulings
   (let [p (record/design-amend-prompt
            {:design design :baseline strata-baseline :recommend :amend :reason "r"

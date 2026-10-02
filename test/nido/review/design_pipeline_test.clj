@@ -176,6 +176,35 @@
                                    {:cwd "/w" :run-id "r1" :label "l"}))))
       (is (= 1 @launched)))))
 
+(deftest a-decision-round-asks-for-every-relation-id-before-it-is-recorded
+  ;; Seen live: a judge shown claims, modules and strata returned rulings on the claims alone, two
+  ;; runs running, and the lineage could never proceed. The schema now names every id, and what a
+  ;; judge still skips is asked again inside the round rather than recorded :unruled.
+  (let [calls    (atom [])
+        baseline {:format :baseline :seq 1
+                  :load-bearing [{:id "p" :property "one rounding boundary"}]
+                  :modules [{:id "m-rounding" :module "rounding" :hides "h" :interface "i"}]}
+        answers  [{:recommend "proceed" :reason "r" :asks "worth it?"
+                   :checks [{:check "relation_honest" :status "held" :note "n"}]
+                   :findings [] :confirmed [] :unchecked []
+                   :relation_rulings [{:id "p" :ruling "breaks" :reason "moves"}]}
+                  {:relation_rulings [{:id "m-rounding" :ruling "stands" :reason "kept"}]}]
+        out      (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                               ws/latest-entry (fn [_ _ k] (when (= :design k) a-design))
+                               standing/of-design (constantly {:decidable? true})
+                               stages/discover-baseline (fn [_ _] baseline)
+                               stages/read-stance (constantly nil)
+                               record/discover-intent (constantly nil)
+                               record/run-round! (fn [opts]
+                                                   (let [n (count (swap! calls conj opts))]
+                                                     {:ok (json/generate-string (answers (dec n)))}))]
+                   (record/design-decision! {:cwd "/w" :run-id "r1" :label "l"}))
+        enum-of  #(get-in (json/parse-string (:schema %) true)
+                          [:properties :relation_rulings :items :properties :id :enum])]
+    (is (= [["p" "m-rounding"] ["m-rounding"]] (mapv enum-of @calls))
+        "the decision is shaped to rule on every id, and the re-ask on only the one it skipped")
+    (is (= ["p" "m-rounding"] (mapv :id (:relation-rulings out))))
+    (is (empty? (:unruled out)) "an id ruled on the second ask does not stop the proceed")))
 
 (defn- decision [recommend & {:keys [checks findings]}]
   (cond-> {:format :design-decision :design-seq 4 :recommend recommend

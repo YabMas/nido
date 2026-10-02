@@ -1234,6 +1234,25 @@
    (disputes-block disputes)
    (level-reminder :commitment))))
 
+(defn- relation-reask-prompt
+  "The decision prompt over the same records, closed by a block asking only for rulings on
+   `missing` — the ids of `subjects` a judge's decision left unruled — beside the `rulings` it did
+   make. The whole prompt rather than the ids alone, because a ruling is a reading of the design
+   against the baseline, and a judge launched fresh has neither in front of it otherwise."
+  [opts subjects missing rulings]
+  (let [missing (set missing)]
+    (str (design-prompt opts)
+         "\n\nTHIS PASS ASKS ONE THING. The decision on this design is already made, and\n"
+         "it ruled on relation-honest per baseline id — but not on every id. Rule on\n"
+         "EACH id below, exactly as the relation-honest instruction above says, and\n"
+         "answer relation_rulings only; every other field above is not asked here.\n"
+         "Still to rule on:\n"
+         (relation-ids-lines (filterv (comp missing second) subjects) "  " nil)
+         (when (seq rulings)
+           (str "Already ruled, for context — not to rule again:\n"
+                (relation-ids-lines (remove (comp missing second) subjects) "  "
+                                    (into {} (map (juxt :id identity)) rulings)))))))
+
 ;; ── Running a round ─────────────────────────────────────────────────────────
 
 (def ^:private schemas
@@ -1248,6 +1267,44 @@
                 :baseline-review "review/baseline_review_schema.json"
                 :design-decision "review/design_decision_schema.json"}
                #(slurp (jio/resource %))))
+
+(defn- exactly-these-rulings
+  "`rulings` — a relation_rulings array schema — admitting exactly `ids`: each item's id one of them,
+   and as many items as there are ids. Empty `ids` admits an empty array, since an enum of nothing is
+   no schema a provider accepts.
+
+   The count and the enum together still let one id be ruled twice and another not at all — strict
+   output has no uniqueItems — so what the judge returns is checked by id afterwards
+   (`unruled-relation-ids`), and this only makes the omission the unlikely answer rather than the free one."
+  [rulings ids]
+  (let [n (count ids)]
+    (cond-> (assoc rulings :minItems n :maxItems n)
+      (pos? n) (assoc-in [:items :properties :id :enum] (vec ids)))))
+
+(defn- design-decision-schema
+  "The decision round's output schema for a design ruled on per id over `subjects`
+   (`relation-yardstick`): relation_rulings must name every one of them.
+
+   Generated per round because the fixed schema let a judge told to rule on seventeen ids return
+   the six claims and skip every module and stratum, round after round — and an id left unruled
+   stops the proceed (`relation-held`), so a lineage whose judge always skips them can never proceed."
+  [subjects]
+  (-> (json/parse-string (schemas :design-decision) true)
+      (update-in [:properties :relation_rulings] exactly-these-rulings (mapv second subjects))
+      json/generate-string))
+
+(defn- relation-reask-schema
+  "The output schema for re-asking a judge only the relation ids it left unruled: one ruling each,
+   in the decision schema's ruling shape."
+  [ids]
+  (let [decision (json/parse-string (schemas :design-decision) true)]
+    (json/generate-string
+     {:type                 "object"
+      :additionalProperties false
+      :required             ["relation_rulings"]
+      :properties           {:relation_rulings (exactly-these-rulings
+                                                (get-in decision [:properties :relation_rulings])
+                                                ids)}})))
 
 (def ^:private derivation-keys
   "Every derivation a round may answer about, of either era. What an answer names is kept only if it
@@ -1404,6 +1461,18 @@
               (not= :sufficient v) (assoc :findings findings))))))
     (catch Exception _ nil)))
 
+(defn- parse-rulings
+  "A judge's relation_rulings as `[{:id :ruling :reason}]`, brackets off. One ruling per id — the
+   first, so a repeated id cannot overturn itself in one answer — and only `breaks` or `stands`."
+  [raw]
+  (->> (if (sequential? raw) raw [])
+       (keep (fn [r]
+               (let [id (slug (:id r))
+                     k  (keyword (str (:ruling r)))]
+                 (when (and (not (str/blank? id)) (#{:breaks :stands} k))
+                   {:id id :ruling k :reason (str (:reason r))}))))
+       (reduce (fn [acc r] (if (some #(= (:id r) (:id %)) acc) acc (conj acc r))) [])))
+
 (defn ^{:malli/schema [:=> [:cat :string :any] :map]}
   parse-design-decision
   "Codex JSON -> a :design-decision ledger record, or nil when unusable."
@@ -1424,14 +1493,7 @@
                                        :note   (str (:note c))}))))
                        (:checks m))
           findings (normalize-findings (:findings m))
-          ;; One ruling per id — the first, so a repeated id cannot overturn itself in one answer.
-          rulings  (->> (if (sequential? (:relation_rulings m)) (:relation_rulings m) [])
-                        (keep (fn [r]
-                                (let [id (slug (:id r))
-                                      k  (keyword (str (:ruling r)))]
-                                  (when (and (not (str/blank? id)) (#{:breaks :stands} k))
-                                    {:id id :ruling k :reason (str (:reason r))}))))
-                        (reduce (fn [acc r] (if (some #(= (:id r) (:id %)) acc) acc (conj acc r))) []))
+          rulings  (parse-rulings (:relation_rulings m))
           asks     (str (:asks m))]
       ;; An :ask needs no finding: what it hands on is the question, and a doubt the build must not
       ;; start without is one whether or not it breaks a check.
@@ -1506,8 +1568,11 @@
    afford one confusion above all others: a round that never ran must not read
    like a round that ran and found nothing to say. Silence from a judge is
    evidence; silence from a missing binary is not, and a reader who cannot tell
-   them apart draws the wrong conclusion from the same blank line."
-  [{:keys [cwd run-id kind prompt label reviewer]}]
+   them apart draws the wrong conclusion from the same blank line.
+
+   `:schema`, the schema's JSON text, replaces `kind`'s for a round whose answer is shaped by what it
+   was shown; `kind` still names the parse."
+  [{:keys [cwd run-id kind prompt label reviewer schema]}]
   (try
     (let [dir (cstate/run-dir run-id)
           _   (fs/create-dirs dir)
@@ -1520,7 +1585,7 @@
           schema-path (str (fs/path dir (str n "-schema.json")))
           out-path    (str (fs/path dir (str n "-out.json")))
           log-path    (str (fs/path dir (str n ".log")))]
-      (spit schema-path (schemas kind))
+      (spit schema-path (or schema (schemas kind)))
       (let [{:keys [exit judged-by] ran-log :log-path}
             (codex/run-reviewer! {:reviewer reviewer :cwd cwd :schema-path schema-path
                                   :out-path out-path :log-path log-path
@@ -1559,6 +1624,41 @@
       {:outcome :unusable-answer
        :detail "the answer did not satisfy what a round must return"})
     result))
+
+(defn- unruled-relation-ids
+  "The ids of `subjects` `decision` gave no relation ruling, in `subjects`' order — none when its
+   relation-honest was underivable, since `relation-held` does not hold such a decision to rulings."
+  [decision subjects]
+  (if (some #(and (= :relation-honest (:check %)) (= :underivable (:status %))) (:checks decision))
+    []
+    (let [ruled (into #{} (map :id) (:relation-rulings decision))]
+      (into [] (comp (map second) (remove ruled)) subjects))))
+
+(defn- rule-unruled-relations!
+  "`decision` with rulings on every id of `subjects` it left unruled, asked of a judge once more
+   before the decision is held to them. `round` is `run-round!`'s options for the decision round,
+   `prompt-opts` `design-prompt`'s.
+
+   One more ask, not a loop: what is still unruled after it stays so, and `relation-held` names it
+   :unruled. A re-ask that fails or answers nothing usable leaves `decision` as it was, for the same
+   reason — the decision is the judge's, and a failed second ask adds nothing to it. Only the asked
+   ids are taken from the answer, so it cannot overturn a ruling the decision already made."
+  [decision subjects round prompt-opts]
+  (let [missing (unruled-relation-ids decision subjects)]
+    (if (or (not (:format decision)) (empty? missing))
+      decision
+      (let [asked  (set missing)
+            answer (:ok (run-round! (assoc round
+                                           :label  (str (or (:label round) "design-decision") "-unruled-relations")
+                                           :schema (relation-reask-schema missing)
+                                           :prompt (relation-reask-prompt prompt-opts subjects missing
+                                                                          (:relation-rulings decision)))))
+            added  (when answer
+                     (try (filterv (comp asked :id)
+                                   (parse-rulings (:relation_rulings (json/parse-string answer true))))
+                          (catch Exception _ nil)))]
+        (cond-> decision
+          (seq added) (update :relation-rulings (fnil into []) added))))))
 
 (defn ^{:malli/schema [:=> [:cat :map :DeclaredElements] [:vector :string]]}
   unresolved-subjects
@@ -1996,7 +2096,9 @@
    stage that chose them. Settled claims are shown apart and are not checks; the
    decision's ruling is held to its checks by `rule`, and a claim it was handed and
    left without a ruling is named under :unruled — and so is a baseline id relation-honest is ruled
-   on per id, whose rulings the decision is then held to (`relation-held`). It carries `:code-identity`, and
+   on per id, whose rulings the decision is then held to (`relation-held`). The judge is handed a
+   schema admitting exactly those ids, and asked once more for any it still skipped
+   (`rule-unruled-relations!`), so :unruled names what two asks left open. It carries `:code-identity`, and
    the `:subject-identities` of what the design's subjects rest on beside it, only when the tree read
    as the judge launched is the tree read as it returned — and a round holding
    settled claims whose tree moved appends nothing, answering
@@ -2020,20 +2122,23 @@
                            (read-levels! {:code-cwd code-cwd :run-id run-id :label label
                                           :reviewer reviewer :design design
                                           :listing  (or listing (design-check/elements project code-cwd))}))
-                result   (judged (run-round!
-                                  {:cwd code-cwd :run-id run-id :kind :design-decision
-                                   :label label :reviewer reviewer
-                                   :prompt (design-prompt
-                                            {:design   design
-                                             :baseline baseline
-                                             :stance   (stages/read-stance project)
-                                             :intent   (discover-intent cwd design)
-                                             :disputes disputes
-                                             :settled  settled
-                                             :prior    prior
-                                             :levels   levels
-                                             :answers  (answered project ws-id design)})})
-                                 #(parse-design-decision % (:seq design)))
+                relation (relation-yardstick design baseline)
+                asking   {:design   design
+                          :baseline baseline
+                          :stance   (stages/read-stance project)
+                          :intent   (discover-intent cwd design)
+                          :disputes disputes
+                          :settled  settled
+                          :prior    prior
+                          :levels   levels
+                          :answers  (answered project ws-id design)}
+                round    {:cwd code-cwd :run-id run-id :kind :design-decision
+                          :label label :reviewer reviewer}
+                result   (-> (run-round! (assoc round
+                                                :schema (design-decision-schema relation)
+                                                :prompt (design-prompt asking)))
+                             (judged #(parse-design-decision % (:seq design)))
+                             (rule-unruled-relations! relation round asking))
                 after    (settled/code-identity code-cwd)
                 one-tree (when (= before after) before)
                 subjects (settled/subjects design)
@@ -2054,8 +2159,7 @@
               :else
               (let [kept (select-keys subject-identities rests-on)]
                 (cond-> (-> (rule result checks asked)
-                            (relation-held (relation-yardstick design baseline)
-                                           (get-in design [:baseline :breaks])))
+                            (relation-held relation (get-in design [:baseline :breaks])))
                   (seq levels)              (assoc :strata-read (mapv :reading levels))
                   one-tree                  (assoc :code-identity one-tree)
                   (and one-tree (seq kept)) (assoc :subject-identities kept))))))
