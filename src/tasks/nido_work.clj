@@ -52,9 +52,9 @@
    `:prompt-file` is read now and becomes the first turn. It goes straight after
    the binary because `--add-dir` takes every argument up to the next flag, so a
    prompt placed last would be read as one more directory. `:permission-mode`
-   is claude's own, passed through unchecked."
+   and `:model` are claude's own, passed through unchecked."
   [{:keys [project session worktree instance-id]}
-   {:keys [claude-bin name prompt-file permission-mode] :or {claude-bin "claude"}}]
+   {:keys [claude-bin name prompt-file permission-mode model] :or {claude-bin "claude"}}]
   (let [briefing (launcher/session-briefing project session instance-id)
         mcp      (state/session-mcp-path instance-id)
         cmd      (cond-> [claude-bin]
@@ -62,6 +62,7 @@
                    :always          (into ["--append-system-prompt" briefing])
                    name             (into ["--name" (str name)])
                    permission-mode  (into ["--permission-mode" (str permission-mode)])
+                   model            (into ["--model" (str model)])
                    (fs/exists? mcp) (into ["--mcp-config" mcp])
                    :always          (into (mapcat (fn [d] ["--add-dir" d])
                                                   (launcher/nido-add-dirs))))]
@@ -95,7 +96,7 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   work [& args]
-  (let [[_ opts] (task-args/split-args args #{:name :prompt-file :permission-mode})
+  (let [[_ opts] (task-args/split-args args #{:name :prompt-file :permission-mode :model})
         {:keys [cmd dir]} (work-cmd* opts)]
     ;; Hand off to the interactive agent in the worktree (inherit the terminal).
     (p/exec cmd {:dir dir})))

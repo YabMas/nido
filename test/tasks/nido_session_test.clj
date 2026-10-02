@@ -227,3 +227,8 @@
         (is (zero? @asked))
         (is (not (str/includes? out "Aborted")))
         (is (some #(= [:up "kid"] %) calls))))))
+
+(deftest spawn-hands-a-model-to-the-kickoff-only-when-given
+  (let [model-of (fn [calls] (:model (last (first (filter #(= :kickoff (first %)) calls)))))]
+    (is (nil? (model-of (first (spawn-calls {})))))
+    (is (= "claude-opus-5-5" (model-of (first (spawn-calls {} ":model" "claude-opus-5-5")))))))

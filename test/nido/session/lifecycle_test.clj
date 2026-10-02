@@ -535,11 +535,12 @@
     (with-redefs [lifecycle/resolve-cd-target   (fn [_ o] (if (= :home (:cd o)) home wt))
                   nido.platform.core/nido-source-dir (fn [] "/opt/nido")]
       (let [by-hand (lifecycle/stage-kickoff! "kid" {:project "nido" :agent-name "kid" :prompt "Go.\n"
-                                                     :permission-mode "bypassPermissions"})
+                                                     :permission-mode "bypassPermissions"
+                                                     :model "claude-opus-5-5"})
             script  (slurp (str (fs/path home @#'lifecycle/kickoff-file)))]
         (is (str/includes? script "cd '/wt/it'\\''s' || exit 1") "the worktree, quoted for the shell")
         (is (str/includes? script "bb --config '/opt/nido/bb.edn' nido:work :name 'kid' :prompt-file "))
-        (is (str/includes? script " :permission-mode 'bypassPermissions'"))
+        (is (str/includes? script " :permission-mode 'bypassPermissions' :model 'claude-opus-5-5'"))
         (is (= "Go.\n" (slurp (str (fs/path home (str @#'lifecycle/kickoff-file "-prompt.md"))))))
         (is (= (str "cd '" home "' && zsh " @#'lifecycle/kickoff-file) by-hand))))))
 

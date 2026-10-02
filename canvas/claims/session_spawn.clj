@@ -26,7 +26,7 @@
   {:about [spawn session-links] :evidence "round"})
 
 (Claim child-started-as-nido-work
-  "The kickoff starts the child agent by running nido work in the child's worktree, in the person's terminal and environment, so it gets the same briefing and MCP config a person typing nido work gets; a name, a first prompt and a permission mode are the only additions, and nido work given none of them assembles the command it did before."
+  "The kickoff starts the child agent by running nido work in the child's worktree, in the person's terminal and environment, so it gets the same briefing and MCP config a person typing nido work gets; a name, a first prompt, a permission mode and a model are the only additions, and nido work given none of them assembles the command it did before."
   {:about [stage-kickoff! work-cmd*] :evidence "round"})
 
 (Claim child-in-parents-permission-class
@@ -36,6 +36,10 @@
 (Claim spawn-asks-no-question
   "spawn enters up's path with the fleet-budget question answered yes, as up given :yes does, so spawn neither prompts nor reads an answer from its caller's terminal whether or not that terminal has a console; the budget question is the only read of a person's answer on that path."
   {:about [spawn up] :evidence "round"})
+
+(Claim child-model-as-given
+  "spawn starts the child agent on the model it is given and, given none, passes no model, so the child runs on claude's default; the parent's model has no bearing on it."
+  {:about [spawn stage-kickoff!] :evidence "round"})
 
 (Claim terminal-mechanism-hidden-in-lifecycle
   "Only the session lifecycle names the kickoff file and the terminal mechanism; spawn asks for a staged kickoff and a tab and knows neither."

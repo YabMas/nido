@@ -116,3 +116,13 @@
     (is (= ["--permission-mode" "bypassPermissions"]
            (->> (:cmd (work/work-cmd* {:claude-bin "claude" :permission-mode "bypassPermissions"}))
                 (drop-while #(not= % "--permission-mode")) (take 2))))))
+
+(deftest a-model-is-passed-to-claude
+  (with-redefs [lifecycle/session-from-cwd
+                (fn [] {:project "nido" :session "kid" :worktree "/wt" :instance-id "nido--kid"})
+                launcher/session-briefing (fn [_ _ _] "B")
+                state/session-mcp-path    (fn [_] "/does/not/exist.json")
+                launcher/nido-add-dirs    (fn [] ["/opt/nido"])]
+    (is (= ["--model" "claude-opus-5-5"]
+           (->> (:cmd (work/work-cmd* {:claude-bin "claude" :model "claude-opus-5-5"}))
+                (drop-while #(not= % "--model")) (take 2))))))

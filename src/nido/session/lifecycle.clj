@@ -944,14 +944,14 @@
   stage-kickoff!
   "Leave a kickoff in the session-home that starts its agent through
    `nido work` in the worktree, named `:agent-name`, given `:prompt` as its
-   first turn and run in `:permission-mode` when one is given. A shell opening in the session-home runs it through the hook.
+   first turn, and run in `:permission-mode` and on `:model` when given. A shell opening in the session-home runs it through the hook.
    Returns the command that runs it by hand, for when no hook will. The
    prompt is kept beside it rather than inlined, because a brief of any
    length survives a file where it would not survive quoting.
 
    Staging again before the hook ran replaces the earlier kickoff; nothing
    queues."
-  [name {:keys [agent-name prompt permission-mode] :as opts}]
+  [name {:keys [agent-name prompt permission-mode model] :as opts}]
   (let [home     (resolve-cd-target name (assoc opts :cd :home))
         worktree (resolve-cd-target name (assoc opts :cd :worktree))
         prompt-f (str (fs/path home (str kickoff-file "-prompt.md")))
@@ -960,6 +960,7 @@
                       " nido:work :name " (sh-quote agent-name)
                       " :prompt-file " (sh-quote prompt-f)
                       (when permission-mode (str " :permission-mode " (sh-quote permission-mode)))
+                      (when model (str " :model " (sh-quote model)))
                       "\n")]
     (spit prompt-f prompt)
     ;; Written aside and renamed in, so the hook never runs a half-written file.

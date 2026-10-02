@@ -275,7 +275,7 @@
    beside the caller. Run from inside the parent session.
 
      bb nido:session:spawn :project <p> <child> :parent-agent <name> :brief-file <path>
-                           [:ws-id <id>] [:permission-mode <m>] [any up option]
+                           [:ws-id <id>] [:permission-mode <m>] [:model <id>] [any up option]
 
    `:parent-agent` is the caller's own agent name, the one SendMessage reaches
    it by. The child goes through exactly what `up` does — `:ws-id` included,
@@ -286,12 +286,14 @@
    `:permission-mode` is the one the child's claude runs in, bypassPermissions
    when not given. It should be the parent's own: messages between sessions in
    different permission classes wait for a person to approve them, which is
-   the back-and-forth a spawn exists to make unattended.
+   the back-and-forth a spawn exists to make unattended. `:model` is the
+   child's claude model; given none, claude's default — it need not match the
+   parent's.
 
    The kickoff runs from a zsh hook; without it the tab is a bare shell and
    the printed command starts the agent by hand. Outside Warp no tab opens."
   [& args]
-  (let [[pos opts]   (task-args/split-args args #{:parent-agent :brief-file :permission-mode})
+  (let [[pos opts]   (task-args/split-args args #{:parent-agent :brief-file :permission-mode :model})
         project      (require-project opts)
         child        (require-session-name pos)
         parent-agent (or (:parent-agent opts)
@@ -312,7 +314,7 @@
     ;; :yes — spawn is one command whoever issues it, so it never stops at the
     ;; budget question a person running it by hand would otherwise be asked.
     (when-let [home (up* project child (some-> (:ws-id opts) str)
-                         (-> (dissoc opts :ws-id :parent-agent :brief-file :permission-mode)
+                         (-> (dissoc opts :ws-id :parent-agent :brief-file :permission-mode :model)
                              (assoc :yes true)))]
       (lifecycle/link-add! ps {:project pp :type :session :url (session-uri project child)
                                :title (str "child · agent " child)})
@@ -321,6 +323,7 @@
       (let [by-hand (lifecycle/stage-kickoff!
                      child {:project project :agent-name child
                             :permission-mode (or (:permission-mode opts) "bypassPermissions")
+                            :model (:model opts)
                             :prompt (kickoff-prompt {:parent-agent parent-agent :parent-project pp
                                                      :parent-session ps :child child :brief brief})})
             tab?    (lifecycle/warp?)]
