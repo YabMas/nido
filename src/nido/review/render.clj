@@ -494,6 +494,7 @@
            (when (pos? u) (str " · " u " unruled"))
            (when (pos? ru) (str " · " ru " relation unruled"))
            (when (pos? r) (str " · " r " read once"))
+           (when (:amendment-read-once ph) " · amendment read once")
            (settled-detail (:settled ph))
            (stand-in-text (:judged-by ph))))
     (when-let [o (:outcome ph)]

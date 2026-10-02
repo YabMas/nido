@@ -1180,7 +1180,7 @@
                                  :pipeline record/design-pipeline
                                  :finding-key record/design-finding-key})]
         (is (= :proceed (:status out)))
-        (is (= 2 (:iter out)))))))
+        (is (= 3 (:iter out)) "the amendment's proceed is read a second time before it stands")))))
 
 (deftest an-amender-that-changes-nothing-stalls-instead-of-spinning
   (with-redefs [record/design-decision! (fn [_] (decision :amend))
@@ -1592,22 +1592,70 @@
     (is (str/includes? p "LEVEL — every stratum the design declares or restates is"))
     (is (str/includes? p "Four\n                      questions of the COMMITMENT"))))
 
+(defn- judging-a-model-design
+  "`f` called with the design stage reading `a-model-design` at seq 4 over an empty ledger, its
+   judge answering `answer` and every append landing in `appended`."
+  [answer appended f]
+  (with-redefs [record/design-decision! (fn [_] answer)
+                record/append! (fn [_ r] (swap! appended conj r) nil)
+                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                ws/latest-entry (fn [_ _ k] (when (= :design k) (assoc a-model-design :seq 4)))
+                stages/discover-baseline (constantly nil)
+                settled/code-identity (constantly "tree")
+                settled/ledgers (constantly [])
+                design-check/elements (constantly {:status :listed :elements []})]
+    (f)))
+
 (deftest a-proceed-on-a-first-reading-is-read-again-before-anyone-is-asked
   ;; A design loop proceeded on one clean reading, and the next run broke the same claims on text
   ;; that had not changed. The first reading is kept, proceeds on no reader's reading of it, and so
   ;; clears nothing; the second is the one that proceeds.
   (let [appended (atom [])
         read     (assoc (decision :proceed :checks [(check :relation-honest :held)])
-                        :confirmed ["lines-exact"] :checked-at {"lines-exact" ["src/a.clj:1"]})]
-    (with-redefs [record/design-decision! (fn [_] read)
-                  record/append! (fn [_ r] (swap! appended conj r) nil)]
-      (let [r1 (run record/design-judge-stage (ctx))]
-        (is (= :next-round (:control r1)))
-        (is (= ["lines-exact"] (:read-once (first @appended))))
-        (is (false? (report/proceeds? (first @appended))) "so appending it writes no clearance")
-        (let [r2 (run record/design-judge-stage (ctx :carry (:carry r1)))]
-          (is (= :proceed (:status r2)))
-          (is (= :escalate (:control r2))))))))
+                        :confirmed ["rounded-once"] :checked-at {"rounded-once" ["src/a.clj:1"]})]
+    (judging-a-model-design
+     read appended
+     (fn []
+       (let [r1 (run record/design-judge-stage (ctx))]
+         (is (= :next-round (:control r1)))
+         (is (= ["rounded-once"] (:read-once (first @appended))))
+         (is (false? (report/proceeds? (first @appended))) "so appending it writes no clearance")
+         (let [r2 (run record/design-judge-stage (ctx :carry (:carry r1)))]
+           (is (= :proceed (:status r2)))
+           (is (= :escalate (:control r2)))))))))
+
+(deftest only-a-subject-the-judge-was-asked-to-confirm-is-read-once
+  ;; A decision round asks for its claims by id and shows its elements as what they are about, so a
+  ;; judge that does not confirm an element again has not left it :unruled. Held for a second
+  ;; reading, three of four such subjects were cleared by a later judge saying nothing about them,
+  ;; and the run proceeded on a second reading nobody made.
+  (let [appended (atom [])
+        read     (assoc (decision :proceed :checks [(check :relation-honest :held)])
+                        :confirmed ["rounded-once" "canvas.order/aggregate"]
+                        :checked-at {"rounded-once" ["src/a.clj:1"] "canvas.order/aggregate" ["src/a.clj:2"]})]
+    (judging-a-model-design
+     read appended
+     (fn []
+       (run record/design-judge-stage (ctx))
+       (is (= ["rounded-once"] (:read-once (first @appended)))
+           "the claim, whose silence the next round counts as :unruled — never the element")))))
+
+(deftest a-proceed-on-a-design-this-run-amended-is-read-again-though-it-confirms-nothing
+  ;; An amendment that rewrote only the summary left every claim settled, so the judge after it had
+  ;; nothing to confirm and its one clean reading ended the run — where a second reading of the
+  ;; record before it had broken a check on text no claim carries.
+  (let [appended (atom [])
+        amended  [{:iter 1 :amended? true}]]
+    (judging-a-model-design
+     (decision :proceed :checks [(check :relation-honest :held)]) appended
+     (fn []
+       (let [r1 (run record/design-judge-stage (ctx :iter 2 :history amended))]
+         (is (= :next-round (:control r1)) "read again before anyone is asked")
+         (is (true? (:amendment-read-once (first @appended))))
+         (is (false? (report/proceeds? (first @appended))) "so appending it writes no clearance")
+         (let [r2 (run record/design-judge-stage (ctx :iter 3 :history amended :carry (:carry r1)))]
+           (is (= :proceed (:status r2)) "the second reading of the amendment proceeds")
+           (is (nil? (:amendment-read-once (last @appended))))))))))
 
 ;; ── A decision that is a person's to make ───────────────────────────────────
 

@@ -648,7 +648,7 @@
                                  :pipeline record/baseline-pipeline
                                  :finding-key record/baseline-finding-key})]
         (is (= :sufficient (:status out)))
-        (is (= 2 (:iter out)))))))
+        (is (= 3 (:iter out)) "the amendment's clean reading is read a second time before it stands")))))
 
 (deftest a-nested-loop-launched-on-a-named-baseline-still-follows-its-amendments
   ;; This is the shape a re-survey runs in, and it could not converge. Given an
@@ -684,7 +684,8 @@
                                  :baseline start
                                  :pipeline record/baseline-pipeline
                                  :finding-key record/baseline-finding-key})]
-        (is (= ["the baseline the design cites" "corrected"] @judged))
+        (is (= ["the baseline the design cites" "corrected" "corrected"] @judged)
+            "the amendment judged, and read a second time before it ends the run")
         (is (= :sufficient (:status out)))
         (testing "and the corrected baseline comes back carrying the seq a design must cite"
           (is (= 7 (:seq (:under-repair (:carry out))))))))))
@@ -1685,6 +1686,23 @@
         r1     (judged-over {:review review :tree nil} (ctx))]
     (is (= :next-round (:control r1)))
     (is (= :sufficient (:status (judged-over {:review review :tree nil} (ctx :carry (:carry r1))))))))
+
+(deftest a-sufficient-verdict-on-a-baseline-this-run-amended-is-read-again
+  ;; An amendment that moved no subject leaves every one settled, so the judge after it confirms
+  ;; nothing and would end the run on one reading of a record no judge had read before.
+  (let [appended (atom [])
+        quiet    (dissoc confirming :confirmed :checked-at)
+        amended  [{:iter 1 :amended? true}]
+        r1       (judged-over {:review quiet :appended appended} (ctx :iter 2 :history amended))]
+    (is (= :next-round (:control r1)) "another judgement, with nothing amended")
+    (is (true? (:amendment-read-once (first @appended))))
+    (is (not (ledger-report/review-holds? (first @appended)))
+        "and no reader takes the baseline as verified on it")
+    (is (= :sufficient (:status (judged-over {:review quiet :appended appended}
+                                             (ctx :iter 3 :history amended :carry (:carry r1)))))
+        "the second reading of the amendment ends the run")
+    (testing "a run that amended nothing ends on the reading"
+      (is (= :sufficient (:status (judged-over {:review quiet} (ctx))))))))
 
 (deftest an-earlier-runs-refutation-is-put-to-the-judge-and-its-reversal-recorded
   ;; A falsified->sufficient flip on an unchanged record rested on one uninformed reading, and was

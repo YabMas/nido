@@ -2453,9 +2453,15 @@
    :unruled is every check the judge left without any ruling: not confirmed with evidence, not
    found against, not declared unchecked (nor, on a decision, :owed). Derived by the round, never
    by the judge, and it is what stops the judgement holding — see `review-holds?` and `proceeds?`.
-   :read-once is every id this judgement confirmed that no confirmation before it, at the same
-   content and tree, had: a first reading. Derived by the round, and it stops the judgement
-   holding too — one clean reading of a record is a sample, and the round reads it again.
+   :read-once is every id the judgement was asked to rule on and confirmed that no confirmation
+   before it, at the same content and tree, had: a first reading. Derived by the round, and it
+   stops the judgement holding too — one clean reading of a record is a sample, and the round
+   reads it again. Only asked ids, because the reading after it pairs them: an id it is not asked
+   about is not :unruled when it goes unconfirmed, so its silence would clear it unread.
+   :amendment-read-once marks the first judgement of a record its own run amended, whatever it
+   confirmed: an amendment can change what the checks read without moving any subject, so
+   settlement alone would let one clean reading of it hold. It stops the judgement holding, and
+   the round reads the record again.
    :overturns names each earlier run's finding against an id this judgement confirmed: the
    reversal, recorded where it was made. :overrides-settled is its mirror: each id this judgement
    was shown as settled and found against anyway, naming the confirmation that had settled it —
@@ -2464,6 +2470,7 @@
    [:unchecked  {:optional true} [:vector [:map {:closed true} [:id string?] [:reason string?]]]]
    [:unruled    {:optional true} [:vector string?]]
    [:read-once  {:optional true} [:vector string?]]
+   [:amendment-read-once {:optional true} [:= true]]
    [:overturns  {:optional true} [:vector [:map {:closed true}
                                            [:id string?] [:seq int?] [:ws-id string?]]]]
    [:overrides-settled {:optional true} [:vector [:map {:closed true}
@@ -3104,7 +3111,8 @@
 
    Never while the round left a check it was handed :unruled, or a baseline id :relation-unruled — a
    decision that did not rule on either has not derived that nothing blocks it, whatever it
-   recommended — nor while it is the first reading of a claim it confirmed (:read-once).
+   recommended — nor while it is the first reading of a claim it confirmed (:read-once), or of a
+   record its own run amended (:amendment-read-once).
 
    ONE definition, over the record alone, for every reader that asks it: the
    judge that ends the round, the clearance writer and the boundary that admits
@@ -3119,6 +3127,7 @@
                   (empty? (:unruled decision))
                   (empty? (:relation-unruled decision))
                   (empty? (:read-once decision))
+                  (not (:amendment-read-once decision))
                   (or (= :proceed (:recommend decision))
                       (and (seq broken) (every? #(= advisory-check (:check %)) broken)))))))
 
@@ -3961,7 +3970,8 @@
   review-holds?
   "Whether a baseline review says the baseline was checked against the code and held: a verdict in
    `verdict-holds`, over a round that left none of its checks :unruled and none on its first reading
-   (:read-once). A sufficient verdict with a check nobody ruled on is a judge that stopped reading,
+   (:read-once), and that is not the first reading of a record its own run amended
+   (:amendment-read-once). A sufficient verdict with a check nobody ruled on is a judge that stopped reading,
    not a baseline that held; one resting on a single confirmation is a sample of it.
 
    The record-level reading for every reader that asks whether a baseline was verified; the
@@ -3969,7 +3979,8 @@
   [review]
   (boolean (and (verdict-holds (:verdict review))
                 (empty? (:unruled review))
-                (empty? (:read-once review)))))
+                (empty? (:read-once review))
+                (not (:amendment-read-once review)))))
 
 (def verdict-invalidates
   "The design verdicts that put the design itself in question rather than its

@@ -496,8 +496,9 @@
       ;; skip a reader can check against the ledger, rather than a quiet round that
       ;; looked at less.
       ;; :checks is how many subjects the judge WAS asked about, :unruled which of them it left
-      ;; without a ruling, :relation-unruled which baseline ids it gave no relation ruling, :read-once which it confirmed on a first reading — why a clean round
-      ;; did not end the run — and :unbanked why nothing it confirmed can settle, when nothing can —
+      ;; without a ruling, :relation-unruled which baseline ids it gave no relation ruling, :read-once which it confirmed on a first reading and
+      ;; :amendment-read-once whether it was the first reading of a record the run amended — why a
+      ;; clean round did not end the run — and :unbanked why nothing it confirmed can settle, when nothing can —
       ;; a round whose confirmations bank looks exactly like one whose confirmations are lost,
       ;; unless the report says which.
       ;; :detail and :answer are what an outcome carries in place of a review, and
@@ -561,6 +562,7 @@
                 (seq (get-in ctx [:record :relation-unruled]))
                 (assoc :relation-unruled (get-in ctx [:record :relation-unruled]))
                 (seq (get-in ctx [:record :read-once])) (assoc :read-once (get-in ctx [:record :read-once]))
+                (get-in ctx [:record :amendment-read-once]) (assoc :amendment-read-once true)
                 (seq (get-in ctx [:record :overrides-settled]))
                 (assoc :overrides-settled (get-in ctx [:record :overrides-settled]))
                 (seq (get-in ctx [:record :unchecked])) (assoc :unchecked (get-in ctx [:record :unchecked]))

@@ -2293,6 +2293,14 @@
                                       (:detail result) (assoc :detail (:detail result))))}))))
          (mapv deref))))
 
+(defn- decision-asked
+  "The ids of `design` a decision round owes a ruling on: its claims `settled` does not name. Only
+   the claims, because the prompt asks the judge to confirm claims by id and shows the elements and
+   fields as what they are about."
+  [design settled]
+  (let [subjects (settled/subjects design)]
+    (into #{} (filter #(some :about (subjects %))) (keys (apply dissoc subjects (keys settled))))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   design-decision!
   "Run the decision round over this workstream's latest design record. Returns
@@ -2379,9 +2387,7 @@
                 one-tree (when (= before after) before)
                 subjects (settled/subjects design)
                 checks   (set (keys (apply dissoc subjects (keys settled))))
-                ;; Only the claims: a design's prompt asks the judge to confirm claims by id and shows
-                ;; its elements and fields as what they are about.
-                asked    (into #{} (filter #(some :about (subjects %))) checks)
+                asked    (decision-asked design settled)
                 rests-on (settled/rested-on design effective)]
             (cond
               (not (:format result)) result
@@ -3597,12 +3603,17 @@
   "`record` — what the judge returned, before it is appended — carrying :overturns, each earlier
    run's finding (`prior`) against an id it confirmed; :overrides-settled, the confirmation that
    settled (`settled`) each id it was shown as outside its checks and found against anyway; and,
-   when `holds?` says it would end the run clean, :read-once, what it confirmed on a first reading.
+   when `holds?` says it would end the run clean, :read-once, what of `asked` it confirmed on a
+   first reading, and :amendment-read-once when `unread-amendment?`.
+
+   `asked` is the ids the round owes a ruling on. :read-once holds no other, because the reading
+   after it pairs them only by confirming them again, and an id it was not asked about can go
+   unconfirmed without being :unruled — so the second reading would clear it unread.
 
    A confirmation is a second reading when one stands before it at the key it was read at
    (`standing`, taken at that key, so only when the record read one tree), or when an earlier quiet
    round of this run confirmed the same id of the same record (`carried`)."
-  [record holds? standing settled carried prior]
+  [record holds? {:keys [standing settled carried prior asked unread-amendment?]}]
   (if-not (:format record)
     record
     (let [confirmed (settled/checked-confirmations record)
@@ -3611,27 +3622,50 @@
                                :when (found id)]
                            {:id id :seq n :ws-id ws-id}))
           paired    (into (set carried) (when (:code-identity record) (keys standing)))
-          once      (when (holds? record) (vec (sort (remove paired confirmed))))
+          holds     (holds? record)
+          once      (when holds (vec (sort (filter (set asked) (remove paired confirmed)))))
           overturns (vec (for [[id {:keys [ws-id] n :seq}] (sort-by key prior)
                                :when (confirmed id)]
                            {:id id :seq n :ws-id ws-id}))]
       (cond-> record
-        (seq once)      (assoc :read-once once)
-        (seq overturns) (assoc :overturns overturns)
-        (seq overrides) (assoc :overrides-settled overrides)))))
+        (seq once)                       (assoc :read-once once)
+        (and holds unread-amendment?)    (assoc :amendment-read-once true)
+        (seq overturns)                  (assoc :overturns overturns)
+        (seq overrides)                  (assoc :overrides-settled overrides)))))
+
+(defn- unread-amendment?
+  "Is the record this round reads one this run amended, with no quiet round of the run since the
+   newest amendment? Settlement is per subject, so an amendment that rewrote only what no subject
+   carries — the prose every check reads — leaves the record fully settled, and its one clean
+   reading would end the run. Told by round and not by :seq, which a record the ledger never
+   stamped does not carry. An amendment is made after its round's judgement, so a quiet round
+   (`second-reading`) at a later :iter has read it."
+  [ctx]
+  (let [amended (keep #(when (:amended? %) (:iter %)) (:history ctx))
+        read-at (get-in ctx [:carry :quiet :iter])]
+    (boolean (and (seq amended) (or (nil? read-at) (<= read-at (apply max amended)))))))
+
+(defn- read-once?
+  "Would `record` have ended the run clean, but on a first reading — of a subject, or of an
+   amendment — so the run reads it again (`second-reading`)?"
+  [record]
+  (boolean (or (seq (:read-once record)) (:amendment-read-once record))))
 
 (defn- second-reading
-  "A round that would have ended the run clean on subjects it confirmed once. The run goes on to
-   another judgement with nothing amended; those subjects are not settled, so the next judge is
-   handed them again, cold — it is not told it is a second reading — and a subject it confirms is
-   paired. What this round confirmed is carried for the pairing a tree with no identity cannot get
-   from the ledger. Bounded: each such round pairs what the one before confirmed, so it recurs only
-   for a subject no earlier quiet round confirmed, and the engine's cap holds either way."
+  "A round that would have ended the run clean on a first reading (`read-once?`). The run goes on to
+   another judgement with nothing amended; the subjects it confirmed once are not settled, so the
+   next judge is handed them again, cold — it is not told it is a second reading — and a subject it
+   confirms is paired, one it leaves without a ruling is :unruled. What this round confirmed is
+   carried for the pairing a tree with no identity cannot get from the ledger, and the round it was
+   read in, so an amendment is read a second time and not a third (`unread-amendment?`). Bounded:
+   each such round pairs what the one before confirmed, so it recurs only for a subject no earlier
+   quiet round confirmed, and the engine's cap holds either way."
   [ctx subject record]
   (-> ctx
       (assoc :control :next-round)
       (assoc-in [:carry :quiet]
                 {:seq       (:seq subject)
+                 :iter      (:iter ctx)
                  :confirmed (into (set (carried-readings ctx subject))
                                   (settled/checked-confirmations record))})))
 
@@ -3664,7 +3698,11 @@
                      :label (str "baseline-review-round-" (:iter ctx))
                      :disputes (disputes-for-judge (:history ctx))})
                    (stamp-run (:config ctx))
-                   (with-readings report/review-holds? standing settled (carried-readings ctx subject) prior))
+                   (with-readings report/review-holds?
+                                  {:standing standing :settled settled :prior prior
+                                   :carried (carried-readings ctx subject)
+                                   :asked (when subject (owed-rulings subject settled))
+                                   :unread-amendment? (unread-amendment? ctx)}))
         ;; Read before this round's record is appended, and this round added by hand, so it is
         ;; counted exactly once whether or not the best-effort append lands.
         running (when (:format record)
@@ -3684,7 +3722,7 @@
         (and (= :sufficient (:verdict record)) (seq (:unruled record)))
         (unruled-stop (assoc ctx :record record :findings []))
 
-        (and (= :sufficient (:verdict record)) (seq (:read-once record)))
+        (and (= :sufficient (:verdict record)) (read-once? record))
         (second-reading (assoc ctx :record record :findings []) subject record)
 
         (= :sufficient (:verdict record))
@@ -3717,8 +3755,9 @@
    A sufficient verdict ends the run only over checks it ruled on. One leaving
    some :unruled is judged once more, with no amendment between; still unruled,
    the run ends :unruled (`unruled-stop`). And only on a second reading: one
-   confirming a subject no confirmation at its key preceded is appended as
-   :read-once, holds nothing, and is judged again (`second-reading`)."
+   confirming a subject no confirmation at its key preceded, or reading a record
+   this run amended for the first time, is appended as :read-once or
+   :amendment-read-once, holds nothing, and is judged again (`second-reading`)."
   {:name :judge
    :run
    run-judge-stage})
@@ -4362,7 +4401,11 @@
                      :label (str "design-decision-round-" (:iter ctx))
                      :disputes (disputes-for-judge (:history ctx))})
                    (stamp-run (:config ctx))
-                   (with-readings report/proceeds? standing settled (carried-readings ctx design) prior))
+                   (with-readings report/proceeds?
+                                  {:standing standing :settled settled :prior prior
+                                   :carried (carried-readings ctx design)
+                                   :asked (when design (decision-asked design settled))
+                                   :unread-amendment? (unread-amendment? ctx)}))
         ;; As the baseline round counts it, over this workstream's decisions and this one.
         running (when-not (:outcome record)
                   (refuted-running (conj (if project (vec (ws/entries-of project ws-id :design-decision)) [])
@@ -4378,9 +4421,10 @@
       (with-appended (assoc ctx :record record :status (:outcome record))
                      (append! cwd record))
 
-      ;; Would proceed, on claims it read once: appended as the reading it is — it does not
-      ;; proceed, so it clears nothing — and read again before a person is asked.
-      (seq (:read-once record))
+      ;; Would proceed, on claims it read once or on an amendment's first reading: appended as the
+      ;; reading it is — it does not proceed, so it clears nothing — and read again before a person
+      ;; is asked.
+      (read-once? record)
       (let [answer (append! cwd record)]
         (with-appended (second-reading (assoc ctx :record record :findings []
                                               :underivable (underivable-checks record))
