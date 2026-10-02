@@ -708,9 +708,28 @@
 
 (deftest an-id-left-without-a-ruling-stops-the-proceed
   (let [r (held (decided (rest (every-id-stands))) [])]
-    (is (= ["one-summing-path"] (:unruled r))
+    (is (= ["one-summing-path"] (:relation-unruled r))
         "a sweep that skipped an id has not derived the relation, so the decision does not proceed")
-    (is (not (report/proceeds? r)))))
+    (is (not (report/proceeds? r)))
+    (is (report/validate-event :design-decision r) "and the ledger takes it")))
+
+;; Watched: one id listed as both 'Not ruled on' and 'owed', and as both :confirmed and :unruled —
+;; confirmed as the design element it also is, unruled as the baseline module it was — with nothing
+;; saying which list answered which question.
+(deftest an-element-reading-and-a-missing-relation-ruling-stay-apart
+  (let [r  (held (assoc (decided (rest (every-id-stands)))
+                        :confirmed ["one-summing-path"] :unruled ["rounded-once"])
+                 [])
+        md (report/report->markdown r)]
+    (is (= ["rounded-once"] (:unruled r))
+        ":unruled stays the claims the element reading left open, untouched by the relation")
+    (is (= ["one-summing-path"] (:confirmed r)) "the element reading still holds what it confirmed")
+    (is (= ["one-summing-path"] (:relation-unruled r))
+        "the relation question an id is open on has its own key, so it is not read as the element's")
+    (is (str/includes? md "## Relation not ruled on — whether this design stops what the baseline records\n- one-summing-path")
+        "the render names the question the id is open on")
+    (is (not (re-find #"(?s)## Not ruled on[^#]*one-summing-path" md))
+        "and does not list it as an element nobody ruled on")))
 
 (deftest an-id-ruled-broken-that-breaks-omits-is-relation-honest-broken
   (let [rulings (assoc (every-id-stands) 2 {:id "canvas.order.strata/totals" :ruling "breaks"
@@ -789,7 +808,7 @@
     (is (= {:id "one-summing-path" :ruling :stands :reason "untouched"}
            (first (:relation-rulings r)))
         "the re-ask cannot overturn a ruling the decision made")
-    (is (empty? (:unruled (held r []))) "every id ruled, so nothing stops the proceed")
+    (is (empty? (:relation-unruled (held r []))) "every id ruled, so nothing stops the proceed")
     (is (report/proceeds? (held r [])))
     (is (report/validate-event :design-decision (held r [])) "and the ledger takes it")))
 
@@ -804,7 +823,7 @@
 
 (deftest a-failed-re-ask-leaves-the-ids-unruled
   (let [[r] (reasked (decided []) nil)]
-    (is (= (mapv second ids) (:unruled (held r []))) "what two asks left open is still named")
+    (is (= (mapv second ids) (:relation-unruled (held r []))) "what two asks left open is still named")
     (is (not (report/proceeds? (held r []))))))
 
 ;; ── A ruling is a reading of a record, held to the last one ─────────────────

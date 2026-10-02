@@ -1555,6 +1555,14 @@
     (is (= {"c2" 1 "h1" 2} (:unruled f))))
   (is (nil? (:unruled (record/run-figures [{:format :baseline-review :verdict :sufficient}])))))
 
+(deftest a-runs-figures-count-relation-ids-apart-from-unruled-checks
+  (let [f (record/run-figures [{:format :design-decision :checks [] :unruled ["c1"]
+                                :relation-unruled ["c1" "m1"]}
+                               {:format :design-decision :checks [] :relation-unruled ["m1"]}])]
+    (is (= {"c1" 1} (:unruled f)) "a claim left unruled is not counted again for its relation")
+    (is (= {"c1" 1 "m1" 2} (:relation-unruled f))
+        "a judge skipping module rulings round after round shows as its own tally")))
+
 (deftest a-runs-level-figures-are-read-off-its-decisions
   (let [f (record/run-figures [{:format :design-decision :checks []
                                 :strata-read [{:stratum "s" :verdict :widens :reason "r"}]}

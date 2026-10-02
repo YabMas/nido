@@ -1675,8 +1675,9 @@
 (defn- relation-held
   "`decision` held to its own per-id rulings on relation-honest, against the design's `:breaks`.
 
-   An id it never ruled on is :unruled, as a claim it never ruled on is, so the decision does not
-   proceed over it. An id ruled `breaks` that :breaks omits, or named under :breaks and ruled
+   An id it never ruled on is :relation-unruled, and stops the proceed as an :unruled claim does.
+   Its own key, because the same id can also be a design element `rule` read — confirmed, :owed or
+   :unruled there — and one list holding both questions cannot say which one an id left open. An id ruled `breaks` that :breaks omits, or named under :breaks and ruled
    `stands`, is relation-honest broken whatever the judge called the check — the ruling and the
    check are its two answers to one question, and the ruling is the one made id by id. A :proceed
    over such a mismatch becomes :amend, with one finding listing the ids and the judge's reasons.
@@ -1713,7 +1714,7 @@
                             (:checks decision))
                       (conj (vec (:checks decision)) check))]
       (cond-> decision
-        (seq unruled) (update :unruled #(vec (distinct (concat % unruled))))
+        (seq unruled) (assoc :relation-unruled (vec unruled))
         (seq misread) (-> (assoc :relation-misread misread)
                           (update :checks
                                   (partial mapv #(if (= :relation-honest (:check %))
@@ -1814,7 +1815,7 @@
    `prompt-opts` `design-prompt`'s.
 
    One more ask, not a loop: what is still unruled after it stays so, and `relation-held` names it
-   :unruled. A re-ask that fails or answers nothing usable leaves `decision` as it was, for the same
+   :relation-unruled. A re-ask that fails or answers nothing usable leaves `decision` as it was, for the same
    reason — the decision is the judge's, and a failed second ask adds nothing to it. Only the asked
    ids are taken from the answer, so it cannot overturn a ruling the decision already made."
   [decision subjects round prompt-opts]
@@ -2311,10 +2312,11 @@
    claims, the `:listing` and the identities they were settled at come from the
    stage that chose them. Settled claims are shown apart and are not checks; the
    decision's ruling is held to its checks by `rule`, and a claim it was handed and
-   left without a ruling is named under :unruled — and so is a baseline id relation-honest is ruled
-   on per id, whose rulings the decision is then held to (`relation-held`). The judge is handed a
-   schema admitting exactly those ids, and asked once more for any it still skipped
-   (`rule-unruled-relations!`), so :unruled names what two asks left open. Each ruling is shown the
+   left without a ruling is named under :unruled. A baseline id relation-honest is ruled on per id,
+   whose rulings the decision is then held to (`relation-held`), left without one is named under
+   :relation-unruled. The judge is handed a schema admitting exactly those ids, and asked once more
+   for any it still skipped (`rule-unruled-relations!`), so :relation-unruled names what two asks
+   left open. Each ruling is shown the
    last decision's beside it and held to it where the record did not move (`held-to-prior`), and ids
    whose rulings contradict the judge's own held relation-honest are asked once more
    (`reconcile-relation-reading!`), so what reaches `relation-held` is the judge's reading and not
@@ -4098,6 +4100,7 @@
       :confirmed {id n}
       :judged-by {reviewer n}
       :unruled   {id n}
+      :relation-unruled {id n}
       :settled-then-found {id n}
       :relation-flips     {id {:stands->breaks n :breaks->stands n}}
       :relation-reversals {id n}}
@@ -4111,10 +4114,11 @@
    :confirmed counts, per subject, the judgements of either kind that confirmed it. :judged-by counts
    judgements per reviewer that answered, a stand-in as `claude for codex`, so a comparison across
    runs can hold the instrument fixed; a judgement from before that was kept counts in neither.
-   :unruled counts, per subject, the judgements handed it as a check that left it without a ruling.
+   :unruled counts, per subject, the judgements handed it as a check that left it without a ruling;
+   :relation-unruled, per baseline id, the decisions that left it without a relation ruling.
    :settled-then-found counts, per subject, the judgements that found against it while it was
    settled (`:overrides-settled`) — beside :confirmed, the rate at which settlement shields a false
-   confirmation. Each of these four is present only when non-empty.
+   confirmation. Each of these five is present only when non-empty.
 
    :relation-flips counts, per baseline id, the decisions that ruled it the other way from the one
    before (`relation-flips`), and :relation-reversals those of the flips the round did not take, for
@@ -4128,6 +4132,7 @@
         reviews   (filterv #(= :baseline-review (:format %)) entries)
         judgements (concat decisions reviews)
         unruled   (frequencies (mapcat :unruled judgements))
+        relation-unruled (frequencies (mapcat :relation-unruled decisions))
         confirmed (frequencies (mapcat :confirmed judgements))
         overridden (frequencies (mapcat #(map :id (:overrides-settled %)) judgements))
         judges    (frequencies (keep (comp judge-name :judged-by) judgements))
@@ -4148,6 +4153,7 @@
         derived   (fn [c status] (count (filter #(= status (get % c)) statuses)))]
     (cond-> {}
       (seq unruled)   (assoc :unruled (into (sorted-map) unruled))
+      (seq relation-unruled) (assoc :relation-unruled (into (sorted-map) relation-unruled))
       (seq confirmed) (assoc :confirmed (into (sorted-map) confirmed))
       (seq overridden) (assoc :settled-then-found (into (sorted-map) overridden))
       (seq judges)    (assoc :judged-by (into (sorted-map) judges))
@@ -4447,10 +4453,10 @@
                                 :underivable (underivable-checks record))
                          (append! cwd record))
 
-          ;; Nothing to repair, and claims it was handed that it neither confirmed nor refuted: a
-          ;; proceed over them does not proceed (`report/proceeds?`), so the round is asked again
-          ;; before a person is.
-          (seq (:unruled record))
+          ;; Nothing to repair, and claims or relation ids it was handed that it neither confirmed
+          ;; nor refuted: a proceed over them does not proceed (`report/proceeds?`), so the round is
+          ;; asked again before a person is.
+          (or (seq (:unruled record)) (seq (:relation-unruled record)))
           (let [c (unruled-stop (assoc ctx :record record :findings []
                                        :underivable (underivable-checks record)))]
             (if (= :unruled (:status c))
@@ -4491,8 +4497,8 @@
    missing yardstick. One holding nothing to repair and no such check ends
    :nothing-to-amend: it would not proceed and named nothing, which is the judge
    contradicting itself. A finding stated a third time after two objections
-   escalates. A round that would proceed but left claims it was handed :unruled
-   does not proceed: it is judged once more, and still unruled it escalates
+   escalates. A round that would proceed but left claims it was handed :unruled,
+   or baseline ids :relation-unruled, does not proceed: it is judged once more, and still unruled it escalates
    :unruled. Nor does one that would proceed on a claim it confirmed on a first
    reading: it is appended :read-once and judged again (`second-reading`), so a
    proceed rests on two consecutive clean readings. Everything else is another

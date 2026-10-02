@@ -1828,7 +1828,7 @@
    ::still-refuted "the same claims are refuted again after being corrected — the amender did its work and the judge found another way each one is false, so these are not going to be settled by wording"
    :unfixable "everything fixable was fixed; what remains was raised three rounds running and did not move — these are for you"
    :disputed   "the judge restated a finding the amender objected to twice — neither can settle it, so you do"
-   :unruled    "the judge would have ended the run leaving checks it neither confirmed, refuted nor called uncheckable, and asked again it still did not rule — the record does not hold over them; the report's judge phase names them"
+   :unruled    "the judge would have ended the run leaving checks it neither confirmed, refuted nor called uncheckable, or baseline ids with no relation ruling, and asked again it still did not rule — the record does not hold over them; the report's judge phase names them, under :unruled and :relation-unruled"
    :amend-noop "the amender produced no record — nothing was appended"
    :amend-unreadable "the amender's answer would not parse as EDN"
    :amend-invalid "the ledger refused the amended record, and refused the amender's repairs of it too"
@@ -2330,7 +2330,8 @@
    broken at the end — and for a check, in how many rounds it was derived, held and underivable. Per
    stratum, its level judges' readings summed; per claim found false, per subject confirmed, left
    unruled or found against while settled, and per reviewer that answered, the runs' counts summed —
-   and per baseline id, its relation-ruling flips each way and its reversals not taken."
+   and per baseline id, the decisions leaving it with no relation ruling, its relation-ruling flips
+   each way and its reversals not taken."
   [figures]
   (letfn [(add [acc tallies]
             (reduce-kv (fn [a k {:keys [broken alone at-end] :as t}]
@@ -2352,6 +2353,7 @@
      :falsified   (counts :falsified)
      :confirmed   (counts :confirmed)
      :unruled     (counts :unruled)
+     :relation-unruled (counts :relation-unruled)
      :settled-then-found (counts :settled-then-found)
      :judged-by   (counts :judged-by)
      :relation-flips     (reduce #(merge-with (partial merge-with +) %1 %2) (sorted-map) (keep :relation-flips figures))

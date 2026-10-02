@@ -2451,8 +2451,7 @@
    :unchecked is what the judge declared it could not check here, and why — evidence that is not
    in the code (production data, a deploy history), say. A ruling, visibly not a confirmation.
    :unruled is every check the judge left without any ruling: not confirmed with evidence, not
-   found against, not declared unchecked (nor, on a decision, :owed) — and, on a decision, every
-   baseline id with no :relation-rulings entry. Derived by the round, never
+   found against, not declared unchecked (nor, on a decision, :owed). Derived by the round, never
    by the judge, and it is what stops the judgement holding — see `review-holds?` and `proceeds?`.
    :read-once is every id this judgement confirmed that no confirmation before it, at the same
    content and tree, had: a first reading. Derived by the round, and it stops the judgement
@@ -2709,6 +2708,11 @@
                            [:reason string?]]]]
                 [:relation-contradicted {:optional true} [:vector string?]]
                 [:relation-misread      {:optional true} [:vector string?]]
+                ;; Each baseline id left with no :relation-rulings entry after the judge was asked
+                ;; twice. Derived by the round, and it stops a proceed as :unruled does. Apart from
+                ;; :unruled because an id can be a design element as well: confirmed or :owed as
+                ;; that, and still unruled as what the baseline records — two questions, two lists.
+                [:relation-unruled      {:optional true} [:vector string?]]
                 ;; As on a baseline review.
                 [:judged-by          {:optional true} JudgedBy]
                 [:tree               {:optional true} JudgedTree]]
@@ -3098,9 +3102,9 @@
    cut alone may not hold a design. False when nothing broke on a round that did
    not say :proceed: a clean round reads as its own recommendation.
 
-   Never while the round left a check it was handed :unruled — a decision that did not rule on a
-   claim has not derived that nothing blocks it, whatever it recommended — nor while it is the first
-   reading of a claim it confirmed (:read-once).
+   Never while the round left a check it was handed :unruled, or a baseline id :relation-unruled — a
+   decision that did not rule on either has not derived that nothing blocks it, whatever it
+   recommended — nor while it is the first reading of a claim it confirmed (:read-once).
 
    ONE definition, over the record alone, for every reader that asks it: the
    judge that ends the round, the clearance writer and the boundary that admits
@@ -3113,6 +3117,7 @@
     ;; question is not answered by the check it happens to break being the cut.
     (boolean (and (not= :ask (:recommend decision))
                   (empty? (:unruled decision))
+                  (empty? (:relation-unruled decision))
                   (empty? (:read-once decision))
                   (or (= :proceed (:recommend decision))
                       (and (seq broken) (every? #(= advisory-check (:check %)) broken)))))))
@@ -4019,13 +4024,18 @@
 
 (defn- ruling->markdown
   "What a judgement left without a confirmation, as lines under their own headings: the checks
-   nobody ruled on, and those the judge said it could not check. Rendered beside the confirmed list
-   because that list reads as the whole check, and it is only the part that held."
-  [{:keys [unruled unchecked]}]
+   nobody ruled on, the baseline ids no relation ruling covers, and those the judge said it could
+   not check. Rendered beside the confirmed list because that list reads as the whole check, and it
+   is only the part that held. An id may sit under both of the first two, or under the second and
+   as :confirmed or :owed: each heading names the question it is open on."
+  [{:keys [unruled relation-unruled unchecked]}]
   (concat
    (when (seq unruled)
      (cons "\n## Not ruled on — neither confirmed nor found against"
            (for [id unruled] (str "- " id))))
+   (when (seq relation-unruled)
+     (cons "\n## Relation not ruled on — whether this design stops what the baseline records"
+           (for [id relation-unruled] (str "- " id))))
    (when (seq unchecked)
      (cons "\n## Not checkable here"
            (for [{:keys [id reason]} unchecked] (str "- " id " — " reason))))))
