@@ -7,6 +7,7 @@
    [babashka.fs :as fs]
    [clojure.set :as set]
    [clojure.string :as str]
+   [nido.boot.attention :as attention]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.daemon.anomaly :as anomaly]
    [nido.coordinator.daemon.breakers :as breakers]
@@ -46,6 +47,7 @@
    [nido.notion.views :as views]
    [nido.coordinator.record.triggers :as triggers]
    [nido.platform.core :as nido-core]
+   [nido.platform.desktop :as desktop]
    [nido.platform.project :as project]
    [nido.review.reconcile :as review-reconcile]
    [nido.session.reclaim :as reclaim]
@@ -88,7 +90,11 @@
    ;; continue from — the first message IS the issue body, so no /continue-ticket
    ;; and no Notion.
    :plan-issue-system-prompt  "You are pre-orienting a nido impl session unattended: the human who owns this session is not here yet but will resume THIS conversation shortly. Your first message is the GitHub issue to implement. Do clear, low-risk implementation work autonomously toward a draft PR. The moment you reach something that needs a human decision — a product/design call, genuine ambiguity, or a risky/destructive change — STOP and leave a concise summary of what you did, where things stand, and exactly what you need; do not guess."
-   :dashboard           {:enabled? true :port 8800}})
+   :dashboard           {:enabled? true :port 8800}
+   ;; How often the daemon looks for new things wanting a person (gates, a halt,
+   ;; a tripped breaker) and posts a desktop notification for each. A full read
+   ;; of every project's workstreams, so not every tick.
+   :attention-interval-ms 15000})
 
 (def ^:private anomaly-thresholds
   ;; spawn-threshold is a RUNAWAY rate brake, not a concurrency cap (that's
@@ -160,6 +166,17 @@
 ;; (re)start reconciles each configured project immediately, then throttles to
 ;; that project's notion-sync.edn :poll interval.
 (defonce ^:private !last-notion-sync-ms (atom {}))
+
+;; The desktop notifier, armed by run! and nil otherwise. Held rather than
+;; called directly so that tick! driven by a test posts nothing on the machine
+;; running it.
+(defonce ^:private !notify-fn (atom nil))
+
+;; Attention keys announced on the last look, nil before the first one (which
+;; announces a summary rather than replaying every open gate).
+(defonce ^:private !attention-seen (atom nil))
+
+(defonce ^:private !last-attention-ms (atom 0))
 
 ;; Resolved dashboard port for the running daemon (nil when disabled). Recorded
 ;; in the heartbeat so `status` can report + probe the right port.
@@ -233,6 +250,30 @@
       (catch Throwable t
         (.println ^java.io.PrintWriter *err*
                   (str "WARN: review settle sweep threw — " (ex-message t)))))))
+
+(defn- maybe-notify-attention!
+  "Throttled: post a desktop notification for each gate, halt or auto-tripped
+   breaker that appeared since the last look. A no-op until run! arms the
+   notifier. Never throws — a failed look leaves `seen` as it was, so whatever
+   arrived meanwhile is announced on the next one."
+  [now-ms halt-info]
+  (when-let [notify! @!notify-fn]
+    (when (>= (- now-ms @!last-attention-ms) (:attention-interval-ms defaults))
+      (reset! !last-attention-ms now-ms)
+      (try
+        (let [current (attention/items {:gates    (work/all-gates)
+                                        :halt     halt-info
+                                        :breakers (breakers/auto-tripped-triggers)})]
+          ;; Off the loop's thread: a sender waiting on a permission prompt
+          ;; holds its call for up to a minute, and the tick must not wait.
+          (let [ns (attention/coalesce (attention/arrivals @!attention-seen current))]
+            (when (seq ns)
+              (future (doseq [n ns] (notify! n)))))
+          (reset! !attention-seen (set (keys current))))
+        (catch Throwable t
+          (binding [*err* *err*]
+            (.println ^java.io.PrintWriter *err*
+                      (str "WARN: attention sweep threw — " (ex-message t)))))))))
 
 (defn- registered-projects []
   ;; nido.platform.project/list-projects returns {<string-name> {:directory ...}}.
@@ -1029,6 +1070,9 @@
   []
   (let [triggers-by-project (load-all-triggers)
         halt-info           (halt/read-halt-info)]
+    ;; Before the halt branch: a halted daemon still has gates waiting on a
+    ;; person, and the halt itself is one of the things to announce.
+    (maybe-notify-attention! (System/currentTimeMillis) halt-info)
     (if halt-info
       (heartbeat/write! {:status       :halted
                          :halted-by    (:source halt-info)
@@ -1167,6 +1211,7 @@
                (.println ^java.io.PrintWriter *err*
                          (str "WARN: dashboard failed to start — " (ex-message t))))))))
   (pid/write! (long (.pid (java.lang.ProcessHandle/current))))
+  (reset! !notify-fn desktop/notify!)
   (install-shutdown-hook!)
   (heartbeat/write! {:status :running :slots-in-use 0 :dashboard-port @!dashboard-port})
   (executor/configure! {:global-cap (:global-parallel-cap defaults)})

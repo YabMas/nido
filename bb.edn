@@ -299,6 +299,11 @@
    :doc "Show what this branch changes about the project's declared design, rendered by fukan at both ends. A reading, not a gate: exits 0 whatever it finds. [:from main] [:cwd <dir>] [:scope <selection>]"
    :task (apply nido-design/diff-cmd *command-line-args*)}
 
+  nido:notify:install
+  {:requires ([tasks.nido-notify :as nido-notify])
+   :doc "Install the nido notifier app (~/Applications/nido-notifier.app), so the daemon's desktop notifications carry nido's icon. Needs `brew install terminal-notifier`."
+   :task (apply nido-notify/install *command-line-args*)}
+
   nido:test
   {:requires ([tasks.nido-test :as nido-test])
    :doc "Run unit tests. Optional :only <ns-prefix> to filter."
