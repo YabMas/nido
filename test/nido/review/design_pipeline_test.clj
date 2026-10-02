@@ -834,6 +834,9 @@
     (is (nil? (:status out)))
     (is (= 2 (count @prompts)))
     (is (str/includes? (second @prompts) "The ledger refused the design record"))
+    (is (= (first @prompts)
+           (slurp (str (fs/path (cstate/run-dir "r1") "design-amend-round-1-prompt.txt"))))
+        "what the design amender was told is readable from the run, since its transcript omits it")
     (is (= fixed (read-string appended)))
     (is (= ["schema said no"] (:amend-refusals out)))))
 

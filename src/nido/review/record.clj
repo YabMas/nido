@@ -3152,7 +3152,11 @@
 
    The amender's transcript goes to `<label>.log` in the run dir rather than the run's shared
    agent.log, because it is the evidence: a moved path is held against the amender only when its
-   own writes reach it, and its lines interleaved with a judge's could not be told apart."
+   own writes reach it, and its lines interleaved with a judge's could not be told apart.
+
+   `first-message` goes beside it as `<label>-prompt.txt`, because claude's stream-json transcript
+   does not carry it: without the file, what the amender was told — the rules it then ignored —
+   cannot be read from the run."
   [ctx {:keys [label first-message permitted out-path check-cmd]}]
   (let [{:keys [cwd run-id budget]} (:config ctx)
         code-cwd   (or (:code-cwd (:config ctx)) cwd)
@@ -3161,6 +3165,7 @@
         before     (stages/working-copy-state code-cwd)]
     (fs/create-dirs dir)
     (fs/delete-if-exists transcript)
+    (spit (str (fs/path dir (str label "-prompt.txt"))) first-message)
     (agent/launch!
      (merge {:run-id run-id :cwd code-cwd :budget budget
              :first-message first-message

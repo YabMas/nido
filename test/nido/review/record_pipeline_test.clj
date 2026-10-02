@@ -533,6 +533,21 @@
     (is (= ["schema said no"] (:refusals (persisted-phase :amend out)))
         "and the report says it took a repair")))
 
+(deftest every-amender-prompt-is-kept-beside-its-answer
+  ;; claude's transcript starts at system/init with no prompt text, so a run where the amender
+  ;; broke a rule its prompt states could not show the prompt stated it. The repair is kept too:
+  ;; its prompt is a different one, and it is the record that finally lands.
+  (let [prompts (atom [])
+        [out _] (with-amend {:refusals 1 :prompts prompts
+                             :writes (fn [p] (spit p (pr-str {:record a-baseline})))}
+                            (ctx :findings [a-finding]))
+        dir     (cstate/run-dir "r1")]
+    (is (nil? (:status out)))
+    (is (= (first @prompts) (slurp (str (fs/path dir "amend-round-1-prompt.txt"))))
+        "the round's prompt is readable from the run, word for word")
+    (is (= (second @prompts) (slurp (str (fs/path dir "amend-round-1-reask-1-prompt.txt"))))
+        "and so is the repair's, under its own label")))
+
 (deftest an-amendment-taken-first-time-reports-no-refusals
   (let [[out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record a-baseline})))}
                             (ctx :findings [a-finding]))]
