@@ -179,6 +179,24 @@
     (is (= ["lines-exact"] (:owed r)))
     (is (report/validate-event :design-decision r))))
 
+;; Watched: a design listing modal-footer under :baseline :breaks, and a judge confirming modal-footer
+;; holds at the pre-change tree — which cleared its refutation run and counted it confirmed, while a
+;; :breaks id that was no element of the design was dropped.
+(deftest a-holds-of-what-the-design-breaks-is-owed-not-confirmed
+  (let [result {:confirmed  ["modal-footer" "rounded-once"]
+                :checked-at {"modal-footer" ["src/modals.clj:270"] "rounded-once" ["src/a.clj:3"]}}
+        checks #{"modal-footer" "rounded-once"}
+        r      (#'record/rule result checks checks ["[modal-footer]"])]
+    (is (= ["rounded-once"] (:confirmed r))
+        "a truth about the code the design says it breaks is not a reading of the design")
+    (is (= ["modal-footer"] (:owed r)) "it is still ruled on, so it does not stop the round as :unruled")
+    (is (not (contains? (:checked-at r) "modal-footer")))
+    (is (= {"modal-footer" 1}
+           (record/refuted-running [{:findings [{:claim-id "modal-footer"}]} r]))
+        "and the subject's refutation run survives it")
+    (is (= ["modal-footer" "rounded-once"] (:confirmed (#'record/rule result checks checks)))
+        "a round with no :breaks confirms as before")))
+
 (deftest a-decision-leaving-a-claim-unruled-does-not-proceed
   (let [d {:format :design-decision :recommend :proceed :design-seq 4 :reason "r" :asks "a"
            :checks [{:check :relation-honest :status :held :note "n"}]}]

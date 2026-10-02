@@ -1406,21 +1406,29 @@
    confirmed it has found. An id outside the checks is dropped whatever the judge said of it: it was
    shown as settled, or it is no subject of this record. What is left of `asked` without a ruling —
    confirmed, found, :owed, or declared :unchecked — is :unruled, which is what stops the judgement
-   holding (`nido.coordinator.report/review-holds?`, `nido.coordinator.report/proceeds?`)."
-  [result checks asked]
-  (let [found     (into #{} (keep :claim-id) (:findings result))
-        held?     #(and (contains? checks %) (not (found %)))
-        confirmed (filterv #(and (held? %) (seq (get-in result [:checked-at %]))) (:confirmed result))
-        owed      (filterv held? (:owed result))
-        unchecked (filterv #(held? (:id %)) (:unchecked result))
-        ruled     (into (set confirmed) (concat owed (map :id unchecked) found))
-        unruled   (vec (sort (remove ruled asked)))]
-    (cond-> (dissoc result :confirmed :checked-at :owed :unchecked :unruled)
-      (seq confirmed) (assoc :confirmed confirmed
-                             :checked-at (select-keys (:checked-at result) confirmed))
-      (seq owed)      (assoc :owed owed)
-      (seq unchecked) (assoc :unchecked unchecked)
-      (seq unruled)   (assoc :unruled unruled))))
+   holding (`nido.coordinator.report/review-holds?`, `nido.coordinator.report/proceeds?`).
+
+   `breaks` is what the design's `:baseline :breaks` lists. A check named there that the judge
+   confirmed holds is :owed, never confirmed: what it read is the code the design says it stops
+   being true, and a confirmation would end that subject's refutation run (`refuted-running`) on a
+   fact about the tree before the change."
+  ([result checks asked] (rule result checks asked nil))
+  ([result checks asked breaks]
+    (let [found     (into #{} (keep :claim-id) (:findings result))
+          held?     #(and (contains? checks %) (not (found %)))
+          broken    (into #{} (map slug) breaks)
+          confirmed (filterv #(and (held? %) (not (broken %)) (seq (get-in result [:checked-at %])))
+                             (:confirmed result))
+          owed      (filterv held? (distinct (concat (:owed result) (filter broken (:confirmed result)))))
+          unchecked (filterv #(held? (:id %)) (:unchecked result))
+          ruled     (into (set confirmed) (concat owed (map :id unchecked) found))
+          unruled   (vec (sort (remove ruled asked)))]
+      (cond-> (dissoc result :confirmed :checked-at :owed :unchecked :unruled)
+        (seq confirmed) (assoc :confirmed confirmed
+                               :checked-at (select-keys (:checked-at result) confirmed))
+        (seq owed)      (assoc :owed owed)
+        (seq unchecked) (assoc :unchecked unchecked)
+        (seq unruled)   (assoc :unruled unruled)))))
 
 (defn- normalize-findings
   [raw]
@@ -2386,7 +2394,7 @@
 
               :else
               (let [kept (select-keys subject-identities rests-on)]
-                (cond-> (-> (rule result checks asked)
+                (cond-> (-> (rule result checks asked breaks)
                             (relation-held relation breaks))
                   (seq levels)              (assoc :strata-read (mapv :reading levels))
                   one-tree                  (assoc :code-identity one-tree)
