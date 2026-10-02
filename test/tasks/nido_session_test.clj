@@ -212,3 +212,18 @@
   (let [[calls out] (spawn-calls {:warp? false})]
     (is (not-any? #(= :tab (first %)) calls))
     (is (str/includes? out "cd /h && zsh k"))))
+
+(deftest spawn-starts-the-child-in-bypass-unless-told-otherwise
+  (let [mode-of (fn [calls] (:permission-mode (last (first (filter #(= :kickoff (first %)) calls)))))]
+    (is (= "bypassPermissions" (mode-of (first (spawn-calls {})))))
+    (is (= "acceptEdits" (mode-of (first (spawn-calls {} ":permission-mode" "acceptEdits")))))))
+
+(deftest spawn-never-asks-the-budget-question
+  (let [asked (atom 0)]
+    (with-redefs [task/interactive? (fn [] true)
+                  task/confirm?     (fn [] (swap! asked inc) false)
+                  fleet/snapshot    (fn [] (throw (ex-info "probed" {})))]
+      (let [[calls out] (spawn-calls {})]
+        (is (zero? @asked))
+        (is (not (str/includes? out "Aborted")))
+        (is (some #(= [:up "kid"] %) calls))))))

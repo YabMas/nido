@@ -53,8 +53,13 @@ the one other sessions message you by — `ListAgents` prints it on its first li
 ```bash
 bb nido:session:spawn :project <p> <child-session> \
   :parent-agent <your agent name> :brief-file <path> \
-  [:ws-id <child ws-id>]          # a delta only
+  [:ws-id <child ws-id>] \       # a delta only
+  [:permission-mode <yours>]      # when you are NOT bypassing permissions
 ```
+
+The child runs in `bypassPermissions` unless you pass your own mode. It has to
+match yours: a message between sessions in different permission classes waits
+for a person to approve it, so a mismatched child cannot hear you unattended.
 
 It brings the child up exactly as `nido:session:up` does (a refusal there is a
 refusal here, before anything is made), links the two sessions to each other,

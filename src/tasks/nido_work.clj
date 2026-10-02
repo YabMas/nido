@@ -51,15 +51,17 @@
   "`:name` sets the agent's display name, the address its peers message it by.
    `:prompt-file` is read now and becomes the first turn. It goes straight after
    the binary because `--add-dir` takes every argument up to the next flag, so a
-   prompt placed last would be read as one more directory."
+   prompt placed last would be read as one more directory. `:permission-mode`
+   is claude's own, passed through unchecked."
   [{:keys [project session worktree instance-id]}
-   {:keys [claude-bin name prompt-file] :or {claude-bin "claude"}}]
+   {:keys [claude-bin name prompt-file permission-mode] :or {claude-bin "claude"}}]
   (let [briefing (launcher/session-briefing project session instance-id)
         mcp      (state/session-mcp-path instance-id)
         cmd      (cond-> [claude-bin]
                    prompt-file      (conj (slurp (str prompt-file)))
                    :always          (into ["--append-system-prompt" briefing])
                    name             (into ["--name" (str name)])
+                   permission-mode  (into ["--permission-mode" (str permission-mode)])
                    (fs/exists? mcp) (into ["--mcp-config" mcp])
                    :always          (into (mapcat (fn [d] ["--add-dir" d])
                                                   (launcher/nido-add-dirs))))]
@@ -93,7 +95,7 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   work [& args]
-  (let [[_ opts] (task-args/split-args args #{:name :prompt-file})
+  (let [[_ opts] (task-args/split-args args #{:name :prompt-file :permission-mode})
         {:keys [cmd dir]} (work-cmd* opts)]
     ;; Hand off to the interactive agent in the worktree (inherit the terminal).
     (p/exec cmd {:dir dir})))

@@ -106,3 +106,13 @@
                 launcher/nido-add-dirs    (fn [] ["/opt/nido"])]
     (is (= ["claude" "--append-system-prompt" "B" "--add-dir" "/opt/nido"]
            (:cmd (work/work-cmd* {:claude-bin "claude"}))))))
+
+(deftest a-permission-mode-is-passed-to-claude
+  (with-redefs [lifecycle/session-from-cwd
+                (fn [] {:project "nido" :session "kid" :worktree "/wt" :instance-id "nido--kid"})
+                launcher/session-briefing (fn [_ _ _] "B")
+                state/session-mcp-path    (fn [_] "/does/not/exist.json")
+                launcher/nido-add-dirs    (fn [] ["/opt/nido"])]
+    (is (= ["--permission-mode" "bypassPermissions"]
+           (->> (:cmd (work/work-cmd* {:claude-bin "claude" :permission-mode "bypassPermissions"}))
+                (drop-while #(not= % "--permission-mode")) (take 2))))))

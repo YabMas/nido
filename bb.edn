@@ -105,7 +105,7 @@
 
   nido:session:spawn
   {:requires ([tasks.nido-session :as nido-session])
-   :doc "Spawn a child session from inside a parent one: :project <p> <child> :parent-agent <your agent name> :brief-file <path> [:ws-id <id>] [up opts] — up, link both ways, stage a kickoff, open a Warp tab where the child's agent starts on the brief. See the spawn-session skill."
+   :doc "Spawn a child session from inside a parent one: :project <p> <child> :parent-agent <your agent name> :brief-file <path> [:ws-id <id>] [:permission-mode <yours; default bypassPermissions>] [up opts] — up, link both ways, stage a kickoff, open a Warp tab where the child's agent starts on the brief. See the spawn-session skill."
    :task (apply nido-session/spawn *command-line-args*)}
 
   nido:session:status
@@ -682,7 +682,7 @@
 
   nido:work
   {:requires ([tasks.nido-work :as nido-work])
-   :doc "Boot an interactive agent in the current worktree with nido context injected. Default :agent claude; supports :agent codex. [:name <agent name>] [:prompt-file <path> — its contents are the first turn] (claude only)"
+   :doc "Boot an interactive agent in the current worktree with nido context injected. Default :agent claude; supports :agent codex. [:name <agent name>] [:prompt-file <path> — its contents are the first turn] [:permission-mode <m>] (claude only)"
    :task (apply nido-work/work *command-line-args*)}
 
   }}
