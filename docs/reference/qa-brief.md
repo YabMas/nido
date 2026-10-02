@@ -4,7 +4,8 @@ The person who checks a change on staging or production reads the Notion
 ticket, not the PR, and usually has never seen either. The QA brief is the
 part of the ticket written for that person: what to click and what should
 happen. Two skills write one — `/land` §6 when a stack lands, `/review-queue`
-when it grooms the Review queue — and both hold it to this page.
+when it grooms the Review queue — and both hold it, and the cleanup of the page
+around it, to this page.
 
 ## The reader
 
@@ -159,3 +160,68 @@ this order:
 
 Keep each rich-text run under 2000 characters: one oversized run rejects the
 whole request.
+
+## Cleanup
+
+The goal is a page whose body is the brief and nothing else: everything that
+led to it is kept, collapsed, underneath. Cleanup follows a brief that is on
+top; a ticket with no brief keeps its report in the body, because without one
+the report is the only account of the problem on the page. These and only these:
+
+- **Delete machine leftovers** — an empty bug-report template ("Can you
+  reproduce the bug? Yes / No"), a superseded `QA instructions` callout or
+  another bot's `QA – what to test:` block the brief replaces, `GitHub PR: <url>`
+  paragraphs naming a PR that closed unmerged, blank paragraphs in runs,
+  duplicate headings.
+- **Delete stale text** — what the change has made false: "not released yet",
+  a workaround "until this ships", "ready for review, stacked on PR …".
+  Each deleted line is quoted in the run's report.
+- **Fold the original report** into one collapsed toggle directly under the
+  brief, `Original report` — what the reporter or requester wrote, its quotes,
+  its screenshots and videos, in their order. It is folded whole and never
+  edited: it is the record of what the reporter saw, and the brief already says
+  what a reviewer needs from it.
+- **Fold the engineering record** into one collapsed toggle at the bottom,
+  `Engineering notes & history` — triage notes, handoffs, root-cause analyses,
+  file paths, plans that have since been carried out, and a person's QA notes
+  in another shape that the brief supersedes.
+
+Nothing else is touched: comments, the title, and properties are not page body.
+A toggle that already exists from an earlier run is appended to, never doubled.
+
+**Folding is delete-and-recreate** — Notion's API has no move. **Uploaded media**
+(an image, video, file or PDF whose type is `file`) is copied by uploading it
+again: its URL expires within the hour, so it is read fresh just before the
+copy. Some blocks cannot be folded, and stay where they are:
+
+- **An upload that fails** — too large for the workspace, or a URL that expired
+  mid-copy.
+- **`child_page`, `child_database`, `synced_block`, `link_preview`** — the API
+  cannot create them.
+- **A block with an inline comment thread** —
+  `notion api GET "/v1/comments?block_id=<block-id>"` returns any. Recreating
+  the block would orphan the discussion.
+
+The run's report names which blocks stayed put and why, so nobody is surprised
+by a half-folded page.
+
+**Fold in this order, so nothing is lost if a call fails midway:**
+
+1. Create the toggle with copies of the blocks inside it — `Original report`
+   directly after the brief
+   (`"position": {"type": "after_block", "after_block": {"id": <brief-id>}}`),
+   `Engineering notes & history` at the bottom. If Notion puts the report toggle
+   anywhere else, say so; it is still collapsed. A request nests two levels;
+   append deeper children to the returned child ids.
+   An uploaded media block is copied by re-reading the block for a fresh URL,
+   `notion file upload <url> --name <its name>`, and creating the copy as
+   `{"type": "image", "image": {"type": "file_upload", "file_upload": {"id": <upload-id>}}}`
+   (`video`, `file`, `pdf` alike). A failed upload leaves that block where it
+   is; the rest still fold.
+2. Read the toggle back and check every copied block is there.
+3. Only then delete the originals.
+
+Keep every deleted block id. Notion archives a deleted block rather than
+destroying it, so
+`notion api PATCH /v1/blocks/<id> --body '{"in_trash": false}'` restores one —
+that list is the undo.

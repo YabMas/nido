@@ -162,43 +162,11 @@ no QA brief; flag that its Status reads as QA work when it is not.
 
 ### Cleanup
 
-The goal is a page whose body is the brief and nothing else: everything that
-led to it is kept, collapsed, underneath. Propose, per ticket, from these and
-only these:
-
-- **Delete machine leftovers** — an empty bug-report template ("Can you
-  reproduce the bug? Yes / No"), a superseded `QA instructions` callout, blank
-  paragraphs in runs, duplicate headings.
-- **Delete stale text** — what the release has made false: "not released yet",
-  a workaround "until this ships", "ready for review, stacked on PR …".
-  Quote each deleted line in the plan.
-- **Fold the original report** into one collapsed toggle directly under the
-  brief, `Original report` — what the reporter or requester wrote, its quotes,
-  its screenshots and videos, in their order. It is folded whole and never edited:
-  it is the record of what the reporter saw, and the brief already says what a
-  reviewer needs from it (self-contained, `docs/reference/qa-brief.md`).
-- **Fold the engineering record** into one collapsed toggle at the bottom,
-  `Engineering notes & history` — handoffs, root-cause analyses, file paths,
-  plans that have since been carried out.
-
-A ticket with no brief keeps its report in the body: without one the report is
-the only account of the problem on the page.
-
-**Folding is delete-and-recreate** — Notion's API has no move. **Uploaded media**
-(an image, video, file or PDF whose type is `file`) is copied by uploading it
-again: its URL expires within the hour, so the apply leg reads it fresh just
-before the copy. Some blocks still cannot be folded, and stay where they are:
-
-- **An upload that fails** — too large for the workspace, or a URL that expired
-  mid-copy.
-- **`child_page`, `child_database`, `synced_block`, `link_preview`** — the API
-  cannot create them.
-- **A block with an inline comment thread** —
-  `notion api GET "/v1/comments?block_id=<block-id>"` returns any. Recreating
-  the block would orphan the discussion.
-
-Say in the plan which blocks stay put and why, so the human is not surprised by
-a half-folded page.
+Propose, per ticket, the cleanup `docs/reference/qa-brief.md` § "Cleanup"
+defines — deleting machine leftovers and stale text, folding the original report
+and the engineering record — and nothing outside it. Quote each line a delete
+removes, and say in the plan which blocks stay put and why, so the human is not
+surprised by a half-folded page.
 
 
 ## 4. Rank the queue
@@ -378,21 +346,8 @@ first are the earlier callout and the body to-dos it moved in deleted; otherwise
 the new one is deleted again and the item is `:failed` with "did not land on
 top".
 
-**Folding, in this order, so nothing is lost if a call fails midway:**
-
-1. Create the toggle with copies of the blocks inside it — `Original report`
-   directly after the brief
-   (`"position": {"type": "after_block", "after_block": {"id": <brief-id>}}`),
-   `Engineering notes & history` at the bottom. If Notion puts the report toggle
-   anywhere else, say so in the result; it is still collapsed. A request nests
-   two levels; append deeper children to the returned child ids.
-   An uploaded media block is copied by re-reading the block for a fresh URL,
-   `notion file upload <url> --name <its name>`, and creating the copy as
-   `{"type": "image", "image": {"type": "file_upload", "file_upload": {"id": <upload-id>}}}`
-   (`video`, `file`, `pdf` alike). A failed upload leaves that block where it
-   is; the rest still fold.
-2. Read the toggle back and check every copied block is there.
-3. Only then delete the originals.
+**Folding** follows the order in `docs/reference/qa-brief.md` § "Cleanup":
+copy into the toggle, read it back, and only then delete the originals.
 
 Keep every deleted block id in the plan run's `deleted-blocks.edn`, by ticket.
 Notion archives a deleted block rather than destroying it, so

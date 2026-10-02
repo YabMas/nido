@@ -1,6 +1,6 @@
 ---
 name: land
-description: Land the current session's stack — mark every layer ready for review, answer the PR checks that readiness triggers and any review thread a human left (fixing what it can, declining what it can defensibly decline), collapse the stack into its top PR, write a product-terms QA brief onto the brian Notion ticket it closes, and merge that one PR, watching it until it lands. No ledger events. Run from a session worktree. Usage: /land
+description: Land the current session's stack — mark every layer ready for review, answer the PR checks that readiness triggers and any review thread a human left (fixing what it can, declining what it can defensibly decline), collapse the stack into its top PR, write a product-terms QA brief onto the brian Notion ticket it closes and clean the page around it, and merge that one PR, watching it until it lands. No ledger events. Run from a session worktree. Usage: /land
 ---
 
 # /land
@@ -469,12 +469,27 @@ on top, the new one if it is not. A `Follow-up` callout leading the page stays
 first: write the brief `after_block` it instead of at `start`. A brief that did not land on top is reported in
 §7 as failed, never left at the bottom.
 
-**The rest of the tidy:**
+**Then clean the page around it — only once the brief is on top.** A brief
+that failed leaves the page as it was: without a brief, the report is the only
+account of the problem. Otherwise:
 
-- `GitHub PR: <url>` paragraphs pointing at a lower layer — those PRs close
-  unmerged after the landing. Delete them.
+- **Follow-up** — write or replace the `Follow-up` callout as
+  `docs/reference/qa-brief.md` § "Follow-up actions" bounds it, from the ticket,
+  its comments and the arc's Out of scope. Most landings have none; no open
+  actions, no block.
+- **Cleanup** — everything `docs/reference/qa-brief.md` § "Cleanup" defines,
+  and nothing outside it: delete machine leftovers and stale text, fold the
+  original report into `Original report` under the brief and the triage note,
+  handoffs and engineering notes into `Engineering notes & history` at the
+  bottom. `GitHub PR: <url>` paragraphs pointing at a lower layer are leftovers
+  — those PRs close unmerged after the landing. Fold in that section's order:
+  copy, read back, and only then delete.
+- **Keep every deleted block id** and print them in §7 — that list is the undo.
 - The `GitHub PR` property — set it to the top PR:
   `notion page set "$PAGE" "GitHub PR=<top-pr-url>"`.
+
+A cleanup step that fails leaves its blocks where they are and is reported in
+§7; it never undoes the brief.
 
 **Release blocker.** Judge the arc by `docs/reference/qa-brief.md` § "Release
 blocker" — it has not reached production, so the only question is whether it
@@ -488,12 +503,12 @@ alters what users experience. A blocker it is, and `Priority` is not already
   release is not one to make with nobody watching: report it in §7 as proposed,
   with its reason, and `/review-queue` puts it to a person on the Operations page.
 
-**Everything a person wrote stays exactly as it is** — the report, its
-screenshots and videos, comments, the triage note, the title, every other
-property but `GitHub PR` and a raised `Priority`. Notion's API has no move, so "folding" old content away means
-deleting and recreating it, which loses its comments and history. The brief
-earns the reviewer's attention by being first and self-contained, not by
-clearing the page around it.
+**Nothing a person wrote is lost or edited** — the report, its screenshots and
+videos and the triage note are folded whole, never rewritten. Comments, the
+title and every property but `GitHub PR` and a raised `Priority` are not
+touched. A block that cannot be recreated without loss — one carrying an inline
+comment thread, an upload that fails — stays where it is (`qa-brief.md`
+§ "Cleanup").
 
 **A Notion failure never stops the landing.** The brief serves the reviewer; the
 merge does not depend on it. Record what went wrong in §7 and go on to the
@@ -662,6 +677,12 @@ Checks
 - <check name> — <fixed how | still red>
 
 QA brief: <written to BR-#### | skipped — <not brian | no Closes claim> | failed — <did not land on top | what Notion answered>>
+Follow-up: <written — <n> actions | none owed | skipped with the brief | failed — <why>>
+Cleanup: <done | skipped with the brief | partial — <what failed>>
+  deleted:  <each line of stale text, quoted; leftovers by kind and count>
+  folded:   <n> blocks → Original report · <m> blocks → Engineering notes & history
+  stayed:   <block · why> (one per line; omit when none)
+  undo ids: <every deleted block id>
 Release blocker: <set — <reason> | proposed, would hold the mobile release — <reason> | already set | not one | skipped with the brief>>
 
 Outcome: <merged at <sha> | on the queue, github-merge poller owns it | halted before merge>
@@ -689,7 +710,7 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
 - **No GitHub-side code review.** The review rounds (`bb nido:review:loop`) judge
   the diff before this runs, so `/land` waits on no reviewer and parses no bot.
   It answers the PR's checks, and whatever thread a person happened to leave.
-- **No other Notion writes.** The QA brief (§6), the tidy that goes with it and
+- **No other Notion writes.** The QA brief (§6), its Follow-up and cleanup, and
   a raised release-blocker Priority are the only ones; the ticket's Status moves on brian's staging deploy and the
   `github-merge` poller, not here.
 - **No un-readying.** A halt leaves the layers ready and the threads open —
@@ -714,6 +735,9 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
   merge.
 - QA brief already on the ticket → the fresh one replaces it by the order in
   `docs/reference/qa-brief.md`; a re-run never stacks a second (§6).
+- Page already cleaned → nothing left to fold or delete; an existing
+  `Original report` or `Engineering notes & history` toggle is appended to,
+  never doubled (§6).
 - Already merged → §6's watch returns immediately; still emit the report.
 
 ## Common mistakes
@@ -773,9 +797,13 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
 - **Writing the QA brief in engineering terms** — its reader knows the product,
   not the code or the ticket's history. A step naming a function, a table or a
   PR is a step they cannot follow (§6).
-- **Clearing the ticket to make room for the brief** — only machine-written,
-  superseded blocks go. The report, media, comments and triage note are a
-  person's record, and Notion cannot move them without destroying them (§6).
+- **Writing the brief and leaving the page around it** — the reviewer then
+  reads the brief, then the reporter's account of the same problem, then a
+  triage note, before anything else. Cleanup is part of the step (§6).
+- **Deleting what should be folded** — only machine leftovers and stale text are
+  deleted. The report, media and triage note are a person's record: folded
+  whole by copy-then-delete, and a block whose copy would lose something stays
+  put (§6, `qa-brief.md` § "Cleanup").
 - **Pushing after the collapse** — a `synchronize` is a new head commit, which
   re-fires CI on the full arc. The frozen head SHA is the whole reason the green
   checks still stand (§6).
