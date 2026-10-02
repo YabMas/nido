@@ -645,6 +645,21 @@
                                        :checks [{:check :stratified :status :held :note "n"}]})]
     (is (= "clean" (:status round)))))
 
+(deftest a-design-round-that-asked-keeps-its-findings-in-the-report
+  ;; report.json showed findings [] beside findings-made 4, so the terminal `broken at the end` had
+  ;; nothing behind it but the ledger.
+  (let [finding {:check :goal-served :claim "over-serves" :cites ["c"] :for-person true}
+        r  (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+               (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+               (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                    :ctx {:record {:format :design-decision :recommend :ask
+                                                   :asks "scope?" :findings [finding]}
+                                          :findings [{:check :goal-served :status :broken :note "n"}]}}
+                                   nil))
+        ph (first (:phases (first (:rounds r))))]
+    (is (= 1 (:findings-made ph)))
+    (is (= [{:claim "over-serves" :cites ["c"]}] (:filed (first (:findings ph)))))))
+
 (deftest a-broken-check-row-carries-the-judges-case-for-it
   ;; The row is keyed on the check, and the case behind it was left in the judge's out.json: a
   ;; refutation resting on a package page read exactly like one resting on the code.

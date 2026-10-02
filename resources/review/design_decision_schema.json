@@ -65,7 +65,7 @@
     },
     "findings": {
       "type": "array",
-      "description": "Empty when recommending proceed; may be empty when recommending ask. Every entry must cite what it falsifies.",
+      "description": "Empty when recommending proceed; may be empty when recommending ask. Every entry must cite what it falsifies. On an ask, every finding is still listed — the ones the question covers marked for_person, the derivable ones not.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -74,7 +74,8 @@
           "check",
           "cites",
           "claim",
-          "evidence"
+          "evidence",
+          "for_person"
         ],
         "properties": {
           "claim-id": {
@@ -107,6 +108,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "for_person": {
+            "type": "boolean",
+            "description": "true when the only repair for this finding is answering the question in asks — an amender handed it would settle that question by guessing. false for a derivable defect the record can repair without anyone deciding anything new, which is repaired before the person is asked. Always false unless recommending ask."
           }
         }
       }

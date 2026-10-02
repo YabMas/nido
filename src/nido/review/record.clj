@@ -1211,6 +1211,10 @@
    "             intent means, whether it is worth its cost. An amender handed it\n"
    "             settles it by guessing — narrowing a goal the person wanted, or\n"
    "             reversing a decision the record states. Findings are optional.\n"
+   "             List every finding anyway, and mark for_person the ones only the\n"
+   "             question repairs. The rest are repaired before the person is\n"
+   "             asked, so a derivable defect you leave out is one they are\n"
+   "             asked over.\n"
    "  amend    — a derivable defect in the record itself, which the record can\n"
    "             repair without anyone deciding anything new.\n"
    "  recut    — the decomposition does not hold.\n"
@@ -1450,7 +1454,9 @@
                            derivation-keys)
                      (assoc :check (keyword (str/replace (str/trim (str (:check f))) "_" "-")))
                          (seq (:evidence f))
-                         (assoc :evidence (mapv str (:evidence f))))))))
+                         (assoc :evidence (mapv str (:evidence f)))
+                         (true? (:for_person f))
+                         (assoc :for-person true))))))
         raw))
 
 (def ^:private derivation-names
@@ -1555,7 +1561,10 @@
                               :checks checks
                               :asks asks}
                              m)
-          (and (not= :proceed r) (seq findings)) (assoc :findings findings)
+          ;; Only an ask has a question for a finding to be the person's: on any other
+          ;; recommendation every finding is the amender's, whatever the judge marked.
+          (and (not= :proceed r) (seq findings)) (assoc :findings (cond->> findings
+                                                                    (not= :ask r) (mapv #(dissoc % :for-person))))
           (seq rulings)                          (assoc :relation-rulings rulings))))
     (catch Exception _ nil)))
 
@@ -4594,13 +4603,6 @@
                                          :stop))
                        answer))
 
-      ;; The judge's own stop for a person. Ahead of the findings, which an amender would otherwise
-      ;; be handed: the question they raise is the one it is not the amender's to answer.
-      (= :ask (:recommend record))
-      (final! (assoc ctx :record record :findings []
-                     :underivable (underivable-checks record)
-                     :control :escalate :status :asked))
-
       :else
       (let [filed     (fn [{c :check}] (filter #(= c (:check %)) (:findings record)))
             claims-of #(into [] (comp (keep (fn [f] (not-empty (str (:claim-id f))))) (distinct))
@@ -4631,9 +4633,30 @@
             findings  (into (mapv #(handle (cond-> (assoc % :claim-ids (claims-of %))
                                              (seq (evidence-of %)) (assoc :evidence (evidence-of %))))
                                   (broken-checks record))
-                            claim-findings)]
+                            claim-findings)
+            ;; A broken check is the person's when every finding filed under it is, and when none
+            ;; is: a check broken with no case behind it names nothing an amender could repair.
+            for-person? (fn [f] (if (:status f)
+                                  (every? :for-person (filed f))
+                                  (:for-person f)))
+            disputed?   #(>= (:disputed-n %) 2)]
         (cond
-          (some #(>= (:disputed-n %) 2) findings)
+          ;; The judge's own stop for a person. What reaches the amender first is only what the
+          ;; question does not cover — a derivable defect left for the person would be asked over,
+          ;; and re-found by the run that resumes after the answer. Nothing derivable left, or a
+          ;; derivable finding already objected to twice, and the round stops for the person
+          ;; holding every finding it made.
+          (= :ask (:recommend record))
+          (let [derivable (filterv (complement for-person?) findings)]
+            (if (and (seq derivable) (not-any? disputed? derivable))
+              (with-appended (assoc ctx :record record :findings derivable
+                                    :underivable (underivable-checks record))
+                             (append! cwd record))
+              (final! (assoc ctx :record record :findings findings
+                             :underivable (underivable-checks record)
+                             :control :escalate :status :asked))))
+
+          (some disputed? findings)
           (final! (assoc ctx :record record :findings findings
                          :underivable (underivable-checks record)
                          :control :escalate :status :disputed))
@@ -4678,7 +4701,10 @@
 
    Six ways to end here and only one of them is convergence-shaped. :asked
    escalates whoever the design owes: the judge said the repair is a person's
-   decision, and an amender would make it for them. :proceed
+   decision, and an amender would make it for them. An ask that also found a
+   derivable defect — a finding not marked :for-person — is a round first: that
+   defect is the amender's, so the person is asked over a record already repaired
+   of everything they were not needed for. :proceed
    escalates because the ask is the point — unless nobody is owed one: a design
    the round cleared advances, and one whose clearance is still unwritten ends
    :clearance-contended, which the clearance stage finishes without re-running
@@ -4814,7 +4840,9 @@
                                           :reason (get-in ctx [:record :reason])
                                           :asks (get-in ctx [:record :asks])
                                           :raised (:findings ctx)
-                                          :findings (get-in ctx [:record :findings])
+                                          ;; An ask's findings for the person are its question's,
+                                          ;; and the prompt tells the amender that is not its to answer.
+                                          :findings (vec (remove :for-person (get-in ctx [:record :findings])))
                                           :rulings (get-in ctx [:record :relation-rulings])
                                           :out-path out-path
                                           :check-cmd (when check-cmd (check-cmd out-path))

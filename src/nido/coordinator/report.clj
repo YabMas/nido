@@ -2354,13 +2354,17 @@
 
    :check, on a design decision's finding, is the derived check it shows broken.
    It is what ties the claim a finding names to that check, so a check broken
-   against one claim is not re-identified by a finding about another."
+   against one claim is not re-identified by a finding about another.
+
+   :for-person, on an :ask's finding, marks one whose only repair is the question in :asks.
+   Absent, the finding is a derivable defect, which the round repairs before the person is asked."
   [:map {:closed true}
-   [:claim-id {:optional true} string?]
-   [:check    {:optional true} keyword?]
-   [:cites    [:vector {:min 1} string?]]
-   [:claim    string?]
-   [:evidence {:optional true} [:vector string?]]])
+   [:claim-id   {:optional true} string?]
+   [:check      {:optional true} keyword?]
+   [:cites      [:vector {:min 1} string?]]
+   [:claim      string?]
+   [:evidence   {:optional true} [:vector string?]]
+   [:for-person {:optional true} [:= true]]])
 
 (def derivations
   "What a baseline exists to let the decision round work out. A baseline is

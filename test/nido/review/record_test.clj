@@ -1050,6 +1050,25 @@
     (is (not (contains? r :findings)))
     (is (= r (report/validate-event :design-decision r)))))
 
+(deftest an-ask-marks-which-of-its-findings-the-question-covers
+  ;; The mark is what lets the round repair the rest before asking; on any other recommendation
+  ;; there is no question for a finding to belong to, and every finding is the amender's.
+  (let [answer (fn [recommend]
+                 (record/parse-design-decision
+                  (json/generate-string
+                   {:recommend recommend :reason "r" :asks "is the pool in scope?"
+                    :checks [{:check "goal_served" :status "broken" :note "n"}]
+                    :findings [{:claim-id "" :check "goal_served" :cites ["c"] :claim "over-serves"
+                                :evidence [] :for_person true}
+                               {:claim-id "" :check "" :cites ["c"] :claim "breaks omitted"
+                                :evidence [] :for_person false}]})
+                  4))
+        ask    (answer "ask")
+        amend  (answer "amend")]
+    (is (= [true nil] (mapv :for-person (:findings ask))))
+    (is (= ask (report/validate-event :design-decision ask)) "the ledger takes the mark")
+    (is (not-any? :for-person (:findings amend)))))
+
 (deftest the-judge-is-told-when-nobody-will-read-its-ask
   ;; A design declaring :conforms/:within clears on a proceed, and its required ask reached no
   ;; report, gate or view. Said before the judge answers, so a question the build must not start

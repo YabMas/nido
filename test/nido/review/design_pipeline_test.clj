@@ -1675,18 +1675,61 @@
 (deftest a-scope-decision-stops-for-a-person-instead-of-reaching-the-amender
   ;; Handed a finding whose only repair was the scope question in :asks, amenders dropped a
   ;; 309-line module the branch was building and reversed a decision the record's :open stated.
-  ;; An :ask ends the run there, and nothing is handed to an amender.
+  ;; An :ask whose every finding is the person's ends the run there, and nothing is handed to an
+  ;; amender.
   (let [appended (atom [])]
     (with-redefs [record/design-decision!
                   (fn [_] (decision :ask :checks [(check :goal-served :broken)]
                                     :findings [{:cites ["c"] :claim "over-serves the goal"
-                                                :check :goal-served :claim-id "pool-in-scope"}]))
+                                                :check :goal-served :claim-id "pool-in-scope"
+                                                :for-person true}]))
                   record/append! (fn [_ r] (swap! appended conj r) nil)]
       (let [out (run record/design-judge-stage (ctx))]
         (is (= :asked (:status out)))
         (is (= :escalate (:control out)))
-        (is (= [] (:findings out)) "the amender is handed nothing to settle")
+        (is (= [:goal-served] (mapv :check (:findings out)))
+            "the round stops holding what it found, so the report's broken check has a case behind it")
         (is (= [:ask] (mapv :recommend @appended)) "the decision is on the ledger for the person")))))
+
+(deftest an-ask-that-also-found-a-derivable-defect-repairs-it-before-asking
+  ;; One round asked a scope question and said in its reason that two derivable defects also needed
+  ;; repair — then escalated with no findings at all, so the run resuming after the answer had to
+  ;; find both again and spend a round amending them.
+  (let [scope   {:cites ["c"] :claim "over-serves the goal" :check :goal-served
+                 :claim-id "pool-in-scope" :for-person true}
+        breaks  {:cites ["[tutor-context]"] :claim "ruled breaks, missing from :breaks"
+                 :check :relation-honest}
+        record  (decision :ask :checks [(check :goal-served :broken) (check :relation-honest :broken)]
+                          :findings [scope breaks])
+        seen    (atom nil)]
+    (with-redefs [record/design-decision! (fn [_] record)
+                  record/append! (fn [_ _] nil)]
+      (let [out (run record/design-judge-stage (ctx))]
+        (is (nil? (:status out)) "the round goes on to the amender rather than stopping for the person")
+        (is (= [:relation-honest] (mapv :check (:findings out)))
+            "only the defect the question does not cover is the amender's")))
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ k] (when (= :design k) a-design))
+                  stages/discover-baseline (fn [_ _] nil)
+                  design-check/design-of (constantly nil)
+                  record/launch-amender! (fn [_ {:keys [first-message]}] (reset! seen first-message) {})]
+      (run record/design-amend-stage (ctx :record record :findings [(check :relation-honest :broken)]))
+      (is (str/includes? @seen "ruled breaks, missing from :breaks"))
+      (is (not (str/includes? @seen "over-serves the goal"))
+          "a finding only the question repairs is never put to the amender, which would answer it")
+      (is (str/includes? @seen "is this worth doing now?") "the question is shown as not its to answer"))))
+
+(deftest an-ask-whose-derivable-finding-was-objected-to-twice-stops-for-the-person
+  ;; Objected to twice, a derivable finding is a disagreement only a person settles — and the ask
+  ;; is already stopping for one.
+  (with-redefs [record/design-decision!
+                (fn [_] (decision :ask :checks [(check :relation-honest :broken)]
+                                  :findings [{:cites ["c"] :claim "x" :check :relation-honest}]))
+                record/append! (fn [_ _] nil)
+                record/disputed-n (constantly 2)]
+    (let [out (run record/design-judge-stage (ctx))]
+      (is (= :asked (:status out)))
+      (is (= [:relation-honest] (mapv :check (:findings out)))))))
 
 (deftest an-ask-parks-even-where-a-proceed-would-clear
   ;; A design declaring :conforms/:within owes nobody a grant, so a proceed clears it and nobody
