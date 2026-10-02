@@ -2970,6 +2970,33 @@
          "from here, and a number you guess names someone else's: where a remainder has\n"
          "no ref yet, route it otherwise and say under :open that it needs filing.\n\n")))
 
+(defn- strata-finding?
+  "Whether finding `f` against `baseline` concerns its strata: a gap blocking the stratified
+   derivation, or a finding about a stratum the baseline lists."
+  [baseline f]
+  (or (= :stratified (:blocks f))
+      (contains? (set (:strata baseline)) (:claim-id f))))
+
+(def ^:private strata-shape
+  "Every field a stratum is written in, literally, for an amender answering a finding about strata.
+   `coupled-edits` says which fields must agree; this says what they look like, which an amender
+   adding the first stratum to a record has nowhere in the record to copy from — and went to read
+   nido's schema to learn. It also says what a stratum does NOT carry, because the field it looked
+   for was a membership list."
+  (str "STRATA, AS THE LEDGER TAKES THEM. A finding below concerns strata, and this is\n"
+       "every field a stratum is written in — there is no other:\n\n"
+       "  :strata [\"<id>\" ...]   floor first; [] says none is declared, not an omission\n"
+       "  under :model :elements, one for each of those ids:\n"
+       "    {:id \"<id>\" :sort :stratum\n"
+       "     :interface \"<the vocabulary this level provides to what is written in it>\"\n"
+       "     :readings [{:lens :stratified/level :verdict :sound :because \"<why>\"}]}\n"
+       "  and, for a verdict other than :sound, under :health:\n"
+       "    {:id \"<slug>\" :observation \"...\" :axis :design :evidence [\"path:line\"]\n"
+       "     :about [\"<the stratum's id>\"]}\n\n"
+       "A stratum names no members, and nothing names what it rests on: which modules\n"
+       "sit in a level is what its :interface and the claims :about it say. Its id\n"
+       "follows the element id rule below.\n\n"))
+
 (def ^:private amender-reading
   "How an amender reads, which the launch enforces (`stages/amender-tools`): told here, so its
    first shell read is not spent finding out."
@@ -3403,6 +3430,8 @@
           "is lost with it, so use these and nothing else:\n"
           (lens-block)))
    (coupled-edits :baseline baseline)
+   (when (and (strata-era? baseline) (some #(strata-finding? baseline %) findings))
+     strata-shape)
    (if gaps?
      (str "CHANGE ONLY WHAT WAS ASKED FOR. A claim nobody named must come back\n"
           "unchanged — not restated, not sharpened, not made more precise.\n\n")

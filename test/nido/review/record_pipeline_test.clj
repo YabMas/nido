@@ -608,6 +608,27 @@
                                                   :out-path "/x"})
                             "EDITS THAT TRAVEL TOGETHER")))))
 
+(deftest an-amender-answering-a-strata-finding-is-told-the-stratum-shape
+  (let [gap {:blocks :stratified :cites ["STRATA — none declared"] :claim "no strata are declared"
+             :needs "the levels this area is written in"}
+        p   (record/amend-prompt {:baseline (assoc a-baseline :strata []) :findings [gap]
+                                  :out-path "/x"})]
+    (is (str/includes? p "STRATA, AS THE LEDGER TAKES THEM")
+        "an amender adding the first stratum has no example in the record, and otherwise reads nido's source for one")
+    (is (str/includes? p ":readings [{:lens :stratified/level :verdict :sound")
+        "the level reading is owed on every stratum, so its fields are stated, not left to be guessed")
+    (is (str/includes? p "A stratum names no members")
+        "the membership field an amender goes looking for does not exist, and saying so ends the search"))
+  (testing "a finding about a listed stratum concerns strata too"
+    (is (str/includes? (record/amend-prompt {:baseline (assoc a-baseline :strata ["core"])
+                                             :findings [(assoc a-finding :claim-id "core")]
+                                             :out-path "/x"})
+                       "STRATA, AS THE LEDGER TAKES THEM")))
+  (testing "a round that found nothing about strata is not handed their shape"
+    (is (not (str/includes? (record/amend-prompt {:baseline (assoc a-baseline :strata [])
+                                                  :findings [a-finding] :out-path "/x"})
+                            "STRATA, AS THE LEDGER TAKES THEM")))))
+
 (deftest a-corrected-record-is-appended-and-the-loop-continues
   (let [corrected (assoc-in a-baseline [:load-bearing 0 :property]
                             "the invoice renderer sums independently of the aggregate")
