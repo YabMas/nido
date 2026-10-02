@@ -3555,10 +3555,13 @@
 
 (defn- banking
   "What the report says about whether a round's confirmations can settle anything: how many subjects
-   were put to the judge, and — when nothing it confirmed can settle — why not. `reading` is the one
-   taken as the judge launched, `record` what the round returned."
-  [subject settled reading record]
-  (cond-> {:checks (count (apply dissoc (settled/subjects subject) (keys settled)))}
+   the judge owed a ruling on, and — when nothing it confirmed can settle — why not. `asked` is the
+   set its prompt listed (`owed-rulings`, `decision-asked`), never every unsettled subject: the
+   report reads `:checks` against what the judge ruled on, so counting a subject it was never asked
+   about shows a gap no judge left. `reading` is the one taken as the judge launched, `record` what
+   the round returned."
+  [asked reading record]
+  (cond-> {:checks (count asked)}
     (nil? (:code-identity reading))
     (assoc :unbanked "no identity could be read for this tree, so nothing this round confirms can settle")
 
@@ -3687,6 +3690,7 @@
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) subject)
         {:keys [standing settled prior]} (judge-inputs project ws-id :baseline subject reading subject run-id
                                                        (get-in ctx [:carry :stale]))
+        asked   (when subject (owed-rulings subject settled))
         record (-> (baseline-review!
                     {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
                      :baseline subject
@@ -3701,7 +3705,7 @@
                    (with-readings report/review-holds?
                                   {:standing standing :settled settled :prior prior
                                    :carried (carried-readings ctx subject)
-                                   :asked (when subject (owed-rulings subject settled))
+                                   :asked asked
                                    :unread-amendment? (unread-amendment? ctx)}))
         ;; Read before this round's record is appended, and this round added by hand, so it is
         ;; counted exactly once whether or not the best-effort append lands.
@@ -3712,7 +3716,7 @@
         ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
                           (update :carry dissoc :stale))
                       (when (:seq subject) {:judged-seq (:seq subject)})
-                      (when subject (banking subject settled reading record)))]
+                      (when subject (banking asked reading record)))]
     (let [answer (append! cwd record)]
       (with-appended
        (cond
@@ -4393,6 +4397,7 @@
         {:keys [standing settled prior]}
         (judge-inputs project ws-id :design design reading (when design (effective-design cwd design)) run-id
                       (get-in ctx [:carry :stale]))
+        asked   (when design (decision-asked design settled))
         record (-> (design-decision!
                     {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
                      :design design :settled settled :prior prior :listing listing
@@ -4404,7 +4409,7 @@
                    (with-readings report/proceeds?
                                   {:standing standing :settled settled :prior prior
                                    :carried (carried-readings ctx design)
-                                   :asked (when design (decision-asked design settled))
+                                   :asked asked
                                    :unread-amendment? (unread-amendment? ctx)}))
         ;; As the baseline round counts it, over this workstream's decisions and this one.
         running (when-not (:outcome record)
@@ -4413,7 +4418,7 @@
         ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
                           (update :carry dissoc :stale))
                       (when (:seq design) {:judged-seq (:seq design)})
-                      (when design (banking design settled reading record)))
+                      (when design (banking asked reading record)))
         traj   (trajectory (:history ctx))
         final! (fn [c] (with-appended c (append! cwd (cond-> record (seq traj) (assoc :trajectory traj)))))]
     (cond

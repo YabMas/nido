@@ -1163,15 +1163,17 @@
     (is (= {"c1" {:ws-id "ws-1" :seq 2}} (:settled out)) "and the report is told what was not asked, and where")))
 
 (defn- judged-with
-  "The judge stage's ctx over `a-baseline` when its judge returns `review`, starting from `c`."
-  [review c]
+  "The judge stage's ctx over `baseline` (`a-baseline` unless named) when its judge returns
+   `review`, starting from `c`."
+  ([review c] (judged-with review c a-baseline))
+  ([review c baseline]
   (with-redefs [record/baseline-review! (fn [_] review)
                 record/append! (fn [_ _] nil)
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
-                ws/latest-entry (fn [_ _ _] a-baseline)
+                ws/latest-entry (fn [_ _ _] baseline)
                 settled/code-identity (fn [_] "tree-a")
                 settled/ledgers (fn [_ _ _] [(assoc settling-ledger :ws-id "ws-1")])]
-    (run record/judge-stage c)))
+    (run record/judge-stage c))))
 
 (deftest a-sufficient-verdict-over-unruled-checks-is-asked-again-then-refused
   ;; A sufficient verdict ended the run while checks had no ruling, and nothing recorded them. Asked
@@ -1190,6 +1192,14 @@
   (let [out (judged-with {:format :baseline-review :verdict :sufficient :reason "ok"} (ctx))]
     (is (= 4 (:checks out)) "the subjects left once c1 was settled")
     (is (:unbanked out) "a review appended with no identity settles nothing, and says why")))
+
+(deftest the-checks-count-only-what-the-judge-was-asked-to-rule-on
+  ;; A bare kind is shown to the judge for what the claims are about and is never owed a ruling.
+  ;; Counted among the checks, every round reads as if the judge left it unruled.
+  (let [out (judged-with {:format :baseline-review :verdict :sufficient :reason "ok"} (ctx)
+                        (assoc a-baseline :model {:elements [{:id "order" :sort :kind}] :claims []}))]
+    (is (= 4 (:checks out))
+        "the bare kind is not a check, so the count still matches the ids the prompt listed")))
 
 (deftest nothing-is-settled-at-a-tree-no-review-read
   (let [[seen _] (judged-at "tree-b")]
