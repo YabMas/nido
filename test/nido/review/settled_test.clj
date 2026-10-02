@@ -481,10 +481,92 @@
       (let [l (ledger :baselines [(baseline 1 c1)] :reviews [(found 2 "old") (found 4 "older")])]
         (is (= {"c1" {:ws-id "ws-1" :seq 4 :restated? false
                       :finding {:claim-id "c1" :cites ["x"] :claim "a second path"}}}
-               (settled/prior-findings [l] (baseline 5 c1) "now")))
-        (is (true? (get-in (settled/prior-findings [l] (baseline 5 (assoc c1 :property "reworded")) "now")
+               (settled/prior-findings [l] :baseline (baseline 5 c1) "now")))
+        (is (true? (get-in (settled/prior-findings [l] :baseline (baseline 5 (assoc c1 :property "reworded")) "now")
                            ["c1" :restated?]))
             "restated, so the judge knows a confirmation is not a pure reversal")))
     (testing "this run's own findings reached its amender already, and are left out"
       (let [l (ledger :baselines [(baseline 1 c1)] :reviews [(found 2 "now")])]
-        (is (= {} (settled/prior-findings [l] (baseline 5 c1) "now")))))))
+        (is (= {} (settled/prior-findings [l] :baseline (baseline 5 c1) "now")))))))
+
+(defn- design
+  [seq-n breaks & claims]
+  {:format :design :seq seq-n :shape "the design's own shape"
+   :baseline {:seq 1 :relation :revisit :breaks breaks}
+   :model {:claims (vec claims) :elements [{:id "m1" :sort :module :hides "summing order"}]}})
+
+(defn- decision
+  [seq-n design-seq & {:as over}]
+  (merge {:format :design-decision :seq seq-n :design-seq design-seq :recommend :proceed
+          :reason "ok" :code-identity "tree-a"}
+         (when (:confirmed over) {:checked-at (read-at (:confirmed over))})
+         over))
+
+(deftest a-baseline-finding-is-no-prior-finding-against-its-designs-subject-of-the-same-id
+  ;; A design's `shape` inherited a refutation of its baseline's `shape`, and confirming the
+  ;; design's own recorded a false :overturns of a finding about a different record.
+  (let [l (ledger :baselines [(baseline 1 c1)]
+                  :reviews [(review 2 1 :verdict :falsified :run-id "old"
+                                    :findings [{:claim-id "shape" :cites ["x"] :claim "wrong order"}])]
+                  :designs [(design 3 [])])]
+    (is (= {} (settled/prior-findings [l] :design (design 4 []) "now"))
+        "a baseline review's finding is about the baseline, whatever id it shares")
+    (is (contains? (settled/prior-findings [l] :baseline (baseline 5 c1) "now") "shape")
+        "and it is still the last word against the baseline's own")))
+
+(deftest a-finding-a-later-confirmation-answered-is-no-longer-prior
+  ;; An answered finding shown again is a reversal the judge is asked to justify twice, and a
+  ;; confirmation of it records an :overturns of something already overturned.
+  (let [found (review 2 1 :verdict :falsified :run-id "old"
+                      :findings [{:claim-id "c1" :cites ["x"] :claim "a second path"}])]
+    (is (= {} (settled/prior-findings
+               [(ledger :baselines [(baseline 1 c1)]
+                        :reviews [found (review 3 1 :confirmed ["c1"] :run-id "later")])]
+               :baseline (baseline 5 c1) "now")))
+    (testing "a confirmation from a retracted record answers nothing"
+      (is (contains? (settled/prior-findings
+                      [(ledger :baselines [(baseline 1 c1) (baseline 4 c1)]
+                               :reviews [found (review 6 4 :confirmed ["c1"] :run-id "later")]
+                               :retractions [{:seq 7 :retracts {:seq 4}}])]
+                      :baseline (baseline 8 c1) "now")
+                     "c1")))
+    (testing "a confirmation that says nowhere it read answers nothing"
+      (is (contains? (settled/prior-findings
+                      [(ledger :baselines [(baseline 1 c1)]
+                               :reviews [found (review 3 1 :confirmed ["c1"] :checked-at {})])]
+                      :baseline (baseline 5 c1) "now")
+                     "c1")))
+    (testing "a finding after the confirmation is prior again"
+      (is (= 4 (get-in (settled/prior-findings
+                        [(ledger :baselines [(baseline 1 c1)]
+                                 :reviews [found (review 3 1 :confirmed ["c1"])
+                                           (review 4 1 :verdict :falsified :run-id "old"
+                                                   :findings [{:claim-id "c1" :cites ["y"] :claim "again"}])])]
+                        :baseline (baseline 5 c1) "now")
+                       ["c1" :seq]))))))
+
+(deftest a-relation-honest-finding-is-restated-when-the-ids-place-under-breaks-moves
+  ;; A :breaks-membership finding fixed by an amendment was shown as `reads the same now`, because
+  ;; only the element was compared, and the judge re-reported it as instructed.
+  (let [m1        {:id "m1" :sort :module :hides "summing order"}
+        overclaim {:claim-id "m1" :check :relation-honest :cites ["Declared :breaks includes m1"]
+                   :claim "m1 stands, so listing it under :breaks claims too much"}
+        found     (decision 4 3 :recommend :amend :run-id "old" :findings [overclaim])
+        l         (fn [& ds] (ledger :designs [(design 3 ["m1"])] :decisions (into [found] ds)))]
+    (is (true? (get-in (settled/prior-findings [(l)] :design (design 5 []) "now") ["m1" :restated?]))
+        "the element reads the same, but :breaks no longer lists the id the finding was about")
+    (is (false? (get-in (settled/prior-findings [(l)] :design (design 5 ["m1"]) "now") ["m1" :restated?])))
+    (is (true? (get-in (settled/prior-findings [(l)] :design (assoc-in (design 5 ["m1"]) [:baseline :relation] :extends) "now")
+                       ["m1" :restated?]))
+        "the relation the finding read beside the id is part of what it cited")
+    (testing "a later ruling the record's :breaks agrees with answers it"
+      (is (= {} (settled/prior-findings
+                 [(ledger :designs [(design 3 ["m1"]) (design 5 [])]
+                          :decisions [found (decision 6 5 :relation-rulings [{:id "m1" :ruling :stands}])])]
+                 :design (design 7 []) "now"))))
+    (testing "a ruling :breaks contradicts, or a confirmation of the element, does not"
+      (is (contains? (settled/prior-findings
+                      [(l (decision 6 3 :relation-rulings [{:id "m1" :ruling :stands}]
+                                    :confirmed ["m1"]))]
+                      :design (design 7 ["m1"]) "now")
+                     "m1")))))

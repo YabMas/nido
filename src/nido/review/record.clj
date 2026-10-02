@@ -211,13 +211,14 @@
    A judge reading a record cold has reversed its own held/broken on text nobody touched, and the
    reversal was recorded as if nothing had been said before. Shown, a confirmation is judged
    against the finding it overturns. Shown as a finding and not as a verdict: it may be the one
-   that was wrong, so the judge is told to look, not to defer. Whether the subject was restated
-   since is said, and how it was is not — the judge still reads the record as it stands
+   that was wrong, so the judge is told to look, not to defer. Whether what it found against was
+   restated since — the subject, and for a relation-honest finding the id's place under :breaks —
+   is said, and how it was is not — the judge still reads the record as it stands
    (`judged-alone`)."
   [prior]
   (when (seq prior)
     (str "\nFOUND AGAINST BEFORE — an earlier run's judge found against these subjects, and\n"
-         "they have not been confirmed twice since. That finding is not an authority and may\n"
+         "no judge has confirmed them past it since. That finding is not an authority and may\n"
          "have been wrong. But confirming one of them now overturns it, so confirm one only\n"
          "when what you read answers the finding, and cite what answers it in that id's\n"
          "evidence. If the finding still holds, report it again under the same id.\n\n"
@@ -225,7 +226,7 @@
           "\n\n"
           (for [[id {n :seq :keys [finding restated?]}] (sort-by key prior)]
             (str "- [" id "] found at entry " n
-                 (if restated? " — the subject has been restated since" " — the subject reads the same now")
+                 (if restated? " — what it found against has been restated since" " — what it found against reads the same now")
                  "\n  it found: " (:claim finding)
                  (when (seq (:cites finding)) (str "\n  citing: " (str/join ", " (:cites finding))))
                  (when (seq (:evidence finding)) (str "\n  evidence: " (str/join ", " (:evidence finding)))))))
@@ -3562,18 +3563,19 @@
     (-> ctx (assoc :control :next-round) (assoc-in [:carry :reasked-unruled] true))))
 
 (defn- judge-inputs
-  "What a judge stage reads off the ledgers for `subject` at `reading`, before it launches a judge:
+  "What a judge stage reads off the ledgers for `subject`, a `kind` of record, at `reading`, before
+   it launches a judge:
    :standing, every subject whose latest judgement at the key confirmed it; :settled, the part of
    it the judge is not asked — those confirmed twice running (`settled/single-readings`), less the
-   ids the last amender called `stale`; and :prior, what earlier runs found against its subjects.
-   `effective` as `settled/settled` takes it."
-  [project ws-id subject reading effective run-id stale]
+   ids the last amender called `stale`; and :prior, what earlier runs found against its subjects
+   and nothing has answered since. `effective` as `settled/settled` takes it."
+  [project ws-id kind subject reading effective run-id stale]
   (let [ls       (when (and project subject) (settled/ledgers project ws-id subject))
         standing (if (and project subject) (settled/settled ls subject reading effective) {})]
     {:standing standing
      :settled  (apply dissoc standing (concat (settled/single-readings ls subject reading effective)
                                               stale))
-     :prior    (when subject (settled/prior-findings ls subject run-id))}))
+     :prior    (when subject (settled/prior-findings ls kind subject run-id))}))
 
 (defn- carried-readings
   "The ids an earlier quiet round of this run confirmed of `subject` — the same record, since a
@@ -3641,7 +3643,7 @@
         [project ws-id] (stages/project+ws-from-cwd cwd)
         subject (or target (when project (ws/latest-entry project ws-id :baseline)))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) subject)
-        {:keys [standing settled prior]} (judge-inputs project ws-id subject reading subject run-id
+        {:keys [standing settled prior]} (judge-inputs project ws-id :baseline subject reading subject run-id
                                                        (get-in ctx [:carry :stale]))
         record (-> (baseline-review!
                     {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
@@ -4342,7 +4344,7 @@
         design  (when project (ws/latest-entry project ws-id :design))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) design)
         {:keys [standing settled prior]}
-        (judge-inputs project ws-id design reading (when design (effective-design cwd design)) run-id
+        (judge-inputs project ws-id :design design reading (when design (effective-design cwd design)) run-id
                       (get-in ctx [:carry :stale]))
         record (-> (design-decision!
                     {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer

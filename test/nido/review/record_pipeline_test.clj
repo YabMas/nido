@@ -1702,7 +1702,7 @@
     (let [p (record/baseline-prompt {:baseline a-baseline :prior (:prior @seen)})]
       (is (str/includes? p "FOUND AGAINST BEFORE"))
       (is (str/includes? p "the invoice no longer sums on its own"))
-      (is (str/includes? p "reads the same now") "an unchanged subject makes a confirmation a pure reversal"))))
+      (is (str/includes? p "what it found against reads the same now") "an unchanged subject makes a confirmation a pure reversal"))))
 
 ;; ── Known staleness: a route out of settlement ──────────────────────────────
 

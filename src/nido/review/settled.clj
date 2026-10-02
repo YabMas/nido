@@ -293,16 +293,17 @@
 
 (defn- judged
   "Every judgement on `ledgers` with the record it judged — nil-record judgements dropped — as
-   `{:ws-id :judgement :record :subjects :retracted?}`."
+   `{:ws-id :judgement :kind :record :subjects :retracted?}`, :kind :baseline for a review and
+   :design for a decision."
   [ledgers]
   (for [{:keys [ws-id reviews decisions baselines designs retractions]} ledgers
         :let [retracted (into #{} (map #(get-in % [:retracts :seq])) retractions)
               records   (into {} (map (juxt :seq identity)) (concat baselines designs))]
-        [j cited] (concat (map (juxt identity :baseline-seq) reviews)
-                          (map (juxt identity :design-seq) decisions))
+        [j kind cited] (concat (map (juxt identity (constantly :baseline) :baseline-seq) reviews)
+                               (map (juxt identity (constantly :design) :design-seq) decisions))
         :let [r (get records cited)]
         :when r]
-    {:ws-id ws-id :judgement j :record r :subjects (subjects r)
+    {:ws-id ws-id :judgement j :kind kind :record r :subjects (subjects r)
      :retracted? (contains? retracted cited)}))
 
 (defn- names?
@@ -409,24 +410,72 @@
   [judgement]
   (into #{} (filter #(checked? judgement %)) (:confirmed judgement)))
 
-(defn ^{:malli/schema [:=> [:cat [:maybe [:vector :map]] :map [:maybe :string]] :map]}
+(defn- relation-of
+  "What a relation-honest finding about `id` read of `record` besides the subject itself: the
+   relation the record declares to its baseline, and whether its :breaks lists `id` — bracketed or
+   not, as a judge or an amender may have written it."
+  [record id]
+  [(get-in record [:baseline :relation])
+   (boolean (some #(= id (-> (str %) str/trim (str/replace #"^\[|\]$" "")))
+                  (get-in record [:baseline :breaks])))])
+
+(defn- relation? [finding] (= :relation-honest (:check finding)))
+
+(defn- answers?
+  "Whether `judgement`, over `record`, answers `finding` against `id`. A relation-honest finding is
+   about where :breaks puts the id, which no confirmation of the subject speaks to; it is answered
+   by a ruling on the id that the judged record's :breaks agrees with. Any other finding is answered
+   by a confirmation of the id that says where it read it."
+  [judgement record finding id]
+  (if (relation? finding)
+    (let [listed? (second (relation-of record id))]
+      (boolean (some #(and (= id (str (:id %)))
+                           (#{:breaks :stands} (keyword (name (:ruling %))))
+                           (= listed? (= :breaks (keyword (name (:ruling %))))))
+                     (:relation-rulings judgement))))
+    (checked? judgement id)))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe [:vector :map]] [:enum :baseline :design] :map [:maybe :string]] :map]}
   prior-findings
-  "For each subject of `record`, the newest finding against its id by a judgement of another run
-   than `run-id`, on any of `ledgers`, at any content or key — as `{id {:ws-id :seq :finding
-   :restated?}}`, :restated? true when the record that judgement read carried the subject
-   differently.
+  "For each subject of `record`, a `kind` (:baseline or :design) of record, the newest finding
+   against its id by a judgement of another run than `run-id` over a record of the same kind, on
+   any of `ledgers`, at any content or key, that no later judgement of that kind has answered — as
+   `{id {:ws-id :seq :finding :restated?}}`, :restated? true when the record that judgement read
+   differed in what the finding is about.
 
    What a confirmation now would overturn. At any key, because a finding at another tree or text is
    still the last word said against the id, and whether the text moved since is exactly what a
    reversal has to answer; from other runs only, because a run's own findings already reached its
-   amender and came back as its disputes."
-  [ledgers record run-id]
-  (let [now   (subjects record)
-        found (for [{j :judgement :as m} (chronological (judged ledgers))
-                    :when (not (and run-id (= (str run-id) (:run-id j))))
-                    f (:findings j)
-                    :let [id (some-> (:claim-id f) str not-empty)]
-                    :when (contains? now id)]
-                [id {:ws-id (:ws-id m) :seq (:seq j) :finding f
-                     :restated? (not= (get now id) (get (:subjects m) id))}])]
-    (into {} found)))
+   amender and came back as its disputes. Its own confirmations still answer, from any run.
+
+   Keyed on the kind as well as the id because a baseline and its design share ids — a design's
+   `shape` is not its baseline's, and a refutation of one confirmed the other into a false
+   :overturns. Answered (`answers?`) because a finding a later judge confirmed past is not the last
+   word any more; shown, it is a reversal the judge is asked to justify a second time. And a
+   relation-honest finding is about the id's place under the record's :breaks and its relation as
+   much as about the subject, so a record that moved either has restated what it found against."
+  [ledgers kind record run-id]
+  (let [now (subjects record)]
+    (reduce (fn [prior {j :judgement :keys [ws-id retracted?] :as m}]
+              (if (not= kind (:kind m))
+                prior
+                (let [answered (when-not retracted?
+                                 (keep (fn [[id {f :finding}]]
+                                         (when (answers? j (:record m) f id) id))
+                                       prior))
+                      prior    (apply dissoc prior answered)]
+                  (if (and run-id (= (str run-id) (:run-id j)))
+                    prior
+                    (reduce (fn [p f]
+                              (let [id (some-> (:claim-id f) str not-empty)]
+                                (if (contains? now id)
+                                  (assoc p id {:ws-id ws-id :seq (:seq j) :finding f
+                                               :restated? (or (not= (get now id) (get (:subjects m) id))
+                                                              (and (relation? f)
+                                                                   (not= (relation-of record id)
+                                                                         (relation-of (:record m) id))))})
+                                  p)))
+                            prior
+                            (:findings j))))))
+            {}
+            (chronological (judged ledgers)))))

@@ -109,9 +109,10 @@
      Pure."
     {:signature [:=> [:catn [:judgement :map]] [:set :string]]})
   (Operation prior-findings
-    "For each subject of a record, the newest finding against its id by a judgement of another run,
-     at any content or key, with the judgement that made it and whether the subject was restated
-     since — what confirming it now would overturn. Pure."
-    {:signature [:=> [:catn [:ledgers [:maybe [:vector :map]]] [:record :map]
-                  [:run-id [:maybe :string]]] :map]
+    "For each subject of a record of one kind, baseline or design, the newest finding against its
+     id by a judgement of another run over a record of the same kind, at any content or key, that
+     no later judgement of that kind has answered — with the judgement that made it and whether
+     what it found against was restated since — what confirming it now would overturn. Pure."
+    {:signature [:=> [:catn [:ledgers [:maybe [:vector :map]]] [:kind [:enum :baseline :design]]
+                  [:record :map] [:run-id [:maybe :string]]] :map]
      :delegates [subjects]}))
