@@ -15,6 +15,22 @@
     ;; lock file is released (deletable) after the body returns
     (is (= :again (shared/with-lock lock (fn [] :again))))))
 
+(deftest with-lock-queues-threads-of-one-process
+  ;; Two Runs starting shared sessions in the daemon at the same instant: an OS
+  ;; file lock is per-JVM, so without an in-process monitor the second thread
+  ;; throws OverlappingFileLockException instead of waiting its turn.
+  (let [lock    (str (fs/path (fs/create-temp-dir) "shared.lock"))
+        inside  (atom 0)
+        overlap (atom false)
+        body    (fn []
+                  (when (> (swap! inside inc) 1) (reset! overlap true))
+                  (Thread/sleep 50)
+                  (swap! inside dec)
+                  :done)
+        futs    (doall (repeatedly 4 #(future (shared/with-lock lock body))))]
+    (is (= [:done :done :done :done] (mapv deref futs)))
+    (is (false? @overlap) "bodies must not run concurrently")))
+
 (deftest resolve-shared-port-is-deterministic-per-project
   (is (= (shared/resolve-shared-port "brian")
          (shared/resolve-shared-port "brian")))

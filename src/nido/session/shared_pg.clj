@@ -12,6 +12,7 @@
    [babashka.process :refer [shell]]
    [clojure.string :as str]
    [nido.platform.core :as core]
+   [nido.platform.io :as io]
    [nido.platform.process :as proc]
    [nido.session.services.postgresql :as pg]
    [nido.session.state :as state]))
@@ -31,21 +32,16 @@
 
 (defn ^{:malli/schema [:=> [:cat :Path :any] :any]}
   with-lock
-  "Run (f) while holding an exclusive OS file lock on lock-path. Creates the
-   parent dir and lock file as needed. Blocks until the lock is acquired.
+  "Run (f) holding the exclusive lock on lock-path, blocking until it is free.
+   Returns f's value.
 
-   Uses RandomAccessFile + FileChannel.lock() — the JVM releases the OS lock
-   when the channel is closed, so no explicit FileLock.release() call is needed
-   (and avoids the FileLock class not being in Babashka's class allowlist)."
+   Callers are other processes (bb tasks) AND other threads of the daemon, which
+   starts every Run's session in-process — two Runs firing on one poll reach
+   here together. `io/with-file-lock` queues both; a bare FileChannel lock
+   queues only the first case and throws OverlappingFileLockException at the
+   second thread."
   [lock-path f]
-  (fs/create-dirs (fs/parent lock-path))
-  (let [raf (java.io.RandomAccessFile. lock-path "rw")
-        ch  (.getChannel raf)]
-    (try
-      (.lock ch)  ;; blocks until exclusive lock is acquired
-      (try (f)
-           (finally (.close ch)))  ;; closing channel releases the OS lock
-      (finally (.close raf)))))
+  (io/with-file-lock (str lock-path) f))
 
 ;; ---------------------------------------------------------------------------
 ;; Lifecycle helpers
