@@ -459,6 +459,25 @@
               (distinct))
         xs))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :string]] :boolean]}
+  wrote-tool-calls?
+  "Whether an answer from a launch that holds no tools has a tool call written
+   out as text anywhere OUTSIDE its fenced json block.
+
+   Such an answer is degenerate whatever its json says. The call ran nothing, so
+   whatever follows it — a ruling that a higher layer repairs the defect, a
+   standing item quoting `12: [brian.chatbot-creation.sessions ...]` — rests on
+   output the model wrote for itself, and one warden reported exactly that
+   invented grep as fact. The json block itself is not searched: a `because`
+   may quote the markup when the code under review is about it."
+  [text]
+  (boolean
+   (when (string? text)
+     (let [outside (if-let [[whole] (last (re-seq fenced-json-re text))]
+                     (str/replace text whole "")
+                     text)]
+       (re-find #"<invoke\b|<function_result" outside)))))
+
 (defn ^{:malli/schema [:function
                        [:=> [:cat :string] :map]
                        [:=> [:cat :string [:maybe :map]] :map]]}
@@ -481,14 +500,21 @@
    text the prompt rendered. Re-reading the ledger here would let the two
    diverge, and a quote failing to match would then mean either a restatement or
    an amendment landing mid-run. Omitted, every appeal to an invariant is
-   refused — which is the answer for a workstream that records none."
+   refused — which is the answer for a workstream that records none.
+
+   An answer that `wrote-tool-calls?` is indeterminate before its json is read."
   ([text] (parse-warden-decision text nil))
   ([text design]
    (let [invariants (design-invariants design)
          block      (when (string? text) (last (re-seq fenced-json-re text)))]
-     (if-let [body (second block)]
+     (cond
+       (wrote-tool-calls? text)
+       {:decision :indeterminate
+        :reason   "the answer wrote tool calls as text — they ran nothing, so its rulings may rest on output it invented"}
+
+       (second block)
        (try
-         (let [m (json/parse-string body true)
+         (let [m (json/parse-string (second block) true)
                d (keyword (:decision m))]
            (if (contains? #{:continue :stop :escalate} d)
              {:decision d
@@ -500,6 +526,8 @@
              {:decision :indeterminate :reason (str "unknown decision: " (:decision m))}))
          (catch Exception e
            {:decision :indeterminate :reason (str "unparseable: " (ex-message e))}))
+
+       :else
        {:decision :indeterminate :reason "no json decision block"}))))
 
 (defn ^{:malli/schema [:=> [:cat :Path] :any]}
@@ -2951,6 +2979,51 @@
     :else
     {:cause :unusable-answer :reason (:reason decision)}))
 
+(defn- ask-the-warden-again?
+  "Whether a warden answer the round cannot use is worth one more launch.
+
+   The failures this answers yes to are the ones a second asking can fix: the
+   model wrote tool calls it does not hold (`malformed_tool_use_exhausted`, or an
+   answer `wrote-tool-calls?`), the API turned it away (`:launch-failed` — a 529
+   is the common one), or it answered in a shape the parser refuses. Each cost a
+   whole round's reviewer fan-out, and a warden retry costs seconds.
+
+   Never on `:budget-spent`: that warden already had the whole wall clock, and a
+   second one would spend it again on the same findings. Never once a ruling
+   parsed, either — a launch that errored after writing rulings has given the
+   round something, and asking again could only replace it."
+  [{:keys [terminal-reason]} decision {:keys [cause]}]
+  (and (not= :budget-spent cause)
+       (empty? (:rulings decision))
+       (or (= "malformed_tool_use_exhausted" terminal-reason)
+           (contains? #{:launch-failed :unusable-answer} cause))))
+
+(defn- restated-warden-prompt
+  "`prompt` with the output contract put first, naming why the last answer could
+   not be used. The contract is already in `prompt`; it goes in front because
+   the answer that failed had it too, and ignored it. The reason is cut to a
+   line: on `:launch-failed` it is the agent's whole result text, which for a
+   degenerate answer is the degenerate answer."
+  [prompt {:keys [reason]}]
+  (str "YOUR LAST ANSWER TO THIS COULD NOT BE USED"
+       (when-not (str/blank? (str reason))
+         (let [r (str/trim (str reason))]
+           (str ": " (subs r 0 (min (count r) 300)))))
+       ".\n"
+       "You hold NO tools. Everything you can rule from is inlined below; a tool\n"
+       "call written as text runs nothing and costs the round again. Where a\n"
+       "finding turns on code that is not inlined, rule on what is, and put the\n"
+       "fact you could not settle in `standing` as unverifiable.\n"
+       "Reply with EXACTLY one fenced ```json block holding `decision`, and\n"
+       "nothing else.\n\n"
+       prompt))
+
+(def ^:private kept-answer-chars
+  "How much of an unusable warden answer the report keeps. Enough to read the
+   rulings a malformed answer did contain, short of the 226k a degenerate one
+   wrote."
+  4000)
+
 (def ^:private park-persists-for
   "How many rounds an unresolved park may survive before the run stops for it.
 
@@ -3097,16 +3170,39 @@
                  :inherited-standing (get-in ctx [:carry :inherited-standing])
                  :fix-outcomes (fix-outcomes (:history ctx) (:carry ctx))
                  :answered (answered-by-layer ctx)})
-        {:keys [num-turns result-error? result-text] :as launch}
-        (agent/launch! {:run-id run-id :cwd cwd
-                        :first-message prompt :budget budget
-                        :tools ""
-                        :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})
-        decision (-> (parse-warden-decision result-text design)
-                     (update :rulings #(some->> % (attributed-before (:iter ctx)))))]
-    (if (or (zero? (or num-turns 0)) result-error?
-            (= :indeterminate (:decision decision)))
-      (assoc ctx :warden (merge decision (warden-failure launch decision))
+        run-dir (str (cstate/run-dir run-id))
+        ask (fn [message]
+              (let [{:keys [num-turns result-error? result-text] :as launch}
+                    ;; In the run dir, not the reviewed worktree. Started there,
+                    ;; claude hands the agent that directory's CLAUDE.md and its
+                    ;; git status — which in a jj workspace binds to the parent
+                    ;; repo, and two wardens reported the branch as sitting at
+                    ;; main. Nothing it rules from may come from anywhere but
+                    ;; this prompt.
+                    (agent/launch! {:run-id run-id :cwd run-dir
+                                    :first-message message :budget budget
+                                    :tools ""
+                                    :err-file (str (fs/path run-dir "agent.err.log"))})
+                    decision (-> (parse-warden-decision result-text design)
+                                 (update :rulings #(some->> % (attributed-before (:iter ctx)))))]
+                {:launch   launch
+                 :decision decision
+                 :failure  (when (or (zero? (or num-turns 0)) result-error?
+                                     (= :indeterminate (:decision decision)))
+                             (warden-failure launch decision))}))
+        first-ask (ask prompt)
+        relaunched (when-let [f (:failure first-ask)]
+                     (when (ask-the-warden-again? (:launch first-ask) (:decision first-ask) f)
+                       f))
+        {:keys [launch decision failure]} (if relaunched
+                                            (ask (restated-warden-prompt prompt relaunched))
+                                            first-ask)]
+    (if failure
+      (assoc ctx :warden (cond-> (merge decision failure)
+                           (not (str/blank? (str (:result-text launch))))
+                           (assoc :result-text (let [t (str (:result-text launch))]
+                                                 (subs t 0 (min (count t) kept-answer-chars))))
+                           relaunched (assoc :relaunched relaunched))
              :control :stop
              :status :warden-indeterminate)
       (let [{promoted :findings unplaceable :standing}
@@ -3146,7 +3242,7 @@
                                             park-persists-for))]
                          k))
             ctx' (assoc ctx
-                        :warden  decision
+                        :warden  (cond-> decision relaunched (assoc :relaunched relaunched))
                         :findings ruled
                         ;; Kept beside the findings they are now part of,
                         ;; because they are the one thing about the round that

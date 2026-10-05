@@ -220,6 +220,23 @@
           warden (some #(when (= "warden" (:phase %)) %) (:phases (first (:rounds r))))]
       (is (not (contains? warden :promoted))))))
 
+(deftest an-indeterminate-warden-phase-keeps-the-answer-it-could-not-use
+  ;; The parser's reason was all the phase kept, and one malformed answer held a
+  ;; full set of rulings that then survived only in agent.log.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :warden :at "t3"}
+            {:event :phase-finished :iter 1 :phase :warden :at "t4"
+             :ctx {:warden {:decision :indeterminate :cause :unusable-answer
+                            :reason "no json decision block"
+                            :result-text "{\"findings\": [...]}"
+                            :relaunched {:cause :launch-failed :reason "529 Overloaded"}}
+                   :findings []}}])
+        warden (some #(when (= "warden" (:phase %)) %) (:phases (first (:rounds r))))]
+    (is (= "{\"findings\": [...]}" (:result-text warden)))
+    (is (= {:cause "launch-failed" :reason "529 Overloaded"} (:relaunched warden))
+        "a retried round says what the first asking failed on")))
+
 (deftest new-round-closes-the-previous-as-continued
   (let [r (drive
            [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}

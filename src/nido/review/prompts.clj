@@ -1963,6 +1963,8 @@
               (str/join "\n"))
          "\n"
          "These are CLAIMS about code a fixer edited, not a record of the tree.\n"
+         "A fixer is told not to commit — the engine commits after it — so an\n"
+         "account saying nothing is committed is expected, not a discrepancy.\n"
          "Two uses. When a finding below sits where an account says a repair did\n"
          "not reach, that is the same open work and it belongs to the layer whose\n"
          "files hold those lines — say so in `because`.\n"
@@ -2019,7 +2021,19 @@
    (if layered?
      "You are the only reader with a view across all of them.\n\n"
      "There are no layers: the branch was reviewed flat.\n\n")
-   "Return EXACTLY one fenced ```json block, nothing after it, matching:\n"
+   ;; Said in the text and not only known to the launch, because the model is
+   ;; never told its tool list is empty except by being refused. Wardens left to
+   ;; find out wrote Bash and Grep calls as text: one exhausted the CLI's retry
+   ;; and lost the round, two looped for fifteen minutes to the output cap, and
+   ;; one invented the grep output and filed it in `standing` as fact.
+   "YOU HOLD NO TOOLS. You cannot read a file, run a command or search the\n"
+   "code: everything you can rule from is inlined in this prompt, and nothing\n"
+   "else is. A tool call written as text runs nothing — it costs the round, or\n"
+   "you end up ruling on output you wrote yourself. Where a ruling turns on\n"
+   "code that is not inlined here, rule on what is, say so in `because`, and put\n"
+   "the fact you could not settle in `standing` as unverifiable.\n\n"
+   "Return EXACTLY one fenced ```json block and nothing else — no tool calls,\n"
+   "no prose after it — matching:\n"
    "{\"decision\": \"continue|stop|escalate\",\n"
    " \"reason\": \"...\",\n"
    " \"standing\": [{\"what\": \"<one open item, in a sentence>\",\n"
@@ -2092,7 +2106,10 @@
    "defect a round's history shows and no reviewer raised, anything about the\n"
    "branch you would want a person to see before it lands. `why_no_finding` is\n"
    "why this round is not acting on it — outside the change, no layer owns it,\n"
-   "not a fixer's work.\n"
+   "not a fixer's work, or unverifiable from what is inlined here.\n"
+   "Name in `what` the source the item rests on: a finding id, or a fixer's\n"
+   "account by its layer and round. You hold nothing else, so an item with no\n"
+   "source here is one you have no way to know.\n"
    "Put it HERE, not in your `reason`. This list is carried onto the\n"
    "workstream's ledger, which outlives this run's directory; the reason is not,\n"
    "and one run's ten items reached nobody because they were prose.\n"

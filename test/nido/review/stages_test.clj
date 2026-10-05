@@ -323,6 +323,84 @@
         (is (some #{"--strict-mcp-config"} cmd) "no MCP server discovered from cwd")
         (is (not (some #{"--mcp-config"} cmd)) "and none granted")))))
 
+(def ^:private stop-answer
+  "```json\n{\"decision\":\"stop\",\"reason\":\"r\"}\n```")
+
+(defn- warden-launches
+  "Run the warden stage against `answers`, one launch result per launch, and
+   return [ctx launch-opts]."
+  [answers]
+  (let [launches (atom [])
+        queue    (atom answers)]
+    (with-redefs [agent/launch! (fn [o] (swap! launches conj o)
+                                  (let [a (first @queue)] (swap! queue rest) a))
+                  stages/discover-design-record (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] nil)]
+      [((:run stages/warden-stage)
+        {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings [{:id "aa11" :title "x"}]})
+       @launches])))
+
+(deftest a-tool-call-written-as-text-makes-the-answer-unusable
+  ;; Observed: a warden wrote `<invoke name="Grep">`, invented its output, and
+  ;; filed the invention in `standing` as fact. The json after it parsed fine,
+  ;; which is exactly why parsing it is the wrong thing to do.
+  (let [txt (str "<invoke name=\"Grep\">course_tab.clj</invoke>\n"
+                 "<function_results>12: [brian.x :as y]</function_results>\n"
+                 stop-answer)]
+    (is (stages/wrote-tool-calls? txt))
+    (is (= :indeterminate (:decision (stages/parse-warden-decision txt)))
+        "rulings that may rest on invented output are not rulings"))
+  (is (not (stages/wrote-tool-calls?
+            "```json\n{\"decision\":\"stop\",\"reason\":\"quotes `<invoke` from the diff\"}\n```"))
+      "a ruling may quote the markup when the code under review is about it")
+  (is (not (stages/wrote-tool-calls? nil))))
+
+(deftest a-warden-the-round-cannot-use-is-asked-once-more
+  ;; Six runs lost a round or the whole run to one malformed warden answer,
+  ;; after a reviewer fan-out costing minutes; the retry costs seconds.
+  (testing "an unusable answer is retried with the contract restated, and the retry rules"
+    (let [[ctx launches] (warden-launches
+                          [{:num-turns 1 :result-error? false :result-text "{\"no\": \"fence\"}"}
+                           {:num-turns 1 :result-error? false
+                            :result-text "```json\n{\"decision\":\"continue\",\"reason\":\"r\",\"findings\":[{\"id\":\"aa11\",\"disposition\":\"fix\"}]}\n```"}])]
+      (is (= 2 (count launches)))
+      (is (str/starts-with? (:first-message (second launches))
+                            "YOUR LAST ANSWER TO THIS COULD NOT BE USED: no json decision block")
+          "the second asking leads with why the first could not be used")
+      (is (= :continue (:control ctx)) "the round goes on with the retry's rulings")
+      (is (= :unusable-answer (get-in ctx [:warden :relaunched :cause]))
+          "and the report can still say the first answer failed")))
+  (testing "malformed_tool_use_exhausted is retried; a second failure stops the run, keeping the answer"
+    (let [long-text (apply str "<invoke name=\"Bash\">sed</invoke>" (repeat 5000 "x"))
+          dead {:num-turns 2 :result-error? true :terminal-reason "malformed_tool_use_exhausted"
+                :result-text long-text}
+          [ctx launches] (warden-launches [dead dead])]
+      (is (= 2 (count launches)) "once, not until it works")
+      (is (= :warden-indeterminate (:status ctx)))
+      (is (<= (count (get-in ctx [:warden :result-text])) 4000)
+          "the answer is kept for a reader, cut short of a degenerate one's size")
+      (is (str/starts-with? (get-in ctx [:warden :result-text]) "<invoke"))))
+  (testing "a warden killed on its budget is not asked again"
+    (let [[ctx launches] (warden-launches [{:num-turns nil :result-error? false :timed-out? true}
+                                           {:num-turns 1 :result-error? false :result-text stop-answer}])]
+      (is (= 1 (count launches)) "it already had the whole wall clock")
+      (is (= :budget-spent (get-in ctx [:warden :cause]))))))
+
+(deftest the-warden-runs-outside-the-reviewed-worktree
+  ;; Started in the worktree, claude gave the warden that directory's git status
+  ;; — the PARENT repo's, in a jj workspace — and two wardens reported the branch
+  ;; as sitting at main.
+  (let [[_ [opts]] (warden-launches [{:num-turns 1 :result-error? false :result-text stop-answer}])]
+    (is (= (str (cstate/run-dir "r1")) (:cwd opts)))))
+
+(deftest the-warden-is-told-it-holds-no-tools
+  (let [[_ [opts]] (warden-launches [{:num-turns 1 :result-error? false :result-text stop-answer}])
+        p (:first-message opts)]
+    (is (str/includes? p "YOU HOLD NO TOOLS")
+        "a model is never told its tool list is empty except by being refused")
+    (is (str/includes? p "unverifiable")
+        "and it has a sanctioned move for a fact it cannot settle")))
+
 (deftest warden-stage-noop-is-indeterminate
   (with-redefs [agent/launch! (fn [_] {:num-turns 0 :result-error? false :result-text ""})
                 stages/discover-design-record (fn [_] nil)

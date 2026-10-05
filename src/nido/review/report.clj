@@ -660,6 +660,17 @@
                                 :reason (:reason a)
                                 :rulings (rulings (:findings ctx)))
                    (seq (:promoted ctx)) (assoc :promoted (vec (:promoted ctx)))
+                   ;; The answer itself, cut short, on a round that could not
+                   ;; use it: the reason says only what the parser objected to,
+                   ;; and a malformed answer can hold a whole set of rulings
+                   ;; that otherwise survive only in agent.log.
+                   (:result-text a) (assoc :result-text (:result-text a))
+                   ;; Why the first answer was refused, when this phase is the
+                   ;; second asking. Without it a retried round reads as one
+                   ;; launch, and the failure that cost the retry is nowhere.
+                   (:relaunched a) (assoc :relaunched
+                                          {:cause (some-> (:cause (:relaunched a)) name)
+                                           :reason (:reason (:relaunched a))})
                    ;; Per round, because it is a judgement that round made and a
                    ;; later one may not repeat: only the terminal round's list is
                    ;; what the run leaves behind, and a reader asking why an item

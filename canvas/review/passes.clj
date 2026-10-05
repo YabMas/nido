@@ -347,6 +347,11 @@
     {:signature [:function
                  [:=> [:catn [:text :string]] :map]
                  [:=> [:catn [:text :string] [:design [:maybe :map]]] :map]]})
+  (Operation wrote-tool-calls?
+    "Whether an answer from a launch holding no tools wrote a tool call out as text, outside
+     its json block. Such an answer is unusable whatever its json says: the call ran nothing,
+     so what follows it may rest on output the model invented."
+    {:signature [:=> [:catn [:text [:maybe :string]]] :boolean]})
   (Operation warden-failure "Why a round has no ruling: no run, no answer, or no parse."
     {:signature [:=> [:catn [:launch :map] [:decision :map]] :map]})
   (Operation project+ws-from-cwd "The project and workstream a directory belongs to."

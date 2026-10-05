@@ -188,13 +188,18 @@
    Returns:
      {:exit-code <int> :claude-session-id <str-or-nil> :timed-out? <bool>
       :num-turns <int-or-nil> :result-error? <bool> :result-text <str-or-nil>
-      :usage-limit <map-or-nil>}
+      :terminal-reason <str-or-nil> :usage-limit <map-or-nil>}
 
    :num-turns / :result-error? / :result-text are pulled from claude's final
    stream-json `result` event. A clean exit (exit 0) with :num-turns 0 means
    the agent did NO work — e.g. claude rejected the launch with
    \"Unknown command: /<skill>\". Callers use this to distinguish a real
    completion from a no-op exit (which must not be treated as success).
+
+   :terminal-reason is the `result` event's `terminal_reason` verbatim — the
+   CLI's own word for why the session ended, e.g. \"malformed_tool_use_exhausted\"
+   when the model kept emitting tool calls it could not parse. Nil when the
+   event carried none, or never arrived.
 
    :usage-limit is non-nil when the account's usage limit rejected the agent
    (see usage-limit) — a fact about the account, not about the Run."
@@ -262,4 +267,5 @@
        :num-turns         (:num_turns rev)
        :result-error?     (boolean (:is_error rev))
        :result-text       (:result rev)
+       :terminal-reason   (:terminal_reason rev)
        :usage-limit       (usage-limit @limit-ev)})))))
