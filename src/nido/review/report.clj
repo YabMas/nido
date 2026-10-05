@@ -958,6 +958,21 @@
                               :final-status s}
                        cap (assoc :max-iters cap)))))
 
+(defn ^{:malli/schema [:=> [:cat :ReviewReport :map] :ReviewReport]}
+  with-settlement
+  "`report` with its status and `:reason` read again off `final`, the terminal
+   ctx once the design verdict's answers are folded in — see
+   `nido.review.verdict/settled`. The rest of the seal stands: the rounds and
+   `:ended-at` are the review's, and the verdict changed none of them. A report
+   no `:run-finalized` sealed is left alone, since there is no status to amend."
+  [report final]
+  (if-not (:summary report)
+    report
+    (let [s (name (:status final))]
+      (-> report
+          (assoc :status s :reason (stopped-on final))
+          (assoc-in [:summary :final-status] s)))))
+
 (def orphaned-status
   "What a run whose process vanished is recorded as.
 

@@ -7,6 +7,7 @@
    [nido.coordinator.report :as report]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.record.workstream :as ws]
+   [nido.review.report]
    [nido.review.stages :as stages]
    [nido.review.verdict :as verdict]
    [tasks.nido-review :as nido-review]))
@@ -333,7 +334,16 @@
    "unraised"            [{"where" "invoice.clj:40" "what" "sums lines itself"
                            "finding" nil}]
    "standing_answered"   [{"index" 0 "answer" "the suite ran green"}]
+   "inherited_answered"  [{"id" "row-1" "evidence" "invoice.clj:52 — the guard is there"}]
+   "contested_closes"    [{"id" "h-closed" "reason" "the reader still re-rounds"}]
    "needs"               "move the sum back behind the aggregate"})
+
+(def ^:private a-run-holding-what-the-template-names
+  "A terminal ctx holding an inherited row and a closed finding under the ids
+   `template-answer` names, so neither answer is dropped as naming nothing."
+  {:findings [{:handle "h-closed" :title "re-rounds" :disposition :closed}]
+   :history  []
+   :carry    {:inherited-open [{:id "row-1" :title "unguarded" :disposition :fix}]}})
 
 (defn- template-fields
   "The fields verdict.clj's JSON template asks a judge to fill, read off a built
@@ -361,11 +371,13 @@
         (let [parsed (-> (verdict/parse
                           (fenced (json/generate-string (assoc template-answer "verdict" v)))
                           2 3)
-                         (verdict/against-the-run {} ["confirm the suite passes"]))]
+                         (verdict/against-the-run a-run-holding-what-the-template-names
+                                                  ["confirm the suite passes"]))]
           (is (= #{:format :verdict :round :design-seq :reason
                    :invariants-held :invariants-unverified :invariants-broken
                    :load-bearing-held :load-bearing-broken
-                   :findings-classified :unraised :standing-answered :needs}
+                   :findings-classified :unraised :standing-answered
+                   :inherited-answered :contested-closes :needs}
                  (set (keys parsed)))
               "parse keeps every field the template asked for, whatever the
                verdict — it is not the place a branch's vocabulary is applied")
@@ -1155,6 +1167,112 @@
            (:standing-answered v))
         "matched by index, and an index outside the list names nothing")
     (is (= v (report/validate-event :design-verdict v)))))
+
+(def ^:private roster-item
+  "A standing item as `report/stopped-on` builds it — a map, not a sentence."
+  {:what "Observe roster reads before the cut" :why-no-finding "no layer owns it"})
+
+(deftest a-standing-answer-carries-the-item-that-retires-it
+  ;; The answer was recorded as the item printed whole, the payload compared that
+  ;; string against the maps it was filtering, nothing ever matched, and every
+  ;; item a verdict answered was published open again beside its answer.
+  (let [v (verdict/against-the-run
+           (assoc judged ::verdict/standing-answers [{:index 0 :answer "repaired at roster.clj:93"}])
+           {} [roster-item])
+        answered (:standing-answered v)]
+    (is (= [{:item (:what roster-item) :standing roster-item
+             :answer "repaired at roster.clj:93"}]
+           answered)
+        "a person reads the text; the run retires the item")
+    (is (verdict/answers-standing? answered roster-item)
+        "the answer names the very item the warden left standing")
+    (is (not (verdict/answers-standing? answered {:what "something else"})))
+    (is (= v (report/validate-event :design-verdict v))
+        "and the ledger takes the item it carries")
+    (is (verdict/answers-standing? [{:item (str roster-item) :answer "a"}] roster-item)
+        "a verdict recorded before answers carried the item is still carried
+         forward, and its printed item must still retire what it answered")))
+
+(def ^:private unplaced-row
+  "A row the last run left owed whose layer this stack no longer has."
+  {:id "12a4597f" :title "roster reads race the cut" :where "students.clj:93"
+   :layer "students-domain" :disposition :fix})
+
+(def ^:private quiet-run-over-an-unplaced-row
+  "Two quiet rounds, the only thing owed a row no reviewer was ever shown — the
+   terminal ctx the run in ws-20261002-d44a4e ended on."
+  (let [final {:status :unresolved :findings [] :history [{:findings []}] :iter 2
+               :carry {:inherited-open [unplaced-row]}
+               :unplaced [(stages/unplaced-standing unplaced-row)]}]
+    (assoc final :owed (verdict/still-owed final))))
+
+(deftest an-inherited-row-the-verdict-answers-is-settled-before-the-status
+  (let [v     (verdict/against-the-run
+               (assoc judged ::verdict/inherited-answers
+                      [{:id "12a4597f" :evidence "students.clj:93-105 guards the read"}
+                       {:id "not-held" :evidence "x.clj:1"}])
+               quiet-run-over-an-unplaced-row [])
+        final (verdict/settled quiet-run-over-an-unplaced-row v)]
+    (is (= [{:id "12a4597f" :evidence "students.clj:93-105 guards the read"}]
+           (:inherited-answered v))
+        "an id the run is not holding answers nothing")
+    (is (= v (report/validate-event :design-verdict v)))
+    (is (= :clean (:status final))
+        "two quiet readings and nothing owed is clean — unresolved asked a person
+         to decide what the run's own verdict had already read in the code")
+    (is (empty? (verdict/owed-rows final))
+        "the :review entry and the gate read this list, so neither re-asks it")
+    (is (nil? (:standing (nido.review.report/stopped-on final)))
+        "nor does the report still name the row as handed to nobody")))
+
+(deftest an-inherited-row-is-put-to-the-verdict-as-a-question
+  ;; A row no reviewer was shown, or that no warden ever ruled on, is one the
+  ;; verdict is the only reader of — told so, it answers rather than glances.
+  (let [p (verdict/build-prompt {:design design :findings [] :history [] :rounds 2
+                                 :inherited [(assoc unplaced-row :question :unplaced)
+                                             {:id "0146e478" :title "t" :question :unruled}]})]
+    (is (str/includes? p "12a4597f roster reads race the cut"))
+    (is (str/includes? p "no reviewer was shown it"))
+    (is (str/includes? p "no warden ever ruled on it"))
+    (is (str/includes? p "inherited_answered by its id"))))
+
+(def ^:private closed-placement
+  {:handle "f4b8ffc6" :title "parse-ops placement" :disposition :closed
+   :authority :false-positive :owner-layer "parse-ops" :because "the record allows it"})
+
+(deftest a-close-the-verdict-contests-reopens-as-a-park
+  ;; The warden closed one placement three rounds running; the verdict said the
+  ;; close did not settle it, and the run counted it settled all the same.
+  (let [final (let [f {:status :converged :findings [closed-placement] :history [] :iter 3}]
+                (assoc f :owed (verdict/still-owed f)))
+        v     (verdict/against-the-run
+               (assoc judged ::verdict/contested-closes
+                      [{:id "f4b8ffc6" :reason "parse_ops.clj:40 still reads the cache"}
+                       {:id "never-closed" :reason "r"}])
+               final [])
+        final' (verdict/settled final v)
+        [park] (verdict/owed-rows final')]
+    (is (= [{:id "f4b8ffc6" :reason "parse_ops.clj:40 still reads the cache"}]
+           (:contested-closes v))
+        "only a finding a warden closed can have its close contested")
+    (is (= :unresolved (:status final')) "a park is owed, so the run did not converge")
+    (is (= :park (:disposition park)) "it goes to a person as a question, not to a fixer")
+    (is (str/includes? (:because park) "parse_ops.clj:40")
+        "and the person is told why the close did not hold")
+    (is (contains? (get-in final' [:carry :parks]) "f4b8ffc6")
+        "the report's :parked names it too")))
+
+(deftest a-standing-item-the-verdict-answered-leaves-the-entry
+  ;; A quiet run has no warden, so the item was carried to the next run and the
+  ;; one after, each re-publishing what a verdict had already answered.
+  (let [final {:status :clean :findings [] :history [{:findings []}]
+               :carry {:inherited-standing [roster-item]}}
+        v     (verdict/against-the-run
+               (assoc judged ::verdict/standing-answers [{:index 0 :answer "answered"}])
+               final [roster-item])]
+    (is (nil? (:standing (nido.review.report/stopped-on (verdict/settled final v))))
+        "the :review entry's :standing is what the next run's prior-standing reads")
+    (is (= final (verdict/settled final nil)) "no verdict answers nothing")))
 
 (deftest a-verdict-records-the-tree-it-read
   (is (= ["aaa" "bbb"]

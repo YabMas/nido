@@ -50,6 +50,10 @@
   (Operation unreadable-tree
     "Conflict markers in `base..@`: the change ids holding them, or nil for none."
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation design-verdict
+    "Run the design verdict, before any ledger is offered it — the run folds it in first, so the
+     `:review` entry publishes the status it settles. Best-effort throughout."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
   (Operation append-design-verdict!
     "Run the design verdict and append it as a ledger event. Best-effort throughout,"
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})

@@ -1875,6 +1875,38 @@
       (t/loop-cmd ":cwd" "/w")
       (is (= [:review :design-verdict :blocker] @kinds)))))
 
+(deftest a-row-the-verdict-answers-is-settled-before-the-entry-publishes-it
+  ;; Two quiet rounds over a row whose layer had left the stack: no reviewer was
+  ;; shown it, no warden ran, and the verdict found it repaired. The entry said
+  ;; :unresolved and the gate asked a person to decide it, run after run.
+  (let [row      {:id "12a4597f" :title "roster reads race the cut"
+                  :where "students.clj:93" :layer "students-domain" :disposition :fix}
+        answered (assoc a-verdict :verdict :sound
+                        :inherited-answered [{:id "12a4597f" :evidence "students.clj:93-105"}])
+        appended (atom [])]
+    (with-redefs [rloop/run-loop (fn [cfg]
+                                   (let [f (assoc ((run-loop-writing-a-report :unresolved) cfg)
+                                                  :findings [] :history [{:findings []}]
+                                                  :carry {:inherited-open [row]}
+                                                  :unplaced [(stages/unplaced-standing row)])]
+                                     (assoc f :owed (verdict/still-owed f))))
+                  stages/discover-design-record (fn [_] a-design)
+                  layers/conflicted (fn [_ _] [])
+                  verdict/run! (fn [_] answered)
+                  lifecycle/session-from-cwd (fn [_] {:project "nido" :session "s1"})
+                  csession/workstream-id-for (fn [_ _] "ws-1")
+                  ws/append-entry! (fn [_ _ {:keys [kind]} payload]
+                                     (swap! appended conj [kind (clojure.edn/read-string payload)]))]
+      (is (= :clean (t/loop-cmd ":cwd" "/w")) "the run's own answer is the settled one")
+      (let [[[kind entry] & more] @appended]
+        (is (= :review kind))
+        (is (= :clean (:status entry))
+            "the entry is what publishes the status, so it is written after the verdict")
+        (is (empty? (:open entry)) "and what the next run inherits no longer holds the row")
+        (is (nil? (:standing entry)) "nor names it as handed to nobody")
+        (is (= [:design-verdict] (map first more))
+            "no halt: there is nothing left for a person to decide")))))
+
 ;; ── An abort's own account ──────────────────────────────────────────────────
 ;;
 ;; The stop that most needs a human to act is the one that computed the facts

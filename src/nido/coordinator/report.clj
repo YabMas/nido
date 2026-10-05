@@ -2250,11 +2250,33 @@
 
 (def StandingAnswer
   "One of the terminal warden's standing items the judge answered from the code.
-   `:item` is the warden's text, verbatim; items the judge did not answer are
-   still open and are not listed."
+   `:item` is the warden's text, verbatim, for a person to read; `:standing` is
+   the item itself, which is what retires it — see
+   `nido.review.verdict/answers-standing?`. Absent on an item that was only ever
+   a sentence, and on answers recorded before it was carried. Items the judge
+   did not answer are still open and are not listed."
   [:map {:closed true}
    [:item   string?]
+   [:standing {:optional true}
+    [:map {:closed true}
+     [:what           string?]
+     [:why-no-finding {:optional true} [:maybe string?]]]]
    [:answer string?]])
+
+(def InheritedAnswer
+  "A row the last run left owed that the judge found settled in the code, by the
+   row's id, with the evidence. The verdict is the only reader a row placed on no
+   layer reaches, so this is what stops such a row holding a quiet run open."
+  [:map {:closed true}
+   [:id       string?]
+   [:evidence string?]])
+
+(def ContestedClose
+  "A finding a warden closed that the judge, having read the code, says is not
+   settled — by the finding's handle, with why. It reopens as a park."
+  [:map {:closed true}
+   [:id     string?]
+   [:reason string?]])
 
 (def ^:private design-verdict-fields
   "What a design verdict may carry, in the order the prompt's JSON template asks
@@ -2290,6 +2312,8 @@
    [:findings-classified {:optional true} [:vector ClassifiedFinding]]
    [:unraised {:optional true} [:vector UnraisedDefect]]
    [:standing-answered {:optional true} [:vector StandingAnswer]]
+   [:inherited-answered {:optional true} [:vector InheritedAnswer]]
+   [:contested-closes {:optional true} [:vector ContestedClose]]
    [:needs {:optional true} string?]])
 
 (defn- design-verdict-branch

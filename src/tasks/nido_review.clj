@@ -524,21 +524,23 @@
 
    The design verdict is merged the same way and on the same argument, and it is
    the one fact here the run's own status cannot carry: the pass judges the whole
-   run, so it answers after the status is fixed. Read back off the report rather
-   than passed down from `append-design-verdict!`, because the report is where
+   run, so it answers after the rounds have ended. Read back off the report rather
+   than passed down from `design-verdict`, because the report is where
    `record-verdict!` has already put it and is the copy that survives a ledger
    that would not take it.
 
    `:findings-kept` is the run's whole remainder and so spans both, which is why
-   the sum is made HERE and nowhere else: the `:review` ledger entry is written
-   before the verdict pass runs and can only ever count the rounds. This payload
+   the sum is made HERE and nowhere else: the `:review` ledger entry counts only
+   the rounds, and the verdict is its own entry. This payload
    is the one record that sees the loop and the judge together — see
    `verdict/kept-by-the-verdict` for which of the verdict's rows belong in it.
 
    `:standing` is the last warden's list less what the verdict answered from
    the code (`:standing-answered`), for the same reason: the warden asked
    before the judge read, and publishing its question beside the answer told a
-   person to do what had already been done.
+   person to do what had already been done. `verdict/settled` has already taken
+   those off a `final` that went through it; this applies the same predicate to
+   one that did not.
 
    `:review-entry` is what became of that ledger entry, read off the report for
    the verdict's reason: the report is the copy that survives a ledger which
@@ -553,9 +555,8 @@
         owed   (into #{} (comp (mapcat (juxt :id :handle)) (remove nil?) (map str))
                      (verdict/still-owed final))
         stop   (report/stopped-on final)
-        answered (into #{} (map :item)
-                       (get-in report [:design-verdict :verdict :standing-answered]))
-        standing (into [] (remove answered) (:standing stop))]
+        answered (get-in report [:design-verdict :verdict :standing-answered])
+        standing (into [] (remove #(verdict/answers-standing? answered %)) (:standing stop))]
     (analysis/enqueue!
      (merge
       {:run-id             (:run-id config)
@@ -656,15 +657,20 @@
           {:ledger :refused :because (refusal-reason e)})))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  append-design-verdict!
+  design-verdict
   "Run the design verdict and say what became of it, as the outcome map
-   `report/with-verdict` folds: `:outcome` (`:answered` / `:no-answer` /
-   `:skipped`), the verdict itself when there was one, and where the ledger put
-   it. nil when there was nothing to judge against at all.
+   `report/with-verdict` folds — `:outcome` (`:answered` / `:no-answer` /
+   `:skipped`) and the verdict itself when there was one — before any ledger has
+   been offered it. nil when there was nothing to judge against at all.
 
-   Best-effort at the ledger, for the same reason append-review-entry! is: a
-   completed review must not turn into a failure because a side record could not
-   be written. Best-effort is not the same as untraceable, and this is the pass
+   Apart from the ledger write because the two happen at different moments: the
+   verdict has to be folded into the run (`verdict/settled`) before the `:review`
+   entry publishes the status, and the verdict entry has to follow that entry.
+   See `review-branch!`.
+
+   Best-effort, for the same reason append-review-entry! is: a completed review
+   must not turn into a failure because a side record could not be produced.
+   Best-effort is not the same as untraceable, and this is the pass
    where the difference showed: it costs minutes of an agent reading code with
    tools, and its answer reached exactly one channel that three separate
    conditions could swallow — a cwd belonging to no workstream, a schema that
@@ -704,7 +710,7 @@
                                       :budget (:budget config)
                                       :final final
                                       :report report})]
-              (assoc (append-verdict-to-ledger! cwd v) :outcome :answered :verdict v)
+              {:outcome :answered :verdict v}
               {:outcome :no-answer
                :because (str "the pass ran and its answer carried no verdict"
                              " — the transcript is agent.log in this run dir")})))))
@@ -712,6 +718,21 @@
       (binding [*out* *err*]
         (println (str "review-loop: design verdict skipped — " (ex-message e))))
       nil)))
+
+(defn- record-design-verdict!
+  "`outcome` — `design-verdict`'s — with where the ledger put its verdict, when
+   it has one to offer."
+  [cwd outcome]
+  (if (= :answered (:outcome outcome))
+    (merge (append-verdict-to-ledger! cwd (:verdict outcome)) outcome)
+    outcome))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  append-design-verdict!
+  "`design-verdict`, then `record-design-verdict!`: the pass and its ledger write
+   in one step, for a caller with nothing to fold between them."
+  [cwd final report config]
+  (some->> (design-verdict cwd final report config) (record-design-verdict! cwd)))
 
 (defn- record-verdict!
   "Fold the verdict pass's outcome into report.json, and say on the terminal when
@@ -1604,12 +1625,28 @@
    the command in front of it is now two decisions rather than one — take the
    claim, and settle what died on this tree before anything reads it."
   [{:keys [cwd config clock report-atom report-path]}]
-  (let [final  (frontend/with-live-display
+  (let [ended  (frontend/with-live-display
                  {:report-atom report-atom :report-path report-path :clock clock}
                  (fn [emit] (rloop/run-loop (assoc config :emit emit))))
+        _      (when (and (= :reviewer-unavailable (:status ended)) (:unavailable ended))
+                 (remember-unavailable! (:reviewer config) (:unavailable ended) (clock)))
+        ;; The verdict BEFORE the :review entry, because what it answers changes
+        ;; what the run is owed and so the status that entry publishes — see
+        ;; `verdict/settled`. A quiet run whose only debts the verdict answers
+        ;; from the code ends as its rounds read, not `unresolved` with a gate
+        ;; asking a person the same thing.
+        ;;
+        ;; A pass killed mid-reading still leaves the entry and the halt the run
+        ;; had before it started: the pass is an agent reading code for minutes,
+        ;; and a stop there used to leave an escalated run with no gate after it,
+        ;; which the next run repaid a whole round to rebuild.
+        judged (nprocess/with-exit-note
+                 #(do (append-review-entry! cwd ended @report-atom report-path)
+                      (append-blocker! cwd ended nil))
+                 #(design-verdict cwd ended @report-atom config))
+        final  (verdict/settled ended (:verdict judged))
         status (:status final)
-        _      (when (and (= :reviewer-unavailable status) (:unavailable final))
-                 (remember-unavailable! (:reviewer config) (:unavailable final) (clock)))
+        _      (swap! report-atom report/with-settlement final)
         entry  (append-review-entry! cwd final @report-atom report-path)
         ;; After the ledger entry, because the entry is the record everything
         ;; downstream reads and this rewrites commits. Before the outcome lines,
@@ -1621,21 +1658,16 @@
     ;; person ran themselves says it here or nowhere.
     (run! println (outcome-lines final @report-atom report-path))
     (record-post-loop-writes! entry devs report-atom report-path)
-    ;; The verdict BEFORE the halt, and the order is the whole point twice over.
-    ;; It is the answer to the question the halt asks, so a halt filed first is a
-    ;; gate offering to decline findings the run already knew how to repair. And
-    ;; a :design-verdict is a :design-stage entry: appended after the halt it is
-    ;; the work having moved on, which is exactly what pipeline/unanswered-blocker
-    ;; reads it as, so the halt reached no gate at all.
+    ;; The verdict's entry BEFORE the halt, and the order is the whole point twice
+    ;; over. It is the answer to the question the halt asks, so a halt filed first
+    ;; is a gate offering to decline findings the run already knew how to repair.
+    ;; And a :design-verdict is a :design-stage entry: appended after the halt it
+    ;; is the work having moved on, which is exactly what
+    ;; pipeline/unanswered-blocker reads it as, so the halt reached no gate at all.
     ;;
     ;; The halt survives a verdict pass that fails, because that pass catches its
-    ;; own exceptions and answers nil — the only loss is the third branch. It
-    ;; survives a pass that is KILLED the same way: the pass is an agent reading
-    ;; code for minutes, and a stop there used to leave an escalated entry with no
-    ;; gate after it, which the next run repaid a whole round to rebuild.
-    (let [outcome (nprocess/with-exit-note
-                    #(append-blocker! cwd final nil)
-                    #(append-design-verdict! cwd final @report-atom config))]
+    ;; own exceptions and answers nil — the only loss is the third branch.
+    (let [outcome (some->> judged (record-design-verdict! cwd))]
       (record-verdict! outcome report-atom report-path)
       (print-verdict! (:verdict outcome))
       (when-let [b (append-blocker! cwd final (:verdict outcome))]

@@ -133,6 +133,11 @@
      change is in it. The directory is often gone after the run; the revision is what remains."
     {:signature [:=> [:catn [:report ReviewReport] [:code-cwd Path] [:tree [:maybe :map]]]
                  ReviewReport]})
+  (Operation with-settlement
+    "The report's status and `:reason` read again off the terminal ctx once the design verdict's
+     answers are folded in. The rounds and `:ended-at` stand; a report nothing sealed is left
+     alone."
+    {:signature [:=> [:catn [:report ReviewReport] [:final :map]] ReviewReport]})
   (Operation in-stack-order "Rows in the order the stack has them, bottom first."
     {:signature [:=> [:catn [:rows :any]] :any]})
   (Operation review-layers "One entry per review target."

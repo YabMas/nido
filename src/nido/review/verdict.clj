@@ -193,6 +193,80 @@
          "index and the answer. Leave out any you could not settle — those stay\n"
          "open.\n")))
 
+(defn- standing-text
+  "A standing item as a person reads it: the warden's `:what` when the item is
+   the map `report/stopped-on` builds, the item itself when it is a sentence."
+  [item]
+  (str (if (map? item) (:what item) item)))
+
+(defn ^{:malli/schema [:=> [:cat :any :any] :boolean]}
+  answers-standing?
+  "Whether a verdict's `standing-answered` answers `item`, one of a run's
+   standing items. By value — the item recorded on the answer under `:standing`.
+   The `:item` text is compared as well, against the item printed whole, for a
+   verdict recorded before answers carried the item: such a verdict is still
+   carried forward, and its `:item` holds exactly that printed form."
+  [answered item]
+  (boolean (some #(or (and (contains? % :standing) (= item (:standing %)))
+                      (= (str item) (:item %)))
+                 answered)))
+
+(def ^:private inherited-questions
+  "Why nothing in the loop could answer an inherited row, by its `:question`.
+   Each is a row this pass is the only reader of, so the judge is told it is
+   being asked rather than shown context."
+  {:unplaced "no layer of this stack holds its file, so no reviewer was shown it"
+   :unruled  "no warden ever ruled on it — the run that left it never reached one"})
+
+(defn- inherited-section
+  "What the last run left owed that this one never answered — `inherited`, each
+   row by id — or nil when there is none.
+
+   Answered by id and with evidence, because the answer is folded back onto the
+   row: `settled` marks it `:answered`, so the status, the `:review` entry and
+   the gate stop counting it. An answer in prose can be joined to no row, and
+   a run whose rounds were all quiet would publish `unresolved` over rows its
+   own verdict had found repaired.
+
+   A row tagged with a `:question` is one only this pass can answer — see
+   `inherited-questions`."
+  [inherited]
+  (when (seq inherited)
+    (str "\nLeft owed by the LAST run of this workstream and answered by nobody in\n"
+         "this one. They are still open on the branch, whatever the rounds above say:\n"
+         (->> inherited
+              (map (fn [{:keys [id title where disposition question]}]
+                     (str "- " id " " title (when where (str " (" where ")"))
+                          (when disposition (str " — ruled " (name disposition)))
+                          (when-let [q (inherited-questions question)]
+                            (str "\n  QUESTION FOR YOU: " q)))))
+              (str/join "\n"))
+         "\nWhere the code settles one — the defect is gone, or never was — put it\n"
+         "in inherited_answered by its id, with the file:line that shows it. One\n"
+         "you leave out stays owed, and the run ends unresolved over it.\n")))
+
+(defn- closed-section
+  "The findings whose last ruling was a warden's close — `closed`, as
+   `closed-across-run` reads them — or nil when there is none.
+
+   The warden cannot read code, so it closes on what the record says; this pass
+   reads the code. Where the two disagree the close was counted settled and the
+   verdict's objection reached a person only as advice, three rounds running on
+   one run. Named by handle so `contested_closes` reopens exactly that finding."
+  [closed]
+  (when (seq closed)
+    (str "\nCLOSED BY THE WARDEN — it ruled these settled without reading the code:\n"
+         (->> closed
+              (map (fn [{:keys [handle id title authority because]}]
+                     (str "- " (or handle id) " " title
+                          (when authority (str " — closed as " (name authority)))
+                          (when-not (str/blank? (str because)) (str ": " because)))))
+              (str/join "\n"))
+         "\nWhere the code or the design shows a close was wrong, put it in\n"
+         "contested_closes by its handle with the reason. It reopens as a question\n"
+         "for a person; do not contest a close you merely would have worded\n"
+         "differently.\n")))
+
 (defn- not-landed
   "The rows of a `stages/fix-outcomes` whose fixer got nothing into the code.
    The landed rest reach this pass inside the round history, accounts and all."
@@ -289,8 +363,11 @@
    `inherited` is what the last run left owed that this one never answered —
    `stages/unanswered-inherited` — which no round's findings mention, so a judge
    shown only those says `nothing is open` beside an entry that lists them.
-   `standing` is the terminal warden's standing list, see `standing-section`."
-  [{:keys [design baseline stance findings inherited history rounds prior status
+   `standing` is the terminal warden's standing list, see `standing-section`,
+   and `closed` the findings the run's last word on was a warden's close, see
+   `closed-section`. Each inherited row may carry `:question`, see
+   `inherited-section`."
+  [{:keys [design baseline stance findings inherited closed history rounds prior status
            fix-outcomes progress standing]}]
   (str
    (opening status (not-landed fix-outcomes))
@@ -350,15 +427,8 @@
           (str/join "\n"))
      "(none)")
    "\n"
-   (when (seq inherited)
-     (str "\nLeft owed by the LAST run of this workstream and answered by nobody in\n"
-          "this one. They are still open on the branch, whatever the rounds above say:\n"
-          (->> inherited
-               (map (fn [{:keys [id title where disposition]}]
-                      (str "- " id " " title (when where (str " (" where ")"))
-                           (when disposition (str " — ruled " (name disposition))))))
-               (str/join "\n"))
-          "\n"))
+   (inherited-section inherited)
+   (closed-section closed)
    (standing-section standing)
    ;; Last, so the judge reads this round's evidence before it is reminded what
    ;; it already decided — the standing answer is what the new evidence is
@@ -376,6 +446,8 @@
    " \"findings_classified\": [{\"finding\": \"...\", \"as\": \"implementation|design|stance|baseline\"}],\n"
    " \"unraised\": [{\"where\": \"file:line\", \"what\": \"...\", \"finding\": null}],\n"
    " \"standing_answered\": [{\"index\": 0, \"answer\": \"...\"}],\n"
+   " \"inherited_answered\": [{\"id\": \"...\", \"evidence\": \"file:line — ...\"}],\n"
+   " \"contested_closes\": [{\"id\": \"...\", \"reason\": \"...\"}],\n"
    " \"needs\": \"...\"}\n\n"
    "- findings_classified: name each finding by the handle shown before its\n"
    "  title, then say what it is.\n"
@@ -389,6 +461,9 @@
    "  a test only run on one platform, a path nobody exercised. An invariant\n"
    "  your needs says is still to be verified belongs HERE and never in\n"
    "  invariants_held: held means you confirmed it.\n"
+   "- inherited_answered: only ids from the left-owed list above, each with\n"
+   "  the evidence in the code. Leave it empty when there is no such list.\n"
+   "- contested_closes: only handles from the closed-by-the-warden list.\n"
    "- needs: what a PERSON should do or decide — advice, a record to amend,\n"
    "  a chore before landing. Never a defect in the code; those go in\n"
    "  unraised. Leave it empty when there is nothing to say.\n"
@@ -404,6 +479,19 @@
    "  PROJECT STANCE is what needs to move. Rare. REQUIRES needs.\n\n"
    "Do not reach for invalidated because the review was noisy. A design is only\n"
    "invalidated when you can name the invariant that cannot hold."))
+
+(defn- by-id
+  "A judge's `[{id <k>}]` answer as `[{:id :<k>}]`, dropping any row missing
+   either half: an id with no evidence is the silence the slot replaces, and
+   evidence with no id answers nothing in particular."
+  [rows k]
+  (into []
+        (keep (fn [row]
+                (let [id (str/trim (str (:id row)))
+                      v  (str/trim (str (get row k)))]
+                  (when-not (or (str/blank? id) (str/blank? v))
+                    {:id id k v}))))
+        rows))
 
 (defn ^{:malli/schema [:=> [:cat :string :any :any] :map]}
   parse
@@ -475,6 +563,12 @@
                                  (when (and (integer? index) (not (str/blank? (str answer))))
                                    {:index index :answer (str/trim (str answer))})))
                          (:standing_answered m)))
+
+            (seq (:inherited_answered m))
+            (assoc ::inherited-answers (by-id (:inherited_answered m) :evidence))
+
+            (seq (:contested_closes m))
+            (assoc ::contested-closes (by-id (:contested_closes m) :reason))
 
             (not (str/blank? (str (:needs m))))
             (assoc :needs (str (:needs m))))))
@@ -656,6 +750,18 @@
    here — see `kept-across-run`."
   [final]
   (into [] (remove stages/settled?) (final-rulings final)))
+
+(defn- finding-key
+  "The id a finding is named by to the verdict pass and back: the warden's
+   handle where it assigned one, as `fold-rulings` keys it."
+  [f]
+  (str (or (:handle f) (:id f))))
+
+(defn- closed-across-run
+  "The findings whose last ruling in the run was a warden's close — what the
+   verdict pass may contest. See `closed-section`."
+  [final]
+  (into [] (filter #(= :closed (:disposition %))) (final-rulings final)))
 
 (defn- fix-attempts-on
   "How many rounds of this run landed a repair aimed at `f` — `repairs-aimed-at`
@@ -1004,7 +1110,7 @@
 (defn ^{:malli/schema [:=> [:cat :map :map :any] :map]}
   against-the-run
   "A parsed verdict, reconciled with the run it judged, as the ledger records
-   it. Five things the judge cannot be trusted to keep straight, each decided
+   it. Six things the judge cannot be trusted to keep straight, each decided
    here mechanically:
 
    - An `:unraised` row naming a finding the run raised is a restatement, and
@@ -1019,7 +1125,13 @@
      says. Listed as both, it read as confirmed beside a `:needs` asking a
      person to go and confirm it.
    - Standing answers name an item by index into `standing`, and are recorded
-     with the item's text; an index outside it names nothing and is dropped.
+     with the item itself under `:standing` beside its text under `:item`; an
+     index outside it names nothing and is dropped. The item, not its text,
+     because `answers-standing?` retires it by value — recorded as the printed
+     map, the answer matched no item and every answered one was republished.
+   - An inherited answer or a contested close naming an id this run is not
+     holding — no unanswered inherited row, no finding a warden closed — names
+     nothing it could settle or reopen, and is dropped.
    - `:patch-hashes` is stamped when the tree the judge read is known — the
      final round's hashes, when that round landed no repair. A repair after the
      reading moved the tree, and a verdict stamped with the tree before it would
@@ -1048,17 +1160,138 @@
                         (:invariants-held v))
         answered  (into [] (keep (fn [{:keys [index answer]}]
                                    (when (< -1 index (count standing))
-                                     {:item (str (nth standing index)) :answer answer})))
+                                     (let [s (nth standing index)]
+                                       (cond-> {:item (standing-text s) :answer answer}
+                                         (map? s) (assoc :standing s))))))
                         (::standing-answers v))
+        holding   (into #{} (keep :id) (stages/unanswered-inherited final))
+        inherited (into [] (filter #(contains? holding (:id %))) (::inherited-answers v))
+        closed    (into #{} (map finding-key) (closed-across-run final))
+        contested (into [] (filter #(contains? closed (:id %))) (::contested-closes v))
         hashes    (sort (map str (:patch-hashes final)))]
-    (cond-> (dissoc v ::standing-answers :unraised :invariants-held :invariants-unverified)
+    (cond-> (dissoc v ::standing-answers ::inherited-answers ::contested-closes
+                    :unraised :invariants-held :invariants-unverified)
       (seq unraised) (assoc :unraised unraised)
+      (seq inherited) (assoc :inherited-answered inherited)
+      (seq contested) (assoc :contested-closes contested)
       (seq held)     (assoc :invariants-held held)
       (seq unver)    (assoc :invariants-unverified unver)
       (seq unmet)    (assoc :invariants-unmet unmet)
       (seq answered) (assoc :standing-answered answered)
       (and (seq hashes) (empty? (:fixes final)))
       (assoc :patch-hashes (vec hashes)))))
+
+(defn- reopened
+  "`f` reopened as a park when its close is one the verdict contests — `contested`
+   is `{handle reason}` — and `f` otherwise."
+  [contested f]
+  (if-let [reason (and (= :closed (:disposition f)) (contested (finding-key f)))]
+    (assoc f :disposition :park
+           :because (str "the design verdict contests the warden's close: " reason))
+    f))
+
+(defn- restatus
+  "The status a run ends as once the verdict's answers are folded in, `owed`
+   being what it is then owed. Only the three statuses that are a reading of the
+   remainder move; every other one names a condition the verdict did not touch.
+   An `:unresolved` run whose remainder the verdict emptied ends as its last
+   round would have without it: `:clean` after a quiet round, `:converged` after
+   a warden's stop."
+  [{:keys [status findings]} owed]
+  (case status
+    :unresolved          (cond (seq owed) :unresolved
+                               (seq findings) :converged
+                               :else :clean)
+    (:converged :clean)  (if (seq owed) :unresolved status)
+    status))
+
+(defn ^{:malli/schema [:=> [:cat :map [:maybe :map]] :map]}
+  settled
+  "`final`, the loop's terminal ctx, with `v` — this run's design verdict, as
+   `against-the-run` records it, or carried — folded in, so that every reader of
+   the remainder reads one answered set. nil `v` leaves `final` as it is.
+
+   The verdict is the only reader after the loop that reads code, and in a quiet
+   run the only one at all: no warden runs on a round with no findings, and no
+   reviewer is shown a row no layer holds. So what it answers has to change
+   what the run is owed, or a run ends `:unresolved` — and asks a person to
+   decide — over rows its own verdict found repaired:
+
+   - an `:inherited-answered` row is marked `:answered`, which
+     `stages/unanswered-of` reads as answered — so `still-owed`, `owed-rows`, the
+     gate and the next run's `prior-open` all drop it, and its `:unplaced`
+     standing entry goes with it;
+   - a `:contested-closes` finding is reopened as a park, in the rulings and in
+     the carried parks, so the gate puts it to a person;
+   - a `:standing-answered` item leaves every list `report/stopped-on` builds
+     `:standing` from, so neither the report, the `:review` entry nor the next
+     run's `stages/prior-standing` holds it.
+
+   Then `:owed` and `:status` are read again — see `restatus`. This must run
+   BEFORE the `:review` entry and the report's `:reason` are written: they are
+   what publishes the status, and the run after reads the entry."
+  [final v]
+  (if-not v
+    final
+    (let [answers   (into {} (map (juxt :id :evidence)) (:inherited-answered v))
+          contested (into {} (map (juxt :id :reason)) (:contested-closes v))
+          said      (:standing-answered v)
+          rows      (get-in final [:carry :inherited-open])
+          answered? #(and (not (:answered %)) (contains? answers (:id %)))
+          gone      (into #{} (comp (filter answered?) (map stages/unplaced-standing)) rows)
+          standing  (fn [items] (into [] (remove #(or (contains? gone %)
+                                                      (answers-standing? said %)))
+                                      items))
+          reopen    (fn [fs] (mapv #(reopened contested %) fs))
+          parks     (into {}
+                          (comp (filter #(and (= :closed (:disposition %))
+                                              (contains? contested (finding-key %))))
+                                (map (fn [f] [(finding-key f)
+                                              {:since (:iter final)
+                                               :owner-layer (:owner-layer f)
+                                               :kind (:kind f)
+                                               :title (:title f)
+                                               :because (:because (reopened contested f))}])))
+                          (closed-across-run final))
+          final'    (cond-> final
+                      (seq rows)
+                      (assoc-in [:carry :inherited-open]
+                                (mapv #(if (answered? %)
+                                         (assoc % :answered {:by "design-verdict"
+                                                             :evidence (answers (:id %))})
+                                         %)
+                                      rows))
+
+                      (seq parks)
+                      (-> (update :findings reopen)
+                          (update :history (fn [h] (mapv #(cond-> % (:findings %) (update :findings reopen))
+                                                         h)))
+                          (update-in [:carry :parks] merge parks))
+
+                      (seq (:unplaced final))
+                      (update :unplaced standing)
+
+                      (seq (get-in final [:warden :standing]))
+                      (update-in [:warden :standing] standing)
+
+                      (seq (get-in final [:carry :inherited-standing]))
+                      (update-in [:carry :inherited-standing] standing))
+          owed      (vec (still-owed final'))]
+      (assoc final' :owed owed :status (restatus final' owed)))))
+
+(defn- as-questions
+  "`stages/unanswered-inherited`, each row nothing in the loop could have
+   answered tagged with why — see `inherited-questions`. A row whose layer has
+   fallen out of the stack is in the run's `:unplaced`; a row with no
+   disposition was left by a run whose warden never ruled."
+  [final]
+  (let [unplaced (set (:unplaced final))]
+    (mapv (fn [row]
+            (cond
+              (contains? unplaced (stages/unplaced-standing row)) (assoc row :question :unplaced)
+              (nil? (:disposition row))                          (assoc row :question :unruled)
+              :else                                              row))
+          (stages/unanswered-inherited final))))
 
 (defn- plan-progress
   "Where the workstream at `cwd` is in the plan that governs it (`ws/plan-design` —
@@ -1100,7 +1333,8 @@
                        :baseline (stages/discover-baseline cwd design)
                        :stance (stages/read-stance (first (stages/project+ws-from-cwd cwd)))
                        :findings (still-open (:findings final))
-                       :inherited (stages/unanswered-inherited final)
+                       :inherited (as-questions final)
+                       :closed (closed-across-run final)
                        :history (mapv #(dissoc % :findings :patch-hashes) (:history final))
                        :fix-outcomes (stages/fix-outcomes (:history final) (:carry final))
                        :status (:status final)

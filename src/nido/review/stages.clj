@@ -970,6 +970,15 @@
                           ", and no layer of this stack touches its file"
                           ", and it carries no file to place it by"))})
 
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  unplaced-standing
+  "The `standing` entry for an inherited row no layer of this stack holds — the
+   run's `:unplaced`. Public because the design verdict can answer the row after
+   the loop has ended, and retiring the row must retire this entry with it; it
+   is matched by value, so it has to be built by the same function."
+  [row]
+  (unplaced-item row "left owed by the last review of this workstream"))
+
 (defn ^{:malli/schema [:=> [:cat :Path :any :any] :map]}
   place-inherited
   "The last run's open rows put onto this round's stack: `:rows` is every row,
@@ -1567,8 +1576,7 @@
         ;; and no reviewer has raised since, as the run's own `standing`: it is
         ;; handed to nobody and still counted open, and a warden cannot list it
         ;; for being shown none of it. See `placed-on`.
-        unplaced (mapv #(unplaced-item % "left owed by the last review of this workstream")
-                       (unanswered-of unplaced-rows rounds))]
+        unplaced (mapv unplaced-standing (unanswered-of unplaced-rows rounds))]
     (if (empty? findings)
       ;; Two different terminal rounds arrive here, and only one of them is a
       ;; review that found nothing.
@@ -1994,10 +2002,13 @@
    nothing, the one run that named a misattached design record said so, and the
    run after — quiet, so no warden — wrote an entry holding no trace of it.
 
-   Two things end the carry. A person answering after that entry, as
-   `answered-by-a-person?` reads it. And a warden of this run, which is shown
-   the list and restates what still stands; one it leaves out is its answer.
-   The second is `nido.review.report/stopped-on`'s to apply."
+   Three things end the carry. A person answering after that entry, as
+   `answered-by-a-person?` reads it. A warden of this run, which is shown the
+   list and restates what still stands; one it leaves out is its answer — that
+   is `nido.review.report/stopped-on`'s to apply. And this run's design verdict
+   answering the item from the code, which `nido.review.verdict/settled` takes
+   off the terminal ctx before the entry this reads is written — a quiet run
+   has no warden, so without it an answered item was carried for ever."
   [cwd]
   (or (when-let [[project ws-id] (project+ws-from-cwd cwd)]
         (let [entry (last-review project ws-id)]
@@ -2332,8 +2343,11 @@
      inherited copy beside it would count one defect twice.
    - the same defect raised again at the same file, line and title, which
      `pass/finding-id` derives the same id from.
-   - a reviewer's explicit `repaired` answer with its evidence, marked on the
-     row as `:answered` by `fan-out-reviews`.
+   - an explicit answer with its evidence, marked on the row as `:answered`:
+     a reviewer's `repaired`, by `fan-out-reviews`, or the design verdict's
+     `inherited_answered`, by `nido.review.verdict/settled` after the loop. The
+     verdict is the only reader a row placed on no layer ever reaches, and in a
+     quiet run the only one that reads any row's code at all.
 
    A reviewer's silence stays unanswered, and the reviewer is told so: it read
    the code, and not reporting a defect is not evidence the defect is gone —

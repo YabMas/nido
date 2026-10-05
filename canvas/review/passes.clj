@@ -211,6 +211,20 @@
      tree the judge read is stamped as `:patch-hashes` when it is known."
     {:signature [:=> [:catn [:verdict :map] [:final :map] [:standing :any]] :map]
      :delegates [open-across-run]})
+  (Operation answers-standing?
+    "Whether a verdict's standing answers retire one of a run's standing items. By the item
+     itself, carried on the answer: matched as printed text, the answer retired nothing and
+     every item a verdict answered was published open again beside its answer."
+    {:signature [:=> [:catn [:answered :any] [:item :any]] :boolean]})
+  (Operation settled
+    "The terminal ctx with the verdict's answers folded in, so every reader of the remainder
+     reads one answered set: an inherited row it answers by id is marked answered, a warden
+     close it contests reopens as a park, a standing item it answers leaves the standing lists,
+     and the status is read again. Runs before the `:review` entry publishes the status — the
+     verdict is the only reader a quiet run has, and without this a run ended `unresolved` and
+     asked a person about rows its own verdict had found repaired."
+    {:signature [:=> [:catn [:final :map] [:verdict [:maybe :map]]] :map]
+     :delegates [still-owed answers-standing?]})
   (Operation run!
     "Run the verdict pass, or carry the standing one when this run gave it nothing to revisit."
     {:signature [:=> [:catn [:opts :map]] :map]
@@ -483,6 +497,10 @@
      what the upper fixer, running later in the same stage, may make — handed over as a claim,
      since no warden has read it yet."
     {:signature [:=> [:catn [:said :any] [:files :any]] :any]})
+  (Operation unplaced-standing
+    "The standing entry for an inherited row no layer of the stack holds. Matched by value when
+     the design verdict answers the row after the loop, so it is built in one place."
+    {:signature [:=> [:catn [:row :map]] :map]})
   (Operation place-inherited
     "The last run's open rows placed on this round's stack, and the ones that place nowhere set
      apart so the run can name them in its standing. A flat branch places every row on its one
