@@ -1,6 +1,6 @@
 ---
 name: local-ci
-description: Run brian's CI for the session you're in, attempt every failure through the agent that owns it, and halt only on what genuinely resists or would need a decision — then report what was resolved and how. Autonomous; the path /drive-home composes. Invoked in-session from the session home.
+description: Run brian's CI for the session you're in, attempt every failure through the agent that owns it, and halt only on what genuinely resists or would need a decision — then report what was resolved and how. Autonomous; the path /drive-home composes. `/local-ci light` runs the Checks job only (format, lint, deps, i18n, migrations — no tests), for small changes. Invoked in-session from the session home.
 ---
 
 # /local-ci
@@ -33,6 +33,30 @@ What replaced the gate is not nothing: a **bounded attempt** at every failure,
 verified narrowly before it counts as fixed, and a **halt line** drawn at
 deciding rather than doing. Both are §5, and both apply however the skill was
 invoked.
+
+## Light: `/local-ci light`
+
+The `Checks` job alone — `bb nido:run … ci-light`, which runs brian's
+`ci/checks.sh`: the same `bb check` the remote "CI Checks" job runs (format,
+clj-kondo, deps, i18n, e2e lint, migration ordering), in the same brian-ci
+image. No unit, integration or e2e job. One container instead of eight, and no
+queue behind someone else's full run.
+
+It is for the change whose risk is the silly failure, not the behavioural one:
+a comment, a copy tweak, a one-function fix already exercised in the REPL. What
+it buys is that the remote does not go red on formatting. What it does **not**
+buy is any evidence the code works — the tests are what that is, and the remote
+still runs them.
+
+Everything else is unchanged: §1–§3 as written, §4 with `ci-light` in place of
+`ci`, §5's attempt protocol and halt line, and §6's report with its header
+reading `CI light:`. Only one job can fail, so the failures are nearly all
+"fix directly (mechanical)" and hygiene rows of the Routing table; the run
+budget is the same three runs.
+
+**Light is never what `/drive-home` composes.** A stack going home gets the full
+suite; light is a call a human makes about their own small change, so it runs
+only when the argument says `light`.
 
 ## When to use
 
@@ -142,8 +166,11 @@ run; unchanged re-runs (flake re-runs, e2e right after unit) reuse the image.
 Do not pass `--no-cache` or warn about forced rebuilds. Run, capturing output:
 
 ```
-bb nido:run :project <project> <session> ci
+bb nido:run :project <project> <session> ci         # light mode: ci-light
 ```
+
+Light mode's `ci-light` runs only the `:check` job; the job list below then has
+one member.
 
 No `nido:session:up` needed — brian's CI is self-contained Docker, path-isolated
 by its own `CI_SUFFIX`.
@@ -258,7 +285,7 @@ Emit this every time, green or halted — it is the whole output of this skill, 
 the only thing `/drive-home` sees.
 
 ```
-CI: <green | halted> · <n> resolved · <m> unresolved · <k> flake
+CI[ light]: <green | halted> · <n> resolved · <m> unresolved · <k> flake
 
 Resolved
 - <job> · <one-line finding>
