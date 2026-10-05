@@ -2724,6 +2724,11 @@
                 ;; :unruled because an id can be a design element as well: confirmed or :owed as
                 ;; that, and still unruled as what the baseline records — two questions, two lists.
                 [:relation-unruled      {:optional true} [:vector string?]]
+                ;; Each check the judge answered that the round's prompt never defined — a
+                ;; `decomposable` on a record naming its strata, or `stratified` on one that does not.
+                ;; Dropped from :checks, and named here so the drop is visible.
+                [:unasked-checks        {:optional true}
+                 [:vector [:enum :relation-honest :goal-served :decomposable :stratified :routing-coherent]]]
                 ;; As on a baseline review.
                 [:judged-by          {:optional true} JudgedBy]
                 [:tree               {:optional true} JudgedTree]]

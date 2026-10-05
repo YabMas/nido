@@ -155,12 +155,16 @@
     (is (str/includes? p "RULE ON EVERY CLAIM YOU ARE ASKED TO CHECK")
         "a claim left without a ruling is what stops a proceed")))
 
+(def ^:private any-era
+  "Every check of either era, for an answer whose era is not what the test is about."
+  (into #{} (concat report/derivations report/strata-derivations)))
+
 (deftest a-decision-records-the-claims-its-judge-confirmed
   (let [r (record/parse-design-decision
            (json/generate-string {:recommend "proceed" :reason "r" :asks "worth it?"
                                   :checks [{:check "relation_honest" :status "held" :note "n"}]
                                   :findings [] :confirmed ["[rounded-once]" "lines-exact" ""]})
-           4)]
+           4 any-era)]
     (is (= ["rounded-once" "lines-exact"] (:confirmed r)) "ids, brackets and blanks taken off")
     (is (report/validate-event :design-decision r) "and the ledger takes it")))
 
@@ -173,7 +177,7 @@
                                   :findings [] :unchecked []
                                   :confirmed [{:id "rounded-once" :evidence ["src/a.clj:3"] :at_this_tree "holds"}
                                               {:id "lines-exact" :evidence ["src/a.clj:9"] :at_this_tree "owed"}]})
-           4)]
+           4 any-era)]
     (is (= ["rounded-once"] (:confirmed r)))
     (is (= {"rounded-once" ["src/a.clj:3"]} (:checked-at r)))
     (is (= ["lines-exact"] (:owed r)))
@@ -348,7 +352,7 @@
                       {:check "routing_coherent" :status "held" :note "one story"}]
              :findings []
              :asks "worth doing now, at M, given the invoice work queued behind it?"})
-           4)]
+           4 any-era)]
     (is (= :proceed (:recommend r)))
     (is (= 4 (count (:checks r))))
     (is (every? #(= :held (:status %)) (:checks r)))
@@ -361,7 +365,7 @@
               {:recommend "proceed" :reason "fine"
                :checks [{:check "relation_honest" :status "held" :note "ok"}]
                :findings [] :asks ""})
-             4))
+             4 any-era))
       "the round prepares an approval; one that asks nothing has granted it"))
 
 (deftest a-decision-that-derived-nothing-is-a-non-answer
@@ -369,7 +373,7 @@
              (json/generate-string
               {:recommend "proceed" :reason "looks good to me"
                :checks [] :findings [] :asks "ship it?"})
-             4))
+             4 any-era))
       "handing a human an unreduced question is the rubber stamp with garnish"))
 
 (deftest a-non-proceed-recommendation-must-carry-findings
@@ -378,7 +382,7 @@
               {:recommend "recut" :reason "feels wrong"
                :checks [{:check "decomposable" :status "broken" :note "cannot state layers"}]
                :findings [] :asks "recut?"})
-             4))
+             4 any-era))
       "saying the design is wrong without citing anything is the same theatre"))
 
 (deftest a-design-with-no-cited-intent-says-so-and-asks-for-underivable
@@ -419,7 +423,7 @@
              :checks [{:check "goal_served" :status "underivable"
                        :note "this design cites no intent record"}]
              :findings [] :asks "worth doing without a stated goal?"})
-           4)]
+           4 any-era)]
     (is (= :underivable (:status (first (:checks r)))))
     (is (= r (report/validate-event :design-decision r)))))
 
@@ -429,7 +433,7 @@
             {:recommend "proceed" :reason "r"
              :checks [{:check "goal_served" :held true :note "n"}]
              :findings [] :asks "a?"})
-           4)]
+           4 any-era)]
     (is (= :held (:status (first (:checks r))))
         "the schema moved; an answer in the previous shape is degraded rather
          than discarded")))
@@ -461,7 +465,7 @@
                            :claim "the smaller design already satisfies it"
                            :evidence ["src/order/aggregate.clj:12"]}]
                :asks "which way?"})
-             4)]
+             4 any-era)]
       (is (= out (:recommend r))
           "redesign, recut and re-survey are different instructions; collapsing
            them is worse than saying nothing")
@@ -703,7 +707,7 @@
                           :checks [{:check "relation_honest" :status "held" :note "n"}]
                           :findings [] :confirmed [] :unchecked []
                           :relation_rulings rulings})
-   4))
+   4 any-era))
 
 (def ^:private ids (#'record/relation-subjects strata-baseline))
 
@@ -785,7 +789,7 @@
   (get-in (json/parse-string schema-json true) [:properties :relation_rulings]))
 
 (deftest the-decision-schema-admits-exactly-the-listed-ids
-  (let [s (rulings-schema (#'record/design-decision-schema ids))]
+  (let [s (rulings-schema (#'record/design-decision-schema {} ids))]
     (is (= (mapv second ids) (get-in s [:items :properties :id :enum]))
         "an id outside the list is no ruling the record can be held to")
     (is (= [(count ids) (count ids)] [(:minItems s) (:maxItems s)])
@@ -793,7 +797,7 @@
     (is (= (set (map name (keys (get-in s [:items :properties])))) (set (get-in s [:items :required])))
         "the provider rejects a schema whose required is not every property"))
   (testing "a design ruled on no ids may rule on none"
-    (let [s (rulings-schema (#'record/design-decision-schema []))]
+    (let [s (rulings-schema (#'record/design-decision-schema {} []))]
       (is (= [0 0] [(:minItems s) (:maxItems s)]))
       (is (nil? (get-in s [:items :properties :id :enum])) "an empty enum is no schema a provider takes"))))
 
@@ -1020,11 +1024,55 @@
                                   :checks [{:check "stratified" :status "broken" :note "misplaced"}
                                            {:check "goal_served" :status "held" :note "n"}]
                                   :findings [{:cites ["x"] :claim "y" :check "stratified" :claim_id ""}]})
-           12)]
+           12 (set report/strata-derivations))]
     (is (= [:stratified :goal-served] (mapv :check (:checks r))))
     (is (= :stratified (:check (first (:findings r)))))
     (is (false? (report/proceeds? r))
         "unlike the cut it replaced, a broken stratified check alone holds the design")))
+
+;; Watched in eight runs: a strata-era judge, shown only `stratified`, answered `decomposable` too
+;; because the schema offered it — and once filed a real habitability defect under it, which
+;; `proceeds?` then waived as the advisory cut.
+
+(defn- check-enums [schema-json]
+  (let [s (json/parse-string schema-json true)]
+    [(get-in s [:properties :checks :items :properties :check :enum])
+     (get-in s [:properties :findings :items :properties :check :enum])]))
+
+(deftest the-decision-schema-offers-only-the-checks-the-prompt-defines
+  (is (= [["relation_honest" "goal_served" "stratified" "routing_coherent"]
+          ["relation_honest" "goal_served" "stratified" "routing_coherent" ""]]
+         (check-enums (#'record/design-decision-schema {:strata ["totals"]} [])))
+      "a strata-era judge offered decomposable answers a check its prompt never asked")
+  (is (= [["relation_honest" "goal_served" "decomposable" "routing_coherent"]
+          ["relation_honest" "goal_served" "decomposable" "routing_coherent" ""]]
+         (check-enums (#'record/design-decision-schema {} [])))
+      "a design from before strata is still judged by decomposable, as its prompt says"))
+
+(deftest a-check-the-round-never-asked-is-dropped-and-named
+  (let [r (record/parse-design-decision
+           (json/generate-string
+            {:recommend "recut" :reason "the first landing is not habitable" :asks "a"
+             :checks [{:check "decomposable" :status "broken" :note "phase 1 not habitable"}
+                      {:check "stratified" :status "held" :note "n"}]
+             :findings [{:claim-id "deploy-order" :check "decomposable" :cites ["x"]
+                         :claim "old writers run beside the new trigger" :evidence []
+                         :for_person false}]})
+           12 (set report/strata-derivations))]
+    (is (= [:stratified] (mapv :check (:checks r)))
+        "a check the prompt never defined is not a ruling the ledger or the figures may count")
+    (is (= [:decomposable] (:unasked-checks r)) "the drop is recorded, not silent")
+    (is (= [nil] (mapv :check (:findings r)))
+        "the defect may be real whatever it was filed under, so the finding stays, check-less")
+    (is (false? (report/proceeds? r))
+        "a blocking defect filed under a phantom check must not be waived as the advisory cut")
+    (is (= r (report/validate-event :design-decision r)) "the ledger takes the note"))
+  (testing "a decision whose every check was unasked derived nothing"
+    (is (nil? (record/parse-design-decision
+               (json/generate-string {:recommend "proceed" :reason "r" :asks "a"
+                                      :checks [{:check "decomposable" :status "held" :note "n"}]
+                                      :findings []})
+               12 (set report/strata-derivations))))))
 
 (deftest the-strata-a-record-names-resolve-against-the-declaration
   (let [listing {:status :listed
@@ -1045,7 +1093,7 @@
             {:recommend "ask" :reason "the intent can be read two ways"
              :checks [{:check "goal_served" :status "held" :note "on one reading"}]
              :findings [] :asks "does a dead session count as working?"})
-           4)]
+           4 any-era)]
     (is (= :ask (:recommend r)))
     (is (not (contains? r :findings)))
     (is (= r (report/validate-event :design-decision r)))))
@@ -1062,7 +1110,7 @@
                                 :evidence [] :for_person true}
                                {:claim-id "" :check "" :cites ["c"] :claim "breaks omitted"
                                 :evidence [] :for_person false}]})
-                  4))
+                  4 any-era))
         ask    (answer "ask")
         amend  (answer "amend")]
     (is (= [true nil] (mapv :for-person (:findings ask))))

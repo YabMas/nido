@@ -1325,17 +1325,30 @@
     (cond-> (assoc rulings :minItems n :maxItems n)
       (pos? n) (assoc-in [:items :properties :id :enum] (vec ids)))))
 
+(defn- check-names
+  "`derivations` in the answer's underscore spelling, as a schema enum lists them."
+  [derivations]
+  (mapv #(str/replace (name %) "-" "_") derivations))
+
 (defn- design-decision-schema
-  "The decision round's output schema for a design ruled on per id over `subjects`
-   (`relation-yardstick`): relation_rulings must name every one of them.
+  "The decision round's output schema for `design`, ruled on per id over `subjects`
+   (`relation-yardstick`): relation_rulings must name every one of them, and a check — on the
+   checks list or on a finding — must be one of the four the design's era is judged by
+   (`report/derivations-of`), the same four `design-prompt` defines.
 
    Generated per round because the fixed schema let a judge told to rule on seventeen ids return
    the six claims and skip every module and stratum, round after round — and an id left unruled
-   stops the proceed (`relation-held`), so a lineage whose judge always skips them can never proceed."
-  [subjects]
-  (-> (json/parse-string (schemas :design-decision) true)
-      (update-in [:properties :relation_rulings] exactly-these-rulings (mapv second subjects))
-      json/generate-string))
+   stops the proceed (`relation-held`), so a lineage whose judge always skips them can never proceed.
+   The check enum is per round for the same reason: offered `decomposable` beside a prompt that
+   defines only `stratified`, a judge answers the check it was never asked, and a `broken` on it
+   reads as the advisory check `report/proceeds?` waives."
+  [design subjects]
+  (let [checks (check-names (report/derivations-of design))]
+    (-> (json/parse-string (schemas :design-decision) true)
+        (update-in [:properties :relation_rulings] exactly-these-rulings (mapv second subjects))
+        (assoc-in [:properties :checks :items :properties :check :enum] checks)
+        (assoc-in [:properties :findings :items :properties :check :enum] (conj checks ""))
+        json/generate-string)))
 
 (defn- relation-reask-schema
   "The output schema for re-asking a judge only the relation ids it left unruled: one ruling each,
@@ -1438,29 +1451,33 @@
         (seq unruled)   (assoc :unruled unruled)))))
 
 (defn- normalize-findings
-  [raw]
-  (into [] (keep (fn [f]
-                   (let [cites (into [] (remove str/blank?) (map str (:cites f)))]
-                     (when (seq cites)
-                       (cond-> {:cites cites :claim (str (:claim f))}
-                     (not (str/blank? (str (:claim-id f))))
-                     ;; Stripped of the brackets the prompt renders around an id.
-                     ;; A judge shown `[engine-names-no-stage] the engine …` cites
-                     ;; it back with them, and an id that is sometimes bracketed
-                     ;; and sometimes not is no identity at all.
-                     (assoc :claim-id (str/replace (str/trim (str (:claim-id f)))
-                                                   #"^\[|\]$" ""))
-                     ;; Only one of the four derivations. A check named in the answer's
-                     ;; underscore spelling is the same check; anything else ties the finding
-                     ;; to nothing, and is dropped rather than kept as a check no round derives.
-                     (some #{(keyword (str/replace (str/trim (str (:check f))) "_" "-"))}
-                           derivation-keys)
-                     (assoc :check (keyword (str/replace (str/trim (str (:check f))) "_" "-")))
-                         (seq (:evidence f))
-                         (assoc :evidence (mapv str (:evidence f)))
-                         (true? (:for_person f))
-                         (assoc :for-person true))))))
-        raw))
+  "`raw` findings with their cites, kept only if they cite something. A finding's :check is kept
+   only if it is one of `asked` (default: any derivation of either era); a finding under any other
+   check is kept check-less, since the defect it names may be real whatever check it was filed under."
+  ([raw] (normalize-findings raw derivation-keys))
+  ([raw asked]
+   (into [] (keep (fn [f]
+                    (let [cites (into [] (remove str/blank?) (map str (:cites f)))]
+                      (when (seq cites)
+                        (cond-> {:cites cites :claim (str (:claim f))}
+                      (not (str/blank? (str (:claim-id f))))
+                      ;; Stripped of the brackets the prompt renders around an id.
+                      ;; A judge shown `[engine-names-no-stage] the engine …` cites
+                      ;; it back with them, and an id that is sometimes bracketed
+                      ;; and sometimes not is no identity at all.
+                      (assoc :claim-id (str/replace (str/trim (str (:claim-id f)))
+                                                    #"^\[|\]$" ""))
+                      ;; Only one of the derivations the round asked. A check named in the answer's
+                      ;; underscore spelling is the same check; anything else ties the finding
+                      ;; to nothing, and is dropped rather than kept as a check the round never derived.
+                      (some #{(keyword (str/replace (str/trim (str (:check f))) "_" "-"))}
+                            asked)
+                      (assoc :check (keyword (str/replace (str/trim (str (:check f))) "_" "-")))
+                          (seq (:evidence f))
+                          (assoc :evidence (mapv str (:evidence f)))
+                          (true? (:for_person f))
+                          (assoc :for-person true))))))
+         raw)))
 
 (def ^:private derivation-names
   (into #{} (map name) derivation-keys))
@@ -1529,16 +1546,26 @@
                      (not (str/blank? (str (:cause r)))) (assoc :cause (str/trim (str (:cause r)))))))))
        (reduce (fn [acc r] (if (some #(= (:id r) (:id %)) acc) acc (conj acc r))) [])))
 
-(defn ^{:malli/schema [:=> [:cat :string :any] :map]}
+(defn ^{:malli/schema [:=> [:cat :string :any [:set :keyword]] :map]}
   parse-design-decision
-  "Codex JSON -> a :design-decision ledger record, or nil when unusable."
-  [json-str design-seq]
+  "Codex JSON -> a :design-decision ledger record, or nil when unusable.
+
+   `asked` is the checks the round's prompt defined (`report/derivations-of` its design). A
+   check outside it is one the judge was never asked: it is dropped from :checks and named under
+   :unasked-checks, and a finding filed under it is kept check-less. Kept, it would reach the
+   ledger, the figures and `report/proceeds?` — where a `broken` on a strata-era `decomposable`
+   reads as the advisory check, and waves through the defect it carries."
+  [json-str design-seq asked]
   (try
     (let [m (json/parse-string json-str true)
           r (keyword (str (:recommend m)))
-          checks (into [] (keep (fn [c]
-                                  (let [k (keyword (str/replace (str (:check c)) "_" "-"))]
-                                    (when (derivation-keys k)
+          named  (keep (fn [c]
+                         (let [k (keyword (str/replace (str (:check c)) "_" "-"))]
+                           (when (derivation-keys k) [k c])))
+                       (:checks m))
+          unasked (into [] (comp (map first) (remove asked) (distinct)) named)
+          checks (into [] (keep (fn [[k c]]
+                                    (when (asked k)
                                       {:check  k
                                        :status (let [st (keyword (str (:status c)))]
                                                  (if (#{:held :broken :underivable} st)
@@ -1546,9 +1573,9 @@
                                                    ;; a judge that answered in the
                                                    ;; old shape is still answering
                                                    (if (:held c) :held :broken)))
-                                       :note   (str (:note c))}))))
-                       (:checks m))
-          findings (normalize-findings (:findings m))
+                                       :note   (str (:note c))})))
+                       named)
+          findings (normalize-findings (:findings m) asked)
           rulings  (parse-rulings (:relation_rulings m))
           asks     (str (:asks m))]
       ;; An :ask needs no finding: what it hands on is the question, and a doubt the build must not
@@ -1568,7 +1595,8 @@
           ;; recommendation every finding is the amender's, whatever the judge marked.
           (and (not= :proceed r) (seq findings)) (assoc :findings (cond->> findings
                                                                     (not= :ask r) (mapv #(dissoc % :for-person))))
-          (seq rulings)                          (assoc :relation-rulings rulings))))
+          (seq rulings)                          (assoc :relation-rulings rulings)
+          (seq unasked)                          (assoc :unasked-checks unasked))))
     (catch Exception _ nil)))
 
 (defn- mismatched
@@ -2393,9 +2421,9 @@
                 round    {:cwd code-cwd :run-id run-id :kind :design-decision
                           :label label :reviewer reviewer}
                 result   (-> (run-round! (assoc round
-                                                :schema (design-decision-schema relation)
+                                                :schema (design-decision-schema design relation)
                                                 :prompt (design-prompt asking)))
-                             (judged #(parse-design-decision % (:seq design)))
+                             (judged #(parse-design-decision % (:seq design) (set (report/derivations-of design))))
                              (rule-unruled-relations! relation round asking)
                              (held-to-prior prior-rs)
                              (reconcile-relation-reading! relation breaks round asking prior-rs))
