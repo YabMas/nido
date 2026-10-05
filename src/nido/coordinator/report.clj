@@ -1815,6 +1815,11 @@
    ;; The warden's own words on why it ruled this way — written for whoever
    ;; picks the finding up, and until now readable only inside report.json.
    [:because     {:optional true} [:maybe string?]]
+   ;; The handle of the earlier finding the warden said this one is — a defect
+   ;; fixed once and back. It is what makes a park a question about the remedy
+   ;; rather than about the design, so a row that drops it reaches the gate as
+   ;; a design question the run never raised.
+   [:same-as     {:optional true} [:maybe string?]]
    ;; A repair for this one is in the branch and nothing checked it. The rest
    ;; of the list needs doing; this needs reading. Present only when true.
    [:handed      {:optional true} boolean?]

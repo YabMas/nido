@@ -809,16 +809,21 @@
    row that has resisted two repairs exactly as they meet one nobody has tried.
 
    `:belongs-in` is the file a fixer said the repair has to be made in, and it
-   is what `nido.review.stages/prior-open` carries a row past one hop on."
+   is what `nido.review.stages/prior-open` carries a row past one hop on.
+
+   `:same-as` is the warden's recurrence mark. A blocker raised over these rows
+   reads its ground from it, so a row that dropped it would put a park on
+   recurrence to a person as a design question."
   [handed findings]
   (into []
-        (map (fn [{:keys [id title file line-start disposition because
+        (map (fn [{:keys [id title file line-start disposition because same-as
                           owner-layer from-layer attempts belongs-in] :as f}]
                (cond-> {:title (str (or title "(untitled finding)"))}
                  id          (assoc :id (str id))
                  file        (assoc :where (str file (when line-start (str ":" line-start))))
                  disposition (assoc :disposition (keyword disposition))
                  because     (assoc :because (str because))
+                 same-as     (assoc :same-as (str same-as))
                  (or owner-layer from-layer) (assoc :layer (str (or owner-layer from-layer)))
                  (handed? handed f) (assoc :handed true)
                  (and attempts (pos? attempts)) (assoc :attempts attempts)
@@ -829,7 +834,8 @@
   "What an inherited row may carry back into an entry: the ledger's own
    `ReviewFinding` keys. The carry adds what the run used it for, and none of
    that is a fact about the branch."
-  [:id :title :where :disposition :because :layer :attempts :inherited :belongs-in])
+  [:id :title :where :disposition :because :same-as :layer :attempts :inherited
+   :belongs-in])
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   owed-rows

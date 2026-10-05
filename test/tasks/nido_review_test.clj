@@ -2314,6 +2314,33 @@
         "the last run's unread repair is not this run's claim to make")
     (is (= entry (report/validate-event :review entry)))))
 
+(deftest a-recurrence-park-keeps-its-ground-through-the-ledger-rows
+  ;; The gate is raised over `owed-rows`, not over the warden's rulings. Trimmed
+  ;; without `:same-as`, every park reached it as a design question: a defect
+  ;; the warden called back after a repair was put to a person as "does the
+  ;; design stand?", with the design verdict's repair recommended.
+  (let [run     {:status :unresolved
+                 :history [{:iter 2
+                            :findings [{:id "r2" :handle "f94e0553" :same-as "f94e0553"
+                                        :title "census omits the draft door"
+                                        :disposition :park
+                                        :because "recurrence (park ground b)"}]}]
+                 :findings []}
+        rows    (verdict/owed-rows run)
+        blocker (t/parked-blocker rows {:verdict :sound})]
+    (is (= ["f94e0553"] (mapv :same-as rows))
+        "the ledger row is the only thing the gate and the next run read the mark from")
+    (is (str/includes? (:needs blocker) "third attempt")
+        "a park on recurrence asks whether the remedy is a decision")
+    (is (not (str/includes? (:needs blocker) "Does the design stand?")))
+    (is (= blocker (report/validate-event :blocker blocker))))
+  (let [inherited {:status :unresolved :history [] :findings []
+                   :carry {:inherited-open [{:id "ip" :title "t" :same-as "aeee857f"
+                                             :disposition :park :inherited true}]}}
+        blocker   (t/parked-blocker (verdict/owed-rows inherited) nil)]
+    (is (str/includes? (:needs blocker) "third attempt")
+        "a park carried to the next run is still the same recurrence")))
+
 (deftest a-stop-over-a-remainder-the-round-does-not-hold-is-unresolved
   ;; A warden stop was judged from the stopping round's findings, so a run
   ;; holding a park from round 1 — or a row the last run left owed — ended
