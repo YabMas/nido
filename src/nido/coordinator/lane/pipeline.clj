@@ -833,6 +833,10 @@
    ;; and re-running the round re-reads the same record to the same end. What a person is
    ;; being asked is whether the judge or the record is the thing that is wrong.
    :nothing-to-amend     :escalate
+   ;; A design round's terminal decision the ledger never took. Not :retry: whatever kept the
+   ;; write out is not known to lift, and the decision — a person's question, often — exists
+   ;; only in the run's report until someone reads it there.
+   :unrecorded           :escalate
    ;; A claim names something the declared design does not hold. Not :route-back: the
    ;; refusal writes nothing, so the next tick reads the position that fired this round
    ;; and fires it again. The record or the declaration has to move, and which one is an

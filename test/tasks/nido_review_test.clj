@@ -1420,6 +1420,7 @@
            :retreated          "below what its own round would check"
            :no-record          "author the design first"
            :clearance-contended "no round re-runs"
+           :unrecorded         "could not be written to the ledger"
            :codex-failed       "NOT a clean result"}]
     (with-redefs [rloop/run-loop (fn [_] {:status status})]
       (let [out (with-out-str (t/design-cmd ":cwd" "/w"))]

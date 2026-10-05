@@ -94,8 +94,10 @@
   (Operation design-decision! "Run the decision round over a design."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [design-prompt parse-design-decision unresolved-subjects design/elements answered]})
-  (Operation append! "Append a round's record to the ledger."
-    {:signature [:=> [:catn [:cwd Path] [:record :map]] :any]})
+  (Operation append!
+    "Append a round's record to the ledger the run resolved when it started — never one re-resolved
+     from a directory mid-run."
+    {:signature [:=> [:catn [:ledger [:maybe [:tuple :keyword :string]]] [:record :map]] :any]})
   (Operation clear!
     "Write the clearance a proceeding decision already on the ledger implies, and nothing else —
      no round re-runs and nothing becomes a grant."

@@ -110,7 +110,10 @@
    `:unavailable` is why no reviewer could be run, as the reviewer said it —
    `nido.review.codex/unavailability`'s `{:signal :message :retry-at}`. The
    status names the condition; this is the remedy and the hour to come back,
-   whose only other copies are the `:review` entry and a log in the run dir."
+   whose only other copies are the `:review` entry and a log in the run dir.
+
+   `:unrecorded` is what a record run that ended `unrecorded` would otherwise have ended as, and
+   the ledger it could not write to: the decision it reached is in this report and nowhere else."
   [ctx]
   (let [parks    (get-in ctx [:carry :parks])
         standing (into [] (distinct) (concat (get-in ctx [:warden :standing])
@@ -124,6 +127,9 @@
      (cond-> {}
        (:unavailable ctx)
        (assoc :unavailable (:unavailable ctx))
+
+       (:unrecorded ctx)
+       (assoc :unrecorded (:unrecorded ctx))
 
        (seq (:unfixable ctx))
        (assoc :unfixable (vec (:unfixable ctx)))

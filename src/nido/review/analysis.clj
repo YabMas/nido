@@ -312,7 +312,7 @@
    per check are the ledger's, read by `bb nido:review:figures`, never carried here."
   [{:keys [loop run-id report-path status rounds judged amended unappended weakened disputed
            record-seq still-broken asks stood-in reviewed-project reviewed-session reviewed-ws-id
-           machinery] :as run}]
+           machinery unrecorded] :as run}]
   (let [kind   (name loop)
         broken (seq (map name still-broken))]
     (cond-> {:adapter     :review-run
@@ -337,6 +337,14 @@
                                " · figures: bb nido:review:figures"
                                (when reviewed-project (str " :project " (name reviewed-project)))
                                " :run-id " run-id "\n"
+                               ;; The figures count from the ledger, which this decision never reached —
+                               ;; said here, or a reader takes the run for its would-be status.
+                               (when unrecorded
+                                 (str "Unrecorded: the run would have ended "
+                                      (some-> (:would-have-ended unrecorded) name)
+                                      ", but its decision reached no ledger"
+                                      (when-let [l (:ledger unrecorded)] (str " (" l ")"))
+                                      " — the figures and the ledger do not hold it\n"))
                                ;; A cleared run stops nobody, so this line is the only place its
                                ;; question surfaces outside the ledger.
                                (when-not (str/blank? (str asks)) (str "Asked of a person: " asks "\n"))

@@ -350,7 +350,7 @@
   (let [appended (atom [])]
     (with-redefs [record/design-decision! (fn [_] (assoc (decision :proceed :checks [(check :relation-honest :held)])
                                                         :unruled ["lines-exact"]))
-                  record/append! (fn [_ r] (swap! appended conj r) nil)]
+                  record/append! (fn [_ r] {:seq (count (swap! appended conj r))})]
       (let [first (run record/design-judge-stage (ctx))]
         (is (= :next-round (:control first)))
         (is (nil? (:status first)))
@@ -590,7 +590,7 @@
                 (fn [_] (decision :amend :checks [(check :relation-honest :underivable)
                                                   (check :goal-served :held)]
                                   :findings [{:cites ["c"] :claim "x" :check :relation-honest}]))
-                record/append! (fn [_ _] nil)]
+                record/append! (fn [_ _] {:seq 1})]
     (let [out (run record/design-judge-stage (ctx))]
       (is (= :underivable (:status out)))
       (is (= :escalate (:control out)))
@@ -622,7 +622,7 @@
   ;; missing.
   (with-redefs [record/design-decision!
                 (fn [_] (decision :amend :checks [(check :goal-served :held)]))
-                record/append! (fn [_ _] nil)]
+                record/append! (fn [_ _] {:seq 1})]
     (let [out (run record/design-judge-stage (ctx))]
       (is (= :nothing-to-amend (:status out)))
       (is (= :escalate (:control out)))
@@ -685,7 +685,7 @@
                   (fn [_] (decision :amend :checks [(check :goal-served :held)]
                                     :findings [{:cites ["c"] :claim "the record says both"
                                                 :claim-id "consistency-reported"}]))
-                  record/append! (fn [_ _] nil)]
+                  record/append! (fn [_ _] {:seq 1})]
       (is (nil? (:status (run record/design-judge-stage
                               (ctx :history [{:disputes [objection]}])))))
       (is (= :disputed
@@ -695,7 +695,7 @@
 (deftest a-check-restated-after-two-objections-goes-to-a-human
   (let [k (record/design-finding-base-key (check :relation-honest :broken))]
     (with-redefs [record/design-decision! (fn [_] (decision :amend))
-                  record/append! (fn [_ _] nil)]
+                  record/append! (fn [_ _] {:seq 1})]
       (is (nil? (:status (run record/design-judge-stage
                               (ctx :history [{:disputes [{:key k :claim "c" :because "b"}]}])))))
       (is (= :disputed
@@ -1686,13 +1686,38 @@
                                     :findings [{:cites ["c"] :claim "over-serves the goal"
                                                 :check :goal-served :claim-id "pool-in-scope"
                                                 :for-person true}]))
-                  record/append! (fn [_ r] (swap! appended conj r) nil)]
+                  record/append! (fn [_ r] {:seq (count (swap! appended conj r))})]
       (let [out (run record/design-judge-stage (ctx))]
         (is (= :asked (:status out)))
         (is (= :escalate (:control out)))
         (is (= [:goal-served] (mapv :check (:findings out)))
             "the round stops holding what it found, so the report's broken check has a case behind it")
         (is (= [:ask] (mapv :recommend @appended)) "the decision is on the ledger for the person")))))
+
+(deftest an-ask-the-ledger-never-took-ends-unrecorded
+  ;; An :ask decision reached no ledger and the run still ended :asked: the person was parked on a
+  ;; question no grant could answer, the next round never read it, and the figures disagreed with
+  ;; the headline. The status a run ends on has to be one the ledger backs.
+  (with-redefs [record/design-decision! (fn [_] (decision :ask :checks [(check :goal-served :held)]))
+                record/append! (fn [_ _] nil)]
+    (let [out (run record/design-judge-stage (ctx :config {:cwd "/w" :run-id "r1" :ledger [:nido "ws-1"]}))]
+      (is (= :unrecorded (:status out)) "a terminal decision that wrote nothing must not read as recorded")
+      (is (= :escalate (:control out)) "the decision exists only in the report, so a person has to read it there")
+      (is (= {:would-have-ended :asked :ledger "nido/ws-1"} (:unrecorded out))
+          "the report has to say what the run decided and where it failed to write it")
+      (is (not (contains? out :appended-seq))))))
+
+(deftest a-round-appends-to-the-ledger-resolved-when-the-run-started
+  ;; Resolving the session from cwd again at the append answered nil mid-run, and the judged
+  ;; decision went nowhere. The ledger the run started on is the one every round writes to.
+  (let [wrote-to (atom nil)]
+    (with-redefs [record/design-decision! (fn [_] (decision :ask :checks [(check :goal-served :held)]))
+                  stages/project+ws-from-cwd (fn [_] nil)
+                  record/append! (fn [ledger _] (reset! wrote-to ledger) {:seq 9})]
+      (let [out (run record/design-judge-stage (ctx :config {:cwd "/w" :run-id "r1" :ledger [:nido "ws-1"]}))]
+        (is (= [:nido "ws-1"] @wrote-to) "a cwd that resolves nothing now must not lose the decision")
+        (is (= :asked (:status out)))
+        (is (= 9 (:appended-seq out)))))))
 
 (deftest an-ask-that-also-found-a-derivable-defect-repairs-it-before-asking
   ;; One round asked a scope question and said in its reason that two derivable defects also needed
@@ -1728,7 +1753,7 @@
   (with-redefs [record/design-decision!
                 (fn [_] (decision :ask :checks [(check :relation-honest :broken)]
                                   :findings [{:cites ["c"] :claim "x" :check :relation-honest}]))
-                record/append! (fn [_ _] nil)
+                record/append! (fn [_ _] {:seq 1})
                 record/disputed-n (constantly 2)]
     (let [out (run record/design-judge-stage (ctx))]
       (is (= :asked (:status out)))
@@ -1743,7 +1768,7 @@
                       :baseline {:seq 1 :relation :within})]
     (with-redefs [record/design-decision!
                   (fn [_] (decision :ask :checks [(check :goal-served :held)]))
-                  record/append! (fn [_ _] nil)
+                  record/append! (fn [_ _] {:seq 1})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/entries-of (constantly [])
                   ws/entry-at-seq (constantly modest)

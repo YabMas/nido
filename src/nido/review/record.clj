@@ -2557,9 +2557,9 @@
    written one. It is the difference between a round that owed a person and one
    that did not, and the driver has no other way to tell them apart: a `:proceed`
    is the design round's ask, and an ask nobody is owed is not an escalation."
-  [cwd design-seq]
+  [[project ws-id] design-seq]
   (boolean
-   (when-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+   (when project
      (some #(= design-seq (get-in % [:design :seq]))
            (ws/entries-of project ws-id :design-cleared)))))
 
@@ -2621,11 +2621,24 @@
               (when (= :stale (:refused res))
                 (recur (inc attempts))))))))))
 
-(defn ^{:malli/schema [:=> [:cat :Path :map] :any]}
+(defn- ledger-of
+  "The `[project ws-id]` a record run reads and writes, or nil: the config's `:ledger`, resolved
+   once when the run started, and resolved from `:cwd` only for a run started without one.
+
+   Once, because resolving a session from a directory can answer nil mid-run — the registry
+   being rewritten, a session restarting — and a run resolving it again per append would judge
+   a workstream it then could not write its decision to."
+  [config]
+  (if (contains? config :ledger)
+    (:ledger config)
+    (stages/project+ws-from-cwd (:cwd config))))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe [:tuple :keyword :string]] :map] :any]}
   append!
-  "Append a round's record to the workstream ledger. Best-effort, for the same
-   reason the review path's appends are: a round that produced an answer must not
-   turn into a failure because the side record could not be written.
+  "Append a round's record to `ledger`, a `[project ws-id]`. Never throws: a round that produced
+   an answer must not turn into a crash because the record could not be written. Whether an
+   unwritten record is a failure is the caller's to say — a round that goes on writes again
+   next round, and one that ends the run cannot (`run-design-judge-stage`'s `final!`).
 
    A decision that proceeds (`report/proceeds?`) may also CLEAR the design, and
    that happens here rather than in either loop so that no round can append a
@@ -2634,12 +2647,12 @@
    Returns `{:seq n}`, the :seq the ledger gave the record — the only answer to which entry this
    round wrote, since the newest entry once the lock is released may be another writer's — plus
    `:contended true` when a clearance was still owed and could not be written. nil when nothing
-   was appended: an outcome, no workstream, or a write that threw. Nothing this returns means `a
+   was appended: an outcome, no ledger, or a write that threw. Nothing this returns means `a
    person is owed the grant`, so a caller asks the design itself, as `proceeding-status` does."
-  [cwd record]
+  [ledger record]
   (try
     (when (:format record)
-      (when-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+      (when-let [[project ws-id] ledger]
         (let [n (ws/seq-of-path (ws/append-entry! project ws-id {:kind (:format record)} (pr-str record)))]
           (cond-> {:seq n}
             (and (= :design-decision (:format record))
@@ -2669,12 +2682,11 @@
    `append!` — and the clearance stage makes it. A design that no longer stands
    owes nobody anything until what moved under it is repaired, so it goes where
    standing says rather than onto a person's gate."
-  [cwd record answer]
+  [[project ws-id :as ledger] record answer]
   (let [n               (:design-seq record)
-        [project ws-id] (stages/project+ws-from-cwd cwd)
         design          (when project (ws/entry-at-seq project ws-id n))]
     (cond
-      (cleared? cwd n)                                  :cleared
+      (cleared? ledger n)                               :cleared
       (:contended answer)                               :clearance-contended
       (or (nil? design) (report/owes-a-person? design)) :proceed
       :else (let [st (standing/of-design project ws-id design)]
@@ -2695,7 +2707,7 @@
    nobody judged. Anything else answers :nothing-to-clear: the ledger moved on
    after the stage was fired, and the next reading of it says where."
   [cwd]
-  (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+  (if-let [[project ws-id :as ledger] (stages/project+ws-from-cwd cwd)]
     (let [design   (ws/latest-entry project ws-id :design)
           decision (some->> (ws/entries-of project ws-id :design-decision)
                             (filter #(= (:seq design) (:design-seq %)))
@@ -2704,8 +2716,8 @@
         (or (nil? design)
             (not (report/proceeds? decision))
             (report/owes-a-person? design)) :nothing-to-clear
-        (cleared? cwd (:seq design))        :cleared
-        :else (proceeding-status cwd decision
+        (cleared? ledger (:seq design))     :cleared
+        :else (proceeding-status ledger decision
                                  {:contended (= :contended (clear-if-owed-nobody! project ws-id (:seq design)))})))
     :no-workstream))
 
@@ -3974,7 +3986,7 @@
         ;; read. From the ledger rather than this run's history, whose carry was
         ;; keyed on the id alone — and this run's own earlier reviews are on the
         ;; ledger too, at a tree that does not move within a run.
-        [project ws-id] (stages/project+ws-from-cwd cwd)
+        [project ws-id :as ledger] (ledger-of (:config ctx))
         subject (or target (when project (ws/latest-entry project ws-id :baseline)))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) subject)
         {:keys [standing settled prior]} (judge-inputs project ws-id :baseline subject reading subject run-id
@@ -4007,7 +4019,7 @@
                           (update :carry dissoc :stale))
                       (when (:seq subject) {:judged-seq (:seq subject)})
                       (when subject (banking asked reading record)))]
-    (let [answer (append! cwd record)]
+    (let [answer (append! ledger record)]
       (with-appended
        (cond
         (:outcome record)
@@ -4692,7 +4704,7 @@
         ;; every ledger the design's unit reaches — never this run's history. A role's players
         ;; are the effective model's, as the round resolves them: a role kept from the baseline
         ;; is not restated, and its players are still what a claim about it rests on.
-        [project ws-id] (stages/project+ws-from-cwd cwd)
+        [project ws-id :as ledger] (ledger-of (:config ctx))
         design  (when project (ws/latest-entry project ws-id :design))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) design)
         {:keys [standing settled prior]}
@@ -4721,17 +4733,27 @@
                       (when (:seq design) {:judged-seq (:seq design)})
                       (when design (banking asked reading record)))
         traj   (trajectory (:history ctx))
-        final! (fn [c] (with-appended c (append! cwd (cond-> record (seq traj) (assoc :trajectory traj)))))]
+        ;; The status a run ends on is a claim that the ledger holds this decision: an :asked
+        ;; whose question was never written is a question no grant can answer and no later round
+        ;; reads. So an append that wrote nothing ends the run :unrecorded, saying what it would
+        ;; have ended as, rather than as the status the ledger cannot back.
+        final! (fn [c]
+                 (let [answer (append! ledger (cond-> record (seq traj) (assoc :trajectory traj)))]
+                   (if (:seq answer)
+                     (with-appended c answer)
+                     (assoc c :status :unrecorded :control :escalate
+                            :unrecorded {:would-have-ended (:status c)
+                                         :ledger (when project (str (name project) "/" ws-id))}))))]
     (cond
       (:outcome record)
       (with-appended (assoc ctx :record record :status (:outcome record))
-                     (append! cwd record))
+                     (append! ledger record))
 
       ;; Would proceed, on claims it read once or on an amendment's first reading: appended as the
       ;; reading it is — it does not proceed, so it clears nothing — and read again before a person
       ;; is asked.
       (read-once? record)
-      (let [answer (append! cwd record)]
+      (let [answer (append! ledger record)]
         (with-appended (second-reading (assoc ctx :record record :findings []
                                               :underivable (underivable-checks record))
                                        design record)
@@ -4753,8 +4775,8 @@
       ;; :proceed to :escalate and would append a blocker that outranks the
       ;; clearance on the next tick. A clearance still owed and never written is
       ;; a write, not an ask, for the same reason — see `proceeding-status`.
-      (let [answer (append! cwd (cond-> record (seq traj) (assoc :trajectory traj)))
-            status (proceeding-status cwd record answer)]
+      (let [answer (append! ledger (cond-> record (seq traj) (assoc :trajectory traj)))
+            status (proceeding-status ledger record answer)]
         (with-appended (assoc ctx :record record :findings []
                               :underivable (underivable-checks record)
                               :status status
@@ -4812,7 +4834,7 @@
             (if (and (seq derivable) (not-any? disputed? derivable))
               (with-appended (assoc ctx :record record :findings derivable
                                     :underivable (underivable-checks record))
-                             (append! cwd record))
+                             (append! ledger record))
               (final! (assoc ctx :record record :findings findings
                              :underivable (underivable-checks record)
                              :control :escalate :status :asked))))
@@ -4825,7 +4847,7 @@
           (seq findings)
           (with-appended (assoc ctx :record record :findings findings
                                 :underivable (underivable-checks record))
-                         (append! cwd record))
+                         (append! ledger record))
 
           ;; Nothing to repair, and claims or relation ids it was handed that it neither confirmed
           ;; nor refuted: a proceed over them does not proceed (`report/proceeds?`), so the round is
@@ -4835,7 +4857,7 @@
                                        :underivable (underivable-checks record)))]
             (if (= :unruled (:status c))
               (final! (assoc c :control :escalate))
-              (with-appended c (append! cwd record))))
+              (with-appended c (append! ledger record))))
 
           ;; Nothing an amender could repair, and a check the round could not derive at
           ;; all: what is left is the missing yardstick. An amender told to fix one would
@@ -4909,7 +4931,7 @@
    progress, which is the one thing a convergence loop must not do."
   [ctx]
   (let [{:keys [cwd survey-cwd run-id budget reviewer]} (:config ctx)
-        [project ws-id] (stages/project+ws-from-cwd cwd)
+        [project ws-id] (ledger-of (:config ctx))
         n   (count (filter :resurveyed (:history ctx)))
         nested-id (str run-id "-resurvey-" (inc n))
         ;; The baseline the design was JUDGED against, which is the only one whose
@@ -4924,6 +4946,7 @@
         reading (if survey-cwd {:dir survey-cwd} (tree/reading :baseline project cwd))
         survey (fn [dir]
                  (rloop/run-loop {:cwd cwd
+                                  :ledger (when project [project ws-id])
                                   :code-cwd dir
                                   :judged-tree (tree/stamp reading dir)
                                   :run-id nested-id

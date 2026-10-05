@@ -404,6 +404,14 @@
         "without :project the command answers that no ledger names the run, for any project but nido")
     (is (not (contains? p :fix-attempts)) "a record run dispatches no repairs to count")))
 
+(deftest a-record-run-whose-decision-reached-no-ledger-says-so
+  ;; The figures command in the headline counts from the ledger, so an unrecorded decision makes
+  ;; it disagree with the run; the headline is the analysis session's whole briefing.
+  (let [h (:headline (analysis/payload (assoc a-design-run :status :unrecorded
+                                              :unrecorded {:would-have-ended :asked :ledger "nido/ws-1"})))]
+    (is (str/includes? h "Status: unrecorded"))
+    (is (str/includes? h "Unrecorded: the run would have ended asked, but its decision reached no ledger (nido/ws-1)"))))
+
 (deftest a-record-run-judged-by-a-stand-in-says-so
   (let [p (analysis/payload (assoc a-design-run
                                    :stood-in [{:reviewer :claude :instead-of :codex :readings 2}]))]

@@ -1924,6 +1924,7 @@
       :stood-in         (report/stood-in report)
       :machinery        (:machinery report)
       :asks             (when (= :design-decision (:format rec)) (:asks rec))
+      :unrecorded       (:unrecorded final)
       :reviewed-project project
       :reviewed-session session
       :reviewed-ws-id   ws-id})))
@@ -1934,7 +1935,7 @@
    command always did."
   [{:keys [cwd code-cwd survey-cwd kind run-id clock title report-path report-atom
            plain emit pipeline finding-key changed? max-iters dry-run? budget baseline
-           remedies epilogue reviewer judged-tree]}]
+           remedies epilogue reviewer judged-tree ledger]}]
   (let [final  (try
                  (frontend/with-live-frame
                    {:frame-fn #(render/record-frame @report-atom % {:title title})
@@ -1949,6 +1950,7 @@
                      (fn []
                        (rloop/run-loop
                         (cond-> {:cwd cwd :code-cwd code-cwd
+                                 :ledger ledger
                                  :run-id run-id
                                  :max-iters max-iters
                                  :dry-run? (boolean dry-run?)
@@ -2048,6 +2050,10 @@
         given  (or cwd (System/getProperty "user.dir"))
         cwd    (or (lifecycle/worktree-from-cwd given) given)
         reviewer (reviewer-of cwd reviewer)
+        ;; The workstream every round reads and appends to, resolved here and nowhere after: a
+        ;; session resolved again mid-run can answer nothing, and a round would then judge a
+        ;; workstream it could not write its decision to.
+        ledger (stages/project+ws-from-cwd cwd)
         run-id (str kind "-loop-" (random-uuid))
         clock  #(Instant/now)
         title  (record-loop-title cwd kind)
@@ -2059,7 +2065,7 @@
         emit   (frontend/emit-fn report-atom report-path clock plain)
         reading (if code-cwd
                   {:dir code-cwd}
-                  (tree/reading (keyword kind) (first (stages/project+ws-from-cwd cwd)) cwd))]
+                  (tree/reading (keyword kind) (first ledger) cwd))]
     (some-> (provenance/warning (:machinery @report-atom)) println)
     (some-> (off-position-line cwd (record-loop-kinds kind)) println)
     (some-> (tree/line reading) println)
@@ -2101,7 +2107,7 @@
               :clock clock :title title :report-path report-path
               :report-atom report-atom :plain plain :emit emit :pipeline pipeline
               :finding-key finding-key :changed? changed? :max-iters max-iters :dry-run? dry-run?
-              :budget budget :reviewer reviewer
+              :budget budget :reviewer reviewer :ledger ledger
               :baseline baseline :remedies remedies :epilogue epilogue}))))))))
 
 (def ^:private baseline-remedies
@@ -2165,6 +2171,7 @@
    :clearance-contended "the design owes nobody a grant and the decision stands, but its clearance is not written yet — the clearance stage writes it, and no round re-runs"
    :underivable "a check has no yardstick to derive against, which is not a defect an amender can repair"
    :nothing-to-amend "the round would not proceed and named nothing an amender could repair — read its reason on the ledger and decide by hand"
+   :unrecorded "the round reached its end, but its decision could not be written to the ledger — no grant, later round or figure can read it; run the round again once this worktree resolves to its workstream"
    :premise-unverified "verify the baseline it cites first — `bb nido:review:baseline :seq <that entry>` — then decide against it"
    :no-record "author the design first"})
 
