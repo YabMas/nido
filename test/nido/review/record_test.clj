@@ -1210,8 +1210,8 @@
               ":codex-failed sends a reader to a judge that broke, when the vendor refused to run one")
           (is (str/includes? (:detail r) line)
               "the vendor's line is the only place the wait it calls for is stated")
-          (is (contains? @#'record/judge-outcomes (name (:outcome r)))
-              "a launched judge, as the :codex-failed this outcome used to be was")))
+          (is (not (contains? @#'record/judge-outcomes (name (:outcome r))))
+              "the refused judge read nothing, so a run of only such rounds is not analysed")))
       (finally (fs/delete-tree dir)))))
 
 (deftest a-judgement-keeps-who-made-it

@@ -154,8 +154,11 @@
         "and it is not the loop's own remainder, which its ledger entry states")))
 
 (deftest a-carried-verdicts-rows-are-not-kept-again
+  ;; One target read: a run that read none and carried its verdict has nothing
+  ;; of its own and is never queued — see the next test.
   (let [report {:summary {:rounds 1 :fix-attempts 0}
                 :target {:base "main"}
+                :rounds [{:phases [{:phase "review" :layers [{:label "a" :status "reviewed"}]}]}]
                 :design-verdict {:outcome "answered"
                                  :verdict {:verdict :sound :round 1 :carried-from 93
                                            :unraised [{:where "a.clj:128" :what "no case default"}
@@ -165,6 +168,16 @@
         "an earlier run's judge found these; re-offering them decides nothing")
     (is (= 2 (:verdict-unraised p)))
     (is (= 93 (:design-carried-from p)))))
+
+(deftest a-clean-run-that-read-nothing-and-carried-its-verdict-is-not-queued
+  (let [report {:summary {:rounds 1 :fix-attempts 0}
+                :target {:base "main"}
+                :rounds [{:phases [{:phase "review" :layers [{:label "a" :status "skipped"}]}]}]
+                :design-verdict {:outcome "answered"
+                                 :verdict {:verdict :sound :round 1 :carried-from 93}}}]
+    (is (nil? (analysis-payload-for {:status :clean :history [] :findings []} report))
+        "every target skipped and the verdict an earlier run's: its analysis would
+         re-read what the earlier run's analysis already read")))
 
 (deftest the-analysis-is-told-whether-the-run-reached-a-ledger
   ;; Read off the report for the verdict's reason: it is the copy that survives

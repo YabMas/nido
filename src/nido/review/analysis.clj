@@ -388,7 +388,8 @@
   worth-analysing?
   "Pure. Every terminal outcome is worth a look EXCEPT a dry run, a run that
    reviewed nothing, an orphan that stopped before it read anything, a run whose
-   reviewer was unavailable before any target was answered, a record run none of
+   reviewer was unavailable before any target was answered, a clean run that
+   read no target and only carried an earlier verdict, a record run none of
    whose rounds launched a judge, and a run that left no report to read.
 
    `:nothing-to-review` is the cheapest of all to exclude and the most obviously
@@ -434,7 +435,16 @@
    status; six such runs in one week each bought a worktree and an hour of Opus
    to say so. But the status alone would also drop a run that read three
    targets, raised a P1 and lost its reviewer in round two, which is as worth
-   reading as any.
+   reading as any. A record run carries no target count, so the same question
+   is put to it as `:judged`: `record/judges-launched` does not count a judge
+   its vendor refused, and a round that judged before the refusal still does.
+
+   A `:clean` run that read no target and whose design verdict is CARRIED from
+   an earlier run has nothing of its own: every target was skipped on an
+   unchanged patch hash, no judge read the code, and the findings and verdict
+   it reports are the earlier run's, which that run's own analysis already
+   read. Any one of the three missing and the run did something — a target
+   read, a verdict judged afresh, or a status the carried verdict changed.
 
    Takes the run map the enqueue site already holds rather than the status
    alone, because three of the exclusions are facts about the run. That
@@ -442,7 +452,7 @@
    `reconcile/settle-one!` and a finished one through `tasks.nido-review`, and a
    second gate at either call site is a second place for the list above to be
    incomplete."
-  [{:keys [status dry-run? loop judged] :as run} report?]
+  [{:keys [status dry-run? loop judged targets-reviewed design-carried-from] :as run} report?]
   (boolean (and status
                 (not (#{:nothing-to-review :stack-conflicted} (keyword status)))
                 (not dry-run?)
@@ -450,7 +460,11 @@
                 (or (not (contains? settled-statuses (name status)))
                     (orphan-worth-reading? run))
                 (or (not= :reviewer-unavailable (keyword status))
-                    (pos? (long (or (:targets-reviewed run) 0))))
+                    (#{:baseline :design} loop)
+                    (pos? (long (or targets-reviewed 0))))
+                (not (and (= :clean (keyword status))
+                          design-carried-from
+                          (zero? (long (or targets-reviewed 0)))))
                 ;; A record run that launched no judge has nothing a loop did to read. Its count
                 ;; decides, never its status: :premise-unverified ends runs that judged and runs
                 ;; that never started alike.

@@ -1449,6 +1449,9 @@
   (let [round (fn [outcome] {:phases [{:phase :judge :outcome outcome} {:phase :amend}]})]
     (is (= 2 (record/judges-launched {:rounds [(round nil) (round "codex-failed")]}))
         "a verdict and a failed judge were both launched")
+    (is (= 1 (record/judges-launched {:rounds [(round nil) (round "reviewer-unavailable")]}))
+        "a judge its vendor refused read nothing, so a run that only ever met the refusal is not
+         sent to an analysis — while one that judged before the refusal still is")
     (is (= 1 (record/judges-launched {:rounds [(round nil) (round "premise-unverified")]})))
     (is (= 0 (record/judges-launched {:rounds [(round "subjects-undeclared")]})))
     (is (= 0 (record/judges-launched {:rounds [(round "goal-superseded") (round "premise-retracted")]}))

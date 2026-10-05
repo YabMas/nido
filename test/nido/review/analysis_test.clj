@@ -293,6 +293,21 @@
   ;; P1 at confidence 1.0, and excluding the status would have dropped it.
   (is (analysis/worth-analysing? (ended :reviewer-unavailable) true)))
 
+(deftest a-clean-run-that-only-carried-its-verdict-is-not-analysed
+  ;; review-a652021d skipped all four targets on unchanged patch hashes and
+  ;; carried the verdict from entry 93: its whole report was the previous run's,
+  ;; already analysed, and it still bought a session to say so.
+  (let [carried (assoc (ended :clean) :targets-reviewed 0 :design-carried-from 93)]
+    (is (not (analysis/worth-analysing? carried true)))
+    (is (not (analysis/worth-analysing? (assoc carried :status "clean") true))
+        "the status arrives as the string the report was persisted with")
+    (is (analysis/worth-analysing? (assoc carried :targets-reviewed 1) true)
+        "a target read is reviewer behaviour of its own")
+    (is (analysis/worth-analysing? (dissoc carried :design-carried-from) true)
+        "a verdict judged afresh is a reading of this run's code")
+    (is (analysis/worth-analysing? (assoc carried :status :unresolved) true)
+        "a status other than clean says the run ended somewhere the carry did not decide")))
+
 (deftest a-run-with-no-terminal-status-is-not-analysed
   (is (not (analysis/worth-analysing? (ended nil) true))))
 
@@ -402,6 +417,14 @@
       "no round launched a judge, so there is no loop behaviour to read")
   (is (not (analysis/worth-analysing? (assoc a-design-run :judged 0 :status :cleared) true))
       "whatever status it ended in"))
+
+(deftest a-record-run-that-lost-its-reviewer-is-judged-by-what-it-judged
+  ;; design-loop-ea82cce0 met a vendor refusal six seconds in and judged nothing;
+  ;; `judges-launched` does not count the refused round, so it reaches here at 0.
+  (is (not (analysis/worth-analysing? (assoc a-design-run :status :reviewer-unavailable :judged 0) true)))
+  (is (analysis/worth-analysing? (assoc a-design-run :status :reviewer-unavailable :judged 1) true)
+      "a record run carries no target count, so the diff loop's reading of one
+       would drop a run that judged in round one and lost its reviewer in round two"))
 
 (deftest a-record-runs-envelope-says-what-the-run-did
   (let [p (analysis/payload a-design-run)]
