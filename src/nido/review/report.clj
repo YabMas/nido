@@ -390,7 +390,9 @@
                      (:skipped ctx)))
          ;; A round that aborted names the targets it lost a reviewer on, and
          ;; they are rowed as the fan-out already moved them.
-         (into (mapv #(row % {:status "error"}) (:failed ctx)))
+         (into (mapv #(row % (cond-> {:status "error"}
+                               (:last-line %) (assoc :last-line (:last-line %))))
+                     (:failed ctx)))
          (into (for [[label n] counts
                      :when (and label (not (contains? accounted label)))]
                  (row {:label label} {:status "reported" :findings n})))))))

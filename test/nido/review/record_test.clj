@@ -1148,6 +1148,22 @@
             "a successful round dropped who answered, so every stand-in's verdict read as codex's"))
       (finally (fs/delete-tree dir)))))
 
+(deftest a-judge-its-vendor-would-not-run-ends-reviewer-unavailable-quoting-the-vendor
+  (let [dir  (str (fs/create-temp-dir))
+        line "ERROR: Selected model is at capacity. Please try a different model."]
+    (try
+      (with-redefs [cstate/run-dir      (constantly dir)
+                    codex/run-reviewer! (fn [_] {:exit 1 :log-path "l" :judged-by {:reviewer :codex}
+                                                 :unavailable {:signal :capacity :message line}})]
+        (let [r (#'record/run-round! {:run-id "r" :kind :baseline-review :prompt "p"})]
+          (is (= :reviewer-unavailable (:outcome r))
+              ":codex-failed sends a reader to a judge that broke, when the vendor refused to run one")
+          (is (str/includes? (:detail r) line)
+              "the vendor's line is the only place the wait it calls for is stated")
+          (is (contains? @#'record/judge-outcomes (name (:outcome r)))
+              "a launched judge, as the :codex-failed this outcome used to be was")))
+      (finally (fs/delete-tree dir)))))
+
 (deftest a-judgement-keeps-who-made-it
   (let [json (baseline-json {:verdict "sufficient" :reason "r" :confirmed [] :findings []})
         r    (#'record/judged {:ok json :judged-by stand-in} #(record/parse-baseline-review % 3))]

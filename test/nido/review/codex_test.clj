@@ -151,3 +151,80 @@
     (is (= [[:claude "stack-round-1.log"]] calls)
         "codex is never asked, whatever claude's log says")
     (is (= {:reviewer :claude} judged-by))))
+
+;; ── A vendor at capacity ────────────────────────────────────────────────────
+
+(def capacity-log
+  "The tail codex leaves when its model is shedding load — what ended four record runs and aborted a
+   diff round holding two finished layer reviews."
+  (str "exec jj diff in /w\n"
+       "ERROR: Selected model is at capacity. Please try a different model.\n"
+       "ERROR: Selected model is at capacity. Please try a different model.\n"))
+
+(deftest a-model-at-capacity-is-a-reviewer-that-could-not-run
+  (let [u (codex/unavailability capacity-log)]
+    (is (= :capacity (:signal u))
+        "unclassified, an absent reviewer reads as a failed review and a reader opens a diff that is fine")
+    (is (= "ERROR: Selected model is at capacity. Please try a different model." (:message u))
+        "verbatim, so the report quotes the vendor rather than a sentence of ours")))
+
+(defn- attempted
+  "`run-reviewer!` with codex answering each call from `attempts` in turn — `{:log <str>}` fails with
+   that log, `{:answers? true}` answers — and claude answering always. Returns the result, who ran,
+   and the waits it slept."
+  [attempts]
+  (let [dir    (str (fs/create-temp-dir))
+        left   (atom attempts)
+        calls  (atom [])
+        slept  (atom [])
+        stub   (fn [who]
+                 (fn [{:keys [log-path out-path]}]
+                   (swap! calls conj who)
+                   (let [{:keys [log answers?]} (if (= who :claude) {:answers? true} (first @left))]
+                     (when (= who :codex) (swap! left rest))
+                     (spit log-path (or log ""))
+                     (when answers? (spit out-path "{\"findings\": []}"))
+                     {:exit (if answers? 0 1)})))]
+    (with-redefs [codex/run-codex!   (stub :codex)
+                  claude/run-claude! (stub :claude)
+                  codex/sleep!       #(swap! slept conj %)]
+      (assoc (codex/run-reviewer! {:cwd dir :prompt "p"
+                                   :schema-path (str dir "/r-schema.json")
+                                   :out-path (str dir "/r-out.json")
+                                   :log-path (str dir "/r.log")})
+             :calls @calls :slept @slept))))
+
+(deftest a-capacity-refusal-is-retried-on-the-same-reviewer
+  (let [{:keys [exit unavailable judged-by calls slept]}
+        (attempted [{:log capacity-log} {:answers? true}])]
+    (is (zero? exit) "one blip must not cost the run that a second request a moment later answers")
+    (is (nil? unavailable))
+    (is (= [:codex :codex] calls) "the same reviewer — capacity is no reason to change judges")
+    (is (= {:reviewer :codex} judged-by))
+    (is (= 1 (count slept)) "after a backoff, not straight back into the same wall")))
+
+(deftest a-capacity-refusal-that-persists-is-reported-as-the-vendors-line
+  (let [{:keys [exit unavailable calls slept]}
+        (attempted (repeat 10 {:log capacity-log}))]
+    (is (= 1 exit))
+    (is (= [:codex :codex :codex] calls)
+        "bounded — a vendor still refusing after the retries is a wait for a person to see, not a loop")
+    (is (= 2 (count slept)))
+    (is (= :capacity (:signal unavailable))
+        "so the caller ends on reviewer-unavailable rather than a failure that sends a reader to the diff")
+    (is (str/includes? (:message unavailable) "Selected model is at capacity"))))
+
+(deftest only-a-transient-signal-is-retried
+  ;; A quota lifts on a date and a credential on a login; re-running after seconds only spends them.
+  (let [{:keys [calls slept]}
+        (attempted [{:log "stream error: unexpected status 401 Unauthorized\n"} {:answers? true}])]
+    (is (= [:codex] calls))
+    (is (empty? slept))))
+
+(deftest a-log-s-last-line-is-its-last-non-blank-one
+  (let [f (str (fs/create-temp-file))]
+    (spit f "thinking\nERROR: model stream closed\n\n   \n")
+    (is (= "ERROR: model stream closed" (codex/last-line f))
+        "the line a failed layer's row carries — trailing blank lines would leave it saying nothing")
+    (is (nil? (codex/last-line (str f ".missing"))) "a reviewer that died before writing leaves nil")
+    (is (nil? (codex/last-line nil)))))

@@ -1311,6 +1311,7 @@
            :no-record          "author the baseline first"
            :nothing-to-check   "refutable"
            :codex-failed       "NOT a clean result"
+           :reviewer-unavailable "vendor would not run it"
            ;; The rest of the ways a record loop can stop. This list is
            ;; hand-kept, which is how :max-iters — a documented flag — came to
            ;; print "unrecognised terminal status" instead of a remedy.

@@ -590,7 +590,7 @@
   (doseq [s [:sufficient :proceed :asked :cleared :clearance-contended :nothing-to-clear
              :disputed :underivable :nothing-to-amend :retreated
              :amend-noop :amend-invalid :amend-touched-code :amend-unreadable
-             :codex-failed :no-output :round-crashed :unusable-answer
+             :codex-failed :reviewer-unavailable :no-output :round-crashed :unusable-answer
              :nothing-to-check :no-record :no-workstream
              :premise-unverified :premise-retracted :design-retracted
              :premise-superseded :premise-goal-superseded :goal-superseded

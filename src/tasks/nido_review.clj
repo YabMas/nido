@@ -1841,6 +1841,7 @@
    :max-iters  "the cap you passed was reached — this is not convergence, and the findings below were still open"
    :no-workstream "run this from a nido session — its worktree or its session home"
    :codex-failed "the judge did not run — this is NOT a clean result"
+   :reviewer-unavailable "the judge's vendor would not run it, retries included — the judge phase's detail quotes why; NOT a clean result"
    :no-output  "the judge ran and wrote nothing — NOT a clean result"
    :unusable-answer "the judge answered, but not in a form a record accepts"
    :round-crashed "the round threw before it could degrade"

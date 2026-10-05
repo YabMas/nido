@@ -36,18 +36,22 @@
 
      The distinction the review path exists to draw at all: a review that BROKE is evidence
      about the branch and a reviewer that could not be RUN is evidence about a quota, a rate
-     limit or a credential, and only one of them is answered by opening the diff. Carries the
+     limit, a credential or a model at capacity, and only one of them is answered by opening the diff. Carries the
      line verbatim, because the remedy and the reset hour are in the vendor's words and nowhere
      else."
     {:signature [:=> [:catn [:tail [:maybe :string]]] [:maybe :map]]})
+  (Operation last-line
+    "The last non-blank line of a reviewer's log — what a failure nothing classifies is reported
+     by, since the reviewer's own last words are usually its error."
+    {:signature [:=> [:catn [:log-path [:maybe :string]]] [:maybe :string]]})
   (Operation reviewer-for
     "The reviewer a run is judged by: its own choice, else its project's, else codex. A name that
      is no reviewer is refused, never read as the default."
     {:signature [:=> [:catn [:override :any] [:configured :any]] :keyword]})
   (Operation run-reviewer!
-    "Run the chosen reviewer, and when codex could not be run for want of quota, claude in its
-     place on the same prompt — saying which one judged, and, when the last run could not be run
-     at all, why."
+    "Run the chosen reviewer, again after a short wait while its vendor says it is at capacity,
+     and when codex could not be run for want of quota, claude in its place on the same prompt —
+     saying which one judged, and, when the last run could not be run at all, why."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [run-codex! run-claude! unavailability]}))
 
@@ -76,7 +80,7 @@
     {:signature [:=> [:catn [:label :any]] :string]})
   (Operation review! "Review one range and answer with its findings."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [run-reviewer! schema-json safe-label]}))
+     :delegates [run-reviewer! last-line schema-json safe-label]}))
 
 (Module review-verdict
   "The pass that decides whether the round is done.

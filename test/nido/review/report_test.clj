@@ -458,6 +458,20 @@
     (is (= ["lower"] (mapv :label (:layers ph))))
     (is (= {:round 1 :phase "review" :message "codex review failed"} (report/errored r)))))
 
+(deftest a-failed-layer-row-carries-its-reviewer-s-last-line
+  (let [ph (first (:phases (first (:rounds
+            (drive
+             [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+              {:event :phase-started :iter 1 :phase :review :at "t1"}
+              {:event :phase-errored :iter 1 :phase :review :at "t2" :error "codex review failed"
+               :ctx {:reviews [] :failed [{:label "upper" :index 2 :last-line "ERROR: model stream closed"}
+                                          {:label "lower" :index 1}]
+                     :review-aborted? true}}])))))]
+    (is (= {"upper" "ERROR: model stream closed" "lower" nil}
+           (into {} (map (juxt :label :last-line)) (:layers ph)))
+        "`codex review failed` names no cause; the reviewer's last line usually does, and a row
+         without one leaves a reader 100 KB of log to search")))
+
 (deftest an-aborted-review-phase-keeps-what-its-survivors-found
   ;; The review stage now gives an account of a round it lost a reviewer in.
   ;; Folded as a finished phase, the account is what the rows are rebuilt from,

@@ -1782,15 +1782,19 @@
           out-path    (str (fs/path dir (str n "-out.json")))
           log-path    (str (fs/path dir (str n ".log")))]
       (spit schema-path (or schema (schemas kind)))
-      (let [{:keys [exit judged-by] ran-log :log-path}
+      (let [{:keys [exit judged-by unavailable] ran-log :log-path}
             (codex/run-reviewer! {:reviewer reviewer :cwd cwd :schema-path schema-path
                                   :out-path out-path :log-path log-path
                                   :prompt prompt})
             who (name (:reviewer judged-by))]
         ;; :codex-failed names the outcome whichever reviewer ran: it is the
         ;; lanes' vocabulary for a judge that did not answer, and the detail is
-        ;; where the reviewer is named.
+        ;; where the reviewer is named. A judge its vendor would not run is
+        ;; told apart, with the vendor's line verbatim — the wait or the login
+        ;; it calls for is in that line and nowhere else.
         (cond
+          unavailable                 {:outcome :reviewer-unavailable
+                                       :detail (str who " could not be run: " (:message unavailable))}
           (not (zero? exit))          {:outcome :codex-failed
                                        :detail (str who " exited " exit " — see " ran-log)}
           (not (fs/exists? out-path)) {:outcome :no-output
@@ -4194,7 +4198,8 @@
         history)))
 
 (def ^:private judge-outcomes
-  "The outcomes only a LAUNCHED judge yields: it exited non-zero, wrote no answer, crashed the round,
+  "The outcomes only a LAUNCHED judge yields: it exited non-zero, its vendor refused it, wrote no
+   answer, crashed the round,
    answered unusably, or answered over code that moved under it. Every other outcome is a round
    stopped before a judge — no ledger, no record, nothing checkable, a subject or a declaration it
    could not resolve, or a premise `standing` refused.
@@ -4202,7 +4207,7 @@
    Listed this way round because the other list is the open one. Every new reason `standing` grows
    for refusing a premise is one more outcome reached without a judge, and a deny-list that did not
    name it counted the refused run as judged and spent an analysis session on it."
-  #{"codex-failed" "no-output" "round-crashed" "unusable-answer" "code-moved"})
+  #{"codex-failed" "reviewer-unavailable" "no-output" "round-crashed" "unusable-answer" "code-moved"})
 
 (defn- judge-launched?
   "Whether a judge phase launched a judge: it reached a verdict no judge was carried from, it

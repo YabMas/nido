@@ -425,8 +425,11 @@
       (is (= (:message (:unavailable (ex-data e))) (ex-message e))
           "the message is the channel: it is what reaches the phase in the
            report and the printed line, and ex-data reaches neither"))
-    (is (= :review-failed (:reason (ex-data (run "ERROR: model stream closed\n"))))
-        "an unclassifiable failure keeps the old reading rather than guessing")))
+    (let [data (ex-data (run "ERROR: model stream closed\n\n"))]
+      (is (= :review-failed (:reason data))
+          "an unclassifiable failure keeps the old reading rather than guessing")
+      (is (= "ERROR: model stream closed" (:last-line data))
+          "the reviewer's own last words, for the layer row — otherwise they exist only at a log's tail"))))
 
 (deftest the-assembled-review-prompt-carries-the-design-above-the-layer-brief
   ;; A layer's claims are what one slice of the change asserts about ITSELF; the

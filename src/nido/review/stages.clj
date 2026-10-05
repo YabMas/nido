@@ -1403,8 +1403,13 @@
          :reviews results
          :skipped skipped
          ;; Rowed by the report as `error`: the phase is rebuilt from this ctx,
-         ;; and a target named nowhere in it would vanish from the round.
-         :failed (mapv :target failed)
+         ;; and a target named nowhere in it would vanish from the round. With
+         ;; the reviewer's last line when its failure carried one (`pass/review!`).
+         :failed (mapv (fn [{:keys [target failure]}]
+                         (if-let [line (:last-line (ex-data failure))]
+                           (assoc target :last-line line)
+                           target))
+                       failed)
          :toc toc
          :review-aborted? true))
 

@@ -302,7 +302,7 @@
                                prompts/composition-manifest-note
                                (prompts/manifest-block manifest)))]
         (spit schema-path (schema-json (some? composed)))
-        (let [{:keys [exit judged-by unavailable]}
+        (let [{:keys [exit judged-by unavailable] ran-log :log-path}
               (codex/run-reviewer! {:reviewer reviewer :cwd cwd :schema-path schema-path
                                     :out-path out-path :log-path log-path
                                     :prompt prompt})]
@@ -321,8 +321,12 @@
                                    (when-let [why (:because judged-by)]
                                      (str " — standing in for "
                                           (name (:instead-of judged-by)) ": " why)))
-                              {:reason :review-failed :exit exit :cwd cwd :label label
-                               :judged-by judged-by}))))
+                              ;; :last-line is rowed on the failed layer: without
+                              ;; it, the cause is only at the tail of its log.
+                              (let [line (codex/last-line ran-log)]
+                                (cond-> {:reason :review-failed :exit exit :cwd cwd :label label
+                                         :judged-by judged-by}
+                                  line (assoc :last-line line)))))))
           (assoc (parse-output (slurp out-path))
                  :status nil :manifest manifest :base-rev from
                  :judged-by judged-by))))))

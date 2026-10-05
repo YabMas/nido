@@ -3792,6 +3792,34 @@
             "the report names the reviewer that died, not just the phase — an
              aborted round used to leave every unfinished row reading `running`")))))
 
+(deftest an-aborted-fan-out-keeps-the-failed-reviewer-s-last-line
+  (with-redefs [layers/patch-hash    (fn [_ from to] (str "h-" from "-" to))
+                pass/merge-base     (fn [& _] "FORK")
+                layers/resolve-rev   (fn [& _] "AT")
+                layers/brief         (fn [& _] nil)
+                pass/changed-files  (fn [& _] [])
+                stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
+                                                {:bookmark "s--b" :slug "b" :tip "cB"}])
+                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                stages/discover-design-record (fn [_] nil)
+                stages/prior-open    (fn [_] nil)
+                stages/standing-needs (fn [_] nil)
+                cache/read-cache     (fn [& _] {})
+                cache/write!         (fn [& _] true)
+                pass/review!        (fn [{:keys [label]}]
+                                       (if (= "b" label)
+                                         (throw (ex-info "codex review failed"
+                                                         {:reason :review-failed
+                                                          :last-line "ERROR: model stream closed"}))
+                                         {:status nil :findings [] :manifest "x"}))]
+    (let [round (:ctx (ex-data (try ((:run stages/review-stage)
+                                     {:config {:cwd "/w" :base "main" :run-id "r"}
+                                      :iter 1 :history []})
+                                    nil
+                                    (catch clojure.lang.ExceptionInfo e e))))]
+      (is (= [["b" "ERROR: model stream closed"]] (mapv (juxt :label :last-line) (:failed round)))
+          "the cause, onto the target the report rows as `error` — the ex-message only says it failed"))))
+
 (deftest an-aborted-fan-out-ends-the-run-on-the-round-it-reached
   ;; The engine ends a run on the ctx a terminal throw carries, and without one
   ;; on the ctx the stage was handed — which holds no design, so a workstream

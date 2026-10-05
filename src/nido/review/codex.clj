@@ -51,11 +51,12 @@
    and the review failed.
 
    Each row is a phrase codex emits for a condition outside this process — a
-   billing quota, a rate limit, a credential. What they share is that the run is
-   no evidence at all about the branch, and that running the same command again
-   changes nothing until a clock or a person intervenes. That is what makes the
-   distinction worth drawing: it decides whether the next move is to open the
-   diff or to wait.
+   billing quota, a rate limit, a credential, the model being at capacity. What
+   they share is that the run is no evidence at all about the branch. That is
+   what makes the distinction worth drawing: it decides whether the next move is
+   to open the diff or to wait. How long to wait differs — capacity sheds in
+   seconds and is retried on the spot (`transient-retries-ms`); the rest need a
+   clock or a person.
 
    Literal vendor phrasing, and deliberately narrow. A looser pattern that also
    matched an ordinary failure would report a working reviewer as an absent one,
@@ -68,6 +69,7 @@
   [{:signal :usage-limit  :re #"(?i)you'?ve hit your usage limit"}
    {:signal :usage-limit  :re #"(?i)usage limit reached"}
    {:signal :rate-limited :re #"(?i)429 too many requests"}
+   {:signal :capacity     :re #"(?i)selected model is at capacity"}
    {:signal :unauthorized :re #"(?i)401 unauthorized"}
    {:signal :unauthorized :re #"(?i)\bnot logged in\b"}])
 
@@ -98,7 +100,7 @@
    `claude/run-claude!`), which are classified only where they happen to share
    one; otherwise its failure reads as a failed review.
 
-   {:signal :usage-limit|:rate-limited|:unauthorized
+   {:signal :usage-limit|:rate-limited|:capacity|:unauthorized
     :message <the line codex printed>
     :retry-at <when it said to come back, when it said>}
 
@@ -123,6 +125,19 @@
                   (cond-> {:signal signal :message line}
                     when-back (assoc :retry-at when-back)))))
             unavailability-signatures))))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :string]] [:maybe :string]]}
+  last-line
+  "The last non-blank line of the log at `log-path`, trimmed, or nil when there is none or it cannot
+   be read. For a failure `unavailability` cannot classify: the reviewer's own last words are usually
+   the error, and the only other copy of them is at the end of a log hundreds of kilobytes long."
+  [log-path]
+  (when log-path
+    (some->> (log-tail log-path unavailability-tail-chars)
+             str/split-lines
+             (map str/trim)
+             (remove str/blank?)
+             last)))
 
 ;; ── Which reviewer judges ───────────────────────────────────────────────────
 
@@ -163,8 +178,29 @@
    the review it blocks is one another vendor's model can do. A credential is
    answered by logging in, and switching judges over one would keep a broken
    login hidden behind reviews that go on succeeding. A 429 is codex's own
-   transient throttling and passes in minutes."
+   transient throttling and passes in minutes. Capacity is retried on the same
+   reviewer instead (`transient-retries-ms`)."
   {:codex {:reviewer :claude :on #{:usage-limit}}})
+
+(def ^:private transient-signals
+  "The `unavailability` signals worth running the SAME reviewer again for, a few seconds later.
+
+   Only capacity: the vendor shedding load, which a request moments later usually gets past. Each
+   unretried capacity refusal ended a whole record run, or aborted a diff round and the clean layer
+   reviews already paid for beside it. Not a 429, whose window is minutes — a short backoff only
+   spends the wait without outlasting it."
+  #{:capacity})
+
+(def ^:private transient-retries-ms
+  "How long to wait before each re-run of a reviewer that left a `transient-signals` signal — one
+   entry per retry, so its length is the retry bound. Short against a round's budget: two minutes
+   is the most a vendor blip costs before the run says the reviewer was unavailable."
+  [20000 60000])
+
+(defn- sleep!
+  "Seam for tests."
+  [ms]
+  (Thread/sleep (long ms)))
 
 (defn- run-one!
   [reviewer opts]
@@ -202,12 +238,20 @@
 
    The primary runs first every time, including on a round after one it could not
    run in. A quota can lift mid-run, and nothing in the log says when codex's
-   will except a date in the vendor's own wording."
+   will except a date in the vendor's own wording.
+
+   A primary whose run left a `transient-signals` signal is run again after each
+   of `transient-retries-ms`, over the same log, and only the last attempt is
+   answered for. Still refused, it returns :unavailable like any other signal."
   [{:keys [reviewer out-path log-path] :as opts}]
   (let [reviewer (or reviewer default-reviewer)
-        {:keys [exit]} (run-one! reviewer opts)
-        ran      {:exit exit :log-path log-path :judged-by {:reviewer reviewer}}
-        u        (why-unavailable ran out-path)
+        [ran u]  (loop [waits transient-retries-ms]
+                   (let [{:keys [exit]} (run-one! reviewer opts)
+                         ran {:exit exit :log-path log-path :judged-by {:reviewer reviewer}}
+                         u   (why-unavailable ran out-path)]
+                     (if (and (transient-signals (:signal u)) (seq waits))
+                       (do (sleep! (first waits)) (recur (rest waits)))
+                       [ran u])))
         stand-in (get fallbacks reviewer)]
     (if (contains? (:on stand-in) (:signal u))
       (let [log' (stand-in-log log-path (:reviewer stand-in))
