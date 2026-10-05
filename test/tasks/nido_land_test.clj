@@ -45,8 +45,10 @@
 
 (defn- record-run
   "Drive the landing record with the repository and the ledger stubbed. `held?` is whether origin's
-   main holds the tip. Returns [exit-code output calls], calls being the writes in the order made."
-  [{:keys [held? standing closed? once-result fetch-fails? ws root append-fails?]}]
+   main holds the tip, and `design` the newest design (default `a-design`; pass nil for none).
+   Returns [exit-code output calls], calls being the writes in the order made."
+  [{:keys [held? standing closed? once-result fetch-fails? ws root append-fails? design]
+    :or {design a-design}}]
   (let [out   (java.io.StringWriter.)
         calls (atom [])
         tmp   (or root (str (fs/create-temp-dir)))]
@@ -65,7 +67,7 @@
                     layers/resolve-rev (fn [_ rev] (cond (= rev "heads(::@ ~ empty())") sha
                                                          held? rev
                                                          :else nil))
-                    cws/latest-entry (fn [& _] a-design)
+                    cws/latest-entry (fn [& _] design)
                     standing/of-design (constantly standing)
                     cws/read-ws (fn [& _] (or ws (cond-> {:id "ws-1"} closed? (assoc :closed {:outcome :done}))))
                     cws/close! (fn [& args] (swap! calls conj [:close args]) {})
@@ -107,6 +109,16 @@
             :title "feat: land it" :design {:seq 4}}
            landing))
     (is (and (same? {:commit sha}) (not (same? {:commit "another"}))) "keyed on the commit")
+    (is (str/includes? out "is recorded"))))
+
+(deftest a-landing-with-no-design-is-recorded-citing-none
+  ;; land:check lets a design-less branch land, so the record must not strand it.
+  (let [[code out calls] (record-run {:held? true :design nil})
+        [[_ _ landing] [_ [_ _ outcome]]] calls]
+    (is (= 0 code))
+    (is (= [:append :close] (mapv first calls)))
+    (is (not (contains? landing :design)) "the :merged cites no design")
+    (is (= :done outcome))
     (is (str/includes? out "is recorded"))))
 
 (deftest a-re-run-on-a-closed-workstream-writes-nothing

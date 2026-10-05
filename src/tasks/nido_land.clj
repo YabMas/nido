@@ -429,6 +429,9 @@
    append goes through `append-entry-once!` keyed on the commit, so one landing is on the ledger
    once however often this runs.
 
+   A workstream with no design is recorded, and its :merged cites none — `land:check` lets that
+   branch land, so refusing to record it would strand a landing already on main.
+
    The :merged is appended BEFORE the close and only then: best-effort, so a failed append leaves
    no record and the close still happens, and a re-run that finds the workstream already closed
    writes nothing. The close is the landing's record for a phase gate, and appending first is
@@ -463,7 +466,7 @@
           (unrecorded (str "origin's main does not hold the worktree's tip " (subs tip 0 (min 12 (count tip))))
                       "push it — jj git push -b main — then run this again")
 
-          (not (:cleared? st))
+          (and design (not (:cleared? st)))
           (unrecorded (str "the workstream's newest design" (when design (str " at entry " (:seq design)))
                            " does not stand")
                       "bb nido:land:check says why; repair that, then run this again")
@@ -482,7 +485,7 @@
                                     " only before its close, so nothing was written"))
                       0)
                   (let [result  (try (cws/append-entry-once! project ws-id {:kind :merged}
-                                                             (pr-str (assoc landing :design {:seq (:seq design)}))
+                                                             (pr-str (cond-> landing design (assoc :design {:seq (:seq design)})))
                                                              #(= tip (:commit %)))
                                      (catch Exception e
                                        (println (str "land:record · the :merged could not be appended ("
