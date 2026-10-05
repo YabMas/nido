@@ -460,7 +460,9 @@
     (let [r (record/parse-design-decision
              (json/generate-string
               {:recommend in :reason "…"
-               :checks [{:check "goal_served" :status "broken" :note "a smaller design does"}]
+               ;; routing-coherent broken too: a recut no decomposition check supports is an amend
+               :checks [{:check "goal_served" :status "broken" :note "a smaller design does"}
+                        {:check "routing_coherent" :status "broken" :note "two stories"}]
                :findings [{:cites ["a total is rounded exactly once"]
                            :claim "the smaller design already satisfies it"
                            :evidence ["src/order/aggregate.clj:12"]}]
@@ -1239,3 +1241,67 @@
     (is (= r (report/validate-event :baseline-review r))))
   (is (not (contains? (#'record/stamp-run {:outcome :codex-failed} {:judged-tree {:rev "a"}}) :tree))
       "an outcome is not a judgement and names no tree"))
+
+;; ── A decision that contradicts itself ──────────────────────────────────────
+;;
+;; Each shape below is one a judge returned: a :recut with only goal-served broken, a finding filed
+;; under goal_served beside goal_served held, and a route's defect filed against the claim it runs
+;; through while that claim was confirmed.
+
+(defn- decision-json [recommend checks findings]
+  (json/generate-string {:recommend recommend :reason "r" :asks "a"
+                         :checks (mapv (fn [[c s]] {:check c :status s :note "n"}) checks)
+                         :findings findings}))
+
+(def ^:private strata (set report/strata-derivations))
+
+(deftest a-recut-no-decomposition-check-supports-is-an-amend
+  (let [r (record/parse-design-decision
+           (decision-json "recut" [["goal_served" "broken"] ["stratified" "held"] ["routing_coherent" "held"]]
+                          [{:check "goal_served" :cites ["x"] :claim "scores drift after re-chunking"}])
+           3 strata)]
+    (is (= :amend (:recommend r))
+        "an amender told to recut redraws the strata to repair what only the goal got wrong")
+    (is (= :recut (:judge-recommended r)) "what the judge said is kept beside what nido read")
+    (is (= r (report/validate-event :design-decision r)) "the ledger takes the note"))
+  (doseq [c ["stratified" "routing_coherent"]]
+    (let [r (record/parse-design-decision
+             (decision-json "recut" [["goal_served" "held"] [c "broken"]]
+                            [{:check c :cites ["x"] :claim "the cut does not hold"}])
+             3 strata)]
+      (is (= :recut (:recommend r)) (str "a broken " c " is the decomposition failing, so the recut stands"))
+      (is (nil? (:judge-recommended r))))))
+
+(deftest a-finding-under-a-check-ruled-held-is-check-less
+  (let [r (record/parse-design-decision
+           (decision-json "amend" [["goal_served" "held"] ["relation_honest" "broken"]]
+                          [{:claim-id "writers-state-order" :check "goal_served" :cites ["x"]
+                            :claim "source answers can share an order"}])
+           3 strata)
+        [f] (:findings r)]
+    (is (nil? (:check f)) "tied to a held check, the report reads goal-served as both held and broken")
+    (is (= :goal-served (:filed-under f)) "what it was filed under stays readable")
+    (is (= "writers-state-order" (:claim-id f)) "the defect is still a refutation of its claim")
+    (is (= r (report/validate-event :design-decision r)))))
+
+(deftest a-finding-citing-a-health-observation-is-routing-s
+  (let [health  #{"cleanup-skips-minimal-evaluation"}
+        finding {:claim-id "attempt-writes-keep-their-commits" :check ""
+                 :cites ["Design claim [attempt-writes-keep-their-commits]"
+                         "Health observation [cleanup-skips-minimal-evaluation], marked invisibly incomplete"]
+                 :claim "cleanup leaves the branch with its marked observation unrealised"}
+        parse   #(record/parse-design-decision
+                  (decision-json "amend" [["routing_coherent" %1] ["goal_served" "held"]] [%2])
+                  3 strata health)]
+    (let [[f] (:findings (parse "broken" finding))]
+      (is (= :routing-coherent (:check f)) "a route's defect is a routing defect")
+      (is (nil? (:claim-id f))
+          "a co-cited claim is not refuted by its route — counted, the figures report it broken at end"))
+    (let [r   (parse "held" finding)
+          [f] (:findings r)]
+      (is (and (nil? (:check f)) (nil? (:claim-id f)) (= :routing-coherent (:filed-under f)))
+          "with routing ruled held, the finding is the routing defect the judge would not call a break")
+      (is (= r (report/validate-event :design-decision r))))
+    (let [[f] (:findings (parse "held" (assoc finding :check "goal_served")))]
+      (is (= :goal-served (:filed-under f)) "a check the judge named is its answer, not nido's to move")
+      (is (= "attempt-writes-keep-their-commits" (:claim-id f))))))

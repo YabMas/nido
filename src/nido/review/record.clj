@@ -1546,7 +1546,57 @@
                      (not (str/blank? (str (:cause r)))) (assoc :cause (str/trim (str (:cause r)))))))))
        (reduce (fn [acc r] (if (some #(= (:id r) (:id %)) acc) acc (conj acc r))) [])))
 
-(defn ^{:malli/schema [:=> [:cat :string :any [:set :keyword]] :map]}
+(defn- id-pattern
+  "Matches `id` written as a word in prose: case aside, and with its separators as hyphens,
+   underscores or spaces, because a judge or an amender writes `derivative-cache` as `derivative
+   cache` as often as not."
+  [id]
+  (re-pattern (str "(?i)(?<![\\w-])"
+                   (str/join "[-_ ]" (map #(java.util.regex.Pattern/quote %) (str/split id #"[-_ ]+")))
+                   "(?![\\w-])")))
+
+(defn- health-ids
+  "The ids of the health observations `baseline` records and `design` routes, brackets off — what a
+   finding about routing cites."
+  [design baseline]
+  (into #{} (comp (map slug) (remove str/blank?))
+        (concat (keep :id (:health baseline)) (keep :health-id (:routes design)))))
+
+(defn- routing-attributed
+  "`finding` filed under routing-coherent when it cites one of `health` (`health-ids`) and the judge
+   filed it under no check or under that one, with any claim-id other than the observation's own
+   dropped.
+
+   A judge citing a route beside the claim whose code the route runs through has found the route
+   wrong, not the claim. Left on it, the claim-id counts as that claim refuted — in `rule`, in the
+   refutation runs and in the figures — while the same decision confirmed it. A finding under any
+   other check keeps it: the judge said which question the defect answers."
+  [health finding]
+  (let [cited? (fn [id] (some #(re-find (id-pattern id) %)
+                              (cons (str (:claim-id finding)) (:cites finding))))]
+    (if (and (contains? #{nil :routing-coherent} (:check finding)) (some cited? health))
+      (cond-> (assoc finding :check :routing-coherent)
+        (not (health (:claim-id finding))) (dissoc :claim-id))
+      finding)))
+
+(defn- off-held-checks
+  "`findings` with each one filed under a check `checks` rules :held made check-less, the check it
+   was filed under kept as :filed-under.
+
+   The judge said both that the check holds and that this defect breaks it. Kept, the ledger reads
+   as both; dropped, a defect that may be real goes unrepaired. Check-less is what the prompt asks
+   of a finding that breaks none of the checks, and the ruling is the judge's considered answer to
+   the check where the filing is one line of one finding."
+  [findings checks]
+  (let [held (into #{} (comp (filter #(= :held (:status %))) (map :check)) checks)]
+    (mapv #(if (held (:check %)) (-> % (dissoc :check) (assoc :filed-under (:check %))) %)
+          findings)))
+
+(def ^:private decomposition-checks
+  "The checks that rule on the decomposition — what a :recut asks to redo."
+  #{:decomposable :stratified :routing-coherent})
+
+(defn ^{:malli/schema [:=> [:cat :string :any [:set :keyword] [:? [:set :string]]] :map]}
   parse-design-decision
   "Codex JSON -> a :design-decision ledger record, or nil when unusable.
 
@@ -1554,11 +1604,16 @@
    check outside it is one the judge was never asked: it is dropped from :checks and named under
    :unasked-checks, and a finding filed under it is kept check-less. Kept, it would reach the
    ledger, the figures and `report/proceeds?` — where a `broken` on a strata-era `decomposable`
-   reads as the advisory check, and waves through the defect it carries."
-  [json-str design-seq asked]
+   reads as the advisory check, and waves through the defect it carries.
+
+   `health` is the health ids the design's record names (`health-ids`); a finding citing one is
+   routing-coherent's (`routing-attributed`). A finding under a check the same answer rules held is
+   made check-less (`off-held-checks`). A :recut with no decomposition check broken is an :amend,
+   the judge's word kept as :judge-recommended: an amender told the decomposition is wrong when
+   only the goal broke redraws the strata to repair what a record edit would."
+  [json-str design-seq asked & [health]]
   (try
     (let [m (json/parse-string json-str true)
-          r (keyword (str (:recommend m)))
           named  (keep (fn [c]
                          (let [k (keyword (str/replace (str (:check c)) "_" "-"))]
                            (when (derivation-keys k) [k c])))
@@ -1575,7 +1630,15 @@
                                                    (if (:held c) :held :broken)))
                                        :note   (str (:note c))})))
                        named)
-          findings (normalize-findings (:findings m) asked)
+          findings (off-held-checks (mapv (partial routing-attributed (set health))
+                                          (normalize-findings (:findings m) asked))
+                                    checks)
+          said     (keyword (str (:recommend m)))
+          r        (if (and (= :recut said)
+                            (not-any? #(and (decomposition-checks (:check %)) (= :broken (:status %)))
+                                      checks))
+                     :amend
+                     said)
           rulings  (parse-rulings (:relation_rulings m))
           asks     (str (:asks m))]
       ;; An :ask needs no finding: what it hands on is the question, and a doubt the build must not
@@ -1596,7 +1659,8 @@
           (and (not= :proceed r) (seq findings)) (assoc :findings (cond->> findings
                                                                     (not= :ask r) (mapv #(dissoc % :for-person))))
           (seq rulings)                          (assoc :relation-rulings rulings)
-          (seq unasked)                          (assoc :unasked-checks unasked))))
+          (seq unasked)                          (assoc :unasked-checks unasked)
+          (not= said r)                          (assoc :judge-recommended said))))
     (catch Exception _ nil)))
 
 (defn- mismatched
@@ -1606,15 +1670,6 @@
   [ruled breaks ids]
   [(filterv #(and (= :breaks (get-in ruled [% :ruling])) (not (breaks %))) ids)
    (filterv #(and (= :stands (get-in ruled [% :ruling])) (breaks %)) ids)])
-
-(defn- id-pattern
-  "Matches `id` written as a word in prose: case aside, and with its separators as hyphens,
-   underscores or spaces, because a judge or an amender writes `derivative-cache` as `derivative
-   cache` as often as not."
-  [id]
-  (re-pattern (str "(?i)(?<![\\w-])"
-                   (str/join "[-_ ]" (map #(java.util.regex.Pattern/quote %) (str/split id #"[-_ ]+")))
-                   "(?![\\w-])")))
 
 (defn- mentions
   "Every part of `x` that names `id` (`id-pattern`), as a sorted set of strings: a map carrying an
@@ -1929,6 +1984,46 @@
         (cond-> (assoc decision :relation-contradicted ids)
           (seq again) (-> (update :relation-rulings (partial mapv #(get again (:id %) %)))
                           (held-to-prior prior)))))))
+
+(defn- self-contradicted-ids
+  "The ids `decision` both lists as confirmed and names in a finding's claim-id, in confirmed order."
+  [decision]
+  (let [found (into #{} (keep :claim-id) (:findings decision))]
+    (filterv found (:confirmed decision))))
+
+(defn- self-contradiction-block
+  "What a judge whose answer confirmed and refuted the same ids is told when it is asked again."
+  [decision ids]
+  (str "\nYOUR LAST ANSWER CONTRADICTED ITSELF. It listed each id below in confirmed AND\n"
+       "filed a finding naming it in claim-id:\n"
+       (str/join "\n" (for [id ids
+                            f  (:findings decision)
+                            :when (= id (:claim-id f))]
+                        (str "- [" id "] found: " (:claim f))))
+       "\nOne reading cannot both hold a claim and refute it. Answer the whole decision\n"
+       "again. For each id, either confirm it or file against it, not both. A finding\n"
+       "whose defect is in something the claim cites — a route, a health observation —\n"
+       "names that instead, and leaves the claim's id out of claim-id.\n"))
+
+(defn- reask-self-contradicted!
+  "`decision`, or the judge's second answer when its first both confirmed ids and filed findings
+   against them (`self-contradicted-ids`), with those ids named under :self-contradicted.
+   `round` is `run-round!`'s options for the decision round, `prompt` the prompt it was asked with,
+   `parse` the decision parse.
+
+   Sent back rather than resolved by nido, as `reconcile-relation-reading!` is: the confirmation and
+   the finding are both the judge's, and nido has no ground to prefer either. One more ask, not a
+   loop. A second answer that still contradicts itself is held by `rule`, where the finding wins; a
+   re-ask that fails or answers nothing usable leaves the first answer."
+  [decision round prompt parse]
+  (let [ids (when (:format decision) (self-contradicted-ids decision))]
+    (if (empty? ids)
+      decision
+      (let [again (judged (run-round! (assoc round
+                                             :label  (str (or (:label round) "design-decision") "-self-contradicted")
+                                             :prompt (str prompt (self-contradiction-block decision ids))))
+                          parse)]
+        (assoc (if (:format again) again decision) :self-contradicted ids)))))
 
 (defn ^{:malli/schema [:=> [:cat :map :DeclaredElements] [:vector :string]]}
   unresolved-subjects
@@ -2419,11 +2514,14 @@
                           :answers  (answered project ws-id design)
                           :relation-prior prior-rs}
                 round    {:cwd code-cwd :run-id run-id :kind :design-decision
-                          :label label :reviewer reviewer}
-                result   (-> (run-round! (assoc round
-                                                :schema (design-decision-schema design relation)
-                                                :prompt (design-prompt asking)))
-                             (judged #(parse-design-decision % (:seq design) (set (report/derivations-of design))))
+                          :label label :reviewer reviewer
+                          :schema (design-decision-schema design relation)}
+                prompt   (design-prompt asking)
+                parse    #(parse-design-decision % (:seq design) (set (report/derivations-of design))
+                                                 (health-ids design baseline))
+                result   (-> (run-round! (assoc round :prompt prompt))
+                             (judged parse)
+                             (reask-self-contradicted! round prompt parse)
                              (rule-unruled-relations! relation round asking)
                              (held-to-prior prior-rs)
                              (reconcile-relation-reading! relation breaks round asking prior-rs))

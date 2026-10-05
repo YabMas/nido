@@ -2356,11 +2356,16 @@
    It is what ties the claim a finding names to that check, so a check broken
    against one claim is not re-identified by a finding about another.
 
+   :filed-under is the check a design decision's judge filed a finding under while ruling that
+   same check held. Such a finding carries no :check: it ties to no broken check, and is repaired
+   like any check-less defect.
+
    :for-person, on an :ask's finding, marks one whose only repair is the question in :asks.
    Absent, the finding is a derivable defect, which the round repairs before the person is asked."
   [:map {:closed true}
    [:claim-id   {:optional true} string?]
    [:check      {:optional true} keyword?]
+   [:filed-under {:optional true} keyword?]
    [:cites      [:vector {:min 1} string?]]
    [:claim      string?]
    [:evidence   {:optional true} [:vector string?]]
@@ -2729,6 +2734,12 @@
                 ;; Dropped from :checks, and named here so the drop is visible.
                 [:unasked-checks        {:optional true}
                  [:vector [:enum :relation-honest :goal-served :decomposable :stratified :routing-coherent]]]
+                ;; What the judge recommended when nido read it as something else: a :recut with no
+                ;; check of the decomposition broken is recorded as an :amend.
+                [:judge-recommended     {:optional true} [:enum :recut]]
+                ;; Each id the judge's first answer both confirmed and filed a finding against. It
+                ;; was asked again, and this decision is the second answer when that one was usable.
+                [:self-contradicted     {:optional true} [:vector string?]]
                 ;; As on a baseline review.
                 [:judged-by          {:optional true} JudgedBy]
                 [:tree               {:optional true} JudgedTree]]

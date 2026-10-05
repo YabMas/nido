@@ -525,7 +525,9 @@
       ;; :relation-rulings is the per-id relation-honest ruling :breaks was held to, round by round —
       ;; a reversal between rounds is otherwise readable only in the raw decision output — and
       ;; beside it the judge's inconsistencies the round recorded rather than enforced
-      ;; (:relation-reversals, :relation-contradicted, :relation-misread).
+      ;; (:relation-reversals, :relation-contradicted, :relation-misread). :self-contradicted is each
+      ;; id the judge both confirmed and found against, asked again; :judge-recommended is a :recut
+      ;; nido read as the :amend its checks support.
       ;; :judged-seq is the entry the judge read and :appended-seq the entry its judgement became —
       ;; absent when the round appended none — so a round is joined to the ledger by number rather
       ;; than by filtering the ledger on :run-id and counting.
@@ -576,6 +578,10 @@
                 (assoc :relation-contradicted (get-in ctx [:record :relation-contradicted]))
                 (seq (get-in ctx [:record :relation-misread]))
                 (assoc :relation-misread (get-in ctx [:record :relation-misread]))
+                (seq (get-in ctx [:record :self-contradicted]))
+                (assoc :self-contradicted (get-in ctx [:record :self-contradicted]))
+                (get-in ctx [:record :judge-recommended])
+                (assoc :judge-recommended (name (get-in ctx [:record :judge-recommended])))
                 (:unbanked ctx)                         (assoc :unbanked (:unbanked ctx))
                 (seq (:refuted-running ctx))            (assoc :refuted-running (into (sorted-map) (:refuted-running ctx)))
                 (and (get-in ctx [:record :outcome]) (get-in ctx [:record :detail]))

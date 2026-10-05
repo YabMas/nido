@@ -70,8 +70,11 @@
   (Operation parse-baseline-review "The agent's answer as a baseline review record."
     {:signature [:=> [:catn [:json-str :string] [:baseline-seq :any]] :map]})
   (Operation parse-design-decision
-    "The agent's answer as a design decision record, holding only the checks its round asked."
-    {:signature [:=> [:catn [:json-str :string] [:design-seq :any] [:asked [:set :keyword]]] :map]})
+    "The agent's answer as a design decision record, holding only the checks its round asked —
+     a finding citing one of the `health` ids is routing-coherent's, and a recommendation or a
+     finding contradicting the answer's own check rulings is read as those rulings support."
+    {:signature [:=> [:catn [:json-str :string] [:design-seq :any] [:asked [:set :keyword]]
+                            [:health [:? [:set :string]]]] :map]})
   (Operation baseline-review!
     "Run the verification round over a baseline, recording on its review the code identity its
      judge read when the readings taken either side of the judge agree."

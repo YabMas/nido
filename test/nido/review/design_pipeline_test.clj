@@ -1794,3 +1794,36 @@
     (is (not (str/includes? p "- [unrelated]")))
     (is (str/includes? p "a quantifier you widen must not\ncross a property the baseline holds"))
     (is (str/includes? p "REPAIR THE CLASS, NOT THE INSTANCE"))))
+
+(deftest a-decision-confirming-what-it-refutes-is-sent-back-once
+  ;; Seen live: a judge confirmed a claim with four citations and filed its only finding against the
+  ;; same claim. `rule` let the finding win silently, so the claim read refuted at end.
+  (let [calls    (atom [])
+        finding  {:claim-id "c1" :check "goal_served" :cites ["x"] :claim "c1 misses the batch path"}
+        answer-1 {:recommend "amend" :reason "r" :asks "a"
+                  :checks [{:check "goal_served" :status "broken" :note "n"}]
+                  :confirmed [{:id "c1" :evidence ["a.clj:1"] :at_this_tree "holds"}]
+                  :findings [finding] :unchecked [] :relation_rulings []}
+        answer-2 (assoc answer-1 :confirmed [])
+        run      (fn [answers]
+                   (reset! calls [])
+                   (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                                 ws/latest-entry (fn [_ _ k] (when (= :design k) (assoc a-design :seq 5)))
+                                 standing/of-design (constantly {:decidable? true})
+                                 stages/discover-baseline (fn [_ _] {:format :baseline :seq 1})
+                                 stages/read-stance (constantly nil)
+                                 record/discover-intent (constantly nil)
+                                 record/run-round! (fn [opts]
+                                                     (let [n (count (swap! calls conj opts))]
+                                                       (answers (dec n))))]
+                     (record/design-decision! {:cwd "/w" :run-id "r1" :label "l"})))
+        out      (run [{:ok (json/generate-string answer-1)} {:ok (json/generate-string answer-2)}])]
+    (is (= 2 (count @calls)) "sent back once, not resolved by nido")
+    (is (str/includes? (:prompt (second @calls)) "[c1] found: c1 misses the batch path")
+        "the judge is shown what it said both ways")
+    (is (= (:schema (first @calls)) (:schema (second @calls))) "and answers the same decision again")
+    (is (= ["c1"] (:self-contradicted out)) "the inconsistency is recorded where it was made")
+    (is (report/validate-event :design-decision out) "and the ledger takes the decision")
+    (let [out (run [{:ok (json/generate-string answer-1)} {:outcome :codex-failed :detail "x"}])]
+      (is (= :amend (:recommend out)) "a re-ask that fails leaves the first answer standing")
+      (is (= ["c1"] (:self-contradicted out))))))
