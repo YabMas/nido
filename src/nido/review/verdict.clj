@@ -208,6 +208,22 @@
          "  repaired — and reach the verdict that follows from it.\n"
          "Overturning it is allowed. Re-deriving it from scratch is not.\n")))
 
+(defn- amended-section
+  "The defects a verdict against the record this one superseded left unraised,
+   put to the judge to carry or let go — `rows` is `stages/across-amendment`'s
+   `:unraised`. Its verdict is not offered, since it judged another record; its
+   rows are, because the judge is the one reader that writes `unraised`, and a
+   row it is never shown is lost after the first run on the new record."
+  [rows]
+  (when (seq rows)
+    (str "\nBEFORE THE DESIGN RECORD WAS LAST AMENDED, the verdict against the record\n"
+         "it replaced found these defects in the code that no round raised. The\n"
+         "amendment does not name them:\n"
+         (bullets (map #(str (:where %) " — " (:what %)) rows)) "\n"
+         "That verdict judged another record, so do not weigh its conclusion. Read\n"
+         "each defect where it stands now, and copy every one still in the code into\n"
+         "`unraised` under the bar below.\n")))
+
 (defn- standing-section
   "The terminal warden's standing items — `report/stopped-on`'s `:standing` —
    numbered, so the judge can answer one by its index, or nil when there are
@@ -403,9 +419,11 @@
    and `closed` the findings the run's last word on was a warden's close, see
    `closed-section`. Each inherited row may carry `:question`, see
    `inherited-section`. `moved` and `parks` say what has happened to `prior`
-   since it was reached; see `prior-verdict-section`."
+   since it was reached; see `prior-verdict-section`. `amended` is the rows a
+   verdict against a superseded record left that the amendment does not name,
+   see `amended-section`."
   [{:keys [design baseline stance findings inherited closed history rounds prior status
-           fix-outcomes progress standing moved parks]}]
+           fix-outcomes progress standing moved parks amended]}]
   (str
    (opening status (not-landed fix-outcomes))
    "Read the code where you need to — you have tools, and the question cannot be\n"
@@ -471,6 +489,7 @@
    ;; it already decided — the standing answer is what the new evidence is
    ;; weighed against, not the frame it is read through.
    (prior-verdict-section prior moved parks)
+   (amended-section amended)
    "\n"
    "Return EXACTLY one fenced ```json block, nothing after it:\n"
    "{\"verdict\": \"sound|strained|invalidated|standing_challenged\",\n"
@@ -491,7 +510,13 @@
    "  title, then say what it is.\n"
    "- unraised: every DEFECT you found in the code that no round raised,\n"
    "  one row each, located at a file and line — whatever the verdict. It is\n"
-   "  the only way such a defect reaches the next run's reviewers. A row\n"
+   "  the only way such a defect reaches the next run's reviewers, and they\n"
+   "  flag only what meaningfully impacts correctness, performance, security\n"
+   "  or maintainability and is provably a problem, so hold a row to that bar:\n"
+   "  one they would never raise comes back to you unraised, run after run.\n"
+   "  A stale docstring or comment, a test name, a label, naming or style is\n"
+   "  NOT a defect here: it is tidying, a chore for a person, and goes in\n"
+   "  needs. So does a defect in a file this change does not touch. A row\n"
    "  about a finding the rounds did raise names its handle in `finding`;\n"
    "  it is already counted, so prefer leaving it out.\n"
    "- invariants_unverified: every invariant you could not confirm from what\n"
@@ -1288,6 +1313,30 @@
       (and (seq hashes) (empty? (:fixes final)))
       (assoc :patch-hashes (vec hashes)))))
 
+(defn ^{:malli/schema [:=> [:cat :map :any] :map]}
+  outside-the-change
+  "`v` with every `:unraised` row whose file is not among `files` — the reviewed
+   range's changed paths — moved onto the end of its `:needs`, one `where — what`
+   line each. Empty `files` leaves `v` as it is: nothing can be said about a
+   range nobody recorded.
+
+   `:unraised` is what the next run's reviewers are handed, and a reviewer told
+   that out of range is a silence answers a row about an untouched file with
+   nothing, every run, while the next verdict copies it forward as kept. A defect
+   nobody reviewing this branch can raise is a person's to act on, which is what
+   `:needs` is."
+  [v files]
+  (let [{in true out false} (group-by #(stages/in-files? files (:where %)) (:unraised v))]
+    (if (or (empty? files) (empty? out))
+      v
+      (cond-> (assoc (dissoc v :unraised) :needs
+                     (str/join "\n\n"
+                               (remove str/blank?
+                                       [(:needs v)
+                                        (str "Outside the reviewed change, so no reviewer of it can raise these:\n"
+                                             (bullets (map #(str (:where %) " — " (:what %)) out)))])))
+        (seq in) (assoc :unraised (vec in))))))
+
 (defn- reopened
   "`f` reopened as a park when its close is one the verdict contests — `contested`
    is `{handle reason}` — and `f` otherwise."
@@ -1446,6 +1495,15 @@
         (phase/progress (ws/plan-design project ws-id) (:entries w))))
     (catch Exception _ nil)))
 
+(defn- amended-rows
+  "`stages/across-amendment`'s rows, or nil when the ledger could not be read —
+   for `plan-progress`'s reason: an unread carry is a prompt the pass can still
+   answer, not a run lost."
+  [cwd design]
+  (try
+    (:unraised (stages/across-amendment cwd design))
+    (catch Exception _ nil)))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   run!
   "Run the verdict pass. Returns the verdict map, or nil when there is no design
@@ -1484,7 +1542,8 @@
                        :moved (moved-since prior final)
                        :parks (open-parks final #{})
                        :progress (plan-progress cwd)
-                       :standing standing})
+                       :standing standing
+                       :amended (when-not prior (amended-rows cwd design))})
               _ (write-prompt! run-id prompt)
               {:keys [num-turns result-error? result-text]}
               (agent/launch! {:run-id run-id :cwd cwd
@@ -1495,4 +1554,5 @@
                     (held-to-claims (when (contains? design :model)
                                       (into #{} (map :id) (claim-model/claims design))))
                     (against-the-run final standing prior)
+                    (outside-the-change (get-in report [:target :files]))
                     (cond-> run-id (assoc :run-id run-id)))))))))

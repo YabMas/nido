@@ -3887,7 +3887,7 @@
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                 stages/discover-design-record (fn [_] nil)
                 stages/prior-open    (fn [_] nil)
-                stages/standing-needs (fn [_] nil)
+                stages/standing-needs (fn [& _] nil)
                 cache/read-cache     (fn [& _] {})
                 cache/write!         (fn [& _] true)
                 pass/review!        (fn [{:keys [label]}]
@@ -3920,7 +3920,7 @@
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   stages/discover-design-record (fn [_] {:seq 7 :claims []})
                   stages/prior-open    (fn [_] nil)
-                  stages/standing-needs (fn [_] nil)
+                  stages/standing-needs (fn [& _] nil)
                   cache/read-cache     (fn [& _] {})
                   cache/write!         (fn [& _] true)
                   pass/review!        (fn [{:keys [label]}]
@@ -4570,7 +4570,7 @@
                                             :needs "re-baseline the turn record"})]
     (is (= {:round 4 :verdict :strained
             :needs "- turn.clj:40 — close-turn! still tests (empty? open)"}
-           (stages/standing-needs "/w"))
+           (stages/standing-needs "/w" nil))
         "the located defects, and not the advice beside them"))
 
   (testing "advice alone is not a question a reviewer can answer in code"
@@ -4580,13 +4580,81 @@
                   ws/latest-entry (ledger-of {:verdict :sound :design-seq 3 :round 2
                                               :reason "nothing moved"
                                               :needs "The earlier outstanding item is unchanged."})]
-      (is (nil? (stages/standing-needs "/w")))))
+      (is (nil? (stages/standing-needs "/w" nil)))))
 
   (testing "a verdict that named nothing outstanding seeds nothing"
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (ledger-of {:verdict :sound :design-seq 3 :round 2
                                               :reason "implementation details"})]
-      (is (nil? (stages/standing-needs "/w"))))))
+      (is (nil? (stages/standing-needs "/w" nil))))))
+
+;; ── Which of a verdict's rows a reviewer can act on ────────────────────────
+
+(deftest a-verdict-row-is-in-the-range-only-when-it-names-a-file-the-range-holds
+  (let [files ["src/main/brian/ui/course_tab.clj" "test/brian/x_test.clj"]]
+    (is (stages/in-files? files "course_tab.clj:879")
+        "a judge abbreviates the path, and the abbreviation still names the file")
+    (is (stages/in-files? files "src/main/brian/ui/course_tab.clj:879-881 (owner-selection)"))
+    (is (stages/in-files? files "/Users/me/w/src/main/brian/ui/course_tab.clj:3")
+        "an absolute path names the same file as the range's relative one")
+    (is (not (stages/in-files? files "tab.clj:879"))
+        "a bare substring is another file: matching it would hand a reviewer a row
+         about code it never reads")
+    (is (not (stages/in-files? files ".fukan/regionmodel/brian.clj:103")))
+    (is (not (stages/in-files? files "the region model"))
+        "a row naming no file is in no range")))
+
+(deftest a-standing-row-about-a-file-the-branch-never-touches-is-not-a-reviewers-question
+  ;; The reviewer is told out of range is a silence, so such a row could only
+  ;; come back unraised and be copied forward as kept, run after run.
+  (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                ws/latest-entry (ledger-of {:verdict :sound :design-seq 3 :round 2
+                                            :reason "r"
+                                            :unraised [{:where "turn.clj:40" :what "in range"}
+                                                       {:where ".fukan/regionmodel/brian.clj:103"
+                                                        :what "outside it"}]})]
+    (is (= "- turn.clj:40 — in range"
+           (:needs (stages/standing-needs "/w" ["src/turn.clj"]))))
+    (is (nil? (stages/standing-needs "/w" ["src/other.clj"]))
+        "with nothing left in range there is nothing to seed")))
+
+(defn- amended-ledger
+  "A ledger whose design record is at seq 5, amended since the verdict at seq 4
+   that judged the record at seq 3."
+  [design verdict]
+  (fn [_ _ kind]
+    (case kind
+      :design         (assoc design :seq 5)
+      :design-verdict (assoc verdict :seq 4)
+      nil)))
+
+(deftest a-verdicts-unraised-rows-carry-across-an-amendment-that-does-not-name-them
+  ;; A row is a defect at a line, not a judgment of the record. Dropped on every
+  ;; amendment, the same located defects reappeared verdict after verdict with no
+  ;; reviewer in between ever asked about them.
+  (let [verdict {:verdict :sound :design-seq 3 :round 2 :reason "r"
+                 :unraised [{:where "job/eduplaces_sync.clj:244" :what "two writes, no transaction"}
+                            {:where "handlers/admin_sso_conflicts.clj:356" :what "no door"}]}
+        design  {:shape "the admin door is decided per handler in admin_sso_conflicts.clj"}]
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (amended-ledger design verdict)]
+      (is (nil? (stages/discover-prior-verdict "/w" (assoc design :seq 5)))
+          "the old JUDGMENT is still not a standing answer for the new record")
+      (is (= [{:where "job/eduplaces_sync.clj:244" :what "two writes, no transaction"}]
+             (:unraised (stages/across-amendment "/w" (assoc design :seq 5))))
+          "only the row the amendment does not name: one it names may be what it re-decided")
+      (is (= "- job/eduplaces_sync.clj:244 — two writes, no transaction"
+             (:needs (stages/standing-needs "/w" ["src/brian/job/eduplaces_sync.clj"])))
+          "and that row reaches the next run's reviewers"))
+    (testing "a verdict against the current record is not an amendment's"
+      (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                    ws/latest-entry (amended-ledger design (assoc verdict :design-seq 5))]
+        (is (nil? (stages/across-amendment "/w" (assoc design :seq 5))))))
+    (testing "an amendment naming every row carries nothing"
+      (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                    ws/latest-entry (amended-ledger design verdict)]
+        (is (nil? (stages/across-amendment
+                   "/w" {:seq 5 :shape "eduplaces_sync.clj and admin_sso_conflicts.clj"})))))))
 
 (deftest a-question-put-to-a-human-is-not-seeded-to-a-reviewer
   ;; :invalidated and :standing-challenged put their :needs to a person — that
@@ -4598,7 +4666,7 @@
                   ws/latest-entry (ledger-of {:verdict v :design-seq 3 :round 1
                                               :reason "the invariant cannot hold"
                                               :needs "supersede the record"})]
-      (is (nil? (stages/standing-needs "/w"))
+      (is (nil? (stages/standing-needs "/w" nil))
           (str "a " (name v) " verdict is a decision, not a defect to review")))))
 
 (deftest the-standing-item-reaches-every-reviewer-that-reads-code

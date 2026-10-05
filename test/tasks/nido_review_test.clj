@@ -940,7 +940,7 @@
                   stages/project+ws-from-cwd (fn [_] nil)
                   stages/discover-design-record (fn [_] {:seq 7 :claims []})
                   stages/prior-open    (fn [_] nil)
-                  stages/standing-needs (fn [_] nil)
+                  stages/standing-needs (fn [& _] nil)
                   pass/review!         (fn [{:keys [label iter]}]
                                          (cond
                                            (and (= 2 iter) (= "b" label))

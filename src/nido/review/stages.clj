@@ -1518,7 +1518,10 @@
                          (with-composition-memory (:history ctx))
                          (with-fix-memory (fix-outcomes (:history ctx) (:carry ctx))
                                           (mapv :findings (:history ctx)))
-                         (with-standing-needs (unless-parked (standing-needs cwd) inherit))
+                         (with-standing-needs (unless-parked (standing-needs
+                                                              cwd (into [] (comp (mapcat :files) (distinct))
+                                                                        targets))
+                                                             inherit))
                          (with-prior-open (get-in ctx [:carry :inherited-open]))))
         {:keys [review skipped]} (to-review cached all)
         targets review
@@ -1871,11 +1874,78 @@
                                                (catch Exception _ nil))))
           v)))))
 
-(defn ^{:malli/schema [:=> [:cat :Path] [:maybe :map]]}
+(defn- verdict-row-file
+  "The file a design verdict's row locates it in — the text of `where` before
+   the first `:` or space, so `a/b.clj:12-20 (f)` is `a/b.clj` — or nil when
+   that names no file. Looser than `where-file`, which reads the `file:line` a
+   reviewer's finding is recorded as: a judge writes `where` freehand."
+  [where]
+  (when-let [f (re-find #"^[^\s:]+" (str/trim (str where)))]
+    (when (re-find #"\.[A-Za-z0-9]+$" f) f)))
+
+(defn ^{:malli/schema [:=> [:cat :any :any] :boolean]}
+  in-files?
+  "Whether `where` locates its row in one of `files`, a reviewed range's changed
+   paths. A judge abbreviates — `course_tab.clj:879` for
+   `src/main/brian/ui/course_tab.clj` — or writes the absolute path, so a row
+   matches a path when either is a whole trailing segment of the other, never on
+   a bare substring: `tab.clj` is not `course_tab.clj`. False for a row that
+   names no file."
+  [files where]
+  (boolean
+   (when-let [f (verdict-row-file where)]
+     (some #(or (= % f)
+                (str/ends-with? % (str "/" f))
+                (str/ends-with? f (str "/" %)))
+           (map str files)))))
+
+(defn- named-by?
+  "Whether `design`'s text names the file `where` locates its row in, by its
+   last segment — the spelling a record is likeliest to use."
+  [design where]
+  (boolean
+   (when-let [f (verdict-row-file where)]
+     (str/includes? (pr-str design) (last (str/split f #"/"))))))
+
+(defn ^{:malli/schema [:=> [:cat :Path :map] [:maybe :map]]}
+  across-amendment
+  "The workstream's last verdict when it was reached against a record `design`
+   has since superseded, holding only the `:unraised` rows `design` does not
+   name — or nil when there are none.
+
+   `discover-prior-verdict` refuses such a verdict, and rightly for its JUDGMENT:
+   whether the old record held is not a question about the new one. A row is not
+   a judgment of the record. It is a defect at a line, and an amendment that never
+   mentions that line has not answered it. Refused with the verdict, located
+   defects would be lost on every amendment and named again from scratch by a
+   later verdict, with no reviewer in between ever asked. A row whose file
+   the amendment does name may be exactly what it re-decided, so it is not
+   carried.
+
+   Never across a phase gate, for `same-phase?`'s reason, and only from a record
+   older than `design`."
+  [cwd design]
+  (when-let [n (:seq design)]
+    (when-let [[project ws-id] (project+ws-from-cwd cwd)]
+      (let [v (ws/latest-entry project ws-id :design-verdict)]
+        (when (and (integer? (:design-seq v)) (< (:design-seq v) n)
+                   (same-phase? design v #(try (:entries (ws/read-ws project ws-id))
+                                               (catch Exception _ nil))))
+          (when-let [rows (seq (remove #(named-by? design (:where %)) (:unraised v)))]
+            (assoc v :unraised (vec rows))))))))
+
+(defn ^{:malli/schema [:=> [:cat :Path :any] [:maybe :map]]}
   standing-needs
-  "What the last verdict against this workstream's design record left
-   outstanding, as `{:round :verdict :needs}` — or nil. `:needs` is the
-   verdict's `:unraised` rows, one `where — what` line each.
+  "What the last verdict left outstanding in the code `files` holds — the
+   round's reviewed paths — as `{:round :verdict :needs}`, or nil. `:needs` is
+   the verdict's `:unraised` rows, one `where — what` line each. The verdict is
+   the one against this workstream's design record, or failing that the one
+   before its last amendment, see `across-amendment`.
+
+   Only the rows inside `files`. A reviewer is asked about its range and is told
+   that out of range is a silence, so a row about a file the branch never touches
+   can only come back unraised, run after run; the verdict pass routes those to a
+   person instead, see `verdict/outside-the-change`. nil `files` filters nothing.
 
    The verdict pass names concrete, located defects, and it runs after the loop
    has already returned, so no reviewer, warden or fixer in the run that
@@ -1897,13 +1967,15 @@
    decisions — and `tasks.nido-review/parked-blocker` already carries one to the
    gate. Seeding it here as well would have a reviewer raise, and a fixer patch,
    the very question a human was asked to answer."
-  [cwd]
+  [cwd files]
   (when-let [design (discover-design-record cwd)]
-    (when-let [v (discover-prior-verdict cwd design)]
-      (when (and (not (report/verdict-invalidates (:verdict v)))
-                 (seq (:unraised v)))
-        {:round (:round v) :verdict (:verdict v)
-         :needs (str/join "\n" (map #(str "- " (:where %) " — " (:what %)) (:unraised v)))}))))
+    (when-let [v (or (discover-prior-verdict cwd design) (across-amendment cwd design))]
+      (let [rows (cond->> (:unraised v)
+                   (seq files) (filter #(in-files? files (:where %))))]
+        (when (and (not (report/verdict-invalidates (:verdict v)))
+                   (seq rows))
+          {:round (:round v) :verdict (:verdict v)
+           :needs (str/join "\n" (map #(str "- " (:where %) " — " (:what %)) rows))})))))
 
 (def ^:private person-answers
   "The entry kinds that are a person answering the workstream's open questions:

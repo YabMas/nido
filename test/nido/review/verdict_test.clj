@@ -1038,7 +1038,7 @@
         (is (nil? (:carried-from v)))
         (is (not (str/includes? @launched "WHAT YOU CONCLUDED LAST TIME"))
             "an earlier phase's verdict is not offered as the standing answer")
-        (is (nil? (stages/standing-needs "/w"))
+        (is (nil? (stages/standing-needs "/w" nil))
             "nor are its :needs handed to the next run's reviewers as outstanding")))
     (with-redefs [stages/discover-design-record (fn [_] phased)
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
@@ -1046,7 +1046,7 @@
                   ws/latest-entry (fn [_ _ kind]
                                     (when (= :design-verdict kind) (assoc standing :seq 12)))]
       (is (= "- header.clj:12 — reads the unread count a second time"
-             (:needs (stages/standing-needs "/w")))
+             (:needs (stages/standing-needs "/w" nil)))
           "within its own phase, the verdict's unraised defects still reach the reviewers"))))
 
 (deftest an-unphased-prompt-says-nothing-about-phases
@@ -1445,3 +1445,60 @@
               "and the verdict names the run, which is what the next judge is shown")
           (is (= v (report/validate-event :design-verdict v)))))
       (finally (fs/delete-tree tmp)))))
+
+;; ── :unraised is what a reviewer can act on ────────────────────────────────
+
+(deftest the-judge-holds-unraised-to-the-reviewers-bar
+  ;; Its rows are seeded to reviewers told to ignore documentation nits, so a
+  ;; nit filed there can never become a finding and is copied forward as kept.
+  (let [p (verdict/build-prompt {:design design :findings [] :history [] :rounds 1})]
+    (is (str/includes? p "hold a row to that bar")
+        "unraised is held to the bar of the reviewers it is handed to")
+    (is (str/includes? p "A stale docstring or comment, a test name, a label, naming or style is\n  NOT a defect here")
+        "tidying is named, since it is what filled unraised")
+    (is (str/includes? p "a chore for a person, and goes in\n  needs")
+        "and it has somewhere to go that a person reads")))
+
+(deftest a-row-outside-the-reviewed-change-is-a-persons-to-act-on
+  (let [v {:verdict :sound :reason "r" :needs "decide how the region model classifies db"
+           :unraised [{:where "turn.clj:40" :what "reads twice"}
+                      {:where ".fukan/regionmodel/brian.clj:103" :what "misclassifies db"}]}
+        r (verdict/outside-the-change v ["src/turn.clj"])]
+    (is (= [{:where "turn.clj:40" :what "reads twice"}] (:unraised r))
+        "a row in range stays where the next run's reviewers read it")
+    (is (str/starts-with? (:needs r) "decide how the region model classifies db\n\n")
+        "the judge's own advice is kept, first")
+    (is (str/includes? (:needs r) "- .fukan/regionmodel/brian.clj:103 — misclassifies db")
+        "and the row no reviewer of this branch can raise reaches a person instead"))
+  (testing "with every row outside, nothing is left kept"
+    (is (nil? (:unraised (verdict/outside-the-change
+                          {:verdict :sound :unraised [{:where "a.clj:1" :what "w"}]}
+                          ["src/b.clj"])))))
+  (testing "a range nobody recorded moves nothing"
+    (let [v {:verdict :sound :unraised [{:where "a.clj:1" :what "w"}]}]
+      (is (= v (verdict/outside-the-change v nil)))
+      (is (= v (verdict/outside-the-change v []))))))
+
+(deftest the-judge-is-shown-the-rows-an-amendment-did-not-answer
+  ;; It is the one reader that writes unraised. A row it is never shown is lost
+  ;; after the first run on the amended record, however long it stays in the code.
+  (let [seen (atom nil)]
+    (with-redefs [stages/discover-design-record (fn [_] design)
+                  stages/discover-prior-verdict (fn [_ _] nil)
+                  stages/across-amendment (fn [_ _] {:verdict :sound :design-seq 2
+                                                     :unraised [{:where "job/sync.clj:244"
+                                                                 :what "two writes, no transaction"}]})
+                  stages/discover-baseline (fn [_ _] nil)
+                  stages/read-stance (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! seen first-message)
+                                  {:num-turns 1
+                                   :result-text (fenced "{\"verdict\":\"sound\",\"reason\":\"r\"}")})]
+      (verdict/run! {:cwd "/w" :run-id "r" :budget "30m"
+                     :final {:status :clean :findings [] :history []}
+                     :report {:summary {:rounds 1 :fix-attempts 0}}})
+      (is (str/includes? @seen "BEFORE THE DESIGN RECORD WAS LAST AMENDED"))
+      (is (str/includes? @seen "- job/sync.clj:244 — two writes, no transaction"))
+      (is (not (str/includes? @seen "WHAT YOU CONCLUDED LAST TIME"))
+          "its verdict judged another record and is still not the standing answer"))))

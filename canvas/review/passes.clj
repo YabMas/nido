@@ -212,6 +212,12 @@
      items by index, and the tree the judge read is stamped as `:patch-hashes` when it is known."
     {:signature [:=> [:catn [:verdict :map] [:final :map] [:standing :any] [:prior [:maybe :map]]] :map]
      :delegates [open-across-run]})
+  (Operation outside-the-change
+    "A verdict with every `:unraised` row whose file the reviewed range does not touch moved
+     onto its `:needs`. `:unraised` is what the next run's reviewers are handed, and a row no
+     reviewer of the branch can raise would be copied forward as kept, run after run; a person
+     is who can act on it."
+    {:signature [:=> [:catn [:verdict :map] [:files :any]] :map]})
   (Operation answers-standing?
     "Whether a verdict's standing answers retire one of a run's standing items. By the item
      itself, carried on the answer: matched as printed text, the answer retired nothing and
@@ -229,7 +235,8 @@
   (Operation run!
     "Run the verdict pass, or carry the standing one when this run gave it nothing to revisit."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [build-prompt parse still-open still-answers? carried-forward against-the-run]}))
+     :delegates [build-prompt parse still-open still-answers? carried-forward against-the-run
+                 outside-the-change]}))
 
 (Module review-layers
   "The session's stack of layers, and the reshaping the review may do to it.
@@ -433,15 +440,29 @@
      phased design, only a verdict reached in the phase the workstream is in now: a gate
      changes what the design owes, so an earlier phase's verdict is as stale."
     {:signature [:=> [:catn [:cwd Path] [:design :map]] [:maybe :map]]})
+  (Operation in-files?
+    "Whether a verdict row's `where` names a file among a reviewed range's paths. A judge writes
+     `where` freehand and abbreviates, so a row matches a path either is a whole trailing
+     segment of — never a bare substring, which would hand a reviewer a row about another file."
+    {:signature [:=> [:catn [:files :any] [:where :any]] :boolean]})
+  (Operation across-amendment
+    "The last verdict when it judged a record the current design has since superseded, holding
+     only the `:unraised` rows the amendment does not name. Its JUDGMENT answered another
+     question, which is why `discover-prior-verdict` refuses it; a row is a defect at a line,
+     and an amendment that never mentions the line has not answered it. Never across a phase
+     gate."
+    {:signature [:=> [:catn [:cwd Path] [:design :map]] [:maybe :map]]})
   (Operation standing-needs
-    "What the last verdict against this workstream's design record left outstanding, from a
-     verdict that leaves the design STANDING. The verdict pass runs after the loop returns, so
+    "What the last verdict left outstanding in the code the round reviews, from a verdict that
+     leaves the design STANDING — the one against this workstream's design record, or failing
+     that its rows carried `across-amendment`. The verdict pass runs after the loop returns, so
      nothing in the run that produced one can act on it; this is what carries it to the next
-     run's reviewers, which are the only agents that can turn it into a finding. A verdict
-     that INVALIDATES puts its :needs to a person instead, and seeding that would have a fixer
-     patch the question somebody was asked to answer."
-    {:signature [:=> [:catn [:cwd Path]] [:maybe :map]]
-     :delegates [discover-design-record discover-prior-verdict]})
+     run's reviewers, which are the only agents that can turn it into a finding. Only rows in
+     the round's files: a reviewer answers out of range with silence, so any other row could
+     only circle. A verdict that INVALIDATES puts its :needs to a person instead, and seeding
+     that would have a fixer patch the question somebody was asked to answer."
+    {:signature [:=> [:catn [:cwd Path] [:files :any]] [:maybe :map]]
+     :delegates [discover-design-record discover-prior-verdict across-amendment in-files?]})
   (Operation last-review
     "The newer of the workstream's last `:review` and last `:review-settled` — what the last run
      left, whether it finished or was settled from its run dir. A run killed mid-fix may be
