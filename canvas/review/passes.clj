@@ -207,9 +207,10 @@
   (Operation against-the-run
     "A parsed verdict reconciled with the run it judged: an `:unraised` row naming a finding the
      run raised is dropped, an invariant held over a still-open finding that contradicts it is
-     `:invariants-unmet`, standing answers are matched to the warden's items by index, and the
-     tree the judge read is stamped as `:patch-hashes` when it is known."
-    {:signature [:=> [:catn [:verdict :map] [:final :map] [:standing :any]] :map]
+     `:invariants-unmet`, an invariant the prior verdict named unmet stays so while a park is
+     open unless the judge names what changed, standing answers are matched to the warden's
+     items by index, and the tree the judge read is stamped as `:patch-hashes` when it is known."
+    {:signature [:=> [:catn [:verdict :map] [:final :map] [:standing :any] [:prior [:maybe :map]]] :map]
      :delegates [open-across-run]})
   (Operation answers-standing?
     "Whether a verdict's standing answers retire one of a run's standing items. By the item

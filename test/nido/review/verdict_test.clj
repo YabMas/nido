@@ -1,12 +1,14 @@
 ;; test/nido/review/verdict_test.clj
 (ns nido.review.verdict-test
   (:require
+   [babashka.fs :as fs]
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.report :as report]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.record.workstream :as ws]
+   [nido.platform.core :as core]
    [nido.review.report]
    [nido.review.stages :as stages]
    [nido.review.verdict :as verdict]
@@ -336,6 +338,8 @@
    "standing_answered"   [{"index" 0 "answer" "the suite ran green"}]
    "inherited_answered"  [{"id" "row-1" "evidence" "invoice.clj:52 — the guard is there"}]
    "contested_closes"    [{"id" "h-closed" "reason" "the reader still re-rounds"}]
+   "unmet_lifted"        [{"invariant" "a total is rounded exactly once"
+                           "changed"   "invoice.clj:40 — the reader no longer sums"}]
    "needs"               "move the sum back behind the aggregate"})
 
 (def ^:private a-run-holding-what-the-template-names
@@ -372,7 +376,7 @@
                           (fenced (json/generate-string (assoc template-answer "verdict" v)))
                           2 3)
                          (verdict/against-the-run a-run-holding-what-the-template-names
-                                                  ["confirm the suite passes"]))]
+                                                  ["confirm the suite passes"] nil))]
           (is (= #{:format :verdict :round :design-seq :reason
                    :invariants-held :invariants-unverified :invariants-broken
                    :load-bearing-held :load-bearing-broken
@@ -1097,7 +1101,7 @@
                (assoc judged :unraised [{:where "a.clj:1" :what "the sniff again"
                                          :finding "54a44beb"}
                                         {:where "b.clj:9" :what "nobody saw this"}])
-               final [])]
+               final [] nil)]
     (is (= [{:where "b.clj:9" :what "nobody saw this"}] (:unraised v))
         "a row naming a finding the run raised is that finding, counted already")))
 
@@ -1109,7 +1113,7 @@
                :history []}
         v     (verdict/against-the-run
                (assoc judged :invariants-held ["[parsed-before-kept]" "one-writer"])
-               final [])]
+               final [] nil)]
     (is (= ["one-writer"] (:invariants-held v))
         "the ledger may not call a claim confirmed that an open finding contradicts")
     (is (= [{:invariant "[parsed-before-kept]" :finding "54a44beb"}] (:invariants-unmet v))
@@ -1126,7 +1130,7 @@
                         "\"invariants_unverified\":[{\"invariant\":\"linux-unchanged\","
                         "\"missing\":\"the cgroup tests on Linux\"},{\"invariant\":\" \"}]}"))
            2 3)
-        r (verdict/against-the-run v {:findings [] :history []} [])]
+        r (verdict/against-the-run v {:findings [] :history []} [] nil)]
     (is (= [{:invariant "linux-unchanged" :missing "the cgroup tests on Linux"}]
            (:invariants-unverified r))
         "the evidence that would confirm it is what the person owes, so it travels with the row")
@@ -1142,7 +1146,7 @@
                (assoc judged
                       :invariants-held ["linux-unchanged"]
                       :invariants-unverified [{:invariant "[linux-unchanged]" :missing "m"}])
-               final [])]
+               final [] nil)]
     (is (= [{:invariant "linux-unchanged" :finding "54a44beb"}] (:invariants-unmet v))
         "the finding answers what the missing evidence was for, and it is counted once")
     (is (nil? (:invariants-unverified v)))
@@ -1162,7 +1166,7 @@
   (let [v (verdict/against-the-run
            (assoc judged ::verdict/standing-answers [{:index 1 :answer "179 tests, no stall"}
                                                      {:index 5 :answer "names nothing"}])
-           {} ["the UTC question" "confirm the live tests do not stall"])]
+           {} ["the UTC question" "confirm the live tests do not stall"] nil)]
     (is (= [{:item "confirm the live tests do not stall" :answer "179 tests, no stall"}]
            (:standing-answered v))
         "matched by index, and an index outside the list names nothing")
@@ -1178,7 +1182,7 @@
   ;; item a verdict answered was published open again beside its answer.
   (let [v (verdict/against-the-run
            (assoc judged ::verdict/standing-answers [{:index 0 :answer "repaired at roster.clj:93"}])
-           {} [roster-item])
+           {} [roster-item] nil)
         answered (:standing-answered v)]
     (is (= [{:item (:what roster-item) :standing roster-item
              :answer "repaired at roster.clj:93"}]
@@ -1211,7 +1215,7 @@
                (assoc judged ::verdict/inherited-answers
                       [{:id "12a4597f" :evidence "students.clj:93-105 guards the read"}
                        {:id "not-held" :evidence "x.clj:1"}])
-               quiet-run-over-an-unplaced-row [])
+               quiet-run-over-an-unplaced-row [] nil)
         final (verdict/settled quiet-run-over-an-unplaced-row v)]
     (is (= [{:id "12a4597f" :evidence "students.clj:93-105 guards the read"}]
            (:inherited-answered v))
@@ -1249,7 +1253,7 @@
                (assoc judged ::verdict/contested-closes
                       [{:id "f4b8ffc6" :reason "parse_ops.clj:40 still reads the cache"}
                        {:id "never-closed" :reason "r"}])
-               final [])
+               final [] nil)
         final' (verdict/settled final v)
         [park] (verdict/owed-rows final')]
     (is (= [{:id "f4b8ffc6" :reason "parse_ops.clj:40 still reads the cache"}]
@@ -1269,17 +1273,17 @@
                :carry {:inherited-standing [roster-item]}}
         v     (verdict/against-the-run
                (assoc judged ::verdict/standing-answers [{:index 0 :answer "answered"}])
-               final [roster-item])]
+               final [roster-item] nil)]
     (is (nil? (:standing (nido.review.report/stopped-on (verdict/settled final v))))
         "the :review entry's :standing is what the next run's prior-standing reads")
     (is (= final (verdict/settled final nil)) "no verdict answers nothing")))
 
 (deftest a-verdict-records-the-tree-it-read
   (is (= ["aaa" "bbb"]
-         (:patch-hashes (verdict/against-the-run judged {:patch-hashes #{"bbb" "aaa"}} [])))
+         (:patch-hashes (verdict/against-the-run judged {:patch-hashes #{"bbb" "aaa"}} [] nil)))
       "sorted, so two runs over one tree record one value")
   (is (nil? (:patch-hashes (verdict/against-the-run
-                            judged {:patch-hashes #{"aaa"} :fixes [{:layer "l"}]} [])))
+                            judged {:patch-hashes #{"aaa"} :fixes [{:layer "l"}]} [] nil)))
       "a repair after the reading moved the tree the judge read, so the hashes
        before it are not that tree — and an unstamped verdict is never carried"))
 
@@ -1288,3 +1292,156 @@
                                  :standing ["the UTC question" "run the live tests"]})]
     (is (str/includes? p "0: the UTC question\n1: run the live tests")
         "answered by index, so the fold that retires one never matches reworded prose")))
+
+;; ── What the next judge is told about the standing verdict ─────────────────
+
+(defn- judged-prompt
+  "The prompt `run!` hands the judge for `final`, with `prior` standing."
+  [prior final]
+  (let [seen (atom nil)]
+    (with-redefs [stages/discover-design-record (fn [_] design)
+                  stages/discover-prior-verdict (fn [_ _] prior)
+                  stages/discover-baseline (fn [_ _] nil)
+                  stages/read-stance (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! seen first-message)
+                                  {:num-turns 1
+                                   :result-text (fenced "{\"verdict\":\"strained\",\"reason\":\"r\"}")})]
+      (verdict/run! {:cwd "/w" :run-id "r" :budget "30m" :final final
+                     :report {:summary {:rounds 2 :fix-attempts 0}}})
+      @seen)))
+
+(deftest the-standing-verdict-is-named-by-entry-and-run
+  ;; Named by round alone, a judge cited `round 6` — another run's — in an entry
+  ;; headed `after round 3`, and a reader could not tell which run it meant.
+  (let [p (verdict/build-prompt {:design design :findings [] :history [] :rounds 3
+                                 :prior (assoc standing :run-id "review-9c8c06e1")})]
+    (is (str/includes? p "entry 12, reached by run review-9c8c06e1, after its round 4")
+        "the entry and the run are what place a round number that is not this run's")
+    (is (str/includes? p "never as `round N`")))
+  (let [p (verdict/build-prompt {:design design :findings [] :history [] :rounds 3
+                                 :prior (assoc (verdict/carried-forward standing) :seq 15)})]
+    (is (str/includes? p "entry 12")
+        "a carried verdict is named where a judge reached it, not where it was copied")))
+
+(deftest the-judge-is-told-which-layers-moved-since-its-verdict
+  ;; Told the verdict stood `unless this round moved it`, a judge answered
+  ;; `nothing moved` over three layers edited between runs, and republished
+  ;; advice about a fixer this run never dispatched.
+  (let [p (judged-prompt standing
+                         {:status :escalated :history []
+                          :findings [{:title "t" :body "b" :disposition :park}]
+                          :patch-hashes #{"aaa" "ccc"}
+                          :reviews [{:target {:label "tool-env" :patch-hash "ccc"}}]
+                          :skipped [{:label "drop-loop" :patch-hash "aaa"}]})]
+    (is (str/includes? p "SINCE THAT VERDICT THESE LAYERS CHANGED: tool-env.")
+        "only the layer holding a patch that verdict never read is named")
+    (is (str/includes? p "drop any that names a fixer or a repair of that earlier run")))
+  (let [p (judged-prompt standing
+                         {:status :escalated :history []
+                          :findings [{:title "t" :body "b" :disposition :park}]
+                          :patch-hashes #{"aaa" "bbb"}
+                          :reviews [{:target {:label "tool-env" :patch-hash "bbb"}}]})]
+    (is (str/includes? p "The tree is the one that verdict read")
+        "an unmoved tree is said so, so `nothing moved` is a reading and not a guess")
+    (is (not (str/includes? p "THESE LAYERS CHANGED"))))
+  (let [p (judged-prompt (dissoc standing :patch-hashes)
+                         {:status :escalated :history []
+                          :findings [{:title "t" :body "b" :disposition :park}]
+                          :patch-hashes #{"aaa"}})]
+    (is (not (or (str/includes? p "THESE LAYERS CHANGED")
+                 (str/includes? p "The tree is the one")))
+        "a verdict that recorded no tree supports no claim about movement either way")))
+
+(deftest a-judge-that-finds-nothing-moved-carries-the-advice-word-for-word
+  ;; Told not to restate the advice, a judge dropped it and moved its facts into
+  ;; `unraised`, so the decision it asked a person for left the ledger.
+  (let [p (verdict/build-prompt {:design design :prior standing
+                                 :findings [] :history [] :rounds 2})]
+    (is (str/includes? p "advice into `needs` WORD FOR WORD"))
+    (is (str/includes? p "do NOT restate it, drop it, or move it into\n  `unraised`"))))
+
+(def ^:private unmet-prior
+  (assoc standing :invariants-unmet [{:invariant "a total is rounded exactly once"
+                                      :finding "f94e0553"}]))
+
+(def ^:private run-holding-the-park
+  "A run whose only remainder is a park the last run left, filed under an id that
+   is not the finding the prior verdict named."
+  {:findings [] :history []
+   :carry {:inherited-open [{:id "ecbe91d8" :title "census misses the moved owners"
+                             :disposition :park}]}})
+
+(defn- judged-over-the-park [answer prior]
+  (-> (verdict/parse (fenced (json/generate-string (merge {"verdict" "sound" "reason" "r"} answer)))
+                     2 3)
+      (verdict/against-the-run run-holding-the-park [] prior)))
+
+(deftest an-unmet-invariant-stays-unmet-while-its-park-is-open
+  ;; A judge citing its last verdict flipped an invariant from unmet to held,
+  ;; calling the evidence unchanged, while the park that kept it unmet was open.
+  (let [v (judged-over-the-park {"invariants_held" ["a total is rounded exactly once"]} unmet-prior)]
+    (is (= [{:invariant "a total is rounded exactly once" :finding "ecbe91d8"}]
+           (:invariants-unmet v))
+        "held over an open park and no stated change, it is recorded unmet — and
+         named by the park still holding it, since the prior's finding is gone")
+    (is (nil? (:invariants-held v)))
+    (is (= v (report/validate-event :design-verdict v))))
+  (let [v (judged-over-the-park {} unmet-prior)]
+    (is (= ["a total is rounded exactly once"] (map :invariant (:invariants-unmet v)))
+        "a judge that says nothing about it does not quietly retire it either"))
+  (testing "the prompt says so, and names the parks"
+    (let [p (verdict/build-prompt {:design design :prior unmet-prior :parks [{:id "ecbe91d8" :title "t"}]
+                                   :findings [] :history [] :rounds 2})]
+      (is (str/includes? p "It named these invariants UNMET"))
+      (is (str/includes? p "- ecbe91d8 t"))
+      (is (str/includes? p "STAYS unmet unless you name what\nchanged")))))
+
+(deftest an-unmet-invariant-is-lifted-only-by-naming-what-changed
+  (let [v (judged-over-the-park {"invariants_held" ["a total is rounded exactly once"]
+                   "unmet_lifted" [{"invariant" "a total is rounded exactly once"
+                                    "changed" "census.clj:557 — the scanner now tracks the doors"}]}
+                  unmet-prior)]
+    (is (= ["a total is rounded exactly once"] (:invariants-held v)))
+    (is (nil? (:invariants-unmet v)))
+    (is (str/includes? (:reason v) "census.clj:557 — the scanner now tracks the doors")
+        "what changed is on the entry that lifts it, where a reader of the flip finds it")
+    (is (= v (report/validate-event :design-verdict v))))
+  (let [v (judged-over-the-park {"invariants_held" ["a total is rounded exactly once"]
+                   "inherited_answered" [{"id" "ecbe91d8" "evidence" "census.clj:557 — tracked"}]}
+                  unmet-prior)]
+    (is (= ["a total is rounded exactly once"] (:invariants-held v))
+        "a park the verdict settles with evidence holds nothing open"))
+  (let [v (judged-over-the-park {"invariants_held" ["a total is rounded exactly once"]
+                   "unmet_lifted" [{"invariant" "a total is rounded exactly once" "changed" "x"}]}
+                  nil)]
+    (is (= "r" (:reason v))
+        "a lift of something no verdict held unmet lifts nothing and says nothing")))
+
+(deftest the-verdict-prompt-is-kept-in-the-run-dir
+  ;; The prompt is an argument, so agent.log never held it, and what a judge was
+  ;; told could only be inferred from source at the machinery's revision.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (fs/create-dirs (fs/path tmp "runs" "r"))
+        (let [seen (atom nil)
+              v    (with-redefs [stages/discover-design-record (fn [_] design)
+                                 stages/discover-prior-verdict (fn [_ _] nil)
+                                 stages/discover-baseline (fn [_ _] nil)
+                                 stages/read-stance (fn [_] nil)
+                                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                                 agent/launch! (fn [{:keys [first-message]}]
+                                                 (reset! seen first-message)
+                                                 {:num-turns 1
+                                                  :result-text (fenced "{\"verdict\":\"sound\",\"reason\":\"r\"}")})]
+                         (verdict/run! {:cwd "/w" :run-id "r" :budget "30m"
+                                        :final {:status :clean :findings [] :history []}
+                                        :report {:summary {:rounds 1 :fix-attempts 0}}}))]
+          (is (= @seen (slurp (str (fs/path tmp "runs" "r" "verdict-prompt.txt"))))
+              "the file is exactly what the judge was handed")
+          (is (= "r" (:run-id v))
+              "and the verdict names the run, which is what the next judge is shown")
+          (is (= v (report/validate-event :design-verdict v)))))
+      (finally (fs/delete-tree tmp)))))

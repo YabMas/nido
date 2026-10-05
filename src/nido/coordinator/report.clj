@@ -2296,6 +2296,11 @@
    ;; repeated independent confirmation — six unmarked identical verdicts claim
    ;; six readings of the code, and only the first of them is one.
    [:carried-from {:optional true} int?]
+   ;; The run whose judge reached this verdict, which a carry keeps as it keeps
+   ;; :carried-from. The next judge is shown it beside the entry, because :round
+   ;; numbers that run's rounds and reads as this run's without it. A verdict
+   ;; recorded before it was kept names none.
+   [:run-id {:optional true} string?]
    ;; The patch hashes of the tree the judge read — `stages/content-hashes` of
    ;; the final round, sorted. Absent when that is not known, and then the
    ;; verdict is never carried: a verdict carries only over the tree it read.

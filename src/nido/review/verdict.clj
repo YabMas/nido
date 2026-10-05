@@ -142,14 +142,28 @@
    Offered as a default to confirm or overturn, never as a ruling to defer to —
    the same footing `prompts/answered-block` puts an earlier round's closes on.
    The design's own :rejected list does this for alternatives somebody else
-   proposed; nothing did it for a decision this pass raised itself."
-  [prior]
+   proposed; nothing did it for a decision this pass raised itself.
+
+   It is named by ledger entry and run, never by round alone: its :round numbers
+   another run's rounds, and a judge shown only that cited `round 6` in an entry
+   headed `after round 3`. `moved` is `moved-since` — nil when the tree that
+   verdict read is not known. A judge told the verdict stands `unless this round
+   moved it` answered `nothing moved` over three layers edited between runs,
+   because between runs is not this round. `parks` is what keeps the prior's
+   unmet invariants unmet — see `still-unmet`."
+  [prior moved parks]
   (when prior
-    (str "\nWHAT YOU CONCLUDED LAST TIME, about this same design record, after\n"
-         "round " (:round prior) " — verdict " (name (:verdict prior)) ":\n"
+    (str "\nWHAT YOU CONCLUDED LAST TIME, about this same design record — ledger\n"
+         "entry " (or (:carried-from prior) (:seq prior))
+         (when-let [r (:run-id prior)] (str ", reached by run " r))
+         ", after its round " (:round prior) " — verdict " (name (:verdict prior)) ":\n"
          (:reason prior) "\n"
          (when-let [b (seq (:invariants-broken prior))]
            (str "It named these invariants contradicted:\n"
+                (bullets (map #(str (:invariant %) " — by " (:finding %)) b)) "\n"))
+         (when-let [b (seq (:invariants-unmet prior))]
+           (str "It named these invariants UNMET — the design holds them, the code fell\n"
+                "short:\n"
                 (bullets (map #(str (:invariant %) " — by " (:finding %)) b)) "\n"))
          (when-let [b (seq (:load-bearing-broken prior))]
            (str "And these load-bearing properties broken without being declared:\n"
@@ -159,17 +173,39 @@
                 (bullets (map #(str (:where %) " — " (:what %)) u)) "\n"))
          (when-let [n (:needs prior)]
            (str "And it advised:\n" n "\n"))
+         "Round numbers in it are that run's. Cite it by its entry, never as `round N`.\n"
+         (cond
+           (seq (:labels moved))
+           (str "\nSINCE THAT VERDICT THESE LAYERS CHANGED: " (str/join ", " (:labels moved)) ".\n"
+                "It did not read them as they are now, so read them before you answer\n"
+                "that nothing moved. Re-check each piece of its advice against them, and\n"
+                "drop any that names a fixer or a repair of that earlier run — this run's\n"
+                "fixers are the ones in the round history above.\n")
+
+           (pos? (or (:gone moved) 0))
+           (str "\nSince that verdict " (:gone moved) " patch(es) it read have left the\n"
+                "stack. Read what the stack holds now before you answer that nothing moved.\n")
+
+           moved
+           "\nThe tree is the one that verdict read: no layer has changed since.\n")
+         (when (and (seq (:invariants-unmet prior)) (seq parks))
+           (str "\nThese parks are still open:\n"
+                (bullets (map #(str (:id %) " " (:title %)) parks)) "\n"
+                "So every invariant it named unmet STAYS unmet unless you name what\n"
+                "changed in the code: put it in unmet_lifted with that change. Listed\n"
+                "as held without one, it is recorded unmet all the same.\n"))
          "\n"
-         "That verdict STANDS unless this round moved it, and your job is to say\n"
+         "That verdict STANDS unless something moved it, and your job is to say\n"
          "which:\n"
-         "- Nothing moved: reach the same verdict and say so in a line. Do NOT\n"
-         "  restate the advice in new words, and do NOT answer `unchanged` —\n"
-         "  copy every defect above that is still in the code into `unraised`\n"
-         "  as it stands. A pointer to an earlier verdict is lost the moment the\n"
-         "  earlier verdict stops being shown.\n"
-         "- Something moved: name WHAT — a finding that contradicts it, an\n"
-         "  invariant this round confirmed, a boundary since repaired — and\n"
-         "  reach the verdict that follows from it.\n"
+         "- Nothing moved: reach the same verdict and say so in a line. Copy its\n"
+         "  advice into `needs` WORD FOR WORD — it is addressed to a person who may\n"
+         "  not have acted on it yet, so do NOT restate it, drop it, or move it into\n"
+         "  `unraised`. And do NOT answer `unchanged` — copy every defect above\n"
+         "  that is still in the code into `unraised` as it stands. A pointer to an\n"
+         "  earlier verdict is lost the moment the earlier verdict stops being shown.\n"
+         "- Something moved: name WHAT — a layer that changed, a finding that\n"
+         "  contradicts it, an invariant this round confirmed, a boundary since\n"
+         "  repaired — and reach the verdict that follows from it.\n"
          "Overturning it is allowed. Re-deriving it from scratch is not.\n")))
 
 (defn- standing-section
@@ -366,9 +402,10 @@
    `standing` is the terminal warden's standing list, see `standing-section`,
    and `closed` the findings the run's last word on was a warden's close, see
    `closed-section`. Each inherited row may carry `:question`, see
-   `inherited-section`."
+   `inherited-section`. `moved` and `parks` say what has happened to `prior`
+   since it was reached; see `prior-verdict-section`."
   [{:keys [design baseline stance findings inherited closed history rounds prior status
-           fix-outcomes progress standing]}]
+           fix-outcomes progress standing moved parks]}]
   (str
    (opening status (not-landed fix-outcomes))
    "Read the code where you need to — you have tools, and the question cannot be\n"
@@ -433,7 +470,7 @@
    ;; Last, so the judge reads this round's evidence before it is reminded what
    ;; it already decided — the standing answer is what the new evidence is
    ;; weighed against, not the frame it is read through.
-   (prior-verdict-section prior)
+   (prior-verdict-section prior moved parks)
    "\n"
    "Return EXACTLY one fenced ```json block, nothing after it:\n"
    "{\"verdict\": \"sound|strained|invalidated|standing_challenged\",\n"
@@ -448,6 +485,7 @@
    " \"standing_answered\": [{\"index\": 0, \"answer\": \"...\"}],\n"
    " \"inherited_answered\": [{\"id\": \"...\", \"evidence\": \"file:line — ...\"}],\n"
    " \"contested_closes\": [{\"id\": \"...\", \"reason\": \"...\"}],\n"
+   " \"unmet_lifted\": [{\"invariant\": \"...\", \"changed\": \"file:line — ...\"}],\n"
    " \"needs\": \"...\"}\n\n"
    "- findings_classified: name each finding by the handle shown before its\n"
    "  title, then say what it is.\n"
@@ -464,6 +502,8 @@
    "- inherited_answered: only ids from the left-owed list above, each with\n"
    "  the evidence in the code. Leave it empty when there is no such list.\n"
    "- contested_closes: only handles from the closed-by-the-warden list.\n"
+   "- unmet_lifted: only invariants your last verdict named unmet, each with\n"
+   "  what changed in the code since. Leave it empty otherwise.\n"
    "- needs: what a PERSON should do or decide — advice, a record to amend,\n"
    "  a chore before landing. Never a defect in the code; those go in\n"
    "  unraised. Leave it empty when there is nothing to say.\n"
@@ -569,6 +609,16 @@
 
             (seq (:contested_closes m))
             (assoc ::contested-closes (by-id (:contested_closes m) :reason))
+
+            (seq (:unmet_lifted m))
+            (assoc ::unmet-lifted
+                   (into []
+                         (keep (fn [{:keys [invariant changed]}]
+                                 (let [i (str/trim (str invariant))
+                                       c (str/trim (str changed))]
+                                   (when-not (or (str/blank? i) (str/blank? c))
+                                     {:invariant i :changed c}))))
+                         (:unmet_lifted m)))
 
             (not (str/blank? (str (:needs m))))
             (assoc :needs (str (:needs m))))))
@@ -1107,10 +1157,53 @@
                 (mapcat :findings (:history final))
                 (stages/unanswered-inherited final))))
 
-(defn ^{:malli/schema [:=> [:cat :map :map :any] :map]}
+(defn- open-parks
+  "The parks `final` ends holding — its own and the inherited rows nobody
+   answered — less those whose id is in `answered`, the inherited rows the
+   verdict settled with evidence."
+  [final answered]
+  (into [] (comp (filter #(= :park (:disposition %)))
+                 (remove #(contains? answered (finding-key %))))
+        (still-owed final)))
+
+(defn- still-unmet
+  "The invariants `prior` named unmet that a verdict may not now call met: all
+   of them while any of `parks` is open, less those `lifted` — the judge's
+   `unmet_lifted` rows — names with what changed. Each keeps the prior's finding
+   where that is itself an open park, and names the open parks otherwise.
+
+   Any open park, not only one naming the invariant: a park carries no claim,
+   and a recurrence of the finding that showed an invariant unmet is filed under
+   a new id, so a match on the prior's finding misses exactly the case this is
+   for — the same gap, parked again, and the invariant called held over it."
+  [prior parks lifted]
+  (when (seq parks)
+    (let [ids (into #{} (map finding-key) parks)
+          off (into #{} (map (comp bare-claim :invariant)) lifted)]
+      (into []
+            (comp (remove #(contains? off (bare-claim (:invariant %))))
+                  (map (fn [{:keys [invariant finding]}]
+                         {:invariant invariant
+                          :finding   (if (contains? ids (str finding))
+                                       (str finding)
+                                       (str/join ", " (sort ids)))})))
+            (:invariants-unmet prior)))))
+
+(defn- lifted-reason
+  "`reason` with each of `lifted` that names an invariant `prior` held unmet
+   appended, so what the judge said changed is on the entry that lifts it."
+  [reason prior lifted]
+  (let [was  (into #{} (map (comp bare-claim :invariant)) (:invariants-unmet prior))
+        rows (filter #(contains? was (bare-claim (:invariant %))) lifted)]
+    (if (seq rows)
+      (str reason "\n\nNo longer unmet:\n"
+           (bullets (map #(str (:invariant %) " — " (:changed %)) rows)))
+      reason)))
+
+(defn ^{:malli/schema [:=> [:cat :map :map :any [:maybe :map]] :map]}
   against-the-run
   "A parsed verdict, reconciled with the run it judged, as the ledger records
-   it. Six things the judge cannot be trusted to keep straight, each decided
+   it. Seven things the judge cannot be trusted to keep straight, each decided
    here mechanically:
 
    - An `:unraised` row naming a finding the run raised is a restatement, and
@@ -1124,6 +1217,11 @@
    - An invariant the judge lists as unverified is not held, whatever else it
      says. Listed as both, it read as confirmed beside a `:needs` asking a
      person to go and confirm it.
+   - An invariant `prior` — the verdict this one was offered as standing —
+     named unmet stays in `:invariants-unmet` while a park is still open,
+     unless the judge lifts it in `unmet_lifted` saying what changed; see
+     `still-unmet`. A judge citing that verdict flipped such an invariant to
+     held over the very park that kept it unmet, calling the evidence unchanged.
    - Standing answers name an item by index into `standing`, and are recorded
      with the item itself under `:standing` beside its text under `:item`; an
      index outside it names nothing and is dropped. The item, not its text,
@@ -1136,15 +1234,24 @@
      final round's hashes, when that round landed no repair. A repair after the
      reading moved the tree, and a verdict stamped with the tree before it would
      carry onto a tree it never read."
-  [v final standing]
+  [v final standing prior]
   (let [raised    (raised-identities final)
         unraised  (into [] (comp (remove #(contains? raised (:finding %)))
                                  (map #(dissoc % :finding)))
                         (:unraised v))
-        contra    (into {} (keep (fn [f] (when-let [c (:contradicts f)]
-                                           [(bare-claim c)
-                                            (str (or (:handle f) (:id f) (:title f)))])))
-                        (open-across-run final))
+        holding   (into #{} (keep :id) (stages/unanswered-inherited final))
+        inherited (into [] (filter #(contains? holding (:id %))) (::inherited-answers v))
+        broken    (into #{} (map (comp bare-claim :invariant)) (:invariants-broken v))
+        held-open (into [] (remove #(contains? broken (bare-claim (:invariant %))))
+                        (still-unmet prior
+                                     (open-parks final (into #{} (map :id) inherited))
+                                     (::unmet-lifted v)))
+        contra    (into (into {} (keep (fn [f] (when-let [c (:contradicts f)]
+                                                 [(bare-claim c)
+                                                  (str (or (:handle f) (:id f) (:title f)))])))
+                              (open-across-run final))
+                        (map (juxt (comp bare-claim :invariant) :finding))
+                        held-open)
         unver     (into [] (remove #(contains? contra (bare-claim (:invariant %))))
                         (:invariants-unverified v))
         owed      (into #{} (map (comp bare-claim :invariant)) (:invariants-unverified v))
@@ -1154,7 +1261,8 @@
                                 (conj acc {:invariant (str i) :finding f})
                                 acc)))
                           []
-                          (concat (:invariants-held v) (map :invariant (:invariants-unverified v))))
+                          (concat (:invariants-held v) (map :invariant (:invariants-unverified v))
+                                  (map :invariant held-open)))
         held      (into [] (remove #(or (contains? contra (bare-claim %))
                                         (contains? owed (bare-claim %))))
                         (:invariants-held v))
@@ -1164,13 +1272,12 @@
                                        (cond-> {:item (standing-text s) :answer answer}
                                          (map? s) (assoc :standing s))))))
                         (::standing-answers v))
-        holding   (into #{} (keep :id) (stages/unanswered-inherited final))
-        inherited (into [] (filter #(contains? holding (:id %))) (::inherited-answers v))
         closed    (into #{} (map finding-key) (closed-across-run final))
         contested (into [] (filter #(contains? closed (:id %))) (::contested-closes v))
         hashes    (sort (map str (:patch-hashes final)))]
-    (cond-> (dissoc v ::standing-answers ::inherited-answers ::contested-closes
-                    :unraised :invariants-held :invariants-unverified)
+    (cond-> (-> (dissoc v ::standing-answers ::inherited-answers ::contested-closes
+                        ::unmet-lifted :unraised :invariants-held :invariants-unverified)
+                (update :reason lifted-reason prior (::unmet-lifted v)))
       (seq unraised) (assoc :unraised unraised)
       (seq inherited) (assoc :inherited-answered inherited)
       (seq contested) (assoc :contested-closes contested)
@@ -1293,6 +1400,39 @@
               :else                                              row))
           (stages/unanswered-inherited final))))
 
+(defn- moved-since
+  "What changed in the stack between the tree `prior` was reached over and the
+   one `final` ends on: `:labels`, the layers holding a patch that verdict never
+   read, in stack order, and `:gone`, how many patches it read the stack no
+   longer holds. nil when either tree is unknown — a verdict with no
+   `:patch-hashes`, or a round jj could not diff — since nothing can then be
+   said either way."
+  [prior final]
+  (let [was (set (:patch-hashes prior))
+        now (into #{} (map str) (:patch-hashes final))]
+    (when (and (seq was) (seq now))
+      {:labels (into []
+                     (comp (filter #(when-let [h (:patch-hash %)]
+                                      (and (contains? now (str h)) (not (contains? was (str h))))))
+                           (keep :label)
+                           (distinct))
+                     (concat (map :target (:reviews final)) (:skipped final)))
+       :gone   (count (remove now was))})))
+
+(defn- write-prompt!
+  "Leave `prompt` in the run dir as verdict-prompt.txt, beside the reviewers'
+   schemas. The agent is handed it as an argument, so agent.log never holds it,
+   and what a judge was told is otherwise only inferable from the source at the
+   machinery's revision. Only into a run dir that exists: one the loop did not
+   make is no run's. Best-effort — a prompt that cannot be kept costs the
+   reader, never the verdict."
+  [run-id prompt]
+  (try
+    (let [dir (cstate/run-dir run-id)]
+      (when (fs/directory? dir)
+        (spit (str (fs/path dir "verdict-prompt.txt")) prompt)))
+    (catch Exception _ nil)))
+
 (defn- plan-progress
   "Where the workstream at `cwd` is in the plan that governs it (`ws/plan-design` —
    the plan the board shows and the gate opens), or nil when it is unphased or its
@@ -1313,7 +1453,8 @@
    names as broken a claim the design does not state — each means 'nothing to
    record', never a fabricated :sound.
 
-   A fresh verdict is recorded as `against-the-run` reconciles it.
+   A fresh verdict is recorded as `against-the-run` reconciles it, stamped with
+   `run-id`; the prompt that reached it is kept in the run dir.
 
    A standing verdict this run gave no reason to revisit is carried forward
    instead of re-derived; see `still-answers?` for when that holds and
@@ -1340,8 +1481,11 @@
                        :status (:status final)
                        :rounds rounds
                        :prior (as-reached cwd prior)
+                       :moved (moved-since prior final)
+                       :parks (open-parks final #{})
                        :progress (plan-progress cwd)
                        :standing standing})
+              _ (write-prompt! run-id prompt)
               {:keys [num-turns result-error? result-text]}
               (agent/launch! {:run-id run-id :cwd cwd
                               :first-message prompt :budget budget
@@ -1350,4 +1494,5 @@
             (some-> (parse result-text rounds (:seq design))
                     (held-to-claims (when (contains? design :model)
                                       (into #{} (map :id) (claim-model/claims design))))
-                    (against-the-run final standing))))))))
+                    (against-the-run final standing prior)
+                    (cond-> run-id (assoc :run-id run-id)))))))))
