@@ -139,6 +139,17 @@
     (is (not (str/includes? (:headline p) "owed")))
     (is (not (contains? p :verdict-unverified)))))
 
+(deftest a-defect-the-verdict-found-is-on-the-open-side-of-the-headline
+  ;; `2 kept` was published over two :unraised rows nobody ruled on, and over a
+  ;; carried verdict the same two were `kept` in two runs' headlines.
+  (let [p (analysis/payload (assoc a-run :design-verdict "sound" :verdict-unraised 2))]
+    (is (str/includes? (:headline p) "still open · 2 unraised by the verdict · 0 kept")
+        "nobody decided to ship them, so they read as open work, before `kept`")
+    (is (= 2 (:verdict-unraised p))))
+  (let [p (analysis/payload (assoc a-run :design-verdict "sound"))]
+    (is (not (str/includes? (:headline p) "unraised")))
+    (is (not (contains? p :verdict-unraised)))))
+
 (deftest the-payload-carries-what-the-design-judge-decided
   ;; The pass judges the whole run, so it answers after the status is fixed and
   ;; nothing the loop published knows what it said. One run reached the analysis

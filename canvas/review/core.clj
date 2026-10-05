@@ -261,7 +261,11 @@
      two unrepaired implementation defects was indistinguishable from one that was finished.
 
      The count is of repair nobody was dispatched for: implementation findings still `owed`, and
-     every defect no round raised. A settled finding is the loop working, not a remainder."
+     every defect no round raised. A settled finding is the loop working, not a remainder.
+
+     Beside it, the invariants the judge could not verify and the defects no round raised, each
+     counted on its own: both are open — nobody ruled on either — and neither is a finding the
+     loop is holding."
     {:signature [:=> [:catn [:report ReviewReport] [:owed :any]] [:maybe :map]]})
   (Operation with-review-entry
     "The report carrying what became of the run's own `:review` ledger entry.

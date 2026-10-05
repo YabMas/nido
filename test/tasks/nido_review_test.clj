@@ -131,12 +131,11 @@
                        {:run-id run-id :dry-run? false} "ws-x")
     (:payload (first (queued-envelopes)))))
 
-(deftest the-kept-count-includes-what-the-design-judge-is-holding
-  ;; The run that prompted this ended `clean · 0 still open` with nothing kept,
-  ;; over a `sound` verdict naming three located defects in a layer three rounds
-  ;; of reviewers had read. This payload is the only record that sees both — the
-  ;; :review ledger entry is written before the pass runs — so a remainder
-  ;; uncounted here is uncounted anywhere.
+(deftest a-defect-the-judge-found-is-open-not-kept
+  ;; One run's headline read `2 kept` over two :unraised rows when both of its
+  ;; warden rulings were `fix`; another, over a carried verdict, published the
+  ;; same two rows as kept for the second run in a row. Nobody had decided to
+  ;; live with either.
   (let [final  {:status :clean :history [] :findings []}
         report {:summary {:rounds 3 :fix-attempts 0}
                 :target {:base "main"}
@@ -144,13 +143,28 @@
                                  :verdict {:verdict :sound :round 3
                                            :unraised [{:where "nido_attach.clj:139"
                                                        :what "an unreachable :claimed branch"}]
-                                           :needs "re-baseline the attach record"}}}]
-    (is (= 1 (:findings-kept (analysis-payload-for final report)))
-        "a defect the branch ships on the judge's say-so is kept, exactly as a
-         declined finding is — and the advice beside it is not a second one")
-    (is (= 0 (:findings-remaining (analysis-payload-for final report)))
-        "and it is not OWED — routing it into the remainder would ask the next
-         run to repair something nobody ruled on")))
+                                           :needs "re-baseline the attach record"}}}
+        p      (analysis-payload-for final report)]
+    (is (= 0 (:findings-kept p))
+        "kept is a ruling to ship a defect, and no round ruled on this one")
+    (is (= 1 (:verdict-unraised p))
+        "it is open work the next run's reviewers are handed, and the headline
+         has to say so — the advice beside it is not a second one")
+    (is (= 0 (:findings-remaining p))
+        "and it is not the loop's own remainder, which its ledger entry states")))
+
+(deftest a-carried-verdicts-rows-are-not-kept-again
+  (let [report {:summary {:rounds 1 :fix-attempts 0}
+                :target {:base "main"}
+                :design-verdict {:outcome "answered"
+                                 :verdict {:verdict :sound :round 1 :carried-from 93
+                                           :unraised [{:where "a.clj:128" :what "no case default"}
+                                                      {:where "V2026.sql:1" :what "stale comment"}]}}}
+        p      (analysis-payload-for {:status :clean :history [] :findings []} report)]
+    (is (= 0 (:findings-kept p))
+        "an earlier run's judge found these; re-offering them decides nothing")
+    (is (= 2 (:verdict-unraised p)))
+    (is (= 93 (:design-carried-from p)))))
 
 (deftest the-analysis-is-told-whether-the-run-reached-a-ledger
   ;; Read off the report for the verdict's reason: it is the copy that survives
@@ -164,7 +178,7 @@
     (is (= "refused" (get-in p [:review-entry :ledger])))
     (is (str/includes? (:title p) "not recorded"))))
 
-(deftest a-judged-remainder-adds-to-the-rounds-own-rather-than-replacing-it
+(deftest the-kept-count-is-the-rounds-rulings-alone
   (let [final  {:status :converged
                 :history [{:iter 1 :findings [{:handle "h1" :title "the shipped defect"
                                                :disposition :declined
@@ -175,10 +189,12 @@
                 :design-verdict {:outcome "answered"
                                  :verdict {:verdict :strained :round 2
                                            :unraised [{:where "cut.clj:3"
-                                                       :what "the third call site is where the cut is failing"}]}}}]
-    (is (= 2 (:findings-kept (analysis-payload-for final report)))
-        "the two halves of the remainder are counted together or one of them
-         hides the other")))
+                                                       :what "the third call site is where the cut is failing"}]}}}
+        p      (analysis-payload-for final report)]
+    (is (= 1 (:findings-kept p))
+        "a decline is a decision to ship a defect and stays counted as one")
+    (is (= 1 (:verdict-unraised p))
+        "the judge's row sits beside it on the open side, not added into it")))
 
 (deftest advice-is-not-counted-as-kept
   ;; `Nothing is needed to ship`, a list of landing chores, a record edit: each
@@ -188,8 +204,10 @@
                 :design-verdict {:outcome "answered"
                                  :verdict {:verdict :sound :round 2
                                            :needs "Nothing is needed to ship. Re-baseline first-event."}}}]
-    (is (= 0 (:findings-kept (analysis-payload-for {:status :clean :history [] :findings []}
-                                                   report))))))
+    (let [p (analysis-payload-for {:status :clean :history [] :findings []} report)]
+      (is (= 0 (:findings-kept p)))
+      (is (not (contains? p :verdict-unraised))
+          "nor is it open: advice names no defect"))))
 
 (deftest a-standing-item-the-verdict-answered-is-not-published-open
   ;; The warden asked a person to confirm the live tests pass; the verdict ran

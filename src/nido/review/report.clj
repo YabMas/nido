@@ -1407,7 +1407,14 @@
 
    `:verdict-unverified` counts the invariants the judge could not confirm, only
    when there are any. Each is evidence somebody owes before the branch ships —
-   open work the rounds never saw, since no finding stands for it."
+   open work the rounds never saw, since no finding stands for it.
+
+   `:verdict-unraised` counts the `:unraised` rows, only when there are any, and
+   is open on the same argument: a located defect no round raised and nobody
+   ruled on is not a decision to ship it. It is owed to the next run, whose
+   reviewers `stages/standing-needs` seeds with it — and a CARRIED verdict's
+   rows are the earlier run's, re-offered rather than decided twice. `:needs`
+   is advice and counts as nothing here."
   [report owed]
   (let [v     (get-in report [:design-verdict :verdict])
         owed? (fn [text] (some #(and (not (str/blank? (str %))) (str/includes? (str text) (str %)))
@@ -1419,6 +1426,7 @@
                                                          (:findings-classified v)))
                                           (count (:unraised v)))}
         (seq (:invariants-unverified v)) (assoc :verdict-unverified (count (:invariants-unverified v)))
+        (seq (:unraised v)) (assoc :verdict-unraised (count (:unraised v)))
         (:carried-from v) (assoc :design-carried-from (:carried-from v))))))
 
 ;; ---- the rest of what the run's tail wrote -------------------------------

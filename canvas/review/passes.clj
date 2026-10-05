@@ -124,23 +124,9 @@
     "What the run DECIDED to live with — the defects it declined and the layer claims it let
      stand. Nobody owes anything on these, which is what keeps them out of `open-across-run`
      and what makes them easy to lose: a decision to ship a known defect is precisely what a
-     record is for."
+     record is for. Rulings only: a defect the design judge found and no round raised was
+     decided by nobody, and the analysis counts it open."
     {:signature [:=> [:catn [:final :map]] :any]})
-  (Operation kept-by-the-verdict
-    "The judge's own half of that remainder: the `:unraised` rows of a verdict that asks nobody
-     to decide anything — one per located defect no round raised. The verdict's `:needs` is
-     advice to a person and counts as nothing.
-
-     Same shape as a decline — a located defect the branch ships, owed to no one — and until it
-     was counted a `sound` verdict naming three of them published `0 still open` with nothing
-     kept beside it. Read off the REPORT, not the round: the pass judges the whole run and so
-     answers after it, which is also why the `:review` ledger entry can never carry this and the
-     analysis payload is where the two halves are summed.
-
-     Never from a decision. Those put their `:needs` to a person and reach the gate as a
-     blocker; counted here they would read as something already settled."
-    {:signature [:=> [:catn [:report :map]] :any]
-     :delegates [decision?]})
   (Operation settled-by-fixing
     "The defects the run REMOVED: findings a repair was aimed at and that no later reviewer
      raised again.

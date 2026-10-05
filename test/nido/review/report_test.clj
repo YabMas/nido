@@ -1366,6 +1366,25 @@
                        #{})
                       :verdict-unverified))))
 
+(deftest the-summary-counts-the-defects-no-round-raised-apart
+  ;; Summed into the kept count, two :unraised rows read `2 kept` on a run whose
+  ;; every ruling was `fix`: a decision nobody made.
+  (let [summary (fn [v] (report/verdict-summary
+                         (report/with-verdict
+                           (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+                           {:outcome :answered :ledger :appended :verdict v})
+                         #{}))]
+    (is (= 2 (:verdict-unraised (summary (assoc a-verdict :unraised
+                                                [{:where "a.clj:3" :what "one"}
+                                                 {:where "b.clj:9" :what "two"}]))))
+        "one per located defect, so the headline can put them on the open side")
+    (is (= 1 (:verdict-unraised (summary (assoc a-verdict :verdict :invalidated
+                                                :unraised [{:where "a.clj:3" :what "one"}]))))
+        "a decision's rows are no more decided than a sound verdict's")
+    (is (not (contains? (summary a-verdict) :verdict-unraised))
+        "the :needs beside them is advice and names no defect")
+    (is (not (contains? (summary (assoc a-verdict :unraised [])) :verdict-unraised)))))
+
 (deftest a-carried-verdict-says-so-in-the-summary
   (let [r (report/with-verdict
             (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})

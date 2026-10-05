@@ -529,11 +529,9 @@
    `record-verdict!` has already put it and is the copy that survives a ledger
    that would not take it.
 
-   `:findings-kept` is the run's whole remainder and so spans both, which is why
-   the sum is made HERE and nowhere else: the `:review` ledger entry counts only
-   the rounds, and the verdict is its own entry. This payload
-   is the one record that sees the loop and the judge together — see
-   `verdict/kept-by-the-verdict` for which of the verdict's rows belong in it.
+   `:findings-kept` is what the ROUNDS decided to live with and nothing else.
+   The verdict's `:unraised` rows are nobody's decision, so `verdict-summary`
+   puts them on the open side as `:verdict-unraised`.
 
    `:standing` is the last warden's list less what the verdict answered from
    the code (`:standing-answered`), for the same reason: the warden asked
@@ -550,7 +548,6 @@
   [cwd final report report-path config ws-id]
   (let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd) {})
         open   (verdict/owed-rows final)
-        judged (verdict/kept-by-the-verdict report)
         cover  (report/coverage report)
         owed   (into #{} (comp (mapcat (juxt :id :handle)) (remove nil?) (map str))
                      (verdict/still-owed final))
@@ -569,8 +566,7 @@
        :defects-settled    (count (verdict/settled-by-fixing final))
        :defects-introduced (count (verdict/settled-the-loop-made final))
        :findings-remaining (count open)
-       :findings-kept      (+ (count (verdict/kept-across-run final))
-                              (count judged))
+       :findings-kept      (count (verdict/kept-across-run final))
        :remaining-handed   (count (filter :handed open))
        :remaining-parked   (count (filter #(= :park (:disposition %)) open))
        :targets-reviewed   (:reviewed cover)

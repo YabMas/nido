@@ -895,41 +895,10 @@
    decline is somebody already did, and the second is a decision to ship a
    defect, which is precisely the kind of thing a record exists to hold.
 
-   The rounds are not the whole remainder — see `kept-by-the-verdict` for the
-   half of it the judge contributes after they end."
+   Rulings only. A defect the design judge finds that no round raised was
+   decided by nobody — it is open, and `report/verdict-summary` counts it."
   [final]
   (into [] (filter stages/kept?) (final-rulings final)))
-
-(defn ^{:malli/schema [:=> [:cat :map] :any]}
-  kept-by-the-verdict
-  "The design judge's own remainder, out of `report`: the `:unraised` rows of a
-   verdict that asks nobody to decide anything — or nil.
-
-   Same shape as a decline. The judge names a located defect, no round raised
-   it, no fixer was handed it, and the run ships it anyway; nobody is owed
-   anything, which is what makes it kept rather than open and what makes it easy
-   to lose. Uncounted, a `sound` verdict naming three defects in a layer three
-   rounds of reviewers had read published `clean · 0 still open` with no
-   remainder beside it — a headline the judge's own entry contradicts.
-
-   One per ROW, and rows only. `:needs` is the judge's advice to a person and
-   counts as nothing: counted, it made `1 kept` out of `nothing is needed to
-   ship`, a list of landing chores, a record edit, a pointer to an earlier
-   verdict and a restatement of a finding still open. A row restating a finding
-   the run raised never reaches here — `against-the-run` drops it.
-
-   Only from a verdict that leaves the design STANDING, on
-   `stages/standing-needs`' argument: :invalidated and :standing-challenged put
-   their :needs to a person, `tasks.nido-review/parked-blocker` carries that to
-   the gate, and a question somebody must answer is the definition of not kept.
-
-   Off the REPORT rather than the loop's `final`, because the pass judges the
-   whole run and so answers after it: `final` predates the verdict, and the
-   report is where `report/with-verdict` has put it."
-  [report]
-  (let [v (get-in report [:design-verdict :verdict])]
-    (when (and (:verdict v) (not (decision? v)))
-      (not-empty (vec (:unraised v))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   handed-to-a-fixer

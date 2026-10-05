@@ -92,12 +92,8 @@
    as the empty string, so an omitted key reaches the analysis as ` · kept`
    rather than as silence.
 
-   It counts the design judge's own remainder too, and this is the one number in
-   the payload that spans the loop AND the pass that judges it: a verdict
-   needing no decision can still name a located defect no round raised, and that
-   is a defect the branch ships on somebody's say-so like any other kept one.
-   `verdict/kept-by-the-verdict` is the reading; the `:review` ledger entry
-   cannot make it, because it is written before the pass runs.
+   It counts rulings and only rulings. A defect the design judge found that no
+   round raised was decided by nobody, so it is `:verdict-unraised` below.
 
    The title carries four of these out of all of it, and each one changes what
    the rest of them MEAN. It is what a human reads off the board without opening
@@ -150,9 +146,17 @@
    and one run published `0 still open · 1 kept` over a verdict whose own
    `:needs` said the Linux path was never run. Carried only when non-zero.
 
+   `:verdict-unraised` is the located defects that verdict found and no round
+   raised, on the open side for the same reason: nobody ruled on them, and the
+   next run's reviewers are handed them. Counted as kept, they made `2 kept` out
+   of a run whose every ruling was `fix` — and a carried verdict published the
+   same two as kept in two consecutive runs. Not inside `still open` either,
+   which is the loop's own derivation and what the ledger entry agrees with.
+   Carried only when non-zero.
+
    A `Design:` line says the verdict in the headline too, and that it was
-   carried when it was: the kept count may include what that verdict found, and
-   a reader has to know whether a judge read THIS run's code to weigh it.
+   carried when it was: the unraised count may be an earlier judge's, and a
+   reader has to know whether a judge read THIS run's code to weigh it.
 
    `:review-entry` is what became of the run's own `:review` ledger entry —
    `report/with-review-entry`'s answer, carried whole. It is the one field here
@@ -203,7 +207,7 @@
            findings-remaining findings-kept remaining-handed remaining-parked
            targets-reviewed targets-skipped unfixable parked standing
            drift unavailable stood-in base in-flight errored design-verdict verdict-implementation
-           verdict-unverified
+           verdict-unverified verdict-unraised
            design-carried-from review-entry reviewed-project reviewed-session reviewed-ws-id
            machinery] :as run}]
   ;; `:in-flight` is the reconciler's reading of an orphan's report and is the
@@ -258,6 +262,8 @@
                                         (str defects-introduced " made by the loop's own repairs; "))
                                       (n fix-attempts) " repairs dispatched) · "
                                       (n findings-remaining) " still open · "
+                                      (when (pos? (or verdict-unraised 0))
+                                        (str verdict-unraised " unraised by the verdict · "))
                                       (when (pos? (or verdict-unverified 0))
                                         (str verdict-unverified " verification"
                                              (when (not= 1 verdict-unverified) "s")
@@ -300,6 +306,7 @@
       verdict          (assoc :design-verdict verdict
                               :verdict-implementation (or verdict-implementation 0))
       (pos? (or verdict-unverified 0)) (assoc :verdict-unverified verdict-unverified)
+      (pos? (or verdict-unraised 0)) (assoc :verdict-unraised verdict-unraised)
       design-carried-from (assoc :design-carried-from design-carried-from)
       reviewed-project (assoc :reviewed-project (name reviewed-project))
       reviewed-session (assoc :reviewed-session reviewed-session)
