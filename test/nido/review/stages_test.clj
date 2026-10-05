@@ -1338,11 +1338,17 @@
                                                      :because "this repair keeps the invariant `positional-edges`"}))
                           "without quoting"))
       "the whole id cites the claim it names")
+  (is (not (str/includes? (:because (ruling-against one-claim-design
+                                                    {:disposition "fix"
+                                                     :because "the invariant \"to a call inside a method's own form\" holds"}))
+                          "without quoting"))
+      "wording copied out of a claim cites that claim — refusing a correct quote
+       puts 'not a licence' on a sound ground, in front of the fixer and the person")
   (is (str/includes? (:because (ruling-against one-claim-design
                                                 {:disposition "fix"
-                                                 :because "the invariant \"to a call inside a method's own form\" holds"}))
+                                                 :because "the invariant \"to a call in the method's file\" holds"}))
                      "without quoting one the record contains")
-      "a design that names its claims is cited by id, so its copied wording licenses nothing")
+      "a restatement is still refused, whatever the design's shape")
   (is (str/includes? (:because (ruling-against one-claim-design
                                                 {:disposition "fix"
                                                  :because "the invariant `positional` holds"}))

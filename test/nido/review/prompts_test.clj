@@ -173,7 +173,10 @@
   (let [out (prompts/warden-prompt {:findings findings :history [] :design model-design})]
     (is (str/includes? out "- [rounded-once] a total is rounded exactly once\n"))
     (is (str/includes? out "[reads-through-aggregate] every read goes through the aggregate  [holds ON COMPLETION"))
-    (is (str/includes? out "quoted by that id"))))
+    (is (str/includes? out "by its [bracketed id]"))
+    (is (not (str/includes? out "verbatim"))
+        "one citation rule, not two: a warden told both the id and the clause
+         verbatim followed the second ten times, and was refused for it")))
 
 (deftest a-reviewer-names-a-shared-model-claim-by-its-id
   ;; `stages/cite-invariants` checks `contradicts` against the ids, so the reviewer

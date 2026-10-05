@@ -264,35 +264,46 @@
   (map (comp str/trim second) (re-seq #"[\"`]([^\"`]+)[\"`]" s)))
 
 (defn- cites?
-  "Whether the quoted span `q` cites one of `invariants`, as `design-invariants`
-   gives them.
+  "What the quoted span `q` cites among `invariants`, as `design-invariants` gives
+   them — the claim's id in the shared model, the clause before it — or nil.
 
-   A design in the shared model names its claims, and there a span cites a claim
-   only by being its whole id — `rounded-once`, whatever its length. The claim's
-   wording is not a citation, copied or not, and neither is part of an id. Before
-   the shared model a clause had nothing to be named by, so a clause-sized span
-   cites the clause it sits inside."
-  [{:keys [ids clauses]} q]
-  (if ids
-    (some #(= (citation-text %) q) ids)
-    (and (>= (count q) min-citation-chars)
-         (some #(str/includes? % q) clauses))))
+   A clause-sized span cites the clause it sits inside. In the shared model a
+   span also cites a claim by being its whole id, whatever its length; part of
+   an id cites nothing. Wording copied out of a claim's statement resolves to
+   that claim, because the warden is shown the statement beside its id and a
+   copy of it is the same text the id names — refusing it would prefix a correct
+   ground with \"not a licence\" and teach the fixer to disregard true refusals.
+   A paraphrase still matches nothing; that is the restatement this exists for."
+  [{:keys [ids statements clauses]} q]
+  (or (when ids
+        (some #(when (= (citation-text %) q) %) ids))
+      (when (>= (count q) min-citation-chars)
+        (if statements
+          (some (fn [[id statement]] (when (str/includes? statement q) id)) statements)
+          (some #(when (str/includes? % q) %) clauses)))))
 
 (defn- design-invariants
-  "What a citation of `design` may name: `{:ids}` for a design in the shared model,
-   its claims' ids as the record spells them, and `{:clauses}` before it, every
-   invariant clause as `citation-text` compares them. Empty for a workstream with
-   no record.
+  "What a citation of `design` may name. For a design in the shared model,
+   `{:ids :statements}`: its claims' ids as the record spells them, and each id's
+   statement as `citation-text` compares it, so `cites?` can resolve copied
+   wording to the claim it came from. Before it, `{:clauses}`, every invariant
+   clause compared the same way. Empty for a workstream with no record.
 
-   Never both. A design that names its claims is cited by name alone: an id cannot
-   be restated wider the way copied wording can, and a check that also took the
-   wording would let exactly that back in."
+   `:clauses` never accompanies `:ids`: `cite-invariants` reads `:ids` alone, and
+   a reviewer's `contradicts` on a claim has to be its id exactly, since it goes
+   on as that claim's name."
   [design]
-  (if (contains? design :model)
-    {:ids (into #{} (keep :id) (claim-model/claims design))}
-    {:clauses (into []
-                    (comp (map :statement) (map citation-text) (remove str/blank?))
-                    (claim-model/claims design))}))
+  (let [claims (claim-model/claims design)]
+    (if (contains? design :model)
+      {:ids        (into #{} (keep :id) claims)
+       :statements (into {}
+                         (comp (filter :id)
+                               (map (juxt :id (comp citation-text :statement)))
+                               (remove (comp str/blank? second)))
+                         claims)}
+      {:clauses (into []
+                      (comp (map :statement) (map citation-text) (remove str/blank?))
+                      claims)})))
 
 (defn- cite-invariants
   "Hold each finding's `:contradicts` against the design's own clauses, and keep

@@ -1610,13 +1610,16 @@
   (str "THE DESIGN THIS CHANGE COMMITTED TO — judge the findings against this:\n"
        "Shape: " shape "\n"
        (if model "Claims:\n" "Invariants:\n") (claim-lines design) "\n"
-       (when model
-         "A claim shown with a [bracketed id] is quoted by that id — the id is the clause.\n")
        "QUOTE ONE, DO NOT RESTATE IT. A `because` using the word \""
        invariant-citation-cue "\"\n"
-       "must carry the clause it leans on verbatim, in double quotes or\n"
-       "backticks, copied from the list above. The loop checks that span against\n"
-       "the list and, when it matches none, prefixes your sentence with a refusal\n"
+       (if model
+         (str "must cite the claim it leans on by its [bracketed id] from the list\n"
+              "above, in backticks — `the-claim-id` — and nothing more: the id is\n"
+              "the clause. The loop checks that span against the list and, when it\n"
+              "matches none, prefixes your sentence with a refusal\n")
+         (str "must carry the clause it leans on verbatim, in double quotes or\n"
+              "backticks, copied from the list above. The loop checks that span against\n"
+              "the list and, when it matches none, prefixes your sentence with a refusal\n"))
        "before the fixer reads it — so a paraphrase licenses nothing. Restating is\n"
        "how an invariant gets WIDER: \"inside the method's own form\" restated as\n"
        "\"in the file that writes the method\" is a different rule, and the fixer\n"
