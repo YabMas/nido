@@ -8,6 +8,7 @@
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.record.fork :as fork]
    [nido.coordinator.record.workstream :as ws]
+   [nido.review.digest :as digest]
    [nido.review.settled :as settled]
    [nido.vsdd.jj :as jj]))
 
@@ -314,6 +315,24 @@
   (with-redefs [jj/jj! (fn [_ & _] (throw (ex-info "boom" {})))]
     (is (nil? (settled/code-identity "/w")) "a throw")))
 
+;; Four record runs re-judged every check (37–39) because an amend agent's clj-kondo and clojure-lsp,
+;; run from src/main/brian, wrote caches into the reviewed tree and moved the identity under them.
+(deftest a-tool-cache-is-not-the-code
+  (let [cache (str "src/main/brian/.clj-kondo/.cache/v1/lock: Ok(Resolved(Some(File { id: FileId(\"aa\"), executable: false, copy_id: CopyId(\"\") })))\n"
+                   "src/main/brian/.lsp/.cache/db.transit.json: Ok(Resolved(Some(File { id: FileId(\"bb\"), executable: false, copy_id: CopyId(\"\") })))\n"
+                   ".cpcache/123.cp: Ok(Resolved(Some(File { id: FileId(\"cc\"), executable: false, copy_id: CopyId(\"\") })))\n")
+        code  (str "src/x.cpcache/a.clj: Ok(Resolved(Some(File { id: FileId(\"dd\"), executable: false, copy_id: CopyId(\"\") })))\n"
+                   ".clj-kondo/config.edn: Ok(Resolved(Some(File { id: FileId(\"ee\"), executable: false, copy_id: CopyId(\"\") })))\n")
+        id    (fn [out] (with-redefs [jj/jj! (fn [_ & _] {:exit 0 :out out :err ""})]
+                          (settled/code-identity "/w")))]
+    (is (= (id (str listing "\n")) (id (str cache listing "\n")))
+        "a cache an editor wrote at any depth must not void the confirmations banked at this tree")
+    (is (= (digest/sha256-hex (str listing "\n")) (id (str listing "\n")))
+        "a tree with no cache keeps the identity every ledger already holds for it")
+    (is (not= (id (str listing "\n")) (id (str code listing "\n")))
+        "a directory that only resembles a cache, or a tool's config, is code")
+    (is (nil? (id cache)) "a tree that is all cache has nothing to identify")))
+
 ;; ── Reading the ledger ──────────────────────────────────────────────────────
 
 (deftest an-entry-that-will-not-parse-settles-nothing
@@ -435,6 +454,9 @@
         (fs/create-dirs (fs/path dir "target"))
         (spit (str (fs/path dir "target" "out.txt")) "build output")
         (is (= before (settled/code-identity dir)) "an ignored file is not the code")
+        (fs/create-dirs (fs/path dir "src" ".clj-kondo" ".cache" "v1"))
+        (spit (str (fs/path dir "src" ".clj-kondo" ".cache" "v1" "lock")) "")
+        (is (= before (settled/code-identity dir)) "an unignored tool cache is not the code either")
         (spit (str (fs/path dir "a.clj")) "(ns a) (def x 1)")
         (is (not= before (settled/code-identity dir)) "an uncommitted edit moves it")
         (is (empty? (str/trim (:out (git "status" "--porcelain" "--untracked-files=no"))))

@@ -46,6 +46,20 @@
    `SymlinkId(\"…\")`, one per side of a conflict."
   #"Id\(\"[0-9a-f]+\"\)")
 
+(def ^:private tool-caches
+  "Directories an editor or build tool writes into on its own, at any depth: an amend whose agent
+   ran clj-kondo or clojure-lsp from a subdirectory writes them into the reviewed tree, and a project
+   that ignores only its top-level caches leaves them untracked and listed. Their content is not the
+   code a confirmation read, so they are not part of its identity."
+  [".clj-kondo/.cache" ".lsp/.cache" ".cpcache"])
+
+(def ^:private tool-cache-line
+  "A `jj debug tree` line whose path lies under one of `tool-caches`. The prefix may cross only
+   whole segments, so `x.cpcache/` and `.cpcache-old/` are code."
+  (re-pattern (str "^(?:[^/\\n]*/)*?(?:"
+                   (str/join "|" (map #(java.util.regex.Pattern/quote %) tool-caches))
+                   ")/")))
+
 (defn- git!
   "Run git in `dir`, answering {:exit :out}. `index` names the index file it stages into."
   [dir index & args]
@@ -69,7 +83,8 @@
             (if (and (not (str/blank? idx)) (fs/exists? idx))
               (fs/copy idx tmp {:replace-existing true})
               (fs/delete-if-exists tmp))
-            (when (zero? (long (:exit (git! (:out top) tmp "add" "-A"))))
+            (when (zero? (long (:exit (apply git! (:out top) tmp "add" "-A" "--" "."
+                                             (for [c tool-caches] (str ":(exclude,glob)**/" c "/**"))))))
               (let [{:keys [exit out]} (git! (:out top) tmp "write-tree")]
                 (when (and (zero? (long exit)) (re-matches #"[0-9a-f]{40,64}" out))
                   (digest/sha256-hex (str "git-tree " out))))))
@@ -84,6 +99,8 @@
    does not. The executable bit and symlinks are part of the listing and move it too. In a plain git
    repository — which jj is never asked about again once it has said it is not one — it is the tree
    git would commit from the working copy: tracked and untracked files, ignored ones left out.
+   Either way, files under a tool cache (`tool-caches`) are left out, so a linter run that touches
+   no code leaves the identity where it was.
 
    jj is asked first and git only when jj says `cwd` is in no jj repository. A jj workspace nested
    inside a git checkout is a directory git would silently read as the OUTER repository, so a jj
@@ -97,9 +114,11 @@
   (try
     (let [{:keys [exit out]} (jj/jj! cwd "debug" "tree" "-r" "@")]
       (if (zero? (long exit))
-        (when (and (not (str/blank? out))
-                   (every? #(re-find content-id %) (str/split-lines out)))
-          (digest/sha256-hex out))
+        ;; Lines keep their own newlines, so a tree with no cache in it hashes byte-for-byte as
+        ;; the whole listing — the identity every ledger already holds for it.
+        (let [lines (remove #(re-find tool-cache-line %) (re-seq #"[^\n]*\n|[^\n]+$" out))]
+          (when (and (seq lines) (every? #(re-find content-id %) lines))
+            (digest/sha256-hex (apply str lines))))
         (when-not (zero? (long (:exit (jj/jj! cwd "root"))))
           (git-identity cwd))))
     (catch Throwable _ nil)))
