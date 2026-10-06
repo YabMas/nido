@@ -1412,8 +1412,21 @@
    "             question repairs. The rest are repaired before the person is\n"
    "             asked, so a derivable defect you leave out is one they are\n"
    "             asked over.\n"
+   "             A finding whose only repair is outside the record is for_person:\n"
+   "             filing or naming a follow-up ref, deciding scope, editing the\n"
+   "             intent. So is one about a claim your asks decides — name every\n"
+   "             such claim id in asks_about.\n"
    "  amend    — a derivable defect in the record itself, which the record can\n"
    "             repair without anyone deciding anything new.\n"
+   "             Which record contradicts a recorded decision decides between the\n"
+   "             two. A DESIGN contradicting what the record already decided or\n"
+   "             rejected is derivable: amend it back to the decision, for_person\n"
+   "             false — never ask the person to reverse a decision they made. The\n"
+   "             INTENT contradicting one is the person's: ask.\n"
+   "             When the repair is a choice between strengthening a guarantee and\n"
+   "             narrowing it, and an earlier decision on this design refuted the\n"
+   "             strengthened form, the choice left is the narrowing, and that is\n"
+   "             scope: ask.\n"
    "  recut    — the decomposition does not hold.\n"
    "  resurvey — the PREMISE is wrong, not the commitment. A design can be sound\n"
    "             on a baseline that was not. Redesign and re-survey are different\n"
@@ -1818,11 +1831,50 @@
     (mapv #(if (held (:check %)) (-> % (dissoc :check) (assoc :filed-under (:check %))) %)
           findings)))
 
+(def ^:private quote-words
+  "How many consecutive words a cite must share with the intent's text to be quoting it. Long enough
+   that a phrase every record in an area uses is not a quote; short enough that a cite prefixed with
+   a label of its own (`Task done condition: …`) or cut with an ellipsis still is."
+  6)
+
+(defn- words
+  [s]
+  (vec (re-seq #"[\p{L}\p{N}]+" (str/lower-case (str s)))))
+
+(defn- quotes?
+  "Whether `cite` quotes `passage`: shares `quote-words` consecutive words with it, or holds the
+   whole of a passage shorter than that."
+  [cite passage]
+  (let [c (words cite) p (words passage)
+        n (min quote-words (count p))
+        grams (fn [ws] (into #{} (partition n 1 ws)))]
+    (and (pos? n) (>= (count c) n)
+         (boolean (some (grams p) (partition n 1 c))))))
+
+(defn- person-marked
+  "On an :ask, `findings` with every one only a person can repair marked :for-person — beside the
+   judge's own marks, never instead of them.
+
+   Two cases need no judgement, and the judge marked both derivable often enough to cost a round
+   each: a finding on a claim the person's answer decides (`about`, the ids the judge named for
+   :asks), which an amender would settle by deciding the question; and one citing the `intent`'s
+   goal or a done-when (`quotes?`), whose remainder is an edit of a record no amender may write. The
+   second also takes a derivable finding that quotes the goal to show the design under-serves it —
+   on an :ask, a person is being asked already, and the next run re-derives anything they leave."
+  [findings about intent]
+  (let [passages (into [] (remove str/blank?) (cons (:goal intent) (:done-when intent)))]
+    (mapv (fn [f]
+            (cond-> f
+              (or (contains? about (:claim-id f))
+                  (some (fn [c] (some #(quotes? c %) passages)) (:cites f)))
+              (assoc :for-person true)))
+          findings)))
+
 (def ^:private decomposition-checks
   "The checks that rule on the decomposition — what a :recut asks to redo."
   #{:decomposable :stratified :routing-coherent})
 
-(defn ^{:malli/schema [:=> [:cat :string :any [:set :keyword] [:? [:set :string]]] :map]}
+(defn ^{:malli/schema [:=> [:cat :string :any [:set :keyword] [:? [:set :string]] [:? :any]] :map]}
   parse-design-decision
   "Codex JSON -> a :design-decision ledger record, or nil when unusable.
 
@@ -1836,8 +1888,11 @@
    routing-coherent's (`routing-attributed`). A finding under a check the same answer rules held is
    made check-less (`off-held-checks`). A :recut with no decomposition check broken is an :amend,
    the judge's word kept as :judge-recommended: an amender told the decomposition is wrong when
-   only the goal broke redraws the strata to repair what a record edit would."
-  [json-str design-seq asked & [health]]
+   only the goal broke redraws the strata to repair what a record edit would.
+
+   `intent` is the intent the round's prompt stated. On an :ask it and the answer's `asks_about`
+   mark findings for the person whatever the judge marked (`person-marked`)."
+  [json-str design-seq asked & [health intent]]
   (try
     (let [m (json/parse-string json-str true)
           named  (keep (fn [c]
@@ -1882,8 +1937,13 @@
                              m)
           ;; Only an ask has a question for a finding to be the person's: on any other
           ;; recommendation every finding is the amender's, whatever the judge marked.
-          (and (not= :proceed r) (seq findings)) (assoc :findings (cond->> findings
-                                                                    (not= :ask r) (mapv #(dissoc % :for-person))))
+          (and (not= :proceed r) (seq findings))
+          (assoc :findings (if (= :ask r)
+                             (person-marked findings
+                                            (into #{} (comp (map slug) (remove str/blank?))
+                                                  (:asks_about m))
+                                            intent)
+                             (mapv #(dissoc % :for-person) findings)))
           (seq rulings)                          (assoc :relation-rulings rulings)
           (seq unasked)                          (assoc :unasked-checks unasked)
           (not= said r)                          (assoc :judge-recommended said))))
@@ -2772,7 +2832,7 @@
                           :schema (design-decision-schema design relation)}
                 prompt   (design-prompt asking)
                 parse    #(parse-design-decision % (:seq design) (set (report/derivations-of design))
-                                                 (health-ids design baseline))
+                                                 (health-ids design baseline) (:intent asking))
                 result   (-> (run-round! (assoc round :prompt prompt))
                              (judged parse)
                              (reask-self-contradicted! round prompt parse)
@@ -3408,26 +3468,33 @@
    amender never computes a key, and nothing has to match text back to text: a
    number is either in range or it is not. One out of range is dropped rather
    than guessed at, along with one that objects without saying why — an
-   objection with no reason cannot be answered and is not an appeal."
+   objection with no reason cannot be answered and is not an appeal.
+
+   :out-of-reach is read the same way: a line whose repair, or what is left of it, lies in no record
+   the amender may write. Each carries the line it names as :finding, since what it is handed to
+   is a person rather than a judge holding the round's findings."
   [raw findings base-key]
   (when (map? raw)
     (let [record   (if (:format raw) raw (:record raw))
-          disputes (when-not (:format raw) (:disputes raw))]
+          numbered (fn [entries]
+                     (vec (keep (fn [{:keys [finding because evidence]}]
+                                  (let [i (dec (long (or finding 0)))
+                                        f (when (and (nat-int? i) (< i (count findings)))
+                                            (nth findings i))]
+                                    (when (and f (not (str/blank? (str because))))
+                                      [f {:key      (base-key f)
+                                          ;; What `disputed-n` tells this defect from another under the key by.
+                                          :sites    (vec (sort (sites f)))
+                                          :claim    (or (:claim f)
+                                                        (some-> (:check f) name)
+                                                        (str f))
+                                          :because  (str because)
+                                          :evidence (vec (map str evidence))}])))
+                                (when (sequential? entries) (filter map? entries)))))]
       {:record   (when (map? record) record)
-       :disputes (vec (keep (fn [{:keys [finding because evidence]}]
-                              (let [i (dec (long (or finding 0)))
-                                    f (when (and (nat-int? i) (< i (count findings)))
-                                        (nth findings i))]
-                                (when (and f (not (str/blank? (str because))))
-                                  {:key      (base-key f)
-                                   ;; What `disputed-n` tells this defect from another under the key by.
-                                   :sites    (vec (sort (sites f)))
-                                   :claim    (or (:claim f)
-                                                 (some-> (:check f) name)
-                                                 (str f))
-                                   :because  (str because)
-                                   :evidence (vec (map str evidence))})))
-                            disputes))
+       :disputes (mapv second (numbered (when-not (:format raw) (:disputes raw))))
+       :out-of-reach (mapv (fn [[f o]] (assoc (dissoc o :sites :evidence) :finding f))
+                           (numbered (when-not (:format raw) (:out-of-reach raw))))
        ;; `{id reason}`. Which of these a round honours is its caller's to say; one without a
        ;; reason is not a withdrawal, only a claim dropped.
        :withdrawn (into {} (keep (fn [{:keys [id because]}]
@@ -4844,9 +4911,10 @@
    quietly is evidence about the ones that did not."
   [history]
   (vec (map-indexed
-        (fn [i {:keys [findings retreats disputes amended?]}]
+        (fn [i {:keys [findings asked retreats disputes amended?]}]
           (cond-> {:round (inc i)}
             (seq findings) (assoc :found (mapv design-finding-label findings))
+            (seq asked) (assoc :asked (mapv design-finding-label asked))
             (some? amended?) (assoc :amended (boolean amended?))
             (seq retreats) (assoc :weakened (mapv #(str (name (:what %)) " — " (:detail %)) retreats))
             (seq disputes) (assoc :disputed (mapv :claim disputes))))
@@ -4937,11 +5005,13 @@
 (defn- for-person?
   "Whether `f`, a finding a design round hands on from `decision` — a broken check, or a finding
    carried under its claim (`claim-finding?`) — is a person's to answer rather than an amender's to
-   repair. A broken check is the person's when every finding filed under it is, and when none is: a
-   check broken with no case behind it names nothing an amender could repair."
+   repair. A broken check is the person's when at least one finding is filed under it and every one
+   is. One with none filed is the amender's: its :note is the defect, and withheld from the amender
+   it reaches neither the amender nor the asks."
   [decision f]
   (if (:status f)
-    (every? :for-person (filter #(= (:check f) (:check %)) (:findings decision)))
+    (let [filed (filter #(= (:check f) (:check %)) (:findings decision))]
+      (boolean (and (seq filed) (every? :for-person filed))))
     (boolean (:for-person f))))
 
 (defn- asks-only?
@@ -5146,6 +5216,23 @@
                                        f (:findings r) :when (and (:claim-id f) (nil? (:blocks f)))]
                                    (:claim-id f))))))))
 
+(defn- numbered-line
+  "One of `raised` as the amender's numbered line, over `findings`, the judge's findings it was
+   handed. A broken check with findings filed under it is named by their claim ids and reads as
+   their claims: those are the case the amender answers, and the check's :note may be about a claim
+   that went to the person — an amender shown it is handed the person's question as a repair. A
+   check with none filed reads as its note; any other line as its claim."
+  [{:keys [check claim-ids note claim status] :as f} findings]
+  (let [ids   (set claim-ids)
+        filed (when status
+                (filter #(and (= check (:check %))
+                              (or (empty? ids) (contains? ids (:claim-id %))))
+                        findings))]
+    (str (design-finding-label f)
+         (when (and check (seq claim-ids)) (str " [" (str/join ", " claim-ids) "]"))
+         " — "
+         (if (seq filed) (str/join "; " (map :claim filed)) (or note claim)))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   design-amend-prompt
   "Instruction to repair a design record the derivation found wanting.
@@ -5233,8 +5320,8 @@
    (str/join
     "\n"
     (let [spent (design-spent raised refuted-running)]
-      (map-indexed (fn [i {:keys [note claim] :as f}]
-                     (str (inc i) ". " (design-finding-label f) " — " (or note claim)
+      (map-indexed (fn [i f]
+                     (str (inc i) ". " (numbered-line f findings)
                           (when-let [ns (seq (keep #(some->> (get spent %) (vector %)) (refuted-ids f)))]
                             (str "\n   running: "
                                  (str/join ", " (for [[id n] ns] (str "[" id "] refuted " n " readings in a row")))
@@ -5281,16 +5368,21 @@
    "\n" (str/trimr (sound-rewrite-rules (some? baseline))) "\n"
    (when-not (str/blank? (str asks))
      (str "\n\nWHAT THE JUDGE LEFT FOR A PERSON — not yours to answer:\n  " asks "\n"))
-   "\n\nIF A NUMBERED LINE IS WRONG ABOUT THE CODE, OR ITS ONLY REPAIR IS ANSWERING\n"
-   "THE QUESTION LEFT FOR A PERSON, SAY SO INSTEAD OF AMENDING FOR IT. Narrowing\n"
-   "the scope, dropping what the intent asks for, or reversing a decision the\n"
-   "record's :open states is answering it. You do not settle it — the judge is\n"
-   "asked again with your objection in front of it, and may stop for the person.\n"
-   "An objection with no reason is dropped.\n\n"
+   "\n\nIF A NUMBERED LINE IS WRONG ABOUT THE CODE, SAY SO INSTEAD OF AMENDING FOR IT,\n"
+   "under :disputes. The judge is asked again with your objection in front of it.\n\n"
+   "IF A NUMBERED LINE'S REPAIR — or what is left of it once you have repaired what\n"
+   "this record can — LIES OUTSIDE THIS RECORD, put it under :out-of-reach: an edit\n"
+   "of the intent, a follow-up ref someone has to file, a scope decision, the\n"
+   "question left for a person. Narrowing the scope, dropping what the intent asks\n"
+   "for, or reversing a decision the record's :open states is answering it, and you\n"
+   "do not settle it. nido stops and asks the person with that line attached; no\n"
+   "judge round is spent re-deriving what you already said.\n"
+   "An objection with no reason is dropped, under either key.\n\n"
    "Write EDN to:\n\n  " out-path "\n\n"
-   "  {:record   <the COMPLETE superseding design — every field, not a diff>\n"
-   "   :disputes [{:finding 1 :because \"...\" :evidence [\"src/x.clj:41\"]}]}\n\n"
-   "Omit :record if you dispute every line and the design needs no change.\n"
+   "  {:record       <the COMPLETE superseding design — every field, not a diff>\n"
+   "   :disputes     [{:finding 1 :because \"...\" :evidence [\"src/x.clj:41\"]}]\n"
+   "   :out-of-reach [{:finding 2 :because \"...\"}]}\n\n"
+   "Omit :record if the design needs no change.\n"
    stale-field "\n"
    "Write it in the shared model — :model {:elements :claims} in place of\n"
    ":invariants, with :holds keyed by claim id when the design is phased — whatever\n"
@@ -5423,11 +5515,23 @@
 
       :else
       (let [filed     (fn [{c :check}] (filter #(= c (:check %)) (:findings record)))
-            claims-of #(into [] (comp (keep (fn [f] (not-empty (str (:claim-id f))))) (distinct))
-                             (filed %))
+            ;; A broken check's filings by whose they are, each half its own handle: [person? filings].
+            ;; Handed whole, a check mixing the two names the person's claims to the amender, which
+            ;; then disputes a line it half repaired, and the dispute is keyed on the claim it
+            ;; conceded. Only an :ask marks a finding the person's, so on any other recommendation
+            ;; this is the whole check, as one. A check with nothing filed is the amender's
+            ;; (`for-person?`).
+            halves    (fn [c]
+                        (let [all (filed c)
+                              person (filterv :for-person all)
+                              derivable (filterv (complement :for-person) all)]
+                          (cond-> []
+                            (or (seq derivable) (empty? all)) (conj [false derivable])
+                            (seq person)                      (conj [true person]))))
+            claims-of #(into [] (comp (keep (fn [f] (not-empty (str (:claim-id f))))) (distinct)) %)
             ;; What a broken check with no claim to name is told apart by, and what tells one
             ;; counterexample to it from the next: the code its findings cite.
-            evidence-of #(into [] (comp (mapcat :evidence) (distinct)) (filed %))
+            evidence-of #(into [] (comp (mapcat :evidence) (distinct)) %)
             handle    (fn [f] (assoc f :disputed-n (disputed-n (:history ctx) design-finding-base-key f)))
             ;; A finding that broke none of the four, carried under the claim it is about.
             ;; `amend` is `a derivable defect in the record itself` and `resurvey` is `the
@@ -5448,9 +5552,11 @@
                                                                                  [(:claim-id %)])))
                                                           (:check %) (assoc :filed-under (:check %))))))
                                  (:findings record))
-            findings  (into (mapv #(handle (cond-> (assoc % :claim-ids (claims-of %))
-                                             (seq (evidence-of %)) (assoc :evidence (evidence-of %))))
-                                  (broken-checks record))
+            findings  (into (vec (for [c (broken-checks record)
+                                       [person? fs] (halves c)]
+                                   (handle (cond-> (assoc c :claim-ids (claims-of fs))
+                                             (seq (evidence-of fs)) (assoc :evidence (evidence-of fs))
+                                             person?                (assoc :for-person true)))))
                             claim-findings)
             disputed?   #(>= (:disputed-n %) 2)]
         (cond
@@ -5458,12 +5564,16 @@
           ;; question does not cover — a derivable defect left for the person would be asked over,
           ;; and re-found by the run that resumes after the answer. Nothing derivable left, or a
           ;; derivable finding already objected to twice, and the round stops for the person
-          ;; holding every finding it made.
+          ;; holding every finding it made. Going on to the amender, the round keeps the person's
+          ;; as :asked-findings — out of :findings, which is what the amender answers and what
+          ;; the loop counts attempts and stalls on, but in the round's history (`trajectory`).
           (= :ask (:recommend record))
-          (let [derivable (filterv #(not (for-person? record %)) findings)]
+          (let [derivable (filterv (complement :for-person) findings)]
             (if (and (seq derivable) (not-any? disputed? derivable))
-              (with-appended (assoc ctx :record record :findings derivable
-                                    :underivable (underivable-checks record))
+              (with-appended (cond-> (assoc ctx :record record :findings derivable
+                                            :underivable (underivable-checks record))
+                               (some :for-person findings)
+                               (assoc :asked-findings (filterv :for-person findings)))
                              (put! ledger record))
               (final! (assoc ctx :record record :findings findings
                              :underivable (underivable-checks record)
@@ -5724,62 +5834,70 @@
         (assoc ctx :control :stop :status :amend-noop)
 
         :else
-        (let [{:keys [record disputes]} answer
+        (let [{:keys [record disputes out-of-reach]} answer
               entry  (fn [retreats amended?]
                        (cond-> {:iter (:iter ctx) :findings (:findings ctx)
                                 :retreats retreats :disputes disputes :amended? amended?}
-                         (:resurveyed ctx) (assoc :resurveyed (:resurveyed ctx))))]
-          (cond
-            (nil? answer)
-            (assoc ctx :control :stop :status :amend-unreadable)
+                         (seq (:asked-findings ctx)) (assoc :asked (:asked-findings ctx))
+                         (:resurveyed ctx) (assoc :resurveyed (:resurveyed ctx))))
+              out    (cond
+                (nil? answer)
+                (assoc ctx :control :stop :status :amend-unreadable)
 
-            ;; Nothing moved: the design is unamended, the baseline was carried rather than read,
-            ;; and every finding is objected to. The next judge would read the same design against
-            ;; the same baseline at the same tree and find the same thing, so the run ends here.
-            (and (nil? record) (= :carried (:resurvey-outcome ctx)) (seq (:findings ctx))
-                 (every? (into #{} (map :key) disputes)
-                         (map design-finding-base-key (:findings ctx))))
-            (assoc ctx :disputes disputes :retreats []
-                   :history (conj (vec (:history ctx)) (entry [] false))
-                   :control :stop :status :no-progress
-                   :unfixable (vec (distinct (map design-finding-key (:findings ctx)))))
+                ;; Nothing moved: the design is unamended, the baseline was carried rather than read,
+                ;; and every finding is objected to. The next judge would read the same design against
+                ;; the same baseline at the same tree and find the same thing, so the run ends here.
+                (and (nil? record) (= :carried (:resurvey-outcome ctx)) (seq (:findings ctx))
+                     (every? (into #{} (map :key) disputes)
+                             (map design-finding-base-key (:findings ctx))))
+                (assoc ctx :disputes disputes :retreats []
+                       :history (conj (vec (:history ctx)) (entry [] false))
+                       :control :stop :status :no-progress
+                       :unfixable (vec (distinct (map design-finding-key (:findings ctx)))))
 
-            (and (nil? record) (seq disputes))
-            (assoc ctx :disputes disputes :retreats []
-                   :history (conj (vec (:history ctx)) (entry [] false)))
+                (and (nil? record) (or (seq disputes) (seq out-of-reach)))
+                (assoc ctx :disputes disputes :retreats []
+                       :history (conj (vec (:history ctx)) (entry [] false)))
 
-            (nil? record)
-            (assoc ctx :control :stop :status :amend-noop)
+                (nil? record)
+                (assoc ctx :control :stop :status :amend-noop)
 
-            :else
-            (let [cite    #(cite-corrected :design prev %
-                                           {:iter (:iter ctx) :run-id run-id
-                                            :resolve (fn [n] (ws/entry-at-seq project ws-id n))})
-                  written (append-amendment!
-                           ctx {:kind :design
-                                :stem (str "design-amend-round-" (:iter ctx))
-                                :permitted permitted
-                                :record record
-                                :path out-path
-                                :check-cmd check-cmd
-                                :append (fn [record]
-                                          (let [record (cite record)]
-                                            (try (ws/append-entry! project ws-id {:kind :design :amended-by (str run-id)}
-                                                                   (pr-str (ws/unstamp record)))
-                                                 {:record record}
-                                                 (catch Exception e
-                                                   {:record record :err (ledger-refusal e)}))))})
-                  record  (:record written)]
-              (if (:status written)
-                (refused-stop ctx written disputes)
-                (let [retreats (retreat/design-retreats prev record)]
-                  (assoc ctx
-                         :amended? true
-                         :retreats retreats
-                         :disputes disputes
-                         :amend-refusals (:refusals written)
-                         :amend-delta (subject-delta prev record)
-                         :history (conj (vec (:history ctx)) (entry retreats true))))))))))))
+                :else
+                (let [cite    #(cite-corrected :design prev %
+                                               {:iter (:iter ctx) :run-id run-id
+                                                :resolve (fn [n] (ws/entry-at-seq project ws-id n))})
+                      written (append-amendment!
+                               ctx {:kind :design
+                                    :stem (str "design-amend-round-" (:iter ctx))
+                                    :permitted permitted
+                                    :record record
+                                    :path out-path
+                                    :check-cmd check-cmd
+                                    :append (fn [record]
+                                              (let [record (cite record)]
+                                                (try (ws/append-entry! project ws-id {:kind :design :amended-by (str run-id)}
+                                                                       (pr-str (ws/unstamp record)))
+                                                     {:record record}
+                                                     (catch Exception e
+                                                       {:record record :err (ledger-refusal e)}))))})
+                      record  (:record written)]
+                  (if (:status written)
+                    (refused-stop ctx written disputes)
+                    (let [retreats (retreat/design-retreats prev record)]
+                      (assoc ctx
+                             :amended? true
+                             :retreats retreats
+                             :disputes disputes
+                             :amend-refusals (:refusals written)
+                             :amend-delta (subject-delta prev record)
+                             :history (conj (vec (:history ctx)) (entry retreats true)))))))]
+          (cond-> out
+            ;; A line the amender says only a record it may not write repairs is the person's, and
+            ;; the decision already on the ledger holds their question. Asked now, with the line
+            ;; attached, rather than after a judge round re-derives what the amender said — the
+            ;; amendment it made beside it, if any, is appended first and judged on the next run.
+            (and (seq out-of-reach) (not (:status out)))
+            (assoc :out-of-reach out-of-reach :control :escalate :status :asked)))))))
 
 (defn- run-design-amend-stage
   [ctx]

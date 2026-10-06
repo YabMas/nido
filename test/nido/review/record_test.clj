@@ -1275,6 +1275,33 @@
     (is (= ask (report/validate-event :design-decision ask)) "the ledger takes the mark")
     (is (not-any? :for-person (:findings amend)))))
 
+(deftest an-ask-marks-the-findings-only-a-person-can-repair-whatever-the-judge-said
+  ;; Twice a judge asked the person a question and handed the amender, as derivable, the finding
+  ;; the question was about; once it marked derivable a finding quoting the task's done-when, whose
+  ;; only repair was editing the intent. Each cost a round to reach the ask it already held.
+  (let [intent {:goal "Merge duplicate courses into one row per content"
+                :done-when ["after the migration there are zero groups larger than one"]}
+        answer (fn [recommend]
+                 (record/parse-design-decision
+                  (json/generate-string
+                   {:recommend recommend :reason "r" :asks "should quiz import keep its own extractor?"
+                    :asks_about ["[tika-arm]"]
+                    :checks [{:check "goal_served" :status "broken" :note "n"}]
+                    :findings [{:claim-id "tika-arm" :check "goal_served" :cites ["src/q.clj:4"]
+                                :claim "quiz import extracts locally" :evidence [] :for_person false}
+                               {:claim-id "one-row" :check "goal_served"
+                                :cites ["Task done condition: after the migration ... there are zero groups larger than one"]
+                                :claim "reconcile runs later" :evidence [] :for_person false}
+                               {:claim-id "breaks" :check "" :cites ["src/a.clj:1"]
+                                :claim "breaks omitted" :evidence [] :for_person false}]})
+                  4 any-era nil intent))
+        ask    (answer "ask")]
+    (is (= [true true nil] (mapv :for-person (:findings ask)))
+        "a claim the asks decides, and a cite quoting the intent, are the person's; the rest is not")
+    (is (= ask (report/validate-event :design-decision ask)))
+    (is (not-any? :for-person (:findings (answer "amend")))
+        "only an ask has a question for a finding to belong to")))
+
 (deftest the-judge-is-told-when-nobody-will-read-its-ask
   ;; A design declaring :conforms/:within clears on a proceed, and its required ask reached no
   ;; report, gate or view. Said before the judge answers, so a question the build must not start

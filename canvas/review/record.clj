@@ -73,9 +73,10 @@
   (Operation parse-design-decision
     "The agent's answer as a design decision record, holding only the checks its round asked —
      a finding citing one of the `health` ids is routing-coherent's, and a recommendation or a
-     finding contradicting the answer's own check rulings is read as those rulings support."
+     finding contradicting the answer's own check rulings is read as those rulings support. On an
+     :ask, a finding on a claim the asks decides, or citing the `intent`, is the person's."
     {:signature [:=> [:catn [:json-str :string] [:design-seq :any] [:asked [:set :keyword]]
-                            [:health [:? [:set :string]]]] :map]})
+                            [:health [:? [:set :string]]] [:intent [:? :any]]] :map]})
   (Operation baseline-review!
     "Run the verification round over a baseline, recording on its review the code identity its
      judge read when the readings taken either side of the judge agree."

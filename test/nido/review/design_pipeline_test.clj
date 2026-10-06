@@ -1956,8 +1956,86 @@
                                        :asks "is the candidate pool in scope?"
                                        :raised [(check :goal-served :broken)] :out-path "/o"})]
     (is (str/includes? p "is the candidate pool in scope?"))
-    (is (str/includes? p "ITS ONLY REPAIR IS ANSWERING")
-        "declining to answer it goes through the objection channel, back to the judge")))
+    (is (str/includes? p ":out-of-reach [{:finding 2")
+        "declining to answer it has a channel of its own, which goes to the person")))
+
+;; ── A person's question never reaches the amender as a repair order ─────────
+
+(deftest a-broken-check-with-nothing-filed-under-it-goes-to-the-amender
+  ;; routing-coherent broke with a concrete note and no finding filed under it. `every?` over no
+  ;; filings called it the person's, so on an :ask it reached neither the amender nor the asks, and
+  ;; vanished from the round's findings while the figures still counted it broken.
+  (with-redefs [record/design-decision!
+                (fn [_] (decision :ask :checks [(check :goal-served :broken) (check :routing-coherent :broken)]
+                                  :findings [{:cites ["c"] :claim "over-serves" :check :goal-served
+                                              :claim-id "pool-in-scope" :for-person true}]))
+                record/append! (fn [_ _] {:seq 1})]
+    (let [out (run record/design-judge-stage (ctx))]
+      (is (nil? (:status out)) "a check broken on its note alone is a defect an amender can repair")
+      (is (= [:routing-coherent] (mapv :check (:findings out))))
+      (is (= [:goal-served] (mapv :check (:asked-findings out)))
+          "the person's half is kept for the round's history rather than dropped"))))
+
+(deftest a-check-mixing-a-person-claim-with-a-derivable-one-hands-the-amender-the-derivable-claim
+  ;; Handed the whole check, the amender repaired the derivable claim and disputed the line for the
+  ;; person's half — and the dispute was keyed on the claim it had repaired.
+  (with-redefs [record/design-decision!
+                (fn [_] (decision :ask :checks [(check :goal-served :broken)]
+                                  :findings [{:cites ["c"] :claim "no tool internals on the wire?"
+                                              :check :goal-served :claim-id "no-tool-internals"
+                                              :for-person true}
+                                             {:cites ["src/a.clj:3"] :claim "the event is split"
+                                              :check :goal-served :claim-id "event-is-whole"}]))
+                record/append! (fn [_ _] {:seq 1})]
+    (let [out (run record/design-judge-stage (ctx))]
+      (is (= [["event-is-whole"]] (mapv :claim-ids (:findings out)))
+          "the amender's handle, and so any dispute it files, names only what it can repair")
+      (is (= [:check :goal-served :claims ["event-is-whole"]]
+             (record/design-finding-base-key (first (:findings out)))))
+      (is (= [["no-tool-internals"]] (mapv :claim-ids (:asked-findings out)))))))
+
+(deftest the-amender-s-numbered-line-reads-as-the-claims-filed-under-it
+  ;; The line showed the check's note, which carried the person's question, while the claim filed
+  ;; under it was a derivable overstatement. The amender fixed the claim and then answered the
+  ;; note as a dispute — a person's question had reached it as a repair order.
+  (let [p (record/design-amend-prompt
+           {:design a-design :recommend :amend :reason "r" :out-path "/o"
+            :raised [(assoc (check :goal-served :broken)
+                            :note "does the extractor still need a request connection?"
+                            :claim-ids ["stats-reach-rows"])]
+            :findings [{:check :goal-served :claim-id "stats-reach-rows" :cites ["c"]
+                        :claim "stats reach rows through the domain is overbroad"}]})]
+    (is (str/includes? p "1. goal-served [stats-reach-rows] — stats reach rows through the domain is overbroad"))
+    (is (not (str/includes? p "does the extractor still need a request connection?"))))
+  (is (str/includes? (record/design-amend-prompt
+                      {:design a-design :recommend :amend :reason "r" :out-path "/o"
+                       :raised [(check :routing-coherent :broken)]})
+                     "1. routing-coherent — routing-coherent note")
+      "a check with nothing filed is still told by its note"))
+
+(deftest a-line-the-amender-cannot-reach-stops-for-the-person-with-the-line-attached
+  ;; The amender said the remainder was in the intent, which it cannot edit. The prose reached
+  ;; nobody, and a whole judge round re-derived it before anyone asked the person.
+  (let [line     (assoc (check :goal-served :broken) :claim-ids ["one-row-per-content"])
+        [out _]  (with-amend {:writes (fn [p] (spit p (pr-str {:record a-design
+                                                                :out-of-reach [{:finding 1 :because "the done-when says zero duplicates"}]})))}
+                             (ctx :findings [line] :record (decision :ask)))]
+    (is (= :asked (:status out)))
+    (is (= :escalate (:control out)))
+    (is (= [{:finding line :key (record/design-finding-base-key line) :claim "goal-served"
+             :because "the done-when says zero duplicates"}]
+           (:out-of-reach out))
+        "the person is handed the line itself, not only the amender's words about it")
+    (is (true? (:amended? out)) "what the amender could repair beside it is still appended"))
+  (testing "and with nothing amended beside it"
+    (let [[out _] (with-amend {:writes (fn [p] (spit p (pr-str {:out-of-reach [{:finding 1 :because "a ref to file"}]})))}
+                              (ctx :findings [(check :goal-served :broken)] :record (decision :ask)))]
+      (is (= :asked (:status out)) "an answer naming only out-of-reach lines is not a no-op"))))
+
+(deftest the-trajectory-names-what-a-round-left-for-the-person
+  (is (= [{:round 1 :found ["relation-honest"] :asked ["goal-served"] :amended true}]
+         (record/trajectory [{:findings [(check :relation-honest :broken)]
+                              :asked [(check :goal-served :broken)] :amended? true}]))))
 
 (deftest the-amend-stage-passes-the-decision-s-ask-through
   (let [seen (atom nil)]

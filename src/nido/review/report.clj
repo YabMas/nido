@@ -693,6 +693,8 @@
       ;; made false — put back to the next judge, and recorded nowhere else.
       ;; :delta is the subjects the appended amendment added, changed and dropped, by id: what the
       ;; next judge is asked about again, which otherwise takes diffing two ledger entries.
+      ;; :out-of-reach is each line the amender said only a record it may not write repairs, with
+      ;; the line itself — what the run then stopped to ask the person, and held nowhere else.
       :amend  (cond-> (assoc ph :retreats (vec (:retreats ctx))
                                 :disputes (vec (:disputes ctx))
                                 :amended? (boolean (:amended? ctx))
@@ -701,6 +703,7 @@
                 (seq (:amend-refusals ctx)) (assoc :refusals (vec (:amend-refusals ctx)))
                 (seq (:stale ctx)) (assoc :stale (vec (:stale ctx)))
                 (:amend-delta ctx) (assoc :delta (:amend-delta ctx))
+                (seq (:out-of-reach ctx)) (assoc :out-of-reach (vec (:out-of-reach ctx)))
                 (:amend-tree ctx) (assoc :tree (:amend-tree ctx))
                 (:amend-unappended ctx) (assoc :status "refused"
                                                :unappended (:amend-unappended ctx)))

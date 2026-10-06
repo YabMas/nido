@@ -2674,10 +2674,14 @@
    :weakened is the one that changes how the rest should be read. A decision
    reached by amending the record down to where nothing could refute it is not
    the same decision as one reached by correcting it, and the final record looks
-   identical either way."
+   identical either way.
+
+   :asked is what the round found that was the person's — left out of :found, which is what the
+   round handed an amender."
   [:map {:closed true}
    [:round    int?]
    [:found    {:optional true} [:vector string?]]
+   [:asked    {:optional true} [:vector string?]]
    [:amended  {:optional true} boolean?]
    [:weakened {:optional true} [:vector string?]]
    [:disputed {:optional true} [:vector string?]]])

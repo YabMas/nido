@@ -9,7 +9,8 @@
     "confirmed",
     "unchecked",
     "relation_rulings",
-    "asks"
+    "asks",
+    "asks_about"
   ],
   "properties": {
     "recommend": {
@@ -111,7 +112,7 @@
           },
           "for_person": {
             "type": "boolean",
-            "description": "true when the only repair for this finding is answering the question in asks — an amender handed it would settle that question by guessing. false for a derivable defect the record can repair without anyone deciding anything new, which is repaired before the person is asked. Always false unless recommending ask."
+            "description": "true when the only repair for this finding is outside the record — answering the question in asks, deciding scope, filing or naming a follow-up ref, or editing the intent — so an amender handed it would settle it by guessing. false for a derivable defect the record can repair without anyone deciding anything new, which is repaired before the person is asked; a design contradicting a decision the record states is one. Always false unless recommending ask."
           }
         }
       }
@@ -210,6 +211,13 @@
     "asks": {
       "type": "string",
       "description": "The question the human still has to answer, with everything derived taken off the table. Required whatever you recommend. Never answer it yourself."
+    },
+    "asks_about": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "The id of every design claim whose ruling the person's answer to asks decides — the slug shown in brackets, WITHOUT the brackets. Never shown to the person. Empty when asks decides no claim."
     }
   }
 }
