@@ -88,7 +88,12 @@
    Atomic w.r.t. the workstream: if run/session creation throws after we MINTED a
    new workstream (not a deduped pre-existing one) and it has no sessions, the
    orphan is deleted before re-throwing, so a failed spawn never leaves a
-   session-less workstream behind."
+   session-less workstream behind.
+
+   A deduped workstream that is closed is reopened at the trigger's stage once
+   its session exists. The ref outlives the close: a ticket dismissed at triage
+   and later picked up dedups onto that dismissed workstream, and :dismissed is
+   the board's veto — the new session would run where no board shows it."
   [routed meta]
   (let [project (:project routed)
         ref     (external-ref (:payload routed))
@@ -98,6 +103,8 @@
     (try
       (let [run (runs/create-run! (assoc routed :workstream-id (:id w)) meta)]
         (create-session-for-run! run (:id w))
+        (when (:closed w)
+          (ws/reopen! project (:id w) (initial-stage routed)))
         run)
       (catch Throwable t
         (when (and minted? (empty? (session/list-sessions project (:id w))))

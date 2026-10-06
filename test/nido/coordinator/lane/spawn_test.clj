@@ -85,6 +85,39 @@
         ;; pre-existing workstream survives
         (is (= (:id pre) (:id (ws/find-by-ref :brian :notion "BR-KEEP"))))))))
 
+(deftest spawn-records-reopens-a-dismissed-workstream
+  ;; A ticket dismissed at triage, then picked up: the spawn dedups onto the
+  ;; dismissed workstream, which must reopen or the board vetoes the new session.
+  (with-tmp
+    (fn [_]
+      (let [pre    (ws/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-DIS"}]})
+            _      (ws/close! :brian (:id pre) :dismissed)
+            routed {:project :brian
+                    :trigger {:name :plan-bug :skill :plan-bug :agent :claude
+                              :payload "Implement {{event/title}}" :limits {} :source {:type :manual}}
+                    :payload {:id "BR-DIS" :title "Dismissed"}
+                    :priority 0 :session-profile :full :uncapped? false}
+            run    (spawn/spawn-records! routed {:fired-at "t" :fired-by "x"})
+            w      (ws/read-ws :brian (:id pre))]
+        (is (= (:id pre) (:workstream-id run)))
+        (is (nil? (:closed w)))
+        (is (= :triaging (:stage w)))))))
+
+(deftest spawn-records-leaves-a-dismissed-workstream-closed-on-failure
+  (with-tmp
+    (fn [_]
+      (let [pre    (ws/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-DIS"}]})
+            _      (ws/close! :brian (:id pre) :dismissed)
+            routed {:project :brian
+                    :trigger {:name :plan-bug :skill :plan-bug :agent :claude
+                              :payload "Implement {{event/title}}" :limits {} :source {:type :manual}}
+                    :payload {:id "BR-DIS" :title "Dismissed"}
+                    :priority 0 :session-profile :full :uncapped? false}]
+        (with-redefs [spawn/create-session-for-run!
+                      (fn [& _] (throw (ex-info "boom" {})))]
+          (is (thrown? clojure.lang.ExceptionInfo (spawn/spawn-records! routed {:fired-at "t" :fired-by "x"}))))
+        (is (= :dismissed (get-in (ws/read-ws :brian (:id pre)) [:closed :outcome])))))))
+
 (deftest external-ref-defaults-to-notion-when-no-adapter
   ;; Regression pin: existing Notion payloads (no :adapter) stay :notion.
   (is (= :notion (:adapter (spawn/external-ref {:id "BR-1" :title "T"})))))
