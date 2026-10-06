@@ -331,6 +331,22 @@
     (is (str/includes? p "You do not make the decision"))
     (is (str/includes? p "Never answer it yourself"))))
 
+(deftest the-decision-prompt-asks-a-person-in-their-terms-and-all-at-once
+  ;; Each clause answers a run where the person was asked badly: three mechanism-worded questions
+  ;; in one, one they said they did not follow; an openly stated deferral left for a second run and
+  ;; a second grant; fifteen kept cross-band edges and their cycles granted as "accounted for".
+  (let [p (record/design-prompt {:design design})]
+    (is (str/includes? p "ONE question per decision they must make")
+        "bundled questions are answered as one, or not at all")
+    (is (str/includes? p "never as a claim id or the\nmechanism")
+        "a person answers what changes for users or the operator, not the record's vocabulary")
+    (is (str/includes? p "Gather EVERY goal or scope gap")
+        "a gap left out of this ask is a second interruption on the next run")
+    (is (str/includes? p "a deferral\nit states openly included")
+        "a deferral the record states is scope the person grants, not settled by being written")
+    (is (str/includes? p "names how many dependencies it keeps\nand every cycle they form")
+        "a recorded violation is granted at its size, never as \"accounted for\"")))
+
 (deftest the-decision-prompt-shows-the-baseline-it-derives-against
   ;; The defect this is aimed at: the prompt named the baseline's modules,
   ;; extension points and health observations in its instructions and printed

@@ -73,7 +73,11 @@
    checks it left broken and the claims they name, and its :asks verbatim — labelled as waiting on
    the repair when the decision named one (`report/repair-before-asking`). An earlier ask of the
    same run is kept beside it, since an amendment between them answered it for nobody. A decision
-   that named a repair says so: a run that stopped on one did not derive everything derivable."
+   that named a repair says so: a run that stopped on one did not derive everything derivable.
+
+   On :no-progress the newest decision's findings are what repeated and stopped the run, and each
+   is quoted beside :asks: the judge wrote :asks without knowing the run would end on it, so it is
+   often a standing scope question that never mentions what actually blocks."
   [outcome decisions]
   (when-let [{:keys [recommend asks checks findings reason] :as last-d} (last decisions)]
     (let [broken  (keep #(when (= :broken (:status %)) (:check %)) checks)
@@ -85,6 +89,9 @@
            (when (seq claims) (str " — claims: " (str/join ", " claims)))
            (when (#{:amend :recut :resurvey} recommend)
              (str ". It named a repair the run did not carry out: " reason))
+           (when (and (= :no-progress outcome) (seq findings))
+             (str "\nStopped on, found again unchanged:"
+                  (str/join (for [{:keys [claim]} findings] (str "\n  - " claim)))))
            (when-not (str/blank? (str asks))
              (str (if (report/repair-before-asking last-d) "\nWill ask once repaired: " "\nFor you to decide: ")
                   asks))

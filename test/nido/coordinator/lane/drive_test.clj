@@ -525,6 +525,22 @@
         "a run that stopped on a named repair did not derive everything derivable")
     (is (not (str/includes? needs "everything derivable")))))
 
+(deftest a-no-progress-stop-puts-the-repeated-finding-into-the-question
+  ;; The judge wrote :asks not knowing the run would end on it: a standing scope question, while
+  ;; the finding found again unchanged — the one thing that blocked — reached the person nowhere.
+  (let [stuck  [{:cites ["intent :done-when"] :claim "the done condition needs zero duplicates at migration"
+                 :check :goal-served}]
+        needs  (drive/decision-needs :no-progress
+                                     [(a-decision 9 :ask "is a briefly visible duplicate acceptable?"
+                                                  :findings stuck)])]
+    (is (str/includes? needs "Stopped on, found again unchanged:\n  - the done condition needs zero duplicates at migration")
+        "the person is asked about what stopped the run, not only about the judge's standing question")
+    (is (str/includes? needs "For you to decide: is a briefly visible duplicate acceptable?")
+        "the judge's ask stays beside it"))
+  (is (not (str/includes? (drive/decision-needs :asked [(a-decision 3 :ask "scope?")])
+                          "Stopped on"))
+      "an :asked stop ended on its question, not on a repeat — nothing stopped it but the ask"))
+
 (deftest an-ask-decision-hands-the-person-a-question-open-now
   (is (str/includes? (drive/decision-needs :asked [(a-decision 3 :ask "scope?" :findings [])])
                      "For you to decide: scope?")
