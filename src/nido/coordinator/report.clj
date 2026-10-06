@@ -6,7 +6,8 @@
    [clojure.edn :as edn]
    [clojure.pprint :as pprint]
    [clojure.string :as str]
-   [malli.core :as m]))
+   [malli.core :as m]
+   [malli.util :as mu]))
 
 (def Confidence
   [:map {:closed true}
@@ -3350,12 +3351,23 @@
 
    Each is a delay so requiring this namespace costs nothing: a task validating
    one kind must not compile the whole registry (bb.edn keeps per-task :requires
-   narrow for the same reason)."
+   narrow for the same reason).
+
+   A :read schema has every map opened. `read-schemas` keeps a record written
+   before a tightening readable by code written after it; this keeps a record
+   written after a widening readable by code written before it, which is the
+   common case and not the edge one: the coordinator daemon loads `src/` once
+   and reads entries that sessions on newer code append. Closed, an optional
+   key it has never heard of made a valid entry unparseable, and standing,
+   which fails closed on an unparseable entry, then blocked the approval of a
+   design every fact of which it held. A key the reader does not know is one
+   it does not read. Writes stay closed, so nothing unknown is recorded. Not
+   covered: a value an enum gained since the reader was loaded still fails."
   (into {}
         (mapcat (fn [kind]
                   (let [write (event-schemas kind)
                         read  (or (read-schemas kind) write)]
-                    (cond-> [[[:read kind] (delay (m/schema read))]]
+                    (cond-> [[[:read kind] (delay (mu/open-schema (m/schema read)))]]
                       write (conj [[:write kind] (delay (m/schema write))])))))
         (into #{} (concat (keys event-schemas) (keys read-schemas)))))
 

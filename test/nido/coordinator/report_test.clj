@@ -1624,6 +1624,20 @@
                (report/parse-event :design (dissoc legacy-design :invariants)))
       "wider is not lax: no era of this schema allowed a design with no invariants"))
 
+(deftest read-contract-ignores-keys-added-after-the-reader
+  ;; The reader is routinely older than the writer — the daemon loads src/ once
+  ;; and reads what sessions on newer code append — so a key it does not know,
+  ;; at any depth, is one it does not read rather than a reason to refuse it.
+  (let [newer (-> valid-design
+                  (assoc :added-later "r-1")
+                  (assoc-in [:model :elements 0 :added-later] true))]
+    (is (= newer (report/parse-event :design newer)) "read back whole, unknown keys and all")
+    (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :design newer))
+        "writes stay closed: nothing unknown is recorded")
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/parse-event :design (dissoc newer :summary)))
+        "open is not lax: a missing required key still refuses")))
+
 (deftest report->markdown-renders-a-revisit-with-its-breaks
   (let [md (report/report->markdown
             (assoc valid-design

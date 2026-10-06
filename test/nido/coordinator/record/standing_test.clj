@@ -378,6 +378,35 @@
           (is (true? (:indeterminate? st)))
           (is (= :unreadable-ledger (:reason (:blocked st)))))))))
 
+(deftest a-verdict-carrying-a-key-this-reader-predates-still-counts
+  ;; The daemon loads src/ once and reads what newer sessions append. A verdict
+  ;; holding a key added since is no less readable for it: here an approved
+  ;; design stayed "awaiting approval" for a day because one verdict carried a
+  ;; :run-id the running code had never heard of.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b (add :baseline a-baseline)
+            _ (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                     :baseline-seq b :reason "ok"})
+            d (add :design (a-design b))
+            _ (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            v (add :design-verdict (dissoc (a-verdict d :strained) :needs))
+            path (str (fs/path (cstate/workstream-dir :brian id)
+                               (format "entries/%04d-design-verdict.edn" v)))
+            from-a-newer-writer (fn [verdict]
+                                  (io/write-text! path (pr-str (-> (a-verdict d verdict)
+                                                                   (assoc :added-later "r-1")
+                                                                   (assoc-in [:invariants-broken 0 :added-later] true)))))]
+        (from-a-newer-writer :strained)
+        (let [st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+          (is (not (:indeterminate? st)) "an unknown key is not an unreadable entry")
+          (is (true? (:decided? st)) "and the grant still decides the design"))
+        (from-a-newer-writer :invalidated)
+        (let [st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+          (is (= :design-invalidated (:reason (:blocked st)))
+              "read, not skipped: what the verdict says still binds"))))))
+
 ;; ── A goal that moved ──────────────────────────────────────────────────────
 ;; The half `standing` owns: records that ALREADY EXIST when the goal moves.
 ;; The other half — a record written afterwards that stands on the replaced
