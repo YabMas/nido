@@ -999,6 +999,8 @@
             :changed (vec (sort (filter #(and (was %) (not= (was %) (is %))) (keys is))))
             :dropped (vec (sort (remove is (keys was))))}))))
 
+(declare lineage-of)
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   answered
   "What a person has already answered about `design`, read off the ledger for its judge's `asks`:
@@ -1007,6 +1009,9 @@
              {:seq :self? :note :delta} — or absent when nobody has granted any of them
      :asked  the newest decision's :asks on this workstream, when no grant has been written
              since it; a question put to a person and not yet answered
+     :asked-of  per claim `design` carries, each earlier :ask decision in its lineage that filed a
+             finding under it, oldest first — {id [{:seq :asks :granted {:seq :note}}]}, :granted
+             the first approval written after that ask, absent when none was
 
    Only what bears on the ask. The judge still derives every check over the whole record, and is
    told so beside this: a grant is evidence that a person decided, never that a claim holds."
@@ -1020,8 +1025,21 @@
         approved  (into {} (map (juxt #(get-in % [:design :seq]) identity)) approvals)
         granted   (some #(when (approved (:seq %)) %) chain)
         last-ask  (last (ws/entries-of project ws-id :design-decision))
-        answered? (some #(> (long (or (:seq %) 0)) (long (or (:seq last-ask) 0))) approvals)]
+        answered? (some #(> (long (or (:seq %) 0)) (long (or (:seq last-ask) 0))) approvals)
+        carried   (set (keys (settled/subjects design)))
+        asked-of  (reduce (fn [acc {n :seq :as d}]
+                            (let [grant (some #(when (> (long (or (:seq %) 0)) (long n)) %) approvals)
+                                  ask   (cond-> {:seq n :asks (str (:asks d))}
+                                          grant (assoc :granted (select-keys grant [:seq :note])))]
+                              (reduce #(update %1 %2 (fnil conj []) ask) acc
+                                      (into (sorted-set)
+                                            (comp (keep #(not-empty (str (:claim-id %)))) (filter carried))
+                                            (:findings d)))))
+                          (sorted-map)
+                          (filter #(and (= :ask (:recommend %)) (:seq %))
+                                  (lineage-of project ws-id :design-decision :design-seq design)))]
     (cond-> {}
+      (seq asked-of) (assoc :asked-of asked-of)
       granted (assoc :grant (cond-> {:seq (:seq granted) :self? (= (:seq granted) (:seq design))}
                               (:note (approved (:seq granted)))
                               (assoc :note (:note (approved (:seq granted))))
@@ -1033,7 +1051,7 @@
 (defn- answered-block
   "Who reads `asks`, and what is already off the table for it: the design's :open notes, a grant a
    person gave, a question already put to one. `owes?` is `report/owes-a-person?` of the design."
-  [owes? open {:keys [grant asked]}]
+  [owes? open {:keys [grant asked asked-of]}]
   (str
    (if owes?
      (str "\nWHO READS asks: a person. This design declares a move they must grant\n"
@@ -1070,7 +1088,21 @@
           "the answer.\n"
           (when owes?
             (str "If you find nothing, recommend proceed: a proceed on this design already stops\n"
-                 "for the person, and asks carries this question to them.\n"))))))
+                 "for the person, and asks carries this question to them.\n"))))
+   (when (seq asked-of)
+     (str "\nCLAIMS A PERSON HAS ALREADY BEEN ASKED ABOUT, AND WHAT THEY GRANTED:\n"
+          (str/join
+           (for [[id earlier] asked-of
+                 {n :seq question :asks granted :granted} earlier]
+             (str "  [" id "] entry " n ": " question "\n"
+                  (if granted
+                    (str "      granted at entry " (:seq granted)
+                         (when (:note granted) (str " — \"" (:note granted) "\"")) "\n")
+                    "      no grant written since\n"))))
+          "A question about one of these claims is not a new question, and asking for one\n"
+          "more exception to it spends the person on the same decision again. If asks has to\n"
+          "raise one, cite the entries above and pose it at the CLASS level — what kind of case\n"
+          "the claim admits or excludes, named so that one answer also covers the next instance.\n"))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   design-prompt
@@ -2820,6 +2852,24 @@
    and was itself the next finding."
   2)
 
+(defn ^{:malli/schema [:=> [:cat [:maybe [:map-of :string :int]]] [:map-of :string :int]]}
+  spent
+  "The subjects `refuted-running` counts at `withdrawable-after` or more, as a sorted `{id n}`: each
+   reworded at least once and refuted again, so a rewording at the same strength is no longer a
+   repair. Named on the judgement (:spent), the run's figures and the analysis headline, because
+   the count runs ACROSS runs and the amender's withdrawal offer reaches none of them when a capped
+   run never reaches its amend stage and the record is amended by hand between runs."
+  [running]
+  (into (sorted-map) (filter #(>= (val %) withdrawable-after)) running))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe [:sequential :string]]]}
+  spent-at-cap
+  "A record run's `run-loop` :spent: the `spent` subjects of a round that still owes an amendment,
+   which a capped run ends :unfixable on instead of :max-iters. nil for a round that owes none."
+  [ctx]
+  (when (seq (:findings ctx))
+    (seq (keys (spent (:refuted-running ctx))))))
+
 (declare refuted-ids check-statuses claim-finding?)
 
 (defn- run-keys
@@ -4133,6 +4183,7 @@
                                                      [])
                                                    record)))
         unsettled (if reviews (unsettled-findings record (unchecked-running reviews)) [])
+        record    (cond-> record (seq (spent running)) (assoc :spent (spent running)))
         ;; An amender's :stale speaks for the one round after it.
         ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
                           (update :carry dissoc :stale))
@@ -4579,7 +4630,8 @@
       :relation-unruled {id n}
       :settled-then-found {id n}
       :relation-flips     {id {:stands->breaks n :breaks->stands n}}
-      :relation-reversals {id n}}
+      :relation-reversals {id n}
+      :spent              {id n}}
 
    Every check a decision derived has a row, so a run whose checks all held says what it answered
    rather than printing an empty map. :alone and :at-end are over every defect a decision found — a
@@ -4604,6 +4656,10 @@
    a reversal on a record that had not moved. The first is the judge's variance on relation-honest,
    the second how much of it nido kept from becoming an amend round. Both present only when non-empty.
 
+   :spent is the run's last judgement's :spent: each subject still refuted at the end, with how many
+   readings running its lineage has refuted it — across runs, so a claim refuted for the eleventh
+   time does not read as a new defect beside :claims. Present only when non-empty.
+
    Read from the decisions rather than the run's report, because a decision holds every check's
    status and it outlives the run dir. Derived on every read; nothing stores it."
   [entries]
@@ -4616,6 +4672,7 @@
         ;; re-survey interleaves its reviews with the decisions. Stable, so entries with none keep
         ;; the order they came in.
         still     (keys (unchecked-running (sort-by :seq judgements)))
+        spent-end (:spent (last (sort-by :seq judgements)))
         relation-unruled (frequencies (mapcat :relation-unruled decisions))
         confirmed (frequencies (mapcat :confirmed judgements))
         overridden (frequencies (mapcat #(map :id (:overrides-settled %)) judgements))
@@ -4645,6 +4702,7 @@
       (seq judges)    (assoc :judged-by (into (sorted-map) judges))
       (seq flips)     (assoc :relation-flips flips)
       (seq reversals) (assoc :relation-reversals (into (sorted-map) reversals))
+      (seq spent-end) (assoc :spent (into (sorted-map) spent-end))
 
       (seq decisions)
       (assoc :decisions (count decisions)
@@ -4859,6 +4917,7 @@
                                                   (lineage-of project ws-id :design-decision :design-seq design)
                                                   [])
                                                 record)))
+        record (cond-> record (seq (spent running)) (assoc :spent (spent running)))
         ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
                           (update :carry dissoc :stale))
                       (when (:seq design) {:judged-seq (:seq design)})

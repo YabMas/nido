@@ -463,6 +463,15 @@
     (is (str/includes? h "Refused amendment, not appended: /r/design-amend-round-2.edn")))
   (is (not (str/includes? (:headline (analysis/payload a-design-run)) "refused"))))
 
+(deftest a-record-run-names-a-claim-spent-across-runs
+  ;; A capped run headlined "1 rounds, 0 amended" over a claim refuted for the fifth time running;
+  ;; the hand amender between runs saw a new defect and wrote the sixth rewording.
+  (let [h (:headline (analysis/payload (assoc a-design-run :status :max-iters
+                                              :spent {"course-store" 5 "writers-order" 11})))]
+    (is (str/includes? h "Spent: course-store refuted 5 readings running, writers-order refuted 11 readings running"))
+    (is (str/includes? h "weaken, withdraw or decide, not reword again")))
+  (is (not (str/includes? (:headline (analysis/payload a-design-run)) "Spent:"))))
+
 (deftest a-cleared-design-run-carries-its-ask-into-the-headline
   ;; A cleared run stops nobody, and its headline read as five counters — an all-clear — while its
   ;; decision held a live product question.

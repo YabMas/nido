@@ -111,6 +111,14 @@
      its newest, over that record's own lineage. What decides whether an amender may remove a
      refuted claim with a reason rather than reword it."
     {:signature [:=> [:catn [:subject [:maybe :map]] [:reviews [:sequential :map]]] [:map-of :string :int]]})
+  (Operation spent
+    "The subjects a refutation run has reached the count at which rewording is no longer a repair —
+     reworded once and refuted again. What every surface a hand amender or a capped run reads names."
+    {:signature [:=> [:catn [:running [:maybe [:map-of :string :int]]]] [:map-of :string :int]]})
+  (Operation spent-at-cap
+    "What a record run reaching its cap ends :unfixable on instead of :max-iters: the spent subjects
+     of a round that still owes an amendment."
+    {:signature [:=> [:catn [:ctx :map]] [:maybe [:sequential :string]]]})
   (Operation unchecked-running
     "How many readings in a row have declared each subject unchecked, counting back from its newest,
      with every reason given. The reasons are carried, never compared — no two judges word one alike."

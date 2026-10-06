@@ -747,6 +747,29 @@
                                :finding-key record/baseline-finding-key})]
       (is (= :no-progress (:status out))))))
 
+(deftest a-capped-round-owing-a-repair-on-a-spent-claim-ends-unfixable-and-records-it
+  ;; Seven capped runs on one workstream each ended :max-iters on the same claim and were amended
+  ;; by hand between them: the withdrawal offer lives in the amend stage, which a cap never reaches.
+  (let [baseline (assoc a-baseline :seq 5)
+        refuted  {:format :baseline-review :baseline-seq 5 :verdict :falsified :seq 6
+                  :findings [(assoc a-finding :claim-id "c1")]}
+        appended (atom [])]
+    (with-redefs [record/baseline-review! (fn [_] (dissoc refuted :seq))
+                  record/append! (fn [_ r] (swap! appended conj r) nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] baseline)
+                  ws/entry-at-seq (fn [_ _ n] (when (= 5 n) baseline))
+                  ws/entries-of (fn [_ _ k] (case k :baseline-review [refuted] :baseline [baseline] []))
+                  stages/working-copy-state (fn [_] "")]
+      (let [out (rloop/run-loop {:run-id "r-spent" :cwd "/w" :max-iters 1 :judged-after :judge
+                                 :pipeline record/baseline-pipeline
+                                 :finding-key record/baseline-finding-key
+                                 :spent record/spent-at-cap})]
+        (is (= :unfixable (:status out)) "a cap over a spent claim is not an ordinary cap")
+        (is (= ["c1"] (:unfixable out)))
+        (is (= {"c1" 2} (:spent (last @appended)))
+            "the judgement on the ledger names the spent claim, where the hand amender reads next")))))
+
 ;; ── A narrowing claim is not a stall ────────────────────────────────────────
 
 (defn- refuting [id evidence]

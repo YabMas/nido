@@ -2338,6 +2338,17 @@
       (is (= {"s" {:read 2 :fits 1 :widens 1 :misplaced 0 :not-a-level 0 :failed 0}}
              (:strata (read-string (with-out-str (t/figures-cmd* {:project "nido"})))))))))
 
+(deftest a-claim-spent-at-runs-ends-sums-to-how-often-and-how-long
+  (let [d (fn [run n spent] {:format :design-decision :run-id run :seq n :checks []
+                             :spent spent})
+        entries {:design-decision [(d "d1" 3 {"writers-order" 4}) (d "d2" 9 {"writers-order" 7})]
+                 :baseline-review []}]
+    (with-redefs [ws/list-ids   (constantly ["ws-1"])
+                  ws/entries-of (fn [_ _ kind] (get entries kind))]
+      (is (= {"writers-order" {:runs 2 :max 7}}
+             (:spent (read-string (with-out-str (t/figures-cmd* {:project "nido"})))))
+          "each run's count already spans the runs before it, so the longest is the figure, never a sum"))))
+
 ;; ---- one remainder, published once ---------------------------------------
 
 (def ^:private owing-run

@@ -316,10 +316,15 @@
   "The envelope for a baseline or design run. Its headline says what a record run DID — how many of
    its rounds judged, amended, gave something up, or were argued with — and, for a design run, which
    checks were still broken when it ended and what its last decision asked of a person; the figures
-   per check are the ledger's, read by `bb nido:review:figures`, never carried here."
+   per check are the ledger's, read by `bb nido:review:figures`, never carried here.
+
+   `spent` is `nido.review.record/spent` of the run's last judgement, `{id n}`: what it ended still
+   refuted, rewording after rewording, counted across runs. Named in the headline because it is the
+   one figure no single run's counts show — a capped run reports `1 round, 0 amended` over a claim
+   refuted for the eleventh time, and the hand amender reads this before writing the twelfth."
   [{:keys [loop run-id report-path status rounds judged amended unappended weakened disputed
            record-seq still-broken asks stood-in reviewed-project reviewed-session reviewed-ws-id
-           machinery unrecorded] :as run}]
+           machinery unrecorded spent] :as run}]
   (let [kind   (name loop)
         broken (seq (map name still-broken))]
     (cond-> {:adapter     :review-run
@@ -344,6 +349,13 @@
                                " · figures: bb nido:review:figures"
                                (when reviewed-project (str " :project " (name reviewed-project)))
                                " :run-id " run-id "\n"
+                               (when (seq spent)
+                                 (str "Spent: "
+                                      (str/join ", " (for [[id n] (sort spent)]
+                                                       (str id " refuted " n " readings running")))
+                                      " — rewording has not settled "
+                                      (if (= 1 (count spent)) "it" "them")
+                                      "; weaken, withdraw or decide, not reword again\n"))
                                ;; The figures count from the ledger, which this decision never reached —
                                ;; said here, or a reader takes the run for its would-be status.
                                (when unrecorded

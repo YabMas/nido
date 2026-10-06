@@ -47,6 +47,19 @@
     (is (= :max-iters (:status out)))
     (is (= 3 (count (:history out))))))
 
+(deftest a-cap-reached-owing-a-repair-on-a-spent-subject-ends-unfixable
+  ;; Seven capped runs on one workstream each ended :max-iters on a claim refuted for the fourth,
+  ;; seventh, eleventh time, and each was amended by hand and run again. :max-iters reads as "your
+  ;; bound came back"; what a reader needs is that this subject is not going to be reworded true.
+  (let [pipe  [(stage :judge (fn [c] (assoc c :findings [{:title "x"}] :spent-ids ["writers-order"])))
+               (stage :amend (fn [c] c))]
+        out   (run-loop {:run-id "r1" :max-iters 1 :pipeline pipe :judged-after :judge
+                         :spent :spent-ids})
+        plain (run-loop {:run-id "r1" :max-iters 1 :pipeline pipe :judged-after :judge})]
+    (is (= :unfixable (:status out)) "a cap over a spent subject must not read as an ordinary cap")
+    (is (= ["writers-order"] (:unfixable out)) "the run names what it gave up on")
+    (is (= :max-iters (:status plain)) "a pipeline that reads nothing as spent keeps the cap's status")))
+
 (deftest uncapped-when-max-iters-absent
   ;; No :max-iters => no iteration ceiling at all. Each round yields a fresh
   ;; finding, so `no-progress?` never fires and the run only ends when the

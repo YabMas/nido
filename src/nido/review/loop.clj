@@ -142,7 +142,7 @@
    now asked at two moments — after the stage that produces the judgement, and
    after the whole pipeline — and the two disagree about what history holds."
   [{:keys [finding-key attempt-key attempted? prev-findings iter max-iters
-           changed?]} ctx prior]
+           changed? spent]} ctx prior]
   (cond
     ;; BEFORE no-progress?, because both are true of a run that ends holding the
     ;; same findings and only this one says which. :no-progress sends a reader
@@ -162,6 +162,13 @@
     ;; persisted, not in whether a reader is told what they were.
     (assoc ctx :status :no-progress
            :unfixable (vec (distinct (map finding-key (:findings ctx)))))
+
+    ;; A cap ends the run whatever it holds, and :max-iters reads as "the bound you passed came
+    ;; back", which sends a reader to amend and run again. Over a subject the pipeline reads as
+    ;; spent that is the one thing not to do: the count runs across runs, so a chain of capped
+    ;; runs amended by hand between them is the loop that no single run sees.
+    (and max-iters (>= iter max-iters) (seq (spent ctx)))
+    (assoc ctx :status :unfixable :unfixable (vec (spent ctx)))
 
     (and max-iters (>= iter max-iters))
     (assoc ctx :status :max-iters)
@@ -260,7 +267,7 @@
    terminates on its own merits (converged / escalated / clean / no-progress /
    error). A round that changes nothing still ends the run via `no-progress?`,
    so unbounded does not mean non-terminating. Pass :max-iters only to cap it.
-   :emit / :clock / :attempt-key / :attempted? / :owed are injection seams.
+   :emit / :clock / :attempt-key / :attempted? / :owed / :spent are injection seams.
    :finding-key decides what \"the same finding again\" means and so what
    no-progress? can detect; only the program knows what its findings are.
    :attempt-key decides what \"we already tried this\"
@@ -274,7 +281,10 @@
    to rule on a finding wants. :changed? decides whether a round moved anything,
    and so whether a repeated finding set is a stall or a defect class the loop
    is still narrowing; it defaults to \"not known to have changed anything\",
-   which leaves the set equality standing alone. :owed is what the RUN still owes, off a round's ctx, and so
+   which leaves the set equality standing alone. :spent is what a round still owes a repair
+   on that rewording has already failed to settle, off its ctx: a run that reaches its cap
+   holding any ends :unfixable naming them rather than :max-iters. It defaults to \"nothing is
+   spent\". :owed is what the RUN still owes, off a round's ctx, and so
    whether a pipeline saying stop has CONVERGED or merely stopped: a run that
    ends holding something reports :unresolved instead. The whole ctx rather
    than the round's findings, because what a run holds is not all in its last
@@ -294,11 +304,12 @@
    throw crashes the run, because finalizing on it would publish a verdict
    nobody reached."
   [{:keys [run-id max-iters pipeline emit clock finding-key attempt-key
-           attempted? judged-after owed changed?] :as config
+           attempted? judged-after owed changed? spent] :as config
     :or   {emit (fn [_]) clock #(Instant/now)
            attempted? (constantly true)
            owed (constantly nil)
-           changed? (constantly false)}}]
+           changed? (constantly false)
+           spent (constantly nil)}}]
   (let [pipeline (or pipeline
                      (throw (ex-info "run-loop needs a :pipeline — the engine runs what its caller passes and names no program of its own" {})))
         finding-key (or finding-key
@@ -330,7 +341,7 @@
                   :carry carry}
             cfg  {:finding-key finding-key :attempt-key attempt-key
                   :attempted? attempted?
-                  :prev-findings prev-findings :changed? changed?
+                  :prev-findings prev-findings :changed? changed? :spent spent
                   :iter iter :max-iters max-iters}
             end? (fn [c prior] (terminal cfg c prior))
             ctx  (try

@@ -1223,6 +1223,55 @@
                                 [{:seq 18 :asks "worth it?"}])))))
     (is (= {} (ledger [] [])) "nothing granted and nothing asked")))
 
+;; ── A claim spent across runs ───────────────────────────────────────────────
+
+(deftest a-subject-is-spent-once-a-rewording-was-itself-refuted
+  (is (= {"writers-order" 2 "readers" 11} (record/spent {"writers-order" 2 "readers" 11 "fresh" 1}))
+      "one refutation is a defect to repair; a second after the rewording is the circle")
+  (is (= {} (record/spent nil))))
+
+(deftest a-cap-ends-on-a-spent-subject-only-while-a-repair-is-owed
+  (is (= ["writers-order"]
+         (record/spent-at-cap {:findings [{:claim-id "writers-order"}]
+                               :refuted-running {"writers-order" 3 "fresh" 1}})))
+  (is (nil? (record/spent-at-cap {:findings [] :refuted-running {"writers-order" 3}}))
+      "a round owing no amendment has nothing a cap would leave half-done"))
+
+(deftest the-figures-name-what-the-run-ended-spent
+  ;; The figures printed {:broken 1 :alone 0 :at-end true} for a claim refuted for the eleventh
+  ;; time, exactly as for a new defect.
+  (let [d (fn [n spent] (cond-> {:format :design-decision :seq n :recommend :amend
+                                 :checks [{:check :stratified :status :held}]
+                                 :findings [{:claim-id "writers-order"}]}
+                          spent (assoc :spent spent)))]
+    (is (= {"writers-order" 11} (:spent (record/run-figures [(d 40 {"writers-order" 10}) (d 41 {"writers-order" 11})]))))
+    (is (nil? (:spent (record/run-figures [(d 40 {"writers-order" 10}) (d 41 nil)])))
+        "only the run's END says what is still spent; a claim the last round let go is not")))
+
+(deftest a-claim-already-asked-about-is-shown-with-its-grants
+  ;; Three asks on one claim each granted one more exception of the same at-least-once class,
+  ;; spending the person three times on one decision.
+  (let [current (assoc design :seq 20 :supersedes {:seq 16 :why "w"}
+                       :model {:claims [{:id "one-per-content" :statement "s" :about ["m"]}]})
+        ask     (fn [n] {:seq n :design-seq 16 :recommend :ask :asks (str "grant case " n "?")
+                         :findings [{:claim-id "one-per-content" :for-person true}
+                                    {:claim-id "not-carried"}]})
+        a       (with-redefs [ws/entry-at-seq (fn [_ _ n] ({20 current 16 (assoc design :seq 16)} n))
+                              ws/entries-of (fn [_ _ k] (case k
+                                                          :design-approved [{:seq 77 :design {:seq 16} :note "lease lapse ok"}]
+                                                          :design-decision [(ask 76) (ask 90)]
+                                                          []))]
+                  (record/answered :nido "ws-1" current))]
+    (is (= {"one-per-content" [{:seq 76 :asks "grant case 76?" :granted {:seq 77 :note "lease lapse ok"}}
+                               {:seq 90 :asks "grant case 90?"}]}
+           (:asked-of a))
+        "each earlier ask on a claim the design still carries, with the grant that answered it")
+    (let [p (record/design-prompt {:design current :answers a})]
+      (is (str/includes? p "[one-per-content] entry 76: grant case 76?"))
+      (is (str/includes? p "granted at entry 77 — \"lease lapse ok\""))
+      (is (str/includes? p "CLASS level")
+          "the next ask on the claim is framed so one answer covers the next instance"))))
+
 ;; ── Who judged, and at which revision ───────────────────────────────────────
 
 (def ^:private stand-in {:reviewer :claude :instead-of :codex :because "You've hit your usage limit"})

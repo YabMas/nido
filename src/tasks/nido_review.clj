@@ -1855,6 +1855,8 @@
    ;; things of a reader. This is the one where nothing was amended.
    ::still-refuted "the same claims are refuted again after being corrected — the amender did its work and the judge found another way each one is false, so these are not going to be settled by wording"
    :unfixable "everything fixable was fixed; what remains was raised three rounds running and did not move — these are for you"
+   ;; :unfixable reached at a cap rather than by the give-up counter: see `shared-remedy`.
+   ::spent    "the cap ended the run owing an amendment to what is named above, and each has been reworded and refuted again across runs — another rewording at the same strength, by hand or by a re-run, is the circle; weaken it to what the code guarantees, withdraw it, or decide it"
    :disputed   "the judge restated a finding the amender objected to twice — neither can settle it, so you do"
    :unruled    "the judge would have ended the run leaving checks it neither confirmed, refuted nor called uncheckable, or baseline ids with no relation ruling, and asked again it still did not rule — the record does not hold over them; the report's judge phase names them, under :unruled and :relation-unruled"
    :amend-noop "the amender produced no record — nothing was appended"
@@ -1893,8 +1895,16 @@
   ;; From the HISTORY, not the terminal ctx: a run that ends on a judgement
   ;; never reaches an amend stage, so the ctx cannot say whether earlier rounds
   ;; repaired anything and would report every such run as an amender that quit.
-  (if (and (= :no-progress status) (some :amended? (:history final)))
+  (cond
+    (and (= :no-progress status) (some :amended? (:history final)))
     (shared-remedies ::still-refuted)
+
+    ;; The two ways to :unfixable name different things: findings this run tried and failed to
+    ;; repair, or — at a cap — subjects earlier runs already did.
+    (and (= :unfixable status) (record/spent-at-cap final))
+    (shared-remedies ::spent)
+
+    :else
     (shared-remedies status)))
 
 (defn- finding-name
@@ -1952,6 +1962,7 @@
       :stood-in         (report/stood-in report)
       :machinery        (:machinery report)
       :asks             (when (= :design-decision (:format rec)) (:asks rec))
+      :spent            (record/spent (:refuted-running final))
       :unrecorded       (:unrecorded final)
       :reviewed-project project
       :reviewed-session session
@@ -1991,7 +2002,8 @@
                                  ;; stage does work rather than reporting, and
                                  ;; nothing has shown the same cost there.
                                  :judged-after :judge
-                                 :finding-key finding-key}
+                                 :finding-key finding-key
+                                 :spent record/spent-at-cap}
                           changed?    (assoc :changed? changed?)
                           baseline    (assoc :baseline baseline)
                           survey-cwd  (assoc :survey-cwd survey-cwd)
@@ -2015,9 +2027,12 @@
     (when (= :amend-touched-code status)
       (println (str "  to append its answer as written and judge it: bb nido:review:amend:append :run "
                     run-id)))
-    (doseq [k (:unfixable final)]
-      (println (str "  ↯ " (finding-name k)
-                    " — raised and re-raised, never resolved")))
+    (let [spent (record/spent (:refuted-running final))]
+      (doseq [k (:unfixable final)]
+        (println (str "  ↯ " (finding-name k)
+                      (if-let [n (get spent k)]
+                        (str " — refuted " n " readings running")
+                        " — raised and re-raised, never resolved")))))
     ;; The other way an amendment costs something, and the one the Weakened
     ;; section cannot report: it answers "did the record claim LESS", and a
     ;; record talked out of checkability claims more. A run reported that it had
@@ -2368,7 +2383,9 @@
    unruled, declared unchecked or found against while settled, and per reviewer that answered, the
    runs' counts summed; per subject, in how many runs it was still unchecked at the end — and per
    baseline id, the decisions leaving it with no relation ruling, its relation-ruling flips
-   each way and its reversals not taken."
+   each way and its reversals not taken. Per subject spent at a run's end, `{:runs n :max n}`: in
+   how many runs, and the longest refutation run any of them ended on — the second is not a sum,
+   because each run's count already spans the runs before it."
   [figures]
   (letfn [(add [acc tallies]
             (reduce-kv (fn [a k {:keys [broken alone at-end] :as t}]
@@ -2397,6 +2414,11 @@
      :judged-by   (counts :judged-by)
      :relation-flips     (reduce #(merge-with (partial merge-with +) %1 %2) (sorted-map) (keep :relation-flips figures))
      :relation-reversals (counts :relation-reversals)
+     :spent       (reduce (fn [acc [id n]]
+                            (update acc id #(-> (or % {:runs 0 :max 0})
+                                                (update :runs inc)
+                                                (update :max max n))))
+                          (sorted-map) (mapcat :spent figures))
      :strata      (reduce (fn [acc t] (merge-with #(merge-with + %1 %2) acc t))
                           (sorted-map) (keep :strata figures))}))
 
