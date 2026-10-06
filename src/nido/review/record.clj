@@ -965,18 +965,40 @@
                            (str "\n    its judge did not answer (" (name (:outcome reading)) ")")))))
          "\n")))
 
+(defn- clauses
+  "`statement` cut at each sentence or semicolon, trimmed — the unit a grant is compared in."
+  [statement]
+  (into [] (comp (map str/trim) (remove str/blank?))
+        (str/split (str statement) #"(?<=[.;])\s+")))
+
+(defn- clause-delta
+  "What one claim's text and :about lost and gained between `was` and `is` — {:granted :now}, each
+   only the clauses, or :about ids, the other side lacks. A clause both sides carry is absent: it
+   reads as it did when granted."
+  [was is]
+  (let [only (fn [a b] (let [b (set b)] (vec (remove b a))))
+        [wc ic] [(clauses (:statement was)) (clauses (:statement is))]
+        [wa ia] [(:about was) (:about is)]]
+    (cond-> {:granted (only wc ic) :now (only ic wc)}
+      (not= (set wa) (set ia)) (assoc :about {:granted (only wa ia) :now (only ia wa)}))))
+
 (defn- claim-delta
-  "Which claims `design` adds, changes and drops against `granted`, by id — nil when either lists
-   invariants with no ids, which leave nothing to compare by."
+  "Which claims `design` adds, changes and drops against `granted`, by id, with :clauses holding
+   `clause-delta` per changed id — nil when either lists invariants with no ids, which leave
+   nothing to compare by."
   [granted design]
-  (let [by-id (fn [d] (into {} (map (juxt :id #(select-keys % [:statement :about])))
-                            (get-in d [:model :claims])))
-        was   (by-id granted)
-        is    (by-id design)]
+  (let [by-id   (fn [d] (into {} (map (juxt :id #(select-keys % [:statement :about])))
+                              (get-in d [:model :claims])))
+        was     (by-id granted)
+        is      (by-id design)
+        changed (vec (sort (filter #(and (was %) (not= (was %) (is %))) (keys is))))]
     (when (and (seq was) (seq is))
-      {:added   (vec (sort (remove was (keys is))))
-       :changed (vec (sort (filter #(and (was %) (not= (was %) (is %))) (keys is))))
-       :dropped (vec (sort (remove is (keys was))))})))
+      (cond-> {:added   (vec (sort (remove was (keys is))))
+               :changed changed
+               :dropped (vec (sort (remove is (keys was))))}
+        (seq changed) (assoc :clauses (into (sorted-map)
+                                            (map (fn [id] [id (clause-delta (was id) (is id))]))
+                                            changed))))))
 
 (defn- subject-delta
   "Which subjects (`settled/subjects`) an amendment `record` adds, changes and drops against `prev`,
@@ -1017,11 +1039,14 @@
   "What a person has already answered about `design`, read off the ledger for its judge's `asks`:
 
      :grant  the nearest design in its :supersedes chain a person granted, itself included —
-             {:seq :self? :note :delta :carried?} — or absent when nobody has granted any of them.
-             A :design-approved grants the design it names; a design a person wrote grants itself
-             with its :supersedes :granted, and is then :carried?
-     :asked  the newest decision's :asks on this workstream, when neither a grant nor a reply has
-             been written since it; a question put to a person and not yet answered
+             {:seq :self? :note :delta :carried? :earlier} — or absent when nobody has granted any
+             of them. A :design-approved grants the design it names; a design a person wrote grants
+             itself with its :supersedes :granted, and is then :carried? :earlier is every grant
+             further up the chain, nearest first, as {:seq :note :carried?}: a newer grant is often
+             narrower, and does not withdraw the scope an older one decided
+     :asked  {:seq :of :asks}, the newest decision on this workstream — at :seq, of the design at
+             :of — when it asked and neither a grant nor a reply has been written since; a question
+             put to a person and not yet answered
      :answered-since  {:seq :asks :by [{:seq :kind :why}]}, when the newest decision asked and a
              person replied after it by writing the record rather than a grant: a design in the
              chain they wrote, or the intent the design cites, each by its :supersedes :why
@@ -1048,13 +1073,18 @@
                              (conj seen (:seq d)) (conj acc d))))
         approvals (ws/entries-of project ws-id :design-approved)
         approved  (into {} (map (juxt #(get-in % [:design :seq]) identity)) approvals)
-        granted   (some #(when (or (approved (:seq %))
-                                   (and (person? %) (get-in % [:supersedes :granted])))
-                           %)
-                        chain)
-        note      (if-let [a (approved (:seq granted))]
-                    (:note a)
-                    (get-in granted [:supersedes :granted]))
+        grants    (filterv #(or (approved (:seq %))
+                                    (and (person? %) (get-in % [:supersedes :granted])))
+                           chain)
+        granted   (first grants)
+        note-of   #(if-let [a (approved (:seq %))]
+                     (:note a)
+                     (get-in % [:supersedes :granted]))
+        note      (note-of granted)
+        earlier   (mapv #(cond-> {:seq (:seq %)}
+                           (note-of %) (assoc :note (note-of %))
+                           (not (approved (:seq %))) (assoc :carried? true))
+                        (rest grants))
         ;; The intent is no amender's to write: a review loop amends baselines and designs.
         intent    (some->> (get-in design [:intent :seq]) (ws/entry-at-seq project ws-id))
         reply     (fn [kind r] {:seq (:seq r) :kind kind :why (get-in r [:supersedes :why])})
@@ -1092,11 +1122,13 @@
                               note (assoc :note note)
                               (not (approved (:seq granted))) (assoc :carried? true)
                               (claim-delta granted design)
-                              (assoc :delta (claim-delta granted design))))
+                              (assoc :delta (claim-delta granted design))
+                              (seq earlier) (assoc :earlier earlier)))
       (seq since-ask)
       (assoc :answered-since {:seq (:seq last-ask) :asks (:asks last-ask) :by since-ask})
       (and asking? (not approved?) (empty? since-ask))
-      (assoc :asked (:asks last-ask))
+      (assoc :asked (cond-> {:seq (:seq last-ask) :asks (:asks last-ask)}
+                      (:design-seq last-ask) (assoc :of (:design-seq last-ask))))
       (and rewrite (not-any? #(= (:seq rewrite) (:seq %)) since-ask))
       (assoc :rewritten {:seq        (:seq rewrite)
                          :why        (get-in rewrite [:supersedes :why])
@@ -1107,8 +1139,9 @@
 (defn- answered-block
   "Who reads `asks`, and what is already off the table for it: the design's :open notes, a grant a
    person gave, a reply they wrote into the record, what they asked for, a question already put to
-   one. `owes?` is `report/owes-a-person?` of the design."
-  [owes? open {:keys [grant asked answered-since rewritten asked-for asked-of]}]
+   one. `owes?` is `report/owes-a-person?` of the design, `judged` its :seq — nil on a record not
+   yet on the ledger, which no earlier ask can have been of."
+  [owes? judged open {:keys [grant asked answered-since rewritten asked-for asked-of]}]
   (str
    (if owes?
      (str "\nWHO READS asks: a person. This design declares a move they must grant\n"
@@ -1137,14 +1170,38 @@
           "whole record as if it were new. What it does answer is a finding whose substance\n"
           "is the decision it made — that a person has not chosen this scope, this cost or\n"
           "this move. It bears on asks, which poses only what the grant does not already cover"
-          (if-let [{:keys [added changed dropped]} (:delta grant)]
+          (if-let [{:keys [added changed dropped clauses]} (:delta grant)]
             (str " — the claims changed since it:"
                  (when (seq added) (str "\n  added: " (str/join ", " added)))
                  (when (seq changed) (str "\n  changed: " (str/join ", " changed)))
+                 (str/join (for [[id {g :granted n :now about :about}] clauses]
+                             (str "\n    [" id "]"
+                                  (str/join (for [c g] (str "\n      granted: " c)))
+                                  (str/join (for [c n] (str "\n      now:     " c)))
+                                  (when about
+                                    (str "\n      about, granted: " (str/join ", " (:granted about))
+                                         "\n      about, now:     " (str/join ", " (:now about)))))))
                  (when (seq dropped) (str "\n  dropped: " (str/join ", " dropped)))
                  (when-not (or (seq added) (seq changed) (seq dropped)) " none")
-                 "\n")
-            ".\n")))
+                 "\n"
+                 (when (seq clauses)
+                   (str "A changed claim's text not shown under it reads as it did when granted:\n"
+                        "asks does not reopen it, and calls no claim \"revised\" without naming the\n"
+                        "clause that changed.\n"))
+                 (when (or (seq added) (seq changed))
+                   (str "A question raised by an added or changed claim names that claim, so the\n"
+                        "person can tell the change raised it and their grant was complete when given.\n"
+                        "When the change since the grant is the one its note ordered, asks says so —\n"
+                        "\"the change since entry " (:seq grant) " is the one your note ordered\" — and\n"
+                        "poses nothing further about it.\n")))
+            ".\n")
+          (when-let [earlier (seq (:earlier grant))]
+            (str "Earlier grants up the same chain, nearest first. A newer grant is often\n"
+                 "narrower and withdraws nothing an older one decided — a scope one of these\n"
+                 "settled is still settled unless this record retracts it:\n"
+                 (str/join (for [{n :seq :keys [note carried?]} earlier]
+                             (str "  entry " n (when carried? " (written by a person, carrying a grant)")
+                                  (when note (str " — \"" note "\"")) "\n")))))))
    (when answered-since
      (str "\nANSWERED SINCE. A person was asked at entry " (:seq answered-since) ":\n  "
           (:asks answered-since) "\n"
@@ -1177,7 +1234,13 @@
           "It bears on asks alone and is evidence for no check: scope a person asked for is\n"
           "not a question to put back to them.\n"))
    (when asked
-     (str "\nASKED BEFORE, AND NO GRANT WRITTEN SINCE:\n  " asked "\n"
+     (str "\nASKED BEFORE, AND NO GRANT WRITTEN SINCE — at entry " (:seq asked)
+          (when (:of asked) (str ", of entry " (:of asked))) ":\n  " (:asks asked) "\n"
+          (when (and judged (:of asked) (not= judged (:of asked)))
+            (str "The record has changed since: this round judges entry " judged ", not entry "
+                 (:of asked) ".\nPose only what entry " judged " still leaves open — drop a "
+                 "precondition it already\nmeets and any clause it retracted, and never carry "
+                 "the question forward word\nfor word.\n"))
           "If what you find can only be repaired by answering this, recommend ask: an\n"
           "amender handed it answers it without the person, and the next round refutes\n"
           "the answer.\n"
@@ -1231,7 +1294,7 @@
           "down: report that check as UNDERIVABLE, say the record is missing,\n"
           "and do NOT infer the goal from the design. An inferred goal is the\n"
           "one the design serves, so the check could never fail.\n\n"))
-   "THE DESIGN:\n"
+   "THE DESIGN" (when (:seq design) (str " — entry " (:seq design))) ":\n"
    "Summary: " (:summary design) "\n"
    "Shape: " (:shape design) "\n"
    "Effort: " (name (:effort design)) "\n"
@@ -1385,8 +1448,11 @@
    "has to answer, in one or two sentences, with everything you derived already\n"
    "taken off the table — and with it what the record's open notes state is\n"
    "decided and what a grant or a person's answer already covers.\n"
-   "Never answer it yourself.\n"
-   (answered-block owes? (:open design) answers)
+   "Never answer it yourself. On a proceed it is unconditional: a question opening\n"
+   "\"after X is done\" is met by this record — drop the condition — or names a repair,\n"
+   "and then the recommendation is not proceed. A correction the record needs is a\n"
+   "finding for the amender, never asks: asks holds only what a person must decide.\n"
+   (answered-block owes? (:seq design) (:open design) answers)
    (prior-findings-block (apply dissoc prior (keys settled)))
    (disputes-block disputes)
    (level-reminder :commitment))))

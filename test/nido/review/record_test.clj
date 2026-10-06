@@ -1277,7 +1277,7 @@
             :answers {:grant {:seq 16 :self? false :note "approved in session"
                               :delta {:added ["drafts-not-scored"] :changed ["pipeline-boundary"]
                                       :dropped []}}
-                      :asked "is the compression worth it now?"}})]
+                      :asked {:seq 18 :of 16 :asks "is the compression worth it now?"}}})]
     (is (str/includes? p "- The name-order flip is confirmed as a product decision."))
     (is (str/includes? p "asks does not pose it again"))
     (is (str/includes? p "A person approved entry 16, which this design replaces"))
@@ -1285,12 +1285,12 @@
     (is (str/includes? p "changed: pipeline-boundary"))
     (is (str/includes? p "The grant is not evidence for any structural check")
         "the grant narrows the ask and nothing else; every check is still derived whole")
-    (is (str/includes? p "ASKED BEFORE, AND NO GRANT WRITTEN SINCE:\n  is the compression worth it now?"))))
+    (is (str/includes? p "ASKED BEFORE, AND NO GRANT WRITTEN SINCE — at entry 18, of entry 16:\n  is the compression worth it now?"))))
 
 (deftest a-clean-round-on-an-owing-design-proceeds-over-a-question-already-asked
   ;; Two zero-finding rounds over the same open questions recorded :ask once and :proceed once:
   ;; the ASKED BEFORE block ended "recommend ask" and said nothing for a round that found nothing.
-  (let [asked   {:asked "is the compression worth it now?"}
+  (let [asked   {:asked {:seq 18 :asks "is the compression worth it now?"}}
         owing   (record/design-prompt {:design  (assoc design :standing {:relation :challenges :note "n"})
                                       :answers asked})
         clear   (record/design-prompt {:design design :answers asked})]
@@ -1315,10 +1315,12 @@
     (testing "the nearest grant up the supersedes chain, with the claims changed since it"
       (let [a (ledger [{:seq 17 :design {:seq 16} :at-seq 16 :note "ok"}] [])]
         (is (= {:seq 16 :self? false :note "ok"
-                :delta {:added ["c"] :changed ["b"] :dropped []}}
+                :delta {:added ["c"] :changed ["b"] :dropped []
+                        :clauses {"b" {:granted ["two"] :now ["TWO"]}}}}
                (:grant a)))))
     (testing "a question put to a person stays open until a grant is written after it"
-      (is (= "worth it?" (:asked (ledger [] [{:seq 18 :asks "worth it?"}]))))
+      (is (= {:seq 18 :of 16 :asks "worth it?"}
+             (:asked (ledger [] [{:seq 18 :design-seq 16 :asks "worth it?"}]))))
       (is (nil? (:asked (ledger [{:seq 19 :design {:seq 16} :at-seq 18}]
                                 [{:seq 18 :asks "worth it?"}])))))
     (is (= {} (ledger [] [])) "nothing granted and nothing asked")))
@@ -1360,7 +1362,7 @@
 (deftest an-amenders-rewrite-answers-nothing
   ;; An amender handed an asked question settles it by guessing; its rewrite must not close it.
   (is (= "Does the source gate cover only slices this workstream adds?"
-         (:asked (answered-over asked-ledger 27 :amended #{27})))
+         (:asks (:asked (answered-over asked-ledger 27 :amended #{27}))))
       "stamped as the amender's on the index")
   (is (some? (:asked (answered-over (assoc-in asked-ledger [27 :supersedes :why]
                                               "corrected against the code after round 2 of run r")
@@ -1433,6 +1435,67 @@
     (is (= [18] (map :seq (:asked-for a))) "only what was filed after the design they last granted")
     (is (str/includes? p "WHAT A PERSON HAS ASKED FOR SINCE"))
     (is (str/includes? p "- [f4] Supersede with a P2 claim"))))
+
+;; ── What was asked and granted, against the record as it stands ────────────
+
+(deftest an-ask-of-a-superseded-record-is-posed-against-the-current-one
+  ;; A proceed copied the previous round's ask word for word, precondition included, over the
+  ;; amendment that had met it — and the person answered the same question twice.
+  (let [a (answered-over (assoc asked-ledger 27 (assoc design :seq 27 :supersedes {:seq 24 :why "w"}))
+                         27 :amended #{27})
+        p (record/design-prompt {:design (assoc design :seq 27) :answers a})]
+    (is (= {:seq 26 :of 24 :asks "Does the source gate cover only slices this workstream adds?"}
+           (:asked a)))
+    (is (str/includes? p "at entry 26, of entry 24")
+        "the ask is labelled with the record it was asked of, so the judge can tell it is not this one")
+    (is (str/includes? p "this round judges entry 27, not entry 24"))
+    (is (str/includes? p "drop a precondition it already\nmeets and any clause it retracted")
+        "an ask over a record that changed under it is re-posed against what is left open, not copied")
+    (is (str/includes? p "THE DESIGN — entry 27:")
+        "the judged entry is named, so a citation into an older entry reads as one")
+    (is (not (str/includes? (record/design-prompt {:design (assoc design :seq 24) :answers a})
+                            "The record has changed since"))
+        "an ask of the very record being judged still stands as asked")))
+
+(deftest a-proceed-asks-unconditionally-and-corrections-are-findings
+  ;; A proceed carried "After the reads are assigned to door calls, do you grant…" over the record
+  ;; that had assigned them; a round asked a person to correct a summary the amender then fixed.
+  (let [p (record/design-prompt {:design design})]
+    (is (str/includes? p "On a proceed it is unconditional"))
+    (is (str/includes? p "A correction the record needs is a\nfinding for the amender, never asks"))))
+
+(deftest a-changed-claim-is-shown-clause-by-clause-against-its-grant
+  ;; Shown only "changed: <id>", the judge asked a person to re-grant a clause that read the same
+  ;; in the granted record, and called a consequential rewording a "revised" commitment.
+  (let [claims  (fn [st] {:claims [{:id "doors" :statement st :about ["m"]}]})
+        ledger  {37 (assoc design :seq 37 :model (claims "Every read goes through a door. LTI context is in scope."))
+                 41 {:format :design-approved :seq 41 :design {:seq 37} :note "supersede to exclude LTI context"}
+                 42 (assoc design :seq 42 :supersedes {:seq 37 :why "excludes LTI context, as ordered"}
+                           :model (claims "Every read goes through a door. LTI context is excluded."))}
+        a       (answered-over ledger 42)
+        p       (record/design-prompt {:design (get ledger 42) :answers a})]
+    (is (= {"doors" {:granted ["LTI context is in scope."] :now ["LTI context is excluded."]}}
+           (get-in a [:grant :delta :clauses])))
+    (is (str/includes? p "granted: LTI context is in scope.\n      now:     LTI context is excluded."))
+    (is (not (str/includes? p "granted: Every read goes through a door."))
+        "a clause the grant already covered is not put back in front of the judge as new")
+    (is (str/includes? p "the change since entry 37 is the one your note ordered")
+        "a supersession doing only what the grant note ordered is said to be that, not asked afresh")))
+
+(deftest every-grant-up-the-chain-reaches-the-judge
+  ;; A newer, narrower grant hid the older one that settled the scope, and four rounds re-asked the
+  ;; question the older grant had answered.
+  (let [ledger {70 (assoc design :seq 70)
+                72 {:format :design-approved :seq 72 :design {:seq 70} :note "per-enrolment stats are Engagement"}
+                95 (assoc design :seq 95 :supersedes {:seq 70 :why "w"})
+                97 {:format :design-approved :seq 97 :design {:seq 95} :note "phase 2 only"}
+                99 (assoc design :seq 99 :supersedes {:seq 95 :why "w"})}
+        a      (answered-over ledger 99 :amended #{99})
+        p      (record/design-prompt {:design (get ledger 99) :answers a})]
+    (is (= 95 (get-in a [:grant :seq])))
+    (is (= [{:seq 70 :note "per-enrolment stats are Engagement"}] (get-in a [:grant :earlier])))
+    (is (str/includes? p "entry 70 — \"per-enrolment stats are Engagement\"")
+        "the scope an older grant decided is still decided under a newer one that does not mention it")))
 
 ;; ── A claim spent across runs ───────────────────────────────────────────────
 
