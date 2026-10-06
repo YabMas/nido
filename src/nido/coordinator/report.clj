@@ -2496,8 +2496,8 @@
    :unruled is every check the judge left without any ruling: not confirmed with evidence, not
    found against, not declared unchecked (nor, on a decision, :owed). Derived by the round, never
    by the judge, and it is what stops the judgement holding — see `review-holds?` and `proceeds?`.
-   :read-once is every id the judgement was asked to rule on and confirmed that no confirmation
-   before it, at the same content and tree, had: a first reading. Derived by the round, and it
+   :read-once is every id the judgement was asked to rule on and confirmed (or, on a decision, held
+   :owed) that no confirmation before it, at the same content and tree, had: a first reading. Derived by the round, and it
    stops the judgement holding too — one clean reading of a record is a sample, and the round
    reads it again. Only asked ids, because the reading after it pairs them: an id it is not asked
    about is not :unruled when it goes unconfirmed, so its silence would clear it unread.
@@ -2505,7 +2505,7 @@
    confirmed: an amendment can change what the checks read without moving any subject, so
    settlement alone would let one clean reading of it hold. It stops the judgement holding, and
    the round reads the record again.
-   :overturns names each earlier run's finding against an id this judgement confirmed: the
+   :overturns names each earlier run's finding against an id this judgement confirmed or held :owed: the
    reversal, recorded where it was made. :overrides-settled is its mirror: each id this judgement
    was shown as settled and found against anyway, naming the confirmation that had settled it —
    a settlement that was shielding a false claim, recorded where it was caught.
@@ -2731,6 +2731,9 @@
                 ;; not yet meet — what the build owes. Ruled, and never settled: the tree they were
                 ;; confirmed at is one they are not true of.
                 [:owed               {:optional true} [:vector string?]]
+                ;; Per :owed id, the file:line references the judge read to hold it owed — what an
+                ;; owed ruling that reverses an earlier finding (:overturns) rests on.
+                [:owed-at            {:optional true} [:map-of string? [:vector {:min 1} string?]]]
                 ;; The run whose round appended this decision, by which that run's rounds are read
                 ;; back; a decision appended before it existed names none.
                 [:run-id             {:optional true} string?]

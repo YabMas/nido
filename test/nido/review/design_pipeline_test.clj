@@ -1691,6 +1691,44 @@
            (is (= :proceed (:status r2)) "the second reading of the amendment proceeds")
            (is (nil? (:amendment-read-once (last @appended))))))))))
 
+;; Watched twice on one workstream: a design not yet built had every claim held :owed, so nothing
+;; was read once and the run proceeded on one judge — the second time clearing three claims the
+;; round before had refuted. An owed ruling is a reading like a confirmation, and is paired like one.
+(deftest a-proceed-holding-every-claim-owed-is-read-again
+  (let [appended (atom [])
+        read     (assoc (decision :proceed :checks [(check :relation-honest :held)])
+                        :owed ["rounded-once"])]
+    (judging-a-model-design
+     read appended
+     (fn []
+       (let [r1 (run record/design-judge-stage (ctx))]
+         (is (= :next-round (:control r1)) "one judge's word that a claim is sound is a sample of it")
+         (is (= ["rounded-once"] (:read-once (first @appended))))
+         (let [r2 (run record/design-judge-stage (ctx :carry (:carry r1)))]
+           (is (= :proceed (:status r2)) "a second owed ruling pairs the first, so the run proceeds")
+           (is (nil? (:read-once (last @appended))))))))))
+
+;; Watched: a round asked the person with no derivable finding, and the round after it broke three
+;; checks on text no amendment had touched — the person would have been asked over an unrepaired
+;; record. An ask with nothing derivable ends the run as a proceed does, so it is read twice too.
+(deftest an-ask-over-nothing-derivable-is-read-again-before-the-person-is-asked
+  (let [appended (atom [])
+        read     (assoc (decision :ask :checks [(check :goal-served :broken)]
+                                  :findings [{:cites ["c"] :claim "over-serves the goal"
+                                              :check :goal-served :claim-id "pool-in-scope"
+                                              :for-person true}])
+                        :confirmed ["rounded-once"] :checked-at {"rounded-once" ["src/a.clj:1"]})]
+    (judging-a-model-design
+     read appended
+     (fn []
+       (with-redefs [record/append! (fn [_ r] {:seq (count (swap! appended conj r))})]
+         (let [r1 (run record/design-judge-stage (ctx))]
+           (is (= :next-round (:control r1)) "a single reading must not be what a person is asked over")
+           (is (= ["rounded-once"] (:read-once (first @appended))))
+           (let [r2 (run record/design-judge-stage (ctx :carry (:carry r1)))]
+             (is (= :asked (:status r2)) "the second reading agreeing is what stops for the person")
+             (is (= :escalate (:control r2))))))))))
+
 ;; ── A decision that is a person's to make ───────────────────────────────────
 
 (deftest a-scope-decision-stops-for-a-person-instead-of-reaching-the-amender

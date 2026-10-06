@@ -202,6 +202,47 @@
     (is (= ["modal-footer" "rounded-once"] (:confirmed (#'record/rule result checks checks)))
         "a round with no :breaks confirms as before")))
 
+(deftest an-owed-ruling-keeps-what-the-judge-read
+  ;; Owed rulings reversed earlier refutations with file:line evidence in the judge's answer, and the
+  ;; ledger kept a bare id list: neither the reversal nor what it rested on could be read back.
+  (let [r (record/parse-design-decision
+           (json/generate-string {:recommend "proceed" :reason "r" :asks "worth it?"
+                                  :checks [{:check "relation_honest" :status "held" :note "n"}]
+                                  :findings [] :unchecked []
+                                  :confirmed [{:id "lines-exact" :evidence ["src/a.clj:9"] :at_this_tree "owed"}]})
+           4 any-era)]
+    (is (= {"lines-exact" ["src/a.clj:9"]} (:owed-at r)))
+    (is (report/validate-event :design-decision r) "and the ledger takes it"))
+  (let [result {:confirmed  ["modal-footer"] :checked-at {"modal-footer" ["src/modals.clj:270"]}}]
+    (is (= {"modal-footer" ["src/modals.clj:270"]}
+           (:owed-at (#'record/rule result #{"modal-footer"} #{"modal-footer"} ["modal-footer"])))
+        "a holds turned owed by :breaks keeps what was read, under the ruling it now is")))
+
+(deftest an-owed-ruling-against-an-earlier-finding-is-an-overturn
+  (let [r (#'record/with-readings {:format :design-decision :owed ["writers-state-order"]}
+                                  (constantly true)
+                                  {:prior {"writers-state-order" {:ws-id "ws-1" :seq 55}}
+                                   :asked ["writers-state-order"]})]
+    (is (= [{:id "writers-state-order" :seq 55 :ws-id "ws-1"}] (:overturns r))
+        "holding a refuted claim sound reverses the refutation, and the ledger has to say so")
+    (is (= ["writers-state-order"] (:read-once r)))))
+
+;; Watched: a judge confirmed chat-door with evidence and filed a stratified gap naming it, and the
+;; confirmation was discarded — though a gap refutes nothing.
+(deftest a-gap-naming-a-claim-leaves-its-confirmation-standing
+  (let [result {:confirmed  ["chat-door"] :checked-at {"chat-door" ["src/chat.clj:12"]}
+                :findings   [{:blocks :stratified :claim-id "chat-door" :cites ["c"] :claim "x" :needs "y"}]}
+        r      (#'record/rule result #{"chat-door"} #{"chat-door"})]
+    (is (= ["chat-door"] (:confirmed r)) "what a gap asks for is more record, not a doubt about the claim")
+    (is (nil? (:overrides-settled
+               (#'record/with-readings (assoc r :format :baseline-review) (constantly false)
+                                       {:settled {"chat-door" {:ws-id "ws-1" :seq 3}}})))
+        "nor does it override the settlement it sits beside"))
+  (is (empty? (:confirmed (#'record/rule {:confirmed ["chat-door"] :checked-at {"chat-door" ["src/chat.clj:12"]}
+                                          :findings [{:claim-id "chat-door" :cites ["c"] :claim "x"}]}
+                                         #{"chat-door"} #{"chat-door"})))
+      "a refutation naming it still wins over the confirmation"))
+
 (deftest a-decision-leaving-a-claim-unruled-does-not-proceed
   (let [d {:format :design-decision :recommend :proceed :design-seq 4 :reason "r" :asks "a"
            :checks [{:check :relation-honest :status :held :note "n"}]}]

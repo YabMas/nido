@@ -1408,12 +1408,14 @@
   (-> (str x) str/trim (str/replace "[" "") (str/replace "]" "")))
 
 (defn- parse-confirmed
-  "A judge's confirmed list as `{:confirmed [id …] :checked-at {id [file:line …]} :owed [id …]}`.
+  "A judge's confirmed list as `{:confirmed [id …] :checked-at {id [file:line …]} :owed [id …]
+   :owed-at {id [file:line …]}}`.
 
    An entry is `{id evidence at_this_tree}`; a bare string is an id with no evidence, which is what an
    answer in the older shape gives, and it confirms nothing that settles. An id the judge says the
    code does not meet yet is :owed rather than :confirmed — a sound commitment, not a fact of the
-   tree it read."
+   tree it read — and what it read to say so is :owed-at, kept because an owed ruling can reverse
+   an earlier finding (`with-readings`' :overturns) and the reversal is only as good as its evidence."
   [raw]
   (reduce (fn [acc e]
             (let [m?  (map? e)
@@ -1422,7 +1424,8 @@
                   at  (when m? (str (or (:at_this_tree e) (:at-this-tree e))))]
               (cond
                 (str/blank? id) acc
-                (= "owed" at)   (update acc :owed (fnil conj []) id)
+                (= "owed" at)   (cond-> (update acc :owed (fnil conj []) id)
+                                  (seq ev) (assoc-in [:owed-at id] ev))
                 :else           (cond-> (update acc :confirmed (fnil conj []) id)
                                   (seq ev) (assoc-in [:checked-at id] ev)))))
           {}
@@ -1441,44 +1444,53 @@
   "`record` carrying the judge's confirmed and unchecked lists from the answer `m`, as the round
    filters them next (`rule`)."
   [record m]
-  (let [{:keys [confirmed checked-at owed]} (parse-confirmed (:confirmed m))
+  (let [{:keys [confirmed checked-at owed owed-at]} (parse-confirmed (:confirmed m))
         unchecked (parse-unchecked (:unchecked m))]
     (cond-> record
       (seq confirmed)  (assoc :confirmed (vec (distinct confirmed)))
       (seq checked-at) (assoc :checked-at checked-at)
       (seq owed)       (assoc :owed (vec (distinct owed)))
+      (seq owed-at)    (assoc :owed-at owed-at)
       (seq unchecked)  (assoc :unchecked unchecked))))
+
+(declare refuted-ids)
 
 (defn- rule
   "A parsed judgement, its ruling held to what the round asked: `checks` are the subjects put to the
    judge, `asked` those of them it owes a ruling on.
 
    A confirmation counts only for a check, only with the file:line it was read at, and only when no
-   finding of the same judgement names that id — a judge that both found against a subject and
-   confirmed it has found. An id outside the checks is dropped whatever the judge said of it: it was
+   finding of the same judgement refutes that id (`refuted-ids`) — a judge that both found against a
+   subject and confirmed it has found. A gap naming the id refutes nothing, so the confirmation
+   stands beside it. An id outside the checks is dropped whatever the judge said of it: it was
    shown as settled, or it is no subject of this record. What is left of `asked` without a ruling —
-   confirmed, found, :owed, or declared :unchecked — is :unruled, which is what stops the judgement
+   confirmed, named by a finding, :owed, or declared :unchecked — is :unruled, which is what stops the judgement
    holding (`nido.coordinator.report/review-holds?`, `nido.coordinator.report/proceeds?`).
 
    `breaks` is what the design's `:baseline :breaks` lists. A check named there that the judge
    confirmed holds is :owed, never confirmed: what it read is the code the design says it stops
    being true, and a confirmation would end that subject's refutation run (`refuted-running`) on a
-   fact about the tree before the change."
+   fact about the tree before the change. What the judge read to confirm it moves to :owed-at with it."
   ([result checks asked] (rule result checks asked nil))
   ([result checks asked breaks]
-    (let [found     (into #{} (keep :claim-id) (:findings result))
+    (let [found     (into #{} (mapcat refuted-ids) (:findings result))
+          named     (into #{} (keep :claim-id) (:findings result))
           held?     #(and (contains? checks %) (not (found %)))
           broken    (into #{} (map slug) breaks)
           confirmed (filterv #(and (held? %) (not (broken %)) (seq (get-in result [:checked-at %])))
                              (:confirmed result))
           owed      (filterv held? (distinct (concat (:owed result) (filter broken (:confirmed result)))))
           unchecked (filterv #(held? (:id %)) (:unchecked result))
-          ruled     (into (set confirmed) (concat owed (map :id unchecked) found))
-          unruled   (vec (sort (remove ruled asked)))]
-      (cond-> (dissoc result :confirmed :checked-at :owed :unchecked :unruled)
+          ruled     (into (set confirmed) (concat owed (map :id unchecked) named))
+          unruled   (vec (sort (remove ruled asked)))
+          owed-at   (select-keys (merge (select-keys (:checked-at result) (filter broken owed))
+                                        (:owed-at result))
+                                 owed)]
+      (cond-> (dissoc result :confirmed :checked-at :owed :owed-at :unchecked :unruled)
         (seq confirmed) (assoc :confirmed confirmed
                                :checked-at (select-keys (:checked-at result) confirmed))
         (seq owed)      (assoc :owed owed)
+        (seq owed-at)   (assoc :owed-at owed-at)
         (seq unchecked) (assoc :unchecked unchecked)
         (seq unruled)   (assoc :unruled unruled)))))
 
@@ -4061,40 +4073,45 @@
      :prior    (when subject (settled/prior-findings ls kind subject run-id))}))
 
 (defn- carried-readings
-  "The ids an earlier quiet round of this run confirmed of `subject` — the same record, since a
-   quiet round is followed by no amendment. What pairs a reading when the tree has no identity to
-   pair it on the ledger."
+  "The ids an earlier quiet round of this run read of `subject` — confirmed or held :owed — the same
+   record, since a quiet round is followed by no amendment. What pairs a reading when the tree has
+   no identity to pair it on the ledger, and the only thing that pairs an :owed one, which settles
+   nothing and so stands on no ledger."
   [ctx subject]
   (let [q (get-in ctx [:carry :quiet])]
-    (when (= (:seq subject) (:seq q)) (:confirmed q))))
+    (when (= (:seq subject) (:seq q)) (:read q))))
 
 (defn- with-readings
   "`record` — what the judge returned, before it is appended — carrying :overturns, each earlier
-   run's finding (`prior`) against an id it confirmed; :overrides-settled, the confirmation that
-   settled (`settled`) each id it was shown as outside its checks and found against anyway; and,
-   when `holds?` says it would end the run clean, :read-once, what of `asked` it confirmed on a
+   run's finding (`prior`) against an id it read; :overrides-settled, the confirmation that
+   settled (`settled`) each id it was shown as outside its checks and refuted anyway; and,
+   when `holds?` says it would end the run, :read-once, what of `asked` it read on a
    first reading, and :amendment-read-once when `unread-amendment?`.
 
-   `asked` is the ids the round owes a ruling on. :read-once holds no other, because the reading
-   after it pairs them only by confirming them again, and an id it was not asked about can go
-   unconfirmed without being :unruled — so the second reading would clear it unread.
+   An id is read when it is confirmed or held :owed. An owed ruling is a judge's word that the claim
+   is sound, and a run resting on one such word is resting on a sample however the code stands: a
+   design not yet built holds every claim owed, and would otherwise end on one reading.
 
-   A confirmation is a second reading when one stands before it at the key it was read at
+   `asked` is the ids the round owes a ruling on. :read-once holds no other, because the reading
+   after it pairs them only by reading them again, and an id it was not asked about can go
+   unread without being :unruled — so the second reading would clear it unread.
+
+   A reading is a second one when a confirmation stands before it at the key it was read at
    (`standing`, taken at that key, so only when the record read one tree), or when an earlier quiet
-   round of this run confirmed the same id of the same record (`carried`)."
+   round of this run read the same id of the same record (`carried`)."
   [record holds? {:keys [standing settled carried prior asked unread-amendment?]}]
   (if-not (:format record)
     record
-    (let [confirmed (settled/checked-confirmations record)
-          found     (into #{} (keep :claim-id) (:findings record))
+    (let [readings  (into (settled/checked-confirmations record) (:owed record))
+          found     (into #{} (mapcat refuted-ids) (:findings record))
           overrides (vec (for [[id {:keys [ws-id] n :seq}] (sort-by key settled)
                                :when (found id)]
                            {:id id :seq n :ws-id ws-id}))
           paired    (into (set carried) (when (:code-identity record) (keys standing)))
           holds     (holds? record)
-          once      (when holds (vec (sort (filter (set asked) (remove paired confirmed)))))
+          once      (when holds (vec (sort (filter (set asked) (remove paired readings)))))
           overturns (vec (for [[id {:keys [ws-id] n :seq}] (sort-by key prior)
-                               :when (confirmed id)]
+                               :when (readings id)]
                            {:id id :seq n :ws-id ws-id}))]
       (cond-> record
         (seq once)                       (assoc :read-once once)
@@ -4115,28 +4132,29 @@
     (boolean (and (seq amended) (or (nil? read-at) (<= read-at (apply max amended)))))))
 
 (defn- read-once?
-  "Would `record` have ended the run clean, but on a first reading — of a subject, or of an
-   amendment — so the run reads it again (`second-reading`)?"
+  "Would `record` have ended the run — held, proceeded, or stopped for a person — but on a first
+   reading of a subject or of an amendment, so the run reads it again (`second-reading`)?"
   [record]
   (boolean (or (seq (:read-once record)) (:amendment-read-once record))))
 
 (defn- second-reading
   "A round that would have ended the run clean on a first reading (`read-once?`). The run goes on to
-   another judgement with nothing amended; the subjects it confirmed once are not settled, so the
+   another judgement with nothing amended; the subjects it read once are not settled, so the
    next judge is handed them again, cold — it is not told it is a second reading — and a subject it
-   confirms is paired, one it leaves without a ruling is :unruled. What this round confirmed is
-   carried for the pairing a tree with no identity cannot get from the ledger, and the round it was
+   confirms or holds :owed is paired, one it leaves without a ruling is :unruled. What this round
+   read is carried for the pairing the ledger cannot give (`carried-readings`), and the round it was
    read in, so an amendment is read a second time and not a third (`unread-amendment?`). Bounded:
-   each such round pairs what the one before confirmed, so it recurs only for a subject no earlier
-   quiet round confirmed, and the engine's cap holds either way."
+   each such round pairs what the one before read, so it recurs only for a subject no earlier
+   quiet round read, and the engine's cap holds either way."
   [ctx subject record]
   (-> ctx
       (assoc :control :next-round)
       (assoc-in [:carry :quiet]
                 {:seq       (:seq subject)
                  :iter      (:iter ctx)
-                 :confirmed (into (set (carried-readings ctx subject))
-                                  (settled/checked-confirmations record))})))
+                 :read      (-> (set (carried-readings ctx subject))
+                                (into (settled/checked-confirmations record))
+                                (into (:owed record)))})))
 
 (defn- run-judge-stage
   [ctx]
@@ -4574,6 +4592,27 @@
   [statuses {:keys [check]}]
   (not (#{:broken :underivable} (get statuses check))))
 
+(defn- for-person?
+  "Whether `f`, a finding a design round hands on from `decision` — a broken check, or a finding
+   carried under its claim (`claim-finding?`) — is a person's to answer rather than an amender's to
+   repair. A broken check is the person's when every finding filed under it is, and when none is: a
+   check broken with no case behind it names nothing an amender could repair."
+  [decision f]
+  (if (:status f)
+    (every? :for-person (filter #(= (:check f) (:check %)) (:findings decision)))
+    (boolean (:for-person f))))
+
+(defn- asks-only?
+  "Whether `decision` stops for a person with nothing an amender could repair first: it recommends
+   :ask and every broken check and claim finding is the person's (`for-person?`). Such a round ends
+   the run as a proceed does, so it rests on two readings as a proceed does (`with-readings`)."
+  [decision]
+  (let [statuses (check-statuses decision)]
+    (and (= :ask (:recommend decision))
+         (every? #(for-person? decision %)
+                 (concat (broken-checks decision)
+                         (filter #(claim-finding? statuses %) (:findings decision)))))))
+
 (defn- refuted-claims
   "The claims a design decision found against with no check broken — a record contradicting itself
    or a claim it rests on, a defect under none of the four derivations (`claim-finding?`) — by claim
@@ -4906,7 +4945,7 @@
                      :label (str "design-decision-round-" (:iter ctx))
                      :disputes (disputes-for-judge (:history ctx))})
                    (stamp-run (:config ctx))
-                   (with-readings report/proceeds?
+                   (with-readings #(or (report/proceeds? %) (asks-only? %))
                                   {:standing standing :settled settled :prior prior
                                    :carried (carried-readings ctx design)
                                    :asked asked
@@ -4939,9 +4978,10 @@
       (with-appended (assoc ctx :record record :status (:outcome record))
                      (append! ledger record))
 
-      ;; Would proceed, on claims it read once or on an amendment's first reading: appended as the
-      ;; reading it is — it does not proceed, so it clears nothing — and read again before a person
-      ;; is asked.
+      ;; Would proceed, or stop for a person over nothing derivable (`asks-only?`), on claims it read
+      ;; once or on an amendment's first reading: appended as the reading it is — it does not
+      ;; proceed, so it clears nothing — and read again before a person is asked, so a person is not
+      ;; asked over a derivable defect one judge missed.
       (read-once? record)
       (let [answer (append! ledger record)]
         (with-appended (second-reading (assoc ctx :record record :findings []
@@ -5007,11 +5047,6 @@
                                              (seq (evidence-of %)) (assoc :evidence (evidence-of %))))
                                   (broken-checks record))
                             claim-findings)
-            ;; A broken check is the person's when every finding filed under it is, and when none
-            ;; is: a check broken with no case behind it names nothing an amender could repair.
-            for-person? (fn [f] (if (:status f)
-                                  (every? :for-person (filed f))
-                                  (:for-person f)))
             disputed?   #(>= (:disputed-n %) 2)]
         (cond
           ;; The judge's own stop for a person. What reaches the amender first is only what the
@@ -5020,7 +5055,7 @@
           ;; derivable finding already objected to twice, and the round stops for the person
           ;; holding every finding it made.
           (= :ask (:recommend record))
-          (let [derivable (filterv (complement for-person?) findings)]
+          (let [derivable (filterv #(not (for-person? record %)) findings)]
             (if (and (seq derivable) (not-any? disputed? derivable))
               (with-appended (assoc ctx :record record :findings derivable
                                     :underivable (underivable-checks record))
@@ -5090,7 +5125,8 @@
    or baseline ids :relation-unruled, does not proceed: it is judged once more, and still unruled it escalates
    :unruled. Nor does one that would proceed on a claim it confirmed on a first
    reading: it is appended :read-once and judged again (`second-reading`), so a
-   proceed rests on two consecutive clean readings. Everything else is another
+   proceed rests on two consecutive clean readings — and so does an :ask with
+   nothing derivable, the other round that ends the run. Everything else is another
    round.
 
    What reaches the amender is every finding the round made, whether it broke one

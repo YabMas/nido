@@ -1342,15 +1342,16 @@
     (is (= [{:id "invoice-resums" :reason "its evidence is a production log"}] (:unchecked r)))
     (is (ledger-report/review-holds? r) "a declared gap is a ruling, and visible where the review is read")))
 
-(deftest a-subject-both-found-against-and-confirmed-has-been-found
-  ;; An insufficient finding dropped its claim-id, so a judge that both found against an id and
-  ;; confirmed it left the id settled by the very judgement that found against it.
+(deftest a-gap-keeps-the-claim-it-names
+  ;; An insufficient finding dropped its claim-id, so a judge that both filed a gap against an id and
+  ;; confirmed it left the id settled by the very judgement that named it (`settled/names?` reads the
+  ;; claim-id). A gap refutes nothing, so the confirmation itself stands beside it.
   (let [r (reviewed {:verdict "insufficient" :reason "gap" :unchecked []
                      :confirmed (mapv read-at ["shape" "composition" "mod-the-order-aggregate" "invoice-resums"])
                      :findings [{:claim-id "[shape]" :blocks "relation-honest" :cites ["the shape"]
                                  :claim "c" :needs "n" :evidence []}]})]
     (is (= "shape" (:claim-id (first (:findings r)))))
-    (is (not (some #{"shape"} (:confirmed r))))
+    (is (some #{"shape"} (:confirmed r)) "a gap asks for more record and doubts no claim")
     (is (nil? (:unruled r)) "a finding is a ruling")))
 
 (deftest a-review-keeps-only-the-identities-its-subjects-rest-on
