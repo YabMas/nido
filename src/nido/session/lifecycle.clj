@@ -32,6 +32,7 @@
    [clojure.string :as str]
    [nido.platform.config :as config]
    [nido.platform.core :as core]
+   [nido.platform.lock :as lock]
    [nido.session.engine :as engine]
    [nido.session.failure :as failure]
    [nido.session.launcher :as launcher]
@@ -545,6 +546,57 @@
                             e)
                    e)))))))
 
+;; ---------------------------------------------------------------------------
+;; One lifecycle verb per session at a time
+;; ---------------------------------------------------------------------------
+
+(def ^:private session-wait-ms
+  "How long a verb waits for another verb on the same session before refusing.
+   Long enough to outlast a cold `up` (clone + JVM boot + app start), so a
+   second caller waits rather than being refused."
+  (* 15 60 1000))
+
+(defonce ^:private local-locks (atom {}))
+
+(defn- local-lock ^java.util.concurrent.locks.ReentrantLock [instance-id]
+  (get (swap! local-locks update instance-id
+              #(or % (java.util.concurrent.locks.ReentrantLock.)))
+       instance-id))
+
+(defn- with-session-lock
+  "Run `f` holding the session's lifecycle lock, waiting while another verb
+   holds it. Throws when the wait runs out. The throw is a refusal, so it is
+   never kept as a start failure.
+
+   Every verb that starts or stops services takes this lock. A start rolls back
+   every service it started when it fails: it stops the session's Postgres on
+   its PGDATA and deletes the nido-written config file. Two overlapping verbs
+   share that PGDATA and that file, so the first one's rollback tears them down
+   under the second. The second then boots an app with no DB and no local.edn.
+   An `up` that waits instead finds the session running and is a no-op.
+
+   The lock has two layers. A thread-reentrant in-process lock covers the TUI
+   and the daemon, which run verbs on several threads of one process. A file
+   lock covers separate bb processes. `nido.platform.lock` treats every thread
+   of the owning pid as the holder, so it cannot serialize threads on its own.
+   It is taken only at the outermost hold, because the file lock's release is
+   not counted: a nested verb (restart! -> down!) would drop it early."
+  [instance-id verb f]
+  (let [l (local-lock instance-id)]
+    (when-not (.tryLock l session-wait-ms java.util.concurrent.TimeUnit/MILLISECONDS)
+      (throw (ex-info (str "Another " instance-id " lifecycle verb in this process is still running")
+                      {:instance-id instance-id :verb verb :waited-ms session-wait-ms})))
+    (try
+      (if (> (.getHoldCount l) 1)
+        (f)
+        (lock/with-lock* (str "session-" instance-id) (str (name verb) " " instance-id)
+          {:wait-ms session-wait-ms
+           :on-wait (fn [{:keys [label pid]}]
+                      (core/log-step (str "Waiting for `" label "` (pid " pid
+                                          ") to finish before " (name verb) "...")))}
+          f))
+      (finally (.unlock l)))))
+
 (defn ^{:malli/schema [:=> [:cat :string :map] :map]}
   session-coords
   "Resolve {:wt-path :instance-id} for a named session. The instance-id is the
@@ -597,40 +649,45 @@
    Worktree creation routes by source-repo VCS: jj-colocated → `jj
    workspace add`; plain git → `git worktree add`."
   [name opts]
-  (let [{:keys [project-name project-dir wt-path branch base] :as ctx} (with-context name opts)
-        profile (effective-profile project-name opts)
-        existed? (fs/exists? wt-path)]
-    (keeping-failure
-     :up name opts ctx existed?
+  (let [{:keys [project-name project-dir wt-path branch base instance-id] :as ctx}
+        (with-context name opts)
+        profile (effective-profile project-name opts)]
+    (with-session-lock
+     instance-id :up
      (fn []
-       (cond
-         (and existed? (jj-worktree-poisoned? wt-path))
-         (do
-           (core/log-step (str "Worktree at " wt-path " is poisoned (empty working copy, @ on the root commit) — recreating."))
-           (remove-jj-workspace! project-dir wt-path branch branch false) ; forget + rm dir; KEEP the bookmark (it's correctly placed)
-           (create-jj-workspace! project-dir wt-path branch base))
+       ;; Read under the lock: a verb we waited for may have just created it.
+       (let [existed? (fs/exists? wt-path)]
+         (keeping-failure
+          :up name opts ctx existed?
+          (fn []
+            (cond
+              (and existed? (jj-worktree-poisoned? wt-path))
+              (do
+                (core/log-step (str "Worktree at " wt-path " is poisoned (empty working copy, @ on the root commit) — recreating."))
+                (remove-jj-workspace! project-dir wt-path branch branch false) ; forget + rm dir; KEEP the bookmark (it's correctly placed)
+                (create-jj-workspace! project-dir wt-path branch base))
 
-         existed?
-         (core/log-step (str "Worktree already exists at " wt-path " — starting session."))
+              existed?
+              (core/log-step (str "Worktree already exists at " wt-path " — starting session."))
 
-         (= :symlink (-> profile :worktree :strategy))
-         (create-symlink-worktree! wt-path (-> profile :worktree :target))
+              (= :symlink (-> profile :worktree :strategy))
+              (create-symlink-worktree! wt-path (-> profile :worktree :target))
 
-         (jj-source-repo? project-dir)
-         (create-jj-workspace! project-dir wt-path branch base)
+              (jj-source-repo? project-dir)
+              (create-jj-workspace! project-dir wt-path branch base)
 
-         :else
-         (create-git-worktree! project-dir wt-path branch base))
-       (engine/start-session! wt-path (assoc opts :session-name name :profile profile))))))
+              :else
+              (create-git-worktree! project-dir wt-path branch base))
+            (engine/start-session! wt-path (assoc opts :session-name name :profile profile)))))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   down!
   "Stop the named session. Worktree and on-disk state are preserved."
   [name opts]
-  (let [{:keys [wt-path]} (with-context name opts)]
+  (let [{:keys [wt-path instance-id]} (with-context name opts)]
     (when-not (fs/exists? wt-path)
       (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
-    (engine/stop-session! wt-path)))
+    (with-session-lock instance-id :down #(engine/stop-session! wt-path))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   restart!
@@ -638,10 +695,13 @@
    Used by the dashboard's restart button. Not exposed as a bb task —
    `bb nido:session:down` followed by `:up` covers the CLI case."
   [name opts]
-  (down! name opts)
-  (let [{:keys [wt-path] :as ctx} (with-context name opts)]
-    (keeping-failure :restart name opts ctx true
-                     #(engine/start-session! wt-path (assoc opts :session-name name)))))
+  (let [{:keys [wt-path instance-id] :as ctx} (with-context name opts)]
+    (with-session-lock
+     instance-id :restart
+     (fn []
+       (down! name opts)
+       (keeping-failure :restart name opts ctx true
+                        #(engine/start-session! wt-path (assoc opts :session-name name)))))))
 
 (defn- effective-pg-mode
   "Resolved PG mode for a session: the per-session override if set, else the
@@ -674,17 +734,19 @@
                       {:project-name project-name :session name})))
     (when-not (fs/exists? wt-path)
       (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
-    (keeping-failure
-     :reset name opts ctx true
-     (fn []
-       (try (engine/stop-session! wt-path)
-            (catch Exception e
-              (core/log-step (str "warning: stop during reset: " (ex-message e)))))
-       (let [pg-data (state/pg-data-dir instance-id)]
-         (when (fs/exists? pg-data)
-           (core/log-step (str "Dropping PGDATA at " pg-data))
-           (fs/delete-tree pg-data)))
-       (engine/start-session! wt-path (assoc opts :session-name name))))))
+    (with-session-lock
+     instance-id :reset
+     #(keeping-failure
+       :reset name opts ctx true
+       (fn []
+         (try (engine/stop-session! wt-path)
+              (catch Exception e
+                (core/log-step (str "warning: stop during reset: " (ex-message e)))))
+         (let [pg-data (state/pg-data-dir instance-id)]
+           (when (fs/exists? pg-data)
+             (core/log-step (str "Dropping PGDATA at " pg-data))
+             (fs/delete-tree pg-data)))
+         (engine/start-session! wt-path (assoc opts :session-name name)))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   isolate!
@@ -695,14 +757,17 @@
   (let [{:keys [wt-path instance-id] :as ctx} (with-context name opts)]
     (when-not (fs/exists? wt-path)
       (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
-    (state/write-pg-mode-override! instance-id :isolated)
-    (keeping-failure
-     :isolate name opts ctx true
+    (with-session-lock
+     instance-id :isolate
      (fn []
-       (try (engine/stop-session! wt-path)
-            (catch Exception e
-              (core/log-step (str "warning: stop during isolate: " (ex-message e)))))
-       (engine/start-session! wt-path (assoc opts :session-name name))))))
+       (state/write-pg-mode-override! instance-id :isolated)
+       (keeping-failure
+        :isolate name opts ctx true
+        (fn []
+          (try (engine/stop-session! wt-path)
+               (catch Exception e
+                 (core/log-step (str "warning: stop during isolate: " (ex-message e)))))
+          (engine/start-session! wt-path (assoc opts :session-name name))))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   share!
@@ -713,18 +778,21 @@
   (let [{:keys [wt-path instance-id] :as ctx} (with-context name opts)]
     (when-not (fs/exists? wt-path)
       (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
-    (state/clear-pg-mode-override! instance-id)
-    (keeping-failure
-     :share name opts ctx true
+    (with-session-lock
+     instance-id :share
      (fn []
-       (try (engine/stop-session! wt-path)
-            (catch Exception e
-              (core/log-step (str "warning: stop during share: " (ex-message e)))))
-       (let [pg-data (state/pg-data-dir instance-id)]
-         (when (fs/exists? pg-data)
-           (core/log-step (str "Dropping private PGDATA at " pg-data))
-           (fs/delete-tree pg-data)))
-       (engine/start-session! wt-path (assoc opts :session-name name))))))
+       (state/clear-pg-mode-override! instance-id)
+       (keeping-failure
+        :share name opts ctx true
+        (fn []
+          (try (engine/stop-session! wt-path)
+               (catch Exception e
+                 (core/log-step (str "warning: stop during share: " (ex-message e)))))
+          (let [pg-data (state/pg-data-dir instance-id)]
+            (when (fs/exists? pg-data)
+              (core/log-step (str "Dropping private PGDATA at " pg-data))
+              (fs/delete-tree pg-data)))
+          (engine/start-session! wt-path (assoc opts :session-name name))))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   destroy!
@@ -743,31 +811,34 @@
   [name opts]
   (let [{:keys [project-dir wt-path branch]} (with-context name opts)
         delete-branch? (boolean (or (:delete-branch? opts) (:delete-branch opts)))
-        instance-id (engine/resolve-instance-id wt-path)
-        ;; Read persisted profile BEFORE dropping state-dir (profile lives inside it).
-        profile (engine/read-profile-for-session wt-path)]
-    (try
-      (when (fs/exists? wt-path)
-        (engine/stop-session! wt-path))
-      (catch Exception e
-        (core/log-step (str "warning: stop-session error: " (ex-message e)))))
-    (let [state-dir (state/instance-state-dir instance-id)]
-      (when (fs/exists? state-dir)
-        (core/log-step (str "Dropping instance state-dir at " state-dir))
-        (fs/delete-tree state-dir)))
-    ;; Links live outside the state-dir (they have to survive reclaim, which
-    ;; eats it an hour after `down`), so destroy is the one verb that has to say
-    ;; so out loud. Without this they would outlive the session that owned them.
-    (links/delete-links! instance-id)
-    (cond
-      (= :symlink (-> profile :worktree :strategy))
-      (remove-symlink-worktree! wt-path)
+        instance-id (engine/resolve-instance-id wt-path)]
+    (with-session-lock
+     instance-id :destroy
+     (fn []
+       ;; Read persisted profile BEFORE dropping state-dir (profile lives inside it).
+       (let [profile (engine/read-profile-for-session wt-path)]
+         (try
+           (when (fs/exists? wt-path)
+             (engine/stop-session! wt-path))
+           (catch Exception e
+             (core/log-step (str "warning: stop-session error: " (ex-message e)))))
+         (let [state-dir (state/instance-state-dir instance-id)]
+           (when (fs/exists? state-dir)
+             (core/log-step (str "Dropping instance state-dir at " state-dir))
+             (fs/delete-tree state-dir)))
+         ;; Links live outside the state-dir (they have to survive reclaim, which
+         ;; eats it an hour after `down`), so destroy is the one verb that has to say
+         ;; so out loud. Without this they would outlive the session that owned them.
+         (links/delete-links! instance-id)
+         (cond
+           (= :symlink (-> profile :worktree :strategy))
+           (remove-symlink-worktree! wt-path)
 
-      (and (fs/exists? wt-path) (jj-workspace? wt-path))
-      (remove-jj-workspace! project-dir wt-path branch branch delete-branch?)
+           (and (fs/exists? wt-path) (jj-workspace? wt-path))
+           (remove-jj-workspace! project-dir wt-path branch branch delete-branch?)
 
-      :else
-      (remove-git-worktree! project-dir wt-path branch delete-branch?))))
+           :else
+           (remove-git-worktree! project-dir wt-path branch delete-branch?)))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   status
