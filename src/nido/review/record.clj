@@ -4246,8 +4246,13 @@
         [project ws-id :as ledger] (ledger-of (:config ctx))
         subject (or target (when project (ws/latest-entry project ws-id :baseline)))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) subject)
-        {:keys [standing settled prior]} (judge-inputs project ws-id :baseline subject reading subject run-id
-                                                       (get-in ctx [:carry :stale]))
+        ;; A re-survey's trigger (`resurvey-refutations`), while the record it refuted is the one
+        ;; read: never settled, so no round can answer it without a judge, and shown that judge as
+        ;; what a confirmation would overturn. Once amended, the record is not the one it refuted.
+        refuted (when-not (get-in ctx [:carry :under-repair]) (:refuted (:config ctx)))
+        {:keys [standing settled prior]} (-> (judge-inputs project ws-id :baseline subject reading subject run-id
+                                                           (concat (get-in ctx [:carry :stale]) (keys refuted)))
+                                             (update :prior merge refuted))
         reused  (standing-judgement ctx ledger :baseline-review :baseline-seq subject reading
                                     #(and (seq (:findings %)) (not (report/review-holds? %))))
         asked   (cond reused #{} subject (owed-rulings subject settled))
@@ -4914,9 +4919,11 @@
    relation-honest ruling, printed beside each baseline id the amender has to hold :breaks to.
    `:refuted-running` is `refuted-running` over the design's lineage, this round included: a subject
    a line refutes that it counts at `withdrawable-after` or more is handed over as spent, and may not
-   be reworded at the same strength again."
+   be reworded at the same strength again. `:resurvey-outcome` (`resurvey-outcome`) is what a
+   :resurvey's nested loop did to the premise: only a :corrected one may be called corrected, and
+   only it moves the citation."
   [{:keys [design baseline recommend reason asks raised findings rulings out-path declared? check-cmd
-           settled refuted-running]}]
+           settled refuted-running resurvey-outcome]}]
   (str
    "A read-only judge derived what could be derived about this DESIGN record,\n"
    "before any code is written, and it did not come out clean.\n\n"
@@ -4928,26 +4935,44 @@
               (str "It says the DECOMPOSITION does not hold. Re-cut it. The claims may be\n"
                    "right; how the change is split into layers or phases is what is wrong,\n"
                    "and restating the claims will not fix it.\n\n"))
-     :resurvey (str "It said the PREMISE was wrong — and the baseline has since been\n"
-                    "re-run and now holds against the code. The corrected baseline is\n"
-                    "below.\n\n"
-                    "Re-state this design against it. That is not a re-citation: the\n"
-                    "design's claims were made about a reading of the area that has\n"
-                    "changed, so each one has to be checked against the new baseline and\n"
-                    "may not survive it. "
-                    ;; The number, not "the corrected baseline". The record below
-                    ;; is printed unstamped — :seq is the ledger's and a record
-                    ;; carrying one is refused on write — so an amender told to
-                    ;; cite it by :seq and shown no :seq anywhere is being asked
-                    ;; to guess the one field the citation is checked against.
-                    (if-let [n (:seq baseline)]
-                      (str "Set :baseline :seq to " n " — that is the entry the\n"
-                           "corrected baseline was appended as.\n\n")
-                      "Point :baseline :seq at the corrected baseline.\n\n")
-                    "If a claim no longer holds under the corrected baseline, change it.\n"
-                    "Re-pointing the citation while leaving the claims untouched asserts\n"
-                    "the design still stands on a premise nobody has re-checked it\n"
-                    "against, which is the failure this whole round exists to catch.\n\n")
+     :resurvey (case resurvey-outcome
+                 :held
+                 (str "It said the PREMISE was wrong. The baseline was re-surveyed: a judge read it\n"
+                      "against the code — every baseline claim a finding below names among what it\n"
+                      "was asked — and it held as written. Nothing was corrected; the baseline below\n"
+                      "is the one the design already cites, so keep :baseline :seq where it is.\n\n"
+                      "The findings below still stand against this design. Where one is right about\n"
+                      "the design, repair the design. Where one says a baseline claim is false, the\n"
+                      "re-survey's judge read that claim and upheld it: dispute the numbered line,\n"
+                      "citing the re-survey's review.\n\n")
+                 :carried
+                 (str "It said the PREMISE was wrong, and the re-survey launched NO judge: every\n"
+                      "subject of the baseline was settled and no finding named one of its claims,\n"
+                      "so an earlier review was carried forward. The baseline below has NOT been\n"
+                      "re-checked against this round's findings, and does not hold because of them.\n\n"
+                      "Repair the design where a finding is about the design. Where one is about the\n"
+                      "baseline, dispute the numbered line saying which baseline claim it falsifies:\n"
+                      "the baseline has to be re-surveyed by hand, and no amendment of the design can\n"
+                      "make it true.\n\n")
+                 (str "It said the PREMISE was wrong — and the baseline has since been\n"
+                      "re-surveyed and corrected. The corrected baseline is below.\n\n"
+                      "Re-state this design against it. That is not a re-citation: the\n"
+                      "design's claims were made about a reading of the area that has\n"
+                      "changed, so each one has to be checked against the new baseline and\n"
+                      "may not survive it. "
+                      ;; The number, not "the corrected baseline". The record below
+                      ;; is printed unstamped — :seq is the ledger's and a record
+                      ;; carrying one is refused on write — so an amender told to
+                      ;; cite it by :seq and shown no :seq anywhere is being asked
+                      ;; to guess the one field the citation is checked against.
+                      (if-let [n (:seq baseline)]
+                        (str "Set :baseline :seq to " n " — that is the entry the\n"
+                             "corrected baseline was appended as.\n\n")
+                        "Point :baseline :seq at the corrected baseline.\n\n")
+                      "If a claim no longer holds under the corrected baseline, change it.\n"
+                      "Re-pointing the citation while leaving the claims untouched asserts\n"
+                      "the design still stands on a premise nobody has re-checked it\n"
+                      "against, which is the failure this whole round exists to catch.\n\n"))
      (str "It says the RECORD has a derivable defect. Repair the record — the\n"
           "commitment may well be sound, and its decomposition with it.\n\n"))
    "Your job is to make the record TRUE and coherent. It is NOT to make the\n"
@@ -5272,8 +5297,41 @@
    :run
    run-design-judge-stage})
 
+(defn- resurvey-refutations
+  "What the design round in `ctx` found against `cited`'s own claims, as `settled/prior-findings`
+   shapes it — `{id {:ws-id :seq :finding :restated? false}}` — for the nested baseline loop's
+   `:refuted`. Only ids `cited` carries as subjects: a finding about the design's own claims is not
+   the baseline's to answer. `:seq` is the decision that found it, nil when none was appended."
+  [ctx ws-id cited]
+  (let [subjects (settled/subjects cited)
+        n        (or (:appended-seq ctx) (:reused-seq ctx))]
+    (into {} (for [f  (:findings ctx)
+                   id (:claim-ids f)
+                   :when (contains? subjects id)]
+               [id {:ws-id ws-id :seq n :restated? false
+                    :finding {:claim-id id
+                              :claim    (or (:claim f) (:note f))
+                              :cites    (vec (:cites f))
+                              :evidence (vec (:evidence f))}}]))))
+
+(defn- resurvey-outcome
+  "What a :sufficient nested baseline loop `out` did to the premise: :corrected when it appended a
+   baseline, :held when a judge read the cited one and it stood, :carried when the run ended on a
+   review no judge reached (`carried-review`) — the premise was not re-checked at all."
+  [out]
+  (cond
+    (get-in out [:carry :under-repair])  :corrected
+    (get-in out [:record :carried-from]) :carried
+    :else                                :held))
+
 (defn- resurvey!
   "Repair the premise by running the baseline loop, then come back.
+
+   The nested loop is handed what this round found against the cited baseline's claims
+   (`resurvey-refutations`), which it may not leave settled: a re-survey ordered over a claim must
+   put that claim to a judge, whatever its confirmations said before. What came of it travels as
+   `:resurvey-outcome`, because the amender is told different things for a corrected premise, one
+   a judge upheld, and one nobody read.
 
    The nested loop emits nothing into this run's report: its rounds are not this
    run's rounds, and folding them in would renumber both. What it does write is
@@ -5317,6 +5375,7 @@
                                   :reviewer reviewer
                                   :emit (fn [_])
                                   :baseline    cited
+                                  :refuted     (not-empty (resurvey-refutations ctx ws-id cited))
                                   :pipeline    baseline-pipeline
                                   :judged-after :judge
                                   :finding-key baseline-finding-key
@@ -5335,6 +5394,7 @@
           ;; appended last, which is how the citation came to point at a baseline
           ;; of a different area in the first place.
           (assoc ctx :resurveyed (:status out)
+                 :resurvey-outcome (resurvey-outcome out)
                  :resurveyed-baseline (or (:under-repair (:carry out)) cited))
           ;; The nested failure's DETAIL travels with its status. Without it the
           ;; terminal says :resurvey-amend-invalid and stops — the one shape a
@@ -5369,6 +5429,7 @@
       :check-cmd (when (and project ws-id) (amend-check-cmd project ws-id :design out-path))
       :settled (:settled ctx)
       :refuted-running (:refuted-running ctx)
+      :resurvey-outcome (:resurvey-outcome ctx)
       :declared? declared?})))
 
 (defn- amend-design!
@@ -5425,6 +5486,17 @@
           (cond
             (nil? answer)
             (assoc ctx :control :stop :status :amend-unreadable)
+
+            ;; Nothing moved: the design is unamended, the baseline was carried rather than read,
+            ;; and every finding is objected to. The next judge would read the same design against
+            ;; the same baseline at the same tree and find the same thing, so the run ends here.
+            (and (nil? record) (= :carried (:resurvey-outcome ctx)) (seq (:findings ctx))
+                 (every? (into #{} (map :key) disputes)
+                         (map design-finding-base-key (:findings ctx))))
+            (assoc ctx :disputes disputes :retreats []
+                   :history (conj (vec (:history ctx)) (entry [] false))
+                   :control :stop :status :no-progress
+                   :unfixable (vec (distinct (map design-finding-key (:findings ctx)))))
 
             (and (nil? record) (seq disputes))
             (assoc ctx :disputes disputes :retreats []

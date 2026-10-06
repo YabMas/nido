@@ -1936,6 +1936,33 @@
         (is (nil? (get-in out [:carry :stale]))
             "and only once: the round after reads the ledger's settlement as it then stands")))))
 
+(deftest a-claim-a-re-survey-was-ordered-over-is-put-to-a-judge
+  ;; Three design runs on one workstream refuted c1-shaped baseline claims and ordered a re-survey,
+  ;; and each nested loop found every subject settled, carried an earlier review with no judge, and
+  ;; came back :sufficient — so the refutation that ordered it was never read by anyone.
+  (let [refuted {"c1" {:ws-id "ws-1" :seq 9 :restated? false
+                       :finding {:claim-id "c1" :claim "a second summing path exists"}}}
+        judge   (fn [c]
+                  (let [seen (atom nil)]
+                    (with-redefs [record/baseline-review! (fn [opts] (reset! seen opts)
+                                                            {:format :baseline-review :verdict :sufficient :reason "ok"})
+                                  record/append! (fn [_ _] nil)
+                                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                                  ws/latest-entry (fn [_ _ _] a-baseline)
+                                  settled/code-identity (fn [_] "tree-a")
+                                  settled/ledgers (fn [_ _ _] [(assoc settling-ledger :ws-id "ws-1")])]
+                      (run record/judge-stage c)
+                      @seen)))
+        seen    (judge (ctx :config {:cwd "/w" :run-id "r1-resurvey-1" :refuted refuted}))]
+    (is (not (contains? (:settled seen) "c1"))
+        "a settled confirmation cannot answer the refutation the re-survey exists to read")
+    (is (= "a second summing path exists" (get-in seen [:prior "c1" :finding :claim]))
+        "and the judge is shown what was found, so a confirmation is one that answers it")
+    (testing "once the run has amended the record, the refutation was about another record"
+      (let [seen (judge (ctx :config {:cwd "/w" :run-id "r1-resurvey-1" :refuted refuted}
+                             :carry {:under-repair (assoc a-baseline :seq 12)}))]
+        (is (not= "a second summing path exists" (get-in seen [:prior "c1" :finding :claim])))))))
+
 (deftest the-amenders-are-told-how-to-name-a-stale-sibling
   (is (str/includes? (record/amend-prompt {:baseline a-baseline :findings [a-finding] :out-path "/x"})
                      ":stale"))

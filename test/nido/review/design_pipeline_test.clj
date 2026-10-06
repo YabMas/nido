@@ -1021,13 +1021,13 @@
 (defn- with-resurvey
   "Stub every seam the two-step re-survey touches. `amends` stands in for what
    the amender wrote after the nested loop came back."
-  [{:keys [nested amends corrected] :or {corrected corrected-baseline}} c]
+  [{:keys [nested amends corrected out] :or {corrected corrected-baseline}} c]
   (let [prompt (atom nil) appended (atom nil)]
     ;; In :carry, where the engine actually leaves it. Stubbing the old
     ;; top-level shape here is why this test passed against an engine that
     ;; dropped the key every round: the stub asserted a contract nothing kept.
-    (with-redefs [rloop/run-loop (fn [_] {:status nested
-                                          :carry {:under-repair corrected}})
+    (with-redefs [rloop/run-loop (fn [_] (or out {:status nested
+                                                  :carry {:under-repair corrected}}))
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ kind]
                                     (if (= :baseline kind) corrected-baseline a-design))
@@ -1378,6 +1378,80 @@
       (#'record/resurvey! (ctx :config {:cwd "/w" :run-id "design-loop-7"}))
       (is (= "design-loop-7" (:within-run @seen)))
       (is (str/starts-with? (:run-id @seen) "design-loop-7-resurvey-")))))
+
+;; ── A re-survey that cannot pass by carrying ────────────────────────────────
+;;
+;; Three runs on one workstream refuted a baseline claim, re-surveyed, and had the nested loop find
+;; every subject settled and carry an old review with no judge. The amender was then told the
+;; baseline "now holds", and the next round re-found the refutation verbatim.
+
+(def ^:private a-finding-against-c1
+  {:claim-ids ["c1"] :claim "the unlocked read answers nil while a fenced leg still holds the row"
+   :evidence ["src/x.clj:9"]})
+
+(deftest a-resurvey-hands-the-nested-loop-the-baseline-claims-it-refuted
+  (let [seen (atom nil)]
+    (with-redefs [stages/project+ws-from-cwd (constantly [:nido "ws-1"])
+                  ws/latest-entry            (constantly a-design)
+                  stages/discover-baseline   (constantly corrected-baseline)
+                  rloop/run-loop             (fn [cfg] (reset! seen cfg) {:status :no-progress})]
+      (#'record/resurvey! (ctx :config {:cwd "/w" :run-id "design-loop-7"}
+                               :appended-seq 14
+                               :findings [a-finding-against-c1
+                                          {:claim-ids ["design-own"] :claim "the design's own claim"}]))
+      (is (= #{"c1"} (set (keys (:refuted @seen))))
+          "only the cited baseline's claims: a finding about the design is not the baseline's to answer")
+      (is (= {:ws-id "ws-1" :seq 14} (select-keys (get-in @seen [:refuted "c1"]) [:ws-id :seq]))
+          "named as the decision that found it, so a judge confirming past it records an overturn")
+      (is (= ["src/x.clj:9"] (get-in @seen [:refuted "c1" :finding :evidence])))))
+  (testing "and nothing when the round named no claim of the baseline"
+    (let [seen (atom nil)]
+      (with-redefs [stages/project+ws-from-cwd (constantly [:nido "ws-1"])
+                    ws/latest-entry            (constantly a-design)
+                    stages/discover-baseline   (constantly corrected-baseline)
+                    rloop/run-loop             (fn [cfg] (reset! seen cfg) {:status :no-progress})]
+        (#'record/resurvey! (ctx :config {:cwd "/w" :run-id "design-loop-7"} :findings []))
+        (is (nil? (:refuted @seen)))))))
+
+(deftest the-amender-is-told-what-the-re-survey-actually-did
+  (let [prompt-for (fn [out]
+                     (second (with-resurvey {:out out}
+                                            (assoc (ctx :findings [a-finding-against-c1])
+                                                   :record (decision :resurvey)))))]
+    (testing "a baseline the nested loop appended is the corrected one"
+      (let [p (prompt-for {:status :sufficient :carry {:under-repair corrected-baseline}})]
+        (is (str/includes? p "re-surveyed and corrected"))
+        (is (str/includes? p "Set :baseline :seq to 11"))))
+    (testing "a judge that upheld the cited baseline corrected nothing, and is not said to have"
+      (let [p (prompt-for {:status :sufficient
+                           :record {:format :baseline-review :verdict :sufficient}})]
+        (is (not (str/includes? p "corrected baseline")))
+        (is (not (str/includes? p "now holds")))
+        (is (str/includes? p "keep :baseline :seq where it is"))))
+    (testing "a carried review is no reading at all"
+      (let [p (prompt-for {:status :sufficient
+                           :record {:format :baseline-review :verdict :sufficient :carried-from 52}})]
+        (is (str/includes? p "re-survey launched NO judge"))
+        (is (str/includes? p "re-surveyed by hand"))
+        (is (not (str/includes? p "now holds")))))))
+
+(deftest a-carried-resurvey-answered-only-by-disputes-ends-the-run-at-once
+  ;; Seen live: the next round read the same design, against the same baseline, at the same tree,
+  ;; and re-found the same finding — a full judge round spent before :no-progress could fire.
+  (let [dispute (fn [p] (spit p (pr-str {:disputes [{:finding 1 :because "the baseline is false here; re-survey it by hand"}]})))
+        round   (fn [out]
+                  (first (with-resurvey {:out out :amends dispute}
+                                        (assoc (ctx :findings [a-finding-against-c1])
+                                               :record (decision :resurvey)))))
+        carried (round {:status :sufficient
+                        :record {:format :baseline-review :verdict :sufficient :carried-from 52}})]
+    (is (= :no-progress (:status carried)))
+    (is (= :stop (:control carried)))
+    (is (seq (:unfixable carried)) "naming what it ended holding, as the engine's :no-progress does")
+    (is (= [false] (map :amended? (:history carried))) "the round is still recorded")
+    (testing "a re-survey a judge read goes on to be judged with the dispute in front of it"
+      (is (nil? (:status (round {:status :sufficient
+                                 :record {:format :baseline-review :verdict :sufficient}})))))))
 
 ;; ── What a run's rounds did ──────────────────────────────────────────────────
 
