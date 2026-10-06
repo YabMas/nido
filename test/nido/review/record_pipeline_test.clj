@@ -1469,19 +1469,25 @@
                                                            "canvas.other/unrelated" "x-1"}}))]
     (is (= {"canvas.order/aggregate" "agg-1"} (:subject-identities r)))))
 
-(deftest a-tree-that-moved-under-a-round-with-settled-subjects-appends-nothing
-  ;; Those subjects were settled against the tree read as the judge launched, and
-  ;; its judge did not read that tree throughout — so the verdict would cover
-  ;; subjects nobody checked against what it did read. No review; the answer is
-  ;; kept for the report.
-  (with-redefs [record/run-round! (fn [_] {:ok "{\"verdict\":\"sufficient\",\"reason\":\"ok\",\"confirmed\":[],\"findings\":[]}"})
+(deftest a-tree-that-moved-under-a-round-with-settled-subjects-keeps-its-answer-and-settles-nothing
+  ;; A moved tree only argues against banking the round forward — its settled subjects were
+  ;; settled against a tree the judge did not read throughout. Its findings and its rulings on
+  ;; its own checks are still a judgment of code, and refusing them sent the next run in blind
+  ;; to a refutation already paid for.
+  (with-redefs [record/run-round! (fn [_] {:ok (json/generate-string
+                                                 {:verdict "falsified" :reason "no" :unchecked []
+                                                  :confirmed [] :findings [{:claim-id "invoice-resums" :claim "c"
+                                                                            :cites ["x"] :evidence ["f.clj:1"]}]})})
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                 settled/code-identity (fn [_] "tree-b")]
     (let [r (record/baseline-review! {:cwd "/w" :run-id "r1" :baseline (assoc a-baseline :seq 3)
-                                      :settled {"c1" 2} :code-identity "tree-a"})]
-      (is (= :code-moved (:outcome r)))
-      (is (nil? (:format r)) "an outcome is never appended")
-      (is (= :sufficient (get-in r [:answer :verdict]))))))
+                                      :settled {"c1" 2} :code-identity "tree-a"
+                                      :subject-identities {"invoice-resums" "id-1"}})]
+      (is (= :baseline-review (:format r)) "the judgment reaches the ledger")
+      (is (= :falsified (:verdict r)))
+      (is (seq (:findings r)) "a refutation paid for is not thrown away")
+      (is (nil? (:code-identity r)) "no single tree was read, so nothing settles forward from it")
+      (is (nil? (:subject-identities r)) "identities are only the judge's beside a tree that held still"))))
 
 (deftest the-refused-answer-is-kept-in-the-persisted-report
   ;; Nothing was appended, so the report is the only place the judgment can be

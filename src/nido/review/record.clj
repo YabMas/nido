@@ -2262,10 +2262,10 @@
    project that declares a design, and only those the baseline's subjects rest on. Settled subjects
    are shown and are not checks; the review's ruling is held to its checks by `rule`, so a check the
    judge left without one is named under :unruled. `:prior` is what earlier runs found against
-   the subjects it checks (`prior-findings-block`). And a round handed
-   settled subjects whose tree moved appends nothing — it answers
-   {:outcome :code-moved :answer <the review>} — because those subjects were
-   settled against a tree its judge did not read throughout.
+   the subjects it checks (`prior-findings-block`). A round whose tree moved is still appended,
+   settled subjects or not: its findings and its rulings on its own checks are a judgment of
+   code, and only banking them forward needs the one tree it lacks — which the missing
+   `:code-identity` already withholds.
 
    Its claims' subjects are resolved against the declared design at the tree the
    judge reads before a judge is launched, and before either identity is read —
@@ -2307,16 +2307,8 @@
                       one-tree (when (= before after) before)
                       checks   (set (keys (apply dissoc (settled/subjects baseline) (keys settled))))
                       rests-on (settled/rested-on baseline baseline)]
-              (cond
-                (not (:format result)) result
-
-                (and (seq settled) (nil? one-tree))
-                {:outcome :code-moved
-                 :detail  (str "the tree changed while the judge read it, with " (count settled)
-                               " subject(s) outside its checks, so its answer was not appended")
-                 :answer  result}
-
-                :else
+              (if-not (:format result)
+                result
                 (let [kept (select-keys subject-identities rests-on)]
                   (cond-> (rule result checks asked)
                     one-tree                  (assoc :code-identity one-tree)
