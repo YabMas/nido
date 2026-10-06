@@ -2820,22 +2820,76 @@
    and was itself the next finding."
   2)
 
-(defn ^{:malli/schema [:=> [:cat [:sequential :map]] [:map-of :string :int]]}
-  refuted-running
-  "How many readings in a row have refuted each claim, counting back from its newest — `{claim-id n}`
-   for every id whose newest reading in `reviews`, oldest first, refuted it.
+(declare refuted-ids check-statuses claim-finding?)
 
-   A reading of a claim is a review that ruled on it: confirmed it, or filed a refutation under its
-   id. A review that did neither — the claim was settled, or left unruled — is no reading and
-   neither breaks nor extends a run; a confirmation ends one. A gap finding (:blocks) refutes
-   nothing, so it is no reading either."
-  [reviews]
-  (reduce (fn [runs {:keys [confirmed findings]}]
-            (let [refuted (into #{} (comp (remove :blocks) (keep :claim-id)) findings)]
-              (as-> runs rs
-                (apply dissoc rs (remove refuted confirmed))
-                (reduce #(update %1 %2 (fnil inc 0)) rs refuted))))
-          {} reviews))
+(defn- run-keys
+  "What one finding of a judgement counts against in `refuted-running`. A finding under a check the
+   judgement ruled broken (or underivable) counts against that check, keyed as the check keyword's
+   string — `\":goal-served\"`, which no slug can be — and not against the claim id the judge
+   anchored it to: one check broken over several scope questions is not one claim refuted that many
+   times. Any other finding counts against the claims it refutes (`refuted-ids`). A :for-person
+   finding is a question for a person, not a falsification, and counts against nothing."
+  [statuses f]
+  (cond
+    (:for-person f)                  []
+    (or (:blocks f) (:unsettled f))  []
+    (claim-finding? statuses f)      (refuted-ids f)
+    :else                            [(str (:check f))]))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map] [:sequential :map]] [:map-of :string :int]]}
+  refuted-running
+  "How many readings in a row have refuted each subject of `subject` — the record being judged —
+   counting back from its newest: `{id n}` for every id `subject` carries (its claims, modules,
+   observations and elements, and its derivation checks keyed as `run-keys` keys them) whose newest
+   reading in `reviews`, oldest first, refuted it. nil `subject` restricts nothing.
+
+   `reviews` must already be the subject's own lineage (`lineage-of`): an id is a slug, and the
+   same slug in another record's history is another claim.
+
+   A reading of a claim is a judgement that ruled on it: confirmed it, held it :owed, ruled it in a
+   relation ruling, or filed a refutation under it. One that did none — the claim was settled, or
+   left unruled — neither breaks nor extends a run; any of the others ends one, except that
+   - a confirmation on a first reading (:read-once) ends nothing until a second reading agrees,
+     since a refutation of that second reading is the run going on;
+   - an :owed ruling of an id `subject` lists under `:baseline :breaks` ends nothing, since what it
+     held is the code the design says it stops being true (`rule`).
+   A check's run is ended by the check ruled :held. A gap (:blocks), an :unsettled subject and a
+   :for-person question refute nothing (`run-keys`)."
+  [subject reviews]
+  (let [broken (into #{} (map slug) (get-in subject [:baseline :breaks]))
+        runs   (reduce (fn [runs {:keys [confirmed owed read-once findings relation-rulings] :as r}]
+                         (let [statuses (check-statuses r)
+                               refuted  (into #{} (mapcat #(run-keys statuses %)) findings)
+                               ended    (concat (remove (set read-once) confirmed)
+                                                (remove broken owed)
+                                                (map :id relation-rulings)
+                                                (keep (fn [[c s]] (when (= :held s) (str c))) statuses))]
+                           (as-> runs rs
+                             (apply dissoc rs (remove refuted ended))
+                             (reduce #(update %1 %2 (fnil inc 0)) rs refuted))))
+                       {} reviews)]
+    (if subject
+      (select-keys runs (concat (keys (settled/subjects subject))
+                                (map str (report/derivations-of subject))))
+      runs)))
+
+(defn- lineage-of
+  "The judgements of `judged` — `:baseline-review`s or `:design-decision`s on `ws-id`, keyed back to
+   what they judged by `seq-key` — whose judged record is `subject`'s own lineage: reachable from it
+   through :supersedes, or citing the same :intent. Every other record on the workstream is another
+   area or another goal, whatever ids it shares."
+  [project ws-id judged seq-key subject]
+  (let [kind   (case judged :baseline-review :baseline :design-decision :design)
+        intent (get-in subject [:intent :seq])
+        chain  (loop [d subject, seen #{}]
+                 (if (or (nil? d) (nil? (:seq d)) (seen (:seq d)))
+                   seen
+                   (recur (some->> (get-in d [:supersedes :seq]) (ws/entry-at-seq project ws-id))
+                          (conj seen (:seq d)))))
+        seqs   (into chain (when intent
+                             (keep #(when (= intent (get-in % [:intent :seq])) (:seq %))
+                                   (ws/entries-of project ws-id kind))))]
+    (filterv (comp seqs seq-key) (ws/entries-of project ws-id judged))))
 
 (defn- withdrawable
   "The claims of `baseline` that `findings` refute and `refuted-running` counts at
@@ -2847,7 +2901,7 @@
     (into (sorted-map)
           (keep (fn [id] (let [n (get refuted-running id 0)]
                            (when (and (claims id) (>= n withdrawable-after)) [id n]))))
-          (distinct (keep :claim-id (remove #(or (:blocks %) (:unsettled %)) findings))))))
+          (distinct (keep :claim-id (remove #(or (:blocks %) (:unsettled %) (:for-person %)) findings))))))
 
 (defn- withdrawal-block
   "What an amender is told about the claims in `spent` (`withdrawable`), or nil when there are none."
@@ -2979,10 +3033,12 @@
         moved?  (fn [[k fs]]
                   (let [a (site-of (get was k)) b (site-of fs)]
                     (and (seq a) (seq b) (not-any? a b))))
-        spent?  (fn [id] (> (get (:refuted-running ctx) id 0) withdrawable-after))]
+        spent?  (fn [id] (> (get (:refuted-running ctx) id 0) withdrawable-after))
+        ;; A design round's broken check is carried as the check itself, its :status on it.
+        statuses (into {} (keep #(when (:status %) [(:check %) (:status %)])) (:findings ctx))]
     (boolean (and (:amended? prev)
                   (every? moved? (filter (comp was key) now))
-                  (not-any? spent? (into #{} (comp (filter (comp was base-key)) (mapcat refuted-ids))
+                  (not-any? spent? (into #{} (comp (filter (comp was base-key)) (mapcat #(run-keys statuses %)))
                                          (:findings ctx)))))))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :boolean]}
@@ -3494,8 +3550,8 @@
    record and printed nowhere. Only the gap branch is new; the refutation wording
    is the one that converged and is left alone.
 
-   `refuted-running` is what `refuted-running` counts over this workstream's
-   reviews, this round's included. A refuted claim it counts at `withdrawable-after` or more has already
+   `refuted-running` is what `refuted-running` counts over the baseline's own
+   lineage of reviews, this round's included. A refuted claim it counts at `withdrawable-after` or more has already
    been reworded and refuted again, so its amender is told that a restatement is
    off the table and offered removal with a reason (`withdrawable`).
 
@@ -4012,7 +4068,11 @@
         ;; counted exactly once whether or not the best-effort append lands.
         reviews   (when (:format record)
                     (conj (if project (vec (ws/entries-of project ws-id :baseline-review)) []) record))
-        running   (when reviews (refuted-running reviews))
+        running   (when reviews
+                    (refuted-running subject (conj (if (and project subject)
+                                                     (lineage-of project ws-id :baseline-review :baseline-seq subject)
+                                                     [])
+                                                   record)))
         unsettled (if reviews (unsettled-findings record (unchecked-running reviews)) [])
         ;; An amender's :stale speaks for the one round after it.
         ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
@@ -4725,10 +4785,12 @@
                                    :carried (carried-readings ctx design)
                                    :asked asked
                                    :unread-amendment? (unread-amendment? ctx)}))
-        ;; As the baseline round counts it, over this workstream's decisions and this one.
+        ;; As the baseline round counts it, over the design's own lineage and this decision.
         running (when-not (:outcome record)
-                  (refuted-running (conj (if project (vec (ws/entries-of project ws-id :design-decision)) [])
-                                         record)))
+                  (refuted-running design (conj (if (and project design)
+                                                  (lineage-of project ws-id :design-decision :design-seq design)
+                                                  [])
+                                                record)))
         ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
                           (update :carry dissoc :stale))
                       (when (:seq design) {:judged-seq (:seq design)})

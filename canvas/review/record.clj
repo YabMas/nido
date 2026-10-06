@@ -107,9 +107,10 @@
   (Operation dispute-aware "A key that folds in how many times a finding has been disputed."
     {:signature [:=> [:catn [:base-key :any]] :any]})
   (Operation refuted-running
-    "How many readings in a row have refuted each claim, counting back from its newest. What
-     decides whether an amender may remove a refuted claim with a reason rather than reword it."
-    {:signature [:=> [:catn [:reviews [:sequential :map]]] [:map-of :string :int]]})
+    "How many readings in a row have refuted each subject of the judged record, counting back from
+     its newest, over that record's own lineage. What decides whether an amender may remove a
+     refuted claim with a reason rather than reword it."
+    {:signature [:=> [:catn [:subject [:maybe :map]] [:reviews [:sequential :map]]] [:map-of :string :int]]})
   (Operation unchecked-running
     "How many readings in a row have declared each subject unchecked, counting back from its newest,
      with every reason given. The reasons are carried, never compared — no two judges word one alike."

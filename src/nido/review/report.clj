@@ -523,9 +523,10 @@
       ;; :judged-by is who answered — a stand-in's judgement is not the configured reviewer's,
       ;; on a phase or on the ledger — and :code-identity the tree its confirmations are keyed on.
       ;; :carried-from is the review whose verdict a round restated with no judge launched.
-      ;; :refuted-running is how many readings in a row have refuted each claim whose newest reading
-      ;; refuted it, across the workstream's judgements: a claim refuted every round by a different
-      ;; counterexample is one no rewording is settling, and nothing else in a round says so.
+      ;; :refuted-running is how many readings in a row have refuted each subject of the judged record
+      ;; whose newest reading refuted it, over that record's own lineage and counted AFTER this
+      ;; round's judgement — a subject the round confirmed is absent: a claim refuted every round by a
+      ;; different counterexample is one no rewording is settling, and nothing else in a round says so.
       ;; :overrides-settled is each subject the judge was shown as settled and found against anyway —
       ;; a confirmation settlement was shielding, caught.
       ;; :relation-rulings is the per-id relation-honest ruling :breaks was held to, round by round —

@@ -196,7 +196,8 @@
     (is (= ["modal-footer"] (:owed r)) "it is still ruled on, so it does not stop the round as :unruled")
     (is (not (contains? (:checked-at r) "modal-footer")))
     (is (= {"modal-footer" 1}
-           (record/refuted-running [{:findings [{:claim-id "modal-footer"}]} r]))
+           (record/refuted-running {:model {:claims [{:id "modal-footer"}]} :baseline {:breaks ["[modal-footer]"]}}
+                                   [{:findings [{:claim-id "modal-footer"}]} r]))
         "and the subject's refutation run survives it")
     (is (= ["modal-footer" "rounded-once"] (:confirmed (#'record/rule result checks checks)))
         "a round with no :breaks confirms as before")))

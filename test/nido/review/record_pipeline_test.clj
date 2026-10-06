@@ -1918,17 +1918,90 @@
                    (map #(hash-map :claim-id % :blocks :goal-served :cites ["x"] :claim "y" :needs "z") gaps))})
 
 (deftest refutations-are-counted-per-claim-across-the-readings-that-ruled-on-it
-  (is (= {"c1" 2} (record/refuted-running [(review :refuted ["c1"]) (review :refuted ["c1"])])))
-  (is (= {"c1" 1} (record/refuted-running [(review :refuted ["c1"]) (review :confirmed ["c1"])
-                                           (review :refuted ["c1"])]))
+  (is (= {"c1" 2} (record/refuted-running nil [(review :refuted ["c1"]) (review :refuted ["c1"])])))
+  (is (= {"c1" 1} (record/refuted-running nil [(review :refuted ["c1"]) (review :confirmed ["c1"])
+                                               (review :refuted ["c1"])]))
       "a confirmation ends a run: the claim was true at some rewording")
-  (is (= {"c1" 2} (record/refuted-running [(review :refuted ["c1"]) (review :confirmed ["c2"])
-                                           (review :refuted ["c1"])]))
+  (is (= {"c1" 2} (record/refuted-running nil [(review :refuted ["c1"]) (review :confirmed ["c2"])
+                                               (review :refuted ["c1"])]))
       "a review that did not rule on the claim is no reading of it, and neither breaks nor extends")
-  (is (= {} (record/refuted-running [(review :refuted ["c1"]) (review :confirmed ["c1"])]))
+  (is (= {} (record/refuted-running nil [(review :refuted ["c1"]) (review :confirmed ["c1"])]))
       "a claim whose newest reading held has no run at all")
-  (is (= {"c1" 1} (record/refuted-running [(review :gaps ["c1"]) (review :refuted ["c1"])]))
+  (is (= {"c1" 1} (record/refuted-running nil [(review :gaps ["c1"]) (review :refuted ["c1"])]))
       "a gap refutes nothing"))
+
+(deftest a-run-counts-only-subjects-the-judged-record-carries
+  (is (= {"c1" 2} (record/refuted-running a-baseline [(review :refuted ["c1" "gone"])
+                                                      (review :refuted ["c1" "gone"])]))
+      "a claim the record no longer makes is never confirmed again, so its count would read as an
+       open refutation of the record forever"))
+
+(deftest an-owed-ruling-ends-a-run-unless-the-design-breaks-it
+  (let [design {:model {:claims [{:id "kept"} {:id "broken"}]} :baseline {:breaks ["[broken]"]}}
+        owed   {:format :design-decision :owed ["kept" "broken"]}]
+    (is (= {"broken" 1}
+           (record/refuted-running design [(review :refuted ["kept" "broken"]) owed]))
+        "a design claim is held :owed before its code exists, so a judge that held it has read it;
+         a held id the design breaks was read at the tree the design says stops being true")))
+
+(deftest a-relation-ruling-on-an-id-ends-its-run
+  (is (= {} (record/refuted-running nil [(review :refuted ["line"])
+                                         {:format :design-decision
+                                          :relation-rulings [{:id "line" :ruling :breaks}]}]))
+      "a baseline line the design now declares it breaks has been ruled on, honestly"))
+
+(deftest a-question-for-a-person-refutes-nothing
+  (is (= {} (record/refuted-running nil [{:confirmed ["c1"]
+                                          :findings [{:claim-id "c1" :for-person true
+                                                      :cites ["x"] :claim "is this what they want?"}]}]))
+      "a goal question confirmed in the same judgement would otherwise license withdrawing a claim
+       that was never reworded"))
+
+(deftest a-broken-check-counts-against-the-check-not-the-claim-it-was-anchored-to
+  (let [decision (fn [id] {:format :design-decision
+                           :checks [{:check :goal-served :status :broken :note "n"}]
+                           :findings [{:claim-id id :check :goal-served :cites ["x"] :claim "q"}]})]
+    (is (= {":goal-served" 2} (record/refuted-running nil [(decision "c1") (decision "c1")]))
+        "distinct scope questions anchored to one claim are not that claim refuted twice")
+    (is (= {} (record/refuted-running nil [(decision "c1")
+                                           {:format :design-decision
+                                            :checks [{:check :goal-served :status :held :note "n"}]}]))
+        "the check ruled held ends its run")
+    (is (= {"c1" 1} (record/refuted-running nil [(assoc (decision "c1") :checks
+                                                        [{:check :goal-served :status :held :note "n"}])]))
+        "a finding filed under a check the judgement held broke no check, and is the claim's")))
+
+(deftest a-first-reading-confirmation-ends-a-run-only-when-the-second-agrees
+  (let [once (assoc (review :confirmed ["c1"]) :read-once ["c1"])]
+    (is (= {"c1" 2} (record/refuted-running nil [(review :refuted ["c1"]) once (review :refuted ["c1"])]))
+        "a claim refuted on every second reading would otherwise never accrue a run")
+    (is (= {} (record/refuted-running nil [(review :refuted ["c1"]) once (review :confirmed ["c1"])]))
+        "the paired confirmation is the one that ends it")))
+
+(deftest a-broken-check-yields-the-stall-veto-on-its-own-run
+  (let [broken  (fn [ev] {:check :goal-served :status :broken :note "n" :claim-ids ["c1"]
+                          :cites ["x"] :claim "q" :evidence ev})
+        changed (fn [running]
+                  (record/design-round-changed?
+                   {:iter 2 :findings [(broken ["src/a.clj:2"])] :refuted-running running}
+                   [{:iter 1 :amended? true :findings [(broken ["src/a.clj:1"])]}]))]
+    (is (false? (changed {":goal-served" 3}))
+        "a check no amendment has repaired three readings running wants a person, not a fourth")
+    (is (true? (changed {"c1" 3}))
+        "the claim the check was anchored to was not what kept breaking")))
+
+(deftest a-lineage-is-the-supersedes-chain-and-the-same-intent
+  (let [entries {:baseline        [{:seq 3 :intent {:seq 2}} {:seq 5 :intent {:seq 2} :supersedes {:seq 3}}
+                                   {:seq 9 :intent {:seq 8}} {:seq 11 :supersedes {:seq 5}}]
+                 :baseline-review [{:seq 4 :baseline-seq 3} {:seq 6 :baseline-seq 5}
+                                   {:seq 10 :baseline-seq 9} {:seq 12 :baseline-seq 11}]}]
+    (with-redefs [ws/entries-of  (fn [_ _ kind] (get entries kind))
+                  ws/entry-at-seq (fn [_ _ n] (some #(when (= n (:seq %)) %) (:baseline entries)))]
+      (is (= [4 6 12] (map :seq (#'record/lineage-of :nido "ws" :baseline-review :baseline-seq
+                                                     {:seq 11 :supersedes {:seq 5}}))))
+      (is (= [4 6] (map :seq (#'record/lineage-of :nido "ws" :baseline-review :baseline-seq
+                                                  {:seq 13 :intent {:seq 2}})))
+          "another goal's reviews are another area, whatever ids it shares"))))
 
 (def ^:private a-claim-finding (assoc a-finding :claim-id "c1"))
 
@@ -1959,9 +2032,13 @@
   (with-redefs [record/baseline-review! (fn [_] (review :refuted ["c1"]))
                 record/append! (fn [_ _] nil)
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
-                ws/latest-entry (fn [_ _ _] a-baseline)
-                ws/entries-of (fn [_ _ kind] (if (= :baseline-review kind) [(review :refuted ["c1"])] []))]
-    (is (= {"c1" 2} (:refuted-running (run record/judge-stage (ctx)))))))
+                ws/latest-entry (fn [_ _ _] (assoc a-baseline :seq 3))
+                ws/entries-of (fn [_ _ kind] (if (= :baseline-review kind)
+                                               [(assoc (review :refuted ["c1"]) :baseline-seq 3)
+                                                (assoc (review :refuted ["c1"]) :baseline-seq 1)]
+                                               []))]
+    (is (= {"c1" 2} (:refuted-running (run record/judge-stage (ctx))))
+        "a review of another record on the workstream is no reading of this one")))
 
 (defn- without-c1 [b] (assoc b :load-bearing []))
 
