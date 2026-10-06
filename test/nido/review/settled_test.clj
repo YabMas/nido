@@ -464,6 +464,19 @@
                                 (review 3 1 :verdict :falsified :findings [{:claim-id "c1"}])
                                 (review 4 1 :confirmed ["c1"])])]
         (is (= #{"c1"} (settled/single-readings [l] (baseline 5 c1) tree-a)))))
+    (testing "an unchecked reading between two confirmations ends the pair"
+      ;; Watched: a subject the judge said three times it could not check settled through the rounds
+      ;; that happened to confirm it.
+      (let [l (ledger :baselines [(baseline 1 c1)]
+                      :reviews [(review 2 1 :confirmed ["c1"])
+                                (review 3 1 :unchecked [{:id "c1" :reason "outside the repo"}])
+                                (review 4 1 :confirmed ["c1"])])]
+        (is (= #{"c1"} (settled/single-readings [l] (baseline 5 c1) tree-a))))
+      (let [l (ledger :baselines [(baseline 1 c1)]
+                      :reviews [(review 2 1 :confirmed ["c1"])
+                                (review 3 1 :unchecked [{:id "c1" :reason "outside the repo"}])])]
+        (is (= {} (settled/settled [l] (baseline 5 c1) tree-a))
+            "nor does a confirmation stand once the reading after it could not check it")))
     (testing "a confirmation at another tree is no first reading here"
       (let [l (ledger :baselines [(baseline 1 c1)]
                       :reviews [(review 2 1 :confirmed ["c1"] :code-identity "tree-b")

@@ -2509,6 +2509,10 @@
    reversal, recorded where it was made. :overrides-settled is its mirror: each id this judgement
    was shown as settled and found against anyway, naming the confirmation that had settled it —
    a settlement that was shielding a false claim, recorded where it was caught.
+   :splits and :unpaired are where this judgement and the reading before it of the same record at
+   the same tree disagree: :splits each id that reading held or owed and this one refuted, :unpaired
+   each id it ruled holds where that reading ruled owed, or the reverse. Neither pairs, so the id is
+   read again; both are kept because otherwise the later ruling silently replaces the earlier one.
    :spent is each subject this judgement refuted that its lineage has now refuted that many readings
    running (`nido.review.record/spent`) — reworded and refuted again, recorded where a hand amender
    reads before writing the next rewording. Derived by the round."
@@ -2521,6 +2525,12 @@
                                            [:id string?] [:seq int?] [:ws-id string?]]]]
    [:overrides-settled {:optional true} [:vector [:map {:closed true}
                                                   [:id string?] [:seq int?] [:ws-id string?]]]]
+   [:splits     {:optional true} [:vector [:map {:closed true}
+                                           [:id string?] [:was [:enum :holds :owed]]]]]
+   [:unpaired   {:optional true} [:vector [:map {:closed true}
+                                           [:id string?]
+                                           [:was [:enum :holds :owed]]
+                                           [:now [:enum :holds :owed]]]]]
    [:spent      {:optional true} [:map-of string? pos-int?]]])
 
 (def BaselineReview

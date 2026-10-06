@@ -528,7 +528,8 @@
       ;; round's judgement — a subject the round confirmed is absent: a claim refuted every round by a
       ;; different counterexample is one no rewording is settling, and nothing else in a round says so.
       ;; :overrides-settled is each subject the judge was shown as settled and found against anyway —
-      ;; a confirmation settlement was shielding, caught.
+      ;; a confirmation settlement was shielding, caught. :splits and :unpaired are where it disagreed
+      ;; with the reading before it at the same tree, which is otherwise only the later ruling.
       ;; :relation-rulings is the per-id relation-honest ruling :breaks was held to, round by round —
       ;; a reversal between rounds is otherwise readable only in the raw decision output — and
       ;; beside it the judge's inconsistencies the round recorded rather than enforced
@@ -576,6 +577,8 @@
                 (get-in ctx [:record :amendment-read-once]) (assoc :amendment-read-once true)
                 (seq (get-in ctx [:record :overrides-settled]))
                 (assoc :overrides-settled (get-in ctx [:record :overrides-settled]))
+                (seq (get-in ctx [:record :splits]))   (assoc :splits (get-in ctx [:record :splits]))
+                (seq (get-in ctx [:record :unpaired])) (assoc :unpaired (get-in ctx [:record :unpaired]))
                 (seq (get-in ctx [:record :unchecked])) (assoc :unchecked (get-in ctx [:record :unchecked]))
                 (seq (get-in ctx [:record :relation-rulings]))
                 (assoc :relation-rulings (get-in ctx [:record :relation-rulings]))

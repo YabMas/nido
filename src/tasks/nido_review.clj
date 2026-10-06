@@ -2383,7 +2383,8 @@
    unruled, declared unchecked or found against while settled, and per reviewer that answered, the
    runs' counts summed; per subject, in how many runs it was still unchecked at the end — and per
    baseline id, the decisions leaving it with no relation ruling, its relation-ruling flips
-   each way and its reversals not taken. Per subject spent at a run's end, `{:runs n :max n}`: in
+   each way and its reversals not taken; per subject, its holds/owed flips each way at one tree
+   and its splits. Per subject spent at a run's end, `{:runs n :max n}`: in
    how many runs, and the longest refutation run any of them ended on — the second is not a sum,
    because each run's count already spans the runs before it."
   [figures]
@@ -2414,6 +2415,8 @@
      :judged-by   (counts :judged-by)
      :relation-flips     (reduce #(merge-with (partial merge-with +) %1 %2) (sorted-map) (keep :relation-flips figures))
      :relation-reversals (counts :relation-reversals)
+     :reading-flips      (reduce #(merge-with (partial merge-with +) %1 %2) (sorted-map) (keep :reading-flips figures))
+     :splits             (counts :splits)
      :spent       (reduce (fn [acc [id n]]
                             (update acc id #(-> (or % {:runs 0 :max 0})
                                                 (update :runs inc)

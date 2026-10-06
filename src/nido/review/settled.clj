@@ -320,9 +320,13 @@
 
 (defn- bearings
   "Per subject id of `record`, oldest first, every judgement at its content, context, cited
-   yardstick and key (`reading`) that bears on it — a finding naming it (`names?`) over any record
-   (`:found? true`), or a checked confirmation over one nobody retracted. Empty when nothing can be
-   keyed."
+   yardstick and key (`reading`) that bears on it — a finding naming it (`names?`) or a declaration
+   that it could not be checked, over any record (`:breaks? true`), or a checked confirmation over
+   one nobody retracted. Empty when nothing can be keyed.
+
+   An unchecked reading breaks like a finding: it is not a confirmation, so the confirmations either
+   side of it are not two consecutive ones, and a subject the judge says it cannot check does not
+   settle through the rounds that happened to confirm it."
   [ledgers record reading effective]
   (if (or (nil? ledgers) (and (nil? (:code-identity reading)) (nil? (:subject-identities reading))))
     {}
@@ -340,7 +344,8 @@
                               ;; A judgement doing both found.
                               (keep (fn [{j :judgement :as m}]
                                       (cond
-                                        (some #(names? % id) (:findings j)) (assoc m :found? true)
+                                        (some #(names? % id) (:findings j))  (assoc m :breaks? true)
+                                        (some #(= id (:id %)) (:unchecked j)) (assoc m :breaks? true)
                                         (and (not (:retracted? m)) (checked? j id)) m)))
                               chronological
                               vec)])))
@@ -358,7 +363,8 @@
    named its id in :confirmed and said where it read it (:checked-at), while judging a record nobody
    retracted that carries that subject identically, around the same context, under the same cited
    intent and baseline, at this subject's key — and no judgement at that same content and key has
-   found against it since, whether under its id or by quoting it in a finding filed under another.
+   found against it since, whether under its id or by quoting it in a finding filed under another,
+   nor declared it unchecked.
    The newest judgement at the key that bears on the subject decides,
    ordered by :at whichever ledger it is on: a finding stands until a later confirmation answers
    it, so a record amended elsewhere in answer to a finding leaves the subject to be confirmed
@@ -377,7 +383,7 @@
    (into {}
          (keep (fn [[id bearing]]
                  (let [latest (peek bearing)]
-                   (when (and latest (not (:found? latest)))
+                   (when (and latest (not (:breaks? latest)))
                      [id {:ws-id (:ws-id latest) :seq (get-in latest [:judgement :seq])}]))))
          (bearings ledgers record reading effective))))
 
@@ -391,7 +397,8 @@
 
    A judge is not deterministic at a byte-identical record — the same one has held and broken one
    claim a round apart on text neither round touched — so a single confirmation is a sample. The
-   two readings need not be in one run; a finding between them ends the pair."
+   two readings need not be in one run; a finding or an unchecked reading between them ends the
+   pair."
   ([ledgers record reading] (single-readings ledgers record reading record))
   ([ledgers record reading effective]
    (into #{}
@@ -399,8 +406,8 @@
                  (let [n      (count bearing)
                        latest (peek bearing)
                        before (when (> n 1) (nth bearing (- n 2)))]
-                   (when (and latest (not (:found? latest))
-                              (or (nil? before) (:found? before)))
+                   (when (and latest (not (:breaks? latest))
+                              (or (nil? before) (:breaks? before)))
                      id))))
          (bearings ledgers record reading effective))))
 

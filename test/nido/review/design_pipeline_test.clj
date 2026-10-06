@@ -1729,6 +1729,50 @@
              (is (= :asked (:status r2)) "the second reading agreeing is what stops for the person")
              (is (= :escalate (:control r2))))))))))
 
+;; Watched: a claim the judge held owed, then holds, on one design at one tree was paired by the
+;; holds and settled — though the owed reading was the true one. Two readings that disagree are not
+;; a pair, and the disagreement is kept.
+(deftest an-owed-reading-then-a-holds-one-is-read-a-third-time
+  (let [appended (atom [])
+        owed     (assoc (decision :proceed :checks [(check :relation-honest :held)])
+                        :owed ["rounded-once"])
+        holds    (assoc (decision :proceed :checks [(check :relation-honest :held)])
+                        :confirmed ["rounded-once"] :checked-at {"rounded-once" ["src/a.clj:1"]})
+        answers  (atom [owed holds holds])]
+    (judging-a-model-design
+     owed appended
+     (fn []
+       (with-redefs [record/design-decision! (fn [_] (let [a (first @answers)] (swap! answers rest) a))]
+         (let [r1 (run record/design-judge-stage (ctx))
+               r2 (run record/design-judge-stage (ctx :carry (:carry r1)))]
+           (is (= :next-round (:control r2)) "a judge that said owed then holds has not said one thing twice")
+           (is (= [{:id "rounded-once" :was :owed :now :holds}] (:unpaired (second @appended)))
+               "the disagreement is on the ledger, not overwritten by the later ruling")
+           (is (= ["rounded-once"] (:read-once (second @appended))))
+           (let [r3 (run record/design-judge-stage (ctx :carry (:carry r2)))]
+             (is (= :proceed (:status r3)) "the third reading agreeing with the second pairs it")
+             (is (nil? (:unpaired (last @appended)))))))))))
+
+;; Watched: a claim confirmed on round 1 and left unchecked on round 2, at one tree, ended the run
+;; :sufficient — confirmed once, never paired, and unchecked once is below the amender's bar.
+(deftest a-confirmation-the-next-round-leaves-unchecked-is-still-read-once
+  (let [appended (atom [])
+        holds    (assoc (decision :proceed :checks [(check :relation-honest :held)])
+                        :confirmed ["rounded-once"] :checked-at {"rounded-once" ["src/a.clj:1"]})
+        unchecked (assoc (decision :proceed :checks [(check :relation-honest :held)])
+                         :unchecked [{:id "rounded-once" :reason "needs response data"}])
+        answers  (atom [holds unchecked])]
+    (judging-a-model-design
+     holds appended
+     (fn []
+       (with-redefs [record/design-decision! (fn [_] (let [a (first @answers)] (swap! answers rest) a))]
+         (let [r1 (run record/design-judge-stage (ctx))
+               r2 (run record/design-judge-stage (ctx :carry (:carry r1)))]
+           (is (= :next-round (:control r2)) "one confirmation and one shrug are not two readings")
+           (is (= ["rounded-once"] (:read-once (second @appended))))
+           (is (not (contains? (get-in r2 [:carry :quiet :read]) "rounded-once"))
+               "the confirmation before the shrug pairs with nothing after it")))))))
+
 ;; ── A decision that is a person's to make ───────────────────────────────────
 
 (deftest a-scope-decision-stops-for-a-person-instead-of-reaching-the-amender

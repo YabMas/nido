@@ -4073,51 +4073,80 @@
      :prior    (when subject (settled/prior-findings ls kind subject run-id))}))
 
 (defn- carried-readings
-  "The ids an earlier quiet round of this run read of `subject` — confirmed or held :owed — the same
-   record, since a quiet round is followed by no amendment. What pairs a reading when the tree has
-   no identity to pair it on the ledger, and the only thing that pairs an :owed one, which settles
-   nothing and so stands on no ledger."
+  "What an earlier quiet round of this run read of `subject`, the same record, since a quiet round
+   is followed by no amendment: `{id :holds|:owed}`, the ruling it gave each id it confirmed or held
+   :owed. What pairs a reading when the tree has no identity to pair it on the ledger, and the only
+   thing that pairs an :owed one, which settles nothing and so stands on no ledger."
   [ctx subject]
   (let [q (get-in ctx [:carry :quiet])]
     (when (= (:seq subject) (:seq q)) (:read q))))
 
+(defn- rulings
+  "`{id :holds|:owed}` for each id `record` read: confirmed with where it read it, or held :owed."
+  [record]
+  (merge (zipmap (:owed record) (repeat :owed))
+         (zipmap (settled/checked-confirmations record) (repeat :holds))))
+
 (defn- with-readings
   "`record` — what the judge returned, before it is appended — carrying :overturns, each earlier
    run's finding (`prior`) against an id it read; :overrides-settled, the confirmation that
-   settled (`settled`) each id it was shown as outside its checks and refuted anyway; and,
-   when `holds?` says it would end the run, :read-once, what of `asked` it read on a
-   first reading, and :amendment-read-once when `unread-amendment?`.
+   settled (`settled`) each id it was shown as outside its checks and refuted anyway; :splits and
+   :unpaired, where it and the reading before it disagree; and, when `holds?` says it would end
+   the run, :read-once, what of `asked` it read on a first reading, and :amendment-read-once when
+   `unread-amendment?`.
 
-   An id is read when it is confirmed or held :owed. An owed ruling is a judge's word that the claim
-   is sound, and a run resting on one such word is resting on a sample however the code stands: a
-   design not yet built holds every claim owed, and would otherwise end on one reading.
+   An id is read when it is confirmed (:holds) or held :owed. An owed ruling is a judge's word that
+   the claim is sound, and a run resting on one such word is resting on a sample however the code
+   stands: a design not yet built holds every claim owed, and would otherwise end on one reading.
+
+   The reading before is the one this run carried from a quiet round of the same record
+   (`carried`, `{id ruling}`), else a confirmation standing at the key it was read at (`standing`,
+   taken at that key, so only when the record read one tree). A reading pairs with it only when
+   the two gave the same ruling. One that gave the other — holds then owed, or owed then holds —
+   is a judge disagreeing with itself on one record at one tree: it pairs nothing, so the id is
+   read again, and it is kept as :unpaired `[{:id :was :now}]`, since otherwise the run keeps the
+   later ruling and nothing shows there were two. An id the reading before held or owed and this
+   one refutes is a :split `[{:id :was}]` — unless it was settled, which :overrides-settled says.
+   An id the reading before read and this one declared unchecked stays :read-once: it was read
+   once, and a run must not end on it.
 
    `asked` is the ids the round owes a ruling on. :read-once holds no other, because the reading
    after it pairs them only by reading them again, and an id it was not asked about can go
-   unread without being :unruled — so the second reading would clear it unread.
-
-   A reading is a second one when a confirmation stands before it at the key it was read at
-   (`standing`, taken at that key, so only when the record read one tree), or when an earlier quiet
-   round of this run read the same id of the same record (`carried`)."
+   unread without being :unruled — so the second reading would clear it unread."
   [record holds? {:keys [standing settled carried prior asked unread-amendment?]}]
   (if-not (:format record)
     record
-    (let [readings  (into (settled/checked-confirmations record) (:owed record))
+    (let [ruled     (rulings record)
           found     (into #{} (mapcat refuted-ids) (:findings record))
           overrides (vec (for [[id {:keys [ws-id] n :seq}] (sort-by key settled)
                                :when (found id)]
                            {:id id :seq n :ws-id ws-id}))
-          paired    (into (set carried) (when (:code-identity record) (keys standing)))
+          before    (merge {}
+                           (when (:code-identity record) (zipmap (keys standing) (repeat :holds)))
+                           carried)
+          unpaired  (vec (for [[id now] (sort-by key ruled)
+                               :let [was (before id)]
+                               :when (and was (not= was now))]
+                           {:id id :was was :now now}))
+          splits    (vec (for [[id was] (sort-by key before)
+                               :when (and (found id) (not (contains? settled id)))]
+                           {:id id :was was}))
+          unchecked (into #{} (map :id) (:unchecked record))
           holds     (holds? record)
-          once      (when holds (vec (sort (filter (set asked) (remove paired readings)))))
+          once      (when holds
+                      (vec (sort (filter (set asked)
+                                         (concat (remove #(= (ruled %) (before %)) (keys ruled))
+                                                 (filter unchecked (keys before)))))))
           overturns (vec (for [[id {:keys [ws-id] n :seq}] (sort-by key prior)
-                               :when (readings id)]
+                               :when (ruled id)]
                            {:id id :seq n :ws-id ws-id}))]
       (cond-> record
         (seq once)                       (assoc :read-once once)
         (and holds unread-amendment?)    (assoc :amendment-read-once true)
         (seq overturns)                  (assoc :overturns overturns)
-        (seq overrides)                  (assoc :overrides-settled overrides)))))
+        (seq overrides)                  (assoc :overrides-settled overrides)
+        (seq splits)                     (assoc :splits splits)
+        (seq unpaired)                   (assoc :unpaired unpaired)))))
 
 (defn- unread-amendment?
   "Is the record this round reads one this run amended, with no quiet round of the run since the
@@ -4141,20 +4170,21 @@
   "A round that would have ended the run clean on a first reading (`read-once?`). The run goes on to
    another judgement with nothing amended; the subjects it read once are not settled, so the
    next judge is handed them again, cold — it is not told it is a second reading — and a subject it
-   confirms or holds :owed is paired, one it leaves without a ruling is :unruled. What this round
-   read is carried for the pairing the ledger cannot give (`carried-readings`), and the round it was
-   read in, so an amendment is read a second time and not a third (`unread-amendment?`). Bounded:
-   each such round pairs what the one before read, so it recurs only for a subject no earlier
-   quiet round read, and the engine's cap holds either way."
+   gives the same ruling is paired, one it leaves without a ruling is :unruled. What this round
+   read is carried, with its ruling, for the pairing the ledger cannot give (`carried-readings`) —
+   less what it declared unchecked, which a later reading has nothing to pair with — and the round
+   it was read in, so an amendment is read a second time and not a third (`unread-amendment?`).
+   Bounded: each such round pairs what the one before read alike, so it recurs only for a subject
+   the judge keeps ruling differently, and the engine's cap holds either way."
   [ctx subject record]
   (-> ctx
       (assoc :control :next-round)
       (assoc-in [:carry :quiet]
                 {:seq       (:seq subject)
                  :iter      (:iter ctx)
-                 :read      (-> (set (carried-readings ctx subject))
-                                (into (settled/checked-confirmations record))
-                                (into (:owed record)))})))
+                 :read      (merge (apply dissoc (carried-readings ctx subject)
+                                          (map :id (:unchecked record)))
+                                   (rulings record))})))
 
 (defn- run-judge-stage
   [ctx]
@@ -4648,6 +4678,25 @@
                      [id (keyword (str (name b) "->" (name r)))])))
          (reduce (fn [acc [id k]] (update-in acc [id k] (fnil inc 0))) (sorted-map)))))
 
+(defn- reading-flips
+  "Per subject, how often `judgements` — one run's, in ledger order — ruled it holds where the
+   judgement before it of the same record at the same tree ruled it owed, or the reverse:
+   `{id {:holds->owed n :owed->holds n}}`, ids never flipped absent. Read as the judge ruled, so a
+   flip counts whether or not the round paired anything over it: it is the judge's variance on
+   at_this_tree being measured, which :unpaired records only where a pairing was at stake. A
+   judgement with no :code-identity read no one tree, and is compared with nothing."
+  [judgements]
+  (->> (vals (group-by (juxt :format :baseline-seq :design-seq) judgements))
+       (mapcat #(partition 2 1 %))
+       (filter (fn [[a b]] (and (:code-identity a) (= (:code-identity a) (:code-identity b)))))
+       (mapcat (fn [[a b]]
+                 (let [was (rulings a)]
+                   (for [[id now] (rulings b)
+                         :let [w (was id)]
+                         :when (and w (not= w now))]
+                     [id (keyword (str (name w) "->" (name now)))]))))
+       (reduce (fn [acc [id k]] (update-in acc [id k] (fnil inc 0))) (sorted-map))))
+
 (defn ^{:malli/schema [:=> [:cat [:vector :map]] :map]}
   run-figures
   "What one record run's rounds did, from the entries it appended, in the ledger's order: its design
@@ -4670,6 +4719,8 @@
       :settled-then-found {id n}
       :relation-flips     {id {:stands->breaks n :breaks->stands n}}
       :relation-reversals {id n}
+      :reading-flips      {id {:holds->owed n :owed->holds n}}
+      :splits             {id n}
       :spent              {id n}}
 
    Every check a decision derived has a row, so a run whose checks all held says what it answered
@@ -4695,6 +4746,12 @@
    a reversal on a record that had not moved. The first is the judge's variance on relation-honest,
    the second how much of it nido kept from becoming an amend round. Both present only when non-empty.
 
+   :reading-flips counts, per subject, the judgements that ruled it holds where the one before of
+   the same record at the same tree ruled it owed, or the reverse (`reading-flips`), and :splits
+   the judgements that refuted it after such a reading held or owed it (`:splits`): the judge's
+   variance on one record at one tree, which the run's last ruling hides. Both present only when
+   non-empty.
+
    :spent is the run's last judgement's :spent: each subject still refuted at the end, with how many
    readings running its lineage has refuted it — across runs, so a claim refuted for the eleventh
    time does not read as a new defect beside :claims. Present only when non-empty.
@@ -4718,6 +4775,8 @@
         judges    (frequencies (keep (comp judge-name :judged-by) judgements))
         flips     (relation-flips decisions)
         reversals (frequencies (mapcat #(map :id (:relation-reversals %)) decisions))
+        rflips    (reading-flips (sort-by :seq judgements))
+        splits    (frequencies (mapcat #(map :id (:splits %)) judgements))
         statuses  (mapv check-statuses decisions)
         ;; One round's defects, each tagged by the tally it belongs to: a check keyword and a claim id
         ;; do not compare, and `alone` has to see both.
@@ -4741,6 +4800,8 @@
       (seq judges)    (assoc :judged-by (into (sorted-map) judges))
       (seq flips)     (assoc :relation-flips flips)
       (seq reversals) (assoc :relation-reversals (into (sorted-map) reversals))
+      (seq rflips)    (assoc :reading-flips rflips)
+      (seq splits)    (assoc :splits (into (sorted-map) splits))
       (seq spent-end) (assoc :spent (into (sorted-map) spent-end))
 
       (seq decisions)

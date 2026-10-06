@@ -227,6 +227,63 @@
         "holding a refuted claim sound reverses the refutation, and the ledger has to say so")
     (is (= ["writers-state-order"] (:read-once r)))))
 
+(deftest a-holds-reading-then-an-owed-one-does-not-pair
+  ;; Watched: no-cutoff held on round 1 and owed on round 2 at one tree; the run kept the owed
+  ;; ruling, and neither the report nor the figures showed there had been two.
+  (let [r (#'record/with-readings {:format :design-decision :owed ["no-cutoff"] :code-identity "t"}
+                                  (constantly true)
+                                  {:standing {"no-cutoff" {:ws-id "ws-1" :seq 3}}
+                                   :asked ["no-cutoff"]})]
+    (is (= [{:id "no-cutoff" :was :holds :now :owed}] (:unpaired r)))
+    (is (= ["no-cutoff"] (:read-once r)) "a disagreement settles nothing, so the claim is read again")
+    (is (report/validate-event :design-decision (assoc r :reason "r" :asks "a" :recommend :proceed
+                                                       :design-seq 4
+                                                       :checks [{:check :relation-honest :status :held :note "n"}]))
+        "and the ledger takes it"))
+  (is (nil? (:read-once (#'record/with-readings {:format :design-decision :owed ["no-cutoff"]}
+                                                (constantly true)
+                                                {:carried {"no-cutoff" :owed} :asked ["no-cutoff"]})))
+      "two owed readings agree, and pair"))
+
+(deftest a-reading-refuting-what-the-one-before-held-is-a-split
+  ;; Watched: enrolment-deleter was confirmed on round 1 and refuted on round 2 at one tree, and the
+  ;; ledger kept two entries nothing related.
+  (let [found [{:claim-id "enrolment-deleter" :cites ["c"] :claim "x"}
+               {:claim-id "settled-one" :cites ["c"] :claim "y"}]
+        r     (#'record/with-readings {:format :baseline-review :findings found}
+                                      (constantly false)
+                                      {:carried {"enrolment-deleter" :holds "settled-one" :holds}
+                                       :settled {"settled-one" {:ws-id "ws-1" :seq 2}}})]
+    (is (= [{:id "enrolment-deleter" :was :holds}] (:splits r)))
+    (is (= ["settled-one"] (map :id (:overrides-settled r)))
+        "a settled confirmation refuted is an override, said once and not twice")
+    (is (report/validate-event :baseline-review (assoc r :verdict :falsified :reason "r" :baseline-seq 1))
+        "and the ledger takes it")))
+
+(deftest a-carried-reading-the-round-left-unchecked-stays-read-once
+  (let [r (#'record/with-readings {:format :baseline-review
+                                   :unchecked [{:id "structure-not-exposed" :reason "needs response data"}]}
+                                  (constantly true)
+                                  {:carried {"structure-not-exposed" :holds} :asked ["structure-not-exposed"]})]
+    (is (= ["structure-not-exposed"] (:read-once r))
+        "confirmed once and then not read is one reading, and a run must not stop on it")))
+
+(deftest figures-count-holds-and-owed-flips-at-one-tree
+  (let [d (fn [n ruled & {:as more}]
+            (merge {:format :design-decision :seq n :design-seq 37 :code-identity "e76cd2"
+                    :recommend :proceed :checks []}
+                   (case ruled
+                     :holds {:confirmed ["c"] :checked-at {"c" ["src/a.clj:1"]}}
+                     :owed  {:owed ["c"]})
+                   more))
+        f (record/run-figures [(d 1 :holds) (d 2 :owed) (d 3 :owed) (d 4 :holds)
+                               (d 5 :owed :code-identity "other")
+                               (d 6 :holds :design-seq 38 :code-identity "other")])]
+    (is (= {"c" {:holds->owed 1 :owed->holds 1}} (:reading-flips f))
+        "only readings of one record at one tree are compared: a moved tree or a new record is no flip"))
+  (is (= {"c" 1} (:splits (record/run-figures [{:format :baseline-review :seq 1 :baseline-seq 1
+                                                :splits [{:id "c" :was :holds}]}])))))
+
 ;; Watched: a judge confirmed chat-door with evidence and filed a stratified gap naming it, and the
 ;; confirmation was discarded — though a gap refutes nothing.
 (deftest a-gap-naming-a-claim-leaves-its-confirmation-standing
