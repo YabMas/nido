@@ -2706,10 +2706,20 @@
     (catch Exception _ nil)))
 
 (defn- with-appended
-  "`ctx` naming the entry `append!` answered it wrote, as `:appended-seq` — untouched when it
-   wrote none."
+  "`ctx` naming the entry `append!` answered it wrote, as `:appended-seq` — or, for a judgement the
+   round took from the ledger (`reused-answer`), the entry it took, as `:reused-seq`. Untouched
+   when it wrote none."
   [ctx answer]
-  (cond-> ctx (:seq answer) (assoc :appended-seq (:seq answer))))
+  (cond
+    (:reused answer) (assoc ctx :reused-seq (:seq answer))
+    (:seq answer)    (assoc ctx :appended-seq (:seq answer))
+    :else            ctx))
+
+(defn- reused-answer
+  "What a round answers in place of `append!` for `judgement`, a ledger entry it took as its own
+   (`standing-judgement`): the entry, which it does not write a second time."
+  [judgement]
+  {:seq (:seq judgement) :reused true})
 
 (defn- proceeding-status
   "The status a decision that `report/proceeds?` ends on, once the clearance it
@@ -4072,6 +4082,37 @@
                                               stale))
      :prior    (when subject (settled/prior-findings ls kind subject run-id))}))
 
+(defn- standing-judgement
+  "The judgement of `subject` already on the ledger that round 1 of a run takes as its own instead
+   of launching a judge, or nil. `judged` is :baseline-review or :design-decision, `seq-key` the
+   field naming the record it judged, `stands?` what else it must say to be taken.
+
+   Only the newest judgement of `subject`, and only while it still stands where the judge would
+   read: read at `reading`'s code-identity, nothing yet answers it — no record supersedes `subject`
+   and nobody retracted it — and it is a complete ruling, nothing left :unruled or on a first
+   reading. A judge launched there is asked what that one already answered: it can only restate it,
+   a round spent, or contradict it at the same tree, and the run would keep the later word with
+   nothing saying there were two. So the round hands that judgement on — to its amender when it
+   found something — and the judge the run launches next is asked only what is still owed a
+   reading, as after any amendment.
+
+   Round 1 only: from then on the run judges what it amended, which no earlier run has read."
+  [ctx [project ws-id] judged seq-key subject reading stands?]
+  (when (and project (:seq subject) (:code-identity reading)
+             (= 1 (:iter ctx)) (nil? (get-in ctx [:carry :under-repair])))
+    (let [n    (:seq subject)
+          j    (last (filter #(= n (seq-key %)) (ws/entries-of project ws-id judged)))
+          kind (:format subject)]
+      (when (and j
+                 (= (:code-identity reading) (:code-identity j))
+                 (nil? (:carried-from j))
+                 (empty? (:unruled j)) (empty? (:relation-unruled j))
+                 (empty? (:read-once j)) (not (:amendment-read-once j))
+                 (not-any? #(= n (get-in % [:supersedes :seq])) (ws/entries-of project ws-id kind))
+                 (not-any? #(= n (get-in % [:retracts :seq])) (ws/entries-of project ws-id :retraction))
+                 (stands? j))
+        j))))
+
 (defn- carried-readings
   "What an earlier quiet round of this run read of `subject`, the same record, since a quiet round
    is followed by no amendment: `{id :holds|:owed}`, the ruling it gave each id it confirmed or held
@@ -4207,32 +4248,37 @@
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) subject)
         {:keys [standing settled prior]} (judge-inputs project ws-id :baseline subject reading subject run-id
                                                        (get-in ctx [:carry :stale]))
-        asked   (when subject (owed-rulings subject settled))
-        record (-> (baseline-review!
-                    {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
-                     :baseline subject
-                     :settled settled
-                     :prior prior
-                     :listing listing
-                     :code-identity (:code-identity reading)
-                     :subject-identities (:subject-identities reading)
-                     :label (str "baseline-review-round-" (:iter ctx))
-                     :disputes (disputes-for-judge (:history ctx))})
-                   (stamp-run (:config ctx))
-                   (with-readings report/review-holds?
-                                  {:standing standing :settled settled :prior prior
-                                   :carried (carried-readings ctx subject)
-                                   :asked asked
-                                   :unread-amendment? (unread-amendment? ctx)}))
+        reused  (standing-judgement ctx ledger :baseline-review :baseline-seq subject reading
+                                    #(and (seq (:findings %)) (not (report/review-holds? %))))
+        asked   (cond reused #{} subject (owed-rulings subject settled))
+        record (or reused
+                   (-> (baseline-review!
+                        {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
+                         :baseline subject
+                         :settled settled
+                         :prior prior
+                         :listing listing
+                         :code-identity (:code-identity reading)
+                         :subject-identities (:subject-identities reading)
+                         :label (str "baseline-review-round-" (:iter ctx))
+                         :disputes (disputes-for-judge (:history ctx))})
+                       (stamp-run (:config ctx))
+                       (with-readings report/review-holds?
+                                      {:standing standing :settled settled :prior prior
+                                       :carried (carried-readings ctx subject)
+                                       :asked asked
+                                       :unread-amendment? (unread-amendment? ctx)})))
         ;; Read before this round's record is appended, and this round added by hand, so it is
-        ;; counted exactly once whether or not the best-effort append lands.
+        ;; counted exactly once whether or not the best-effort append lands. A reused review is on
+        ;; the ledger already, and is not added twice.
+        mine      (when-not reused [record])
         reviews   (when (:format record)
-                    (conj (if project (vec (ws/entries-of project ws-id :baseline-review)) []) record))
+                    (into (if project (vec (ws/entries-of project ws-id :baseline-review)) []) mine))
         running   (when reviews
-                    (refuted-running subject (conj (if (and project subject)
+                    (refuted-running subject (into (if (and project subject)
                                                      (lineage-of project ws-id :baseline-review :baseline-seq subject)
                                                      [])
-                                                   record)))
+                                                   mine)))
         unsettled (if reviews (unsettled-findings record (unchecked-running reviews)) [])
         record    (cond-> record (seq (spent running)) (assoc :spent (spent running)))
         ;; An amender's :stale speaks for the one round after it.
@@ -4240,7 +4286,7 @@
                           (update :carry dissoc :stale))
                       (when (:seq subject) {:judged-seq (:seq subject)})
                       (when subject (banking asked reading record)))]
-    (let [answer (append! ledger record)]
+    (let [answer (if reused (reused-answer reused) (append! ledger record))]
       (with-appended
        (cond
         (:outcome record)
@@ -4585,12 +4631,12 @@
   #{"codex-failed" "no-output" "round-crashed" "unusable-answer" "code-moved"})
 
 (defn- judge-launched?
-  "Whether a judge phase launched a judge: it reached a verdict no judge was carried from, it
-   carries no outcome — a design round's judgement is not folded as a verdict — or its outcome is
-   one of `judge-outcomes`."
+  "Whether a judge phase launched a judge: it reached a verdict no judge was carried from and took
+   no earlier run's judgement as its own (:reused-seq), it carries no outcome — a design round's
+   judgement is not folded as a verdict — or its outcome is one of `judge-outcomes`."
   [ph]
   (let [outcome (some-> (:outcome ph) name)]
-    (boolean (and (nil? (:carried-from ph))
+    (boolean (and (nil? (:carried-from ph)) (nil? (:reused-seq ph))
                   (or (:verdict ph) (nil? outcome) (judge-outcomes outcome))))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :int]}
@@ -5015,26 +5061,35 @@
         {:keys [standing settled prior]}
         (judge-inputs project ws-id :design design reading (when design (effective-design cwd design)) run-id
                       (get-in ctx [:carry :stale]))
-        asked   (when design (decision-asked design settled))
-        record (-> (design-decision!
-                    {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
-                     :design design :settled settled :prior prior :listing listing
-                     :code-identity (:code-identity reading)
-                     :subject-identities (:subject-identities reading)
-                     :label (str "design-decision-round-" (:iter ctx))
-                     :disputes (disputes-for-judge (:history ctx))})
-                   (stamp-run (:config ctx))
-                   (with-readings #(or (report/proceeds? %) (asks-only? %))
-                                  {:standing standing :settled settled :prior prior
-                                   :carried (carried-readings ctx design)
-                                   :asked asked
-                                   :unread-amendment? (unread-amendment? ctx)}))
-        ;; As the baseline round counts it, over the design's own lineage and this decision.
+        ;; A decision that would not proceed, standing at this tree: the round points at it rather
+        ;; than asking a judge again, and goes on as that decision sends it — to the amender, or to
+        ;; the person it asks.
+        reused  (standing-judgement ctx ledger :design-decision :design-seq design reading
+                                    (complement report/proceeds?))
+        asked   (cond reused #{} design (decision-asked design settled))
+        record (or reused
+                   (-> (design-decision!
+                        {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
+                         :design design :settled settled :prior prior :listing listing
+                         :code-identity (:code-identity reading)
+                         :subject-identities (:subject-identities reading)
+                         :label (str "design-decision-round-" (:iter ctx))
+                         :disputes (disputes-for-judge (:history ctx))})
+                       (stamp-run (:config ctx))
+                       (with-readings #(or (report/proceeds? %) (asks-only? %))
+                                      {:standing standing :settled settled :prior prior
+                                       :carried (carried-readings ctx design)
+                                       :asked asked
+                                       :unread-amendment? (unread-amendment? ctx)})))
+        ;; As the baseline round counts it, over the design's own lineage and this decision — which,
+        ;; reused, the lineage already holds.
         running (when-not (:outcome record)
-                  (refuted-running design (conj (if (and project design)
+                  (refuted-running design (into (if (and project design)
                                                   (lineage-of project ws-id :design-decision :design-seq design)
                                                   [])
-                                                record)))
+                                                (when-not reused [record]))))
+        ;; Every append below writes `record`; a reused one is on the ledger already.
+        put!    (fn [ledger record] (if reused (reused-answer reused) (append! ledger record)))
         record (cond-> record (seq (spent running)) (assoc :spent (spent running)))
         ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
                           (update :carry dissoc :stale))
@@ -5046,7 +5101,7 @@
         ;; reads. So an append that wrote nothing ends the run :unrecorded, saying what it would
         ;; have ended as, rather than as the status the ledger cannot back.
         final! (fn [c]
-                 (let [answer (append! ledger (cond-> record (seq traj) (assoc :trajectory traj)))]
+                 (let [answer (put! ledger (cond-> record (seq traj) (assoc :trajectory traj)))]
                    (if (:seq answer)
                      (with-appended c answer)
                      (assoc c :status :unrecorded :control :escalate
@@ -5055,14 +5110,14 @@
     (cond
       (:outcome record)
       (with-appended (assoc ctx :record record :status (:outcome record))
-                     (append! ledger record))
+                     (put! ledger record))
 
       ;; Would proceed, or stop for a person over nothing derivable (`asks-only?`), on claims it read
       ;; once or on an amendment's first reading: appended as the reading it is — it does not
       ;; proceed, so it clears nothing — and read again before a person is asked, so a person is not
       ;; asked over a derivable defect one judge missed.
       (read-once? record)
-      (let [answer (append! ledger record)]
+      (let [answer (put! ledger record)]
         (with-appended (second-reading (assoc ctx :record record :findings []
                                               :underivable (underivable-checks record))
                                        design record)
@@ -5084,7 +5139,7 @@
       ;; :proceed to :escalate and would append a blocker that outranks the
       ;; clearance on the next tick. A clearance still owed and never written is
       ;; a write, not an ask, for the same reason — see `proceeding-status`.
-      (let [answer (append! ledger (cond-> record (seq traj) (assoc :trajectory traj)))
+      (let [answer (put! ledger (cond-> record (seq traj) (assoc :trajectory traj)))
             status (proceeding-status ledger record answer)]
         (with-appended (assoc ctx :record record :findings []
                               :underivable (underivable-checks record)
@@ -5138,7 +5193,7 @@
             (if (and (seq derivable) (not-any? disputed? derivable))
               (with-appended (assoc ctx :record record :findings derivable
                                     :underivable (underivable-checks record))
-                             (append! ledger record))
+                             (put! ledger record))
               (final! (assoc ctx :record record :findings findings
                              :underivable (underivable-checks record)
                              :control :escalate :status :asked))))
@@ -5151,7 +5206,7 @@
           (seq findings)
           (with-appended (assoc ctx :record record :findings findings
                                 :underivable (underivable-checks record))
-                         (append! ledger record))
+                         (put! ledger record))
 
           ;; Nothing to repair, and claims or relation ids it was handed that it neither confirmed
           ;; nor refuted: a proceed over them does not proceed (`report/proceeds?`), so the round is
@@ -5161,7 +5216,7 @@
                                        :underivable (underivable-checks record)))]
             (if (= :unruled (:status c))
               (final! (assoc c :control :escalate))
-              (with-appended c (append! ledger record))))
+              (with-appended c (put! ledger record))))
 
           ;; Nothing an amender could repair, and a check the round could not derive at
           ;; all: what is left is the missing yardstick. An amender told to fix one would

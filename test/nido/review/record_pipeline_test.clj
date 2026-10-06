@@ -1260,6 +1260,102 @@
     (is (= 4 (:checks out))
         "the bare kind is not a check, so the count still matches the ids the prompt listed")))
 
+;; ── A judgement already standing at the run's key ──────────────────────────
+
+(def ^:private standing-review
+  "An earlier run's review of baseline 1, read at tree-a, that found against c1 — what a run
+   interrupted before its amendment leaves on the ledger."
+  {:format :baseline-review :seq 3 :baseline-seq 1 :verdict :insufficient :reason "c1 is false"
+   :findings [(assoc a-finding :claim-id "c1")] :code-identity "tree-a" :run-id "earlier"})
+
+(defn- judged-over-ledger
+  "The judge stage's ctx, and whether a judge was launched, at `tree`, from `c`, with `entries`
+   (`{kind [entry]}`) on the workstream and `subject` as the record judged. `judge` is what
+   `judge-fn` returns when one is launched; `stage` and `judge-fn` name the pipeline."
+  [{:keys [tree entries subject stage judge-fn judge c]
+    :or   {stage record/judge-stage judge-fn #'record/baseline-review! c (ctx)}}]
+  (let [launched (atom 0) appended (atom [])]
+    (with-redefs-fn {judge-fn                    (fn [_] (swap! launched inc) judge)
+                     #'record/append!            (fn [_ r] (swap! appended conj r) {:seq 99})
+                     #'stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                     #'stages/discover-baseline  (fn [_ _] a-baseline)
+                     #'ws/latest-entry           (fn [_ _ _] subject)
+                     #'ws/entries-of             (fn [_ _ kind] (get entries kind []))
+                     #'settled/code-identity     (fn [_] tree)
+                     #'settled/ledgers           (fn [_ _ _] nil)}
+      (fn [] {:ctx (run stage c) :launched @launched :appended @appended}))))
+
+(deftest a-review-standing-at-this-tree-is-handed-to-the-amender-unjudged
+  ;; A restart re-judged a refutation already on the ledger for the identical record and tree:
+  ;; the judge can only restate it or contradict it, and nothing tells the two apart. Round 1
+  ;; takes it, so its findings go straight to the amender and the next judge is asked only what
+  ;; the amendment leaves owed.
+  (let [base {:tree "tree-a" :subject (assoc a-baseline :seq 1)
+              :entries {:baseline [(assoc a-baseline :seq 1)] :baseline-review [standing-review]}
+              :judge {:format :baseline-review :verdict :sufficient :reason "ok"}}
+        {out :ctx :keys [launched appended]} (judged-over-ledger base)]
+    (is (zero? launched) "no judge is asked what the ledger already answers at this tree")
+    (is (empty? appended) "and the review is not written a second time")
+    (is (= 3 (:reused-seq out)) "the round names the entry it took")
+    (is (nil? (:appended-seq out)))
+    (is (= ["c1"] (map :claim-id (:findings out))) "its findings are the amender's")
+    (is (nil? (:status out)) "the run goes on to amend them, not to a stop")
+    (is (= {"c1" 1} (:refuted-running out)) "the reused refutation is counted once, not twice")
+    (testing "it stands only where the judge would read"
+      (is (= 1 (:launched (judged-over-ledger (assoc base :tree "tree-b"))))
+          "at another tree it is a different question, and is asked"))
+    (testing "an amendment since answers it"
+      (is (= 1 (:launched (judged-over-ledger
+                           (update-in base [:entries :baseline] conj
+                                      (assoc a-baseline :seq 4 :supersedes {:seq 1}))))))
+      (is (= 1 (:launched (judged-over-ledger (assoc base :c (ctx :iter 2)))))
+          "and after round 1 the run judges what it amended, which nobody has read"))
+    (testing "a review that held, or found nothing, is not taken"
+      (is (= 1 (:launched (judged-over-ledger
+                           (assoc-in base [:entries :baseline-review]
+                                     [(assoc standing-review :verdict :sufficient :findings [])])))))
+      (is (= 1 (:launched (judged-over-ledger
+                           (assoc-in base [:entries :baseline-review]
+                                     [(assoc standing-review :read-once ["c1"])]))))
+          "nor one resting on a first reading, which is owed another"))))
+
+(deftest a-design-holding-a-recut-at-this-tree-points-at-it-and-is-not-judged-again
+  ;; A second design run started 26 s after one that appended a recut, at the same identity, and
+  ;; its own judgement — the only thing it added — contradicted the first.
+  (let [design   {:format :design :seq 35 :strata [] :baseline {:seq 1}}
+        decision {:format :design-decision :seq 36 :design-seq 35 :recommend :recut
+                  :reason "the first landing is not habitable" :code-identity "tree-a"
+                  :run-id "design-loop-earlier"
+                  :checks [{:check :stratified :status :broken}]
+                  :findings [{:check :stratified :claim-id "writers-state-order"
+                              :claim "the first landing leaves writers unordered"
+                              :evidence ["src/a.clj:1"]}]}
+        base     {:tree "tree-a" :subject design :stage record/design-judge-stage
+                  :judge-fn #'record/design-decision!
+                  :judge {:outcome :no-output :detail "stub"}
+                  :entries {:design [design] :design-decision [decision]}}
+        {:keys [ctx launched appended]} (judged-over-ledger base)]
+    (is (zero? launched))
+    (is (empty? appended))
+    (is (= 36 (:reused-seq ctx)) "the round points at the decision that stands")
+    (is (= :recut (get-in ctx [:record :recommend])) "and goes on as that decision sends it")
+    (is (seq (:findings ctx)) "to the amender, with what it found")
+    (testing "an ask with nothing derivable ends the run on that ask, written once"
+      (let [ask {:format :design-decision :seq 36 :design-seq 35 :recommend :ask
+                 :reason "a person decides" :asks "which phase lands first?" :code-identity "tree-a"
+                 :checks [{:check :stratified :status :held}] :findings []}
+            {:keys [ctx launched appended]}
+            (judged-over-ledger (assoc-in base [:entries :design-decision] [ask]))]
+        (is (zero? launched))
+        (is (empty? appended))
+        (is (= :asked (:status ctx)))
+        (is (= 36 (:reused-seq ctx)))))
+    (testing "a proceed is never taken: what it may clear is the judge's to decide afresh"
+      (is (= 1 (:launched (judged-over-ledger
+                           (assoc-in base [:entries :design-decision]
+                                     [(assoc decision :recommend :proceed :findings []
+                                             :checks [{:check :stratified :status :held}])]))))))))
+
 (deftest nothing-is-settled-at-a-tree-no-review-read
   (let [[seen _] (judged-at "tree-b")]
     (is (= {} (:settled seen)))))

@@ -2139,7 +2139,7 @@
   [{:keys [kind pipeline finding-key changed? remedies epilogue]}
    ;; `seq-n`, not `seq` — see baseline-cmd*. Read here only to publish it as
    ;; the claim's target; which entry it names is baseline-at's business.
-   {:keys [cwd code-cwd max-iters dry-run? budget baseline reviewer] seq-n :seq
+   {:keys [cwd code-cwd max-iters dry-run? budget baseline reviewer caller] seq-n :seq
     :or   {budget default-launch-budget}}]
   (let [;; Through the home-aware union whether the caller named a directory or
         ;; not. A session home is a place an agent legitimately stands — it is
@@ -2161,7 +2161,14 @@
         report-path (str (fs/path (cstate/run-dir run-id) "report.json"))
         report-atom (atom (report/init {:run-id run-id :cwd cwd :base nil
                                         :started-at (str (clock))
-                                        :machinery (provenance/loaded-from cwd)}))
+                                        :machinery (provenance/loaded-from cwd)
+                                        :launch (cond-> {:caller (or caller "cli")
+                                                         :max-iters max-iters
+                                                         :budget budget}
+                                                  seq-n     (assoc :seq seq-n)
+                                                  code-cwd  (assoc :code-cwd (str code-cwd))
+                                                  reviewer  (assoc :reviewer (name reviewer))
+                                                  dry-run?  (assoc :dry-run? true))}))
         plain  (frontend/plain?)
         emit   (frontend/emit-fn report-atom report-path clock plain)
         reading (if code-cwd
@@ -2406,7 +2413,7 @@
     (if err
       (do (println (str "amend:append: " err)) 1)
       (let [loop-opts (-> (select-keys opts [:max-iters :budget :reviewer])
-                          (assoc :cwd cwd))]
+                          (assoc :cwd cwd :caller "amend:append"))]
         (println (str "amend:append: " answer " appended as entry " (:seq record)))
         (some-> (retreat/summary retreats) println)
         (if (= :design kind)

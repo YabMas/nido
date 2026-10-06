@@ -25,21 +25,28 @@
    there are two. Not `:reviewer` — that word is already the process that judges
    a range, codex or claude, and `:reviewer-unavailable` is a status about it. Supplied by the caller — see
    `nido.review.provenance/loaded-from` — because this namespace is pure and
-   answering it means reading the classpath and asking jj."
-  [{:keys [run-id cwd base started-at context machinery]}]
-  {:schema     schema-version
-   :run-id     run-id
-   :status     "running"
-   :target     (cond-> {:cwd cwd :base base :base-rev nil :files []}
-                 context (assoc :context context))
-   :machinery  machinery
-   :started-at started-at
-   :ended-at   nil
-   :rounds     []
-   :summary    nil
-   ;; Filled by `finalize` from the terminal ctx; nil while the run is going and
-   ;; nil at the end of one whose status is the whole story. See `stopped-on`.
-   :reason     nil})
+   answering it means reading the classpath and asking jj.
+
+   `:launch`, when given, is what started the run and with which arguments — `{:caller ...}` plus
+   the options it was given, :max-iters among them. Two runs over one record minutes apart read
+   the same from everything else here, and which of them was a person, a driver tick or a retry,
+   and whether either was capped, is what tells a duplicate from a re-run somebody wanted."
+  [{:keys [run-id cwd base started-at context machinery launch]}]
+  (cond->
+   {:schema     schema-version
+    :run-id     run-id
+    :status     "running"
+    :target     (cond-> {:cwd cwd :base base :base-rev nil :files []}
+                  context (assoc :context context))
+    :machinery  machinery
+    :started-at started-at
+    :ended-at   nil
+    :rounds     []
+    :summary    nil
+    ;; Filled by `finalize` from the terminal ctx; nil while the run is going and
+    ;; nil at the end of one whose status is the whole story. See `stopped-on`.
+    :reason     nil}
+    launch (assoc :launch launch)))
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport :Path [:maybe :map]] :ReviewReport]}
   with-judged-tree
@@ -587,13 +594,16 @@
       ;; nido read as the :amend its checks support.
       ;; :judged-seq is the entry the judge read and :appended-seq the entry its judgement became —
       ;; absent when the round appended none — so a round is joined to the ledger by number rather
-      ;; than by filtering the ledger on :run-id and counting.
+      ;; than by filtering the ledger on :run-id and counting. :reused-seq is instead the entry an
+      ;; earlier run appended that this round took as its judgement, launching no judge: everything
+      ;; else on the phase is that entry's, not this run's.
       ;; A finding row standing for a broken check carries :filed — see `with-filed`.
       :judge  (cond-> (assoc ph :verdict (some-> (get-in ctx [:record :verdict]) name)
                                 :outcome (some-> (get-in ctx [:record :outcome]) name)
                                 :findings (with-filed (:findings ctx) (get-in ctx [:record :findings])))
                 (:judged-seq ctx)   (assoc :judged-seq (:judged-seq ctx))
                 (:appended-seq ctx) (assoc :appended-seq (:appended-seq ctx))
+                (:reused-seq ctx)   (assoc :reused-seq (:reused-seq ctx))
                 (get-in ctx [:record :recommend])
                 (assoc :recommend (name (get-in ctx [:record :recommend]))
                        :findings-made (count (get-in ctx [:record :findings])))

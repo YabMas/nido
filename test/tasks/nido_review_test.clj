@@ -1545,6 +1545,21 @@
       (is (true? (:repair-at-cap? @seen)))
       (is (= record/owed-reading (:owes-reading @seen))))))
 
+(deftest a-record-loop-report-names-who-launched-it-and-with-what
+  ;; Two design runs over one record 26 s apart read alike in everything else the report holds, so
+  ;; whether the second was a person, a driver tick or a retry — and that the first was capped at
+  ;; one round — was not recoverable from either report.
+  (let [seen (atom [])
+        init rreport/init]
+    (with-redefs [rloop/run-loop (fn [_] {:status :sufficient})
+                  rreport/init   (fn [m] (swap! seen conj (:launch m)) (init m))]
+      (with-out-str (t/baseline-cmd ":cwd" "/w" ":max-iters" "1"))
+      (with-out-str (t/design-cmd* {:cwd "/w" :caller "drive"})))
+    (is (= {:caller "cli" :max-iters 1} (select-keys (first @seen) [:caller :max-iters]))
+        "a command line launch says so, with the cap it was given")
+    (is (= "drive" (:caller (second @seen))) "a driver launch is told apart from a person's")
+    (is (nil? (:max-iters (second @seen))) "and an uncapped run reads as uncapped")))
+
 (deftest a-cap-of-one-is-warned-about-at-launch
   ;; The hand-correct-then-verify pattern runs :max-iters 1 after a manual amendment. Refuted, its
   ;; round amends, and nothing in the run is left to read the amendment.
@@ -2501,7 +2516,8 @@
     (is (= answer (:answer appended)) "the answer file itself is what is appended")
     (is (= 4 (get-in appended [:prev :seq])) "as an amendment of the record the stopped round judged")
     (is (= 2 (:iter appended)))
-    (is (= {:cwd "/wt" :seq 5} entered) "and the round re-enters on the entry it became")))
+    (is (= {:cwd "/wt" :seq 5 :caller "amend:append"} entered)
+        "and the round re-enters on the entry it became, saying who started it")))
 
 (deftest a-stopped-answer-is-not-appended-over-a-newer-record
   ;; The hand re-type is exactly the newer record: appending the answer after it would fork the

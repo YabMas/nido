@@ -396,7 +396,7 @@
        :else
        (loop [attempt 1, tried []]
          (let [since   (when (= :decide-design stage) (newest-decision-seq project ws-id))
-               status  (try ((requiring-resolve task) {:cwd cwd})
+               status  (try ((requiring-resolve task) {:cwd cwd :caller "drive"})
                             (catch Throwable t
                               (binding [*out* *err*]
                                 (println (str "nido drive: " label " stage threw on "
