@@ -3,7 +3,8 @@
             [cheshire.core :as json]
             [clojure.edn :as edn])
   (:import [java.nio.channels FileChannel]
-           [java.nio.file Paths StandardOpenOption]))
+           [java.nio.file Files LinkOption NoSuchFileException Paths StandardOpenOption]
+           [java.nio.file.attribute BasicFileAttributes]))
 
 ;; ── Exclusion across processes AND threads ──────────────────────────────────
 
@@ -60,6 +61,43 @@
   [path]
   (when (fs/exists? path)
     (edn/read-string (slurp path))))
+
+(defn ^{:malli/schema [:=> [:cat :string] :any]}
+  file-stamp
+  "What changes whenever the file at `path` does — [inode mtime-ns size] — or nil
+   when there is no file. The inode is what makes it hold: `write-edn!` renames a
+   fresh file into place, so a rewrite is a different inode even inside one
+   mtime tick."
+  [path]
+  (try
+    (let [a (Files/readAttributes (Paths/get (str path) (make-array String 0))
+                                  BasicFileAttributes
+                                  ^"[Ljava.nio.file.LinkOption;" (make-array LinkOption 0))]
+      [(.fileKey a) (str (.lastModifiedTime a)) (.size a)])
+    (catch NoSuchFileException _ nil)))
+
+(defonce ^:private edn-cache (atom {}))
+
+(def ^:private edn-cache-cap 16384)
+
+(defn ^{:malli/schema [:=> [:cat :string] :any]}
+  read-edn-cached
+  "`read-edn`, but a file whose `file-stamp` has not moved is not parsed again.
+
+   For readers that re-read the same many files on a loop — the board and the
+   dashboard read every workstream and session record on every render, ~3000
+   files, nearly all unchanged since the last time. Bounded: past
+   `edn-cache-cap` the cache is dropped whole and refills from what is read."
+  [path]
+  (let [p (str path)]
+    (when-let [stamp (file-stamp p)]
+      (let [hit (get @edn-cache p)]
+        (if (= stamp (:stamp hit))
+          (:value hit)
+          (let [v (read-edn p)]
+            (swap! edn-cache #(assoc (if (>= (count %) edn-cache-cap) {} %)
+                                     p {:stamp stamp :value v}))
+            v))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :any] :any]}
   write-edn!

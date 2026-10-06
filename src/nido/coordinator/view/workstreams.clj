@@ -318,12 +318,23 @@
       ;; :awaiting-merge on a row projected :done.
       :doing           doing
       :open-findings   (count (:open (:findings ws)))
-      ;; Where the workstream is in its standing design's phase plan, nil for an
-      ;; unphased one or one whose design no longer stands. :between-phases? is
-      ;; read from :closed whatever drives the row: between phases is nido's own
-      ;; fact about the plan, which no ticket status carries.
-      :phase           (phase/progress (standing-design project (:id ws)) (:entries ws))
+      ;; :between-phases? is read from :closed whatever drives the row: between
+      ;; phases is nido's own fact about the plan, which no ticket status carries.
+      ;; Where the row stands IN that plan is `phase-progress`, asked only for
+      ;; rows the board draws.
       :between-phases? (= :between-phases (get-in ws [:closed :outcome]))})))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
+  phase-progress
+  "Where workstream `ws-id` is in its standing design's phase plan, nil for an
+   unphased one, one whose design no longer stands, or no workstream at all.
+
+   Not part of `workstream-row`: it reads the design's standing, the costliest
+   thing a row asks, and every row paid it — ~1000 rows per board refresh, nearly
+   all of them in :done, which nothing draws."
+  [project ws-id]
+  (when-let [ws (workstream/read-ws project ws-id)]
+    (phase/progress (standing-design project ws-id) (:entries ws))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string :map] :WorkstreamRow]}
   bare-row

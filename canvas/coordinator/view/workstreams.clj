@@ -62,6 +62,11 @@
     "A display row for a watched Notion page that has no workstream yet — what the board shows
      before anything local exists."
     {:signature [:=> [:catn [:project ProjectName] [:page-id :string] [:page :map]] WorkstreamRow]})
+  (Operation phase-progress
+    "Where a workstream is in its standing design's phase plan — asked apart from the row
+     because it reads the design's standing, which only a drawn row needs."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
+     :delegates [workstream/read-ws]})
   (Operation workstream-rows
     "Every display row for a project."
     {:signature [:=> [:catn [:project ProjectName] [:live-names [:? :any]]] [:vector WorkstreamRow]]

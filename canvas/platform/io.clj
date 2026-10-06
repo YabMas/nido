@@ -20,6 +20,13 @@
   (Operation read-edn
     "Read an EDN file, or nil when it does not exist."
     {:signature [:=> [:catn [:path :string]] :any]})
+  (Operation file-stamp
+    "What changes whenever a file does — inode, mtime, size — or nil when there is none."
+    {:signature [:=> [:catn [:path :string]] :any]})
+  (Operation read-edn-cached
+    "`read-edn` that does not parse a file again until its stamp moves."
+    {:signature [:=> [:catn [:path :string]] :any]
+     :delegates [file-stamp read-edn]})
   (Operation write-edn!
     "Atomically write EDN: a unique temp file, then a rename. A reader sees the old content or
      the new one, never a partial."

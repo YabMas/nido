@@ -108,7 +108,7 @@
   "Read a workstream.edn by project + id. Returns nil if absent. Normalizes the
    legacy :inbox stage to :incoming (see normalize-legacy-stage)."
   [project ws-id]
-  (some-> (io/read-edn (cstate/workstream-edn-path project ws-id))
+  (some-> (io/read-edn-cached (cstate/workstream-edn-path project ws-id))
           normalize-legacy-stage))
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] :Workstream]}
@@ -234,6 +234,31 @@
               (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
     (write! (if (seq tracker) (assoc w :findings tracker) (dissoc w :findings)))))
 
+(def ^:private parsed-entries
+  "Entry file → its parsed payload, keyed on [path kind file-stamp].
+
+   An entry is written once and never rewritten, yet every reader re-parsed it:
+   one `pipeline/of` on a 236-entry ledger parsed 526 files (~180ms), and the
+   board asks it for every drawn row on every refresh. The file's stamp is in the
+   key anyway, so a file that did change is re-read rather than trusted.
+
+   Bounded, because the daemon lives for days and the ledgers run to ~100MB of
+   EDN between them: past `parsed-entry-cap` the cache is dropped whole and
+   refills from what is actually being read."
+  (atom {}))
+
+(def ^:private parsed-entry-cap 4096)
+
+(defn- parse-entry-file
+  "`report/parse-event` of the entry file `f` as `kind`, through `parsed-entries`.
+   Throws as an uncached read would — a failure is never cached."
+  [kind f]
+  (let [k [f kind (io/file-stamp f)]]
+    (or (get @parsed-entries k)
+        (let [v (report/parse-event kind (io/read-edn f))]
+          (swap! parsed-entries #(assoc (if (>= (count %) parsed-entry-cap) {} %) k v))
+          v))))
+
 (defn- read-entry-at
   "Parse the entry at `seq-n` on the workstream record `w`, through the READ
    contract, stamped with :seq/:at — or nil when absent or unparseable. Degrades
@@ -242,7 +267,7 @@
   [w seq-n]
   (when-let [e (->> (:entries w) (filter #(= seq-n (:seq %))) first)]
     (let [f (str (fs/path (cstate/workstream-dir (:project w) (:id w)) (:file e)))]
-      (try (-> (report/parse-event (:kind e) (io/read-edn f))
+      (try (-> (parse-entry-file (:kind e) f)
                (assoc :seq (:seq e) :at (:at e)))
            (catch Throwable _ nil)))))
 
@@ -1624,7 +1649,7 @@
                       (sort-by :seq)
                       last)]
       (let [f (str (fs/path (cstate/workstream-dir project ws-id) (:file e)))]
-        (try (-> (report/parse-event kind (io/read-edn f))
+        (try (-> (parse-entry-file kind f)
                  (assoc :seq (:seq e) :at (:at e)))
              (catch Throwable _ nil))))))
 

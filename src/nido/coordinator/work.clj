@@ -547,6 +547,9 @@
    and the detail pane already asks pipeline/of for itself — stamping there would
    make every pane read the ledger twice to answer one question.
 
+   The phase plan rides along for the same reason: it is a standing read too,
+   and only a drawn row shows it.
+
    Skipped for the bands nothing draws. It costs a ledger read and a standing
    closure per row (~4ms measured across brian's 45 open workstreams, ~190ms for
    the board), which is affordable against a multi-second poll and worth not
@@ -556,6 +559,7 @@
     row
     (let [position (pipeline/of project (:ws-id row))]
       (cond-> (assoc row :position position)
+        (not (:bare? row)) (assoc :phase (wsv/phase-progress project (:ws-id row)))
         ;; A workstream whose next move is a person's IS a gate, and nothing else
         ;; was going to say so. :needs-you is projected from session phases, and
         ;; the rounds that hand work back to a human run as tasks that park no

@@ -69,8 +69,7 @@
       (->> (fs/list-dir d)
            (filter fs/directory?)
            (map #(str (fs/path % "session.edn")))
-           (filter fs/exists?)
-           (keep io/read-edn))
+           (keep io/read-edn-cached))
       [])))
 
 (defn- list-ws-ids [project]
