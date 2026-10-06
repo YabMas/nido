@@ -667,6 +667,26 @@
         "a stand-in's decision must not read as the configured reviewer's")
     (is (= "tree-1" (:code-identity ph)))))
 
+(deftest a-judge-phase-accounts-for-every-claim-it-read
+  ;; report.json listed 6 confirmed and 1 unchecked of the 10 claims a round judged: the 3 held owed
+  ;; were on the ledger alone, and a round reading every claim owed read like one reading none.
+  (let [r  (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+               (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+               (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                    :ctx {:record {:format :design-decision :recommend :proceed
+                                                   :confirmed ["c1"] :owed ["c2" "c3"]
+                                                   :overturns [{:id "c2" :seq 44 :ws-id "ws-1"}]}
+                                          :rejudged {:seq 18 :because "passed" :was "proceed"}
+                                          :findings []}} nil))
+        ph (first (:phases (first (:rounds r))))]
+    (is (= ["c2" "c3"] (:owed ph)) "a claim held owed is a ruling, and the report must show it was read")
+    (is (= [{:id "c2" :seq 44 :ws-id "ws-1"}] (:overturns ph))
+        "a run reversing an earlier finding says so where the reversal was made")
+    (is (= {:seq 18 :because "passed" :was "proceed"} (:rejudged ph))
+        "a design judged again after it proceeded says why, or the second decision reads as unexplained"))
+  (let [[_ ph] (design-judge-phase {:format :design-decision :recommend :proceed :confirmed ["c1"]})]
+    (is (not-any? #(contains? ph %) [:owed :overturns :rejudged]) "absent when there is nothing to say")))
+
 (deftest a-design-round-that-asked-a-person-is-not-clean
   (let [[round _] (design-judge-phase {:format :design-decision :recommend :ask :asks "scope?"
                                        :checks [{:check :stratified :status :held :note "n"}]})]

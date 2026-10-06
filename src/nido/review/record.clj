@@ -4376,6 +4376,56 @@
                                               stale))
      :prior    (when subject (settled/prior-findings ls kind subject run-id))}))
 
+(defn- newest-judgement
+  "The newest `judged` entry on the ledger naming `subject` under `seq-key`, or nil."
+  [[project ws-id] judged seq-key subject]
+  (when (and project (:seq subject))
+    (last (filter #(= (:seq subject) (seq-key %)) (ws/entries-of project ws-id judged)))))
+
+(defn- why-judged-again
+  "Why round 1 asks a judge about `subject` rather than taking `j`, the newest judgement of it on
+   the ledger, as its own — nil when it takes it (`standing-judgement`). One keyword, the first that
+   applies:
+
+     :not-round-1   the run is past round 1, or repairing what it refuted
+     :no-identity   the tree has no identity, so no reading of it can be matched
+     :tree-moved    `j` was read at another tree
+     :carried       `j` restated an earlier verdict with no judge launched
+     :unruled       `j` left a check, or a baseline id, without a ruling
+     :read-once     `j` rested on a first reading, which is owed a second
+     :superseded    a later record answers `subject`
+     :retracted     `j`'s subject was retracted
+     :passed        `j` would let the record through — a proceed, a review that holds — which is
+                    never taken: what it may clear is a judge's to decide afresh
+
+   :passed is the reason a design already proceeded on, at an unmoved tree, is judged again."
+  [ctx [project ws-id] subject reading j stands?]
+  (let [n (:seq subject)]
+    (cond
+      (or (not= 1 (:iter ctx)) (get-in ctx [:carry :under-repair])) :not-round-1
+      (nil? (:code-identity reading))                                :no-identity
+      (not= (:code-identity reading) (:code-identity j))             :tree-moved
+      (:carried-from j)                                              :carried
+      (or (seq (:unruled j)) (seq (:relation-unruled j)))            :unruled
+      (or (seq (:read-once j)) (:amendment-read-once j))             :read-once
+      (some #(= n (get-in % [:supersedes :seq])) (ws/entries-of project ws-id (:format subject)))
+      :superseded
+      (some #(= n (get-in % [:retracts :seq])) (ws/entries-of project ws-id :retraction))
+      :retracted
+      (not (stands? j))                                              :passed)))
+
+(defn- rejudged
+  "What a judge phase records of `j`, the judgement already on the ledger that round 1 asked a judge
+   about again, and why (`why-judged-again`) — or nil when there was none, or it was taken, or the
+   round is not round 1, where every run judges what it amended."
+  [ctx ledger subject reading j stands?]
+  (when j
+    (when-let [why (why-judged-again ctx ledger subject reading j stands?)]
+      (when (not= :not-round-1 why)
+        (cond-> {:seq (:seq j) :because (name why)}
+          (:recommend j) (assoc :was (name (:recommend j)))
+          (:verdict j)   (assoc :was (name (:verdict j))))))))
+
 (defn- standing-judgement
   "The judgement of `subject` already on the ledger that round 1 of a run takes as its own instead
    of launching a judge, or nil. `judged` is :baseline-review or :design-decision, `seq-key` the
@@ -4391,21 +4441,10 @@
    reading, as after any amendment.
 
    Round 1 only: from then on the run judges what it amended, which no earlier run has read."
-  [ctx [project ws-id] judged seq-key subject reading stands?]
-  (when (and project (:seq subject) (:code-identity reading)
-             (= 1 (:iter ctx)) (nil? (get-in ctx [:carry :under-repair])))
-    (let [n    (:seq subject)
-          j    (last (filter #(= n (seq-key %)) (ws/entries-of project ws-id judged)))
-          kind (:format subject)]
-      (when (and j
-                 (= (:code-identity reading) (:code-identity j))
-                 (nil? (:carried-from j))
-                 (empty? (:unruled j)) (empty? (:relation-unruled j))
-                 (empty? (:read-once j)) (not (:amendment-read-once j))
-                 (not-any? #(= n (get-in % [:supersedes :seq])) (ws/entries-of project ws-id kind))
-                 (not-any? #(= n (get-in % [:retracts :seq])) (ws/entries-of project ws-id :retraction))
-                 (stands? j))
-        j))))
+  [ctx ledger judged seq-key subject reading stands?]
+  (let [j (newest-judgement ledger judged seq-key subject)]
+    (when (and j (nil? (why-judged-again ctx ledger subject reading j stands?)))
+      j)))
 
 (defn- carried-readings
   "What an earlier quiet round of this run read of `subject`, the same record, since a quiet round
@@ -4547,8 +4586,10 @@
         {:keys [standing settled prior]} (-> (judge-inputs project ws-id :baseline subject reading subject run-id
                                                            (concat (get-in ctx [:carry :stale]) (keys refuted)))
                                              (update :prior merge refuted))
-        reused  (standing-judgement ctx ledger :baseline-review :baseline-seq subject reading
-                                    #(and (seq (:findings %)) (not (report/review-holds? %))))
+        stands? #(and (seq (:findings %)) (not (report/review-holds? %)))
+        reused  (standing-judgement ctx ledger :baseline-review :baseline-seq subject reading stands?)
+        again   (rejudged ctx ledger subject reading
+                          (newest-judgement ledger :baseline-review :baseline-seq subject) stands?)
         asked   (cond reused #{} subject (owed-rulings subject settled))
         judged  (when-not reused
                   (baseline-review!
@@ -4587,6 +4628,7 @@
                           (update :carry dissoc :stale))
                       (when (:seq subject) {:judged-seq (:seq subject)})
                       (when-let [m (:tree-moved judged)] {:tree-moved m})
+                      (when again {:rejudged again})
                       (when subject (banking asked reading record)))]
     (let [answer (if reused (reused-answer reused) (append! ledger record))]
       (with-appended
@@ -5115,6 +5157,7 @@
       :reviews   n :derivations {derivation {:broken n :alone n :at-end bool}}
                    :falsified   {claim-id n}
       :confirmed {id n}
+      :owed      {id n}
       :judged-by {reviewer n}
       :unruled   {id n}
       :unchecked {id n}
@@ -5139,7 +5182,9 @@
    :asks counts the decisions that recommended :ask, and says whether the last did — the one figure
    for a round that asked and filed nothing the question could be keyed on.
 
-   :confirmed counts, per subject, the judgements of either kind that confirmed it. :judged-by counts
+   :confirmed counts, per subject, the judgements of either kind that confirmed it, and :owed the
+   decisions that held it sound but not yet met at the tree they read — so a claim read every round
+   is not absent from the figures because the build had not reached it. :judged-by counts
    judgements per reviewer that answered, a stand-in as `claude for codex`, so a comparison across
    runs can hold the instrument fixed; a judgement from before that was kept counts in neither.
    :unruled counts, per subject, the judgements handed it as a check that left it without a ruling;
@@ -5149,7 +5194,7 @@
    without anyone ruling on, which a sufficient status does not say.
    :settled-then-found counts, per subject, the judgements that found against it while it was
    settled (`:overrides-settled`) — beside :confirmed, the rate at which settlement shields a false
-   confirmation. Each of these seven is present only when non-empty.
+   confirmation. Each of these eight is present only when non-empty.
 
    :relation-flips counts, per baseline id, the decisions that ruled it the other way from the one
    before (`relation-flips`), and :relation-reversals those of the flips the round did not take, for
@@ -5181,6 +5226,7 @@
         spent-end (:spent (last (sort-by :seq judgements)))
         relation-unruled (frequencies (mapcat :relation-unruled decisions))
         confirmed (frequencies (mapcat :confirmed judgements))
+        owed      (frequencies (mapcat :owed decisions))
         overridden (frequencies (mapcat #(map :id (:overrides-settled %)) judgements))
         judges    (frequencies (keep (comp judge-name :judged-by) judgements))
         flips     (relation-flips decisions)
@@ -5203,6 +5249,7 @@
       (seq still)     (assoc :still-unchecked (vec (sort still)))
       (seq relation-unruled) (assoc :relation-unruled (into (sorted-map) relation-unruled))
       (seq confirmed) (assoc :confirmed (into (sorted-map) confirmed))
+      (seq owed)      (assoc :owed (into (sorted-map) owed))
       (seq overridden) (assoc :settled-then-found (into (sorted-map) overridden))
       (seq judges)    (assoc :judged-by (into (sorted-map) judges))
       (seq flips)     (assoc :relation-flips flips)
@@ -5452,8 +5499,10 @@
         ;; A decision that would not proceed, standing at this tree: the round points at it rather
         ;; than asking a judge again, and goes on as that decision sends it — to the amender, or to
         ;; the person it asks.
-        reused  (standing-judgement ctx ledger :design-decision :design-seq design reading
-                                    (complement report/proceeds?))
+        stands? (complement report/proceeds?)
+        reused  (standing-judgement ctx ledger :design-decision :design-seq design reading stands?)
+        again   (rejudged ctx ledger design reading
+                          (newest-judgement ledger :design-decision :design-seq design) stands?)
         asked   (cond reused #{} design (decision-asked design settled))
         judged  (when-not reused
                   (design-decision!
@@ -5485,6 +5534,7 @@
                           (update :carry dissoc :stale))
                       (when (:seq design) {:judged-seq (:seq design)})
                       (when-let [m (:tree-moved judged)] {:tree-moved m})
+                      (when again {:rejudged again})
                       (when design (banking asked reading record)))
         traj   (trajectory (:history ctx))
         ;; The status a run ends on is a claim that the ledger holds this decision: an :asked

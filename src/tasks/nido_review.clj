@@ -2469,7 +2469,7 @@
    rounds, and how many ended asking. Per
    stratum, its level judges' readings summed; per claim found false, per subject confirmed, left
    unruled, declared unchecked or found against while settled, and per reviewer that answered, the
-   runs' counts summed; per subject, in how many runs it was still unchecked at the end — and per
+   runs' counts summed, and likewise per claim held owed; per subject, in how many runs it was still unchecked at the end — and per
    baseline id, the decisions leaving it with no relation ruling, its relation-ruling flips
    each way and its reversals not taken; per subject, its holds/owed flips each way at one tree
    and its splits. Per subject spent at a run's end, `{:runs n :max n}`: in
@@ -2500,6 +2500,7 @@
      :derivations (reduce add (sorted-map) (keep :derivations figures))
      :falsified   (counts :falsified)
      :confirmed   (counts :confirmed)
+     :owed        (counts :owed)
      :unruled     (counts :unruled)
      :unchecked   (counts :unchecked)
      :still-unchecked (into (sorted-map) (frequencies (mapcat :still-unchecked figures)))

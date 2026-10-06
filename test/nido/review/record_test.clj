@@ -269,6 +269,15 @@
     (is (= ["structure-not-exposed"] (:read-once r))
         "confirmed once and then not read is one reading, and a run must not stop on it")))
 
+(deftest figures-count-each-claim-held-owed
+  ;; A claim judged owed every round was in no figure at all, so an owed->holds flip could only be
+  ;; found by reading each round's raw decision output.
+  (let [d (fn [n & {:as more}] (merge {:format :design-decision :seq n :design-seq 37 :checks []} more))
+        f (record/run-figures [(d 1 :owed ["a" "b"]) (d 2 :owed ["a"] :confirmed ["b"])
+                               {:format :baseline-review :seq 3 :baseline-seq 1 :owed ["z"]}])]
+    (is (= {"a" 2 "b" 1} (:owed f)) "counted per claim, over the run's decisions — a review holds nothing owed")
+    (is (nil? (:owed (record/run-figures [(d 1 :confirmed ["a"])]))))))
+
 (deftest figures-count-holds-and-owed-flips-at-one-tree
   (let [d (fn [n ruled & {:as more}]
             (merge {:format :design-decision :seq n :design-seq 37 :code-identity "e76cd2"

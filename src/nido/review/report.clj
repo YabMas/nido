@@ -620,7 +620,11 @@
       ;; :findings carries one row per broken check whatever number of findings named it, and one per
       ;; claim refuted under no check. :made is every finding the decision holds, each marked
       ;; advisory, for-person or derivable (`made`) — :findings is only what the round handed on.
-      ;; :confirmed is what the round kept of the judge's confirmations.
+      ;; :confirmed is what the round kept of the judge's confirmations, and :owed each claim it held
+      ;; sound but not yet met at this tree — without it a round that read every claim owed reads
+      ;; like one that read none. :overturns is each earlier run's finding this judgement reversed.
+      ;; :rejudged is why round 1 asked a judge again over a judgement of the same record already on
+      ;; the ledger (`nido.review.record/why-judged-again`), naming that entry and what it recommended.
       ;; :judged-by is who answered — a stand-in's judgement is not the configured reviewer's,
       ;; on a phase or on the ledger — and :code-identity the tree its confirmations are keyed on.
       ;; :carried-from is the review whose verdict a round restated with no judge launched.
@@ -666,6 +670,11 @@
                                       (get-in ctx [:record :checks])))
                 (seq (get-in ctx [:record :confirmed]))
                 (assoc :confirmed (vec (get-in ctx [:record :confirmed])))
+                (seq (get-in ctx [:record :owed]))
+                (assoc :owed (vec (get-in ctx [:record :owed])))
+                (seq (get-in ctx [:record :overturns]))
+                (assoc :overturns (vec (get-in ctx [:record :overturns])))
+                (:rejudged ctx) (assoc :rejudged (:rejudged ctx))
                 (or (get-in ctx [:record :judged-by]) (get-in ctx [:record :answer :judged-by]))
                 (assoc :judged-by (or (get-in ctx [:record :judged-by])
                                       (get-in ctx [:record :answer :judged-by])))

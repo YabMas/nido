@@ -1431,11 +1431,19 @@
         (is (empty? appended))
         (is (= :asked (:status ctx)))
         (is (= 36 (:reused-seq ctx)))))
+    (is (nil? (:rejudged ctx)) "a decision taken is not one judged again")
     (testing "a proceed is never taken: what it may clear is the judge's to decide afresh"
-      (is (= 1 (:launched (judged-over-ledger
-                           (assoc-in base [:entries :design-decision]
-                                     [(assoc decision :recommend :proceed :findings []
-                                             :checks [{:check :stratified :status :held}])]))))))))
+      (let [proceeded (assoc decision :recommend :proceed :findings []
+                             :checks [{:check :stratified :status :held}])
+            out       (judged-over-ledger (assoc-in base [:entries :design-decision] [proceeded]))]
+        (is (= 1 (:launched out)))
+        (is (= {:seq 36 :because "passed" :was "proceed"} (get-in out [:ctx :rejudged]))
+            "and the round says why it asked again over a design already proceeded on")
+        (is (= "tree-moved" (get-in (judged-over-ledger (assoc base :tree "tree-b"
+                                                               :entries {:design [design]
+                                                                         :design-decision [proceeded]}))
+                                    [:ctx :rejudged :because]))
+            "the first reason that applies is the one stamped")))))
 
 (deftest nothing-is-settled-at-a-tree-no-review-read
   (let [[seen _] (judged-at "tree-b")]
