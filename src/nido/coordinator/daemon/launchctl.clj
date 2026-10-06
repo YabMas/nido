@@ -101,7 +101,12 @@
    - :bb-path   — absolute path to the bb binary
    - :nido-dir  — absolute path to the nido checkout (becomes WorkingDirectory)
    - :log-path  — absolute path for StandardOutPath + StandardErrorPath
-   - :path-env  — PATH value injected into the daemon's environment"
+   - :path-env  — PATH value injected into the daemon's environment
+
+   ProcessType Interactive, because the daemon serves the dashboard a person is
+   waiting on. Left unset, launchd applies its light resource limits — throttled
+   CPU and I/O — and on a loaded machine (load 23 on 14 cores) the same page
+   rendered in 0.3s standalone took 1.2–1.4s from the daemon."
   [{:keys [bb-path nido-dir log-path path-env]}]
   (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
@@ -120,6 +125,8 @@
        "    <true/>\n"
        "    <key>KeepAlive</key>\n"
        "    <true/>\n"
+       "    <key>ProcessType</key>\n"
+       "    <string>Interactive</string>\n"
        "    <key>ThrottleInterval</key>\n"
        "    <integer>10</integer>\n"
        "    <key>StandardOutPath</key>\n"

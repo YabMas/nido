@@ -48,6 +48,8 @@
        "    <true/>\n"
        "    <key>KeepAlive</key>\n"
        "    <true/>\n"
+       "    <key>ProcessType</key>\n"
+       "    <string>Interactive</string>\n"
        "    <key>ThrottleInterval</key>\n"
        "    <integer>10</integer>\n"
        "    <key>StandardOutPath</key>\n"
