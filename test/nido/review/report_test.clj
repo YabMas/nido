@@ -1188,6 +1188,17 @@
         "and per round, because a later warden may drop an item and a reader
          asking why needs the round it was last named in")))
 
+(deftest standing-comes-from-the-last-round-that-ran-a-warden
+  ;; review-be5e2123 ended on a review-only re-reading. Its ctx had no warden,
+  ;; and the two standing items the round before listed reached no ledger entry.
+  (let [item {:what "the equivalence claim belongs with tfs-transport"}]
+    (is (= [item] (:standing (report/stopped-on
+                              {:history [{:iter 1 :warden {:standing [item]}}]}))))
+    (is (nil? (:standing (report/stopped-on
+                          {:warden {:standing []}
+                           :history [{:iter 1 :warden {:standing [item]}}]})))
+        "a terminal round that ran a warden has the last word, and dropping an item is its answer")))
+
 (deftest a-row-no-layer-holds-is-standing-even-with-no-warden-to-list-it
   ;; review-830f5aec counted two inherited rows open that no layer label matched,
   ;; and neither id appeared anywhere in its report. No warden is shown those

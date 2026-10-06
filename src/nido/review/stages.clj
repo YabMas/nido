@@ -1084,7 +1084,7 @@
                       rows)
         standing))))
 
-(declare unanswered-inherited)
+(declare unanswered-inherited with-round-history)
 
 (defn- run-owed
   "What the run is still owed, off a round's ctx, by the pipeline's own reading:
@@ -2616,8 +2616,8 @@
    nothing landed on.
 
    They cover each other exactly, which is why neither alone was enough. Only a
-   round that landed a fix or settled a finding is in `:history` at all — and a
-   round that lands nothing leaves the patch where it was, so what the label
+   round a warden ruled on is in `:history` at all — and a round no warden ruled
+   on landed nothing, so it leaves the patch where it was and what the label
    cannot reach the hash still finds.
 
    The cache is asked about the targets UNDER REVIEW, which is what makes what
@@ -3405,9 +3405,12 @@
             ;; its layers are about to be repaired or read again regardless,
             ;; and the round did not go back for them.
             hold?    (and (seq sampled) (= :stop (:control ctx')) (not (:status ctx')))]
+        ;; A held round runs no fix stage, which is where a round is otherwise
+        ;; entered in `:history`, so it is entered here.
         (cond-> (with-quiet-reads ctx' statuses
                                   (quiet-patches (:reviews ctx') (:findings ctx')))
-          hold? (assoc :read-once (mapv :label sampled) :control :next-round))))))
+          hold? (-> (assoc :read-once (mapv :label sampled) :control :next-round)
+                    with-round-history))))))
 
 (def warden-stage
   "The one reader with a view across layers, so attribution is its job.
@@ -3768,7 +3771,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    the reshape stage then refuses it, the finding has no path at all. It went to
    the round's `:reshapes` array and to nothing the next warden or the
    termination check could see: `fix-plan` filters on `:disposition :fix`, and
-   `:history` is appended by the fix stage alone. One run refused two recuts;
+   nothing else carried a refused recut forward. One run refused two recuts;
    one was ruled real and then appeared in no later round's findings or rulings,
    and the other ended the run under a status about the fixer's empty input.
 
@@ -3942,16 +3945,19 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    wording — every instance is filed under the handle the class was first raised
    with, and a return under fresh words keeps it.
 
-   A round is in `:history` only when it landed a fix or settled a finding its
-   fixer found already absent, so a round named here is one whose sweep was
-   carried out and survived. A fixer that declined leaves no entry, and one that
-   answered absent swept nothing — its finding is skipped — so nothing here
-   mistakes a refusal for a sweep that failed."
+   Only a sweep a landed fix commit named counts, so a round named here is one
+   whose sweep was carried out and survived. A round enters `:history` once its
+   warden rules, fixer or not — so a sweep ordered in a round whose fixer
+   declined, or that ran no fix stage at all, is in the history and was never
+   carried out. One that answered absent swept nothing and is skipped too, so
+   nothing here mistakes a refusal for a sweep that failed."
   [findings history]
   (let [swept (reduce (fn [acc round]
                         (reduce (fn [a f]
                                   (if (and (:sweep f)
-                                         (not= "absent-at-head" (:authority f)))
+                                           (contains? (into #{} (mapcat :handed) (:fixes round))
+                                                      (or (:handle f) (:id f)))
+                                           (not= "absent-at-head" (:authority f)))
                                     (update a (or (:handle f) (:id f))
                                             (fnil conj []) (:iter round))
                                     a))
@@ -4492,19 +4498,24 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                          findings)))
 
 (defn- with-round-history
-  "`ctx` with this round entered in `:history` when it landed a fix or settled a
-   finding on a fixer's evidence that it is already absent — the only channel
-   that carries a round's account to the termination check and to the readers
-   of the run's final value. A round that did neither enters nothing, and one
-   that did enters it however the plan ended: run through, stopped, or thrown
-   out of part-way.
+  "`ctx` with this round entered in `:history` when its warden ruled on anything,
+   landed a fix, or settled a finding on a fixer's evidence that it is already
+   absent — the only channel that carries a round's account to the termination
+   check and to the readers of the run's final value. A round that did none of
+   these enters nothing, and one that did enters it however the plan ended: run
+   through, stopped, or thrown out of part-way.
 
-   The settling round is entered because it is the one no-fix round the run
-   goes on from (see `run-fix-stage`), and the next round replaces `:findings`:
-   left out, the close it ruled and every other ruling it held would vanish
-   from the fold rather than be read as decided."
+   A ruled round is entered whether or not a fixer ran, because the next round
+   replaces `:findings`: left out, every ruling it held vanishes from
+   `verdict/fold-rulings` rather than being read as decided. The round the
+   read-once hold carries on from (see `run-warden-stage`) is the one that
+   matters: a park ruled there is in no later round's findings, so the history
+   is the only place the remainder can find it.
+
+   Call it at most once per round: a second call enters the round twice."
   [ctx]
-  (if (or (seq (:fixes ctx)) (some :absent (:declined ctx)))
+  (if (or (seq (:fixes ctx)) (some :absent (:declined ctx))
+          (seq (get-in ctx [:warden :rulings])))
     (update ctx :history (fnil conj [])
             {:iter (:iter ctx)
              :fixes (:fixes ctx)

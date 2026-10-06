@@ -52,6 +52,14 @@
   (cond-> (assoc-in report [:target :code-cwd] code-cwd)
     (seq tree) (assoc-in [:target :tree] tree)))
 
+(defn- last-warden
+  "The warden of the last round in `ctx` that ran one: the terminal round's own,
+   else the newest in `:history`, or nil. A round the read-once hold carried on
+   from is entered in the history with its warden, and the review-only round
+   after it has none of its own."
+  [ctx]
+  (or (:warden ctx) (some :warden (rseq (vec (:history ctx))))))
+
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
   stopped-on
   "What the run stopped ON, read off its terminal ctx — as against `:status`,
@@ -78,8 +86,11 @@
 
    `:standing` is the last warden's own list of what it knows is open and handed
    to nobody — no finding covers it, no fixer was launched at it, so nothing
-   else in the run mentions it. The terminal ROUND's list rather than the union
-   over the run, and that is the accurate reading: a standing item carries no id
+   else in the run mentions it. The last round that RAN a warden, which is not
+   the terminal round when the run ends on a review-only re-reading: that round
+   has no warden, and its empty list would drop every item. The last
+   warden's list rather than the union over the run, and that is the accurate
+   reading: a standing item carries no id
    and no handle, so nothing in the loop can settle one and a union could only
    grow. Which is why the warden is asked for the whole list every round, and
    why a later round dropping an item is that warden's answer rather than a
@@ -116,7 +127,7 @@
    the ledger it could not write to: the decision it reached is in this report and nowhere else."
   [ctx]
   (let [parks    (get-in ctx [:carry :parks])
-        standing (into [] (distinct) (concat (get-in ctx [:warden :standing])
+        standing (into [] (distinct) (concat (:standing (last-warden ctx))
                                              (get-in ctx [:carry :inherited-standing])
                                              (:unplaced ctx)
                                              (some-> (:off-yardstick ctx) vector)))
@@ -1220,14 +1231,15 @@
                        (mapv ruled (:rulings warden))
                        (vec (:findings review))))
      :fixes    (vec (:fixes fix))
-     :absent   (vec (keys absent))}))
+     :absent   (vec (keys absent))
+     :ruled?   (boolean (and (= "ok" (:status warden)) (seq (:rulings warden))))}))
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport] :map]}
   as-final
   "The loop's terminal value as far as `report` can rebuild one, for a run that
    never returned its own: `:findings` and `:fixes` of the round it stopped in,
-   `:history` of every earlier round that landed a repair or settled a finding
-   absent, and
+   `:history` of every earlier round whose warden ruled, that landed a repair
+   or that settled a finding absent, and
    `:review-aborted?` when the stopping round's review never finished.
 
    The shape `nido.review.verdict` folds, so a settled run's remainder, kept
@@ -1242,7 +1254,7 @@
   [report]
   (let [rounds (mapv round-as-ctx (:rounds report))]
     (if-let [stop (peek rounds)]
-      {:history         (into [] (comp (filter #(or (seq (:fixes %)) (seq (:absent %))))
+      {:history         (into [] (comp (filter #(or (:ruled? %) (seq (:fixes %)) (seq (:absent %))))
                                        (map #(select-keys % [:iter :fixes :findings])))
                               (pop rounds))
        :findings        (:findings stop)

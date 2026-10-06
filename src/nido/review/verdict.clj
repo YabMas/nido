@@ -822,9 +822,22 @@
    views.
 
    What a decline and a deviation leave behind is not nothing, and it is not
-   here — see `kept-across-run`."
+   here — see `kept-across-run`.
+
+   After the fold's own remainder, every park in `[:carry :parks]` the fold does
+   not know — `stages/carried-parks` already drops one a later ruling settled,
+   so what is left was ruled in a round the history never held, and is owed."
   [final]
-  (into [] (remove stages/settled?) (final-rulings final)))
+  (let [{:keys [standing repaired]} (fold-rulings final)
+        known (into #{} (comp (mapcat (juxt :handle :id)) (remove nil?) (map str))
+                    (concat standing repaired))]
+    (into (into [] (remove stages/settled?) standing)
+          (comp (remove (fn [[k _]] (contains? known (str k))))
+                (map (fn [[k p]]
+                       (-> (select-keys p [:owner-layer :kind :title :because])
+                           (assoc :id (str k) :handle (str k) :disposition :park)))))
+          (sort-by (juxt (comp #(or % 0) :since val) (comp str key))
+                   (get-in final [:carry :parks])))))
 
 (defn- finding-key
   "The id a finding is named by to the verdict pass and back: the warden's
@@ -1399,10 +1412,31 @@
                       (seq (get-in final [:warden :standing]))
                       (update-in [:warden :standing] standing)
 
+                      ;; `report/stopped-on` reads a history entry's list when
+                      ;; the terminal round ran no warden.
+                      (some #(seq (get-in % [:warden :standing])) (:history final))
+                      (update :history (partial mapv #(cond-> %
+                                                        (seq (get-in % [:warden :standing]))
+                                                        (update-in [:warden :standing] standing))))
+
                       (seq (get-in final [:carry :inherited-standing]))
                       (update-in [:carry :inherited-standing] standing))
           owed      (vec (still-owed final'))]
       (assoc final' :owed owed :status (restatus final' owed)))))
+
+(defn- owed-and-final
+  "What the design judge classifies: the final round's findings, then every row
+   of the run's own remainder they do not hold — `still-owed` less its inherited
+   rows, which reach the judge as questions instead. A park ruled rounds before
+   the run ended is in no final round, so read off the final round alone the
+   judge never sees it and leaves it out of `:needs`."
+  [final]
+  (let [fs   (vec (:findings final))
+        seen (into #{} (comp (mapcat (juxt :handle :id)) (remove nil?) (map str)) fs)]
+    (into fs
+          (remove #(or (:inherited %) (some (fn [k] (contains? seen (str k)))
+                                            (remove nil? [(:handle %) (:id %)]))))
+          (still-owed final))))
 
 (defn- as-questions
   "`stages/unanswered-inherited`, each row nothing in the loop could have
@@ -1500,7 +1534,7 @@
                       {:design design
                        :baseline (stages/discover-baseline cwd design)
                        :stance (stages/read-stance (first (stages/project+ws-from-cwd cwd)))
-                       :findings (still-open (:findings final))
+                       :findings (still-open (owed-and-final final))
                        :inherited (as-questions final)
                        :closed (closed-across-run final)
                        :history (mapv #(dissoc % :findings :patch-hashes) (:history final))

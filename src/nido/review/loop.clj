@@ -147,52 +147,58 @@
 
    The cap is read against `counted`, not :iter: a round entered only to read again what the
    round before read once (`rereading?`) is not counted, so a cap never falls between a reading
-   and the second reading it owes."
+   and the second reading it owes.
+
+   The stall checks read `held` — the round's findings the run still owes — and `prev-findings`
+   is the previous round's `held`. A finding the round settled is no stall however often it is
+   raised: read over every finding, a round whose only finding is ruled a deviation would end
+   :no-progress naming a finding the remainder says is not open."
   [{:keys [finding-key attempt-key attempted? prev-findings counted max-iters
-           changed? spent owes-reading repair-at-cap? rereading?]} ctx prior judged?]
-  (cond
-    ;; BEFORE no-progress?, because both are true of a run that ends holding the
-    ;; same findings and only this one says which. :no-progress sends a reader
-    ;; to look at everything; :unfixable names the two or three that did not
-    ;; move, which on a converged baseline is the whole of what is left.
-    (seq (unfixable finding-key attempt-key attempted? prior (:findings ctx)))
-    (assoc ctx :status :unfixable
-           :unfixable (vec (unfixable finding-key attempt-key attempted?
-                                      prior (:findings ctx))))
+           changed? spent owes-reading repair-at-cap? rereading? held]} ctx prior judged?]
+  (let [findings (held ctx)]
+    (cond
+      ;; BEFORE no-progress?, because both are true of a run that ends holding the
+      ;; same findings and only this one says which. :no-progress sends a reader
+      ;; to look at everything; :unfixable names the two or three that did not
+      ;; move, which on a converged baseline is the whole of what is left.
+      (seq (unfixable finding-key attempt-key attempted? prior findings))
+      (assoc ctx :status :unfixable
+             :unfixable (vec (unfixable finding-key attempt-key attempted?
+                                        prior findings)))
 
-    ;; Reached when the round changed nothing AND no single finding has yet
-    ;; survived long enough to be called stuck — an amender that stopped working
-    ;; rather than one that ran out of things it could fix.
-    (no-progress? finding-key prev-findings (:findings ctx) (changed? ctx prior))
-    ;; Naming what is still open, like :unfixable does. A run that stops holding
-    ;; findings should say which; the two statuses differ in how long they
-    ;; persisted, not in whether a reader is told what they were.
-    (assoc ctx :status :no-progress
-           :unfixable (vec (distinct (map finding-key (:findings ctx)))))
+      ;; Reached when the round changed nothing AND no single finding has yet
+      ;; survived long enough to be called stuck — an amender that stopped working
+      ;; rather than one that ran out of things it could fix.
+      (no-progress? finding-key prev-findings findings (changed? ctx prior))
+      ;; Naming what is still open, like :unfixable does. A run that stops holding
+      ;; findings should say which; the two statuses differ in how long they
+      ;; persisted, not in whether a reader is told what they were.
+      (assoc ctx :status :no-progress
+             :unfixable (vec (distinct (map finding-key findings))))
 
-    ;; A cap ends the run whatever it holds, and :max-iters reads as "the bound you passed came
-    ;; back", which sends a reader to amend and run again. Over a subject the pipeline reads as
-    ;; spent that is the one thing not to do: the count runs across runs, so a chain of capped
-    ;; runs amended by hand between them is the loop that no single run sees.
-    (and max-iters (>= counted max-iters) (seq (spent ctx)))
-    (assoc ctx :status :unfixable :unfixable (vec (spent ctx)))
+      ;; A cap ends the run whatever it holds, and :max-iters reads as "the bound you passed came
+      ;; back", which sends a reader to amend and run again. Over a subject the pipeline reads as
+      ;; spent that is the one thing not to do: the count runs across runs, so a chain of capped
+      ;; runs amended by hand between them is the loop that no single run sees.
+      (and max-iters (>= counted max-iters) (seq (spent ctx)))
+      (assoc ctx :status :unfixable :unfixable (vec (spent ctx)))
 
-    ;; A round owing a second reading at the cap gets it, uncounted — once. A second reading that
-    ;; itself owes another is a judge ruling one subject two ways, and the cap ends it under its own
-    ;; name: what is owed is a reading, not a repair, and :max-iters would send a reader to amend.
-    (and max-iters (>= counted max-iters) (owes-reading ctx))
-    (when rereading?
-      (assoc ctx :status :owed-second-reading :owed-reading (owes-reading ctx)))
+      ;; A round owing a second reading at the cap gets it, uncounted — once. A second reading that
+      ;; itself owes another is a judge ruling one subject two ways, and the cap ends it under its own
+      ;; name: what is owed is a reading, not a repair, and :max-iters would send a reader to amend.
+      (and max-iters (>= counted max-iters) (owes-reading ctx))
+      (when rereading?
+        (assoc ctx :status :owed-second-reading :owed-reading (owes-reading ctx)))
 
-    ;; A judgement holding findings is followed by its repair before the cap ends the run, so
-    ;; what the last judgement found is answered in the ledger rather than by hand between runs.
-    (and max-iters (>= counted max-iters) judged? repair-at-cap? (seq (:findings ctx)))
-    nil
+      ;; A judgement holding findings is followed by its repair before the cap ends the run, so
+      ;; what the last judgement found is answered in the ledger rather than by hand between runs.
+      (and max-iters (>= counted max-iters) judged? repair-at-cap? (seq (:findings ctx)))
+      nil
 
-    (and max-iters (>= counted max-iters))
-    (assoc ctx :status :max-iters)
+      (and max-iters (>= counted max-iters))
+      (assoc ctx :status :max-iters)
 
-    :else nil))
+      :else nil)))
 
 (defn- run-pipeline
   "Run stages in order over ctx, emitting phase-started before each stage and
@@ -251,11 +257,13 @@
          (= :escalate (:control ctx')) (reduced (assoc ctx' :status :escalated))
 
          :else
-         ;; The history here does not yet count this round — the stage that
-         ;; appends it has not run — so it is already the `prior` the check
-         ;; wants.
+         ;; `prior` is the history without this round. The stage that appends
+         ;; a repaired round runs after the judgement, but a round that ends
+         ;; here with `:next-round` enters itself — and counted as its own
+         ;; prior it would be one of the rounds `unfixable` asks about.
          (let [final (when (and judged-after (= judged-after (:name stage)))
-                       (end? ctx' (:history ctx') true))]
+                       (end? ctx' (filterv #(not= (:iter ctx') (:iter %)) (:history ctx'))
+                             true))]
            (cond
              final (reduced final)
 
@@ -317,7 +325,9 @@
    round — a park raised in round 1 is never raised again, and what an earlier
    run left owed was raised by nobody here. It defaults to \"nothing is owed\",
    which is the reading a pipeline with no notion of an unactioned finding
-   wants.
+   wants. A pipeline that passes :owed also has its stall checks — no-progress
+   and the give-up counter — read only the round's findings :owed holds, keyed
+   by :finding-key; one that passes none has them read every finding.
 
    A round's ctx is rebuilt from scratch. `:carry` is the only channel a stage
    has to reach the next round, and it survives onto the terminal ctx too — see
@@ -345,6 +355,11 @@
         ;; Defaults to the identity itself, which is what a pipeline with no
         ;; notion of routing wants: every appearance is an attempt.
         attempt-key (or attempt-key finding-key)
+        held (if (:owed config)
+               (fn [ctx]
+                 (let [owing (into #{} (map finding-key) (owed ctx))]
+                   (filterv #(contains? owing (finding-key %)) (:findings ctx))))
+               :findings)
         impl-session-id (str (random-uuid))]
     (emit {:event :run-started :run-id run-id
            :cwd (:cwd config) :base (:base config) :at (str (clock))})
@@ -370,7 +385,7 @@
                   :attempted? attempted?
                   :prev-findings prev-findings :changed? changed? :spent spent
                   :owes-reading owes-reading :repair-at-cap? repair-at-cap?
-                  :rereading? rereading?
+                  :rereading? rereading? :held held
                   :iter iter :counted counted :max-iters max-iters}
             end? (fn [c prior judged?] (terminal cfg c prior judged?))
             ctx  (try
@@ -414,4 +429,4 @@
                                   (= :next-round (:control ctx))
                                   (boolean (owes-reading ctx)))]
             (recur (inc iter) (if reread-next? counted (inc counted)) reread-next?
-                   (:history ctx) (:findings ctx) (:carry ctx))))))))
+                   (:history ctx) (held ctx) (:carry ctx))))))))

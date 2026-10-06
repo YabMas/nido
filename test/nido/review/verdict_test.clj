@@ -479,6 +479,42 @@
         "a repair in the final round settles nothing — no reviewer has read it,
          and counting it is how a run publishes fixes nobody checked")))
 
+(deftest a-park-ruled-in-a-held-round-is-owed-and-not-repaired
+  ;; review-f6db14a5, the shape it ended in: round 1 repaired H, round 2 parked a
+  ;; recurrence filed under H in a round the read-once hold carried on from, and
+  ;; round 3 was quiet. The run published :clean, `0 still open`, and counted H
+  ;; settled by fixing.
+  (let [final {:history  [{:iter 1 :fixes [{:layer "core" :commit "c1" :handed ["H"]}]
+                           :findings [{:id "H" :handle "H" :title "deadline" :disposition :fix}]}
+                          {:iter 2 :findings [{:id "p2" :handle "H" :title "deadline again"
+                                               :disposition :park :because "which deadline"}]}]
+               :findings []
+               :carry {:parks {"H" {:since 2 :title "deadline again" :because "which deadline"}}}}]
+    (is (= [["H" :park]] (mapv (juxt :handle :disposition) (verdict/still-owed final)))
+        "the park is what the branch is waiting on, and it is in the remainder once")
+    (is (empty? (verdict/settled-by-fixing final))
+        "the round after the repair parked the same defect, so the repair did not settle it")
+    (is (some? (nido-review/parked-blocker (verdict/owed-rows final) nil))
+        "the decision the park asks for reaches a person as a blocker")
+    (is (= ["H"] (mapv :handle (#'verdict/owed-and-final final)))
+        "and the design judge is shown it, not only the quiet final round")))
+
+(deftest a-carried-park-no-entered-round-holds-is-owed
+  ;; The carry holds every park no later ruling settled, so a park ruled in a
+  ;; round the history does not hold is still in the remainder.
+  (let [final {:history [] :findings []
+               :carry {:parks {"q1" {:since 1 :title "who owns the socket" :owner-layer "net"}}}}]
+    (is (= [{:id "q1" :handle "q1" :disposition :park :title "who owns the socket"
+             :owner-layer "net"}]
+           (verdict/open-across-run final))))
+  (testing "a park the fold knows is the fold's to decide"
+    (let [final {:history [{:iter 1 :fixes [{:handed ["q1"]}]
+                            :findings [{:handle "q1" :title "t" :disposition :fix}]}]
+                 :findings []
+                 :carry {:parks {"q1" {:since 1 :title "t"}}}}]
+      (is (empty? (verdict/open-across-run final))
+          "re-ruled :fix and repaired, it is settled whatever the carry still holds"))))
+
 (deftest the-loop-made-counts-only-settled-defects-the-warden-attributed
   ;; Two defects removed in round 2: one the branch arrived with, one round 1's
   ;; own repair created. Both are settled; only the second is the loop's.

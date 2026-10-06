@@ -600,6 +600,51 @@
         "round 1 ends at the stage that asked for another reading, and round 2
          runs the pipeline out")))
 
+(deftest a-repeat-the-round-settled-is-not-a-stall
+  ;; review-fdf99a3f: round 2 raised round 1's finding again and the warden ruled
+  ;; it a deviation — settled — then stopped, and the read-once hold made the
+  ;; stop a :next-round. The stall check read every finding, saw the same handle
+  ;; over a round that moved nothing, and ended :no-progress naming a finding
+  ;; the remainder said was not open.
+  (let [pipe [(stage :review (fn [c] (assoc c :findings (case (:iter c)
+                                                          1 [{:k "a" :done? false}]
+                                                          2 [{:k "a" :done? true}]
+                                                          []))))
+              (stage :warden (fn [c] (assoc c :control (case (:iter c)
+                                                         1 :continue
+                                                         2 :next-round
+                                                         :stop))))
+              (stage :fix (fn [c] (update c :history (fnil conj []) {:iter (:iter c)})))]
+        out  (run-loop {:run-id "r" :pipeline pipe :judged-after :warden :finding-key :k
+                        :owed #(remove :done? (:findings %))})]
+    (is (= :converged (:status out))
+        "a round that owes nothing cannot be a stall, so the held reading runs and the run converges")
+    (is (= 3 (:iter out)))))
+
+(deftest a-repeat-of-what-is-still-owed-is-still-a-stall
+  ;; The stall checks read the owed findings at both ends, so a settled finding
+  ;; riding beside an owed one in both rounds does not hide the repeat.
+  (let [pipe [(stage :review (fn [c] (assoc c :findings [{:k "a"} {:k "b" :done? true}])))
+              (stage :warden (fn [c] (assoc c :control :continue)))
+              (stage :fix (fn [c] (update c :history (fnil conj []) {:iter (:iter c)})))]
+        out  (run-loop {:run-id "r" :max-iters 10 :pipeline pipe :judged-after :warden
+                        :finding-key :k :owed #(remove :done? (:findings %))})]
+    (is (= :no-progress (:status out)))
+    (is (= ["a"] (:unfixable out)) "it names what is owed, not what was settled")))
+
+(deftest a-round-that-enters-its-own-history-is-not-its-own-prior
+  ;; A judged stage that ends the round with :next-round enters the round in the
+  ;; history itself, ahead of the terminal check. Counted as its own prior, the
+  ;; give-up counter reached four rounds on the third.
+  (let [pipe [(stage :warden (fn [c] (-> c
+                                         (assoc :findings [{:k "a"}] :control :next-round)
+                                         (update :history (fnil conj [])
+                                                 {:iter (:iter c) :findings [{:k "a"}]}))))]
+        out  (run-loop {:run-id "r" :pipeline pipe :judged-after :warden :finding-key :k
+                        :changed? (constantly true)})]
+    (is (= :unfixable (:status out)))
+    (is (= 4 (:iter out)) "three tested repairs before the fourth raising gives up, as unfixable-after says")))
+
 (deftest a-run-at-its-cap-ends-however-much-a-stage-wants-another-round
   ;; A control that could outrank the terminal check would be an uncapped loop
   ;; with one more way in: a stage that asks for another reading every round

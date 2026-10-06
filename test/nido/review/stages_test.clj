@@ -2589,6 +2589,29 @@
             "a settled finding leaves the layer owing nothing, which is one
              reading of this content and not the pair")))))
 
+(deftest a-held-round-enters-the-history-with-its-rulings
+  ;; review-f6db14a5: the warden parked a finding and stopped, the hold made the
+  ;; stop a :next-round, and no fix stage ran to enter the round. The next round
+  ;; replaced :findings, and the park went with it — the run ended :clean.
+  (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                stages/discover-design-record (fn [_] nil)
+                stages/read-stance (fn [_] nil)
+                cache/read-cache (fn [& _] {})
+                cache/write! (fn [& _] true)
+                agent/launch! (fn [_] {:num-turns 1 :result-error? false
+                                       :result-text "```json\n{\"decision\":\"stop\",\"reason\":\"a person decides\",\"standing\":[{\"what\":\"the deadline question\"}],\"findings\":[{\"id\":\"aa11\",\"disposition\":\"park\",\"because\":\"which deadline\"}]}\n```"})]
+    (let [out ((:run stages/warden-stage)
+               {:config {:cwd "/w" :run-id "r"} :iter 3
+                :reviews [{:target {:label "core" :patch-hash "h-core"}}]
+                :findings [{:id "aa11" :title "x" :from-layer "core"}]})
+          entry (last (:history out))]
+      (is (= :next-round (:control out)))
+      (is (= 3 (:iter entry)) "the held round is in the history")
+      (is (= [:park] (mapv :disposition (:findings entry)))
+          "with the ruling the run's remainder is folded from")
+      (is (= [{:what "the deadline question"}] (get-in entry [:warden :standing]))
+          "and the warden whose standing list the report reads when the run ends on the re-reading"))))
+
 ;; ---- convergence ---------------------------------------------------------
 
 (deftest to-review-skips-only-a-target-whose-exact-patch-converged
@@ -4011,14 +4034,16 @@
   ;; A sweep that comes back has disproved its own remedy, and only the run's
   ;; history says so. The fixer starts cold every round, so without this the
   ;; third sweep of one class is asked for in exactly the words of the first.
-  (let [history [{:iter 2 :findings [{:handle "h1" :id "aa11" :sweep true}
-                                     ;; Two instances of one class in a single
-                                     ;; round: same-as folds both onto h1, and
-                                     ;; naming round 2 twice would read as two
-                                     ;; failed sweeps.
-                                     {:handle "h1" :id "aa12" :sweep true}
-                                     {:handle "h2" :id "bb22"}]}
-                 {:iter 3 :findings [{:handle "h1" :id "cc33" :sweep true}]}]
+  (let [history [{:iter 2 :fixes [{:handed ["h1" "h2"]}]
+                  :findings [{:handle "h1" :id "aa11" :sweep true}
+                             ;; Two instances of one class in a single
+                             ;; round: same-as folds both onto h1, and
+                             ;; naming round 2 twice would read as two
+                             ;; failed sweeps.
+                             {:handle "h1" :id "aa12" :sweep true}
+                             {:handle "h2" :id "bb22"}]}
+                 {:iter 3 :fixes [{:handed ["h1"]}]
+                  :findings [{:handle "h1" :id "cc33" :sweep true}]}]
         [repeat-of-h1 h2 fresh]
         (stages/with-sweep-memory
           [{:handle "h1" :id "dd44" :sweep true}
@@ -4030,6 +4055,18 @@
     (is (nil? (:swept-before h2))
         "a class raised in an earlier round but never swept has had no remedy fail")
     (is (nil? (:swept-before fresh)))))
+
+(deftest a-sweep-no-landed-fix-named-is-no-sweep
+  ;; A round enters the history once its warden rules, so a round whose fixer
+  ;; declined — or that the read-once hold ended before any fixer ran — is in it
+  ;; holding a `:sweep` ruling nobody carried out.
+  (let [history [{:iter 2 :findings [{:handle "h1" :id "aa11" :sweep true}]}
+                 {:iter 3 :fixes [{:handed ["h2"]}]
+                  :findings [{:handle "h1" :id "cc33" :sweep true}]}]]
+    (is (nil? (:swept-before (first (stages/with-sweep-memory
+                                      [{:handle "h1" :id "dd44" :sweep true}] history))))
+        "telling a fixer its remedy already failed, when no fixer ever tried it,
+         talks it out of the one remedy nobody has tested")))
 
 (deftest a-run-that-has-swept-nothing-marks-nothing
   (let [findings [{:handle "h1" :sweep true}]]
@@ -4049,7 +4086,8 @@
                   jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
       ((:run stages/fix-stage)
        {:config {:cwd "/w" :run-id "r1"} :iter 3
-        :history [{:iter 2 :findings [{:handle "h1" :id "aa11" :sweep true}]}]
+        :history [{:iter 2 :fixes [{:handed ["h1"]}]
+                   :findings [{:handle "h1" :id "aa11" :sweep true}]}]
         :findings [{:id "bb22" :handle "h1" :title "x" :body "y"
                     :sweep true :disposition :fix}]})
       (is (str/includes? @seen "already swept in round 2")
