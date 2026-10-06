@@ -1031,12 +1031,18 @@ bb nido:design:approve :project <p> :ws-id <id> :design-seq <n> \
 
 It writes the same `:design-approved` the gate's Approve writes, and answers a
 round that proceeded or asked; it refuses one that sent the record back. Never
-record a go anywhere else — not in a superseding design's `:summary`, not in its
-`:supersedes :why`. Nothing that reads grants reads prose, so the next round
-reports the question unanswered and asks it again, and a record that could
-declare its own question settled would be no record of a decision. An answer
-that is not a go — narrow the scope, mean something else by the intent — is an
-amendment, and goes into the design or the intent as one.
+record a go in a superseding design's `:summary` or `:supersedes :why`: nothing
+that reads grants reads them. An answer that is not a go — narrow the scope,
+mean something else by the intent — is an amendment, and goes into the design or
+the intent as one, with the person's answer as its `:supersedes :why`. A round
+reads a design or intent you write after its ask as the reply (ANSWERED SINCE)
+and stops posing the question; the same written by the loop's amender answers
+nothing.
+
+When you amend after the person already granted cost or a `:revisit` in chat,
+carry it in the amendment as `:supersedes {:seq <n> :why "…" :granted "…"}`, in
+their words. A round reads it as it reads a `:design-approved` note — only on a
+record you wrote, never on the amender's.
 
 Add `:seq <n>` to the baseline loop when the workstream holds more than one
 survey and you mean a particular one; the default is the newest, which is the

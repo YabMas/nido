@@ -999,38 +999,86 @@
             :changed (vec (sort (filter #(and (was %) (not= (was %) (is %))) (keys is))))
             :dropped (vec (sort (remove is (keys was))))}))))
 
-(declare lineage-of)
+(declare lineage-of loop-why-prefix)
+
+(defn- written-by-person?
+  "Whether the design `d` was written by somebody other than a review loop's amender — a person, or
+   a session acting for one. `amended` is `ws/amended-seqs` of its ledger.
+
+   The :why test is what still recognises an amender's record appended before the index stamp
+   existed: the loop writes the :why on every record it leaves the amender to cite, and tells the
+   amender to omit its own."
+  [amended d]
+  (and (not (amended (:seq d)))
+       (not (some-> (get-in d [:supersedes :why]) (str/starts-with? loop-why-prefix)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   answered
   "What a person has already answered about `design`, read off the ledger for its judge's `asks`:
 
-     :grant  the nearest design in its :supersedes chain a person approved, itself included —
-             {:seq :self? :note :delta} — or absent when nobody has granted any of them
-     :asked  the newest decision's :asks on this workstream, when no grant has been written
-             since it; a question put to a person and not yet answered
+     :grant  the nearest design in its :supersedes chain a person granted, itself included —
+             {:seq :self? :note :delta :carried?} — or absent when nobody has granted any of them.
+             A :design-approved grants the design it names; a design a person wrote grants itself
+             with its :supersedes :granted, and is then :carried?
+     :asked  the newest decision's :asks on this workstream, when neither a grant nor a reply has
+             been written since it; a question put to a person and not yet answered
+     :answered-since  {:seq :asks :by [{:seq :kind :why}]}, when the newest decision asked and a
+             person replied after it by writing the record rather than a grant: a design in the
+             chain they wrote, or the intent the design cites, each by its :supersedes :why
+     :rewritten  {:seq :why :supersedes :approved?}, the nearest design in the chain a person
+             wrote, by its :supersedes :why, when that is not already a reply above — and whether
+             the design it replaced was approved
+     :asked-for  the :findings entries a person filed after the design they last granted (after
+             the chain's root, when nothing was granted), oldest first — {:seq :round :note :items}
      :asked-of  per claim `design` carries, each earlier :ask decision in its lineage that filed a
-             finding under it, oldest first — {id [{:seq :asks :granted {:seq :note}}]}, :granted
-             the first approval written after that ask, absent when none was
+             finding under it, oldest first — {id [{:seq :asks :granted {:seq :note}
+             :answered {:seq :why}}]}, :granted the first approval written after that ask and
+             :answered, when there is none, the first reply
 
    Only what bears on the ask. The judge still derives every check over the whole record, and is
-   told so beside this: a grant is evidence that a person decided, never that a claim holds."
+   told so beside this: a grant or a reply is evidence that a person decided, never that a claim
+   holds."
   [project ws-id design]
-  (let [chain     (loop [d design, seen #{}, acc []]
+  (let [amended   (ws/amended-seqs project ws-id)
+        person?   #(written-by-person? amended %)
+        chain     (loop [d design, seen #{}, acc []]
                     (if (or (nil? d) (seen (:seq d)))
                       acc
                       (recur (some->> (get-in d [:supersedes :seq]) (ws/entry-at-seq project ws-id))
                              (conj seen (:seq d)) (conj acc d))))
         approvals (ws/entries-of project ws-id :design-approved)
         approved  (into {} (map (juxt #(get-in % [:design :seq]) identity)) approvals)
-        granted   (some #(when (approved (:seq %)) %) chain)
+        granted   (some #(when (or (approved (:seq %))
+                                   (and (person? %) (get-in % [:supersedes :granted])))
+                           %)
+                        chain)
+        note      (if-let [a (approved (:seq granted))]
+                    (:note a)
+                    (get-in granted [:supersedes :granted]))
+        ;; The intent is no amender's to write: a review loop amends baselines and designs.
+        intent    (some->> (get-in design [:intent :seq]) (ws/entry-at-seq project ws-id))
+        reply     (fn [kind r] {:seq (:seq r) :kind kind :why (get-in r [:supersedes :why])})
+        written   (filterv #(and (:seq %) (person? %) (get-in % [:supersedes :why])) chain)
+        replies   (sort-by :seq (cond-> (mapv #(reply :design %) written)
+                                  (and (:seq intent) (get-in intent [:supersedes :why]))
+                                  (conj (reply :intent intent))))
+        after     (fn [n] (filterv #(> (long (:seq %)) (long (or n 0))) replies))
         last-ask  (last (ws/entries-of project ws-id :design-decision))
-        answered? (some #(> (long (or (:seq %) 0)) (long (or (:seq last-ask) 0))) approvals)
+        asking?   (and last-ask (not (str/blank? (:asks last-ask))))
+        since-ask (when asking? (after (:seq last-ask)))
+        approved? (some #(> (long (or (:seq %) 0)) (long (or (:seq last-ask) 0))) approvals)
+        rewrite   (first written)
+        asked-for (let [from (long (or (:seq granted) (:seq (peek chain)) 0))]
+                    (into [] (comp (filter #(> (long (or (:seq %) 0)) from))
+                                   (map #(select-keys % [:seq :round :note :items])))
+                          (ws/entries-of project ws-id :findings)))
         carried   (set (keys (settled/subjects design)))
         asked-of  (reduce (fn [acc {n :seq :as d}]
                             (let [grant (some #(when (> (long (or (:seq %) 0)) (long n)) %) approvals)
+                                  reply (when-not grant (first (after n)))
                                   ask   (cond-> {:seq n :asks (str (:asks d))}
-                                          grant (assoc :granted (select-keys grant [:seq :note])))]
+                                          grant (assoc :granted (select-keys grant [:seq :note]))
+                                          reply (assoc :answered (select-keys reply [:seq :why])))]
                               (reduce #(update %1 %2 (fnil conj []) ask) acc
                                       (into (sorted-set)
                                             (comp (keep #(not-empty (str (:claim-id %)))) (filter carried))
@@ -1041,17 +1089,26 @@
     (cond-> {}
       (seq asked-of) (assoc :asked-of asked-of)
       granted (assoc :grant (cond-> {:seq (:seq granted) :self? (= (:seq granted) (:seq design))}
-                              (:note (approved (:seq granted)))
-                              (assoc :note (:note (approved (:seq granted))))
+                              note (assoc :note note)
+                              (not (approved (:seq granted))) (assoc :carried? true)
                               (claim-delta granted design)
                               (assoc :delta (claim-delta granted design))))
-      (and last-ask (not answered?) (not (str/blank? (:asks last-ask))))
-      (assoc :asked (:asks last-ask)))))
+      (seq since-ask)
+      (assoc :answered-since {:seq (:seq last-ask) :asks (:asks last-ask) :by since-ask})
+      (and asking? (not approved?) (empty? since-ask))
+      (assoc :asked (:asks last-ask))
+      (and rewrite (not-any? #(= (:seq rewrite) (:seq %)) since-ask))
+      (assoc :rewritten {:seq        (:seq rewrite)
+                         :why        (get-in rewrite [:supersedes :why])
+                         :supersedes (get-in rewrite [:supersedes :seq])
+                         :approved?  (boolean (approved (get-in rewrite [:supersedes :seq])))})
+      (seq asked-for) (assoc :asked-for asked-for))))
 
 (defn- answered-block
   "Who reads `asks`, and what is already off the table for it: the design's :open notes, a grant a
-   person gave, a question already put to one. `owes?` is `report/owes-a-person?` of the design."
-  [owes? open {:keys [grant asked asked-of]}]
+   person gave, a reply they wrote into the record, what they asked for, a question already put to
+   one. `owes?` is `report/owes-a-person?` of the design."
+  [owes? open {:keys [grant asked answered-since rewritten asked-for asked-of]}]
   (str
    (if owes?
      (str "\nWHO READS asks: a person. This design declares a move they must grant\n"
@@ -1067,12 +1124,19 @@
           "A note stating a decision is answered: asks does not pose it again. A finding\n"
           "that sets the intent against one is a question for a person — ask, not amend.\n"))
    (when grant
-     (str "\nALREADY GRANTED. A person approved "
-          (if (:self? grant) "this design" (str "entry " (:seq grant) ", which this design replaces"))
+     (str "\nALREADY GRANTED. "
+          (cond
+            (:carried? grant)
+            (str "A person wrote "
+                 (if (:self? grant) "this design" (str "entry " (:seq grant) ", which this design replaces"))
+                 ", carrying what they had already granted")
+            (:self? grant) "A person approved this design"
+            :else (str "A person approved entry " (:seq grant) ", which this design replaces"))
           (when (:note grant) (str " — \"" (:note grant) "\""))
-          ".\nThe grant is not evidence for any check: derive every one over the whole record\n"
-          "as if it were new. It bears on asks alone, which poses only what the grant does\n"
-          "not already cover"
+          ".\nThe grant is not evidence for any structural check: derive every one over the\n"
+          "whole record as if it were new. What it does answer is a finding whose substance\n"
+          "is the decision it made — that a person has not chosen this scope, this cost or\n"
+          "this move. It bears on asks, which poses only what the grant does not already cover"
           (if-let [{:keys [added changed dropped]} (:delta grant)]
             (str " — the claims changed since it:"
                  (when (seq added) (str "\n  added: " (str/join ", " added)))
@@ -1081,6 +1145,37 @@
                  (when-not (or (seq added) (seq changed) (seq dropped)) " none")
                  "\n")
             ".\n")))
+   (when answered-since
+     (str "\nANSWERED SINCE. A person was asked at entry " (:seq answered-since) ":\n  "
+          (:asks answered-since) "\n"
+          "and answered by writing the record rather than a grant:\n"
+          (str/join (for [{n :seq kind :kind why :why} (:by answered-since)]
+                      (str "  entry " n " (" (name kind) "): " why "\n")))
+          "Do not pose that question again; asks poses only what the answer leaves open.\n"
+          "The answer is evidence that a person decided, never that a claim holds. A record\n"
+          "still inconsistent with it — a claim, an open note or a field written before it —\n"
+          "is a defect the amender repairs by carrying the answer in: amend, not ask. A\n"
+          "finding that a person has not chosen what the answer chose is answered.\n"))
+   (when rewritten
+     (str "\nWHY ITS AUTHOR LAST REWROTE THIS RECORD — entry " (:seq rewritten)
+          ", replacing entry " (:supersedes rewritten)
+          (when (:approved? rewritten) ", which a person approved") ":\n  "
+          (:why rewritten) "\n"
+          "Every check is still derived over the whole record. This bears on asks: a\n"
+          "question the reason already settles is not asked again"
+          (if (:approved? rewritten)
+            (str ", and with its predecessor\napproved, asks is about what changed since — not "
+                 "the worth of the whole change.\n")
+            ".\n")))
+   (when (seq asked-for)
+     (str "\nWHAT A PERSON HAS ASKED FOR SINCE — findings they filed on this workstream:\n"
+          (str/join
+           (for [{n :seq :keys [round note items]} asked-for]
+             (str "  entry " n (when round (str " (round " round ")")) (when note (str ": " note)) "\n"
+                  (str/join (for [{:keys [id summary]} items]
+                              (str "    - [" id "] " summary "\n"))))))
+          "It bears on asks alone and is evidence for no check: scope a person asked for is\n"
+          "not a question to put back to them.\n"))
    (when asked
      (str "\nASKED BEFORE, AND NO GRANT WRITTEN SINCE:\n  " asked "\n"
           "If what you find can only be repaired by answering this, recommend ask: an\n"
@@ -1093,12 +1188,15 @@
      (str "\nCLAIMS A PERSON HAS ALREADY BEEN ASKED ABOUT, AND WHAT THEY GRANTED:\n"
           (str/join
            (for [[id earlier] asked-of
-                 {n :seq question :asks granted :granted} earlier]
+                 {n :seq question :asks granted :granted reply :answered} earlier]
              (str "  [" id "] entry " n ": " question "\n"
-                  (if granted
+                  (cond
+                    granted
                     (str "      granted at entry " (:seq granted)
                          (when (:note granted) (str " — \"" (:note granted) "\"")) "\n")
-                    "      no grant written since\n"))))
+                    reply
+                    (str "      answered at entry " (:seq reply) " — \"" (:why reply) "\"\n")
+                    :else "      no grant written since\n"))))
           "A question about one of these claims is not a new question, and asking for one\n"
           "more exception to it spends the person on the same decision again. If asks has to\n"
           "raise one, cite the entries above and pose it at the CLASS level — what kind of case\n"
@@ -1286,7 +1384,8 @@
    "asks is REQUIRED whatever you recommend: state the question the human still\n"
    "has to answer, in one or two sentences, with everything you derived already\n"
    "taken off the table — and with it what the record's open notes state is\n"
-   "decided and what a grant already covers. Never answer it yourself.\n"
+   "decided and what a grant or a person's answer already covers.\n"
+   "Never answer it yourself.\n"
    (answered-block owes? (:open design) answers)
    (prior-findings-block (apply dissoc prior (keys settled)))
    (disputes-block disputes)
@@ -4056,7 +4155,8 @@
                                    {:iter iter :run-id run-id
                                     :resolve #(ws/entry-at-seq project ws-id %)})]
         (try
-          (let [path (ws/append-entry! project ws-id {:kind kind} (pr-str (ws/unstamp record)))]
+          (let [path (ws/append-entry! project ws-id {:kind kind :amended-by (str run-id)}
+                                         (pr-str (ws/unstamp record)))]
             {:record   (appended project ws-id path record)
              :retreats (if (= :design kind)
                          (retreat/design-retreats prev record)
@@ -4503,7 +4603,7 @@
                                               (let [record (cite record)]
                                                 (try {:record record
                                                       :path (ws/append-entry!
-                                                             project ws-id {:kind :baseline}
+                                                             project ws-id {:kind :baseline :amended-by (str run-id)}
                                                              (pr-str (ws/unstamp record)))}
                                                      (catch Exception e
                                                        {:record record :err (ledger-refusal e)}))))})
@@ -5581,7 +5681,7 @@
                                 :check-cmd check-cmd
                                 :append (fn [record]
                                           (let [record (cite record)]
-                                            (try (ws/append-entry! project ws-id {:kind :design}
+                                            (try (ws/append-entry! project ws-id {:kind :design :amended-by (str run-id)}
                                                                    (pr-str (ws/unstamp record)))
                                                  {:record record}
                                                  (catch Exception e

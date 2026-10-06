@@ -414,7 +414,12 @@
    stays in the ledger — a design is amended and cited, never silently rewritten."
   [:map {:closed true}
    [:seq int?]
-   [:why string?]])
+   [:why string?]
+   ;; What a person has already granted that this amendment carries — cost, a :revisit of the
+   ;; baseline — in their words. Read on a design a person wrote, as a :design-approved's :note
+   ;; is: it narrows what a design round asks, and is evidence for no check. Ignored on a record
+   ;; the loop's amender wrote, which may not grant anything.
+   [:granted {:optional true} string?]])
 
 (def Intent
   "What the task is FOR, and what would make it done. Authored BEFORE the design

@@ -8,6 +8,7 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
+   [malli.core :as m]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.report :as report]
@@ -1282,7 +1283,7 @@
     (is (str/includes? p "A person approved entry 16, which this design replaces"))
     (is (str/includes? p "added: drafts-not-scored"))
     (is (str/includes? p "changed: pipeline-boundary"))
-    (is (str/includes? p "The grant is not evidence for any check")
+    (is (str/includes? p "The grant is not evidence for any structural check")
         "the grant narrows the ask and nothing else; every check is still derived whole")
     (is (str/includes? p "ASKED BEFORE, AND NO GRANT WRITTEN SINCE:\n  is the compression worth it now?"))))
 
@@ -1304,7 +1305,8 @@
         current (assoc design :seq 20 :supersedes {:seq 16 :why "w"}
                        :model (claims ["a" "one"] ["b" "TWO"] ["c" "three"]))
         ledger  (fn [approvals decisions]
-                  (with-redefs [ws/entry-at-seq (fn [_ _ n] ({16 granted 20 current} n))
+                  (with-redefs [ws/amended-seqs (constantly #{20})
+                                ws/entry-at-seq (fn [_ _ n] ({16 granted 20 current} n))
                                 ws/entries-of (fn [_ _ k] (case k
                                                             :design-approved approvals
                                                             :design-decision decisions
@@ -1320,6 +1322,117 @@
       (is (nil? (:asked (ledger [{:seq 19 :design {:seq 16} :at-seq 18}]
                                 [{:seq 18 :asks "worth it?"}])))))
     (is (= {} (ledger [] [])) "nothing granted and nothing asked")))
+
+;; ── An answer a person wrote into the record ──────────────────────────────
+
+(defn- answered-over
+  "`record/answered` of the entry at `judged` on a ledger holding `entries` by :seq, `amended` the
+   seqs the loop's amender wrote."
+  [entries judged & {:keys [amended] :or {amended #{}}}]
+  (let [of-kind (fn [k] (->> (vals entries) (filter #(= k (:format %))) (sort-by :seq) vec))]
+    (with-redefs [ws/amended-seqs (constantly amended)
+                  ws/entry-at-seq (fn [_ _ n] (get entries n))
+                  ws/entries-of   (fn [_ _ k] (of-kind k))]
+      (record/answered :nido "ws-1" (get entries judged)))))
+
+(def ^:private asked-ledger
+  {24 (assoc design :seq 24)
+   26 {:format :design-decision :seq 26 :design-seq 24 :recommend :ask
+       :asks "Does the source gate cover only slices this workstream adds?"}
+   27 (assoc design :seq 27 :supersedes {:seq 24 :why "the person narrowed the source gate to slices this workstream adds"})})
+
+(deftest a-reply-written-as-a-superseding-design-answers-the-ask
+  ;; Seven analyses watched the judge be told "ASKED BEFORE, AND NO GRANT WRITTEN SINCE" over a
+  ;; question the person had answered by rewriting the record, and re-ask it word for word.
+  (let [a (answered-over asked-ledger 27)
+        p (record/design-prompt {:design (get asked-ledger 27) :answers a})]
+    (is (nil? (:asked a)) "a question answered in the record is no longer open")
+    (is (= {:seq 26 :asks "Does the source gate cover only slices this workstream adds?"
+            :by [{:seq 27 :kind :design :why "the person narrowed the source gate to slices this workstream adds"}]}
+           (:answered-since a)))
+    (is (str/includes? p "ANSWERED SINCE"))
+    (is (str/includes? p "entry 27 (design): the person narrowed the source gate")
+        "the judge reads the answer itself, not only that one exists")
+    (is (str/includes? p "amend, not ask")
+        "a record left inconsistent with the answer is the amender's to repair, not the person's to re-answer")
+    (is (not (str/includes? p "ASKED BEFORE")))))
+
+(deftest an-amenders-rewrite-answers-nothing
+  ;; An amender handed an asked question settles it by guessing; its rewrite must not close it.
+  (is (= "Does the source gate cover only slices this workstream adds?"
+         (:asked (answered-over asked-ledger 27 :amended #{27})))
+      "stamped as the amender's on the index")
+  (is (some? (:asked (answered-over (assoc-in asked-ledger [27 :supersedes :why]
+                                              "corrected against the code after round 2 of run r")
+                                    27)))
+      "an amender's record from before the stamp is still known by the :why the loop wrote"))
+
+(deftest a-reply-written-as-a-superseding-intent-answers-the-ask
+  ;; The person's answer went into the goal: intent 96 superseded 77, and the design cites 96.
+  (let [ledger {77 {:format :intent :seq 77 :goal "g" :done-when ["d"]}
+                90 (assoc design :seq 90 :intent {:seq 77})
+                95 {:format :design-decision :seq 95 :design-seq 90 :recommend :ask :asks "shared blobs?"}
+                96 {:format :intent :seq 96 :goal "g" :done-when ["views are per content"]
+                    :supersedes {:seq 77 :why "States the user's answer on shared content"}}
+                97 (assoc design :seq 97 :intent {:seq 96}
+                          :supersedes {:seq 90 :why "corrected against the code after round 1 of run r"})}
+        a      (answered-over ledger 97 :amended #{97})]
+    (is (nil? (:asked a)))
+    (is (= [{:seq 96 :kind :intent :why "States the user's answer on shared content"}]
+           (:by (:answered-since a))))))
+
+(deftest an-amendment-carries-what-a-person-already-granted
+  ;; A grant given in chat had nowhere to live but a :design-approved written after the round
+  ;; asked, so every round on a :revisit design re-asked cost and revisit.
+  (let [ledger {32 (assoc design :seq 32)
+                33 (assoc design :seq 33 :supersedes {:seq 32 :why "keeps :rows on the user's challenge"
+                                                      :granted "XL effort is fine; revisit the ingest boundary"})}
+        a      (answered-over ledger 33)]
+    (is (= {:seq 33 :self? true :note "XL effort is fine; revisit the ingest boundary" :carried? true}
+           (:grant a)))
+    (is (str/includes? (record/design-prompt {:design (get ledger 33) :answers a})
+                       "carrying what they had already granted — \"XL effort is fine"))
+    (is (nil? (:grant (answered-over ledger 33 :amended #{33})))
+        "an amender may not grant anything, so a :granted it wrote is not read")
+    (is (m/validate report/Supersedes (get-in ledger [33 :supersedes]))
+        "the ledger takes the carried grant")))
+
+(deftest a-grant-answers-the-scope-question-it-decided
+  ;; Told "the grant is not evidence for any check", the judge had to break the rule to answer a
+  ;; finding whose whole content was that the person had not chosen this scope.
+  (let [p (record/design-prompt {:design design :answers {:grant {:seq 4 :self? true}}})]
+    (is (str/includes? p "not evidence for any structural check"))
+    (is (str/includes? p "a person has not chosen this scope"))))
+
+(deftest the-judge-reads-why-a-person-last-rewrote-the-record
+  ;; A mid-build amendment said "noticed while building", and the judge, shown none of it, asked
+  ;; whether the whole change was worth executing at XL.
+  (let [ledger {27 (assoc design :seq 27)
+                28 {:format :design-approved :seq 28 :design {:seq 27} :at-seq 27}
+                30 (assoc design :seq 30 :supersedes {:seq 27 :why "noticed while building: the cache needs a key"})
+                31 (assoc design :seq 31 :supersedes {:seq 30 :why "corrected against the code after round 1 of run r"})}
+        a      (answered-over ledger 31 :amended #{31})
+        p      (record/design-prompt {:design (get ledger 31) :answers a})]
+    (is (= {:seq 30 :why "noticed while building: the cache needs a key" :supersedes 27 :approved? true}
+           (:rewritten a))
+        "the nearest record a person wrote, past the amender's rewrite of it")
+    (is (str/includes? p "noticed while building"))
+    (is (str/includes? p "not the worth of the whole change"))))
+
+(deftest what-a-person-asked-for-reaches-the-round
+  ;; A user audit filed as :findings widened the scope, and the round read the widening as scope
+  ;; creep against the intent.
+  (let [ledger {10 {:format :findings :seq 10 :round 1 :items [{:id "old" :summary "s" :severity :tweak}]}
+                16 (assoc design :seq 16)
+                17 {:format :design-approved :seq 17 :design {:seq 16} :at-seq 16}
+                18 {:format :findings :seq 18 :round 2 :note "user audit"
+                    :items [{:id "f4" :summary "Supersede with a P2 claim" :severity :blocker}]}
+                20 (assoc design :seq 20 :supersedes {:seq 16 :why "corrected against the code after round 1 of run r"})}
+        a      (answered-over ledger 20)
+        p      (record/design-prompt {:design (get ledger 20) :answers a})]
+    (is (= [18] (map :seq (:asked-for a))) "only what was filed after the design they last granted")
+    (is (str/includes? p "WHAT A PERSON HAS ASKED FOR SINCE"))
+    (is (str/includes? p "- [f4] Supersede with a P2 claim"))))
 
 ;; ── A claim spent across runs ───────────────────────────────────────────────
 
@@ -1354,7 +1467,8 @@
         ask     (fn [n] {:seq n :design-seq 16 :recommend :ask :asks (str "grant case " n "?")
                          :findings [{:claim-id "one-per-content" :for-person true}
                                     {:claim-id "not-carried"}]})
-        a       (with-redefs [ws/entry-at-seq (fn [_ _ n] ({20 current 16 (assoc design :seq 16)} n))
+        a       (with-redefs [ws/amended-seqs (constantly #{20})
+                              ws/entry-at-seq (fn [_ _ n] ({20 current 16 (assoc design :seq 16)} n))
                               ws/entries-of (fn [_ _ k] (case k
                                                           :design-approved [{:seq 77 :design {:seq 16} :note "lease lapse ok"}]
                                                           :design-decision [(ask 76) (ask 90)]

@@ -163,6 +163,11 @@
      and gets back what it cited rather than what has since been written."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:seq-n :int]] [:maybe LedgerEntry]]
      :delegates [read-ws report/parse-event]})
+  (Operation amended-seqs
+    "The positions of the entries a review loop's amender wrote, read off the index stamp the loop
+     alone sets — how a reader tells an amender's rewrite from a person's reply."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:set :int]]
+     :delegates [read-ws]})
   (Operation list-ids
     "Every workstream id a project has."
     {:signature [:=> [:catn [:project ProjectName]] [:vector WorkstreamId]]

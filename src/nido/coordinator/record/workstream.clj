@@ -1409,7 +1409,8 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string] :Path]}
   append-entry!
   "Write an immutable entry file under entries/ and record it in :entries.
-   `entry` = {:kind <kw> :session <str>?}. Returns the absolute file path.
+   `entry` = {:kind <kw> :session <str>? :amended-by <run-id>?}, kept as the entry's index row;
+   :amended-by is for a review loop's amender alone (`amended-seqs`). Returns the absolute file path.
 
    SERIALISED, and the whole read-derive-write has to be inside the lock rather
    than any one write of it. :seq is derived from the index count and the
@@ -1700,6 +1701,18 @@
   [project ws-id seq-n]
   (when-let [w (read-ws project ws-id)]
     (read-entry-at w seq-n)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:set :int]]}
+  amended-seqs
+  "The :seqs of the entries a review loop's amender wrote, read off the index rows `append-entry!`
+   stamped `:amended-by <run-id>`. Empty for an absent workstream.
+
+   On the INDEX, never the payload: an amender is handed a record and returns one, so a stamp in
+   the payload is one it could copy forward or drop, and a person copying a record forward would
+   inherit it. Nobody authors an index row. An entry written before the stamp existed is not in
+   this set whoever wrote it."
+  [project ws-id]
+  (into #{} (keep #(when (:amended-by %) (:seq %))) (:entries (read-ws project ws-id))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :WorkstreamId]]}
   list-ids

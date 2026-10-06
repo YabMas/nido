@@ -175,6 +175,18 @@
           (is (= "2026-06-05T12:00:00Z" (:at e)))))
       (finally (fs/delete-tree tmp)))))
 
+(deftest an-amenders-entry-is-told-apart-on-the-index
+  ;; A person's reply written as a superseding design read exactly like an amender's rewrite: the
+  ;; payloads carry the same keys, so nothing could say which of them answered a question.
+  (with-tmp
+    (fn [_]
+      (ws/write! example-ws)
+      (ws/append-entry! :brian (:id example-ws) {:kind :note} "a person's")
+      (ws/append-entry! :brian (:id example-ws) {:kind :note :amended-by "run-7"} "the amender's")
+      (is (= #{2} (ws/amended-seqs :brian (:id example-ws)))
+          "only the index row the loop stamped names its amender")
+      (is (= #{} (ws/amended-seqs :brian "ws-absent"))))))
+
 (deftest append-entry-increments-seq
   (let [tmp (fs/create-temp-dir)]
     (try

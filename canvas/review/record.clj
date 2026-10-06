@@ -5,6 +5,7 @@
             [canvas.coordinator.agent :as agent]
             [canvas.coordinator.record.standing :as standing]
             [canvas.coordinator.record.state :refer [Path WorkstreamId]]
+            [canvas.coordinator.record.workstream :as workstream]
             [canvas.design.check :as design :refer [DeclaredElements]]
             [canvas.platform.project :refer [ProjectName]]
             [canvas.review.settled :as settled]
@@ -88,9 +89,11 @@
      :delegates [standing/of-design]})
   (Operation answered
     "What a person has already answered about a design, for its judge's ask: the nearest grant up
-     its supersedes chain with the claims changed since, and a question put to a person that no
-     grant has answered."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design :map]] :map]})
+     its supersedes chain with the claims changed since, a reply they wrote into the record since
+     the last ask, what they asked for in findings, and a question put to a person that neither a
+     grant nor a reply has answered. A record the loop's amender wrote answers and grants nothing."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design :map]] :map]
+     :delegates [workstream/amended-seqs]})
   (Operation design-decision! "Run the decision round over a design."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [design-prompt parse-design-decision unresolved-subjects design/elements answered]})
