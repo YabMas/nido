@@ -1881,6 +1881,16 @@
                                     (assoc :evidence (mapv #(str % ": " (:reason (ruled %))) wrong)))))
         (and (seq wrong) (= :proceed (:recommend decision))) (assoc :recommend :amend)))))
 
+(def ^:private judge-reading
+  "How a record judge runs jj, ahead of every prompt `run-round!` sends. A judge reads the
+   predecessor revision with jj unprompted; without the flag jj snapshots the working copy first,
+   the read-only sandbox denies that lock write, and the claim it was reading for comes back
+   unchecked for a reason that has nothing to do with the claim. First rather than last, because
+   the prompts end on the list the judge's answer is drawn from."
+  (str "Run every jj command with --ignore-working-copy (`jj --ignore-working-copy log …`,\n"
+       "`jj --ignore-working-copy file show -r <rev> -- <path>`), or jj tries to snapshot\n"
+       "the working copy and the read-only sandbox denies the lock write.\n\n"))
+
 (defn- run-round!
   "One read-only reviewer pass over a record — `:reviewer`, or codex, with
    codex's stand-in when codex has run out of quota (`codex/run-reviewer!`).
@@ -1912,7 +1922,7 @@
       (let [{:keys [exit judged-by unavailable] ran-log :log-path}
             (codex/run-reviewer! {:reviewer reviewer :cwd cwd :schema-path schema-path
                                   :out-path out-path :log-path log-path
-                                  :prompt prompt})
+                                  :prompt (str judge-reading prompt)})
             who (name (:reviewer judged-by))]
         ;; :codex-failed names the outcome whichever reviewer ran: it is the
         ;; lanes' vocabulary for a judge that did not answer, and the detail is
@@ -3353,7 +3363,9 @@
   (str "Read code with the Read, Grep and Glob tools. Your shell runs read-only jj\n"
        "(jj file show, jj diff, jj log, jj show, jj st), the check command and plain\n"
        "reads; any command that writes is denied, and so is a write to any file but\n"
-       "your answer.\n\n"))
+       "your answer. Run every jj command with --ignore-working-copy (`jj\n"
+       "--ignore-working-copy log …`): without it jj tries to snapshot the working copy,\n"
+       "and is refused.\n\n"))
 
 (defn- check-block
   "How an author checks its answer file against the ledger before handing it over, or nil with no

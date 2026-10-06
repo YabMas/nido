@@ -3494,8 +3494,12 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
 
 (def ^:private amender-jj-reads
   "The jj subcommands an amender may run: each reads the repo and none writes a path in its tree.
-   jj snapshots the working copy first, which moves no path's content."
-  ["jj log" "jj show" "jj diff" "jj st" "jj status" "jj file show" "jj file list" "jj file annotate"])
+   Only with --ignore-working-copy, so that none snapshots the working copy either — a snapshot
+   writes the working-copy lock, which a read-only sandbox denies, and records an operation on a
+   tree someone else may be editing. The amender's prompt (`record/amender-reading`) says so, since
+   a rule matches the command as spelled and a bare `jj log` is refused."
+  (mapv #(str "jj --ignore-working-copy " %)
+        ["log" "show" "diff" "st" "status" "file show" "file list" "file annotate"]))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   amender-tools

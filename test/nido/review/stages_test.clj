@@ -5265,6 +5265,9 @@
                          (= % "Bash(bb nido:review:amend:check :file a.edn)"))
                     shell)
             "the shell runs read-only jj and the exact check command, nothing else")
+        (is (every? #(str/starts-with? % "Bash(jj --ignore-working-copy ")
+                    (filter #(str/starts-with? % "Bash(jj ") shell))
+            "every jj read skips the snapshot: a snapshot writes the working-copy lock, which a read-only sandbox denies")
         (is (not-any? #{"Bash(jj new:*)" "Bash(jj describe:*)" "Bash(jj squash:*)" "Bash"} allowed)))
       (finally (fs/delete-tree dir)))))
 

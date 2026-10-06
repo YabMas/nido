@@ -1386,6 +1386,25 @@
             "a successful round dropped who answered, so every stand-in's verdict read as codex's"))
       (finally (fs/delete-tree dir)))))
 
+(deftest every-judge-is-told-to-read-jj-without-snapshotting
+  (let [dir  (str (fs/create-temp-dir))
+        sent (atom nil)]
+    (try
+      (with-redefs [cstate/run-dir      (constantly dir)
+                    codex/run-reviewer! (fn [{:keys [prompt]}]
+                                          (reset! sent prompt)
+                                          {:exit 1 :log-path "l" :judged-by {:reviewer :codex}})]
+        (#'record/run-round! {:run-id "r" :kind :baseline-review :prompt "THE CHECKS"})
+        (is (str/includes? @sent "jj --ignore-working-copy")
+            "a judge's bare `jj log` is denied the lock write under the read-only sandbox, and the claim it read for goes unchecked")
+        (is (str/ends-with? @sent "THE CHECKS")
+            "the prompts end on the list the judge's answer is drawn from, and that stays last"))
+      (finally (fs/delete-tree dir)))))
+
+(deftest an-amender-is-told-the-jj-spelling-its-shell-admits
+  (is (str/includes? @#'record/amender-reading "--ignore-working-copy")
+      "the amender's shell admits jj only with the flag, so an amender not told so spends a turn per refused read"))
+
 (deftest a-judge-its-vendor-would-not-run-ends-reviewer-unavailable-quoting-the-vendor
   (let [dir  (str (fs/create-temp-dir))
         line "ERROR: Selected model is at capacity. Please try a different model."]
