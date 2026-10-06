@@ -70,7 +70,8 @@
    appended, oldest first — or nil when it appended none, and the fallback is all there is to say.
 
    The newest decision is where the run stopped, so the question is its: what it recommended, the
-   checks it left broken and the claims they name, and its :asks verbatim. An earlier ask of the
+   checks it left broken and the claims they name, and its :asks verbatim — labelled as waiting on
+   the repair when the decision named one (`report/repair-before-asking`). An earlier ask of the
    same run is kept beside it, since an amendment between them answered it for nobody. A decision
    that named a repair says so: a run that stopped on one did not derive everything derivable."
   [outcome decisions]
@@ -84,7 +85,9 @@
            (when (seq claims) (str " — claims: " (str/join ", " claims)))
            (when (#{:amend :recut :resurvey} recommend)
              (str ". It named a repair the run did not carry out: " reason))
-           (when-not (str/blank? (str asks)) (str "\nFor you to decide: " asks))
+           (when-not (str/blank? (str asks))
+             (str (if (report/repair-before-asking last-d) "\nWill ask once repaired: " "\nFor you to decide: ")
+                  asks))
            (when (seq earlier)
              (str "\nAsked earlier in the same run: " (str/join " / " earlier)))))))
 

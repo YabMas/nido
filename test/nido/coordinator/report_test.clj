@@ -2106,3 +2106,18 @@
            (report/report-title (-> once (dissoc :read-once) (assoc :amendment-read-once true))))
         "the first reading of an amendment is one reading too")
     (is (= "Baseline review: sufficient" (report/report-title (dissoc once :read-once))))))
+
+(deftest a-decisions-asks-waits-on-the-repair-it-recommends
+  ;; A capped run's :amend decision asked "after the corrections, do you grant…", and every surface
+  ;; showed it as a gate open now over corrections the cap had stopped anyone making.
+  (let [d (fn [recommend & checks]
+            {:format :design-decision :recommend recommend :asks "q?"
+             :checks (vec (or (seq checks) [{:check :goal-served :status :broken}]))})]
+    (is (= :amend (report/repair-before-asking (d :amend))))
+    (is (= :recut (report/repair-before-asking (d :recut {:check :stratified :status :broken}))))
+    (is (= :resurvey (report/repair-before-asking (d :resurvey))))
+    (is (nil? (report/repair-before-asking (d :ask))) "an :ask is the person's question, open now")
+    (is (nil? (report/repair-before-asking (d :proceed {:check :goal-served :status :held}))))
+    (is (nil? (report/repair-before-asking (d :amend {:check :decomposable :status :broken})))
+        "an :amend that proceeds anyway — only the advisory check broken — repairs nothing first")
+    (is (nil? (report/repair-before-asking nil)) "no decision, nothing to wait on")))

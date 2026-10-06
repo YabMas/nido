@@ -498,6 +498,26 @@
   (is (not (str/includes? (:headline (analysis/payload a-design-run)) "Asked of a person"))
       "a baseline run, or one that ended before any decision, asks nothing"))
 
+(deftest a-capped-runs-repair-ask-is-labelled-as-waiting-on-the-repair
+  ;; design-loop-521dd33c ended :max-iters at its judgement, 0 amended, and led with "Asked of a
+  ;; person: After the claim is corrected, do you grant…" — a gate over a correction nobody made.
+  (let [h (:headline (analysis/payload (assoc a-design-run :status :max-iters :amended 0
+                                              :repair :amend :repaired? false
+                                              :asks "after the correction, do you grant the scope?")))]
+    (is (str/includes? h (str "Amendment owed — cap reached before the amend stage\n"
+                              "Will ask once repaired: after the correction, do you grant the scope?\n"))
+        "what is owed first, then the question that waits on it")
+    (is (not (str/includes? h "Asked of a person"))
+        "a question over the repaired record is not one the person can answer now"))
+  (is (str/includes? (:headline (analysis/payload (assoc a-design-run :status :escalated
+                                                         :repair :recut :repaired? false :asks "q?")))
+                     "Recut owed — the run ended escalated before the amend stage\n")
+      "a run ended before its repair by anything but the cap says what ended it")
+  (let [h (:headline (analysis/payload (assoc a-design-run :status :max-iters
+                                              :repair :amend :repaired? true :asks "q?")))]
+    (is (not (str/includes? h "owed —")) "an amendment the run made is not owed, only unread")
+    (is (str/includes? h "Will ask once repaired: q?") "and the question still waits on its reading")))
+
 (deftest a-diff-runs-envelope-keeps-its-fields-and-gains-a-headline
   (let [p (analysis/payload a-run)]
     (is (= (str "Status: converged · 3 rounds · 3 defects settled (5 repairs dispatched) · 1 still open · 0 kept\n"

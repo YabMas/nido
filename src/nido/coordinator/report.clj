@@ -3211,6 +3211,21 @@
                   (or (= :proceed (:recommend decision))
                       (and (seq broken) (every? #(= advisory-check (:check %)) broken)))))))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe [:enum :amend :recut :resurvey]]]}
+  repair-before-asking
+  "The repair this design decision's :asks waits on — its :recommend, when that is :amend, :recut
+   or :resurvey and the decision does not proceed anyway — or nil when :asks is a question a person
+   can answer now.
+
+   :asks is written on every branch, and on a repair it is posed over the record as it will be once
+   repaired. Shown as a question open now, it asks a person to grant scope over corrections nobody
+   has made, and a run the cap ended at its judgement makes none. A surface showing :asks labels it
+   as conditional when this is non-nil."
+  [decision]
+  (let [r (:recommend decision)]
+    (when (and (#{:amend :recut :resurvey} r) (not (proceeds? decision)))
+      r)))
+
 (def Fork
   "Where a child unit came from, written once on the child workstream's own ledger: the parent
    workstream, and the baseline and design on its ledger the child was derived from.

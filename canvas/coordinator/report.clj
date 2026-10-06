@@ -85,6 +85,14 @@
      and the gate offering a grant. A reader testing `:recommend` itself parks an advisory-only
      design for a person whose grant nothing then accepts."
     {:signature [:=> [:catn [:decision [:maybe :map]]] :boolean]})
+  (Operation repair-before-asking
+    "The repair a design decision's `:asks` waits on: its `:recommend` when that is `:amend`,
+     `:recut` or `:resurvey` and the decision does not `proceeds?` anyway, else nil.
+
+     On a repair, `:asks` is posed over the record the repair will leave. Every surface that shows
+     it — the analysis headline, the design round's hand-over, the driver's park — labels it as
+     waiting on that repair, so a person is never asked to grant scope over corrections nobody made."
+    {:signature [:=> [:catn [:decision [:maybe :map]]] [:maybe [:enum :amend :recut :resurvey]]]})
   (Operation review-holds?
     "Whether a baseline review says its baseline was checked against the code and held: a verdict
      that holds, over a round that left none of its checks `:unruled` and none on its first reading

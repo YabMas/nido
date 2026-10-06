@@ -1452,6 +1452,11 @@
    "\"after X is done\" is met by this record — drop the condition — or names a repair,\n"
    "and then the recommendation is not proceed. A correction the record needs is a\n"
    "finding for the amender, never asks: asks holds only what a person must decide.\n"
+   "On amend, recut or resurvey, too, asks carries no \"after the corrections…\"\n"
+   "preamble: the repair is your findings', and it is shown to the person beside\n"
+   "asks already. Pose the scope or worth question so it stands whatever the repair\n"
+   "writes — a person can grant that now, and need not wait for a record that is\n"
+   "still changing. Name a correction in asks only when the question depends on it.\n"
    (answered-block owes? (:seq design) (:open design) answers)
    (prior-findings-block (apply dissoc prior (keys settled)))
    (disputes-block disputes)

@@ -323,6 +323,9 @@
       reviewed-session (assoc :reviewed-session reviewed-session)
       reviewed-ws-id   (assoc :reviewed-ws-id reviewed-ws-id))))
 
+(def ^:private repair-owed
+  {:amend "amendment" :recut "recut" :resurvey "re-survey"})
+
 (defn- record-payload
   "The envelope for a baseline or design run. Its headline says what a record run DID — how many of
    its rounds judged, amended, gave something up, or were argued with — and, for a design run, which
@@ -332,10 +335,15 @@
    `spent` is `nido.review.record/spent` of the run's last judgement, `{id n}`: what it ended still
    refuted, rewording after rewording, counted across runs. Named in the headline because it is the
    one figure no single run's counts show — a capped run reports `1 round, 0 amended` over a claim
-   refuted for the eleventh time, and the hand amender reads this before writing the twelfth."
+   refuted for the eleventh time, and the hand amender reads this before writing the twelfth.
+
+   `repair` is `nido.coordinator.report/repair-before-asking` of that judgement, and `repaired?`
+   whether the run amended after it: `asks` on a repair is conditional on it, and is never shown as
+   a question open now."
   [{:keys [loop run-id report-path status rounds judged amended unappended weakened disputed
            record-seq still-broken asks stood-in reviewed-project reviewed-session reviewed-ws-id
-           machinery unrecorded spent cap amend-prompt unreadable stale-at-start] :as run}]
+           machinery unrecorded spent cap amend-prompt unreadable stale-at-start repair repaired?]
+    :as run}]
   (let [kind   (name loop)
         broken (seq (map name still-broken))]
     (cond-> {:adapter     :review-run
@@ -391,9 +399,19 @@
                                       ", but its decision reached no ledger"
                                       (when-let [l (:ledger unrecorded)] (str " (" l ")"))
                                       " — the figures and the ledger do not hold it\n"))
+                               ;; A repair the run never reached is what is owed first, and the
+                               ;; question after it is posed over the repaired record, so it is
+                               ;; labelled as one nobody can answer yet.
+                               (when (and repair (not repaired?))
+                                 (str (str/capitalize (repair-owed repair)) " owed — "
+                                      (if (= :max-iters status)
+                                        "cap reached"
+                                        (str "the run ended " (name (or status :unknown))))
+                                      " before the amend stage\n"))
                                ;; A cleared run stops nobody, so this line is the only place its
                                ;; question surfaces outside the ledger.
-                               (when-not (str/blank? (str asks)) (str "Asked of a person: " asks "\n"))
+                               (when-not (str/blank? (str asks))
+                                 (str (if repair "Will ask once repaired: " "Asked of a person: ") asks "\n"))
                                (some-> (stood-in-line stood-in) (str "\n"))
                                (reviewed-line run (when reviewed-ws-id (str " (workstream " reviewed-ws-id ")")))
                                (some->> (provenance/warning machinery) (str "\n")))}

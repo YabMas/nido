@@ -1464,6 +1464,13 @@
     (is (str/includes? p "On a proceed it is unconditional"))
     (is (str/includes? p "A correction the record needs is a\nfinding for the amender, never asks"))))
 
+(deftest a-repair-decisions-asks-poses-the-grant-apart-from-the-repair
+  ;; Ten decisions re-asked the same scope grant, each behind a new "after correcting…" prefix, so the
+  ;; person waited on a record that kept changing for a grant that never did.
+  (let [p (record/design-prompt {:design design})]
+    (is (str/includes? p "On amend, recut or resurvey, too, asks carries no \"after the corrections…\""))
+    (is (str/includes? p "so it stands whatever the repair\nwrites — a person can grant that now"))))
+
 (deftest a-changed-claim-is-shown-clause-by-clause-against-its-grant
   ;; Shown only "changed: <id>", the judge asked a person to re-grant a clause that read the same
   ;; in the granted record, and called a consequential rewording a "revised" commitment.

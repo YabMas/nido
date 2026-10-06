@@ -1406,6 +1406,19 @@
       (is (str/includes? out "is this worth doing now, at this cost?"))
       (is (str/includes? out "the part only you can answer")))))
 
+(deftest design-cmd-holds-back-a-question-that-waits-on-a-repair
+  ;; A capped run that ended at its :amend judgement printed its "after the corrections, do you
+  ;; grant…" as FOR YOU TO DECIDE, a gate over corrections nobody had made.
+  (with-redefs [rloop/run-loop (fn [_] {:status :max-iters
+                                        :record {:format :design-decision :recommend :amend
+                                                 :checks [{:check :goal-served :status :broken}]
+                                                 :asks "do you grant the scope?"}})]
+    (let [out (with-out-str (t/design-cmd ":cwd" "/w"))]
+      (is (str/includes? out "WILL ASK YOU ONCE REPAIRED — the amend recommended above comes first:")
+          "the question is labelled as conditional on the repair the decision named")
+      (is (str/includes? out "do you grant the scope?") "and still shown, so the person sees what is coming")
+      (is (not (str/includes? out "FOR YOU TO DECIDE"))))))
+
 (deftest an-ask-names-the-grant-a-go-is-recorded-as
   ;; A go written into the design's prose is read by no grant reader, so the next round asks the
   ;; same question again. The hand-over has to name the one record that is read.

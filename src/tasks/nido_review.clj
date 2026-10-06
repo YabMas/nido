@@ -21,6 +21,7 @@
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.report :as creport]
    [nido.coordinator.report.model :as claim-model]
    [nido.review.analysis :as analysis]
    [nido.review.codex :as codex]
@@ -2001,6 +2002,9 @@
       :stood-in         (report/stood-in report)
       :machinery        (:machinery report)
       :asks             (when (= :design-decision (:format rec)) (:asks rec))
+      ;; The repair that :asks waits on, and whether this run made it after the decision that asks.
+      :repair           (when (= :design-decision (:format rec)) (creport/repair-before-asking rec))
+      :repaired?        (boolean (some #(and (= (:iter final) (:iter %)) (:amended? %)) history))
       :spent            (record/spent (:refuted-running final))
       :cap              (record/cap-account final)
       :unreadable       (record/unreadable-rounds report)
@@ -2309,7 +2313,10 @@
   (doseq [{:keys [check note]} (:underivable final)]
     (println (str "  — " (name check) " could not be derived: " note)))
   (when-let [asks (get-in final [:record :asks])]
-    (println "\n  FOR YOU TO DECIDE:")
+    (if-let [repair (creport/repair-before-asking (:record final))]
+      ;; Posed over the record as the repair leaves it, so it is not yet a question to answer.
+      (println (str "\n  WILL ASK YOU ONCE REPAIRED — the " (name repair) " recommended above comes first:"))
+      (println "\n  FOR YOU TO DECIDE:"))
     (println (str "  " asks))
     ;; Named here because a go has exactly one record a later round reads: the grant. Written
     ;; anywhere else — a design's :summary, a supersession's :why — it is prose, the judge

@@ -511,8 +511,11 @@
   (let [needs (drive/decision-needs :no-progress
                                     [(a-decision 7 :amend "is the harness worth M now?")
                                      (a-decision 9 :amend "is this one-course harness worth M now?")])]
-    (is (str/includes? needs "For you to decide: is this one-course harness worth M now?")
-        "the terminal decision's ask, verbatim")
+    (is (str/includes? needs "Will ask once repaired: is this one-course harness worth M now?")
+        "the terminal decision's ask, verbatim — and conditional, since it is posed over the record
+         the :amend it recommended would leave, which nobody has written")
+    (is (not (str/includes? needs "For you to decide"))
+        "a question over corrections nobody made is not a gate the person can answer now")
     (is (str/includes? needs "Asked earlier in the same run: is the harness worth M now?")
         "an earlier ask of the run is not dropped because an amendment came between")
     (is (str/includes? needs "broken: goal-served"))
@@ -521,6 +524,11 @@
     (is (str/includes? needs "did not carry out: two derivable gaps")
         "a run that stopped on a named repair did not derive everything derivable")
     (is (not (str/includes? needs "everything derivable")))))
+
+(deftest an-ask-decision-hands-the-person-a-question-open-now
+  (is (str/includes? (drive/decision-needs :asked [(a-decision 3 :ask "scope?" :findings [])])
+                     "For you to decide: scope?")
+      "an :ask waits on no repair, so its question is the person's to answer now"))
 
 (deftest a-round-that-appended-no-decision-keeps-the-honest-fallback
   (is (nil? (drive/decision-needs :subjects-undeclared [])))
