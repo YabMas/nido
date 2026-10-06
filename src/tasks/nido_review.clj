@@ -1355,7 +1355,8 @@
    :fix-launch-failed "a fixer was launched and claude refused it before a turn — nothing was attempted there, so the findings are untried rather than resisted; what is broken is the machinery, and the layer's fix-<layer>-round-N.err.log in the run dir says how"
    :fix-unrouted "no finding reached a layer a fixer can touch — what is in question is the routing, not any repair"
    :fix-rolled-back "every repair was refused by the rebase and put back, so the branch is exactly what was reviewed — a re-run earns the same refusal; what is in question is the layer order"
-   :max-iters "the cap you passed was reached — this is not convergence, and the findings were still open"
+   :max-iters "the cap you passed was reached with findings open — this is not convergence; the last round's findings were handed to fixers and no round read what they did"
+   :owed-second-reading "the cap you passed was reached with no finding open, only layers read quiet once and owed the second reading convergence takes — re-run to read them, there is nothing to repair"
 
    ;; ── the branch is holding conflict markers ──
    ;; Named apart because they say different things about what put the markers
@@ -1472,6 +1473,23 @@
                              (str (or layer "the branch") " (round " round
                                   (when (some? exit-code) (str ", exit " exit-code))
                                   ")")))))
+
+      ;; The layers a cap left on one quiet reading, which is all :owed-second-reading is
+      ;; waiting on and so all a re-run will read.
+      (seq (get-in final [:owed-reading :read-once]))
+      (conj (str "  owed a second reading: "
+                 (str/join ", " (map #(or % "the branch")
+                                     (get-in final [:owed-reading :read-once])))))
+
+      ;; Rulings the last warden made that no fixer was launched for — see
+      ;; `report/ruled-not-dispatched`. A re-run re-reads and re-rules them, so the sweep
+      ;; each was ordered with is said here or lost.
+      (seq (report/ruled-not-dispatched final))
+      (conj (str "  ruled, never dispatched: "
+                 (str/join ", "
+                           (for [{:keys [id owner-layer sweep]} (report/ruled-not-dispatched final)]
+                             (str id " (" (or owner-layer "the branch")
+                                  (when sweep ", sweep") ")")))))
 
       :always
       (conj (str "  → " (or (diff-remedies status)
@@ -1690,6 +1708,15 @@
                       (some->> (lifecycle/session-from-cwd cwd) :project
                                (get (config/read-projects)) :reviewer)))
 
+(defn- diff-cap-warning
+  "A line for a diff-loop cap under 3, or nil. Round 1's repairs are read by round 2, and that
+   reading is the one most likely to find what round 1 missed; under 3, whatever it finds is
+   repaired with no round left to read it, and the run ends :max-iters on code nobody read."
+  [max-iters]
+  (when (and max-iters (< max-iters 3))
+    (str "⚠ :max-iters " max-iters " ends the run on a repair no round reads whenever the reading"
+         " after round 1's repairs finds anything — pass 3 or more, or none")))
+
 (defn- loop-cmd-run!
   "The diff loop proper, on a cwd `no-yardstick` has already cleared. Split from
    `loop-cmd*` so the refusal reads as one branch rather than as a guard buried
@@ -1756,6 +1783,15 @@
                     ;; commits that no round will ever review — which is exactly
                     ;; what the last round of an :unfixable run was doing.
                     :judged-after :warden
+                    ;; A round sent on only to read a quiet layer a second time
+                    ;; is not counted against the cap, and a cap that falls
+                    ;; there says so — see `stages/owed-reading`.
+                    :owes-reading stages/owed-reading
+                    ;; What the last warden ruled is dispatched before the cap
+                    ;; ends the run, and beside an escalation, so a ruling is
+                    ;; never answered by hand between runs for want of a round.
+                    :repair-at-cap? true
+                    :repair-before-escalate? stages/repair-before-escalate?
                     ;; The diff loop's own program, how its findings are told
                     ;; apart, and the refusal of its stack that ends a run. The
                     ;; engine names none of them.
@@ -1767,6 +1803,7 @@
                                         :context context
                                         :machinery (provenance/loaded-from cwd)}))
         _ (some-> (provenance/warning (:machinery @report-atom)) println)
+        _ (some-> (diff-cap-warning max-iters) println)
         _ (when (seq (:missing context))
             (println (str "review-loop: running WITHOUT "
                           (str/join ", " (:missing context))

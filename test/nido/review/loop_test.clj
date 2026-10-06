@@ -720,3 +720,41 @@
     (is (= :unfixable (:status (run-loop {:run-id "r" :max-iters 1 :pipeline pipe :judged-after :judge
                                           :repair-at-cap? true :spent (constantly ["s"])}))))
     (is (zero? @amended) "a spent subject is not reworded once more because the cap allows a repair")))
+
+(deftest an-escalation-runs-the-repairs-it-ruled-beside-it-first
+  ;; A warden escalated a design contradiction and, in the same answer, ruled an unrelated test
+  ;; defect `fix` — "a real test failure … and should be fixed". The run ended on the judgement,
+  ;; and the defect reached the person merged into the question as one more thing still open.
+  (let [calls (atom [])
+        pipe  [(stage :review (fn [c] (assoc c :findings [{:title "x"}])))
+               (stage :warden (fn [c] (assoc c :control :escalate)))
+               (stage :fix    (fn [c] (swap! calls conj (:control c)) (assoc c :fixed? true)))]
+        out   (run-loop {:run-id "r" :pipeline pipe :judged-after :warden
+                         :repair-before-escalate? (constantly true)})]
+    (is (= :escalated (:status out)) "the run still ends on the question")
+    (is (= [:escalate] @calls) "the repair ran, and knew it was running under an escalation")
+    (is (:fixed? out))
+    (is (not (contains? out ::rloop/escalating)) "the engine's own marker does not leak")
+    (reset! calls [])
+    (run-loop {:run-id "r" :pipeline pipe :judged-after :warden})
+    (is (empty? @calls) "a pipeline that names no such repairs ends on the judgement, as before")))
+
+(deftest an-escalation-with-repairs-outranks-the-cap-and-the-stall-checks
+  ;; The escalation pre-empted every terminal check while it ended the run on its judgement.
+  ;; Running its repairs must not hand the run to the cap or a stall instead, which would bury
+  ;; the design question under a status that sends a reader to amend.
+  (let [pipe [(stage :review (fn [c] (assoc c :findings [{:title "x"}])))
+              (stage :warden (fn [c] (if (= 1 (:iter c)) c (assoc c :control :escalate))))
+              (stage :fix    (fn [c] (update c :history (fnil conj []) {:iter (:iter c) :findings (:findings c)})))]
+        out  (run-loop {:run-id "r" :max-iters 2 :pipeline pipe :judged-after :warden
+                        :repair-before-escalate? (constantly true)})]
+    (is (= :escalated (:status out)) "not :max-iters, and not :no-progress over the repeated set")))
+
+(deftest a-repair-stage-under-an-escalation-may-still-end-the-run-on-its-own-status
+  (let [pipe [(stage :review (fn [c] (assoc c :findings [{:title "x"}])))
+              (stage :warden (fn [c] (assoc c :control :escalate)))
+              (stage :fix    (fn [c] (assoc c :control :stop :status :fix-conflicted)))]
+        out  (run-loop {:run-id "r" :pipeline pipe :judged-after :warden
+                        :repair-before-escalate? (constantly true)})]
+    (is (= :fix-conflicted (:status out))
+        "a branch holding markers is the pipeline's to put first, and the engine does not overrule it")))

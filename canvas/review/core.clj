@@ -152,6 +152,12 @@
      :run-finalized, and the analysis payload carries it because a run dir is reclaimed
      long before an analysis of it is read."
     {:signature [:=> [:catn [:ctx :map]] [:maybe :map]]})
+  (Operation ruled-not-dispatched
+    "The terminal round's `fix` rulings no fixer was launched for, with the owning layer and the
+     sweep each was ordered with — read off the launch record. A re-run re-rules the finding; the
+     order is what it cannot re-derive. Public because the terminal lines read it as well as
+     `stopped-on`."
+    {:signature [:=> [:catn [:ctx :map]] [:vector :map]]})
   (Operation applied-reshapes
     "Every recut the run actually carried out, in round order.
 

@@ -544,3 +544,15 @@
     (is (str/includes? h "Cap: round 3 was the second reading"))
     (is (str/includes? h "Amend prompt the run did not reach: /runs/r/amend-prompt-round-3.md")))
   (is (not (str/includes? (:headline (analysis/payload a-design-run)) "Cap:"))))
+
+(deftest a-cap-left-on-owed-readings-lists-them-in-the-headline
+  ;; 'capped one clean reading short' and 'capped while open' were one headline.
+  (let [p (analysis/payload (assoc a-run :status :owed-second-reading
+                                         :owed-reading {:read-once ["domain-guard" "stack"]}))]
+    (is (str/includes? (:headline p) "Owed a second reading: domain-guard, stack")))
+  (is (not (str/includes? (:headline (analysis/payload a-run)) "Owed a second reading"))))
+
+(deftest an-undispatched-ruling-is-in-the-headline-with-its-sweep
+  (let [p (analysis/payload (assoc a-run :ruled-not-dispatched
+                                   [{:id "14d31b83" :owner-layer "transport" :sweep true}]))]
+    (is (str/includes? (:headline p) "Ruled, never dispatched: 14d31b83 (transport, sweep)"))))

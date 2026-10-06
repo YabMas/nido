@@ -2517,3 +2517,42 @@
         {:keys [appended out]} (append-stopped run-id 4)]
     (is (nil? appended) "an answer the ledger refused would be refused again")
     (is (str/includes? out "not amend-touched-code"))))
+
+(deftest the-diff-loop-dispatches-what-its-last-warden-ruled
+  ;; Six analyses found a capped or escalated diff run ending with the last warden's `fix` ruling
+  ;; never handed to a fixer, and a re-read round counted against the cap. Each seam is what
+  ;; closes one of those; a config that stopped passing it would quietly go back.
+  (let [seen (atom nil)]
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :converged :history []})]
+      (with-out-str (t/loop-cmd ":cwd" "/w" ":max-iters" "3"))
+      (is (true? (:repair-at-cap? @seen)) "a capped judgement is repaired before the run ends")
+      (is (= stages/owed-reading (:owes-reading @seen)) "a second reading is not counted")
+      (is (= stages/repair-before-escalate? (:repair-before-escalate? @seen))
+          "an escalation's independent fixes are run beside it"))))
+
+(deftest a-diff-cap-under-three-is-warned-about-at-launch
+  ;; Two analyses watched a cap of 2 end :max-iters over a branch whose round-2 reading found a
+  ;; defect round 1 had passed: the repair landed and nothing read it.
+  (with-redefs [rloop/run-loop (fn [_] {:status :converged :history []})]
+    (is (str/includes? (with-out-str (t/loop-cmd ":cwd" "/w" ":max-iters" "2")) "⚠ :max-iters 2"))
+    (is (not (str/includes? (with-out-str (t/loop-cmd ":cwd" "/w" ":max-iters" "3")) "⚠ :max-iters")))
+    (is (not (str/includes? (with-out-str (t/loop-cmd ":cwd" "/w")) "⚠ :max-iters"))
+        "an uncapped run ends on its own merits and has nothing to be warned about")))
+
+(deftest a-diff-cap-that-fell-on-owed-readings-names-them
+  ;; A run ended :max-iters on a round with zero findings and every layer read quiet; the status
+  ;; read as running out of time on open work.
+  (let [out (str/join "\n" (t/outcome-lines {:status :owed-second-reading
+                                             :owed-reading {:read-once ["domain-guard" nil]}}
+                                            {:rounds []} "/runs/r/report.json"))]
+    (is (str/includes? out "review-loop: owed-second-reading"))
+    (is (str/includes? out "owed a second reading: domain-guard, the branch"))
+    (is (str/includes? out "nothing to repair"))
+    (is (not (str/includes? out "findings open")))))
+
+(deftest a-ruling-no-fixer-received-is-named-on-the-terminal
+  (let [out (str/join "\n" (t/outcome-lines {:status :escalated :iter 3
+                                             :findings [{:id "x" :handle "14d31b83" :disposition :fix
+                                                         :owner-layer "transport" :sweep true}]}
+                                            {:rounds []} "/runs/r/report.json"))]
+    (is (str/includes? out "ruled, never dispatched: 14d31b83 (transport, sweep)"))))

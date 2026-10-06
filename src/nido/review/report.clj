@@ -60,6 +60,29 @@
   [ctx]
   (or (:warden ctx) (some :warden (rseq (vec (:history ctx))))))
 
+(defn ^{:malli/schema [:=> [:cat :map] [:vector :map]]}
+  ruled-not-dispatched
+  "The terminal round's `fix` rulings that no fixer was launched for, each as
+   `{:id :title :owner-layer :sweep :because}` — named by handle where the warden gave one.
+
+   A run that ends on a judgement — an escalation's parked subjects, a stall, a give-up — ends
+   before its repairs, and the next run re-reads and re-rules those findings from scratch. What it
+   cannot re-derive is the order: which layer owns the repair and whether the fixer was to sweep
+   the class. `:because` is where the warden scoped a sweep.
+
+   Read off the launch record (`:carry :fixer-launches`), which every fixer launch enters with
+   the ids it was handed, so a ruling a fixer was handed and declined is not one of these."
+  [ctx]
+  (let [hid      #(or (:handle %) (:id %))
+        launched (into #{} (comp cat (filter #(= (:iter ctx) (:round %))) (mapcat :handed))
+                       (vals (get-in ctx [:carry :fixer-launches])))]
+    (into [] (comp (filter #(= :fix (:disposition %)))
+                   (remove #(contains? launched (hid %)))
+                   (map #(-> (select-keys % [:title :owner-layer :sweep :because])
+                             (assoc :id (str (hid %)))))
+                   (distinct))
+          (:findings ctx))))
+
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
   stopped-on
   "What the run stopped ON, read off its terminal ctx — as against `:status`,
@@ -124,7 +147,12 @@
    whose only other copies are the `:review` entry and a log in the run dir.
 
    `:unrecorded` is what a record run that ended `unrecorded` would otherwise have ended as, and
-   the ledger it could not write to: the decision it reached is in this report and nowhere else."
+   the ledger it could not write to: the decision it reached is in this report and nowhere else.
+
+   `:owed-reading` is what a run that ended :owed-second-reading still owed a second reading of —
+   the whole of what it stopped on, since it stopped holding no finding. And
+   `:ruled-not-dispatched` is the last warden's `fix` rulings no fixer was launched for, with the
+   sweep each was ordered with — see `ruled-not-dispatched`."
   [ctx]
   (let [parks    (get-in ctx [:carry :parks])
         standing (into [] (distinct) (concat (:standing (last-warden ctx))
@@ -141,6 +169,12 @@
 
        (:unrecorded ctx)
        (assoc :unrecorded (:unrecorded ctx))
+
+       (:owed-reading ctx)
+       (assoc :owed-reading (:owed-reading ctx))
+
+       (seq (ruled-not-dispatched ctx))
+       (assoc :ruled-not-dispatched (ruled-not-dispatched ctx))
 
        (seq (:unfixable ctx))
        (assoc :unfixable (vec (:unfixable ctx)))

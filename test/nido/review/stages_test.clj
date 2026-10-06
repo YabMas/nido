@@ -5602,3 +5602,87 @@
         (is (= [] (stages/prior-standing "/w")) "a person answering after it ends the carry"))))
   (with-redefs [stages/project+ws-from-cwd (fn [_] nil)]
     (is (= [] (stages/prior-standing "/w")))))
+
+(deftest an-escalating-round-repairs-only-what-no-park-holds
+  ;; The escalation's parks are the question; a `fix` beside them is a defect the warden already
+  ;; judged repairable alone. One ruled under a parked handle is the question's own subject.
+  (let [launches (atom [])]
+    (with-redefs [agent/launch! (fn [m] (swap! launches conj m)
+                                  {:num-turns 4 :result-error? false :result-text "done"})
+                  stages/working-copy-dirty? (fn [_] true)
+                  stages/session-stack (fn [_ _] two-layer-stack)
+                  jj/jj! (jj-scripted [[] []])]
+      (let [ctx ((:run stages/fix-stage)
+                 {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 3 :control :escalate
+                  :carry {:parks {"h2" {:since 3 :owner-layer "upper"}}}
+                  :findings [{:id "aa11" :handle "h1" :title "x" :disposition :fix :owner-layer "lower"}
+                             {:id "bb22" :handle "h2" :title "y" :disposition :fix :owner-layer "upper"}
+                             {:id "cc33" :handle "h2" :title "z" :disposition :park :owner-layer "upper"}]})]
+        (is (= ["lower"] (fixers-run @launches)) "the parked subject's layer gets no fixer")
+        (is (= [["h1"]] (mapv #(:handed %) (:fixes ctx))))
+        (is (= :escalate (:control ctx)) "the round still ends on the question")
+        (is (nil? (:status ctx)))
+        (is (= 3 (count (:findings ctx))) "every ruling stays on the round for the report")))))
+
+(deftest a-declined-repair-under-an-escalation-does-not-replace-it
+  ;; A fixer saying no beside a design question leaves the question what the person is asked;
+  ;; :fix-declined there would read as the whole story.
+  (with-redefs [agent/launch! (fn [_] {:num-turns 4 :result-error? false :result-text "no"})
+                stages/working-copy-dirty? (fn [_] false)
+                stages/session-stack (fn [_ _] two-layer-stack)
+                jj/jj! (jj-scripted [[] []])]
+    (let [plain {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 2
+                 :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "lower"}]}]
+      (is (= :fix-declined (:status ((:run stages/fix-stage) plain))) "the same round, not escalating")
+      (let [ctx ((:run stages/fix-stage) (assoc plain :control :escalate))]
+        (is (nil? (:status ctx)))
+        (is (= :escalate (:control ctx)))
+        (is (seq (:declined ctx)) "the decline is still on the round, beside the question")))))
+
+(deftest a-recut-waits-on-an-escalation
+  (let [ctx {:config {:cwd "/w" :base "main"} :iter 2 :control :escalate
+             :findings [{:id "a" :handle "h" :disposition :recut}]}]
+    (with-redefs [stages/session-stack (fn [_ _] (throw (ex-info "reshape planned" {})))]
+      (is (thrown? clojure.lang.ExceptionInfo ((:run stages/reshape-stage) (dissoc ctx :control)))
+          "the probe: outside an escalation the stage reads the stack")
+      (is (= ctx ((:run stages/reshape-stage) ctx)) "under one it leaves the cut alone"))))
+
+(deftest repair-before-escalate-asks-for-an-unparked-fix
+  (is (true? (stages/repair-before-escalate?
+              {:findings [{:id "a" :disposition :fix}]})))
+  (is (false? (stages/repair-before-escalate?
+               {:carry {:parks {"a" {}}} :findings [{:id "a" :disposition :fix}]})))
+  (is (false? (stages/repair-before-escalate?
+               {:findings [{:id "a" :disposition :park} {:id "b" :disposition :declined}]}))))
+
+(deftest owed-reading-is-a-round-sent-on-for-a-second-reading
+  (is (= {:read-once ["lower" "stack"]}
+         (stages/owed-reading {:control :next-round :read-once ["lower" "stack"]})))
+  (is (nil? (stages/owed-reading {:control :continue :read-once ["lower"]}))
+      "a round continuing to a repair owes the repair, which the cap does bound")
+  (is (nil? (stages/owed-reading {:control :next-round}))))
+
+(defn- diff-shaped-run
+  "A diff-loop-shaped run: round 1 finds and repairs, every round after reads quiet and owes a
+   second reading of `owes` until round `clean-at`, which ends :clean."
+  [max-iters clean-at]
+  (rloop/run-loop
+   {:run-id "r" :max-iters max-iters :judged-after :warden
+    :finding-key :id :owes-reading stages/owed-reading :repair-at-cap? true
+    :pipeline [{:name :review
+                :run (fn [c] (cond
+                               (= 1 (:iter c))        (assoc c :findings [{:id "f"}])
+                               (>= (:iter c) clean-at) (assoc c :findings [] :control :stop :status :clean)
+                               :else (assoc c :findings [] :control :next-round :read-once ["lower"])))}
+               {:name :warden :run (fn [c] (assoc c :control :continue))}
+               {:name :fix :run (fn [c] (update c :history (fnil conj []) {:iter (:iter c) :fixed-count 1}))}]}))
+
+(deftest a-cap-of-two-reaches-the-second-reading-of-a-repair
+  ;; A run capped at 2 repaired four defects in round 1, read every layer quiet in round 2, and
+  ;; ended :max-iters with nothing open: round 2 was the repaired layers' FIRST quiet reading.
+  (is (= :clean (:status (diff-shaped-run 2 3)))
+      "the round going back only to read again is not counted against the cap")
+  (let [out (diff-shaped-run 2 99)]
+    (is (= :owed-second-reading (:status out))
+        "a cap that still falls on owed readings says so, not that findings were open")
+    (is (= {:read-once ["lower"]} (:owed-reading out)))))

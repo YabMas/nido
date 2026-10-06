@@ -22,11 +22,12 @@
    reasons its caller passes as `run-loop`'s :terminal-reasons; for the diff
    review both are `nido.review.stages/stage-statuses`. The record pipelines end on statuses of
    their own too, and those are NOT here: they reach a different ledger event,
-   under no enum this one can drift from. So is `:owed-second-reading`, though the
-   engine sets it: only a pipeline passing `run-loop` an :owes-reading can reach it,
-   and only the record pipelines pass one."
+   under no enum this one can drift from.
+
+   `:owed-second-reading` is reachable only by a pipeline that passes `run-loop` an
+   :owes-reading. Both the diff loop and the record loops pass one, so it is here."
   #{:converged :unresolved :escalated :unfixable :no-progress :max-iters
-    :review-failed :reviewer-unavailable})
+    :owed-second-reading :review-failed :reviewer-unavailable})
 
 (def ^:private terminal-reasons
   "The `:reason`s a stage throws with that END the run rather than crash it —
@@ -223,8 +224,15 @@
    the stage was handed — which holds everything the stages before it did this
    round. Only the first reaches the phase event, because it is the stage's own
    account of itself and the second is not: folded as one, it would overwrite
-   what the phase had already recorded with what the phase was given."
-  [ctx pipeline emit clock judged-after end? owed ends-run?]
+   what the phase had already recorded with what the phase was given.
+
+   An `:escalate` from the judging stage ends the round there unless
+   `repair-before-escalate?` says the judgement also ruled repairs that do not wait on the
+   question it escalates. Then the stages after it run, still under `:control :escalate`, and the
+   round ends :escalated when they are done — unless one of them ends it on a status of its own.
+   No terminal check runs in between: an escalation outranks the cap and the stall checks
+   whether or not its repairs run, so letting them run must not hand the run to one of those."
+  [ctx pipeline emit clock judged-after end? owed ends-run? repair-before-escalate?]
   (reduce
    (fn [ctx stage]
      (emit {:event :phase-started :iter (:iter ctx) :phase (:name stage)
@@ -254,7 +262,12 @@
          (reduced (assoc ctx' :status (if (seq (owed ctx'))
                                         :unresolved
                                         :converged)))
-         (= :escalate (:control ctx')) (reduced (assoc ctx' :status :escalated))
+         (= :escalate (:control ctx'))
+         (cond
+           (::escalating ctx') ctx'
+           (and judged-after (= judged-after (:name stage)) (repair-before-escalate? ctx'))
+           (assoc ctx' ::escalating true)
+           :else (reduced (assoc ctx' :status :escalated)))
 
          :else
          ;; `prior` is the history without this round. The stage that appends
@@ -295,7 +308,11 @@
    terminates on its own merits (converged / escalated / clean / no-progress /
    error). A round that changes nothing still ends the run via `no-progress?`,
    so unbounded does not mean non-terminating. Pass :max-iters only to cap it.
-   :emit / :clock / :attempt-key / :attempted? / :owed / :spent / :owes-reading are injection seams.
+   :emit / :clock / :attempt-key / :attempted? / :owed / :spent / :owes-reading /
+   :repair-before-escalate? are injection seams.
+   :repair-before-escalate? is asked of a judgement that escalates: truthy runs the rest of the
+   round's pipeline — its repairs — before the run ends :escalated. It defaults to \"never\", which
+   ends the run on the judgement. See `run-pipeline`.
    :owes-reading is what a round that ends `:control :next-round` still owes as a READING rather
    than a repair, off its ctx, or nil: the round after it is not counted against :max-iters, and
    a cap reached on a round that owes one ends :owed-second-reading carrying it as :owed-reading.
@@ -340,9 +357,11 @@
    throw crashes the run, because finalizing on it would publish a verdict
    nobody reached."
   [{:keys [run-id max-iters pipeline emit clock finding-key attempt-key
-           attempted? judged-after owed changed? spent owes-reading repair-at-cap?] :as config
+           attempted? judged-after owed changed? spent owes-reading repair-at-cap?
+           repair-before-escalate?] :as config
     :or   {emit (fn [_]) clock #(Instant/now)
            attempted? (constantly true)
+           repair-before-escalate? (constantly false)
            owed (constantly nil)
            changed? (constantly false)
            spent (constantly nil)
@@ -389,7 +408,8 @@
                   :iter iter :counted counted :max-iters max-iters}
             end? (fn [c prior judged?] (terminal cfg c prior judged?))
             ctx  (try
-                   (run-pipeline ctx0 pipeline emit clock judged-after end? owed ends-run?)
+                   (run-pipeline ctx0 pipeline emit clock judged-after end? owed ends-run?
+                                 repair-before-escalate?)
                    (catch clojure.lang.ExceptionInfo e
                      (let [{:keys [reason] :as data} (ex-data e)]
                        (if (ends-run? reason)
@@ -409,7 +429,11 @@
                                        :status reason :error (ex-message e))
                                 (select-keys data [:unavailable]))
                          (throw e)))))
-            final (or (when (:status ctx) ctx)
+            final (or (when (:status ctx) (dissoc ctx ::escalating))
+                      ;; An escalating round whose repairs ran out the pipeline — see
+                      ;; `run-pipeline`. Before the terminal check, which the escalation outranks.
+                      (when (::escalating ctx)
+                        (assoc (dissoc ctx ::escalating) :status :escalated))
                       ;; The whole pipeline ran without ending. `butlast`
                       ;; because a stage after the judgement has since appended
                       ;; this round to the history. A pipeline that named a

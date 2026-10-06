@@ -1865,6 +1865,9 @@
    ;; not read them, so a test asserts this admits their union.
    [:status             [:enum :converged :unresolved :escalated :clean :no-progress
                                :max-iters :review-failed :dry-run
+                               ;; A cap reached holding no finding, only layers
+                               ;; read quiet once and owed their second reading.
+                               :owed-second-reading
                                ;; Findings raised in four consecutive rounds
                                ;; that no repair moved, or a park that stood
                                ;; that long. The loop has nothing further to

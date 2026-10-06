@@ -937,7 +937,7 @@
    ;; before dispositions are consulted, by deferring to the next tick.
    :detached             :retry
    :max-iters            :escalate  ; a cap somebody asked for was reached
-   :owed-second-reading  :escalate  ; a cap fell on a record held on one reading only
+   :owed-second-reading  :escalate  ; a cap fell between a reading and the second it owes
    :warden-indeterminate :escalate
    :arbiter-indeterminate :escalate  ; pre-rename, still readable in old ledgers
    :judge-indeterminate  :escalate

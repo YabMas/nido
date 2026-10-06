@@ -3374,7 +3374,8 @@
                         ;; just created, which is the prose outcome this channel
                         ;; exists to replace. `escalate` is untouched: a design
                         ;; question outranks a repair, and the promoted finding
-                        ;; stays open for whoever answers it.
+                        ;; is repaired beside it only as any other `fix` is —
+                        ;; see `escalation-repairs`.
                         :control (if (and (seq promoted)
                                           (= :stop (:decision decision)))
                                    :continue
@@ -3803,7 +3804,17 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
           (or parks {})
           outcomes))
 
+(declare reshape-round)
+
 (defn- run-reshape-stage
+  [ctx]
+  ;; Not under an escalation: a recut rewrites the cut, and the question escalated may be about
+  ;; the cut. The round's fixes still run — see `escalation-repairs`.
+  (if (= :escalate (:control ctx))
+    ctx
+    (reshape-round ctx)))
+
+(defn- reshape-round
   [ctx]
   (let [{:keys [cwd base dry-run?]} (:config ctx)
         tried  (get-in ctx [:carry :reshaped] #{})
@@ -4602,8 +4613,53 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
         (if (reduced? r) @r (recur r (inc i))))
       acc)))
 
+(defn ^{:malli/schema [:=> [:cat :map] [:vector :any]]}
+  escalation-repairs
+  "The findings a round whose warden escalated still hands to fixers: those it ruled `fix` under
+   a handle no park holds.
+
+   An escalation is a question about the design, and the parks are what it asks; a `fix` ruling
+   beside them is a defect the warden already judged repairable on its own. Left for the person,
+   it reaches them merged into `still open` with the question, which is the one thing it is not.
+   A `fix` under a handle a park still holds is the question's own subject, so it waits with it."
+  [ctx]
+  (let [parked (set (keys (get-in ctx [:carry :parks])))]
+    (filterv #(and (= :fix (:disposition %))
+                   (not (contains? parked (or (:handle %) (:id %)))))
+             (:findings ctx))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  repair-before-escalate?
+  "The diff loop's `run-loop` :repair-before-escalate? — whether an escalating round has any
+   `escalation-repairs` to run before it ends."
+  [ctx]
+  (boolean (seq (escalation-repairs ctx))))
+
+(defn- still-escalated
+  "`ctx`, the end of an escalating round's repairs, ended as the escalation it ran under.
+
+   A repair status the fix stage reached is about the repair, and the escalation outranks it: a
+   fixer declining or timing out beside a design question leaves the question what the person is
+   asked, with the fix rows in the report beside it. Two are about the BRANCH and stand, because
+   nothing can be answered on it until they are cleared: conflict markers the repair left, and a
+   working copy someone else moved."
+  [ctx]
+  (if (#{:fix-conflicted :workspace-drifted} (:status ctx))
+    ctx
+    (assoc (dissoc ctx :status) :control :escalate)))
+
+(declare fix-round)
+
 (defn- run-fix-stage
   [ctx]
+  (if (= :escalate (:control ctx))
+    (still-escalated (fix-round ctx (escalation-repairs ctx)))
+    (fix-round ctx (:findings ctx))))
+
+(defn- fix-round
+  "The fix stage over `to-fix`, the findings of `ctx` its plan is drawn from — every finding of
+   the round, or on an escalating round only `escalation-repairs`."
+  [ctx to-fix]
   (if (:dry-run? (:config ctx))
     (assoc ctx :control :stop :status :dry-run)
     (let [{:keys [cwd base run-id budget impl-session-id fixer-model]} (:config ctx)
@@ -4612,7 +4668,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
           ;; stands in the same worktree, so the answer cannot differ between
           ;; them and the registry read is not worth repeating.
           sys-prompt (fixer-system-prompt cwd)
-          plan  (fix-plan stack (with-sweep-memory (:findings ctx) (:history ctx)))
+          plan  (fix-plan stack (with-sweep-memory to-fix (:history ctx)))
           ;; The round's own rulings are conjoined on because the warden runs
           ;; inside it: the decision a fixer is about to walk into is usually
           ;; one taken minutes ago, and `:history` does not hold this round
@@ -5181,3 +5237,17 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
     (boolean (and (pos? (long (or (:fixed-count prev) 0)))
                   (seq was) (seq holds)
                   (not= was holds)))))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
+  owed-reading
+  "The diff loop's `run-loop` :owes-reading: `{:read-once labels}` for a round that ended
+   `:control :next-round` because those targets have been read quiet only once, else nil.
+
+   What that round goes back for is a reading, not a repair — the review stage or the warden's
+   hold sends it on only with nothing left to fix. So the round after it is not counted against
+   the cap, and a cap reached on it ends :owed-second-reading naming these targets rather than
+   :max-iters, which reads as findings left open."
+  [ctx]
+  (when (= :next-round (:control ctx))
+    (when-let [labels (not-empty (:read-once ctx))]
+      {:read-once (vec labels)})))

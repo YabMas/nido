@@ -753,4 +753,17 @@
      round's reviewers read differs from what the last round's did. What the engine's stall
      check cannot ask for itself — a repeated finding set is a stall only if nothing moved,
      and a defect CLASS being narrowed repeats its handles by construction."
-    {:signature [:=> [:catn [:ctx :map] [:prior :any]] :boolean]}))
+    {:signature [:=> [:catn [:ctx :map] [:prior :any]] :boolean]})
+  (Operation owed-reading
+    "The diff loop's :owes-reading for the engine: the targets a round went on to read a second
+     time, read quiet once with nothing to repair. The round after is not counted against the
+     cap, and a cap that still falls there ends :owed-second-reading naming them, not :max-iters."
+    {:signature [:=> [:catn [:ctx :map]] [:maybe :map]]})
+  (Operation escalation-repairs
+    "The findings an escalating round still hands to fixers: ruled `fix` under a handle no park
+     holds. The parks are the question; a fix beside them is a defect judged repairable alone."
+    {:signature [:=> [:catn [:ctx :map]] [:vector :any]]})
+  (Operation repair-before-escalate?
+    "The diff loop's :repair-before-escalate? for the engine — whether an escalating round has
+     escalation repairs to run before it ends."
+    {:signature [:=> [:catn [:ctx :map]] :boolean]}))

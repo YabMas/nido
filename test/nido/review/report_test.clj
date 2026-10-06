@@ -1924,3 +1924,25 @@
     (is (= "read-once" (:status (first (:rounds r)))))
     (is (= {:seq 4 :read-once ["a"]} (get-in r [:summary :owed-reading]))
         "the report names what the run still owed a reading of")))
+
+(deftest a-fix-ruling-no-fixer-was-launched-for-is-on-the-reason
+  ;; The cap ended a run after its warden ruled a sweep-bearing fix, and the report recorded no
+  ;; trace of it: the next run re-ruled the finding with the sweep order gone.
+  (let [ctx {:iter 3
+             :findings [{:id "a" :handle "h1" :disposition :fix :owner-layer "lower"}
+                        {:id "b" :handle "h2" :disposition :fix :owner-layer "upper" :sweep true
+                         :because "every command returning a Persistence row" :title "t"}
+                        {:id "c" :handle "h3" :disposition :park}]
+             :carry {:fixer-launches {"lower" [{:round 3 :handed ["h1"] :ran? true}]
+                                      "upper" [{:round 2 :handed ["h2"] :ran? true}]}}}]
+    (is (= [{:id "h2" :title "t" :owner-layer "upper" :sweep true
+             :because "every command returning a Persistence row"}]
+           (report/ruled-not-dispatched ctx))
+        "launched this round is dispatched; launched in an EARLIER round is not this ruling")
+    (is (= (report/ruled-not-dispatched ctx) (:ruled-not-dispatched (report/stopped-on ctx))))
+    (is (nil? (report/stopped-on (update ctx :findings (partial filterv #(not= "h2" (:handle %))))))
+        "a run whose rulings all reached a fixer says nothing about it")))
+
+(deftest a-cap-on-owed-readings-is-on-the-reason
+  (is (= {:read-once ["lower"]}
+         (:owed-reading (report/stopped-on {:owed-reading {:read-once ["lower"]}})))))

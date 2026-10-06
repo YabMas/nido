@@ -209,7 +209,7 @@
            drift unavailable stood-in base in-flight errored design-verdict verdict-implementation
            verdict-unverified verdict-unraised
            design-carried-from review-entry reviewed-project reviewed-session reviewed-ws-id
-           machinery] :as run}]
+           machinery owed-reading ruled-not-dispatched] :as run}]
   ;; `:in-flight` is the reconciler's reading of an orphan's report and is the
   ;; same value `worth-analysing?` gates on; the phase is the half of it that
   ;; means something to a reader, so it is published and the round is not.
@@ -272,6 +272,17 @@
                                       "Coverage: " (or targets-reviewed 0) " targets read this run, "
                                       (or targets-skipped 0) " carried from an earlier run\n"
                                       (reviewed-line run (str " (base " base ")"))
+                                      ;; What a cap left read quiet once — on :owed-second-reading
+                                      ;; the whole of what the run stopped on.
+                                      (when-let [owed (seq (:read-once owed-reading))]
+                                        (str "\nOwed a second reading: "
+                                             (str/join ", " (map #(or % "the branch") owed))))
+                                      (when (seq ruled-not-dispatched)
+                                        (str "\nRuled, never dispatched: "
+                                             (str/join ", "
+                                                       (for [{:keys [id owner-layer sweep]} ruled-not-dispatched]
+                                                         (str id " (" (or owner-layer "the branch")
+                                                              (when sweep ", sweep") ")")))))
                                       (when verdict
                                         (str "\nDesign: " verdict
                                              (when design-carried-from
