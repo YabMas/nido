@@ -595,7 +595,7 @@
              :premise-unverified :premise-retracted :design-retracted
              :premise-superseded :premise-goal-superseded :goal-superseded
              :no-premise :unreadable-ledger :dry-run
-             :subjects-undeclared :declaration-unreadable]]
+             :subjects-undeclared :declaration-unreadable :owed-second-reading]]
     (is (contains? @#'p/disposition-of-status s)
         (str s " must be named in the table"))))
 

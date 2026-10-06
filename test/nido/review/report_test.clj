@@ -1899,3 +1899,17 @@
            (:inherited (report/stopped-on ctx))))
     (is (nil? (report/stopped-on {:owed [{:id "f1" :title "this run's"}]}))
         "the run's own remainder is in its rounds already")))
+
+(deftest a-record-round-held-on-one-reading-is-not-clean
+  ;; report.json rounds[2].status "clean" over a round whose verdict stood on a first reading, in a
+  ;; run that then ended :max-iters — read as the round that ended the run, it was not one.
+  (let [r (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+              (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+              (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                   :ctx {:record {:verdict :sufficient :read-once ["a"]}
+                                         :findings []}} nil)
+              (report/apply-event {:event :run-finalized :status :owed-second-reading
+                                   :ctx {:owed-reading {:seq 4 :read-once ["a"]}} :at "t3"} nil))]
+    (is (= "read-once" (:status (first (:rounds r)))))
+    (is (= {:seq 4 :read-once ["a"]} (get-in r [:summary :owed-reading]))
+        "the report names what the run still owed a reading of")))

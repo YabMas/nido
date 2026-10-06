@@ -2160,3 +2160,78 @@
     (is (= [{:what :claim-withdrawn :detail "claim c1 was removed: only deploy history shows it"}]
            (:retreats out))
         "moved to :unknowns or dropped, the human reads why it went rather than a claim dropped")))
+
+;; ── What a capped run owes ──────────────────────────────────────────────────
+
+(deftest a-cap-of-one-still-gives-a-first-reading-its-second
+  ;; Run f48e319a, :max-iters 1: zero findings, a sufficient verdict read once, ended :max-iters
+  ;; under 'the findings below were still open' — and a second run 45 s later did nothing but the
+  ;; second reading the first one owed.
+  (let [review (dissoc confirming :code-identity)
+        judged (atom 0)]
+    (with-redefs [record/baseline-review! (fn [_] (swap! judged inc) review)
+                  record/append! (fn [_ _] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] (assoc a-baseline :seq 1))
+                  settled/code-identity (fn [_] nil)
+                  settled/ledgers (fn [_ _ _] [{:ws-id "ws-1" :reviews []
+                                                :baselines [(assoc a-baseline :seq 1)]
+                                                :decisions [] :designs [] :retractions []}])]
+      (let [out (rloop/run-loop {:run-id "r-once" :cwd "/w" :max-iters 1 :judged-after :judge
+                                 :pipeline record/baseline-pipeline
+                                 :finding-key record/baseline-finding-key
+                                 :owes-reading record/owed-reading
+                                 :repair-at-cap? true})]
+        (is (= :sufficient (:status out)) "the second reading is not what the cap bounds")
+        (is (= 2 @judged))))))
+
+(deftest a-round-sent-on-to-its-second-reading-names-what-it-owes
+  (let [r1 (judged-over {:review confirming} (ctx))]
+    (is (= {:seq 1 :read-once ["invoice-resums"]} (record/owed-reading r1)))
+    (is (nil? (record/owed-reading (assoc r1 :control :stop)))
+        "only a round going on to another reading owes one")))
+
+(deftest a-cap-says-what-it-ended-the-run-between
+  ;; 'the findings below were still open' was printed over runs that ended with no findings and a
+  ;; sufficient verdict owed one reading, and over runs whose last round was a second reading that
+  ;; had just overturned a sufficient verdict — the round most likely to, and the one a reader most
+  ;; needs to hear about.
+  (testing "a reading owed is not a finding open"
+    (let [s (record/cap-account {:status :owed-second-reading
+                                 :record {:format :baseline-review :verdict :sufficient}
+                                 :owed-reading {:seq 26 :read-once ["cache-keyed-by-course"]}})]
+      (is (str/includes? s "entry 26 is sufficient on one reading — second reading owed of cache-keyed-by-course"))
+      (is (not (str/includes? s "still open")))))
+  (testing "a second reading that overturned a sufficient verdict says so, with the count"
+    (let [s (record/cap-account {:status :max-iters :iter 3 :findings [a-finding a-finding]
+                                 :amended? true
+                                 :carry {:quiet {:iter 2} :under-repair {:seq 31}}})]
+      (is (str/includes? s "round 3 was the second reading of round 2's sufficient verdict and overturned it, 2 findings open"))
+      (is (str/includes? s "round 3's amendment (entry 31)"))
+      (is (str/includes? s "has not been read"))))
+  (testing "findings left with no amendment name the prompt written for them"
+    (is (str/includes? (record/cap-account {:status :max-iters :iter 1 :findings [a-finding]
+                                            :amend-prompt "/runs/r/amend-prompt-round-1.md"})
+                       "1 finding below was still open with no amendment — the amend prompt is /runs/r/amend-prompt-round-1.md")))
+  (is (nil? (record/cap-account {:status :sufficient}))))
+
+(deftest a-capped-run-that-could-not-amend-leaves-the-amenders-prompt
+  ;; A spent claim at the cap ends :unfixable at the judgement, so no amender ran, and the person
+  ;; who restated it by hand did so without the withdrawal offer the amender would have had —
+  ;; keeping the clause that was refuted twice more by the same counterexample.
+  (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                ws/latest-entry (fn [_ _ _] (assoc a-baseline :seq 5))
+                design-check/design-of (fn [_ _] nil)
+                stages/read-stance (fn [_] nil)]
+    (let [final {:status :unfixable :iter 2 :findings [(assoc a-finding :claim-id "c1")]
+                 :refuted-running {"c1" 3}
+                 :record {:format :baseline-review :verdict :falsified}
+                 :config {:cwd "/w" :run-id "r-cap"}}
+          path  (record/write-owed-amend-prompt! final)]
+      (is (str/ends-with? path "amend-prompt-round-2.md"))
+      (is (str/includes? (slurp path) "the invoice renderer sums independently")
+          "the prompt carries the findings the round would have handed its amender")
+      (is (nil? (record/write-owed-amend-prompt! (assoc final :amended? true)))
+          "a round that amended owes no prompt")
+      (is (nil? (record/write-owed-amend-prompt! (assoc final :refuted-running {"c1" 1})))
+          "an ordinary :unfixable was amended round after round and owes none"))))

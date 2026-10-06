@@ -199,6 +199,10 @@
       ;; do: nothing left to say, something given up, or another round earned.
       ;; A design round is clean only when it proceeds: one that asked a person, or found a check
       ;; it could not derive, hands an amender no findings and is not clean for it.
+      ;; Before "clean" for the reason the diff review's read-once row is: a round that held only on
+      ;; a first reading settled nothing, and called clean it reads as the round that ended the run.
+      (and judge (= "ok" (:status judge)) (empty? (:findings judge))
+           (or (seq (:read-once judge)) (:amendment-read-once judge))) "read-once"
       (and judge (= "ok" (:status judge)) (empty? (:findings judge))
            (contains? #{nil "proceed"} (:recommend judge)))        "clean"
       (and amend (:unappended amend))                              "amend-refused"
@@ -949,7 +953,8 @@
 
    `:summary` carries `:max-iters`, the cap, when the run had one. The loop has no default, so a
    cap is always the number whoever invoked the run passed; without it a `max-iters` status names
-   the stop and not how short the leash was."
+   the stop and not how short the leash was. `:owed-reading` is what a run that ended
+   :owed-second-reading still owed a second reading of, so the report names it too."
   [report status ctx at]
   (let [s   (name status)
         cap (get-in ctx [:config :max-iters])]
@@ -960,7 +965,8 @@
            :summary  (cond-> {:rounds       (count (:rounds report))
                               :fix-attempts (fix-attempts report)
                               :final-status s}
-                       cap (assoc :max-iters cap)))))
+                       cap (assoc :max-iters cap)
+                       (:owed-reading ctx) (assoc :owed-reading (:owed-reading ctx))))))
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport :map] :ReviewReport]}
   with-settlement

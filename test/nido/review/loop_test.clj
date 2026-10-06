@@ -622,3 +622,56 @@
               (stage :fix (fn [c] c))]
         out (run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit})]
     (is (= #{"h"} (get-in out [:carry :quiet-reads])))))
+
+(defn- owes-on-next-round [c] (when (= :next-round (:control c)) (:owes c)))
+
+(deftest a-second-reading-does-not-count-against-the-cap
+  ;; Callers capped record loops at 1, 2 and 3, and every cap that landed on a sufficient verdict
+  ;; read once ended there: the confirming reading was cut, and the next run refuted what the
+  ;; capped one had let stand. The reading a round owes is not a repair the cap is bounding.
+  (let [judged (atom 0)
+        pipe   [(stage :judge (fn [c]
+                                (swap! judged inc)
+                                (if (= 1 (:iter c))
+                                  (assoc c :findings [] :control :next-round :owes {:read-once ["a"]})
+                                  (assoc c :findings [] :control :stop :status :sufficient))))
+                (stage :amend (fn [c] c))]
+        out    (run-loop {:run-id "r" :max-iters 1 :pipeline pipe :judged-after :judge
+                          :owes-reading owes-on-next-round})]
+    (is (= :sufficient (:status out)) "a cap of 1 still reaches the second reading its round owes")
+    (is (= 2 @judged))
+    (reset! judged 0)
+    (is (= :max-iters (:status (run-loop {:run-id "r" :max-iters 1 :pipeline pipe :judged-after :judge})))
+        "a pipeline that names no owed reading keeps counting every round")))
+
+(deftest a-second-reading-that-owes-another-ends-on-its-own-status
+  ;; Uncounted once, not forever: a judge that rules a subject differently every reading would
+  ;; otherwise run past any cap. Where that ends it, :max-iters would send a reader to amend; what
+  ;; is owed is a reading, and the status says so and names it.
+  (let [judged (atom 0)
+        pipe   [(stage :judge (fn [c] (swap! judged inc)
+                                (assoc c :findings [] :control :next-round :owes {:read-once ["a" "b"]})))]
+        out    (run-loop {:run-id "r" :max-iters 1 :pipeline pipe :judged-after :judge
+                          :owes-reading owes-on-next-round})]
+    (is (= :owed-second-reading (:status out)))
+    (is (= {:read-once ["a" "b"]} (:owed-reading out)) "the run names what it still owes a reading of")
+    (is (= 2 @judged) "one uncounted round per counted one bounds the run")))
+
+(deftest a-capped-round-holding-findings-is-repaired-before-the-run-ends
+  ;; The cap fell between a judgement and its amender, so the last refutation reached no amender
+  ;; and the record was restated by hand 36 s after the run ended, without the amender's rules.
+  (let [amended (atom 0)
+        pipe    [(stage :judge (fn [c] (assoc c :findings [{:title "x"}])))
+                 (stage :amend (fn [c] (swap! amended inc) (assoc c :amended? true)))]
+        out     (run-loop {:run-id "r" :max-iters 1 :pipeline pipe :judged-after :judge
+                           :repair-at-cap? true})]
+    (is (= :max-iters (:status out)))
+    (is (= 1 @amended) "the capped round's findings reach its amend stage")
+    (is (:amended? out))
+    (reset! amended 0)
+    (run-loop {:run-id "r" :max-iters 1 :pipeline pipe :judged-after :judge})
+    (is (zero? @amended) "without the opt-in the cap still ends the run on its judgement")
+    (reset! amended 0)
+    (is (= :unfixable (:status (run-loop {:run-id "r" :max-iters 1 :pipeline pipe :judged-after :judge
+                                          :repair-at-cap? true :spent (constantly ["s"])}))))
+    (is (zero? @amended) "a spent subject is not reworded once more because the cap allows a repair")))

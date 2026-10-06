@@ -596,3 +596,19 @@
           (is (= {:reason :goal-superseded :replaced-by i3}
                  (select-keys (:blocked (st)) [:reason :replaced-by]))
               "a restatement after it does, wherever the chain began"))))))
+
+(deftest a-premise-held-on-one-reading-says-a-second-reading-is-what-is-owed
+  ;; A design was written on a baseline whose newest review was sufficient with its second reading
+  ;; still owed, and had to be re-issued when that reading refuted it. The gate refused it, saying
+  ;; no round had found the baseline sufficient — which reads as a baseline nobody checked.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b  (add :baseline a-baseline)
+            r  (add :baseline-review {:format :baseline-review :verdict :sufficient :reason "ok"
+                                      :baseline-seq b :read-once ["c1"]})
+            d  (add :design (a-design b))
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (= :premise-unverified (:reason (:blocked st))) "one reading still does not verify it")
+        (is (str/includes? (:detail (:blocked st))
+                           (str "the review at entry " r " found sufficient on one reading — second reading owed")))))))

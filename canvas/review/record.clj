@@ -119,6 +119,20 @@
     "What a record run reaching its cap ends :unfixable on instead of :max-iters: the spent subjects
      of a round that still owes an amendment."
     {:signature [:=> [:catn [:ctx :map]] [:maybe [:sequential :string]]]})
+  (Operation owed-reading
+    "What a round sent on to its second reading read once — the record, the ids, whether it was an
+     amendment's first reading. The engine counts no round against the cap that only reads this
+     again, so a cap never ends a run between a reading and the one it owes."
+    {:signature [:=> [:catn [:ctx :map]] [:maybe :map]]})
+  (Operation cap-account
+    "What the cap ended a record run between — an owed second reading, an amendment not yet read, a
+     second reading that overturned a sufficient verdict, findings left unamended — read off the
+     terminal ctx; what the terminal line and the analysis headline say in place of a fixed sentence."
+    {:signature [:=> [:catn [:final :map]] [:maybe :string]]})
+  (Operation write-owed-amend-prompt!
+    "The prompt a capped round's amender would have been given, written to the run dir when the run
+     ended holding findings no amender reached, so a hand amendment works under the same rules."
+    {:signature [:=> [:catn [:final :map]] [:maybe :string]]})
   (Operation unchecked-running
     "How many readings in a row have declared each subject unchecked, counting back from its newest,
      with every reason given. The reasons are carried, never compared — no two judges word one alike."

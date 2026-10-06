@@ -2079,3 +2079,16 @@
   (is (str/includes? (report/report->markdown stratified-baseline)
                      "**Strata:** `canvas.order.strata/totals`"))
   (is (str/includes? (report/report->markdown valid-design) "**Strata:** touches no declared stratum")))
+
+(deftest a-baseline-review-held-on-one-reading-is-not-titled-plain-sufficient
+  ;; Entry 34 was titled 'Baseline review: sufficient' over a reading owed its second, and a design
+  ;; was appended citing the baseline 'which a round found sufficient' seven seconds later.
+  (let [once {:format :baseline-review :verdict :sufficient :baseline-seq 33 :reason "ok"
+              :read-once ["registry"]}]
+    (is (= "Baseline review: sufficient on one reading — second reading owed" (report/report-title once)))
+    (is (str/starts-with? (report/report->markdown once)
+                          "# Baseline review: sufficient on one reading — second reading owed"))
+    (is (= "Baseline review: sufficient on one reading — second reading owed"
+           (report/report-title (-> once (dissoc :read-once) (assoc :amendment-read-once true))))
+        "the first reading of an amendment is one reading too")
+    (is (= "Baseline review: sufficient" (report/report-title (dissoc once :read-once))))))

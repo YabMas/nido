@@ -202,6 +202,10 @@
                              (some #(and (= premise-seq (:baseline-seq %))
                                          (report/review-holds? %))
                                    revs))
+                ;; The premise's newest review, when it held on a first reading only: the gate
+                ;; still refuses, and says that one more reading is all it is waiting on.
+                held-once   (let [r (last (filter #(= premise-seq (:baseline-seq %)) revs))]
+                              (when (report/held-once? r) r))
                 replaced-by (replacement bls premise-seq)
                 ;; The goal this design was written to serve, and the goal the
                 ;; baseline under it was scoped for. Either moving unseats the
@@ -330,7 +334,10 @@
                           {:reason :premise-unverified :seq premise-seq
                            :replaced-by (:replaced-by premise)
                            :detail (str "the design cites the baseline at entry " premise-seq
-                                        ", and no round has found that baseline sufficient"
+                                        (if held-once
+                                          (str ", which the review at entry " (:seq held-once)
+                                               " found sufficient on one reading — second reading owed")
+                                          ", and no round has found that baseline sufficient")
                                         (when-let [r (:replaced-by premise)]
                                           (str "; entry " r " corrects it and is what a "
                                                "superseding design would cite")))}

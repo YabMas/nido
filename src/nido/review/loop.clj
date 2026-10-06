@@ -22,7 +22,9 @@
    reasons its caller passes as `run-loop`'s :terminal-reasons; for the diff
    review both are `nido.review.stages/stage-statuses`. The record pipelines end on statuses of
    their own too, and those are NOT here: they reach a different ledger event,
-   under no enum this one can drift from."
+   under no enum this one can drift from. So is `:owed-second-reading`, though the
+   engine sets it: only a pipeline passing `run-loop` an :owes-reading can reach it,
+   and only the record pipelines pass one."
   #{:converged :unresolved :escalated :unfixable :no-progress :max-iters
     :review-failed :reviewer-unavailable})
 
@@ -139,10 +141,15 @@
   "The status this round ends on, or nil to keep going.
 
    `prior` is every round before this one. Split out of `run-loop` because it is
-   now asked at two moments — after the stage that produces the judgement, and
-   after the whole pipeline — and the two disagree about what history holds."
-  [{:keys [finding-key attempt-key attempted? prev-findings iter max-iters
-           changed? spent]} ctx prior]
+   now asked at two moments — after the stage that produces the judgement
+   (`judged?`), and after the whole pipeline — and the two disagree about what
+   history holds.
+
+   The cap is read against `counted`, not :iter: a round entered only to read again what the
+   round before read once (`rereading?`) is not counted, so a cap never falls between a reading
+   and the second reading it owes."
+  [{:keys [finding-key attempt-key attempted? prev-findings counted max-iters
+           changed? spent owes-reading repair-at-cap? rereading?]} ctx prior judged?]
   (cond
     ;; BEFORE no-progress?, because both are true of a run that ends holding the
     ;; same findings and only this one says which. :no-progress sends a reader
@@ -167,10 +174,22 @@
     ;; back", which sends a reader to amend and run again. Over a subject the pipeline reads as
     ;; spent that is the one thing not to do: the count runs across runs, so a chain of capped
     ;; runs amended by hand between them is the loop that no single run sees.
-    (and max-iters (>= iter max-iters) (seq (spent ctx)))
+    (and max-iters (>= counted max-iters) (seq (spent ctx)))
     (assoc ctx :status :unfixable :unfixable (vec (spent ctx)))
 
-    (and max-iters (>= iter max-iters))
+    ;; A round owing a second reading at the cap gets it, uncounted — once. A second reading that
+    ;; itself owes another is a judge ruling one subject two ways, and the cap ends it under its own
+    ;; name: what is owed is a reading, not a repair, and :max-iters would send a reader to amend.
+    (and max-iters (>= counted max-iters) (owes-reading ctx))
+    (when rereading?
+      (assoc ctx :status :owed-second-reading :owed-reading (owes-reading ctx)))
+
+    ;; A judgement holding findings is followed by its repair before the cap ends the run, so
+    ;; what the last judgement found is answered in the ledger rather than by hand between runs.
+    (and max-iters (>= counted max-iters) judged? repair-at-cap? (seq (:findings ctx)))
+    nil
+
+    (and max-iters (>= counted max-iters))
     (assoc ctx :status :max-iters)
 
     :else nil))
@@ -236,7 +255,7 @@
          ;; appends it has not run — so it is already the `prior` the check
          ;; wants.
          (let [final (when (and judged-after (= judged-after (:name stage)))
-                       (end? ctx' (:history ctx')))]
+                       (end? ctx' (:history ctx') true))]
            (cond
              final (reduced final)
 
@@ -248,7 +267,8 @@
              ;; Asked after the terminal check rather than before it, because a
              ;; run at its cap or going nowhere ends however much a stage would
              ;; like another round — a control that could outrank `end?` would
-             ;; be an uncapped loop with one more way in.
+             ;; be an uncapped loop with one more way in. A round owing a second
+             ;; reading is let through by `end?` itself, which bounds it.
              (= :next-round (:control ctx')) (reduced ctx')
 
              :else ctx')))))
@@ -267,7 +287,13 @@
    terminates on its own merits (converged / escalated / clean / no-progress /
    error). A round that changes nothing still ends the run via `no-progress?`,
    so unbounded does not mean non-terminating. Pass :max-iters only to cap it.
-   :emit / :clock / :attempt-key / :attempted? / :owed / :spent are injection seams.
+   :emit / :clock / :attempt-key / :attempted? / :owed / :spent / :owes-reading are injection seams.
+   :owes-reading is what a round that ends `:control :next-round` still owes as a READING rather
+   than a repair, off its ctx, or nil: the round after it is not counted against :max-iters, and
+   a cap reached on a round that owes one ends :owed-second-reading carrying it as :owed-reading.
+   It defaults to \"never\", which counts every round. :repair-at-cap? lets a round holding
+   findings at the cap run the rest of its pipeline — the repair — before the run ends
+   :max-iters; without it the cap ends the run on the judgement.
    :finding-key decides what \"the same finding again\" means and so what
    no-progress? can detect; only the program knows what its findings are.
    :attempt-key decides what \"we already tried this\"
@@ -304,12 +330,13 @@
    throw crashes the run, because finalizing on it would publish a verdict
    nobody reached."
   [{:keys [run-id max-iters pipeline emit clock finding-key attempt-key
-           attempted? judged-after owed changed? spent] :as config
+           attempted? judged-after owed changed? spent owes-reading repair-at-cap?] :as config
     :or   {emit (fn [_]) clock #(Instant/now)
            attempted? (constantly true)
            owed (constantly nil)
            changed? (constantly false)
-           spent (constantly nil)}}]
+           spent (constantly nil)
+           owes-reading (constantly nil)}}]
   (let [pipeline (or pipeline
                      (throw (ex-info "run-loop needs a :pipeline — the engine runs what its caller passes and names no program of its own" {})))
         finding-key (or finding-key
@@ -321,7 +348,7 @@
         impl-session-id (str (random-uuid))]
     (emit {:event :run-started :run-id run-id
            :cwd (:cwd config) :base (:base config) :at (str (clock))})
-    (loop [iter 1, history [], prev-findings nil, carry nil]
+    (loop [iter 1, counted 1, rereading? false, history [], prev-findings nil, carry nil]
       (let [ctx0 {:config (assoc config :impl-session-id impl-session-id)
                   :iter iter :history history :control :continue
                   ;; The one thing a round may hand to the next one. Everything
@@ -342,8 +369,10 @@
             cfg  {:finding-key finding-key :attempt-key attempt-key
                   :attempted? attempted?
                   :prev-findings prev-findings :changed? changed? :spent spent
-                  :iter iter :max-iters max-iters}
-            end? (fn [c prior] (terminal cfg c prior))
+                  :owes-reading owes-reading :repair-at-cap? repair-at-cap?
+                  :rereading? rereading?
+                  :iter iter :counted counted :max-iters max-iters}
+            end? (fn [c prior judged?] (terminal cfg c prior judged?))
             ctx  (try
                    (run-pipeline ctx0 pipeline emit clock judged-after end? owed ends-run?)
                    (catch clojure.lang.ExceptionInfo e
@@ -372,7 +401,7 @@
                       ;; judged-after stage has already asked and been told no,
                       ;; on the same findings and the same prior — so this
                       ;; cannot contradict it.
-                      (terminal cfg ctx (butlast (:history ctx))))]
+                      (terminal cfg ctx (butlast (:history ctx)) false))]
         (if final
           ;; What the run still owes rides on the terminal ctx, read once by
           ;; the reading that decided the status, so the report states the
@@ -381,4 +410,8 @@
             (emit {:event :run-finalized :status (:status final)
                    :ctx final :at (str (clock))})
             final)
-          (recur (inc iter) (:history ctx) (:findings ctx) (:carry ctx)))))))
+          (let [reread-next? (and (not rereading?)
+                                  (= :next-round (:control ctx))
+                                  (boolean (owes-reading ctx)))]
+            (recur (inc iter) (if reread-next? counted (inc counted)) reread-next?
+                   (:history ctx) (:findings ctx) (:carry ctx))))))))

@@ -91,6 +91,11 @@
      (`:read-once`). The record-level reading
      every reader asking whether a baseline was verified goes through."
     {:signature [:=> [:catn [:review [:maybe :map]]] :boolean]})
+  (Operation held-once?
+    "Whether a baseline review would hold but for resting on a first reading of a subject or of its
+     run's own amendment: the review every surface names 'sufficient on one reading — second reading
+     owed' rather than plain sufficient."
+    {:signature [:=> [:catn [:review [:maybe :map]]] :boolean]})
   (Operation derivations-of
     "The derivations a baseline or design is judged by, read off the record: `stratified` in place
      of `decomposable` for one that names its strata, and the set it was written under otherwise."

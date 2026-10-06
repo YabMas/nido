@@ -1525,6 +1525,35 @@
       (is (not (str/includes? out "unrecognised terminal status")))
       (is (str/includes? out "not convergence")))))
 
+(deftest a-cap-that-fell-on-an-owed-reading-says-so-rather-than-findings-open
+  ;; Eighteen analyses found 'the findings below were still open' printed over runs that held no
+  ;; finding: what they owed was one more reading of named ids, which a re-run with no amender
+  ;; settles — and a reader told findings were open amends instead.
+  (with-redefs [rloop/run-loop (fn [_] {:status :owed-second-reading
+                                        :record {:format :baseline-review :verdict :sufficient}
+                                        :owed-reading {:seq 7 :read-once ["registry"]}})]
+    (let [out (with-out-str (t/baseline-cmd ":cwd" "/w" ":max-iters" "2"))]
+      (is (str/includes? out "entry 7 is sufficient on one reading — second reading owed of registry"))
+      (is (not (str/includes? out "still open"))))))
+
+(deftest a-record-loop-runs-its-amendment-and-second-reading-under-the-cap
+  ;; Both are what keep a cap from falling between a reading and what it owes; a record loop that
+  ;; stopped passing them would quietly go back to ending there.
+  (let [seen (atom nil)]
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :sufficient})]
+      (with-out-str (t/baseline-cmd ":cwd" "/w" ":max-iters" "2"))
+      (is (true? (:repair-at-cap? @seen)))
+      (is (= record/owed-reading (:owes-reading @seen))))))
+
+(deftest a-cap-of-one-is-warned-about-at-launch
+  ;; The hand-correct-then-verify pattern runs :max-iters 1 after a manual amendment. Refuted, its
+  ;; round amends, and nothing in the run is left to read the amendment.
+  (with-redefs [rloop/run-loop (fn [_] {:status :sufficient})]
+    (is (str/includes? (with-out-str (t/baseline-cmd ":cwd" "/w" ":max-iters" "1"))
+                       ":max-iters 1 leaves no round to read an amendment"))
+    (is (not (str/includes? (with-out-str (t/baseline-cmd ":cwd" "/w" ":max-iters" "2"))
+                            "leaves no round")))))
+
 (deftest a-record-talked-out-of-checkability-is-reported
   ;; The Weakened section answers "did the record claim LESS", and a record that
   ;; grew claims more — so a run whose composition went from four sentences to a

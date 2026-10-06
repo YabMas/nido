@@ -1864,11 +1864,6 @@
    :amend-invalid "the ledger refused the amended record, and refused the amender's repairs of it too"
    :amend-touched-code "the amender wrote to the paths named above; whatever it wrote is still there, and its answer was not appended — if the answer is right, append it with the command above rather than re-typing it"
    :dry-run    "nothing was amended"
-   ;; Only reachable when a caller asked for a cap. The loop has no default one
-   ;; — it ends on its own merits — so this is the reader's own bound coming
-   ;; back, and saying so is the difference between "it stopped" and "you
-   ;; stopped it".
-   :max-iters  "the cap you passed was reached — this is not convergence, and the findings below were still open"
    :no-workstream "run this from a nido session — its worktree or its session home"
    :codex-failed "the judge did not run — this is NOT a clean result"
    :reviewer-unavailable "the judge's vendor would not run it, retries included — the judge phase's detail quotes why; NOT a clean result"
@@ -1902,7 +1897,14 @@
     ;; The two ways to :unfixable name different things: findings this run tried and failed to
     ;; repair, or — at a cap — subjects earlier runs already did.
     (and (= :unfixable status) (record/spent-at-cap final))
-    (shared-remedies ::spent)
+    (str (shared-remedies ::spent)
+         (when-let [p (:amend-prompt final)] (str " — the amend prompt the round did not reach is " p)))
+
+    ;; Only reachable when a caller asked for a cap, so it is the reader's own bound coming back.
+    ;; Read off the ctx, because what the cap fell between — findings left open, an amendment not
+    ;; yet read, a sufficient verdict owed its second reading — is what the reader does next.
+    (#{:max-iters :owed-second-reading} status)
+    (record/cap-account final)
 
     :else
     (shared-remedies status)))
@@ -1963,6 +1965,8 @@
       :machinery        (:machinery report)
       :asks             (when (= :design-decision (:format rec)) (:asks rec))
       :spent            (record/spent (:refuted-running final))
+      :cap              (record/cap-account final)
+      :amend-prompt     (:amend-prompt final)
       :unrecorded       (:unrecorded final)
       :reviewed-project project
       :reviewed-session session
@@ -2003,13 +2007,20 @@
                                  ;; nothing has shown the same cost there.
                                  :judged-after :judge
                                  :finding-key finding-key
-                                 :spent record/spent-at-cap}
+                                 :spent record/spent-at-cap
+                                 :owes-reading record/owed-reading
+                                 :repair-at-cap? true}
                           changed?    (assoc :changed? changed?)
                           baseline    (assoc :baseline baseline)
                           survey-cwd  (assoc :survey-cwd survey-cwd)
                           judged-tree (assoc :judged-tree judged-tree))))))
                  (finally
                    (println (render/record-final @report-atom {:title title}))))
+        ;; Best-effort, like the analysis queue: a prompt that could not be written leaves the run's
+        ;; account of itself to print without it.
+        final  (if-let [p (try (record/write-owed-amend-prompt! final) (catch Exception _ nil))]
+                 (assoc final :amend-prompt p)
+                 final)
         status (:status final)]
     (println (str kind "-loop: " (name status) " · report " report-path))
     ;; Before anything below can throw: the run is over, and how it went is worth reading whatever
@@ -2050,6 +2061,16 @@
                              (str "unrecognised terminal status: " status))))
     (when epilogue (epilogue final))
     status))
+
+(defn- cap-warning
+  "A line for a record-loop cap too short to judge what the run itself amends, or nil. A round's
+   amendment is read by the round after it; a cap of 1 has no such round, so a run launched to
+   verify a record — a hand amendment, typically — that finds anything ends with its own repair
+   unread."
+  [max-iters]
+  (when (and max-iters (< max-iters 2))
+    (str "⚠ :max-iters " max-iters " leaves no round to read an amendment this run makes — if round 1"
+         " finds anything, the run ends with its amendment unread; pass 2 or more, or none")))
 
 (defn- record-loop-cmd*
   "Drive a record pipeline through the engine inside the live frame.
@@ -2110,6 +2131,7 @@
                   {:dir code-cwd}
                   (tree/reading (keyword kind) (first ledger) cwd))]
     (some-> (provenance/warning (:machinery @report-atom)) println)
+    (some-> (cap-warning max-iters) println)
     (some-> (off-position-line cwd (record-loop-kinds kind)) println)
     (some-> (tree/line reading) println)
     ;; Under the claim from here, exactly as the diff loop is: two record rounds

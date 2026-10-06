@@ -4053,6 +4053,19 @@
                 (empty? (:read-once review))
                 (not (:amendment-read-once review)))))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
+  held-once?
+  "Whether a baseline review would hold (`review-holds?`) but for resting on a first reading — of a
+   subject (:read-once) or of an amendment its own run made (:amendment-read-once). Every surface
+   that names such a review says 'sufficient on one reading — second reading owed', because the
+   bare verdict reads as a baseline a design may rest on, and one was written on exactly that."
+  [review]
+  (boolean (and (verdict-holds (:verdict review))
+                (empty? (:unruled review))
+                (or (seq (:read-once review)) (:amendment-read-once review)))))
+
+(def ^:private held-once-words " on one reading — second reading owed")
+
 (def verdict-invalidates
   "The design verdicts that put the design itself in question rather than its
    execution — the two a human has to answer rather than read.
@@ -4128,7 +4141,7 @@
    "\n"
    (remove nil?
      (concat
-      [(str "# Baseline review: " (name verdict))
+      [(str "# Baseline review: " (name verdict) (when (held-once? review) held-once-words))
        (str "of entry " baseline-seq)
        (when-let [n (:carried-from review)]
          (str "carried from the review at entry " n " — no judge ran"))
@@ -4409,7 +4422,8 @@
                                 (str "Accepted: direction " (:letter d) " — " (:label d))
                                 "Accepted: no direction chosen")
     :review-report            (str "Review: " (name (:status report)))
-    :baseline-review          (str "Baseline review: " (name (:verdict report)))
+    :baseline-review          (str "Baseline review: " (name (:verdict report))
+                                   (when (held-once? report) held-once-words))
     :design-decision          (str "Design decision: " (name (:recommend report)))
     :design-verdict           (str "Design verdict: " (name (:verdict report)))
     :findings                 (str "Findings round " (:round report)

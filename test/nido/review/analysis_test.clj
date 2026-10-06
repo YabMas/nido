@@ -533,3 +533,14 @@
     (is (not (str/includes? (:headline (analysis/payload (assoc a-run :machinery {:root "/n/src" :rev "abc" :lacks []})))
                             "warning"))
         "a copy current with main on the loop is not worth a line")))
+
+(deftest a-capped-record-run-says-in-its-headline-what-the-cap-fell-between
+  ;; 'max-iters · 3 rounds, 3 judged · 1 amended' was the whole headline of a run whose last round
+  ;; had overturned a sufficient verdict and left two findings unamended; the analysis read it as
+  ;; an ordinary cap.
+  (let [h (:headline (analysis/payload (assoc a-design-run :status :max-iters
+                                              :cap "round 3 was the second reading of round 2's sufficient verdict and overturned it, 2 findings open"
+                                              :amend-prompt "/runs/r/amend-prompt-round-3.md")))]
+    (is (str/includes? h "Cap: round 3 was the second reading"))
+    (is (str/includes? h "Amend prompt the run did not reach: /runs/r/amend-prompt-round-3.md")))
+  (is (not (str/includes? (:headline (analysis/payload a-design-run)) "Cap:"))))

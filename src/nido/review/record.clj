@@ -4178,7 +4178,10 @@
    the judge keeps ruling differently, and the engine's cap holds either way."
   [ctx subject record]
   (-> ctx
-      (assoc :control :next-round)
+      (assoc :control :next-round
+             :owes-reading (cond-> {:seq (:seq subject)}
+                             (seq (:read-once record))      (assoc :read-once (vec (:read-once record)))
+                             (:amendment-read-once record)  (assoc :amendment true)))
       (assoc-in [:carry :quiet]
                 {:seq       (:seq subject)
                  :iter      (:iter ctx)
@@ -4290,16 +4293,38 @@
    :run
    run-judge-stage})
 
+(defn- under-repair
+  "The baseline a round's amendment repairs: the one this run last amended, else the one it was
+   pointed at, else the newest."
+  [ctx]
+  (or (:under-repair (:carry ctx))
+      (:baseline (:config ctx))
+      (when-let [[project ws-id] (stages/project+ws-from-cwd (:cwd (:config ctx)))]
+        (ws/latest-entry project ws-id :baseline))))
+
+(defn- baseline-amend-message
+  "What the baseline amender is told for this round's findings against `prev`, answering into
+   `out-path`."
+  [ctx prev out-path]
+  (let [{:keys [cwd code-cwd]} (:config ctx)
+        [project ws-id] (stages/project+ws-from-cwd cwd)
+        check (when (and project ws-id) (amend-check-cmd project ws-id :baseline out-path))]
+    (amend-prompt {:baseline  prev
+                   :findings  (:findings ctx)
+                   :out-path  out-path
+                   :check-cmd check
+                   :settled   (:settled ctx)
+                   :refuted-running (:refuted-running ctx)
+                   :stance    (stages/read-stance project)
+                   :declared? (some? (design-check/design-of project (or code-cwd cwd)))})))
+
 (defn- run-amend-stage
   [ctx]
-  (let [{:keys [cwd code-cwd run-id dry-run?]} (:config ctx)
-        code-cwd (or code-cwd cwd)]
+  (let [{:keys [cwd run-id dry-run?]} (:config ctx)]
     (if dry-run?
       (assoc ctx :control :stop :status :dry-run)
       (let [[project ws-id] (stages/project+ws-from-cwd cwd)
-            prev      (or (:under-repair (:carry ctx))
-                          (:baseline (:config ctx))
-                          (ws/latest-entry project ws-id :baseline))
+            prev      (under-repair ctx)
             dir       (cstate/run-dir run-id)
             out-path  (str (fs/path dir (str "amend-round-" (:iter ctx) ".edn")))
             check-cmd (when (and project ws-id) #(amend-check-cmd project ws-id :baseline %))]
@@ -4313,14 +4338,7 @@
                         ctx {:label (str "amend-round-" (:iter ctx))
                              :out-path out-path
                              :check-cmd (when check-cmd (check-cmd out-path))
-                             :first-message (amend-prompt {:baseline  prev
-                                                           :findings  (:findings ctx)
-                                                           :out-path  out-path
-                                                           :check-cmd (when check-cmd (check-cmd out-path))
-                                                           :settled   (:settled ctx)
-                                                           :refuted-running (:refuted-running ctx)
-                                                           :stance    (stages/read-stance project)
-                                                           :declared? (some? (design-check/design-of project code-cwd))})})
+                             :first-message (baseline-amend-message ctx prev out-path)})
               ;; Read before the tree is judged, so an answer the round will not
               ;; append is still described where the stop is.
               raw      (when (fs/exists? out-path)
@@ -5276,6 +5294,28 @@
                          :status (keyword (str "resurvey-" (name (:status out)))))
             (:amend-tree out) (assoc :amend-tree (:amend-tree out))))))
 
+(defn- design-amend-message
+  "What the design amender is told to repair `prev` for this round's `recommend`, shown `baseline`
+   beside it and answering into `out-path`."
+  [ctx prev recommend baseline out-path declared?]
+  (let [[project ws-id] (stages/project+ws-from-cwd (:cwd (:config ctx)))]
+    (design-amend-prompt
+     {:design prev
+      :baseline baseline
+      :recommend recommend
+      :reason (get-in ctx [:record :reason])
+      :asks (get-in ctx [:record :asks])
+      :raised (:findings ctx)
+      ;; An ask's findings for the person are its question's,
+      ;; and the prompt tells the amender that is not its to answer.
+      :findings (vec (remove :for-person (get-in ctx [:record :findings])))
+      :rulings (get-in ctx [:record :relation-rulings])
+      :out-path out-path
+      :check-cmd (when (and project ws-id) (amend-check-cmd project ws-id :design out-path))
+      :settled (:settled ctx)
+      :refuted-running (:refuted-running ctx)
+      :declared? declared?})))
+
 (defn- amend-design!
   "Launch the amender against the design record and take in what it hands back.
 
@@ -5304,22 +5344,8 @@
                          :permitted permitted
                          :out-path out-path
                          :check-cmd (when check-cmd (check-cmd out-path))
-                         :first-message (design-amend-prompt
-                                         {:design prev
-                                          :baseline baseline
-                                          :recommend recommend
-                                          :reason (get-in ctx [:record :reason])
-                                          :asks (get-in ctx [:record :asks])
-                                          :raised (:findings ctx)
-                                          ;; An ask's findings for the person are its question's,
-                                          ;; and the prompt tells the amender that is not its to answer.
-                                          :findings (vec (remove :for-person (get-in ctx [:record :findings])))
-                                          :rulings (get-in ctx [:record :relation-rulings])
-                                          :out-path out-path
-                                          :check-cmd (when check-cmd (check-cmd out-path))
-                                          :settled (:settled ctx)
-                                          :refuted-running (:refuted-running ctx)
-                                          :declared? (some? declared)})})
+                         :first-message (design-amend-message ctx prev recommend baseline out-path
+                                                              (some? declared))})
           raw      (when (fs/exists? out-path)
                      (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
           answer   (parse-amend-answer raw (:findings ctx) design-finding-base-key)
@@ -5422,3 +5448,92 @@
 (def design-pipeline
   "judge -> amend, where amend may be a whole baseline loop."
   [design-judge-stage design-amend-stage])
+
+;; ── What a capped record run owes ───────────────────────────────────────────
+
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
+  owed-reading
+  "A record run's `run-loop` :owes-reading: what a round sent on to its second reading
+   (`second-reading`) read once — `{:seq the record, :read-once ids, :amendment true}`, the last
+   when it was the first reading of an amendment this run made — or nil for any other round."
+  [ctx]
+  (when (= :next-round (:control ctx))
+    (:owes-reading ctx)))
+
+(defn- one-reading
+  "`record` held on a first reading only, as the words every surface uses for it: 'sufficient on
+   one reading — second reading owed', naming what is owed (`owed`, as `owed-reading`)."
+  [record {n :seq :keys [read-once amendment]}]
+  (str (when n (str "entry " n " is "))
+       (if (= :design-decision (:format record)) "proceeding" "sufficient")
+       " on one reading — second reading owed"
+       (cond (seq read-once) (str " of " (str/join ", " read-once))
+             amendment       " of the amendment this run made")))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :string]]}
+  cap-account
+  "What the cap ended a record run between, read off its terminal ctx `final`, or nil when the cap
+   did not end it. The terminal line and the analysis headline both print this, so a run that ended
+   holding no findings never reads as one that left findings open, and a second reading that
+   overturned a sufficient verdict is not reported as an ordinary cap."
+  [final]
+  (let [{:keys [status iter findings amended? owed-reading amend-prompt]} final
+        n           (count findings)
+        quiet       (get-in final [:carry :quiet :iter])
+        overturned? (and (pos? n) quiet (= quiet (dec iter)))
+        counted     (str n " finding" (when (not= 1 n) "s"))]
+    (case status
+      :owed-second-reading
+      (str "the cap fell between a reading and its second: " (one-reading (:record final) owed-reading)
+           " — it does not stand until a reading agrees; re-run with no amendment between")
+
+      :max-iters
+      (str "the cap you passed was reached — this is not convergence"
+           (when overturned?
+             (str "; round " iter " was the second reading of round " quiet
+                  "'s sufficient verdict and overturned it, " counted " open"))
+           (cond
+             amended?
+             (str "; round " iter "'s amendment"
+                  (when-let [s (get-in final [:carry :under-repair :seq])] (str " (entry " s ")"))
+                  " answers " (if overturned? "them" (str "the " counted " below"))
+                  " and has not been read — re-run to judge it")
+             (pos? n)
+             (str ", and the " counted " below " (if (= 1 n) "was" "were")
+                  " still open with no amendment"
+                  (when amend-prompt (str " — the amend prompt is " amend-prompt)))))
+
+      nil)))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :string]]}
+  write-owed-amend-prompt!
+  "The prompt the last round's amender would have been given, written to the run dir as
+   `amend-prompt-round-<n>.md` when the run ended at its cap holding findings that round never
+   amended — the cap fell on a `spent` subject and ended :unfixable at the judgement — and its
+   path; nil when the run owes no amendment. A person who corrects the record by hand then works
+   under the rules the amender would have, the withdrawal offer above all, rather than rewording it
+   once more. A design round that recommended a re-survey has no prompt: its repair is a loop."
+  [final]
+  (let [{:keys [status findings amended? record iter]} final
+        run-id   (get-in final [:config :run-id])
+        design?  (= :design-decision (:format record))
+        owed?    (and run-id (seq findings) (not amended?)
+                      (or (= :max-iters status)
+                          (and (= :unfixable status) (spent-at-cap final)))
+                      (not (and design? (= :resurvey (:recommend record)))))]
+    (when owed?
+      (let [dir      (cstate/run-dir run-id)
+            out-path (str (fs/path dir (str (when design? "design-") "amend-round-" iter ".edn")))
+            path     (str (fs/path dir (str "amend-prompt-round-" iter ".md")))
+            cwd      (get-in final [:config :cwd])
+            message  (if design?
+                       (let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+                         (design-amend-message
+                          final (ws/latest-entry project ws-id :design) (:recommend record)
+                          (stages/discover-baseline cwd (ws/latest-entry project ws-id :design))
+                          out-path
+                          (some? (design-check/design-of project (or (get-in final [:config :code-cwd]) cwd)))))
+                       (baseline-amend-message final (under-repair final) out-path))]
+        (fs/create-dirs dir)
+        (spit path message)
+        path))))

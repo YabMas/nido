@@ -324,7 +324,7 @@
    refuted for the eleventh time, and the hand amender reads this before writing the twelfth."
   [{:keys [loop run-id report-path status rounds judged amended unappended weakened disputed
            record-seq still-broken asks stood-in reviewed-project reviewed-session reviewed-ws-id
-           machinery unrecorded spent] :as run}]
+           machinery unrecorded spent cap amend-prompt] :as run}]
   (let [kind   (name loop)
         broken (seq (map name still-broken))]
     (cond-> {:adapter     :review-run
@@ -349,6 +349,12 @@
                                " · figures: bb nido:review:figures"
                                (when reviewed-project (str " :project " (name reviewed-project)))
                                " :run-id " run-id "\n"
+                               ;; What a cap ended the run between, from its terminal ctx: an
+                               ;; amendment not yet read, a sufficient verdict owed its second
+                               ;; reading, a second reading that overturned one.
+                               (when cap (str "Cap: " cap "\n"))
+                               (when (and amend-prompt (not (str/includes? (str cap) amend-prompt)))
+                                 (str "Amend prompt the run did not reach: " amend-prompt "\n"))
                                (when (seq spent)
                                  (str "Spent: "
                                       (str/join ", " (for [[id n] (sort spent)]
