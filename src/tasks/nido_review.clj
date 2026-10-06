@@ -1963,6 +1963,12 @@
         (some #(when (keyword? %) (name %)) (rest parts))
         (pr-str k))))
 
+(defn- subject-names
+  "`record/outstanding` keys as a headline names them: checks first, then each claim as `claim <id>`."
+  [ks]
+  (concat (sort (keep (fn [[kind v]] (when (= :check kind) (name v))) ks))
+          (sort (keep (fn [[kind v]] (when (= :claim kind) (str "claim " v))) ks))))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   queue-record-analysis!
   "Queue a finished baseline or design run for nido-side analysis, through the gate a diff run
@@ -1992,13 +1998,12 @@
       :disputed         (count (mapcat :disputes history))
       :record-seq       (or (:design-seq rec) (:baseline-seq rec))
       ;; A claim refuted with no check broken is as broken at the end as a check is, and is the
-      ;; whole defect of a run whose checks all held.
+      ;; whole defect of a run whose checks all held. What the last decision asked a person about
+      ;; is outstanding too, but is theirs to answer rather than broken (`record/outstanding`).
       :still-broken     (when (= :design-decision (:format rec))
-                          (concat (sort (keep #(when (= :broken (:status %)) (name (:check %))) (:checks rec)))
-                                  (sort (distinct (keep #(when-not (:check %)
-                                                           (str "claim " (or (not-empty (str (:claim-id %)))
-                                                                             "the record")))
-                                                        (:findings rec))))))
+                          (subject-names (:broken (record/outstanding rec))))
+      :still-asked      (when (= :design-decision (:format rec))
+                          (subject-names (:asked (record/outstanding rec))))
       :stood-in         (report/stood-in report)
       :machinery        (:machinery report)
       :asks             (when (= :design-decision (:format rec)) (:asks rec))
@@ -2458,7 +2463,10 @@
 (defn- summed
   "Many runs' figures, per check, per check-less refuted claim and per derivation: in how many runs
    it was broken, in how many rounds, in how many of those alone, and in how many runs it was still
-   broken at the end — and for a check, in how many rounds it was derived, held and underivable. Per
+   broken at the end — and for a check, in how many rounds it was derived, held and underivable.
+   A subject a person was asked about also carries :asked, in how many rounds, and :asked-at-end, in
+   how many runs the last decision asked about it; :asks is the runs that asked, their asking
+   rounds, and how many ended asking. Per
    stratum, its level judges' readings summed; per claim found false, per subject confirmed, left
    unruled, declared unchecked or found against while settled, and per reviewer that answered, the
    runs' counts summed; per subject, in how many runs it was still unchecked at the end — and per
@@ -2469,13 +2477,15 @@
    because each run's count already spans the runs before it."
   [figures]
   (letfn [(add [acc tallies]
-            (reduce-kv (fn [a k {:keys [broken alone at-end] :as t}]
+            (reduce-kv (fn [a k {:keys [broken alone at-end asked asked-at-end] :as t}]
                          (update a k (fn [m]
                                        (cond-> (-> (or m {:runs 0 :rounds 0 :alone 0 :at-end 0})
                                                    (update :runs + (if (pos? broken) 1 0))
                                                    (update :rounds + broken)
                                                    (update :alone + alone)
                                                    (update :at-end + (if at-end 1 0)))
+                                         asked (update :asked (fnil + 0) asked)
+                                         asked-at-end (update :asked-at-end (fnil + 0) 1)
                                          (:derived t) (update :derived (fnil + 0) (:derived t))
                                          (:held t) (update :held (fnil + 0) (:held t))
                                          (:underivable t) (update :underivable (fnil + 0) (:underivable t))))))
@@ -2484,6 +2494,9 @@
     {:runs        (count figures)
      :checks      (reduce add (sorted-map) (keep :checks figures))
      :claims      (reduce add (sorted-map) (keep :claims figures))
+     :asks        (reduce #(-> %1 (update :runs inc) (update :rounds + (:rounds %2))
+                               (update :at-end + (if (:at-end %2) 1 0)))
+                          {:runs 0 :rounds 0 :at-end 0} (keep :asks figures))
      :derivations (reduce add (sorted-map) (keep :derivations figures))
      :falsified   (counts :falsified)
      :confirmed   (counts :confirmed)

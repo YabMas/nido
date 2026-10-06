@@ -1502,6 +1502,41 @@
         "a refutation the amender repaired must not vanish from the figures for naming a held check")
     (is (= 0 (get-in f [:checks :stratified :broken])) "and the check it named stays held")))
 
+(deftest what-a-decision-asked-a-person-is-counted-asked-not-broken
+  ;; A run that ended on a question read `broken at the end` exactly like one that ended on an
+  ;; unrepaired defect, and an underivable check carrying the ask read as not outstanding at all.
+  (let [d (fn [recommend findings & checks]
+            {:format :design-decision :recommend recommend :asks "scope?"
+             :checks (vec checks) :findings findings})
+        f (record/run-figures
+           [(d :amend [{:claim-id "role" :claim "x"}] (check :goal-served :broken))
+            (d :ask [{:claim-id "role" :claim "x" :for-person true}
+                     {:check :stratified :claim-id "door" :for-person true}
+                     {:claim "which scope?" :for-person true}]
+               (check :stratified :broken) (check :goal-served :underivable))])]
+    (is (= {:broken 1 :alone 0 :at-end false :asked 1 :asked-at-end true} (get-in f [:claims "role"]))
+        "a claim the last decision asked about is outstanding as the person's, not broken")
+    (is (= {:broken 0 :alone 0 :at-end false :asked 1 :asked-at-end true}
+           (select-keys (get-in f [:checks :stratified]) [:broken :alone :at-end :asked :asked-at-end]))
+        "a broken check whose every filing is the person's is asked, not broken")
+    (is (true? (get-in f [:checks :goal-served :asked-at-end]))
+        "an underivable check an :ask carries is what the run stopped on, so it is outstanding")
+    (is (nil? (get-in f [:claims "the record"]))
+        "a claim-less question is the ask itself, not a broken claim called `the record`")
+    (is (= {:rounds 1 :at-end true} (:asks f))
+        "a round that asked is counted whether or not it filed anything the question keys on")))
+
+(deftest outstanding-splits-the-amenders-from-the-persons
+  (let [dec {:format :design-decision :recommend :ask
+             :checks [(check :stratified :broken) (check :goal-served :broken)]
+             :findings [{:check :stratified :claim-id "a" :for-person true}
+                        {:check :goal-served :claim-id "b"}]}]
+    (is (= {:broken #{[:check :goal-served]} :asked #{[:check :stratified]}}
+           (record/outstanding dec)))
+    (is (= {:broken #{[:check :goal-served] [:check :stratified]} :asked #{}}
+           (record/outstanding (assoc dec :recommend :amend)))
+        "only an :ask hands anything to a person; on any other recommendation it is all the amender's")))
+
 (deftest a-runs-figures-count-confirmations-and-who-judged
   (let [f (record/run-figures [{:format :baseline-review :verdict :sufficient :confirmed ["c1" "c2"]
                                 :judged-by {:reviewer :claude :instead-of :codex}}

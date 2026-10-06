@@ -329,7 +329,8 @@
 (defn- record-payload
   "The envelope for a baseline or design run. Its headline says what a record run DID — how many of
    its rounds judged, amended, gave something up, or were argued with — and, for a design run, which
-   checks were still broken when it ended and what its last decision asked of a person; the figures
+   checks were still broken when it ended, what its last decision asked of a person and which
+   subjects it asked about (`still-asked` — outstanding, but not broken); the figures
    per check are the ledger's, read by `bb nido:review:figures`, never carried here.
 
    `spent` is `nido.review.record/spent` of the run's last judgement, `{id n}`: what it ended still
@@ -341,7 +342,7 @@
    whether the run amended after it: `asks` on a repair is conditional on it, and is never shown as
    a question open now."
   [{:keys [loop run-id report-path status rounds judged amended unappended weakened disputed
-           record-seq still-broken asks stood-in reviewed-project reviewed-session reviewed-ws-id
+           record-seq still-broken still-asked asks stood-in reviewed-project reviewed-session reviewed-ws-id
            machinery unrecorded spent cap amend-prompt unreadable stale-at-start repair repaired?]
     :as run}]
   (let [kind   (name loop)
@@ -365,6 +366,8 @@
                                (when unappended (str "Refused amendment, not appended: " unappended "\n"))
                                "Record: the " kind (when record-seq (str " at entry " record-seq))
                                (when broken (str " · broken at the end: " (str/join ", " broken)))
+                               (when (seq still-asked)
+                                 (str " · asked at the end: " (str/join ", " still-asked)))
                                " · figures: bb nido:review:figures"
                                (when reviewed-project (str " :project " (name reviewed-project)))
                                " :run-id " run-id "\n"

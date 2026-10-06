@@ -191,6 +191,11 @@
      broken, and whether it was still broken when the run's last round answered. Pure over those
      entries, so the figures are derived on every read and stored nowhere."
     {:signature [:=> [:catn [:entries [:vector :map]]] :map]})
+  (Operation outstanding
+    "What one design decision leaves open, split by whose it is to close: the subjects broken for an
+     amender, and on an :ask the subjects its question is about — outstanding, but a person's to
+     answer, so never counted broken."
+    {:signature [:=> [:catn [:decision :map]] :map]})
   (Operation design-amend-prompt "The instruction to repair a design."
     {:signature [:=> [:catn [:opts :map]] :string]})
   (Operation cite-corrected

@@ -691,6 +691,45 @@
     (is (= 1 (:findings-made ph)))
     (is (= [{:claim "over-serves" :cites ["c"]}] (:filed (first (:findings ph)))))))
 
+(deftest a-design-judge-phase-records-every-finding-its-decision-made
+  ;; The :ask branch hands the report only the derivable part and a proceed hands it nothing, so the
+  ;; evidence behind :asks, and what a proceed waived, were only in the judge's raw out.json.
+  (let [phase (fn [record findings]
+                (let [r (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+                            (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+                            (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                                 :ctx {:record (assoc record :format :design-decision)
+                                                       :findings findings}}
+                                                nil))]
+                  (first (:phases (first (:rounds r))))))
+        asked (phase {:recommend :ask :asks "scope?"
+                      :checks [{:check :goal-served :status :broken} {:check :stratified :status :broken}]
+                      :findings [{:check :goal-served :claim-id "g" :claim "q" :cites ["c"] :for-person true}
+                                 {:check :stratified :claim-id "s" :claim "d" :cites ["e"]}]}
+                     [{:check :stratified :status :broken :claim-ids ["s"]}])
+        waived (phase {:recommend :proceed
+                       :checks [{:check :decomposable :status :broken}]
+                       :findings [{:check :decomposable :claim-id "cut" :claim "w" :cites ["x"]}]}
+                      [])]
+    (is (= ["for-person" "derivable"] (map :as (:made asked)))
+        "the question's evidence is on the report beside what the amender was handed")
+    (is (= [{:check :goal-served :claim-id "g" :claim "q" :cites ["c"] :as "for-person"}]
+           (filter #(= "for-person" (:as %)) (:made asked))))
+    (is (= ["advisory"] (map :as (:made waived)))
+        "a reader sees what the proceed waived, not an empty round under a contradicting reason")))
+
+(deftest a-claim-refutation-row-reads-like-any-other-row
+  (let [r  (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+               (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+               (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                    :ctx {:record {:format :design-decision :recommend :amend
+                                                   :findings [{:claim-id "c2" :claim "other" :cites ["x"]}]}
+                                          :findings [{:claim-ids ["c2"] :claim "other" :cites ["x"]}]}}
+                                   nil))
+        [row] (:findings (first (:phases (first (:rounds r)))))]
+    (is (= ["refuted" "other"] [(:status row) (:note row)])
+        "a row with no check, status or note reads as an empty finding to anyone scanning by check")))
+
 (deftest a-broken-check-row-carries-the-judges-case-for-it
   ;; The row is keyed on the check, and the case behind it was left in the judge's out.json: a
   ;; refutation resting on a package page read exactly like one resting on the code.

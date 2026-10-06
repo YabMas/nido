@@ -4968,15 +4968,22 @@
 
 (defn- tally
   "Per key, in how many of `rounds` it was broken, in how many it was the only thing broken, and
-   whether it was broken in the last of them. `rounds` is each round's set of broken keys, in order."
-  [rounds]
-  (let [ks (into (sorted-set) cat rounds)
-        end (or (last rounds) #{})]
-    (into (sorted-map)
-          (for [k ks]
-            [k {:broken (count (filter #(contains? % k) rounds))
-                :alone  (count (filter #(= #{k} %) rounds))
-                :at-end (contains? end k)}]))))
+   whether it was broken in the last of them. `rounds` is each round's set of broken keys, in order.
+   `asked`, when given, is each round's set of keys it asked a person about instead — never broken
+   in that round — and a key asked in any round also carries :asked, how many, and :asked-at-end,
+   whether in the last: outstanding at the end, as a broken one is, but the person's to answer."
+  ([rounds] (tally rounds nil))
+  ([rounds asked]
+   (let [ks (into (sorted-set) cat (concat rounds asked))
+         end (or (last rounds) #{})
+         asked-end (or (last asked) #{})]
+     (into (sorted-map)
+           (for [k ks
+                 :let [n (count (filter #(contains? % k) asked))]]
+             [k (cond-> {:broken (count (filter #(contains? % k) rounds))
+                         :alone  (count (filter #(= #{k} %) rounds))
+                         :at-end (contains? end k)}
+                  (pos? n) (assoc :asked n :asked-at-end (contains? asked-end k)))])))))
 
 (defn- check-statuses
   "Each check a design decision derived, by name, with its status in either era's shape — :status on
@@ -5025,16 +5032,30 @@
                  (concat (broken-checks decision)
                          (filter #(claim-finding? statuses %) (:findings decision)))))))
 
-(defn- refuted-claims
-  "The claims a design decision found against with no check broken — a record contradicting itself
-   or a claim it rests on, a defect under none of the four derivations (`claim-finding?`) — by claim
-   id, or \"the record\" for one naming none. Its only handle, as in `design-finding-label`."
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  outstanding
+  "What one design decision leaves open, split by whose it is to close:
+   `{:broken #{key} :asked #{key}}`, each key `[:check c]` or `[:claim id]`.
+
+   :broken is the amender's: each broken check, and each claim found against under none of the four
+   derivations (`claim-finding?`) by its id, or \"the record\" for one naming none. :asked is the
+   person's, and only on an :ask — what the question is about, so not a defect that went unrepaired:
+   a broken check or a claim finding that is theirs (`for-person?`), and every underivable check,
+   which an :ask carries because nothing else can derive it. A claim-less finding for the person is
+   in neither: it is the ask itself, which `:asks` says and a subject key cannot."
   [decision]
-  (let [statuses (check-statuses decision)]
-    (into #{} (keep (fn [{:keys [claim-id] :as f}]
-                      (when (claim-finding? statuses f)
-                        (or (not-empty (str claim-id)) "the record"))))
-          (:findings decision))))
+  (let [statuses (check-statuses decision)
+        person?  (if (= :ask (:recommend decision)) #(for-person? decision %) (constantly false))
+        claims   (filter #(claim-finding? statuses %) (:findings decision))
+        claim-of (fn [f] [:claim (or (not-empty (str (:claim-id f))) "the record")])]
+    {:broken (-> #{}
+                 (into (comp (remove person?) (map (fn [c] [:check (:check c)]))) (broken-checks decision))
+                 (into (comp (remove person?) (map claim-of)) claims))
+     :asked  (-> #{}
+                 (into (comp (filter person?) (map (fn [c] [:check (:check c)]))) (broken-checks decision))
+                 (into (comp (filter person?) (filter (comp not-empty str :claim-id)) (map claim-of)) claims)
+                 (into (when (= :ask (:recommend decision))
+                         (map (fn [c] [:check (:check c)]) (underivable-checks decision)))))}))
 
 (defn- judge-name
   "Who answered a judgement, as the figures count it — the stand-in named with whom it stood in for.
@@ -5089,6 +5110,7 @@
      {:decisions n :checks      {check {:derived n :held n :broken n :underivable n
                                         :alone n :at-end bool}}
                    :claims      {claim-id {:broken n :alone n :at-end bool}}
+                   :asks        {:rounds n :at-end bool}
                    :strata      {stratum {:read n :fits n :widens n :misplaced n :not-a-level n :failed n}}
       :reviews   n :derivations {derivation {:broken n :alone n :at-end bool}}
                    :falsified   {claim-id n}
@@ -5110,6 +5132,12 @@
    broken check or a check-less refutation — so a check is never `alone` in a round that also
    refuted a claim. A gap is counted under the derivation it :blocks, whatever the review's verdict
    and whatever claim it cites; :falsified counts the findings of a falsified review that block none.
+
+   What a decision asked a person about is not a defect (`outstanding`): a check or claim the
+   question is about carries :asked n and :asked-at-end beside :broken, and is never counted broken
+   in that round, so a run that ended on a question does not read as one that ended unrepaired.
+   :asks counts the decisions that recommended :ask, and says whether the last did — the one figure
+   for a round that asked and filed nothing the question could be keyed on.
 
    :confirmed counts, per subject, the judgements of either kind that confirmed it. :judged-by counts
    judgements per reviewer that answered, a stand-in as `claude for codex`, so a comparison across
@@ -5160,14 +5188,11 @@
         rflips    (reading-flips (sort-by :seq judgements))
         splits    (frequencies (mapcat #(map :id (:splits %)) judgements))
         statuses  (mapv check-statuses decisions)
-        ;; One round's defects, each tagged by the tally it belongs to: a check keyword and a claim id
-        ;; do not compare, and `alone` has to see both.
-        defects   (mapv (fn [st d]
-                          (into (into #{} (keep (fn [[c v]] (when (= :broken v) [:check c]))) st)
-                                (map (fn [id] [:claim id]))
-                                (refuted-claims d)))
-                        statuses decisions)
-        defect-tally (tally defects)
+        ;; One round's defects and what it asked about, each tagged by the tally it belongs to: a
+        ;; check keyword and a claim id do not compare, and `alone` has to see both.
+        open      (mapv outstanding decisions)
+        defect-tally (tally (mapv :broken open) (mapv :asked open))
+        asking    (mapv #(= :ask (:recommend %)) decisions)
         of-kind   (fn [kind] (into (sorted-map)
                                    (keep (fn [[[k v] figures]] (when (= kind k) [v figures])))
                                    defect-tally))
@@ -5196,8 +5221,11 @@
                                              :underivable (derived c :underivable)}
                                             (get broken c {:broken 0 :alone 0 :at-end false}))]))))
 
-      (some seq (map refuted-claims decisions))
+      (seq (of-kind :claim))
       (assoc :claims (of-kind :claim))
+
+      (some true? asking)
+      (assoc :asks {:rounds (count (filter true? asking)) :at-end (last asking)})
 
       (some :strata-read decisions)
       (assoc :strata (reduce (fn [acc {:keys [stratum verdict]}]

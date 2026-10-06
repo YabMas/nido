@@ -5,7 +5,8 @@
   (:require
    [babashka.fs :as fs]
    [cheshire.core :as json]
-   [clojure.string :as str]))
+   [clojure.string :as str]
+   [nido.coordinator.report :as creport]))
 
 (def schema-version 1)
 
@@ -553,6 +554,33 @@
             (cond-> row (seq filed) (assoc :filed filed))))
         rows))
 
+(defn- claim-rows
+  "A design judge phase's finding `rows` with each that is a claim refutation — it names no check,
+   so carries no :status or :note of one — given status \"refuted\" and its claim as the note, so a
+   reader scanning the rows by status and note does not read a refutation as an empty row."
+  [rows]
+  (mapv (fn [row]
+          (cond-> row
+            (and (nil? (:check row)) (nil? (:status row)))
+            (assoc :status "refuted" :note (:claim row))))
+        rows))
+
+(defn- made
+  "Every finding `decision` holds, marked by whose it was: \"advisory\" when the decision proceeds —
+   or would, but for being a first reading — so nothing was handed on and the finding is what the
+   proceed waived; \"for-person\" when it is the person's to answer; \"derivable\" when it is an
+   amender's to repair. The phase's :findings hold only what the round handed on, which on an :ask
+   is the derivable part and on a proceed is nothing, so this is the one place a report shows what
+   a round asked over or waived."
+  [decision]
+  (let [advisory? (creport/proceeds? (dissoc decision :read-once :amendment-read-once))]
+    (mapv (fn [f]
+            (assoc (select-keys f [:check :claim-id :claim :cites :evidence])
+                   :as (cond advisory?        "advisory"
+                             (:for-person f) "for-person"
+                             :else           "derivable")))
+          (:findings decision))))
+
 (defn- finish-phase
   [ph phase ctx at]
   (let [ph (assoc ph :status "ok" :ended-at at)]
@@ -589,7 +617,9 @@
       ;; person and each derived check's status under :derived — held and underivable included,
       ;; which :findings never holds — so a proceed over four held checks is not read as a round
       ;; that answered nothing. :findings-made is how many findings the decision itself holds, since
-      ;; :findings carries one row per broken check whatever number of findings named it.
+      ;; :findings carries one row per broken check whatever number of findings named it, and one per
+      ;; claim refuted under no check. :made is every finding the decision holds, each marked
+      ;; advisory, for-person or derivable (`made`) — :findings is only what the round handed on.
       ;; :confirmed is what the round kept of the judge's confirmations.
       ;; :judged-by is who answered — a stand-in's judgement is not the configured reviewer's,
       ;; on a phase or on the ledger — and :code-identity the tree its confirmations are keyed on.
@@ -621,7 +651,10 @@
                 (:reused-seq ctx)   (assoc :reused-seq (:reused-seq ctx))
                 (get-in ctx [:record :recommend])
                 (assoc :recommend (name (get-in ctx [:record :recommend]))
+                       :findings (claim-rows (with-filed (:findings ctx) (get-in ctx [:record :findings])))
                        :findings-made (count (get-in ctx [:record :findings])))
+                (seq (get-in ctx [:record :findings]))
+                (assoc :made (made (:record ctx)))
                 (not (str/blank? (str (get-in ctx [:record :asks]))))
                 (assoc :asks (get-in ctx [:record :asks]))
                 (seq (get-in ctx [:record :checks]))

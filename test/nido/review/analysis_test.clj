@@ -426,6 +426,14 @@
       "a record run carries no target count, so the diff loop's reading of one
        would drop a run that judged in round one and lost its reviewer in round two"))
 
+(deftest a-record-run-that-ended-on-a-question-says-what-it-asked-about
+  ;; `broken at the end: claim domain-covers-shared-callers` was the person's question, worded as
+  ;; an unrepaired defect.
+  (let [h (:headline (analysis/payload (assoc a-design-run :still-broken []
+                                              :still-asked ["goal-served" "claim role"])))]
+    (is (str/includes? h "asked at the end: goal-served, claim role"))
+    (is (not (str/includes? h "broken at the end")))))
+
 (deftest a-record-run-that-could-not-bank-says-why-in-its-headline
   ;; "3 rounds, 3 judged" reads the same for a run that settled normally and one whose every
   ;; confirmation was lost to a stale working copy; the remedy was a command nobody was told.
