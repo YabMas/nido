@@ -466,7 +466,51 @@
 (deftest a-directory-in-no-repository-has-no-identity
   (let [dir (str (fs/create-temp-dir))]
     (try (is (nil? (settled/code-identity dir)))
+         (let [why (:unreadable (settled/tree-reading dir))]
+           (is (str/includes? why "jj root exited")
+               "it says jj found no repository, which is why git was asked")
+           (is (str/includes? why "git rev-parse --show-toplevel exited")
+               "and which git step failed, since a tree with no identity settles nothing all run"))
          (finally (fs/delete-tree dir)))))
+
+(defn- jj-repo!
+  "A jj repository holding a.clj, committed, and a workspace `work` on it. Answers [root home work]."
+  []
+  (let [root (fs/create-temp-dir {:prefix "nido-settled"})
+        home (str (fs/path root "repo"))
+        work (str (fs/path root "work"))]
+    (jj/jj! (str root) "git" "init" "repo")
+    (spit (str (fs/path home "a.clj")) "(ns a)")
+    (jj/jj! home "commit" "-m" "base")
+    (jj/jj! home "workspace" "add" "--name" "work" work)
+    [(str root) home work]))
+
+(deftest a-stale-workspace-says-what-jj-said
+  ;; Six runs banked nothing under a generic "no identity", and the stale copy behind it was named
+  ;; only on an amend phase. The reading itself has to carry jj's words.
+  (let [[root home work] (jj-repo!)]
+    (try
+      (jj/jj! home "restore" "--from" "root()" "--into" "work@")
+      (let [{:keys [identity unreadable]} (settled/tree-reading work)]
+        (is (nil? identity))
+        (is (str/includes? unreadable "jj debug tree -r @ exited 1") "the step and its exit")
+        (is (str/includes? unreadable "stale") "and jj's own stderr, which names the remedy"))
+      (finally (fs/delete-tree root)))))
+
+(deftest a-moved-tree-says-which-paths-moved
+  ;; A tree that moved under a judge was recorded as two unequal hashes, which cannot tell a person
+  ;; editing the live worktree from an agent the loop launched. The paths can.
+  (let [[root _ work] (jj-repo!)]
+    (try
+      (let [before (settled/code-identity work)]
+        (spit (str (fs/path work "a.clj")) "(ns a) (def x 1)")
+        (spit (str (fs/path work "b.clj")) "(ns b)")
+        (let [after (settled/code-identity work)]
+          (is (= ["a.clj" "b.clj"] (settled/moved-paths before after)) "an edit and an addition")
+          (is (= [] (settled/moved-paths after after)) "nothing moves between a tree and itself")
+          (is (nil? (settled/moved-paths before "a-hash-never-listed"))
+              "an identity whose listing is not held is unknown, never an empty move")))
+      (finally (fs/delete-tree root)))))
 
 ;; ── Two readings, and what a reversal overturns ─────────────────────────────
 

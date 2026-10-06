@@ -335,7 +335,7 @@
    refuted for the eleventh time, and the hand amender reads this before writing the twelfth."
   [{:keys [loop run-id report-path status rounds judged amended unappended weakened disputed
            record-seq still-broken asks stood-in reviewed-project reviewed-session reviewed-ws-id
-           machinery unrecorded spent cap amend-prompt] :as run}]
+           machinery unrecorded spent cap amend-prompt unreadable stale-at-start] :as run}]
   (let [kind   (name loop)
         broken (seq (map name still-broken))]
     (cond-> {:adapter     :review-run
@@ -366,6 +366,16 @@
                                (when cap (str "Cap: " cap "\n"))
                                (when (and amend-prompt (not (str/includes? (str cap) amend-prompt)))
                                  (str "Amend prompt the run did not reach: " amend-prompt "\n"))
+                               ;; Said beside the counts, which read the same for a run that
+                               ;; settled normally and one whose every confirmation was lost.
+                               (when stale-at-start
+                                 (str "Working copy at start: " (:line stale-at-start) "\n"))
+                               (when (seq unreadable)
+                                 (str "Unsettled: tree identity unreadable in round"
+                                      (when (next unreadable) "s") " "
+                                      (str/join ", " (map :round unreadable))
+                                      ", so what they confirmed could not settle — "
+                                      (:why (last unreadable)) "\n"))
                                (when (seq spent)
                                  (str "Spent: "
                                       (str/join ", " (for [[id n] (sort spent)]

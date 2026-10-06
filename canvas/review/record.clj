@@ -177,6 +177,10 @@
     "How many of a record run's rounds launched a judge, read off its report; zero whatever status
      the run ended in means it judged nothing."
     {:signature [:=> [:catn [:report [:maybe :map]]] :int]})
+  (Operation unreadable-rounds
+    "Each round of a record run's report whose confirmations could not settle because its tree had
+     no identity, with why, read off the report."
+    {:signature [:=> [:catn [:report [:maybe :map]]] [:vector :map]]})
   (Operation run-figures
     "What one record run's rounds did, per derived check or derivation, read off the decisions and
      reviews it appended: in how many rounds each was broken, in how many it was the only thing

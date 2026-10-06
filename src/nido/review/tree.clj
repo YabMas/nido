@@ -19,7 +19,9 @@
    [babashka.process :as p]
    [clojure.string :as str]
    [nido.design.check :as design]
+   [nido.review.layers :as layers]
    [nido.review.pass :as pass]
+   [nido.session.lifecycle :as lifecycle]
    [nido.vsdd.jj :as jj]))
 
 (def ^:private base
@@ -121,6 +123,75 @@
       (cond-> {}
         at         (assoc :rev at)
         unresolved (assoc :unresolved unresolved)))))
+
+(defn- disk-against
+  "How many files on disk in `dir` differ from commit `rev`'s tree, read without snapshotting (a
+   stale copy refuses the snapshot) — or nil when `rev` is nil or the difference cannot be read."
+  [dir rev]
+  (when-let [patch (layers/working-copy-patch dir rev)]
+    (count (re-seq #"(?m)^diff --git " patch))))
+
+(defn- commit-at
+  "The commit `dir`'s workspace has as @ at operation `op` (the current one when nil), asked without
+   touching the working copy; nil when jj will not say."
+  [dir op]
+  (let [{:keys [exit out]} (apply jj/jj! dir "--ignore-working-copy"
+                                  (concat (when op ["--at-op" op])
+                                          ["log" "-r" "@" "--no-graph" "-T" "commit_id"]))]
+    (when (zero? (long exit)) (not-empty out))))
+
+(defn ^{:malli/schema [:=> [:cat :Path] [:maybe [:map [:healed :boolean] [:line :string]]]]}
+  heal-stale!
+  "Heal `dir`'s working copy if jj refuses it as stale and healing it changes nothing, as
+   `{:healed true :line …}`; leave it as it is and say why as `{:healed false :line …}`; nil when it
+   is not stale.
+
+   A stale copy is one whose commit another operation rewrote without updating its files. Every jj
+   read there fails, so a record round reading it has no tree identity and nothing it confirms can
+   settle, round after round. `jj workspace update-stale` is the remedy, and it has two effects a
+   round must not cause: it checks the new commit out over the files a judge may be reading, and it
+   records any file that differs from the commit they were checked out from as an edit, divergent
+   from the rewritten one. So it is run only when the files on disk are BOTH commits' trees — the
+   one the copy was last updated to (the operation jj's refusal names) and the one it would move
+   to. Any difference, or one that cannot be read, is left for a person: it is the reviewed tree
+   itself, or an edit nobody recorded, and neither is a round's to overwrite or commit.
+
+   `:line` is the one sentence the run prints and the report carries; when not healed it names the
+   command, so the person who has to run it does not have to work it out."
+  [dir]
+  (let [probe (try (jj/jj! dir "log" "-r" "@" "--no-graph" "-T" "commit_id")
+                   (catch Throwable _ nil))]
+    (when (and probe (lifecycle/workspace-stale? probe))
+      (let [remedy (str " — run `jj workspace update-stale` in " dir
+                        " once nothing is reading it; until then no round can settle what it confirms")
+            op     (second (re-find #"not updated since operation ([0-9a-f]+)" (str (:err probe))))
+            moving (disk-against dir (commit-at dir nil))
+            edited (disk-against dir (when op (commit-at dir op)))]
+        (cond
+          (or (nil? moving) (nil? edited))
+          {:healed false
+           :line   (str "the working copy is stale, and whether healing it would change a file could not"
+                        " be read" remedy)}
+
+          (pos? (long moving))
+          {:healed false
+           :line   (str "the working copy is stale, and healing it would rewrite " moving " file(s) under"
+                        " the reviewed tree" remedy)}
+
+          (pos? (long edited))
+          {:healed false
+           :line   (str "the working copy is stale, and " edited " file(s) on disk hold edits jj has not"
+                        " recorded, which healing it would commit beside the rewritten change" remedy)}
+
+          :else
+          (let [r (jj/jj! dir "workspace" "update-stale")]
+            (if (and (zero? (long (:exit r))) (not (layers/stale? dir)))
+              {:healed true
+               :line   "the working copy was stale; `jj workspace update-stale` healed it, changing no file"}
+              {:healed false
+               :line   (str "the working copy is stale, and `jj workspace update-stale` did not heal it ("
+                            "exited " (:exit r) (when-not (str/blank? (:err r)) (str ": " (:err r))) ")"
+                            remedy)})))))))
 
 (defn- remove-workspace!
   "Take the round's workspace out of the repo and off the disk. Its working-copy commit is

@@ -40,14 +40,24 @@
    Nothing here is stored. What it reads are observations only a judge can make — the ids it
    checked, and the tree and element identities it read — and they are on the judgement. So a
    ledger that cannot be read, or a reading that yields no identity, settles nothing."
+  (Operation tree-reading
+    "The identity of the tree at `cwd` — in a jj repository the tree jj lists, every path with the
+     content id of what it holds; in a plain git repository the tree git would commit from the
+     working copy, ignored files left out — or, when neither can be read in full, why not: the step
+     that failed with its exit and stderr. Moves when any content, path, symlink or executable bit
+     in the tree moves; a description edit, or a rebase that leaves the tree as it was, does not
+     move it. Read as a judge launches and again as it returns, and the tree is not frozen between
+     the two readings."
+    {:signature [:=> [:catn [:cwd Path]] [:map [:identity {:optional true} :string]
+                                         [:unreadable {:optional true} :string]]]})
   (Operation code-identity
-    "A hash of the tree at `cwd` — in a jj repository the tree jj lists, every path with the content
-     id of what it holds; in a plain git repository the tree git would commit from the working copy,
-     ignored files left out — or nil when neither can be read in full. Moves when any content, path,
-     symlink or executable bit in the tree moves; a description edit, or a rebase that leaves the
-     tree as it was, does not move it. Read as a judge launches and again as it returns, and the
-     tree is not frozen between the two readings."
+    "The tree-reading's identity, or nil when the tree could not be read."
     {:signature [:=> [:catn [:cwd Path]] [:maybe :string]]})
+  (Operation moved-paths
+    "The paths whose content differs between two identities this process read, or nil when either
+     listing is no longer held — an unknown, never an empty move."
+    {:signature [:=> [:catn [:before [:maybe :string]] [:after [:maybe :string]]]
+                 [:maybe [:vector :string]]]})
   (Operation subject-identities
     "Each declared element's identity at a worktree, by id, from the element listing: its
      declaration digests and the content of the file its module pairs with — for a stratum, of the

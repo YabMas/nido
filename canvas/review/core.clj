@@ -133,6 +133,10 @@
      change is in it. The directory is often gone after the run; the revision is what remains."
     {:signature [:=> [:catn [:report ReviewReport] [:code-cwd Path] [:tree [:maybe :map]]]
                  ReviewReport]})
+  (Operation with-working-copy
+    "The report carrying what a record run found of its judged tree's working copy as it started —
+     stale and healed, or stale and left for a person — or unchanged when it was not stale."
+    {:signature [:=> [:catn [:report ReviewReport] [:healing [:maybe :map]]] ReviewReport]})
   (Operation with-settlement
     "The report's status and `:reason` read again off the terminal ctx once the design verdict's
      answers are folded in. The rounds and `:ended-at` stand; a report nothing sealed is left

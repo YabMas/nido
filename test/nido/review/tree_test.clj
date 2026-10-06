@@ -4,6 +4,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.design.check :as design]
+   [nido.review.layers :as layers]
    [nido.review.tree :as tree]
    [nido.vsdd.jj :as jj]))
 
@@ -161,3 +162,55 @@
       (is (= {:unresolved "no fork point"} (tree/stamp {:dir dir :unresolved "no fork point"} dir))
           "a tree nothing names a revision for says why, and guesses none")
       (finally (fs/delete-tree dir)))))
+
+;; ── A stale working copy ────────────────────────────────────────────────────
+
+(defn- stale!
+  "`work` made stale from the default workspace: its commit's tree rewritten to drop src/a.clj, its
+   files on disk left as they were."
+  [{:keys [home]}]
+  (jj/jj! home "restore" "--from" "root()" "--into" "work@" "src/a.clj"))
+
+(deftest a-copy-that-is-not-stale-is-left-alone
+  (let [{:keys [root work]} (repo!)]
+    (try (is (nil? (tree/heal-stale! work)))
+         (finally (fs/delete-tree root)))))
+
+(deftest a-stale-copy-whose-heal-would-move-the-reviewed-tree-is-left-and-named
+  ;; Healing checks the rewritten commit out over the files a judge is reading. A round may not do
+  ;; that to a tree it reviews, so it says what a person has to run instead — the one sentence the
+  ;; runs that banked nothing for ten rounds never carried.
+  (let [{:keys [root work] :as r} (repo!)]
+    (try
+      (stale! r)
+      (let [h (tree/heal-stale! work)]
+        (is (false? (:healed h)))
+        (is (str/includes? (:line h) "would rewrite 1 file(s)") "it says how much the heal would move")
+        (is (str/includes? (:line h) (str "run `jj workspace update-stale` in " work))
+            "and names the command and where, so nobody has to work it out")
+        (is (fs/exists? (fs/path work "src" "a.clj")) "and the reviewed file is where it was"))
+      (finally (fs/delete-tree root)))))
+
+(deftest a-stale-copy-holding-unrecorded-edits-is-not-healed
+  ;; The disk matches the rewritten commit but not the one it was checked out from, so jj would
+  ;; record the difference as an edit beside the rewritten change — a divergent change in a
+  ;; repository a review only reads.
+  (let [{:keys [root work] :as r} (repo!)]
+    (try
+      (stale! r)
+      (fs/delete (fs/path work "src" "a.clj"))
+      (let [h (tree/heal-stale! work)]
+        (is (false? (:healed h)))
+        (is (str/includes? (:line h) "1 file(s) on disk hold edits jj has not recorded")))
+      (finally (fs/delete-tree root)))))
+
+(deftest a-stale-copy-whose-heal-changes-nothing-is-healed
+  ;; Both trees read as the disk, so the heal writes and records nothing, and every round after it
+  ;; can bank what it confirms.
+  (let [{:keys [root work] :as r} (repo!)]
+    (try
+      (stale! r)
+      (with-redefs [layers/working-copy-patch (fn [_ _] "")]
+        (is (:healed (tree/heal-stale! work))))
+      (is (not (layers/stale? work)) "the copy is no longer refused")
+      (finally (fs/delete-tree root)))))

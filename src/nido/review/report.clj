@@ -59,6 +59,16 @@
   (cond-> (assoc-in report [:target :code-cwd] code-cwd)
     (seq tree) (assoc-in [:target :tree] tree)))
 
+(defn ^{:malli/schema [:=> [:cat :ReviewReport [:maybe :map]] :ReviewReport]}
+  with-working-copy
+  "`report` carrying what a record run found of its judged tree's working copy as it started —
+   `nido.review.tree/heal-stale!`'s answer, under `[:target :stale-working-copy]` — or unchanged
+   when it was not stale. A stale copy left unhealed is why every round after it banks nothing, and
+   the report is where the run's analysis reads that."
+  [report healing]
+  (cond-> report
+    healing (assoc-in [:target :stale-working-copy] healing)))
+
 (defn- last-warden
   "The warden of the last round in `ctx` that ran one: the terminal round's own,
    else the newest in `:history`, or nil. A round the read-once hold carried on
@@ -562,9 +572,14 @@
       ;; :checks is how many subjects the judge WAS asked about, :unruled which of them it left
       ;; without a ruling, :relation-unruled which baseline ids it gave no relation ruling, :read-once which it confirmed on a first reading and
       ;; :amendment-read-once whether it was the first reading of a record the run amended — why a
-      ;; clean round did not end the run — and :unbanked why nothing it confirmed can settle, when nothing can —
-      ;; a round whose confirmations bank looks exactly like one whose confirmations are lost,
-      ;; unless the report says which.
+      ;; clean round did not end the run — and :unbanked why what it confirmed cannot settle, when it
+      ;; confirmed something that cannot — a round whose confirmations bank looks exactly like one
+      ;; whose confirmations are lost, unless the report says which. :identity-unreadable is why the
+      ;; tree had no identity, when that is the reason: jj's exit and stderr, or the stale working
+      ;; copy nobody could heal.
+      ;; :code-identity-before/-after and :moved-paths are what a round whose tree moved under its
+      ;; judge saw move — the paths absent when either listing could not be compared — so a person
+      ;; editing the live worktree can be told from an agent the loop launched.
       ;; :detail and :answer are what an outcome carries in place of a review, and
       ;; the ledger holds neither: :detail says why there is no verdict, :answer is
       ;; a judgment that was made and refused (`:code-moved`), findings and all.
@@ -652,6 +667,8 @@
                 (get-in ctx [:record :judge-recommended])
                 (assoc :judge-recommended (name (get-in ctx [:record :judge-recommended])))
                 (:unbanked ctx)                         (assoc :unbanked (:unbanked ctx))
+                (:identity-unreadable ctx)              (assoc :identity-unreadable (:identity-unreadable ctx))
+                (:tree-moved ctx)                       (merge (:tree-moved ctx))
                 (seq (:refuted-running ctx))            (assoc :refuted-running (into (sorted-map) (:refuted-running ctx)))
                 (and (get-in ctx [:record :outcome]) (get-in ctx [:record :detail]))
                 (assoc :detail (get-in ctx [:record :detail]))

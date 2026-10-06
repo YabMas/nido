@@ -35,6 +35,11 @@
      fork point, or the working-copy commit of a tree read as it stands. Reads jj, or git, and
      never throws."
     {:signature [:=> [:catn [:reading :map] [:dir Path]] :map]})
+  (Operation heal-stale!
+    "Heal a working copy jj refuses as stale, only when the files on disk are both the tree it was
+     checked out from and the tree it would move to, so the heal changes and records nothing; else
+     leave it and say what a person must run. Nil when the copy is not stale."
+    {:signature [:=> [:catn [:dir Path]] [:maybe [:map [:healed :boolean] [:line :string]]]]})
   (Operation with-reading!
     "Call a function with the directory a reading names, producing it first when it names a
      revision and removing it when the function returns or throws."

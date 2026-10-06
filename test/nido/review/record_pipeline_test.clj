@@ -20,7 +20,8 @@
    [nido.coordinator.report :as ledger-report]
    [nido.review.report :as report]
    [nido.review.settled :as settled]
-   [nido.review.stages :as stages]))
+   [nido.review.stages :as stages]
+   [nido.review.tree :as tree]))
 
 (defn- with-tmp-nido-root
   "Every stage here writes where the real stage writes — run dirs, answer files
@@ -1248,9 +1249,89 @@
         "a verdict that ruled on every check ends the run as it always did")))
 
 (deftest the-report-is-told-how-much-was-checked-and-whether-it-banks
-  (let [out (judged-with {:format :baseline-review :verdict :sufficient :reason "ok"} (ctx))]
+  (let [out (judged-with {:format :baseline-review :verdict :sufficient :reason "ok"
+                          :confirmed ["c2"] :checked-at {"c2" ["a.clj:1"]}} (ctx))]
     (is (= 4 (:checks out)) "the subjects left once c1 was settled")
-    (is (:unbanked out) "a review appended with no identity settles nothing, and says why")))
+    (is (str/includes? (:unbanked out) "the tree moved while the judge read it, so the 1 subject(s)")
+        "a review appended with no identity settles what it confirmed nowhere, and says why")))
+
+(deftest a-round-that-confirmed-nothing-lost-nothing
+  ;; A design round whose every claim was owed reported confirmations lost to a moved tree, when it
+  ;; had confirmed none — sending a reader after a loss that never happened.
+  (let [out (judged-with {:format :baseline-review :verdict :sufficient :reason "ok"} (ctx))]
+    (is (nil? (:unbanked out)))))
+
+(deftest a-tree-with-no-identity-says-why-on-the-judge-phase
+  ;; Runs of six to ten rounds banked nothing under "no identity could be read", while the reason —
+  ;; a stale jj working copy — was on an amend phase or nowhere. The judge phase is where a reader
+  ;; of the round looks.
+  (let [why    "jj debug tree -r @ exited 1: Error: The working copy is stale"
+        review {:format :baseline-review :verdict :sufficient :reason "ok"
+                :confirmed ["c2"] :checked-at {"c2" ["a.clj:1"]}}
+        out    (with-redefs [record/baseline-review! (fn [_] review)
+                             record/append! (fn [_ _] nil)
+                             stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                             ws/latest-entry (fn [_ _ _] a-baseline)
+                             settled/code-identity (fn [_] nil)
+                             settled/tree-reading (fn [_] {:unreadable why})
+                             tree/heal-stale! (fn [_] nil)
+                             settled/ledgers (fn [_ _ _] [(assoc settling-ledger :ws-id "ws-1")])]
+                 (run record/judge-stage (ctx)))
+        ph     (persisted-phase :judge out)]
+    (is (= why (:identity-unreadable ph)) "the cause, as jj gave it")
+    (is (str/includes? (:unbanked ph) why) "and in the sentence that says nothing could settle")
+    (is (= [{:round 1 :why why}] (record/unreadable-rounds {:rounds [{:round 1 :phases [ph]}]}))
+        "which is what the run's headline reads")))
+
+(deftest a-stale-copy-nobody-may-heal-is-what-the-judge-phase-says
+  (let [line   "the working copy is stale, and healing it would rewrite 3 file(s) under the reviewed tree"
+        review {:format :baseline-review :verdict :sufficient :reason "ok"
+                :confirmed ["c2"] :checked-at {"c2" ["a.clj:1"]}}
+        out    (with-redefs [record/baseline-review! (fn [_] review)
+                             record/append! (fn [_ _] nil)
+                             stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                             ws/latest-entry (fn [_ _ _] a-baseline)
+                             settled/code-identity (fn [_] nil)
+                             tree/heal-stale! (fn [_] {:healed false :line line})
+                             settled/ledgers (fn [_ _ _] [(assoc settling-ledger :ws-id "ws-1")])]
+                 (run record/judge-stage (ctx)))]
+    (is (= line (:identity-unreadable out)))))
+
+(deftest a-healed-copy-is-read-again-before-the-judge
+  (let [reads  (atom [nil "tree-a"])
+        seen   (atom nil)
+        out    (with-redefs [record/baseline-review! (fn [opts] (reset! seen opts)
+                                                       {:format :baseline-review :verdict :sufficient
+                                                        :reason "ok" :code-identity "tree-a"})
+                             record/append! (fn [_ _] nil)
+                             stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                             ws/latest-entry (fn [_ _ _] a-baseline)
+                             settled/code-identity (fn [_] (let [[r & more] @reads] (reset! reads more) r))
+                             tree/heal-stale! (fn [_] {:healed true :line "healed"})
+                             settled/ledgers (fn [_ _ _] [(assoc settling-ledger :ws-id "ws-1")])]
+                 (run record/judge-stage (ctx)))]
+    (is (= "tree-a" (:code-identity @seen)) "the round reads the healed tree's identity")
+    (is (nil? (:unbanked out)))))
+
+(deftest a-tree-that-moved-under-the-judge-says-what-moved
+  ;; Two unequal hashes cannot tell a person editing the live worktree from an agent the loop
+  ;; launched. The paths are the report's; the ledger's schema is closed and holds none of them.
+  (let [moved    {:code-identity-before "tree-a" :code-identity-after "tree-b"
+                  :moved-paths ["src/a.clj"]}
+        appended (atom nil)
+        out      (with-redefs [record/baseline-review! (fn [_] {:format :baseline-review :verdict :sufficient
+                                                                :reason "ok" :tree-moved moved})
+                               record/append! (fn [_ r] (reset! appended r) nil)
+                               stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                               ws/latest-entry (fn [_ _ _] a-baseline)
+                               settled/code-identity (fn [_] "tree-a")
+                               settled/ledgers (fn [_ _ _] [(assoc settling-ledger :ws-id "ws-1")])]
+                   (run record/judge-stage (ctx)))
+        ph       (persisted-phase :judge out)]
+    (is (= "tree-a" (:code-identity-before ph)))
+    (is (= "tree-b" (:code-identity-after ph)))
+    (is (= ["src/a.clj"] (:moved-paths ph)))
+    (is (not (contains? @appended :tree-moved)) "and none of it reaches the ledger")))
 
 (deftest the-checks-count-only-what-the-judge-was-asked-to-rule-on
   ;; A bare kind is shown to the judge for what the claims are about and is never owed a ruling.

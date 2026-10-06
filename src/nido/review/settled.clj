@@ -61,38 +61,73 @@
                    ")/")))
 
 (defn- git!
-  "Run git in `dir`, answering {:exit :out}. `index` names the index file it stages into."
+  "Run git in `dir`, answering {:exit :out :err}. `index` names the index file it stages into."
   [dir index & args]
-  (let [{:keys [exit out]} (apply p/shell {:dir dir :out :string :err :string :continue true
-                                           :extra-env (cond-> {} index (assoc "GIT_INDEX_FILE" index))}
-                                  "git" args)]
-    {:exit exit :out (str/trim (str out))}))
+  (let [{:keys [exit out err]} (apply p/shell {:dir dir :out :string :err :string :continue true
+                                               :extra-env (cond-> {} index (assoc "GIT_INDEX_FILE" index))}
+                                      "git" args)]
+    {:exit exit :out (str/trim (str out)) :err (str/trim (str err))}))
 
-(defn- git-identity
-  "A hash of the tree git would commit from `cwd` — every tracked and untracked file that is not
-   ignored — or nil when `cwd` is in no git repository.
+(defn- refused
+  "Why a command that exited non-zero read nothing: its words, its exit, and what it said on stderr."
+  [what {:keys [exit err]}]
+  (str what " exited " exit (when-not (str/blank? err) (str ": " err))))
+
+(defn- git-reading
+  "The tree git would commit from `cwd` — every tracked and untracked file that is not ignored — as
+   `{:identity h}`, or `{:unreadable why}` naming the git step that failed.
 
    Staged into a copy of the repository's index, so the real one is never touched and git's stat
    cache still spares it re-hashing every file."
   [cwd]
   (let [top (git! cwd nil "rev-parse" "--show-toplevel")]
-    (when (zero? (long (:exit top)))
+    (if-not (zero? (long (:exit top)))
+      {:unreadable (refused "git rev-parse --show-toplevel" top)}
       (let [tmp (str (fs/create-temp-file {:prefix "nido-identity-" :suffix ".index"}))]
         (try
           (let [idx (:out (git! cwd nil "rev-parse" "--path-format=absolute" "--git-path" "index"))]
             (if (and (not (str/blank? idx)) (fs/exists? idx))
               (fs/copy idx tmp {:replace-existing true})
               (fs/delete-if-exists tmp))
-            (when (zero? (long (:exit (apply git! (:out top) tmp "add" "-A" "--" "."
-                                             (for [c tool-caches] (str ":(exclude,glob)**/" c "/**"))))))
-              (let [{:keys [exit out]} (git! (:out top) tmp "write-tree")]
-                (when (and (zero? (long exit)) (re-matches #"[0-9a-f]{40,64}" out))
-                  (digest/sha256-hex (str "git-tree " out))))))
+            (let [add (apply git! (:out top) tmp "add" "-A" "--" "."
+                             (for [c tool-caches] (str ":(exclude,glob)**/" c "/**")))]
+              (if-not (zero? (long (:exit add)))
+                {:unreadable (refused "git add -A" add)}
+                (let [{:keys [exit out] :as written} (git! (:out top) tmp "write-tree")]
+                  (cond
+                    (not (zero? (long exit)))            {:unreadable (refused "git write-tree" written)}
+                    (re-matches #"[0-9a-f]{40,64}" out) {:identity (digest/sha256-hex (str "git-tree " out))}
+                    :else {:unreadable (str "git write-tree answered no tree hash: " out)})))))
           (finally (fs/delete-if-exists tmp)))))))
 
-(defn ^{:malli/schema [:=> [:cat :Path] [:maybe :string]]}
-  code-identity
-  "A hash of the tree at `cwd`, or nil.
+(def ^:private listing-entry
+  "One line of `jj debug tree`: the path, then what it holds. Greedy on the path, because the entry
+   is the part with a known opening and a path may itself contain `: `."
+  #"^(.*): ((?:Ok|Err)\(.*)$")
+
+(def ^:private held-listings
+  "The last few jj listings `tree-reading` hashed, by the identity it gave them, oldest first — so
+   `moved-paths` can say what moved between two identities a round read without listing either
+   tree again. A hash names one listing, so an entry can never go stale; it can only be evicted,
+   and an evicted one is an unknown, never an empty move. Bounded because a large tree's listing
+   is megabytes."
+  (atom []))
+
+(def ^:private listings-held 4)
+
+(defn- hold-listing! [identity lines]
+  (swap! held-listings
+         (fn [held]
+           (let [held (into [] (remove #(= identity (first %))) held)]
+             (conj (if (< (count held) listings-held) held (subvec held 1)) [identity lines])))))
+
+(defn ^{:malli/schema [:=> [:cat :Path] [:map [:identity {:optional true} :string]
+                                         [:unreadable {:optional true} :string]]]}
+  tree-reading
+  "The identity of the tree at `cwd` as `{:identity h}`, or `{:unreadable why}` — never both, never
+   neither. `why` names the step that failed and, for a command, its exit and stderr, because a
+   tree with no identity settles nothing all run, and the reason is the one thing that tells a
+   stale workspace (fixable) from a repository nido cannot read (not).
 
    In a jj repository it is the tree jj lists. Listing it snapshots the working copy first, so an
    uncommitted edit moves the hash; a description edit, or a rebase that leaves the tree as it was,
@@ -104,24 +139,57 @@
 
    jj is asked first and git only when jj says `cwd` is in no jj repository. A jj workspace nested
    inside a git checkout is a directory git would silently read as the OUTER repository, so a jj
-   failure inside one is nil, never git's answer about somewhere else.
+   failure inside one is unreadable, never git's answer about somewhere else.
 
    `jj debug tree` is not an interface jj promises to keep. A listing line with no
-   content id yields nil rather than a hash, because a format that dropped the ids
+   content id is unreadable rather than a hash, because a format that dropped the ids
    would otherwise hash two different trees to one value — the single failure this
-   must not have. Anything else unexpected (an empty tree, a throw) is nil too."
+   must not have. Anything else unexpected (an empty tree, a throw) is unreadable too."
   [cwd]
   (try
-    (let [{:keys [exit out]} (jj/jj! cwd "debug" "tree" "-r" "@")]
+    (let [{:keys [exit out] :as listed} (jj/jj! cwd "debug" "tree" "-r" "@")]
       (if (zero? (long exit))
         ;; Lines keep their own newlines, so a tree with no cache in it hashes byte-for-byte as
         ;; the whole listing — the identity every ledger already holds for it.
         (let [lines (remove #(re-find tool-cache-line %) (re-seq #"[^\n]*\n|[^\n]+$" out))]
-          (when (and (seq lines) (every? #(re-find content-id %) lines))
-            (digest/sha256-hex (apply str lines))))
-        (when-not (zero? (long (:exit (jj/jj! cwd "root"))))
-          (git-identity cwd))))
-    (catch Throwable _ nil)))
+          (cond
+            (empty? lines)                        {:unreadable "jj debug tree listed nothing"}
+            (not (every? #(re-find content-id %) lines))
+            {:unreadable "jj debug tree listed a line with no content id"}
+            :else (let [h (digest/sha256-hex (apply str lines))]
+                    (hold-listing! h lines)
+                    {:identity h})))
+        (let [root (jj/jj! cwd "root")]
+          (if (zero? (long (:exit root)))
+            {:unreadable (refused "jj debug tree -r @" listed)}
+            (let [g (git-reading cwd)]
+              (cond-> g
+                (:unreadable g) (update :unreadable #(str "not a jj repository ("
+                                                          (refused "jj root" root) "), and " %))))))))
+    (catch Throwable t {:unreadable (str "reading the tree threw: " (ex-message t))})))
+
+(defn ^{:malli/schema [:=> [:cat :Path] [:maybe :string]]}
+  code-identity
+  "A hash of the tree at `cwd`, or nil — `tree-reading`'s identity, for a caller that needs no
+   reason when there is none."
+  [cwd]
+  (:identity (tree-reading cwd)))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :string] [:maybe :string]] [:maybe [:vector :string]]]}
+  moved-paths
+  "Every path whose entry differs between the trees `before` and `after` identify, added and removed
+   included — or nil when either listing is not held (`held-listings`): a git identity, one read
+   in another process, or one evicted since. Nil is not the same answer as nothing having moved."
+  [before after]
+  (let [held  (into {} @held-listings)
+        index (fn [id] (when-let [lines (get held id)]
+                         (into {} (keep #(when-let [[_ path entry] (re-find listing-entry (str/trimr %))]
+                                           [path entry]))
+                               lines)))
+        a     (index before)
+        b     (index after)]
+    (when (and a b)
+      (vec (sort (filter #(not= (get a %) (get b %)) (into (set (keys a)) (keys b))))))))
 
 (defn- stratum? [row] (= "stratum" (some-> (:sort row) name str/lower-case)))
 

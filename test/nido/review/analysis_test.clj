@@ -426,6 +426,24 @@
       "a record run carries no target count, so the diff loop's reading of one
        would drop a run that judged in round one and lost its reviewer in round two"))
 
+(deftest a-record-run-that-could-not-bank-says-why-in-its-headline
+  ;; "3 rounds, 3 judged" reads the same for a run that settled normally and one whose every
+  ;; confirmation was lost to a stale working copy; the remedy was a command nobody was told.
+  (let [h (:headline (analysis/payload
+                      (assoc a-design-run
+                             :unreadable [{:round 2 :why "jj debug tree -r @ exited 1: stale"}
+                                          {:round 3 :why "jj debug tree -r @ exited 1: stale"}]
+                             :stale-at-start {:healed false
+                                              :line "the working copy is stale — run `jj workspace update-stale` in /w"})))]
+    (is (str/includes? h "Unsettled: tree identity unreadable in rounds 2, 3")
+        "which rounds could not settle what they confirmed")
+    (is (str/includes? h "jj debug tree -r @ exited 1: stale") "and why")
+    (is (str/includes? h "Working copy at start: the working copy is stale — run `jj workspace update-stale` in /w")
+        "with the remedy, said once, at the start"))
+  (let [h (:headline (analysis/payload a-design-run))]
+    (is (not (str/includes? h "Unsettled")) "a run whose rounds all banked says nothing of it")
+    (is (not (str/includes? h "Working copy")))))
+
 (deftest a-record-runs-envelope-says-what-the-run-did
   (let [p (analysis/payload a-design-run)]
     (is (= :review-run (:adapter p)))

@@ -2178,14 +2178,36 @@
 
    The tree is read FIRST. A declaration edited while the listing is read then moves the tree the
    round compares against as its judge returns, instead of pairing an old digest with a tree that
-   already holds the new one."
+   already holds the new one.
+
+   A tree with no identity is read again once a stale working copy is healed (`tree/heal-stale!`),
+   and otherwise keeps why under `:unreadable` — what `banking` tells the report."
   [project worktree record]
-  (let [tree    (settled/code-identity worktree)
+  (let [read    (settled/code-identity worktree)
+        healing (when-not read (tree/heal-stale! worktree))
+        tree    (or read (when (:healed healing) (settled/code-identity worktree)))
+        why     (when-not tree
+                  (if (false? (:healed healing))
+                    (:line healing)
+                    (:unreadable (settled/tree-reading worktree))))
         listing (when (and project (seq (mapcat :about (get-in record [:model :claims]))))
                   (design-check/elements project worktree))]
     {:listing listing
-     :reading {:code-identity      tree
-               :subject-identities (settled/subject-identities listing worktree)}}))
+     :reading (cond-> {:code-identity      tree
+                       :subject-identities (settled/subject-identities listing worktree)}
+                why (assoc :unreadable why))}))
+
+(defn- tree-moved
+  "What a judge's round saw move, when the tree read as it launched (`before`) is not the one read as
+   it returned: both identities, and the paths whose content differs between them when both
+   listings are still held (`settled/moved-paths`) — so a person editing the live worktree can be
+   told apart from an agent the loop launched. Nil when nothing moved, or no identity was read at
+   launch, which is `banking`'s unreadable case and not a move."
+  [before after]
+  (when (and before (not= before after))
+    (let [paths (settled/moved-paths before after)]
+      (cond-> {:code-identity-before before :code-identity-after after}
+        paths (assoc :moved-paths paths)))))
 
 (def ^:private provenance
   "What a baseline carries about where it came from rather than what it says of the area: the
@@ -2265,7 +2287,8 @@
    the subjects it checks (`prior-findings-block`). A round whose tree moved is still appended,
    settled subjects or not: its findings and its rulings on its own checks are a judgment of
    code, and only banking them forward needs the one tree it lacks — which the missing
-   `:code-identity` already withholds.
+   `:code-identity` already withholds. Such a round's review carries `:tree-moved` (`tree-moved`),
+   which is the report's and not the ledger's: the caller takes it off before appending.
 
    Its claims' subjects are resolved against the declared design at the tree the
    judge reads before a judge is launched, and before either identity is read —
@@ -2309,10 +2332,12 @@
                       rests-on (settled/rested-on baseline baseline)]
               (if-not (:format result)
                 result
-                (let [kept (select-keys subject-identities rests-on)]
+                (let [kept  (select-keys subject-identities rests-on)
+                      moved (tree-moved before after)]
                   (cond-> (rule result checks asked)
                     one-tree                  (assoc :code-identity one-tree)
-                    (and one-tree (seq kept)) (assoc :subject-identities kept))))))))
+                    (and one-tree (seq kept)) (assoc :subject-identities kept)
+                    moved                     (assoc :tree-moved moved))))))))
         {:outcome :nothing-to-check
          :detail "the baseline records no load-bearing property and no health observation"})
       {:outcome :no-record :detail "this workstream has no :baseline entry"})
@@ -2516,7 +2541,8 @@
    the `:subject-identities` of what the design's subjects rest on beside it, only when the tree read
    as the judge launched is the tree read as it returned — and a round holding
    settled claims whose tree moved appends nothing, answering
-   {:outcome :code-moved :answer <the decision>}."
+   {:outcome :code-moved :answer <the decision>}. Either way a round whose tree moved carries
+   `:tree-moved` (`tree-moved`), for the report; the caller takes it off before appending."
   [{:keys [cwd code-cwd run-id label disputes design settled listing subject-identities
            reviewer prior] :as opts}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
@@ -2571,18 +2597,21 @@
               (not (:format result)) result
 
               (and (seq settled) (nil? one-tree))
-              {:outcome :code-moved
-               :detail  (str "the tree changed while the judge read it, with " (count settled)
-                             " claim(s) outside its checks, so its decision was not appended")
-               :answer  result}
+              (cond-> {:outcome :code-moved
+                       :detail  (str "the tree changed while the judge read it, with " (count settled)
+                                     " claim(s) outside its checks, so its decision was not appended")
+                       :answer  result}
+                (tree-moved before after) (assoc :tree-moved (tree-moved before after)))
 
               :else
-              (let [kept (select-keys subject-identities rests-on)]
+              (let [kept  (select-keys subject-identities rests-on)
+                    moved (tree-moved before after)]
                 (cond-> (-> (rule result checks asked breaks)
                             (relation-held relation breaks))
                   (seq levels)              (assoc :strata-read (mapv :reading levels))
                   one-tree                  (assoc :code-identity one-tree)
-                  (and one-tree (seq kept)) (assoc :subject-identities kept))))))
+                  (and one-tree (seq kept)) (assoc :subject-identities kept)
+                  moved                     (assoc :tree-moved moved))))))
       {:outcome :no-record :detail "this workstream has no :design entry"})
     {:outcome :no-workstream :detail (str "cwd resolves to no nido session: " cwd)}))
 
@@ -4035,19 +4064,30 @@
 
 (defn- banking
   "What the report says about whether a round's confirmations can settle anything: how many subjects
-   the judge owed a ruling on, and — when nothing it confirmed can settle — why not. `asked` is the
-   set its prompt listed (`owed-rulings`, `decision-asked`), never every unsettled subject: the
+   the judge owed a ruling on, and — when something it confirmed cannot settle — why not. `asked` is
+   the set its prompt listed (`owed-rulings`, `decision-asked`), never every unsettled subject: the
    report reads `:checks` against what the judge ruled on, so counting a subject it was never asked
    about shows a gap no judge left. `reading` is the one taken as the judge launched, `record` what
-   the round returned."
-  [asked reading record]
-  (cond-> {:checks (count asked)}
-    (nil? (:code-identity reading))
-    (assoc :unbanked "no identity could be read for this tree, so nothing this round confirms can settle")
+   the round returned.
 
-    (and (:code-identity reading) (:format record) (nil? (:code-identity record))
-         (nil? (:carried-from record)))
-    (assoc :unbanked "the tree moved while the judge read it, so nothing this round confirmed can settle")))
+   :unbanked only over a round that confirmed something: one that confirmed nothing lost nothing,
+   and saying it did sends a reader after a loss that never happened. When the tree had no
+   identity, :identity-unreadable is why (`reading-for`), and :unbanked says it too — the generic
+   sentence alone cannot tell a stale workspace, which a person can heal, from a repository nido
+   cannot read."
+  [asked reading record]
+  (let [lost (count (:confirmed record))
+        why  (or (:unreadable reading) "no reason was recorded")]
+    (cond-> {:checks (count asked)}
+      (and (pos? lost) (nil? (:code-identity reading)))
+      (assoc :unbanked (str "no identity could be read for this tree (" why "), so the " lost
+                            " subject(s) this round confirmed cannot settle")
+             :identity-unreadable why)
+
+      (and (pos? lost) (:code-identity reading) (:format record) (nil? (:code-identity record))
+           (nil? (:carried-from record)))
+      (assoc :unbanked (str "the tree moved while the judge read it, so the " lost
+                            " subject(s) this round confirmed cannot settle")))))
 
 (defn- unruled-stop
   "A round that would have ended the run with checks it never ruled on. The first time, the run goes
@@ -4248,17 +4288,19 @@
         reused  (standing-judgement ctx ledger :baseline-review :baseline-seq subject reading
                                     #(and (seq (:findings %)) (not (report/review-holds? %))))
         asked   (cond reused #{} subject (owed-rulings subject settled))
+        judged  (when-not reused
+                  (baseline-review!
+                   {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
+                    :baseline subject
+                    :settled settled
+                    :prior prior
+                    :listing listing
+                    :code-identity (:code-identity reading)
+                    :subject-identities (:subject-identities reading)
+                    :label (str "baseline-review-round-" (:iter ctx))
+                    :disputes (disputes-for-judge (:history ctx))}))
         record (or reused
-                   (-> (baseline-review!
-                        {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
-                         :baseline subject
-                         :settled settled
-                         :prior prior
-                         :listing listing
-                         :code-identity (:code-identity reading)
-                         :subject-identities (:subject-identities reading)
-                         :label (str "baseline-review-round-" (:iter ctx))
-                         :disputes (disputes-for-judge (:history ctx))})
+                   (-> (dissoc judged :tree-moved)
                        (stamp-run (:config ctx))
                        (with-readings report/review-holds?
                                       {:standing standing :settled settled :prior prior
@@ -4282,6 +4324,7 @@
         ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
                           (update :carry dissoc :stale))
                       (when (:seq subject) {:judged-seq (:seq subject)})
+                      (when-let [m (:tree-moved judged)] {:tree-moved m})
                       (when subject (banking asked reading record)))]
     (let [answer (if reused (reused-answer reused) (append! ledger record))]
       (with-appended
@@ -4646,6 +4689,19 @@
                :when (= "judge" (some-> (:phase ph) name))
                :when (judge-launched? ph)]
            ph)))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:vector :map]]}
+  unreadable-rounds
+  "Each round of a record run's report whose confirmations could not settle because its tree had no
+   identity, as `{:round n :why <the judge phase's :identity-unreadable>}` — read off the report, so
+   a finished run's headline says it as the run did. Empty for a run every round of which could
+   bank, or whose unbankable rounds confirmed nothing."
+  [report]
+  (vec (for [round (:rounds report)
+             ph    (:phases round)
+             :when (= "judge" (some-> (:phase ph) name))
+             :when (:identity-unreadable ph)]
+         {:round (:round round) :why (:identity-unreadable ph)})))
 
 (defn- tally
   "Per key, in how many of `rounds` it was broken, in how many it was the only thing broken, and
@@ -5084,14 +5140,16 @@
         reused  (standing-judgement ctx ledger :design-decision :design-seq design reading
                                     (complement report/proceeds?))
         asked   (cond reused #{} design (decision-asked design settled))
+        judged  (when-not reused
+                  (design-decision!
+                   {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
+                    :design design :settled settled :prior prior :listing listing
+                    :code-identity (:code-identity reading)
+                    :subject-identities (:subject-identities reading)
+                    :label (str "design-decision-round-" (:iter ctx))
+                    :disputes (disputes-for-judge (:history ctx))}))
         record (or reused
-                   (-> (design-decision!
-                        {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
-                         :design design :settled settled :prior prior :listing listing
-                         :code-identity (:code-identity reading)
-                         :subject-identities (:subject-identities reading)
-                         :label (str "design-decision-round-" (:iter ctx))
-                         :disputes (disputes-for-judge (:history ctx))})
+                   (-> (dissoc judged :tree-moved)
                        (stamp-run (:config ctx))
                        (with-readings #(or (report/proceeds? %) (asks-only? %))
                                       {:standing standing :settled settled :prior prior
@@ -5111,6 +5169,7 @@
         ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
                           (update :carry dissoc :stale))
                       (when (:seq design) {:judged-seq (:seq design)})
+                      (when-let [m (:tree-moved judged)] {:tree-moved m})
                       (when design (banking asked reading record)))
         traj   (trajectory (:history ctx))
         ;; The status a run ends on is a claim that the ledger holds this decision: an :asked

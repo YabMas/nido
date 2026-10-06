@@ -2003,6 +2003,8 @@
       :asks             (when (= :design-decision (:format rec)) (:asks rec))
       :spent            (record/spent (:refuted-running final))
       :cap              (record/cap-account final)
+      :unreadable       (record/unreadable-rounds report)
+      :stale-at-start   (get-in report [:target :stale-working-copy])
       :amend-prompt     (:amend-prompt final)
       :unrecorded       (:unrecorded final)
       :reviewed-project project
@@ -2205,10 +2207,16 @@
        (tree/with-reading!
         cwd reading run-id (str (fs/path (cstate/run-dir run-id) "tree"))
         (fn [dir]
-          ;; Which tree the judges read, on the report and on every judgement the run appends:
-          ;; `dir` is often produced for this run and gone after it, and :cwd is the worktree,
-          ;; which is exactly the tree a baseline must not be judged against.
-          (let [judged-tree (tree/stamp reading dir)]
+          ;; Healed first, since a stale copy refuses the read that stamps the tree. Once per run:
+          ;; a copy that goes stale mid-run is healed, or explained, round by round as its
+          ;; identity is read.
+          (let [healing     (tree/heal-stale! dir)
+                ;; Which tree the judges read, on the report and on every judgement the run
+                ;; appends: `dir` is often produced for this run and gone after it, and :cwd is the
+                ;; worktree, which is exactly the tree a baseline must not be judged against.
+                judged-tree (tree/stamp reading dir)]
+            (some->> (:line healing) (str (if (:healed healing) "note: " "⚠ ")) println)
+            (swap! report-atom report/with-working-copy healing)
             (swap! report-atom report/with-judged-tree dir judged-tree)
             (record-loop-body
              {:cwd cwd :code-cwd dir :survey-cwd code-cwd :kind kind :run-id run-id
