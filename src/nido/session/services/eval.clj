@@ -63,6 +63,16 @@
           ["Execution error" "Syntax error" ":cause" "FATAL ERROR"
            "DATABASE STARTUP FAILED" "could not start [#'" "permission denied for schema"])))
 
+(def ^:private eval-timeout-signature
+  "What clj-nrepl-eval prints when `--timeout` elapses: it sends nREPL an
+   :interrupt and exits 0, with this notice on STDOUT. Matching it is the only
+   way to tell an interrupted eval from one that returned."
+  "Timeout hit, sending nREPL :interrupt")
+
+(defn- eval-timed-out?
+  [output]
+  (str/includes? (or output "") eval-timeout-signature))
+
 (def ^:private flyway-checksum-mismatch-re
   #"(?i)checksum mismatch for migration version (\d+)")
 
@@ -143,7 +153,8 @@
 (defn- eval-on-repl!
   "Send `form` to the nREPL on `nrepl-port`, capturing both stdout and
    stderr. Persists the exchange to the session's eval.log (visible in
-   the UI). Throws if the shell itself failed OR if the eval returned
+   the UI). Throws if the shell itself failed, if `timeout-ms` elapsed and
+   the eval was interrupted, OR if the eval returned
    content that looks like a thrown exception — with the first
    meaningful error line attached as :error-msg so callers can surface
    it on the :failed state."
@@ -172,6 +183,23 @@
                          :error err
                          :output out
                          :error-msg (or detail err)}))))
+    ;; Checked before the error signatures: an interrupt lands wherever the
+    ;; boot happened to be — commonly mid-`require` — and leaves the JVM with
+    ;; namespaces half loaded. Passed as a success, the session stays up on that
+    ;; JVM and the next boot in it fails with a compile error that names code
+    ;; which is fine. Thrown, the engine's rollback stops the JVM instead.
+    (when (eval-timed-out? output)
+      (let [msg (str "nREPL evaluation timed out after " (quot timeout-ms 1000)
+                     "s and was interrupted — the JVM may hold half-loaded"
+                     " namespaces, so start it fresh rather than evaluating"
+                     " in it again")]
+        (throw (ex-info msg
+                        {:port nrepl-port
+                         :timeout-ms timeout-ms
+                         :timed-out? true
+                         :output out
+                         :error err
+                         :error-msg msg}))))
     (when (nrepl-eval-error? output)
       (let [project-name (some-> instance-id (str/split #"--") first)
             divergence   (flyway-divergence-message output project-name)

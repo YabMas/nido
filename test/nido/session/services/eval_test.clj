@@ -178,6 +178,28 @@
     (is (= ":started" (#'eval/eval-on-repl! "brian--feat-x" 12345 1000 "(start)"))
         "stderr without a failure signature is not a failure")))
 
+;; What clj-nrepl-eval returns when its --timeout elapses mid-boot: exit 0, the
+;; boot's own logging, then its interrupt notice — all on stdout, no error
+;; signature anywhere. Read as a success, the session stayed up on a JVM whose
+;; interrupted `require` left namespaces half loaded, and the next start in it
+;; died on "namespace 'brian.job.engagement-email' not found".
+
+(def ^:private timed-out-out
+  (str "2026-10-06T13:23:11Z INFO brian.translations Loaded translations\n"
+       "\n⚠️  Timeout hit, sending nREPL :interrupt …\n"
+       "✋ Evaluation interrupted.\n"))
+
+(deftest eval-on-repl!-fails-an-eval-its-timeout-interrupted
+  (with-redefs [babashka.process/shell
+                (fn [_opts & _args] {:exit 0 :out timed-out-out :err ""})]
+    (let [ex (try (#'eval/eval-on-repl! "brian--feat-x" 12345 180000 "(start)")
+                  nil
+                  (catch clojure.lang.ExceptionInfo e e))]
+      (is ex "an interrupted eval is a failed eval, whatever the exit code")
+      (is (str/includes? (ex-message ex) "timed out after 180s")
+          "the message names the timeout, not a compile error the interrupt caused")
+      (is (:timed-out? (ex-data ex))))))
+
 ;; start-app! in a stale jj working copy: the files the REPL loaded are not the
 ;; branch, so whatever failed is said to be suspect FIRST — ahead of a remedy
 ;; (here a cluster reset) that would act on the stale files' behalf.
