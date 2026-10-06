@@ -2919,6 +2919,65 @@
          "    retreat from one: it is reported to a human as a withdrawal carrying your\n"
          "    reason. A removal without a reason is reported as a claim dropped.")))
 
+(defn- design-spent
+  "The subjects a design round's `raised` lines refute that `refuted-running` counts at
+   `withdrawable-after` or more, as a sorted `{id n}`. Claims and elements alike: a design states
+   both, and an element refuted that many readings running is an :interface being extended one
+   member at a time (`design-withdrawal-block`)."
+  [raised refuted-running]
+  (into (sorted-map)
+        (keep (fn [id] (let [n (get refuted-running id 0)]
+                         (when (>= n withdrawable-after) [id n]))))
+        (distinct (mapcat refuted-ids (remove :for-person raised)))))
+
+(defn- enumerated-ids
+  "The ids of elements carrying an :interface, in `design`'s model or the `baseline` it cites — the
+   design may restate an element by id alone and leave its interface where the baseline wrote it."
+  [design baseline]
+  (into #{}
+        (comp (filter #(seq (str (:interface %)))) (keep :id))
+        (concat (get-in design [:model :elements])
+                (get-in baseline [:model :elements])
+                (:modules baseline))))
+
+(defn- design-withdrawal-block
+  "What a design amender is told about the subjects in `spent` (`design-spent`), or nil when there
+   are none. `enumerated` (`enumerated-ids`) says which of them are an :interface rather than a claim.
+
+   Not the baseline's `withdrawal-block`: a design has no :withdrawn — dropping a claim from one is
+   a retreat, measured as one — so what is left to offer is weakening, a residual stated as a class,
+   or the person. Each repair names the CLASS of the cases, because a rewording that answers one
+   counterexample is what produced the run."
+  [spent enumerated]
+  (let [interfaces (filter (comp enumerated key) spent)
+        claims     (remove (comp enumerated key) spent)
+        running    #(str/join ", " (for [[id n] %] (str "[" id "] has been refuted " n " readings running")))]
+    (str
+     (when (seq claims)
+       (str "\n\nA CLAIM NO REWORDING HAS SETTLED. " (running claims)
+            ",\neach time after a rewording of it. Restating it at the same strength is off the\n"
+            "table: that has been tried, and it was the next finding — a rewording that answers\n"
+            "this round's counterexample leaves the next one standing. Three honest repairs are\n"
+            "left, and you choose between them:\n\n"
+            "  - WEAKEN it to what the cited code guarantees, including on its failure path —\n"
+            "    what the code tries, not what it achieves when every call succeeds. A claim\n"
+            "    bundling several promises keeps those the code keeps, and gives up the rest.\n"
+            "  - STATE THE RESIDUAL AS ONE CLASS. Keep what the code guarantees as the claim,\n"
+            "    and name the cases it does not cover by what they share — one class, never\n"
+            "    this round's counterexample — as an accepted limit of this design or of its\n"
+            "    phase.\n"
+            "  - ASK, when whether that class is acceptable is the intent's question and not\n"
+            "    yours: dispute the numbered line as one only a person can answer, naming the\n"
+            "    class. The judge is asked again with it, and may stop for the person."))
+     (when (seq interfaces)
+       (str "\n\nAN INTERFACE NO ENUMERATION HAS SETTLED. " (running interfaces)
+            ",\neach time by a member its :interface did not list. Do NOT add the member this\n"
+            "round found: the enumeration is what keeps being refuted, and the next round finds\n"
+            "the next member. Restate the :interface by category — what kind of var it\n"
+            "publishes and which callers compose it — so a member the code adds is already\n"
+            "described. Where no category holds them, ask instead: dispute the numbered line,\n"
+            "naming why.")))))
+
 (defn- refuted-ids
   "The claims a record finding refutes: a design finding's :claim-ids, a baseline refutation's
    :claim-id. A gap (:blocks) refutes nothing, and neither does a subject no reading could rule on
@@ -3023,8 +3082,8 @@
    Bounded twice. `unfixable` still gives up on a claim raised in four consecutive rounds, which
    this does not touch. And the veto YIELDS once a repeated claim has been refuted more than
    `withdrawable-after` readings running (`:refuted-running` on the round's ctx): its amender has
-   then reworded it twice and been refuted each time — on a baseline, after being offered its
-   withdrawal — and a claim no rewording settles wants a person or a drop, not a third rewording."
+   then reworded it twice and been refuted each time — after being offered its withdrawal on a
+   baseline, its weakening on a design — and a claim no rewording settles wants a person or a drop, not a third rewording."
   [base-key ctx prior]
   (let [prev    (last (filter #(= (dec (:iter ctx)) (:iter %)) prior))
         was     (group-by base-key (:findings prev))
@@ -4630,9 +4689,12 @@
    answerable and both are disputable, and the number is how: the amender
    objects by ordinal and never by matching text. `:findings` is the judge's own
    prose beneath them, which says more and is keyed to nothing. `:rulings` is the judge's per-id
-   relation-honest ruling, printed beside each baseline id the amender has to hold :breaks to."
+   relation-honest ruling, printed beside each baseline id the amender has to hold :breaks to.
+   `:refuted-running` is `refuted-running` over the design's lineage, this round included: a subject
+   a line refutes that it counts at `withdrawable-after` or more is handed over as spent, and may not
+   be reworded at the same strength again."
   [{:keys [design baseline recommend reason asks raised findings rulings out-path declared? check-cmd
-           settled]}]
+           settled refuted-running]}]
   (str
    "A read-only judge derived what could be derived about this DESIGN record,\n"
    "before any code is written, and it did not come out clean.\n\n"
@@ -4680,9 +4742,15 @@
    "other line is a defect in the record that breaks none of them:\n\n"
    (str/join
     "\n"
-    (map-indexed (fn [i {:keys [note claim] :as f}]
-                   (str (inc i) ". " (design-finding-label f) " — " (or note claim)))
-                 raised))
+    (let [spent (design-spent raised refuted-running)]
+      (map-indexed (fn [i {:keys [note claim] :as f}]
+                     (str (inc i) ". " (design-finding-label f) " — " (or note claim)
+                          (when-let [ns (seq (keep #(some->> (get spent %) (vector %)) (refuted-ids f)))]
+                            (str "\n   running: "
+                                 (str/join ", " (for [[id n] ns] (str "[" id "] refuted " n " readings in a row")))
+                                 " — see what follows the numbered lines"))))
+                   raised)))
+   (design-withdrawal-block (design-spent raised refuted-running) (enumerated-ids design baseline))
    (when (seq findings)
      (str "\n\nWHAT THE DERIVATION FOUND:\n\n"
           (str/join
@@ -5094,6 +5162,7 @@
                                           :out-path out-path
                                           :check-cmd (when check-cmd (check-cmd out-path))
                                           :settled (:settled ctx)
+                                          :refuted-running (:refuted-running ctx)
                                           :declared? (some? declared)})})
           raw      (when (fs/exists? out-path)
                      (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))

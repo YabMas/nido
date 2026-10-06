@@ -1005,6 +1005,46 @@
     (is (str/includes? p "Go through the whole list")
         "a :breaks repaired one omission at a time takes a round per omission")))
 
+(deftest a-design-claim-no-rewording-settled-is-handed-over-as-spent
+  (let [amend (fn [running & {:as more}]
+                (record/design-amend-prompt
+                 (merge {:design strata-design :baseline strata-baseline :recommend :amend :reason "r"
+                         :raised [{:claim-ids ["rounded-once"] :claim "a refund rounds again"}]
+                         :refuted-running running :out-path "/run/a.edn"}
+                        more)))
+        p (amend {"rounded-once" 6})]
+    (is (str/includes? p "A CLAIM NO REWORDING HAS SETTLED. [rounded-once] has been refuted 6 readings running")
+        "a claim reworded through six counterexamples is reworded again unless the amender is told")
+    (is (str/includes? p "Restating it at the same strength is off the\ntable"))
+    (doseq [repair ["WEAKEN" "STATE THE RESIDUAL AS ONE CLASS" "ASK"]]
+      (is (str/includes? p repair) (str "the spent claim is offered " repair)))
+    (is (not (str/includes? p ":withdrawn"))
+        "a design has no withdrawal to offer; dropping its claim is a retreat")
+    (is (str/includes? p "1. rounded-once — a refund rounds again\n   running: [rounded-once] refuted 6 readings in a row")
+        "the numbered line says it is spent, where the amender answers it")
+    (testing "one refutation short of withdrawable-after is still the amender's to reword"
+      (is (not (str/includes? (amend {"rounded-once" 1}) "NO REWORDING HAS SETTLED"))))
+    (testing "a spent claim this round did not refute is not the amender's to touch"
+      (is (not (str/includes? (amend {"rounded-once" 4} :raised [{:check :goal-served :status :broken :note "n"}])
+                              "NO REWORDING HAS SETTLED"))))
+    (testing "a question for a person is not the amender's to answer, spent or not"
+      (is (not (str/includes? (amend {"rounded-once" 4}
+                                     :raised [{:claim-ids ["rounded-once"] :claim "c" :for-person true}])
+                              "NO REWORDING HAS SETTLED"))))))
+
+(deftest a-design-interface-refuted-member-by-member-is-restated-by-category
+  ;; The element is restated by id alone; its :interface is the baseline's, and so is the enumeration.
+  (let [p (record/design-amend-prompt
+           {:design strata-design :baseline model-baseline :recommend :amend :reason "r"
+            :raised [{:claim-ids ["canvas.order/aggregate"] :claim "it also publishes a rounding helper"}]
+            :refuted-running {"canvas.order/aggregate" 3} :out-path "/run/a.edn"})]
+    (is (str/includes? p "AN INTERFACE NO ENUMERATION HAS SETTLED. [canvas.order/aggregate] has been refuted 3 readings running"))
+    (is (str/includes? p "Do NOT add the member this\nround found")
+        "each member added is the next round's finding; the enumeration is what is refuted")
+    (is (str/includes? p "Restate the :interface by category"))
+    (is (not (str/includes? p "A CLAIM NO REWORDING HAS SETTLED"))
+        "an interface is not weakened like a claim; it is restated as a kind")))
+
 (deftest a-design-naming-its-strata-is-judged-on-its-levels-not-its-cut
   (let [p (record/design-prompt {:design strata-design :baseline strata-baseline})]
     (is (str/includes? p "STRATA THIS CHANGE TOUCHES, floor first"))

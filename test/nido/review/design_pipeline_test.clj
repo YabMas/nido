@@ -997,6 +997,21 @@
         (is (str/includes? recut "DECOMPOSITION does not hold"))
         (is (str/includes? recut "restating the claims will not fix it"))))))
 
+(deftest the-round-s-refutation-count-reaches-the-design-amender
+  ;; The judge stage counts it onto ctx; an amender that never sees it rewords a spent claim again.
+  (let [prompt (atom nil)]
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] a-design)
+                  stages/discover-baseline (fn [_ _] nil)
+                  stages/working-copy-state (fn [_] {:identity "t" :entries {}})
+                  agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! prompt first-message) {:num-turns 1})]
+      (run record/design-amend-stage
+           (ctx :findings [{:claim-ids ["c1"] :claim "a second writer reorders"}]
+                :record (decision :amend)
+                :refuted-running {"c1" 3}))
+      (is (str/includes? @prompt "A CLAIM NO REWORDING HAS SETTLED. [c1] has been refuted 3 readings running")))))
+
 ;; ── Resurvey: the loop that calls the other loop ────────────────────────────
 
 (def ^:private corrected-baseline
