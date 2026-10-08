@@ -19,7 +19,10 @@
    [nido.session.fleet :as fleet]
    [nido.session.launcher :as launcher]
    [nido.session.lifecycle :as session-lifecycle]
-   [nido.session.state :as session-state]))
+   [nido.session.state :as session-state])
+  (:import
+   [java.nio.channels FileChannel]
+   [java.nio.file Paths StandardOpenOption]))
 
 (def states
   "Permitted Run states. See spec §Runs / Lifecycle."
@@ -159,6 +162,46 @@
                      (= (:session-name %) session-name)))
        (sort-by #(-> % :state-history last :at))
        last))
+
+(def ^:private probe-monitor
+  "Serializes this JVM's lock probes. The JVM refuses a second lock on a range one of its own
+   channels already locks — OverlappingFileLockException, even when both are shared — so two
+   threads probing one file at once would otherwise read each other as the holder. No agent's
+   lock is ever this JVM's: it belongs to the wrapper process, so every probe can wait its turn."
+  (Object.))
+
+(defn- held?
+  "Whether another process holds the lock at `path`."
+  [path]
+  (locking probe-monitor
+    (with-open [ch (FileChannel/open (Paths/get (str path) (into-array String []))
+                                     (into-array StandardOpenOption
+                                                 [StandardOpenOption/READ StandardOpenOption/WRITE]))]
+      (nil? (.tryLock ch 0 1 true)))))
+
+(defn ^{:malli/schema [:=> [:cat :RunId] :boolean]}
+  live?
+  "Whether a process doing a run is alive: someone holds one of its launch locks, each taken by
+   the launcher's wrapper before it becomes the agent and dropped by the operating system when
+   that agent exits — however it exits, and whether or not the daemon that launched it is still
+   running.
+
+   Asks with a SHARED lock on the byte the holder locks, so two readers probing at once do not
+   read each other as the holder. False for a run with no lock: it never started an agent."
+  [run-id]
+  (let [dir (cstate/run-locks-dir run-id)]
+    (boolean
+     (when (fs/exists? dir)
+       (some held? (fs/list-dir dir))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:vector :RunId]]}
+  live-runs
+  "The runs launched against a workstream whose agent is alive right now, by run id."
+  [project ws-id]
+  (let [dir (cstate/workstream-runs-dir project ws-id)]
+    (if (fs/exists? dir)
+      (into [] (comp (map (comp str fs/file-name)) (filter live?)) (sort (fs/list-dir dir)))
+      [])))
 
 (def allowed-transitions
   "Map of from-state → set of to-states.

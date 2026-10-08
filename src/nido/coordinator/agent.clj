@@ -3,6 +3,8 @@
 
    See spec §Agent launch."
   (:require
+   [babashka.fs :as fs]
+   [nido.platform.io :as io]
    [nido.platform.process :as nprocess]
    [babashka.process :as p]
    [cheshire.core :as json]
@@ -88,6 +90,41 @@
    place. ScheduleWakeup survives CLAUDE_CODE_DISABLE_CRON (claude 2.1.278 still
    offers it) and would schedule a wakeup nothing can deliver."
   ["ScheduleWakeup"])
+
+(def ^:private hold-run-lock
+  "A wrapper that takes the run's lock and then becomes the agent: python3 exec's the command, so
+   the agent keeps the wrapper's pid and with it the lock — a POSIX record lock belongs to the
+   process and survives exec. The descriptor is made inheritable because closing any descriptor
+   of a file drops every record lock the process holds on it, and a close-on-exec one would be
+   closed by the very exec that hands the lock on.
+
+   A record lock (fcntl) and not flock(2), deliberately: the JVM's FileChannel locks are record
+   locks on macOS, and the two families do not see each other there, so a flock(2) holder would
+   read as free to every probe nido makes. Non-blocking: a lock somebody already holds is a run
+   started twice, and failing to launch says so."
+  (str "import fcntl,os,sys\n"
+       "fd=os.open(sys.argv[1],os.O_RDWR|os.O_CREAT,0o644)\n"
+       "fcntl.lockf(fd,fcntl.LOCK_EX|fcntl.LOCK_NB,1,0)\n"
+       "os.set_inheritable(fd,True)\n"
+       "os.execvp(sys.argv[2],sys.argv[2:])\n"))
+
+(defn- register-run!
+  "Leave a file named by the run in its workstream's runs directory, when the run has one, so a
+   reader of that workstream finds the lock without opening every run on disk. Written before the
+   agent starts and never removed: a run whose lock nobody holds is simply not live."
+  [run-id]
+  (let [{:keys [project workstream-id]} (io/read-edn (cstate/run-edn-path run-id))]
+    (when (and project workstream-id)
+      (let [f (fs/path (cstate/workstream-runs-dir project workstream-id) run-id)]
+        (fs/create-dirs (fs/parent f))
+        ;; Created, not checked-then-created: agents launched together under one run race here.
+        (try (fs/create-file f)
+             (catch java.nio.file.FileAlreadyExistsException _ nil))))))
+
+(defn- holding-run-lock
+  "`cmd` run by the wrapper that holds `lock-path` for the life of the process `cmd` becomes."
+  [lock-path cmd]
+  (into ["python3" "-c" hold-run-lock lock-path] cmd))
 
 (defn- build-cmd
   "Assemble the claude command vector. With :claude-session-id, the run is
@@ -215,12 +252,17 @@
         ;; claude already running and no timer to stop it, which is the exact
         ;; state being refused, now with an orphan attached.
         budget-ms (parse-budget-ms budget)
+        _         (register-run! run-id)
         log-path  (or out-file (cstate/run-agent-log run-id))
-        cmd       (build-cmd {:claude-bin claude-bin :first-message first-message
-                              :system-prompt system-prompt :claude-session-id claude-session-id
-                              :resume? resume? :mcp-config mcp-config :add-dirs add-dirs
-                              :tools tools :allowed allowed :model model
-                              :settings settings})
+        lock-path (str (fs/path (cstate/run-locks-dir run-id) (str (random-uuid) ".lock")))
+        _         (fs/create-dirs (cstate/run-locks-dir run-id))
+        cmd       (holding-run-lock
+                   lock-path
+                   (build-cmd {:claude-bin claude-bin :first-message first-message
+                               :system-prompt system-prompt :claude-session-id claude-session-id
+                               :resume? resume? :mcp-config mcp-config :add-dirs add-dirs
+                               :tools tools :allowed allowed :model model
+                               :settings settings}))
         proc      (p/process cmd (cond-> {:dir cwd
                                           :env (merge (into {} (System/getenv)) (or env {})
                                                       headless-env)

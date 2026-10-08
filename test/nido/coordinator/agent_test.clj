@@ -5,6 +5,7 @@
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.state :as cstate]))
 
 (def fake-claude
@@ -387,4 +388,59 @@
                                   {:run-id "r1" :cwd (str tmp) :first-message "/x"
                                    :claude-bin fake-claude :budget "5m"
                                    :env {"FAKE_CLAUDE_RATE_LIMIT_STATUS" "allowed"}})))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest a-run-is-live-exactly-while-its-agent-runs
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (fs/create-dirs (cstate/run-dir "r-live"))
+        (is (not (runs/live? "r-live")) "no agent ever started: no lock to hold")
+        (let [seen   (promise)
+              launch (future (agent/launch! {:run-id "r-live" :cwd (str tmp) :first-message "/x"
+                                             :claude-bin fake-claude :budget "5m"
+                                             :env {"FAKE_CLAUDE_DELAY_MS" "1500"}}))]
+          (loop [n 0]
+            (if (or (runs/live? "r-live") (> n 100))
+              (deliver seen (runs/live? "r-live"))
+              (do (Thread/sleep 20) (recur (inc n)))))
+          (is (true? @seen) "the agent process holds its run's lock while it runs")
+          (is (= 0 (:exit-code @launch)))
+          (is (not (runs/live? "r-live")) "the lock goes with the agent")))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest the-agent-not-its-launcher-holds-the-run-lock
+  (let [cmd (#'agent/holding-run-lock "/runs/r/run.lock" ["claude" "--print"])]
+    (is (= ["python3" "-c"] (take 2 cmd)))
+    (is (= ["/runs/r/run.lock" "claude" "--print"] (drop 3 cmd))
+        "the wrapper is handed the lock and then the command it becomes")))
+
+(deftest agents-launched-together-under-one-run-each-hold-their-own-lock
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (fs/create-dirs (cstate/run-dir "r-par"))
+        (let [go #(future (agent/launch! {:run-id "r-par" :cwd (str tmp) :first-message "/x"
+                                           :claude-bin fake-claude :budget "5m"
+                                           :env {"FAKE_CLAUDE_DELAY_MS" "800"}}))
+              a  (go) b (go)]
+          (is (= [0 0] [(:exit-code @a) (:exit-code @b)]) "neither launch is refused the lock")
+          (is (not (runs/live? "r-par")))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest a-run-against-a-workstream-is-found-from-the-workstream
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (fs/create-dirs (cstate/run-dir "r-ws"))
+        (spit (cstate/run-edn-path "r-ws") (pr-str {:project :brian :workstream-id "ws-1"}))
+        (let [launch (future (agent/launch! {:run-id "r-ws" :cwd (str tmp) :first-message "/x"
+                                             :claude-bin fake-claude :budget "5m"
+                                             :env {"FAKE_CLAUDE_DELAY_MS" "1500"}}))]
+          (loop [n 0]
+            (when (and (empty? (runs/live-runs :brian "ws-1")) (< n 100))
+              (Thread/sleep 20) (recur (inc n))))
+          (is (= ["r-ws"] (runs/live-runs :brian "ws-1")))
+          @launch
+          (is (= [] (runs/live-runs :brian "ws-1")) "a run whose agent exited is not live")))
       (finally (fs/delete-tree tmp)))))

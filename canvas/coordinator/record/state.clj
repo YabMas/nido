@@ -113,6 +113,9 @@
   (Operation run-artifacts-dir
     "Where a run's agent leaves what it produced."
     {:signature [:=> [:catn [:run-id RunId]] Path]})
+  (Operation run-locks-dir
+    "Where a run's agents keep their locks, one per launch, each held for as long as its agent runs."
+    {:signature [:=> [:catn [:run-id RunId]] Path]})
   (Operation run-agent-log
     "One run's agent transcript."
     {:signature [:=> [:catn [:run-id RunId]] Path]})
@@ -128,6 +131,11 @@
   (Operation pre-unification-dir
     "Where a project's records lived before the workstream unification. Read-only; kept so an old record stays findable."
     {:signature [:=> [:catn [:project ProjectName]] Path]})
+  (Operation workstream-runs-dir
+    "Where a workstream keeps one file per run launched against it, so its runs are found without
+     opening every run on disk."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Path]
+     :delegates [workstream-dir]})
   (Operation workstream-dir
     "One workstream's directory."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Path]})

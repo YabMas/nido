@@ -90,6 +90,14 @@
   (str (fs/path (run-dir run-id) "artifacts")))
 
 (defn ^{:malli/schema [:=> [:cat :RunId] :Path]}
+  run-locks-dir
+  "Where a run's agents keep their locks, one file per launch: each is held by its agent process
+   for exactly as long as that agent runs. One per launch rather than one per run, because a run
+   may launch several agents at once — a round's judges — and an exclusive lock admits one."
+  [run-id]
+  (str (fs/path (run-dir run-id) "locks")))
+
+(defn ^{:malli/schema [:=> [:cat :RunId] :Path]}
   run-agent-log [run-id]
   (str (fs/path (run-dir run-id) "agent.log")))
 
@@ -108,6 +116,13 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
   workstream-dir [project ws-id]
   (str (fs/path (workstreams-dir project) ws-id)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
+  workstream-runs-dir
+  "Where a workstream keeps one empty file per run launched against it, named by run id — how a
+   reader of one workstream finds its runs without opening every run on disk."
+  [project ws-id]
+  (str (fs/path (workstream-dir project ws-id) "runs")))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
   workstream-edn-path [project ws-id]
