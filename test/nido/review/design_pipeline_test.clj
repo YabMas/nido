@@ -738,8 +738,8 @@
    answer the amender left at the out-path; `moves` for the paths it wrote in the
    tree, each named in its transcript by an Edit; `declared` for the project's
    design configuration."
-  [{:keys [prev writes recommend append-throws? refusals prompts moves declared]
-    :or {prev a-design recommend :amend refusals 0}} c]
+  [{:keys [prev writes recommend append-throws? refusals prompts moves declared launch]
+    :or {prev a-design recommend :amend refusals 0 launch {:num-turns 3}}} c]
   (let [appended (atom nil)
         refused  (atom 0)
         state    (atom {:identity "t0" :entries {}})]
@@ -767,7 +767,7 @@
                                                        {:type "assistant"
                                                         :message {:content [{:type "tool_use" :name "Edit"
                                                                              :input {:file_path (str "/w/" m)}}]}})))))
-                                  {:num-turns 3})]
+                                  launch)]
       [(run record/design-amend-stage
             (assoc-in c [:record :recommend] recommend))
        @appended])))
@@ -1568,6 +1568,27 @@
     (is (= #{:relation-honest :goal-served} (set (keys (:derivations f))))
         "two gaps blocking different derivations are two derivations, not one claim")
     (is (= {"one-gate" 1} (:falsified f)) "only a finding blocking no derivation is a falsified claim")))
+
+(deftest a-design-amender-that-died-stops-on-the-launch-not-as-a-decline
+  ;; design-loop-351cd37a, verbatim: one thinking block, seven output tokens, no result event —
+  ;; reported :amend-noop with the amend phase ok.
+  (let [[out appended] (with-amend {:launch {:exit-code 0 :num-turns nil}}
+                                   (ctx :findings [(check :relation-honest :broken)]))]
+    (is (= :amend-launch-failed (:status out)))
+    (is (nil? appended))
+    (is (str/includes? (:amend-error out) "ended with no result event"))))
+
+(deftest a-round-is-judged-only-when-a-verdict-was-parsed
+  ;; baseline-loop-f0fb8970 reported "1 rounds, 1 judged" over a codex failure: the judge launched,
+  ;; and nothing it said was a verdict.
+  (let [report {:rounds [{:phases [{:phase "judge" :verdict "sufficient"}]}
+                         {:phases [{:phase "judge" :recommend "proceed"}]}
+                         {:phases [{:phase "judge" :outcome "codex-failed"}]}
+                         {:phases [{:phase "judge" :outcome "goal-superseded"}]}]}]
+    (is (= 3 (record/judges-launched report)))
+    (is (= 2 (record/rounds-judged report))
+        "a launched judge with no verdict is counted launched and never judged")
+    (is (zero? (record/rounds-judged nil)))))
 
 (deftest a-run-that-launched-no-judge-counts-none
   (let [round (fn [outcome] {:phases [{:phase :judge :outcome outcome} {:phase :amend}]})]

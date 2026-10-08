@@ -3781,10 +3781,54 @@
        "nido reads this file, validates it and appends it. Do not append it yourself, do\n"
        "not commit anything, and do NOT edit any source file."))
 
+(defn- amender-launch
+  "What the report keeps of how an amender's agent ended — `agent/launch!`'s `:exit-code`,
+   `:timed-out?` and `:num-turns`, and the transcript it wrote — with `:failed` set to why it did
+   not complete, or absent when it did.
+
+   It did not complete when it was killed on its budget, exited non-zero, or ended with no `result`
+   event. The last is read off `:num-turns`, which is taken from that event and so is nil exactly
+   when none arrived: claude died mid-turn, and whatever the amender meant to write went with it.
+   An amender that completed and wrote nothing has declined; one that did not complete has said
+   nothing at all, and only this tells the two apart once the answer file is found absent."
+  [{:keys [exit-code timed-out? num-turns]} transcript]
+  (let [failed (cond timed-out?                          "killed on its budget"
+                     (and exit-code (not (zero? exit-code))) (str "exited " exit-code)
+                     (nil? num-turns)                    "ended with no result event")]
+    (cond-> {:exit-code exit-code :timed-out? (boolean timed-out?) :num-turns num-turns
+             :log transcript}
+      failed (assoc :failed failed))))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :string]]}
+  amender-account
+  "One line on how an amender's agent ended, from the amend phase's `:launch` (`amender-launch`) —
+   whether it completed, its exit code, and its turns or that no result event arrived — or nil when
+   no amender was launched."
+  [{:keys [exit-code timed-out? num-turns failed] :as launch}]
+  (when launch
+    (str (if failed "did not complete — " "completed — ")
+         (str/join " · " (cond-> []
+                           (some? exit-code) (conj (str "exit " exit-code))
+                           timed-out?        (conj "killed on its budget")
+                           (some? num-turns) (conj (str num-turns " turn" (when (not= 1 num-turns) "s")))
+                           (nil? num-turns)  (conj "no result event"))))))
+
+(defn- unanswered-stop
+  "End a round whose amender left no record and no objection. `:amend-noop` only when its agent
+   completed — it read the findings and declined; `:amend-launch-failed` when the agent did not,
+   with the reason and transcript as `:amend-error`, since that round's question was never answered
+   and re-running it is a different remedy from overruling a refusal."
+  [ctx {:keys [failed log]}]
+  (if failed
+    (assoc ctx :control :stop :status :amend-launch-failed
+           :amend-error (str "the amender " failed " before answering — nothing was appended; its"
+                             " transcript is " log))
+    (assoc ctx :control :stop :status :amend-noop)))
+
 (defn- launch-amender!
-  "Launch an amender on `first-message` over the round's code tree, and say what it did to that
-   tree: `stages/amender-trespass` over a reading either side, with `permitted` as the dirs its
-   writes are allowed in.
+  "Launch an amender on `first-message` over the round's code tree, and say what it did: `:trespass`
+   is `stages/amender-trespass` over a reading of that tree either side, with `permitted` as the
+   dirs its writes are allowed in, and `:launch` is how the agent itself ended (`amender-launch`).
 
    Confined by `stages/amender-tools`: it may write `out-path` and under `permitted`, and its
    shell runs only reads and `check-cmd` (the command string, or nil). That confinement is what
@@ -3806,15 +3850,17 @@
     (fs/create-dirs dir)
     (fs/delete-if-exists transcript)
     (spit (str (fs/path dir (str label "-prompt.txt"))) first-message)
-    (agent/launch!
-     (merge {:run-id run-id :cwd code-cwd :budget budget
-             :first-message first-message
-             :err-file (str (fs/path dir (str label ".err.log")))
-             :out-file transcript}
-            (stages/amender-tools {:cwd code-cwd :out-path out-path
-                                   :permitted permitted :check-cmd check-cmd})))
-    (stages/amender-trespass {:before before :after (stages/working-copy-state code-cwd)
-                              :transcript transcript :cwd code-cwd :permitted permitted})))
+    (let [launched (agent/launch!
+                    (merge {:run-id run-id :cwd code-cwd :budget budget
+                            :first-message first-message
+                            :err-file (str (fs/path dir (str label ".err.log")))
+                            :out-file transcript}
+                           (stages/amender-tools {:cwd code-cwd :out-path out-path
+                                                  :permitted permitted :check-cmd check-cmd})))]
+      {:launch   (amender-launch launched transcript)
+       :trespass (stages/amender-trespass {:before before :after (stages/working-copy-state code-cwd)
+                                           :transcript transcript :cwd code-cwd
+                                           :permitted permitted})})))
 
 (defn- amendment-state
   "What the answer file at `out-path` held, for a round that will not append it: `:absent`,
@@ -3896,7 +3942,8 @@
                 out-path (str (fs/path dir (str label ".edn")))
                 _        (fs/delete-if-exists out-path)
                 check    (when check-cmd (check-cmd out-path))
-                trespass (launch-amender!
+                {:keys [trespass]}
+                         (launch-amender!
                           ctx {:label label :permitted permitted
                                :out-path out-path :check-cmd check
                                :first-message (refusal-prompt {:kind kind :record (:record written)
@@ -4741,7 +4788,8 @@
         ;; an earlier run under this run-id would otherwise be read as this
         ;; round's answer and appended to the ledger as a superseding record.
         (fs/delete-if-exists out-path)
-        (let [trespass (launch-amender!
+        (let [{:keys [trespass launch]}
+                       (launch-amender!
                         ctx {:label (str "amend-round-" (:iter ctx))
                              :out-path out-path
                              :check-cmd (when check-cmd (check-cmd out-path))
@@ -4751,7 +4799,7 @@
               raw      (when (fs/exists? out-path)
                          (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
               answer   (parse-amend-answer raw (:findings ctx) baseline-finding-base-key)
-              ctx      (cond-> (assoc ctx :stale (vec (sort (:stale answer))))
+              ctx      (cond-> (assoc ctx :stale (vec (sort (:stale answer))) :amend-launch launch)
                          (amend-tree trespass out-path answer)
                          (assoc :amend-tree (amend-tree trespass out-path answer))
                          (seq (:stale answer))
@@ -4761,7 +4809,7 @@
             (trespass-stop ctx trespass out-path answer)
 
             (not (fs/exists? out-path))
-            (assoc ctx :control :stop :status :amend-noop)
+            (unanswered-stop ctx launch)
 
             :else
             (let [{:keys [record disputes]} answer
@@ -4791,7 +4839,7 @@
                        :history (conj (vec (:history ctx)) (entry [] false)))
 
                 (nil? record)
-                (assoc ctx :control :stop :status :amend-noop)
+                (unanswered-stop ctx launch)
 
                 :else
                 ;; The correction names what it corrects, and this round is the
@@ -4862,8 +4910,11 @@
        somebody else moved in a live worktree is reported, not held against it.
        Terminal, and loud: whatever it wrote is still there for a human, and the
        stop names it and the answer that was not appended.
-     no usable record came back — the amender declined or failed. Terminal as
-       :amend-noop, the ledger untouched, mirroring the diff loop's :fix-noop.
+     no usable record came back — the ledger untouched, and terminal under one of
+       two statuses (`unanswered-stop`): :amend-noop when the amender's agent
+       completed and declined, mirroring the diff loop's :fix-noop, and
+       :amend-launch-failed when it never completed, as the diff loop's
+       :fix-launch-failed is.
      the record came back smaller — reported always, and terminal when it fell
        below the point its own round would still run. That last one is the whole
        reason this stage measures rather than trusts: a loop that converges by
@@ -5010,6 +5061,19 @@
                ph    (:phases round)
                :when (= "judge" (some-> (:phase ph) name))
                :when (judge-launched? ph)]
+           ph)))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :int]}
+  rounds-judged
+  "How many of a record run's rounds a judge it launched JUDGED: `judge-launched?`, and a verdict or a
+   design recommendation was parsed from it. Never more than `judges-launched`; the difference is
+   the judges that ran and left no judgement — a codex failure, an answer nothing could read."
+  [report]
+  (count (for [round (:rounds report)
+               ph    (:phases round)
+               :when (= "judge" (some-> (:phase ph) name))
+               :when (judge-launched? ph)
+               :when (or (:verdict ph) (:recommend ph))]
            ph)))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:vector :map]]}
@@ -5861,7 +5925,8 @@
                                          :retreats [] :disputes [] :resurveyed (:status out)})
                          :control :stop
                          :status (keyword (str "resurvey-" (name (:status out)))))
-            (:amend-tree out) (assoc :amend-tree (:amend-tree out))))))
+            (:amend-tree out)   (assoc :amend-tree (:amend-tree out))
+            (:amend-launch out) (assoc :amend-launch (:amend-launch out))))))
 
 (defn- design-amend-message
   "What the design amender is told to repair `prev` for this round's `recommend`, shown `baseline`
@@ -5909,7 +5974,8 @@
         check-cmd (when (and project ws-id) #(amend-check-cmd project ws-id :design %))]
     (fs/create-dirs dir)
     (fs/delete-if-exists out-path)
-    (let [trespass (launch-amender!
+    (let [{:keys [trespass launch]}
+                   (launch-amender!
                     ctx {:label (str "design-amend-round-" (:iter ctx))
                          :permitted permitted
                          :out-path out-path
@@ -5919,7 +5985,7 @@
           raw      (when (fs/exists? out-path)
                      (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
           answer   (parse-amend-answer raw (:findings ctx) design-finding-base-key)
-          ctx      (cond-> (assoc ctx :stale (vec (sort (:stale answer))))
+          ctx      (cond-> (assoc ctx :stale (vec (sort (:stale answer))) :amend-launch launch)
                      (amend-tree trespass out-path answer)
                      (assoc :amend-tree (amend-tree trespass out-path answer))
                      (seq (:stale answer))
@@ -5929,7 +5995,7 @@
         (trespass-stop ctx trespass out-path answer)
 
         (not (fs/exists? out-path))
-        (assoc ctx :control :stop :status :amend-noop)
+        (unanswered-stop ctx launch)
 
         :else
         (let [{:keys [record disputes out-of-reach]} answer
@@ -5958,7 +6024,7 @@
                        :history (conj (vec (:history ctx)) (entry [] false)))
 
                 (nil? record)
-                (assoc ctx :control :stop :status :amend-noop)
+                (unanswered-stop ctx launch)
 
                 :else
                 (let [cite    #(cite-corrected :design prev %

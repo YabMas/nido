@@ -865,6 +865,38 @@
     (is (= "refused" (:status ph)))
     (is (= "/run/amend-round-1.edn" (:unappended ph)))))
 
+(deftest a-record-round-whose-amender-died-says-so
+  ;; Its amend phase read `ok` beside a run ended :amend-noop, and nothing on it said the agent had
+  ;; died — so a dead launch read as an amender that looked and declined.
+  (let [launch {:exit-code 143 :timed-out? true :num-turns nil :log "/run/amend-round-1.log"
+                :failed "killed on its budget"}
+        r  (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+               (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+               (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                    :ctx {:record {:verdict :falsified} :findings [{:cites ["a"]}]}} nil)
+               (report/apply-event {:event :phase-started :iter 1 :phase :amend :at "t3"} nil)
+               (report/apply-event {:event :phase-finished :iter 1 :phase :amend :at "t4"
+                                    :ctx {:status :amend-launch-failed :amend-launch launch}} nil)
+               (report/apply-event {:event :run-finalized :status :amend-launch-failed :ctx {} :at "t5"} nil))
+        rd (first (:rounds r))
+        ph (last (:phases rd))]
+    (is (= "failed" (:status ph)) "the phase says what its agent did, not that a file failed to appear")
+    (is (= 143 (get-in ph [:launch :exit-code])) "and keeps the exit code, held nowhere else")
+    (is (= "amend-failed" (:status rd)))))
+
+(deftest a-judge-phase-with-no-verdict-is-not-ok
+  ;; baseline-loop-f0fb8970's judge phase read `ok` next to outcome codex-failed and verdict null.
+  (let [phase (fn [record]
+                (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+                    (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+                    (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                         :ctx {:record record :findings []}} nil)
+                    :rounds first :phases last))]
+    (is (= "unjudged" (:status (phase {:outcome :codex-failed :detail "codex exited 1"}))))
+    (is (= "ok" (:status (phase {:verdict :sufficient}))))
+    (is (= "ok" (:status (phase {:recommend :proceed})))
+        "a design decision carries no verdict; its recommendation is the judgement")))
+
 (deftest a-record-round-that-amended-cleanly-continues
   (is (= "continued" (record-round-status [{:cites ["a"]}] []))))
 

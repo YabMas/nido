@@ -23,6 +23,8 @@
     "ok"      "✓"
     "error"   "✗"
     "refused" "✗"
+    "failed"  "✗"
+    "unjudged" "✗"
     "·"))
 
 (defn- label [ph target]
@@ -515,7 +517,8 @@
                 (:amended? ph)   (conj "amended")
                 (pos? n)         (conj (str n " weakening" (when (not= 1 n) "s")))
                 (pos? d)         (conj (str d " objection" (when (not= 1 d) "s")))
-                (:unappended ph) (conj (str "refused by the ledger, not appended: " (:unappended ph))))]
+                (:unappended ph) (conj (str "refused by the ledger, not appended: " (:unappended ph)))
+                (get-in ph [:launch :failed]) (conj (str "amender " (get-in ph [:launch :failed]))))]
     (if (seq parts) (str/join " · " parts) "nothing to amend")))
 
 (defn- record-phase-line

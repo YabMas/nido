@@ -343,9 +343,10 @@
    `tree-before` and `tree-after` are the code tree's readings either side of it,
    and `calls` the tool calls its transcript shows. The ledger refuses every
    append under `append-throws?`, or the first `refusals` of them; each prompt an
-   amender is launched over is added to `prompts`."
-  [{:keys [prev writes tree-before tree-after calls append-throws? refusals prompts]
-    :or {prev a-baseline tree-before (tree {}) refusals 0}} c]
+   amender is launched over is added to `prompts`. `launch` is what `agent/launch!`
+   returns — a completed three-turn run unless given."
+  [{:keys [prev writes tree-before tree-after calls append-throws? refusals prompts launch]
+    :or {prev a-baseline tree-before (tree {}) refusals 0 launch {:exit-code 0 :num-turns 3}}} c]
   (let [state (atom tree-before)
         appended (atom nil)
         refused (atom 0)]
@@ -365,7 +366,7 @@
                                                              first-message))))
                                   (transcript! out-file calls)
                                   (reset! state (or tree-after @state))
-                                  {:num-turns 3})]
+                                  launch)]
       [(run record/amend-stage c) @appended])))
 
 (deftest an-amendment-names-the-subjects-it-moved
@@ -503,6 +504,40 @@
   (let [[out appended] (with-amend {} (ctx :findings [a-finding]))]
     (is (= :amend-noop (:status out)))
     (is (nil? appended))))
+
+(deftest an-amender-that-never-completed-is-not-reported-as-declining
+  ;; design-loop-351cd37a: the amender died after one thinking block with no result event, and the
+  ;; run ended :amend-noop — the status of an amender that read the findings and declined. The two
+  ;; want different things from a person: a re-run, or a ruling on the refusal.
+  (doseq [[why launch] {"no result event" {:exit-code 0 :num-turns nil}
+                        "a non-zero exit" {:exit-code 1 :num-turns 1}
+                        "a budget kill"   {:exit-code 143 :timed-out? true :num-turns nil}}]
+    (let [[out appended] (with-amend {:launch launch} (ctx :findings [a-finding]))]
+      (is (= :amend-launch-failed (:status out)) (str why " is a launch that failed, not a decline"))
+      (is (= :stop (:control out)))
+      (is (nil? appended) "nothing was appended")
+      (is (= (:exit-code launch) (get-in out [:amend-launch :exit-code]))
+          "the exit code is kept: it is the one fact about why it died the run can hold")
+      (is (str/includes? (:amend-error out) "amend-round-1.log")
+          "the stop names the transcript, which is where the cause is"))))
+
+(deftest an-amender-that-completed-and-wrote-nothing-still-declined
+  (let [[out _] (with-amend {:launch {:exit-code 0 :num-turns 4}} (ctx :findings [a-finding]))]
+    (is (= :amend-noop (:status out)))
+    (is (= {:exit-code 0 :timed-out? false :num-turns 4}
+           (select-keys (:amend-launch out) [:exit-code :timed-out? :num-turns]))
+        "the launch is kept on a decline too, so the report can show it completed")
+    (is (nil? (get-in out [:amend-launch :failed])))))
+
+(deftest an-answer-written-before-the-agent-died-is-still-taken
+  ;; The status reads the agent only when there is no answer. A complete record on disk is a
+  ;; complete answer whatever happened to the process after it was written, and the ledger
+  ;; validates it either way.
+  (let [[out appended] (with-amend {:launch {:exit-code 143 :timed-out? true :num-turns nil}
+                                    :writes (fn [p] (spit p (pr-str {:record a-baseline})))}
+                                   (ctx :findings [a-finding]))]
+    (is (not= :amend-launch-failed (:status out)))
+    (is (some? appended) "the record it wrote reached the ledger")))
 
 (deftest a-leftover-answer-is-not-mistaken-for-this-rounds
   ;; "The file is there" is the whole test for whether the amender answered, so

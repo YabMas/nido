@@ -1330,7 +1330,7 @@
   "Phase status → its mark. Same vocabulary as the terminal render (review/render)
    so a review reads identically in the pane and in the loop that produced it."
   [status]
-  (case status "ok" "✓" "error" "✗" "refused" "✗" "running" "…" "·"))
+  (case status "ok" "✓" ("error" "refused" "failed" "unjudged") "✗" "running" "…" "·"))
 
 (defn- rel-path
   "`file` relative to the reviewed worktree — findings carry absolute paths, and

@@ -341,9 +341,10 @@
    `repair` is `nido.coordinator.report/repair-before-asking` of that judgement, and `repaired?`
    whether the run amended after it: `asks` on a repair is conditional on it, and is never shown as
    a question open now."
-  [{:keys [loop run-id report-path status rounds judged amended unappended weakened disputed
+  [{:keys [loop run-id report-path status rounds launched judged amended unappended weakened disputed
            record-seq still-broken still-asked asks stood-in reviewed-project reviewed-session reviewed-ws-id
-           machinery unrecorded spent cap amend-prompt unreadable stale-at-start repair repaired?]
+           machinery unrecorded spent cap amend-prompt unreadable stale-at-start repair repaired?
+           amender]
     :as run}]
   (let [kind   (name loop)
         broken (seq (map name still-broken))]
@@ -360,7 +361,12 @@
              :status      (name (or status :unknown))
              :rounds      (or rounds 0)
              :headline    (str "Status: " (name (or status :unknown)) " · " (or rounds 0) " rounds, "
-                               (or judged 0) " judged · " (or amended 0) " amended · "
+                               (or judged 0) " judged"
+                               ;; A judge that ran and left no verdict judged nothing, and counted
+                               ;; as judged it is a codex failure read as a round that passed.
+                               (when (> (or launched 0) (or judged 0))
+                                 (str " (" (- launched (or judged 0)) " launched, no verdict)"))
+                               " · " (or amended 0) " amended · "
                                (when unappended "1 refused by the ledger · ")
                                (or weakened 0) " weakenings · " (or disputed 0) " disputed\n"
                                (when unappended (str "Refused amendment, not appended: " unappended "\n"))
@@ -407,10 +413,16 @@
                                ;; labelled as one nobody can answer yet.
                                (when (and repair (not repaired?))
                                  (str (str/capitalize (repair-owed repair)) " owed — "
-                                      (if (= :max-iters status)
-                                        "cap reached"
-                                        (str "the run ended " (name (or status :unknown))))
-                                      " before the amend stage\n"))
+                                      (cond (= :max-iters status) "cap reached before the amend stage"
+                                            amender (str "the amend stage ran and the run ended "
+                                                         (name (or status :unknown)))
+                                            :else   (str "the run ended " (name (or status :unknown))
+                                                         " before the amend stage"))
+                                      "\n"))
+                               ;; How the last round's amender ended, from its agent and not from
+                               ;; whether a file appeared: a dead amender and one that declined both
+                               ;; leave none.
+                               (when amender (str "Amender: " amender "\n"))
                                ;; A cleared run stops nobody, so this line is the only place its
                                ;; question surfaces outside the ledger.
                                (when-not (str/blank? (str asks))
@@ -496,7 +508,7 @@
    to say so. But the status alone would also drop a run that read three
    targets, raised a P1 and lost its reviewer in round two, which is as worth
    reading as any. A record run carries no target count, so the same question
-   is put to it as `:judged`: `record/judges-launched` does not count a judge
+   is put to it as `:launched`: `record/judges-launched` does not count a judge
    its vendor refused, and a round that judged before the refusal still does.
 
    A `:clean` run that read no target and whose design verdict is CARRIED from
@@ -512,7 +524,7 @@
    `reconcile/settle-one!` and a finished one through `tasks.nido-review`, and a
    second gate at either call site is a second place for the list above to be
    incomplete."
-  [{:keys [status dry-run? loop judged targets-reviewed design-carried-from] :as run} report?]
+  [{:keys [status dry-run? loop launched targets-reviewed design-carried-from] :as run} report?]
   (boolean (and status
                 (not (#{:nothing-to-review :stack-conflicted} (keyword status)))
                 (not dry-run?)
@@ -529,7 +541,7 @@
                 ;; decides, never its status: :premise-unverified ends runs that judged and runs
                 ;; that never started alike.
                 (or (not (#{:baseline :design} loop))
-                    (pos? (long (or judged 0)))))))
+                    (pos? (long (or launched 0)))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :any]]}
   enqueue!

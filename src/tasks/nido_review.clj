@@ -1897,7 +1897,8 @@
    ::spent    "the cap ended the run owing an amendment to what is named above, and each has been reworded and refuted again across runs — another rewording at the same strength, by hand or by a re-run, is the circle; weaken it to what the code guarantees, withdraw it, or decide it"
    :disputed   "the judge restated a finding the amender objected to twice — neither can settle it, so you do"
    :unruled    "the judge would have ended the run leaving checks it neither confirmed, refuted nor called uncheckable, or baseline ids with no relation ruling, and asked again it still did not rule — the record does not hold over them; the report's judge phase names them, under :unruled and :relation-unruled"
-   :amend-noop "the amender produced no record — nothing was appended"
+   :amend-noop "the amender completed and produced no record — nothing was appended"
+   :amend-launch-failed "the amender never completed — it exited or was killed before answering, so the round's findings are still unanswered and nothing was appended; read its transcript, then re-run"
    :amend-unreadable "the amender's answer would not parse as EDN"
    :amend-invalid "the ledger refused the amended record, and refused the amender's repairs of it too"
    :amend-touched-code "the amender wrote to the paths named above; whatever it wrote is still there, and its answer was not appended — if the answer is right, append it with the command above rather than re-typing it"
@@ -1976,7 +1977,8 @@
    passes. Best-effort, as `queue-analysis!` is.
 
    What it tells the analysis is what the run DID, counted off its report and final state: how many
-   rounds launched a judge — the gate refuses a run with none — how many amended, what was given up
+   rounds launched a judge — the gate refuses a run with none — and how many of those a verdict was
+   parsed from, how many amended, what was given up
    and argued, the record it judged and, for a design run, the checks its last decision still marks
    broken. The figures per check are not counted here: `bb nido:review:figures` derives them from
    the ledger, which holds what this run's report drops.
@@ -1998,7 +2000,8 @@
       :status           (:status final)
       :dry-run?         (boolean dry-run?)
       :rounds           (or (get-in report [:summary :rounds]) 0)
-      :judged           (record/judges-launched report)
+      :launched         (record/judges-launched report)
+      :judged           (record/rounds-judged report)
       :amended          (count (filter :amended? history))
       :unappended       (:amend-unappended final)
       :weakened         (count (mapcat :retreats history))
@@ -2022,6 +2025,7 @@
       :unreadable       (record/unreadable-rounds report)
       :stale-at-start   (get-in report [:target :stale-working-copy])
       :amend-prompt     (:amend-prompt final)
+      :amender          (some-> (:amend-launch final) record/amender-account)
       :unrecorded       (:unrecorded final)
       :reviewed-project project
       :reviewed-session session

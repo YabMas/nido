@@ -268,6 +268,7 @@
            (or (seq (:read-once judge)) (:amendment-read-once judge))) "read-once"
       (and judge (= "ok" (:status judge)) (empty? (:findings judge))
            (contains? #{nil "proceed"} (:recommend judge)))        "clean"
+      (and amend (= "failed" (:status amend)))                     "amend-failed"
       (and amend (:unappended amend))                              "amend-refused"
       (and amend (seq (:retreats amend)))                          "weakened"
       (and judge amend)                                            "continued"
@@ -647,6 +648,9 @@
       ;; earlier run appended that this round took as its judgement, launching no judge: everything
       ;; else on the phase is that entry's, not this run's.
       ;; A finding row standing for a broken check carries :filed — see `with-filed`.
+      ;; :status is "unjudged" when the round has an outcome and neither a verdict nor a
+      ;; recommendation: no judgement was parsed, whether or not a judge was launched, and an "ok"
+      ;; beside a codex failure reads as a round that judged.
       :judge  (cond-> (assoc ph :verdict (some-> (get-in ctx [:record :verdict]) name)
                                 :outcome (some-> (get-in ctx [:record :outcome]) name)
                                 :findings (with-filed (:findings ctx) (get-in ctx [:record :findings])))
@@ -715,7 +719,10 @@
                 (and (get-in ctx [:record :outcome]) (get-in ctx [:record :detail]))
                 (assoc :detail (get-in ctx [:record :detail]))
                 (get-in ctx [:record :answer])
-                (assoc :answer (get-in ctx [:record :answer])))
+                (assoc :answer (get-in ctx [:record :answer]))
+                (and (get-in ctx [:record :outcome]) (nil? (get-in ctx [:record :verdict]))
+                     (nil? (get-in ctx [:record :recommend])))
+                (assoc :status "unjudged"))
       ;; What the stage actually DID, not what its name suggests. An amend phase
       ;; that spent its round re-surveying and never reached an amendment must
       ;; not report itself as having amended anything.
@@ -737,6 +744,10 @@
       ;; next judge is asked about again, which otherwise takes diffing two ledger entries.
       ;; :out-of-reach is each line the amender said only a record it may not write repairs, with
       ;; the line itself — what the run then stopped to ask the person, and held nowhere else.
+      ;; :launch is how the amender's agent ended — exit code, turns, transcript, and `:failed`
+      ;; when it never completed (`nido.review.record/amender-launch`) — and marks the phase failed
+      ;; when the round stopped on it: an amender that died and one that declined both leave no
+      ;; answer file, and nothing else on the phase separates them.
       :amend  (cond-> (assoc ph :retreats (vec (:retreats ctx))
                                 :disputes (vec (:disputes ctx))
                                 :amended? (boolean (:amended? ctx))
@@ -747,6 +758,8 @@
                 (:amend-delta ctx) (assoc :delta (:amend-delta ctx))
                 (seq (:out-of-reach ctx)) (assoc :out-of-reach (vec (:out-of-reach ctx)))
                 (:amend-tree ctx) (assoc :tree (:amend-tree ctx))
+                (:amend-launch ctx) (assoc :launch (:amend-launch ctx))
+                (= :amend-launch-failed (:status ctx)) (assoc :status "failed")
                 (:amend-unappended ctx) (assoc :status "refused"
                                                :unappended (:amend-unappended ctx)))
 

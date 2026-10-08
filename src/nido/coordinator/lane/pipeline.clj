@@ -852,6 +852,9 @@
    :retreated            :escalate  ; the record shrank below its own worth
    :amend-touched-code   :escalate  ; a record round wrote code; whatever it wrote is still there
    :amend-noop           :escalate
+   ;; The amender's agent died, timed out or exited non-zero before answering. Not :retry, for
+   ;; the reason :fix-launch-failed is not: what killed it is not known to lift in a backoff.
+   :amend-launch-failed  :escalate
    :amend-invalid        :escalate
    :amend-unreadable     :escalate
    ;; Split from the single :fix-noop, which meant three different things. No

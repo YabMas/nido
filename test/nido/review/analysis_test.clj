@@ -405,7 +405,7 @@
 
 (def a-design-run
   {:loop :design :run-id "design-loop-1" :report-path "/r/report.json" :status :cleared
-   :rounds 2 :judged 2 :amended 1 :weakened 3 :disputed 0 :record-seq 14
+   :rounds 2 :launched 2 :judged 2 :amended 1 :weakened 3 :disputed 0 :record-seq 14
    :still-broken [:stratified]
    :reviewed-project :nido :reviewed-session "record-round-analysis" :reviewed-ws-id "ws-9"})
 
@@ -413,18 +413,42 @@
   (is (analysis/worth-analysing? a-design-run true))
   (is (analysis/worth-analysing? (assoc a-design-run :status :premise-unverified) true)
       "a status reached after rounds that judged is not a run that judged nothing")
-  (is (not (analysis/worth-analysing? (assoc a-design-run :judged 0) true))
+  (is (not (analysis/worth-analysing? (assoc a-design-run :launched 0 :judged 0) true))
       "no round launched a judge, so there is no loop behaviour to read")
-  (is (not (analysis/worth-analysing? (assoc a-design-run :judged 0 :status :cleared) true))
+  (is (not (analysis/worth-analysing? (assoc a-design-run :launched 0 :judged 0 :status :cleared) true))
       "whatever status it ended in"))
 
 (deftest a-record-run-that-lost-its-reviewer-is-judged-by-what-it-judged
   ;; design-loop-ea82cce0 met a vendor refusal six seconds in and judged nothing;
   ;; `judges-launched` does not count the refused round, so it reaches here at 0.
-  (is (not (analysis/worth-analysing? (assoc a-design-run :status :reviewer-unavailable :judged 0) true)))
-  (is (analysis/worth-analysing? (assoc a-design-run :status :reviewer-unavailable :judged 1) true)
+  (is (not (analysis/worth-analysing? (assoc a-design-run :status :reviewer-unavailable :launched 0 :judged 0) true)))
+  (is (analysis/worth-analysing? (assoc a-design-run :status :reviewer-unavailable :launched 1 :judged 1) true)
       "a record run carries no target count, so the diff loop's reading of one
        would drop a run that judged in round one and lost its reviewer in round two"))
+
+(deftest a-record-run-counts-as-judged-only-the-rounds-a-verdict-came-from
+  ;; baseline-loop-f0fb8970's headline read "1 rounds, 1 judged" over a round codex failed and no
+  ;; verdict was parsed from — a run that judged nothing, worded as one that judged.
+  (let [run (assoc a-design-run :status :codex-failed :rounds 1 :launched 1 :judged 0)]
+    (is (analysis/worth-analysing? run true)
+        "the gate still reads launched judges: a judge that failed is loop behaviour worth reading")
+    (is (str/includes? (:headline (analysis/payload run)) "1 rounds, 0 judged (1 launched, no verdict)")
+        "the headline says the judge ran and judged nothing")))
+
+(deftest a-record-run-whose-amender-died-says-how-in-its-headline
+  ;; design-loop-351cd37a: the amender died after one thinking block, and the headline said the run
+  ;; ended "before the amend stage" with nothing to say why the amendment was never made.
+  (let [h (:headline (analysis/payload
+                      (assoc a-design-run :status :amend-launch-failed :repair :amend :repaired? false
+                             :amender "did not complete — exit 143 · no result event")))]
+    (is (str/includes? h "Amendment owed — the amend stage ran and the run ended amend-launch-failed")
+        "the amend stage ran; saying it was never reached sends the reader to the wrong stage")
+    (is (str/includes? h "Amender: did not complete — exit 143 · no result event")
+        "the exit code is the one fact about why it died that the run can keep"))
+  (is (str/includes? (:headline (analysis/payload (assoc a-design-run :status :codex-failed
+                                                         :repair :amend :repaired? false)))
+                     "the run ended codex-failed before the amend stage")
+      "a run that stopped at the judge still says so"))
 
 (deftest a-record-run-that-ended-on-a-question-says-what-it-asked-about
   ;; `broken at the end: claim domain-covers-shared-callers` was the person's question, worded as
