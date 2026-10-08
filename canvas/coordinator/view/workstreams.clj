@@ -58,6 +58,13 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws Workstream]
                             [:live-names [:? :any]] [:facts [:? :any]]] WorkstreamRow]
      :delegates [label last-activity ws-source session/list-sessions session/stage-projection]})
+  (Operation doing-at
+    "What is underway in a workstream right now, at a closure and band the caller settled on —
+     the board passes status's band, so what is underway and where the row sits are one answer.
+     A defaults chain: the sessions are read unless they are handed in."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:closed [:maybe :map]]
+                            [:stage [:maybe :keyword]] [:sessions [:? :any]]] [:maybe :map]]
+     :delegates [session/list-sessions]})
   (Operation bare-row
     "A display row for a watched Notion page that has no workstream yet — what the board shows
      before anything local exists."

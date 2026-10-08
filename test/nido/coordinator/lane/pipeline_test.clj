@@ -405,7 +405,8 @@
           (is (= 1 (:ledger (:read r))))
           (is (= #{:intent} (:kinds (:read r))))
           (is (contains? (:read r) :board-stage))
-          (is (contains? (:read r) :ticket-status))
+          (is (not (contains? (:read r) :ticket-status))
+              "the position level reads no ref, so no ticket status it would key")
           (is (contains? (:read r) :sessions))
           (is (contains? (:read r) :standing)))))))
 
@@ -1303,7 +1304,44 @@
               (is (= :implementing (:at r)) "once the round's halt clears, the layers still place it")))
           (testing "an implementation record moves past them"
             (add! :implementation-completed {:format :implementation-completed :summary "s" :artifacts [] :design {:seq d}})
-            (is (= :implemented (:at (p/of :brian id))))))))))
+            (is (= :implemented (:at (p/of :brian id)))))
+          (testing "after the implementation, a resolved findings round does not put the layers back"
+            (add! :findings {:format :findings :round 2 :items [{:id "f2" :summary "s" :severity :tweak}]})
+            (add! :findings-resolved {:format :findings-resolved :round 2 :items ["f2"] :by "c2"})
+            (let [r (p/of :brian id)]
+              (is (not= :implementing (:at r)))
+              (is (= {:done 1 :of 3} (:layers r)) "the layers still report their progress"))))))))
+
+(deftest an-earlier-designs-late-record-leaves-the-newer-designs-layers-placing
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (add! :baseline a-baseline)
+        (add! :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})
+        (let [d1 (add! :design (a-design 2))
+              _  (add! :design-approved {:format :design-approved :design {:seq d1} :at-seq d1})
+              d2 (add! :design (assoc (a-design 2) :supersedes {:seq d1 :why "amended"}))]
+          (add! :design-approved {:format :design-approved :design {:seq d2} :at-seq d2})
+          (add! :layer-completed {:format :layer-completed :design {:seq d2} :layer 1 :of 3})
+          (is (= :implementing (:at (p/of :brian id))))
+          (add! :implementation-completed {:format :implementation-completed :summary "s" :artifacts []
+                                           :design {:seq d1}})
+          (is (= :implementing (:at (p/of :brian id)))
+              "work recorded under the earlier design says nothing about the newer one's layers"))))))
+
+(deftest layers-under-an-ungranted-design-do-not-walk-past-the-gate
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (add! :baseline a-baseline)
+        (add! :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})
+        (let [d (add! :design (a-design 2))]
+          (add! :layer-completed {:format :layer-completed :design {:seq d} :layer 1 :of 3})
+          (let [r (p/of :brian id)]
+            (is (not= :implementing (:at r)) "no grant and no clearance: the layer does not place it")
+            (is (not= :implement (get-in r [:next :stage])))))))))
 
 (deftest closure-is-read-off-the-ledger
   (with-tmp
@@ -1316,6 +1354,35 @@
         (is (= :shipped (:at (p/of :brian id))))
         (ws/reopen! :brian id :in-progress)
         (is (= :intent-stated (:at (p/of :brian id))))))))
+
+(deftest an-unreadable-newest-close-is-not-an-older-one
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (ws/close! :brian id :between-phases)
+        (ws/reopen! :brian id :in-progress)
+        (ws/close! :brian id :done)
+        (let [w      (ws/read-ws :brian id)
+              newest (last (filter #(= :closed (:kind %)) (:entries w)))]
+          (spit (str (fs/path (cstate/workstream-dir :brian id) (:file newest))) "{:not edn")
+          (let [c (p/closure :brian id (ws/read-ws :brian id))]
+            (is (= (:seq newest) (:seq c)))
+            (is (nil? (:outcome c)) "the older :between-phases is not revived"))
+          (is (= :shipped (:at (p/of :brian id))) "unreadable, and still closed"))))))
+
+(deftest notion-settlement-does-not-answer-a-blocker
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (let [b (add! :blocker {:format :blocker :summary "s" :needs "n"})]
+          (add! :notion-status {:format :notion-status :page-id "abc" :status "Done" :by :poller})
+          (let [r (p/of :brian id)]
+            (is (= :blocked (:at r)) "only an answer naming the blocker clears it")
+            (is (nil? (:settled-in-notion r))))
+          (add! :blocker-answered {:format :blocker-answered :blocker-seq b :summary "go"})
+          (is (= "Done" (:settled-in-notion (p/of :brian id))) "answered, the settlement places it"))))))
 
 (deftest status-says-who-owes-the-move-and-whether-anything-is-live
   (with-tmp
@@ -1346,3 +1413,12 @@
 (deftest an-unanswered-blocker-outranks-open-findings
   (is (= :blocked (#'p/place {:ks #{:intent} :findings-open? true :blocker-seq 7})))
   (is (= :findings-open (#'p/place {:ks #{:intent} :findings-open? true}))))
+
+(deftest an-issue-arrival-is-read-by-kind
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (add! :issue {:format :issue :id "o/r#7" :title "t"})
+        (let [r (p/of :brian id)]
+          (is (= :issue (:intake r)) "how it arrived is the :issue entry, not a ref")
+          (is (= :intake (:at r)) "an arrival alone carries no position"))))))

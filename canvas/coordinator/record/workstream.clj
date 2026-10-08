@@ -71,7 +71,8 @@
   (Operation advance-stage!
     "Move a workstream to a new stage, recording where it came from and appending the move as a
      :stage-set entry naming who decided it. A no-op when it is already there, so a repeated
-     event does not litter the history."
+     event does not litter the history — save that a person's choice is recorded as an entry even
+     then, validated like any other move."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:new-stage :keyword]
                       [:by [:? [:enum :person :nido :backfill]]]] Workstream]
      :delegates [read-ws write! clock/now-iso append-lock-path]})

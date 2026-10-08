@@ -68,6 +68,11 @@
   (Operation list-workstreams "Every workstream of a project, as enriched rows on the spine."
     {:signature [:=> [:catn [:project ProjectName] [:live-names [:? :any]]] [:vector :map]]
      :delegates [view/workstream-rows]})
+  (Operation status-audit
+    "Every open workstream on which status and the record projection it replaced disagree, with
+     both answers — the first phase's exit instrument."
+    {:signature [:=> [:catn [:project ProjectName] [:live-names [:? :any]]] [:vector :map]]
+     :delegates [list-workstreams view/workstream-rows]})
   (Operation winding-down
     "Workstreams that are FINISHED and still holding a live session — the ones costing memory
      for work nobody is doing."
@@ -100,7 +105,8 @@
     {:signature [:=> [:catn [:project ProjectName] [:action :keyword]] :keyword]})
   (Operation set-stage!
     "Move a workstream to a stage. THE single mutation behind every board gesture — one place
-     that writes the spine, so a surface cannot invent a transition."
+     that writes the spine, so a surface cannot invent a transition. A choice naming the stage
+     already stored is still recorded, since status reads choices off the ledger."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:target :keyword]] :any]
      :delegates [workstream/advance-stage!]})
   (Operation dismiss! "Take a workstream off the radar, recording that it was dismissed."

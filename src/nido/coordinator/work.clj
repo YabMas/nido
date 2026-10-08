@@ -25,6 +25,7 @@
    [nido.coordinator.report :as report]
    [nido.coordinator.lane.resume :as resume]
    [nido.coordinator.record.runs :as runs]
+   [nido.coordinator.record.activity :as activity]
    [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.lane.spawn :as spawn]
@@ -540,36 +541,6 @@
   (let [{:keys [stage mode]} (:next position)]
     (when (= :human mode) stage)))
 
-(defn- with-position
-  "Stamp the pipeline position on a row the board will actually render.
-
-   Here rather than in `to-spine`, which both row paths share: to-spine is pure,
-   and the detail pane already asks pipeline/of for itself — stamping there would
-   make every pane read the ledger twice to answer one question.
-
-   The phase plan rides along for the same reason: it is a standing read too,
-   and only a drawn row shows it.
-
-   Skipped for the bands nothing draws. It costs a ledger read and a standing
-   closure per row (~4ms measured across brian's 45 open workstreams, ~190ms for
-   the board), which is affordable against a multi-second poll and worth not
-   paying 150 times over for rows in :done."
-  [project row]
-  (if (contains? unrendered-bands (:stage row))
-    row
-    (let [position (pipeline/of project (:ws-id row))]
-      (cond-> (assoc row :position position)
-        (not (:bare? row)) (assoc :phase (wsv/phase-progress project (:ws-id row)))
-        ;; A workstream whose next move is a person's IS a gate, and nothing else
-        ;; was going to say so. :needs-you is projected from session phases, and
-        ;; the rounds that hand work back to a human run as tasks that park no
-        ;; session — so a design decision waiting to be granted read as nobody
-        ;; waiting, and never reached the inbox that is supposed to carry it.
-        ;;
-        ;; Only ever set, never cleared: the session-parked reading underneath is
-        ;; a different way to be a gate and stays exactly as true as it was.
-        (awaiting-human position) (assoc :needs-you true)))))
-
 (def ^:private ^:dynamic *rows-memo*
   "Atom memoizing `list-workstreams` by [project live-names] for the extent of one
    `with-shared-rows` call, or nil when nothing is sharing.
@@ -594,11 +565,175 @@
   [f]
   (binding [*rows-memo* (atom {})] (f)))
 
+(declare live-session-names resuming?)
+
+(def ^:private stage-carried-by
+  "Per chosen stage, the kinds that record that choice being carried out rather than the work
+   moving past it — read by `band-of`, so a choice and the act it starts are one band."
+  {:shipping #{:ship-submitted}})
+
+(defn- band-of
+  "The board band of an OPEN workstream, read off its ledger: in progress while status places it
+   at an unanswered blocker; an analysis's own band; settled when status's position says a person
+   settled it in Notion; a person's or nido's recorded stage choice, while no record of the work
+   is newer than it — the intake pen among them, which queueing a report records; a one-off's own band;
+   else where its position says the work is."
+  [project ws-id origin position]
+  (let [;; A stage chosen since it was minted — a recorded choice, never the stage it was minted
+        ;; at: that is a stored copy no entry records, and a row grouped by it would stand apart
+        ;; from the position status gives it.
+        ;; A reopen at a stage is a stage decision too, and a marker stage it names hands the band
+        ;; back to the position. The newest move is found on the index and read by its :seq: one
+        ;; whose payload no longer reads chooses nothing, rather than an older choice it replaced.
+        w      (cws/read-ws project ws-id)
+        move   (last (filter #(#{:stage-set :reopened} (:kind %)) (:entries w)))
+        chosen (when move (:stage (cws/entry-at-seq project ws-id (:seq move))))
+        ;; A stage choice says where the work stood WHEN it was made. Work recorded since moves
+        ;; it on, so the position — not the choice — says where it is now: a workstream put at
+        ;; :ready that has since been blocked or published is not Ready. A record that carries
+        ;; the choice OUT is not such work: the ship lane chooses :shipping and then records the
+        ;; shipment it started, and that record is the choice being acted on, not the work moving
+        ;; past it. Nor is a :note: it is an account, never work, and notion-sync writes one to explain
+        ;; each stage it sets.
+        carries (get stage-carried-by chosen #{})
+        worked (:seq (last (remove #(or (cws/status-kinds (:kind %)) (carries (:kind %))
+                                        (= :note (:kind %)))
+                                   (:entries w))))
+        holds? (and move
+                    (contains? csession/lifecycle-stages chosen)
+                    (or (nil? worked) (> (:seq move) worked)))
+        ;; Status places a ticket settled in Notion since its last stage choice; read off the
+        ;; position, never off the entry, so the band and the pane's owed-by are one answer.
+        settled? (some? (:settled-in-notion position))]
+    (cond
+      ;; An unanswered blocker is answered only by an entry naming it, never by a stage choice
+      ;; made over it nor by where the workstream came from: status places it :blocked, and the
+      ;; band takes that from status. (A settlement never stands over one, so this is not ahead
+      ;; of :done.)
+      (= :blocked (:at position))                    :in-progress
+      (= :review-run origin)                         :analysed
+      ;; A ledger of records the pipeline cannot read is a person's reading, not a derivation:
+      ;; it keeps the band its records gave it rather than being moved by a default.
+      (= :unplaceable (:at position))                nil
+      settled?                                       :done
+      holds?                                         chosen
+      (= :scratch origin)                            :in-progress
+      (= :triage-awaiting (:at position))            :triage
+      (= :intake (:at position))                     (if (= :triaged (:intake position)) :ready :triage)
+      :else                                          :in-progress)))
+
+(defn- engagement-of
+  "The engagement vocabulary the board's bands and holds are written in, from status."
+  [{:keys [owed-by live stalled]}]
+  (cond
+    (= :person owed-by)  :parked-at-gate
+    live                 :active
+    stalled              :stalled
+    (= :machine owed-by) :queued
+    :else                :idle))
+
+(defn- with-status
+  "A spine row whose band, needs-you and engagement are status's — never the record projection
+   the view computed beneath it, which stays only for the audit to compare against.
+
+   A row the ledger says is settled takes its band from its closure; every other row reads the
+   whole of status. A settled row still SHOWN — dismissed, still live as status means it (a held
+   activity claim, a run's lock, a person's answering session), or the one a pane is open on
+   (`whole?`) — carries status's position and owed-by/live as well, so a
+   process still running under it is not hidden. ~1000 workstreams sit on a board and nearly all
+   are settled and drawn nowhere, so skipping status for those is what keeps a refresh to the
+   rows a person can see."
+  ([project live-names row] (with-status project live-names row false))
+  ([project live-names row whole?]
+  (if (:bare? row)
+    (to-spine row)
+    (let [ws-id   (:ws-id row)
+          w       (cws/read-ws project ws-id)
+          closed  (pipeline/closure project ws-id w)
+          outcome (:outcome closed)
+          spine   (to-spine row)
+          origin  (:origin spine)]
+      (if (and closed (not= :between-phases outcome))
+        (let [;; Live as status means it — a held activity claim, a run whose agent holds its
+              ;; lock, or a person's session whose ports answer — so an agent still running
+              ;; under a closed workstream is shown, not only a person's session.
+              shown? (or whole? (= :dismissed outcome)
+                         (activity/held? project ws-id)
+                         (resuming? project ws-id)
+                         (and (seq live-names)
+                              (some #(contains? live-names (:name %))
+                                    (csession/list-sessions project ws-id))))
+              st     (when shown? (pipeline/status project ws-id live-names))]
+          (cond-> (assoc spine :stage (if (= :dismissed outcome) :dismissed :done)
+                               :dismissed? (= :dismissed outcome)
+                               :needs-you false :engagement :settled
+                               ;; Settled is over: nothing is underway in it, whatever the
+                               ;; record projection beneath read.
+                               :doing nil)
+            st (assoc :position (:position st)
+                      :status   (select-keys st [:owed-by :live :stalled]))))
+        (let [st   (pipeline/status project ws-id live-names)
+              pos  (:position st)
+              band (cond closed :awaiting-gate
+                         :else  (or (band-of project ws-id origin pos) (:stage spine)))]
+          (cond-> (assoc spine
+                         :stage      band
+                         :dismissed? false
+                         :position   pos
+                         :status     (select-keys st [:owed-by :live :stalled])
+                         :needs-you  (= :person (:owed-by st))
+                         :engagement (engagement-of st)
+                         ;; What is underway, at status's band rather than the record
+                         ;; projection's, so a row cannot say :done and running at once.
+                         :doing      (wsv/doing-at project ws-id closed band))
+            (not (contains? unrendered-bands band))
+            (assoc :phase (wsv/phase-progress project ws-id)))))))))
+
 (defn- read-rows
   "`list-workstreams` without the memo — one full read of a project's workstreams."
   [project live-names]
-  (mapv #(with-position project (to-spine %))
+  (mapv #(with-status project live-names %)
         (wsv/workstream-rows project live-names)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :map]]}
+  status-audit
+  "Every open workstream of `project` on which status and the record projection it replaced
+   disagree — about the band, whether it needs a person, or whether anything is live — with both
+   answers and status's position beside them, so a person can say which one was wrong.
+
+   The first phase's exit instrument: the stored copies are still written, so the projection
+   over them can still be computed, and five quiet days of this is what licenses no longer
+   writing them. Settled rows are left out — both read them as done."
+  ([project] (status-audit project (live-session-names project)))
+  ([project live-names]
+   (let [old (into {} (map (juxt :ws-id identity))
+                   (map to-spine (wsv/workstream-rows project live-names)))
+         ;; The projection's liveness off its own inputs, not off its engagement label: that
+         ;; label ranks :parked-at-gate above :active, so a parked session beside a working one
+         ;; would read as nothing live. A working session — a person's only while its ports
+         ;; answer, as the projection reconciled it.
+         old-live? (fn [ws-id]
+                     (boolean (some #(and (csession/working? %)
+                                          (or (csession/autonomous? %)
+                                              (contains? live-names (:name %))))
+                                    (csession/list-sessions project ws-id))))]
+     (into []
+           (keep (fn [row]
+                   (let [was (old (:ws-id row))
+                         ;; The board this replaced also lit a row whose position owes a person,
+                         ;; whatever its sessions said; leaving that out would list every such row.
+                         a   {:stage (:stage was)
+                              :needs-you (boolean (or (:needs-you was)
+                                                      (awaiting-human (:position row))))
+                              :live (old-live? (:ws-id row))}
+                         b   {:stage (:stage row) :needs-you (boolean (:needs-you row))
+                              :live (boolean (get-in row [:status :live]))}]
+                     (when (and (:status row) (not= a b))
+                       {:ws-id (:ws-id row) :label (:label row)
+                        :position (get-in row [:position :at])
+                        :owed-by (get-in row [:status :owed-by])
+                        :projection a :status b}))))
+           (read-rows project live-names)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :boolean]}
   grantable?
@@ -625,15 +760,15 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :map]]}
   list-workstreams
   "All of a project's workstreams as enriched rows on the single spine. `live-names`
-   (optional set of session names actually holding ports) is threaded into the
-   engagement projection — pass it so a downed one-off reads idle.
+   (the set of session names actually holding ports; read from `live-session-names` when
+   omitted) is threaded into status, whose liveness of a person's session is that set.
 
    Each rendered row carries :position — where the pipeline says it is and what
    would happen next. The board used to show only which BAND a workstream was in,
    so everything between authoring an intent and opening a draft PR looked
    identical: forty rows reading :in-progress, saying nothing about which of them
    was waiting on a baseline and which on a human."
-  ([project] (list-workstreams project nil))
+  ([project] (list-workstreams project (live-session-names project)))
   ([project live-names]
    (if-let [memo *rows-memo*]
      (let [k [project live-names]]
@@ -694,7 +829,7 @@
    {:triage {:in-flight [..] :queued [..]} :ready [..] :in-progress [..]}.
    Scratch one-offs fold into :in-progress (done via list-workstreams' remap);
    :done is omitted. The board renders these groups directly."
-  ([project] (grouped project nil))
+  ([project] (grouped project (live-session-names project)))
   ([project live-names]
    (let [rows (list-workstreams project live-names)]
      (assoc (wsv/grouped-by-stage rows)
@@ -847,7 +982,8 @@
   (case engagement
     :idle           :stuck
     :parked-at-gate :waiting-on-you
-    (:active :queued) :working))
+    (:active :queued) :working
+    :stalled        :stuck))
 
 (defn- last-session-change
   "The latest phase or substrate change any of `sessions` recorded, or nil when
@@ -1031,7 +1167,7 @@
    :incoming Slack report still shows its message body."
   [project ws-id]
   (let [{:keys [base-dir entries]} (active-ledger project ws-id)
-        newest (or (last (remove #(cws/status-kinds (:kind %)) entries)) (last entries))]
+        newest (last (remove #(cws/status-kinds (:kind %)) entries))]
     (if newest
       (hydrate (entry->report base-dir newest))
       (intake-fallback project ws-id))))
@@ -1208,31 +1344,42 @@
            ;; Pass the Notion cache so the pane derives stage exactly like the board
            ;; list (workstream-rows) — else the pane goes Notion-driven vs legacy and
            ;; they disagree (e.g. a promoted ticket: list :ready, pane :in-progress).
-           row      (to-spine (wsv/workstream-row project w nil (notion-cache/project-page-facts project)))
+           row      (with-status project (live-session-names project)
+                                 (wsv/workstream-row project w nil (notion-cache/project-page-facts project))
+                                 true)
            {:keys [base-dir entries]} (active-ledger project ws-id)
            sel      ((set (map :seq entries)) selected-seq)
            index    (when (seq entries)
                       ;; mark BEFORE reversing — mark-superseded reads oldest-first
                       (vec (reverse (mark-superseded (mapv #(index-row base-dir %) entries)))))
-           latest?  (or (nil? sel) (= sel (:seq (last entries))))
+           ;; The newest record of the WORK: a close, reopen or stage move appended after a
+           ;; blocker or a gate report says nothing a gate shows, so it neither displaces that
+           ;; report nor makes it stale. Opening such a status entry still reads as current.
+           work-e   (last (remove #(cws/status-kinds (:kind %)) entries))
+           latest?  (or (nil? sel)
+                        (= sel (:seq (last entries)))
+                        (and work-e (= sel (:seq work-e))))
            ;; The current report, derived from the snapshot `entries` ALREADY
            ;; holds rather than re-read from disk. A second read is a second
            ;; moment: an entry landing between them leaves :on-latest? true with
            ;; the viewer showing one question and the action bar — and the :seq
            ;; its option buttons carry — built from the next one, which is
            ;; precisely the card/button binding the seq check exists to enforce.
-           ;; Only the empty-ledger case still reads (there is no entry to bind
-           ;; to, and latest-report is where the intake-text fallback lives).
-           latest-r (if (seq entries)
-                      (hydrate (entry->report base-dir (last entries)))
+           ;; Only a ledger with no work record still reads (there is no entry to
+           ;; bind to, and latest-report is where the intake-text fallback lives).
+           latest-r (if work-e
+                      (hydrate (entry->report base-dir work-e))
                       (latest-report project ws-id))
            ;; Read ONCE and used twice — by the heading and by the arc beneath
            ;; it. Asking pipeline/of a second time for the arc would be a second
            ;; moment, and a heading clamped back to the approval above an arc
            ;; that still called implementation done is exactly the disagreement
            ;; the clamp exists to remove.
-           position (pipeline/of project ws-id)]
+           position (or (:position row) (pipeline/of project ws-id))]
        {:ws-id        ws-id
+        ;; Who owes the next move and whether anything is live — status's, as the board row
+        ;; carries it, so the pane and the row cannot say different things.
+        :status       (:status row)
         :project      project
         :origin       (classify-origin w)
         :stage        (:stage row)
@@ -1269,11 +1416,12 @@
         ;; read-back, not something you act on — and the resting pane, which is
         ;; reading nothing at all, acts on the workstream as it stands.
         :on-latest?   latest?
-        ;; A ledger renders only what the reader opened. With no ledger at all,
-        ;; the intake text is the pane's only content, so it stands in unasked.
-        :report       (if (seq entries)
-                        (when sel (report-at base-dir entries sel))
-                        latest-r)
+        ;; A ledger renders only what the reader opened. With no record of the work —
+        ;; no ledger, or only status entries a close or stage move wrote — the intake
+        ;; text is the pane's only content, so it stands in unasked.
+        :report       (cond sel    (report-at base-dir entries sel)
+                            work-e nil
+                            :else  latest-r)
         ;; What the pane's live ACTIONS derive from — which is not what the
         ;; viewer is showing. The resting pane has nothing open (:report nil) and
         ;; still acts on the workstream as it stands, so a parked blocker's
@@ -1310,24 +1458,15 @@
        first))
 
 (defn- resuming?
-  "True iff the workstream has a LIVE autonomous session ACTIVELY EXECUTING a turn
-   (phase :preprocessing/:running) — i.e. a resume/burst is genuinely in flight.
-   Keeps 'Apply → working…' honest: the gate stays visible but offers no actions
-   until the agent parks or terminates.
+  "True iff an agent is running against the workstream right now — a resume or a burst genuinely
+   in flight, observed as a run whose agent holds its lock. Keeps 'Apply → working…' honest: the
+   gate stays visible but offers no actions until the agent exits.
 
-   Checks in-progress-phases rather than the old `(not parked?)`: a :failed/:done/
-   :queued session is NOT in flight, and counting it stranded a PERMANENT 'working…'
-   on any workstream carrying a failed-but-unarchived session — e.g. a plan-bug
-   spawn failure, whose teardown is a no-op so the session stays :live at :failed.
-   That dead 'working…' hides the gate's own actions (Promote/Drop), so the ticket
-   looks stuck."
+   The lock, never a session phase: a phase outlives the process it describes, and a
+   failed-but-unarchived session left at a phase stranded a permanent 'working…' that hid the
+   gate's own actions."
   [project ws-id]
-  (->> (csession/list-sessions project ws-id)
-       (some (fn [s] (and (:autonomy s)
-                          (csession/live? s)
-                          (contains? csession/in-progress-phases
-                                     (get-in s [:autonomy :phase])))))
-       boolean))
+  (boolean (seq (runs/live-runs project ws-id))))
 
 (defn- ->gate
   "Hydrate one needs-you spine row into a gate. `:project` is canonicalized to a
@@ -1335,8 +1474,10 @@
    rows with the same string key) so a gate reads the same whether it came from
    `gates` (string or keyword arg) or `all-gates`."
   [project row]
-  (let [parked? (= :parked-at-gate (:engagement row))
-        psess   (parked-session project (:ws-id row))
+  (let [psess   (parked-session project (:ws-id row))
+        ;; A session to reply to, not merely a move a person owes: :reply resumes an agent, and
+        ;; a gate a round handed back to a person has no agent asleep in it.
+        parked? (some? psess)
         ;; Read once: the action set is derived from what the ledger holds last,
         ;; so the buttons and the report a reader is looking at cannot disagree.
         report  (latest-report project (:ws-id row))]
@@ -1379,9 +1520,9 @@
    cosmetic: Notion-driven rows ignore nido :closed for engagement, and the parked
    session is torn down asynchronously by review/sweep-resolved!, so without this a
    just-dismissed row keeps its :needs-you until the daemon next ticks.
-   `live-names` threads into the engagement projection (pass it so a downed
-   one-off reads idle)."
-  ([project] (gates project nil))
+   `live-names` threads into status (read from `live-session-names` when omitted), so a
+   person's session that is up reads live."
+  ([project] (gates project (live-session-names project)))
   ([project live-names]
    (->> (list-workstreams project live-names)
         (remove #(= :dismissed (:stage %)))
@@ -1457,14 +1598,20 @@
      :in-progress → the full promote gesture (gate + provision the planning leg)
      :done        → close the workstream (:done outcome)
      other        → advance the stored stage only (no autonomous leg)
-   Returns {:decision <kw>}: promote's decision verbatim, else :done / :advanced."
+   Returns {:decision <kw>}: promote's decision verbatim, else :done / :advanced.
+
+   A person's choice is recorded even when it names the stage already stored — `advance-stage!`
+   records every `:person` choice, validated like any other move — because status reads the
+   choice off the ledger: a ticket Notion settled since, or one minted at the stage and never
+   chosen there, is moved only by an entry, so a choice reported :advanced must be one."
   [project ws-id target]
-  (if (nil? (cws/read-ws project ws-id))
-    {:decision :no-workstream}
+  (if-let [w (cws/read-ws project ws-id)]
     (case target
       :in-progress (promote/promote-workstream! project ws-id)
       :done        (do (cws/close! project ws-id :done nil :person) {:decision :done})
-      (do (cws/advance-stage! project ws-id target :person) {:decision :advanced}))))
+      (do (cws/advance-stage! project ws-id target :person)
+          {:decision :advanced}))
+    {:decision :no-workstream}))
 
 (defn- bare-row-br
   "The BR-#### behind a bare watched-view row, whose synthetic ws-id IS the Notion
@@ -2713,8 +2860,17 @@
    Nothing checks that the proposal was approved first, and nothing should. A
    proposal implemented before anyone got round to deciding on it is a normal
    sequence here, and a record that refused to describe it would leave the code
-   landed and the surface saying nothing happened."
+   landed and the surface saying nothing happened.
+
+   What IS checked is that the address names a proposal: a landing recorded
+   against a seq or an index no analysis made discharges nothing, and the
+   proposal it was meant for would stay owed behind a reported success."
   [project ws-id {:keys [analysis-seq observation rev note]}]
+  (when-not (some #(= [ws-id analysis-seq observation]
+                      [(:ws-id %) (:analysis-seq %) (:observation %)])
+                  (proposal/of-project (keyword (name project))))
+    (throw (ex-info (str "No proposal at " ws-id "/" analysis-seq "." observation)
+                    {:ws-id ws-id :analysis-seq analysis-seq :observation observation})))
   {:landed :recorded
    :file (cws/append-entry!
           (keyword (name project)) ws-id

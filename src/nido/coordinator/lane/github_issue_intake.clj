@@ -48,15 +48,27 @@
        (empty? (session/list-sessions project (:id w)))))
 
 (defn- upsert-issue!
-  "Ensure a :ready workstream exists for one assigned issue. Idempotent via
-   find-by-ref on the :github-issue adapter."
+  "Ensure a :ready workstream exists for one assigned issue, holding the :issue entry that records
+   its arrival. Idempotent via find-by-ref on the :github-issue adapter — and an existing one
+   lacking the entry, which an append interrupted after the mint leaves, gets it now: the next
+   poll is the only writer that would ever complete it."
   [project repo {:keys [number url title]}]
-  (let [id (issue-id repo number)]
-    (when-not (ws/find-by-ref project :github-issue id)
-      (ws/create! project {:stage :ready
-                           :external-refs [(cond-> {:adapter :github-issue :id id}
-                                             url   (assoc :url url)
-                                             title (assoc :title title))]}))))
+  (let [id    (issue-id repo number)
+        entry #(ws/append-entry! project % {:kind :issue}
+                                 (pr-str (cond-> {:format :issue :id id}
+                                           url   (assoc :url url)
+                                           title (assoc :title title))))]
+    (if-let [w (ws/find-by-ref project :github-issue id)]
+      (when-not (some #(= :issue (:kind %)) (:entries w))
+        (entry (:id w))
+        nil)
+      (let [w (ws/create! project {:stage :ready
+                                   :external-refs [(cond-> {:adapter :github-issue :id id}
+                                                     url   (assoc :url url)
+                                                     title (assoc :title title))]})]
+        ;; How it arrived, on the ledger: the position reads the arrival by kind, never off refs.
+        (entry (:id w))
+        (ws/read-ws project (:id w))))))
 
 (defn- reverse-reconcile!
   "Delete queue entries whose issue is no longer in `assigned-ids` AND that are

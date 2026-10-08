@@ -44,6 +44,21 @@
         (intake/poll-and-reconcile! :brian cfg)
         (is (= 1 (count (ws/list-ids :brian))))))))
 
+(deftest a-re-poll-completes-an-interrupted-issue-entry
+  (with-tmp
+    (fn [_]
+      (let [kinds #(->> (ws/find-by-ref :brian :github-issue "o/r#1") :entries
+                        (filter (comp #{:issue} :kind)) count)]
+        (with-redefs [gh/list-assigned-issues (fn [_ _] {:status :ok :issues [{:number 1}]})]
+          (with-redefs [ws/append-entry! (fn [& _] (throw (ex-info "died after the mint" {})))]
+            (try (intake/poll-and-reconcile! :brian cfg) (catch Exception _)))
+          (is (= 1 (count (ws/list-ids :brian))))
+          (is (= 0 (kinds)) "the mint landed, its entry did not")
+          (intake/poll-and-reconcile! :brian cfg)
+          (is (= 1 (kinds)) "the next poll completes it")
+          (intake/poll-and-reconcile! :brian cfg)
+          (is (= 1 (kinds)) "and only once"))))))
+
 (deftest unassigned-unpromoted-issue-is-dropped
   (with-tmp
     (fn [_]

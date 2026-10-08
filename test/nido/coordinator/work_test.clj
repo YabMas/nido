@@ -7,6 +7,7 @@
    [nido.platform.core :as core]
    [nido.platform.config]
    [nido.coordinator.lane.facets]
+   [nido.coordinator.lane.intake :as intake]
    [nido.coordinator.lane.pickup]
    [nido.coordinator.lane.promote]
    [nido.coordinator.lane.pipeline :as pipeline]
@@ -39,6 +40,23 @@
         (cstate/ensure-dirs!)
         (f tmp))
       (finally (fs/delete-tree tmp)))))
+
+(defn- triage-report
+  "A typed triage verdict for `ticket` — what a triage run leaves for a person to accept."
+  [ticket]
+  (pr-str {:format :triage-report :ticket-key ticket :determination :bug
+           :title "Verdict" :summary "bug — reproduced."
+           :confidence {:level :high :reason "r"}
+           :routing nil :directions [] :notion-writes nil :trail []}))
+
+(defn- triaged!
+  "A triage verdict on `ws-id`, and — when `accepted?` — a person's acceptance of it."
+  [ws-id ticket accepted?]
+  (let [path (workstream/append-entry! :brian ws-id {:kind :triage} (triage-report ticket))]
+    (when accepted?
+      (workstream/append-entry! :brian ws-id {:kind :triage-accepted}
+                                (pr-str {:format :triage-accepted
+                                         :triage-seq (workstream/seq-of-path path)})))))
 
 (deftest stages-is-the-canonical-spine
   ;; STORED stage names (see spine-is-exactly-the-stages-the-board-honors).
@@ -212,11 +230,65 @@
       (let [w (workstream/create! :brian {:stage :triaging
                                           :external-refs [{:adapter :notion :id "BR-9" :title "t"}]})]
         (tickets/open! :brian "BR-9" {:title "t"})
-        (tickets/set-status! :brian "BR-9" :triaged)
+        (triaged! (:id w) "BR-9" true)
         (session/create! :brian (:id w) {:name "s" :weight :light :autonomy nil}))
       (let [row (first (work/list-workstreams :brian))]
         (is (= :notion (:origin row)))
-        (is (= :ready (:stage row)) "a triaged notion ticket projects to :ready, unchanged")))))
+        (is (= :ready (:stage row)) "an accepted triage projects to :ready")))))
+
+(deftest a-ticket-settled-in-notion-after-a-stage-choice-is-done
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-11" :title "t"}]})
+            notion! (fn [status]
+                      (workstream/append-entry! :brian (:id w) {:kind :notion-status}
+                                                (pr-str {:format :notion-status :page-id "p"
+                                                         :status status :by :poller})))
+            stage   #(:stage (first (filter (comp #{(:id w)} :ws-id) (work/list-workstreams :brian))))]
+        (workstream/advance-stage! :brian (:id w) :ready :person)
+        (is (= :ready (stage)))
+        (notion! "Done")
+        (is (= :done (stage)) "a settlement newer than the stage choice wins")
+        (let [st (pipeline/status :brian (:id w) #{})]
+          (is (= :nobody (:owed-by st)) "status owes nobody the move on a ticket Notion settled")
+          (is (= "Done" (get-in st [:position :settled-in-notion]))))
+        (workstream/advance-stage! :brian (:id w) :in-progress :person)
+        (is (= :in-progress (stage)) "a stage chosen after the settlement takes it back out")))))
+
+(deftest a-ticket-in-notion-review-has-left-the-board
+  ;; Review settles a ticket as far as nido is concerned: it is in a person's hands outside nido,
+  ;; so it leaves the board even when its ledger still holds an unaccepted triage (BR-6454).
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-12" :title "t"}]})]
+        (triaged! (:id w) "BR-12" false)
+        (workstream/append-entry! :brian (:id w) {:kind :notion-status}
+                                  (pr-str {:format :notion-status :page-id "p" :status "Review"
+                                           :by :poller}))
+        (let [row (first (filter (comp #{(:id w)} :ws-id) (work/list-workstreams :brian)))]
+          (is (= :done (:stage row)))
+          (is (not (:needs-you row)) "and it asks nobody for a triage call"))))))
+
+(deftest a-status-entry-does-not-displace-the-work-report
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian
+                {:stage :incoming
+                 :external-refs [{:adapter :slack-message :id "slack-C-2.0"}]
+                 :intake {:trigger :triage-slack-bugs
+                          :payload {:id "slack-C-2.0" :text "the app crashed on load"}}})]
+        (workstream/advance-stage! :brian (:id w) :triaging :person)
+        (is (= "the app crashed on load" (:markdown (work/latest-report :brian (:id w))))
+            "a status-only ledger still falls back to the intake text")
+        (workstream/append-entry! :brian (:id w) {:kind :note} "# Finding")
+        (workstream/advance-stage! :brian (:id w) :ready :person)
+        (let [pane (work/workstream :brian (:id w))]
+          (is (= "# Finding" (:markdown (work/latest-report :brian (:id w)))))
+          (is (= "# Finding" (:markdown (:action-report pane))))
+          (is (:on-latest? (work/workstream :brian (:id w) (:seq (work/latest-report :brian (:id w)))))
+              "the work entry stays current after a status entry lands on it"))))))
 
 (deftest dismissed-rows-project-to-the-dismissed-stage
   (with-tmp
@@ -227,10 +299,12 @@
                 {:stage :triage
                  :external-refs [{:adapter :slack-message :id "slack-C1-1.2" :title "t"}]})]
         (tickets/open! :brian "slack-C1-1.2" {:title "t"})
-        (tickets/dismiss! :brian "slack-C1-1.2")
-        (workstream/close! :brian (:id w) :dropped)
+        (work/dismiss! :brian (:id w))
         (is (= [:dismissed] (map :stage (work/list-workstreams :brian)))
-            "dismissed beats both the :settled fold and derive-stage's :done")))))
+            "a dismissal is the close's outcome, and its band is :dismissed, not :done")
+        (let [row (first (work/list-workstreams :brian))]
+          (is (= :shipped (get-in row [:position :at])) "a dismissed row is drawn, so it reads status")
+          (is (= {:owed-by :nobody :live false :stalled false} (:status row))))))))
 
 (deftest undismissed-rows-are-unaffected
   (with-tmp
@@ -1009,9 +1083,7 @@
       (let [w (workstream/create! :brian {:stage :triaging
                                           :external-refs [{:adapter :notion :id "BR-7" :title "t"}]})]
         (tickets/open! :brian "BR-7" {:title "t"})
-        (tickets/set-status! :brian "BR-7" :investigating)
-        (workstream/append-entry! :brian (:id w) {:kind :impl}
-                                  "# Verdict\n\nbug — reproduced.")
+        (triaged! (:id w) "BR-7" false)
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-running :phase :parked)})
@@ -1022,9 +1094,8 @@
           (is (= "auto" (:session g)) "the parked session a :reply would resume")
           (is (= [:apply :dismiss :reply] (map :id (:actions g)))
               "Notion origin: Dismiss offered same as any other origin")
-          (is (= :markdown (-> g :report :format)))
-          (is (= "Verdict" (-> g :report :title)))
-          (is (= "# Verdict\n\nbug — reproduced." (-> g :report :markdown))))))))
+          (is (= :triage-report (-> g :report :format)))
+          (is (= "Verdict" (-> g :report :title))))))))
 
 (deftest gate-not-working-when-session-failed-not-in-flight
   ;; Regression: a live autonomous session stuck at :failed (e.g. a plan-bug spawn
@@ -1037,7 +1108,7 @@
       (let [w (workstream/create! :brian {:stage :triaging
                                           :external-refs [{:adapter :notion :id "BR-9" :title "t"}]})]
         (tickets/open! :brian "BR-9" {:title "t"})
-        (tickets/set-status! :brian "BR-9" :investigating)   ; stays :triage ⇒ a real gate
+        (triaged! (:id w) "BR-9" false)   ; a verdict nobody accepted ⇒ a real gate
         (session/create! :brian (:id w)
                          {:name "triage" :weight :heavy
                           :autonomy (assoc autonomy-running :phase :parked)})
@@ -1047,7 +1118,7 @@
         (let [g (work/gate :brian (:id w))]
           (is (= :triage (:stage g)))
           (is (false? (:working? g))
-              "a live-but-:failed session is NOT in flight ⇒ no stranded 'working…'")
+              "no agent holds a run lock ⇒ no stranded 'working…', whatever a session's phase says")
           (is (= [:apply :dismiss :reply] (map :id (:actions g)))
               "gate actions stay actionable (Notion origin: Dismiss offered)"))))))
 
@@ -1059,15 +1130,16 @@
       (let [w (workstream/create! :brian {:stage :triaging
                                           :external-refs [{:adapter :notion :id "BR-10" :title "t"}]})]
         (tickets/open! :brian "BR-10" {:title "t"})
-        (tickets/set-status! :brian "BR-10" :investigating)
+        (triaged! (:id w) "BR-10" false)
         (session/create! :brian (:id w)
                          {:name "triage" :weight :heavy
                           :autonomy (assoc autonomy-running :phase :parked)})
         (session/create! :brian (:id w)
                          {:name "impl" :weight :heavy
                           :autonomy (assoc autonomy-running :phase :running)})
-        (is (true? (:working? (work/gate :brian (:id w))))
-            "an actively-running session ⇒ working… (gate visible, actions gated)")))))
+        (with-redefs [nido.coordinator.record.runs/live-runs (constantly ["r-1"])]
+          (is (true? (:working? (work/gate :brian (:id w))))
+              "an agent holding its run lock ⇒ working… (gate visible, actions gated)"))))))
 
 (deftest triaged-failed-spawn-is-not-a-gate-but-stays-on-board
   ;; The scenario the two tests above used to cover on a :ready gate: a triaged
@@ -1128,7 +1200,7 @@
       (let [r (workstream/create! :brian {:stage :triaging
                                           :external-refs [{:adapter :notion :id "BR-8" :title "t"}]})]
         (tickets/open! :brian "BR-8" {:title "t"})
-        (tickets/set-status! :brian "BR-8" :triaged)
+        (triaged! (:id r) "BR-8" true)
         (session/create! :brian (:id r) {:name "s" :weight :light :autonomy nil}))
       (is (empty? (work/gates :brian)) "a :ready workstream is not a gate")
       ;; …but it is still on the spine at :ready with its board actions available.
@@ -1146,7 +1218,7 @@
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
-        (workstream/append-entry! :brian (:id w) {:kind :impl} "# X\n\nrep.")
+        (triaged! (:id w) "x" false)
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-running :phase :parked)}))
@@ -1164,7 +1236,7 @@
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
-        (workstream/append-entry! :brian (:id w) {:kind :impl} "# X\n\nrep.")
+        (triaged! (:id w) "x" false)
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-running :phase :parked)}))
@@ -1313,7 +1385,6 @@
       (let [w (workstream/create! :brian {:stage :triaging
                                           :external-refs [{:adapter :notion :id "BR-9" :title "t"}]})]
         (tickets/open! :brian "BR-9" {:title "t"})
-        (tickets/set-status! :brian "BR-9" :investigating)
         (workstream/append-to-ref! :brian "BR-9" {:kind :triage} notion-edn-report)
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
@@ -1338,7 +1409,7 @@
       (let [w (workstream/create! :brian {:stage :triaging
                                           :external-refs [{:adapter :notion :id "BR-2" :title "t"}]})]
         (tickets/open! :brian "BR-2" {:title "t"})
-        (tickets/set-status! :brian "BR-2" :investigating)
+        (triaged! (:id w) "BR-2" false)
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-running :phase :parked
@@ -1382,7 +1453,12 @@
                 work/latest-report (fn [_ _] {:kind :triage :at "t" :title "V" :markdown "# V"})
                 ;; minimal stubs so workstream's other projections don't throw:
                 nido.coordinator.record.session/list-sessions (fn [_ _] [])
-                nido.coordinator.view.workstreams/workstream-row (fn [_ _ & _] {:stage :triage :label "BR-7" :source :notion})]
+                nido.coordinator.view.workstreams/workstream-row (fn [_ _ & _] {:ws-id "ws-1" :stage :triage :label "BR-7" :source :notion})
+                nido.coordinator.lane.pipeline/closure (constantly nil)
+                nido.coordinator.lane.pipeline/status (constantly {:position {:at :intake} :owed-by :agent
+                                                                   :live false :stalled true})
+                nido.coordinator.record.standing/open-findings (constantly #{})
+                work/live-session-names (constantly #{})]
     (is (= "# V" (-> (work/workstream "brian" "ws-1") :report :markdown)))))
 
 (deftest list-workstreams-rows-carry-facets
@@ -2440,7 +2516,7 @@
         (work/restore! :brian (:id w))
         (is (= [:triage] (map :stage (work/list-workstreams :brian)))
             "restore still lands in the triage queue")
-        (tickets/complete! :brian slack-id :triaged :routed)
+        (triaged! (:id w) slack-id true)
         (is (= [:ready] (map :stage (work/list-workstreams :brian)))
             "and triaging it afterwards reaches :ready — i.e. it is promotable again")))))
 
@@ -2502,7 +2578,7 @@
                 {:stage :triage
                  :external-refs [{:adapter :notion :id "BR-79" :page-id "pg" :url "u"}]})]
         (tickets/open! :brian "BR-79" {:title "t"})
-        (tickets/set-status! :brian "BR-79" :awaiting-input)
+        (triaged! (:id w) "BR-79" false)
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-running :phase :parked)})
@@ -3437,3 +3513,105 @@
     (fn [_]
       (let [w (workstream/create! :brian {:stage :in-progress :external-refs []})]
         (is (nil? (:plan (work/workstream :brian (:id w)))))))))
+
+(deftest the-stage-a-workstream-was-minted-at-places-nothing
+  (with-tmp
+    (fn [_]
+      (let [w   (workstream/create! :brian {:stage :ready :external-refs []})
+            row #(first (filter (comp #{(:id w)} :ws-id) (work/list-workstreams :brian)))]
+        (is (= :intake (get-in (row) [:position :at])))
+        (is (= :triage (:stage (row))) "the band is status's, not the stored stage")
+        (is (= {:decision :advanced} (work/set-stage! :brian (:id w) :ready)))
+        (is (= :ready (:stage (row))) "choosing the stored stage records the choice")))))
+
+(deftest choosing-a-foreign-stored-stage-is-refused
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :ready :external-refs []})]
+        (workstream/write! (assoc (workstream/read-ws :brian (:id w)) :stage :planning))
+        (is (thrown-with-msg? Exception #"Unknown workstream stage"
+                              (work/set-stage! :brian (:id w) :planning))
+            "naming the stage already stored does not skip the vocabulary check")
+        (is (empty? (workstream/entries-of :brian (:id w) :stage-set)) "and records no choice")))))
+
+(deftest a-queued-intake-stays-in-the-pen
+  (with-tmp
+    (fn [_]
+      (let [w   (with-redefs [nido.notion.views/facet-properties (constantly nil)]
+                  (intake/enqueue-inbox! {:project :brian
+                                          :trigger {:name :t :skill :triage-bug}
+                                          :payload {:adapter :slack-message :id "slack-C-1.0"
+                                                    :title "hi" :text "hi" :url "u"}}))
+            row #(first (filter (comp #{(:id w)} :ws-id) (work/list-workstreams :brian)))]
+        (is (= :incoming (:stage (row))) "queueing records the pen; status alone reads :intake")
+        (workstream/advance-stage! :brian (:id w) :triaging)
+        (is (= :triage (:stage (row))) "once let in, status places it")))))
+
+(deftest a-stage-choice-takes-a-ticket-back-from-a-notion-settlement
+  (with-tmp
+    (fn [_]
+      (let [w   (workstream/create! :brian {:stage :triaging :external-refs []})
+            row #(first (filter (comp #{(:id w)} :ws-id) (work/list-workstreams :brian)))]
+        (workstream/advance-stage! :brian (:id w) :ready :person)
+        (workstream/append-entry! :brian (:id w) {:kind :notion-status}
+          (pr-str {:format :notion-status :page-id "abc" :status "Done" :by :poller}))
+        (is (= :done (:stage (row))))
+        (work/set-stage! :brian (:id w) :ready)
+        (is (= :ready (:stage (row))) "re-choosing the stored stage reverses the settlement")))))
+
+(deftest an-unanswered-blocker-outranks-the-analysis-band
+  (with-tmp
+    (fn [_]
+      (let [w   (workstream/create! :brian {:stage :triaging
+                                            :external-refs [{:adapter :review-run :id "run-1" :title "t"}]})
+            row #(first (filter (comp #{(:id w)} :ws-id) (work/list-workstreams :brian)))]
+        (is (= :analysed (:stage (row))))
+        (workstream/append-entry! :brian (:id w) {:kind :blocker}
+          (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+        (is (= :blocked (get-in (row) [:position :at])))
+        (is (= :in-progress (:stage (row))) "status places it, not where it came from")))))
+
+(deftest a-shipment-carries-its-shipping-choice-out
+  (with-tmp
+    (fn [_]
+      (let [w   (workstream/create! :brian {:stage :triaging :external-refs []})
+            row #(first (filter (comp #{(:id w)} :ws-id) (work/list-workstreams :brian)))]
+        (workstream/advance-stage! :brian (:id w) :shipping)
+        (workstream/append-entry! :brian (:id w) {:kind :ship-submitted :session "s" :run-id "r"}
+          (pr-str {:format :ship-submitted :session "s"}))
+        (is (= :shipping (:stage (row))) "the shipment it started does not supersede the choice")
+        (workstream/append-entry! :brian (:id w) {:kind :note} "notion-sync: an account of it")
+        (is (= :shipping (:stage (row))) "nor does a note")
+        (workstream/append-entry! :brian (:id w) {:kind :blocker}
+          (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+        (is (not= :shipping (:stage (row))) "work past the shipment still moves it on")))))
+
+(deftest a-closed-row-under-a-live-run-reads-status
+  (with-tmp
+    (fn [_]
+      (let [w    (workstream/create! :brian {:stage :triaging :external-refs []})
+            _    (workstream/close! :brian (:id w) :done)
+            row  #(#'work/with-status :brian #{} (wsv/workstream-row :brian (workstream/read-ws :brian (:id w))))]
+        (is (nil? (:status (row))) "nothing live: a settled row skips status")
+        (with-redefs [runs/live-runs (constantly [{:run-id "r"}])]
+          (is (true? (get-in (row) [:status :live]))
+              "an agent still holding its run lock is shown, not hidden"))))))
+
+(deftest work-recorded-after-a-stage-choice-outranks-it
+  (with-tmp
+    (fn [_]
+      (let [w     (workstream/create! :brian {:stage :triaging :external-refs []})
+            row   #(first (filter (comp #{(:id w)} :ws-id) (work/list-workstreams :brian)))]
+        (workstream/advance-stage! :brian (:id w) :ready :person)
+        (is (= :ready (:stage (row))))
+        (workstream/append-entry! :brian (:id w) {:kind :blocker}
+          (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+        (is (not= :ready (:stage (row))) "a blocker recorded since the choice is where the work is")
+        (is (:needs-you (row)))
+        (let [b (:seq (last (filter #(= :blocker (:kind %)) (:entries (workstream/read-ws :brian (:id w))))))]
+          (workstream/advance-stage! :brian (:id w) :shipping :person)
+          (is (= :in-progress (:stage (row))) "a stage choice does not answer the blocker under it")
+          (workstream/append-entry! :brian (:id w) {:kind :blocker-answered}
+            (pr-str {:format :blocker-answered :blocker-seq b :summary "go"})))
+        (workstream/advance-stage! :brian (:id w) :ready :person)
+        (is (= :ready (:stage (row))) "answered, a choice newer than every record holds")))))

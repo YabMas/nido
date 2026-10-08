@@ -62,6 +62,9 @@
   (Operation blocker-answer-cmd
     "bb nido:workstream:blocker:answer — the entry point for `blocker-answer*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation status-audit-cmd
+    "bb nido:status:audit — where status and the record projection it replaced disagree."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation status-backfill-cmd
     "bb nido:status:backfill — record as entries the status every workstream's records hold."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

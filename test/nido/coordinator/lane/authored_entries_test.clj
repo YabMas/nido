@@ -143,17 +143,56 @@
           (poll!)
           (is (= 2 (count (ws/entries-of :brian id :notion-status))) "and only once"))))))
 
-(deftest a-layer-is-recorded-under-the-newest-design
+(def ^:private a-baseline
+  {:format :baseline :strata [] :intent {:seq 1}
+   :area "order totalling" :bounded-by "money on an order"
+   :shape "one summing path"
+   :model {:elements [{:id "agg" :sort :module :hides "the summing order"
+                       :interface "an order's total"}]
+           :claims [{:id "c1" :about ["agg"]
+                     :statement "the aggregate is the only summing path"
+                     :falsified-by "a second path that sums lines"
+                     :evidence {:by :round} :read-at ["src/a.clj:1"]}]}
+   :read ["src/a.clj"]})
+
+(defn- a-design [baseline-seq]
+  {:format :design :strata [] :summary "s" :shape "sh"
+   :model {:elements [{:id "agg" :sort :module}]
+           :claims [{:id "one-summing-path" :about ["agg"]
+                     :statement "one summing path"
+                     :falsified-by "a second path that sums lines"
+                     :evidence {:by :round}}]}
+   :standing {:relation :conforms}
+   :baseline {:seq baseline-seq :relation :within}
+   :intent {:seq 1} :effort :S})
+
+(deftest a-layer-is-recorded-under-the-design-it-was-built-under
   (with-tmp
     (fn []
-      (let [id (:id (ws/create! :brian {:stage :in-progress}))]
+      (let [id   (:id (ws/create! :brian {:stage :in-progress}))
+            add! (fn [kind record]
+                   (ws/append-entry! :brian id {:kind kind} (pr-str record))
+                   (:seq (last (:entries (ws/read-ws :brian id)))))
+            done #(select-keys (last (ws/entries-of :brian id :layer-completed))
+                               [:design :layer :of :bookmark])]
         (is (thrown-with-msg? Exception #"No design"
                               (t/layer-complete* {:project "brian" :ws-id id :layer 1 :of 3})))
-        (with-redefs [ws/latest-entry (fn [_ _ kind] (when (= :design kind) {:seq 7}))]
-          (t/layer-complete* {:project "brian" :ws-id id :layer 1 :of 3 :bookmark "s--a"}))
-        (is (= {:design {:seq 7} :layer 1 :of 3 :bookmark "s--a"}
-               (select-keys (last (ws/entries-of :brian id :layer-completed))
-                            [:design :layer :of :bookmark])))))))
+        (add! :intent {:format :intent :goal "g" :done-when ["d"]})
+        (let [b  (add! :baseline a-baseline)
+              d1 (add! :design (a-design b))]
+          (t/layer-complete* {:project "brian" :ws-id id :layer 1 :of 3 :bookmark "s--a"})
+          (is (= {:design {:seq d1} :layer 1 :of 3 :bookmark "s--a"} (done))
+              "the only design is the one it was built under")
+          (let [d2 (add! :design (assoc (a-design b) :supersedes {:seq d1 :why "amended"}))]
+            (is (thrown-with-msg? Exception #"name the one"
+                                  (t/layer-complete* {:project "brian" :ws-id id :layer 2 :of 3}))
+                "with two designs, the newest is not evidence")
+            (is (thrown-with-msg? Exception #"No design at that seq"
+                                  (t/layer-complete* {:project "brian" :ws-id id :layer 2 :of 3
+                                                      :design (inc d2)})))
+            (t/layer-complete* {:project "brian" :ws-id id :layer 2 :of 3 :design (str d1)})
+            (is (= {:design {:seq d1} :layer 2 :of 3} (done))
+                "a layer finished under the earlier design is recorded under it")))))))
 
 (deftest a-worded-answer-names-the-newest-unanswered-blocker
   (with-tmp
@@ -233,3 +272,13 @@
         (is (= :dismissed (:outcome (last (ws/entries-of :brian gone :closed)))))
         (is (= {:workstreams 2 :appended {} :failed []} (backfill/backfill! :brian))
             "a second run appends nothing")))))
+
+(deftest the-backfill-records-an-issue-arrival-once
+  (with-tmp
+    (fn []
+      (let [id (:id (ws/create! :brian {:stage :ready
+                                        :external-refs [{:adapter :github-issue :id "o/r#3" :title "t"}]}))]
+        (is (= [:issue] (vec (remove #{:stage-set} (backfill/backfill-workstream! :brian id {})))))
+        (is (= {:format :issue :id "o/r#3" :title "t"}
+               (select-keys (last (ws/entries-of :brian id :issue)) [:format :id :title])))
+        (is (empty? (backfill/backfill-workstream! :brian id {})) "a second run appends nothing")))))

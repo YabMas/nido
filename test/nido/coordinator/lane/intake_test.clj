@@ -41,6 +41,19 @@
         (is (= (:id a) (:id b)))
         (is (= 1 (count (ws/list-ids :brian))))))))
 
+(deftest a-refire-completes-an-interrupted-pen-entry
+  (with-tmp
+    (fn [_]
+      (let [pens #(count (ws/entries-of :brian % :stage-set))]
+        (with-redefs [ws/append-entry! (fn [& _] (throw (ex-info "died after the mint" {})))]
+          (try (intake/enqueue-inbox! routed) (catch Exception _)))
+        (let [[id] (ws/list-ids :brian)]
+          (is (= 0 (pens id)) "the mint landed, its entry did not")
+          (is (= id (:id (intake/enqueue-inbox! routed))))
+          (is (= 1 (pens id)) "the refire completes it")
+          (intake/enqueue-inbox! routed)
+          (is (= 1 (pens id)) "and only once"))))))
+
 (defn- iso->ms [iso] (.toEpochMilli (java.time.Instant/parse iso)))
 
 (deftest enqueue-stamps-no-facets-for-slack

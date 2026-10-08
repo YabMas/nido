@@ -134,6 +134,8 @@
         .pos .pos-nx { font-size:11px; color:#5f5f78; }
         .pos.pos-you .pos-at { color:#c9a227; }
         .pos.pos-you .pos-nx { color:#a08a4a; }
+        .st { font-size:11px; color:#777; margin-left:6px; }
+        .st.st-stalled { color:#d0654a; }
         .phase-chip { font-size:11px; color:#8a8aa8; border:1px solid #33334a; border-radius:4px; padding:0 5px; margin-left:6px; }
         .gate-sub span.phase-chip { flex:none; }
         .plan { margin:10px 0 14px; }
@@ -1262,11 +1264,14 @@
   [{:keys [blocker-seq letter label summary resumed]}]
   [:div.md
    [:h2 "Answered"]
-   [:div.option
-    [:div.option-head
-     [:span.option-letter letter]
-     [:strong label]]
-    [:p summary]]
+   (if letter
+     [:div.option
+      [:div.option-head
+       [:span.option-letter letter]
+       [:strong label]]
+      [:p summary]]
+     ;; An answer a person gave in words, recorded from the session's chat.
+     [:blockquote summary])
    [:p.meta "answers the blocker at entry " blocker-seq
     (if resumed
       (list " · resumed " [:code resumed])
@@ -1801,6 +1806,8 @@
    :design-cleared    "Cleared"
    :design-approved   "Approved"
    :implemented       "Implemented"
+   :implementing      "Implementing"
+   :triage-awaiting   "Triage to accept"
    :reviewed          "Reviewed"
    :awaiting-gate     "Awaiting gate"
    :published         "Draft PR open"
@@ -1828,6 +1835,8 @@
    :address-findings      "address findings"
    :answer-blocker        "your answer"
    :assert-gate           "your gate"
+   :land                  "your landing"
+   :accept-triage         "your triage call"
    :acknowledge-invalidation "your call on the verdict"})
 
 (defn- position-chip
@@ -1846,9 +1855,24 @@
   (when position
     (let [human? (= :human (:mode next))]
       [:span {:class (str "pos" (when human? " pos-you"))}
-       [:span.pos-at (get position-label at (name at))]
+       [:span.pos-at (get position-label at (name at))
+        (when-let [{:keys [done of]} (:layers position)] (str " " done "/" of))]
        (when next
          [:span.pos-nx (str "→ " (get stage-label (:stage next) (name (:stage next))))])])))
+
+(def ^:private owed-label
+  {:person "you" :agent "agent" :machine "nido" :nobody "nobody"})
+
+(defn- status-chip
+  "Who owes the next move, and whether anything is working on it now — the two facets of status
+   the position chip does not carry. Stalled is lit: an agent owes the move, nothing is running,
+   and no question was recorded to say why, which is the row a person has to look at."
+  [{:keys [owed-by live stalled] :as st}]
+  (when st
+    [:span {:class (str "st" (when stalled " st-stalled"))
+            :title "who owes the next move · whether anything is live"}
+     (str "owed: " (owed-label owed-by (some-> owed-by name))
+          (cond live " · live" stalled " · stalled" :else ""))]))
 
 (defn- phase-chip
   "Where a phased workstream is in its plan — `phase 2/3` — or nothing for an
@@ -1870,7 +1894,7 @@
     (when needs-you [:span.needs {:title "needs you"}])
     (when (pos? (or open-findings 0))
       [:span.badge-findings (str "⚑ " open-findings " open findings")])]
-   [:div.gate-sub [:span project] (position-chip position)
+   [:div.gate-sub [:span project] (position-chip position) (status-chip (:status row))
     ;; Where a workstream STANDS is the position chip; this is what is happening
     ;; in it right now, which is a different question and often has no answer.
     ;; A :shipping row reads its merge phase from HERE — the projection folds
@@ -2373,7 +2397,7 @@
    — see pane-fragment), so transient dev-env states (starting…) self-advance
    without the refresh closing whatever the reader has open."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan]
+  ([{:keys [project ws-id origin stage label links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan status]
      :or {on-latest? true}} session-dev-states machine-facts]
    (let [pos  {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds
                :stage open-stage :history? history?}
@@ -2395,7 +2419,7 @@
                             :error-msg error-msg})
            [:div {:id "ws-pane" :data-on-interval__duration.3s (pane-fragment pos)}
             (pane-heading origin label links)
-            [:p.meta (name stage)]
+            [:p.meta (name stage) " " (status-chip status)]
             (links-row links)
 
             ;; Two sections, and the split is the pane's whole claim: what is

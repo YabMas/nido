@@ -124,13 +124,17 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Workstream]]}
   read-ws
   "Read a workstream.edn by project + id. Returns nil if absent. Normalizes the
-   legacy :inbox stage to :incoming (see normalize-legacy-stage)."
+   legacy :inbox stage to :incoming (see normalize-legacy-stage).
+
+   A record whose index is MISSING reads the index entries/ rebuilds. One that has an index reads
+   its rows as entries/ holds them (`reconciled-index`), but never gains a row for a file the
+   index lacks: an append that died between its entry and its index row left an entry whose
+   paired record change — a phase gate's reopen — never happened, and whose completion
+   `append-entry-once!` makes only after re-running the append's checks. Reading it as indexed
+   would skip both, so `index-drift` reports it instead."
   [project ws-id]
   (some-> (io/read-edn-cached (cstate/workstream-edn-path project ws-id))
           normalize-legacy-stage
-          ;; The index is a cache of entries/: a record that lost it reads the one the
-          ;; directory rebuilds rather than an empty ledger, and one whose rows name files the
-          ;; directory does not hold reads those rows as the directory has them.
           (as-> w (assoc w :entries (if (contains? w :entries)
                                       (reconciled-index project ws-id w)
                                       (rebuilt-index project ws-id w))))))
@@ -186,21 +190,23 @@
   advance-stage!
   "Move a workstream to `new-stage`, appending to :stage-history, and record the move as a
    :stage-set entry in the same write. `by` is who decided it — a person, or nido itself (the
-   default). No-op (no history entry, no entry) when already at `new-stage`. Throws if the
-   workstream is absent, or if `new-stage` is outside session/storable-stages — checked ahead of
-   the no-op, so re-setting a foreign stage is refused rather than quietly accepted. Returns the
-   updated record."
+   default). No-op (no history entry, no entry) when already at `new-stage` — except that a
+   person's choice is recorded as an entry even then, since status reads the choice off the
+   ledger, not the stored copy. Throws if the workstream is absent, or if `new-stage` is outside
+   session/storable-stages — checked ahead of the no-op, so re-setting a foreign stage is refused
+   rather than quietly accepted. Returns the updated record."
   ([project ws-id new-stage] (advance-stage! project ws-id new-stage :nido))
   ([project ws-id new-stage by]
    (check-stage! new-stage :advance-stage!)
    (when-not (read-ws project ws-id)
      (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
    (record-status! project ws-id
-                   (fn [w] (when-not (= new-stage (:stage w))
+                   (fn [w] (when (or (= :person by) (not= new-stage (:stage w)))
                              {:format :stage-set :stage new-stage :by by}))
-                   (fn [w] (-> w
-                               (assoc :stage new-stage)
-                               (update :stage-history conj {:at (clock/now-iso) :stage new-stage}))))))
+                   (fn [w] (cond-> w
+                             (not= new-stage (:stage w))
+                             (-> (assoc :stage new-stage)
+                                 (update :stage-history conj {:at (clock/now-iso) :stage new-stage})))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Workstream]}
   set-facets!

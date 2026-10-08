@@ -173,6 +173,15 @@
   [{:keys [current of]}]
   (when current (str "  [phase " current "/" of "]")))
 
+(defn- status-str
+  "`  ‹owed: agent · stalled›` — who owes the row's next move and whether anything is live, the
+   facets of status the position does not carry. nil for a row status was not read for."
+  [{:keys [status position]}]
+  (when status
+    (let [{:keys [owed-by live stalled]} status]
+      (str "  ‹" (some-> position :at name) " · owed: " (name owed-by)
+           (cond live " · live" stalled " · stalled" :else "") "›"))))
+
 (defn- badged-item-row
   "One workstream row for the spine board: origin badge + the wsv display string.
    wsv/format-row and wsv/promote-result-message (below) are display-only helpers
@@ -188,6 +197,7 @@
                      ;; ship-substate in, so the merge-lane tag this replaced
                      ;; would have printed the same state a second time.
                      (doing-str r)
+                     (status-str r)
                      (phase-str (:phase r)))
    ;; A row waiting on its gate says what the gate is, where the eye already
    ;; reads a row's second line; the gate is asserted from the dashboard or

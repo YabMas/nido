@@ -302,32 +302,55 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   layer-complete*
-  "Record that layer :layer of :of is finished under the workstream's newest design."
+  "Record that layer :layer of :of is finished under the design it was built under — :design
+   <seq>, else the workstream's only design. NEVER the newest of several: a design appended while
+   the layer was being built is one it was never built under, so with more than one the caller
+   names it. Recording it again under the same design appends nothing and answers the entry
+   already there."
   [{:keys [layer of bookmark commit] :as opts}]
-  (let [[p id] (here opts)
-        design (or (ws/latest-entry p id :design)
-                   (throw (ex-info "No design on this workstream — a layer is built under one" {:ws-id id})))]
-    (ws/append-entry! p id {:kind :layer-completed}
-                      (pr-str (cond-> {:format :layer-completed :design {:seq (:seq design)}
-                                       :layer layer :of of}
-                                bookmark (assoc :bookmark (str bookmark))
-                                commit   (assoc :commit (str commit)))))))
+  (let [[p id]  (here opts)
+        designs (filterv #(= :design (:kind %)) (:entries (ws/read-ws p id)))
+        n       (some-> (:design opts) str parse-long)
+        design  (cond
+                  (empty? designs)
+                  (throw (ex-info "No design on this workstream — a layer is built under one" {:ws-id id}))
+                  (:design opts)
+                  (or (some #(when (= n (:seq %)) %) designs)
+                      (throw (ex-info "No design at that seq" {:ws-id id :design (:design opts)
+                                                               :designs (mapv :seq designs)})))
+                  (= 1 (count designs)) (first designs)
+                  :else
+                  (throw (ex-info (str "This workstream holds " (count designs) " designs — name the one"
+                                       " the layer was built under with :design <seq>")
+                                  {:ws-id id :designs (mapv :seq designs)})))]
+    (some val (ws/append-entry-once!
+               p id {:kind :layer-completed}
+               (pr-str (cond-> {:format :layer-completed :design {:seq (:seq design)}
+                                :layer layer :of of}
+                         bookmark (assoc :bookmark (str bookmark))
+                         commit   (assoc :commit (str commit))))
+               #(and (= (:seq design) (-> % :design :seq)) (= layer (:layer %)))))))
 
 (defn- unanswered-blockers
-  "The seqs of this workstream's blockers no :blocker-answered names, oldest first."
+  "The seqs of this workstream's blockers no :blocker-answered names, oldest first — off the
+   index, so a blocker whose payload no longer reads is still one to answer."
   [p id]
   (let [answered (into #{} (keep :blocker-seq) (ws/entries-of p id :blocker-answered))]
-    (into [] (comp (map :seq) (remove answered)) (ws/entries-of p id :blocker))))
+    (into [] (comp (filter #(= :blocker (:kind %))) (map :seq) (remove answered))
+          (:entries (ws/read-ws p id)))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   blocker-answer*
   "Record a person's answer, in their words, to a blocker — :blocker-seq, else the newest one
-   nothing has answered."
+   nothing has answered. A :blocker-seq that names no unanswered blocker is refused: an answer
+   recorded against it would answer nothing now, or a blocker nobody has yet asked."
   [{:keys [answer blocker-seq] :as opts}]
   (let [[p id] (here opts)
         owed   (unanswered-blockers p id)
         n      (or blocker-seq (peek owed)
                    (throw (ex-info "No unanswered blocker on this workstream" {:ws-id id})))]
+    (when-not (some #{n} owed)
+      (throw (ex-info "No unanswered blocker at that seq" {:ws-id id :blocker-seq n :unanswered owed})))
     (when (str/blank? (str answer))
       (throw (ex-info "An answer is the person's words — pass :answer \"…\"" {:ws-id id})))
     (ws/append-entry! p id {:kind :blocker-answered}
@@ -341,6 +364,13 @@
   status-backfill-cmd [& args]
   (let [[_ opts] (task-args/split-args args)]
     (prn (backfill/backfill! (keyword (:project opts))))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  status-audit-cmd [& args]
+  (let [[_ opts] (task-args/split-args args)
+        diffs (work/status-audit (keyword (:project opts)))]
+    (doseq [d diffs] (prn d))
+    (println (count diffs) "open workstreams where status and the record projection disagree")))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   backfill-landings-cmd [& args]

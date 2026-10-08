@@ -479,6 +479,12 @@
     (try (with-redefs [core/nido-root (constantly (str tmp))] (cstate/ensure-dirs!) (f))
          (finally (fs/delete-tree tmp)))))
 
+;; The band is status's, and a stage only places a row once a choice records it: minting a
+;; workstream at a stage records nothing, so these mint it and then choose the stage.
+(defn- in-progress! [opts]
+  (let [w (workstream/create! :brian (assoc opts :stage :triaging))]
+    (workstream/advance-stage! :brian (:id w) :in-progress)))
+
 (deftest step-facet-cycles-all-then-present-values
   ;; pure helper: given the value list, stepping wraps through :all + values
   (is (= "Teacher" (#'tui/step-facet :all ["Teacher" "Student"] 1)))
@@ -491,9 +497,9 @@
       ;; redef the liveness oracle so the board doesn't hit lifecycle;
       ;; pass an EMPTY collapsed set so no band is folded out of the row list.
       (with-redefs [nido.coordinator.work/live-session-names (constantly #{})]
-        (workstream/create! :brian {:stage :in-progress :external-refs [{:adapter :notion :id "BR-1"}]
+        (in-progress! { :external-refs [{:adapter :notion :id "BR-1"}]
                                     :facets {:app-domain ["Teacher"]}})
-        (workstream/create! :brian {:stage :in-progress :external-refs [{:adapter :notion :id "BR-2"}]
+        (in-progress! { :external-refs [{:adapter :notion :id "BR-2"}]
                                     :facets {:app-domain ["Student"]}})
         (let [n-ws (fn [ff] (->> (#'tui/board-rows :brian :all #{} ff)
                                  (keep :data) (filter map?) (keep :ws-id) count))]
@@ -523,10 +529,10 @@
     (fn []
       (with-redefs [nido.coordinator.work/live-session-names (constantly #{})]
         ;; Slack workstream: no facets
-        (workstream/create! :brian {:stage :in-progress
+        (in-progress! {
                                     :external-refs [{:adapter :slack-message :id "slack-C-1.0"}]})
         ;; Notion workstream: has facets
-        (workstream/create! :brian {:stage :in-progress
+        (in-progress! {
                                     :external-refs [{:adapter :notion :id "BR-1"}]
                                     :facets {:app-domain ["Teacher"]}})
         (let [count-ws (fn [origin ff]

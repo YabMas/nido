@@ -113,7 +113,8 @@
        id is too noisy to show, and the title IS the report body
    1c. GitHub-issue external-ref → the issue title (falling back to repo#number,
        its :id — both read far better than the raw ws-id)
-   2. latest ledger entry's :title (when present and non-blank)
+   2. the newest ledger entry recording the work's :title (when present and non-blank) — a
+      close or a stage move is not what the work is
    3. originating trigger (from a session's autonomy) + short ws-id suffix
    4. a session name (human one-offs have no ref/entry/trigger — the name reads
       far better than the raw ws-id)
@@ -122,7 +123,7 @@
   (let [nref        (notion-ref ws)
         sref        (slack-ref ws)
         gref        (github-ref ws)
-        entry-title (not-empty (some-> ws :entries last :title))
+        entry-title (not-empty (some-> ws workstream/newest-record :title))
         trigger     (some #(get-in % [:autonomy :trigger]) sessions)
         sname       (some (comp not-empty :name) sessions)]
     (cond
@@ -222,6 +223,20 @@
       (assoc doing :progress p)
       doing)))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :map] [:maybe :keyword] [:? :any]] [:maybe :map]]}
+  doing-at
+  "What is underway in workstream `ws-id` right now, given the closure and band the caller
+   settled on — `session/doing` with the claim read here and the running round's progress beside
+   it. The board passes status's band, so what is underway and where the row sits are one answer."
+  ([project ws-id closed stage] (doing-at project ws-id closed stage nil))
+  ([project ws-id closed stage sessions]
+   (with-progress
+     (session/doing
+      {:closed   closed
+       :sessions (or sessions (session/list-sessions project ws-id))
+       :stage    stage
+       :claim    (activity/read-live project ws-id)}))))
+
 (defn- standing-design
   "The design whose plan governs the workstream (`workstream/plan-design` — the one
    its gate opens under) when it stands — cleared, as landing asks — or nil. Only a
@@ -268,12 +283,8 @@
          ;; Bound rather than inlined because the row reports it twice — once as
          ;; itself and once as the merge lane's sub-state — and two calls would
          ;; be two reads of the claim, which is two moments.
-         doing          (with-progress
-                          (session/doing
-                           {:closed   (when-not notion-driven? (:closed ws))
-                            :sessions sessions
-                            :stage    (:stage proj)
-                            :claim    (activity/read-live project (:id ws))}))]
+         doing          (doing-at project (:id ws)
+                                  (when-not notion-driven? (:closed ws)) (:stage proj) sessions)]
      {:ws-id           (:id ws)
       :project         project
       :br-id           br-id
@@ -317,7 +328,12 @@
       ;; pair would let one row answer the same question twice, :doing saying
       ;; :awaiting-merge on a row projected :done.
       :doing           doing
-      :open-findings   (count (:open (:findings ws)))
+      ;; Standing's answer, read off the ledger — the one placement asks — never the stored
+      ;; tracker, which a resolution entry does not clear. Asked only of a ledger holding a
+      ;; findings round: nearly none do, and a board reads ~1000 rows.
+      :open-findings   (if (some #(= :findings (:kind %)) (:entries ws))
+                         (count (standing/open-findings project (:id ws)))
+                         0)
       ;; :between-phases? is read from :closed whatever drives the row: between
       ;; phases is nido's own fact about the plan, which no ticket status carries.
       ;; Where the row stands IN that plan is `phase-progress`, asked only for
@@ -502,6 +518,7 @@
     :parked-at-gate "parked"
     :active         "running"
     :queued         "queued"
+    :stalled        "stalled"
     :idle           "idle"
     :settled        "done"
     "—"))

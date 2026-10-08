@@ -62,7 +62,8 @@
    - a :notion-status for a cached page status, when no Notion entry records one yet — the
      poller records every later change, and a cache read cannot say it is newer than an entry
    - a :triage-accepted for a verdict its ticket's status says was taken and no acceptance cites
-   - a :closed :dismissed for an open record whose ticket alone was dismissed"
+   - a :closed :dismissed for an open record whose ticket alone was dismissed
+   - an :issue for a workstream raised from a GitHub issue that records no arrival"
   [project ws-id facts]
   (ws/freeze-index! project ws-id)
   (let [w        (ws/read-ws project ws-id)
@@ -93,6 +94,11 @@
         (when (and (= :dismissed st) (nil? (:closed (ws/read-ws project id)))
                    (not= :closed (:kind (newest project id #{:closed :reopened}))))
           (add! {:format :closed :outcome :dismissed :by :backfill}))))
+    (when-let [ref (some #(when (= :github-issue (:adapter %)) %) (:external-refs w))]
+      (when-not (some #(= :issue (:kind %)) (:entries (ws/read-ws project id)))
+        (add! (cond-> {:format :issue :id (:id ref)}
+                (:url ref)   (assoc :url (:url ref))
+                (:title ref) (assoc :title (:title ref))))))
     (when-let [page-id (notion-page-id w facts)]
       (when-let [status (get-in facts [page-id :status])]
         (when (empty? (ws/entries-of project id :notion-status))

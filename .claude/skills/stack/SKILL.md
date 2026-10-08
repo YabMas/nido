@@ -244,7 +244,9 @@ disproved.
   bb nido:workstream:layer:complete :layer <n> :of <N> :bookmark <session>--<slug>
   ```
 
-  `:of` is the cut you drew for this design; repeat it on every layer. The
+  `:of` is the cut you drew for this design; repeat it on every layer. When
+  the workstream holds more than one design, add `:design <seq>` — the one the
+  layer was built under; the command refuses rather than guess the newest. The
   board reads these entries to show which layer is done and which is owed, and
   a session that stops between layers with no question recorded reads as
   stalled. Stop only for something a person must decide — and then record it

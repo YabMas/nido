@@ -626,7 +626,7 @@
 
   nido:workstream:layer:complete
   {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "Record a finished stack layer under the workstream's newest design: :layer <n> :of <m> [:bookmark <name>] [:commit <id>]. Resolves the workstream from cwd, or :project with :ws-id/:ref."
+   :doc "Record a finished stack layer under the design it was built under: :layer <n> :of <m> [:design <seq> — required when the workstream holds more than one] [:bookmark <name>] [:commit <id>]. Resolves the workstream from cwd, or :project with :ws-id/:ref."
    :task (apply nido-workstream/layer-complete-cmd *command-line-args*)}
 
   nido:workstream:blocker:answer
@@ -638,6 +638,11 @@
   {:requires ([tasks.nido-workstream :as nido-workstream])
    :doc "Record as entries the status every workstream's records already hold — closes, one-offs, stages, findings resolutions, Notion statuses — and keep each index row beside its entry. Idempotent. :project <p>"
    :task (apply nido-workstream/status-backfill-cmd *command-line-args*)}
+
+  nido:status:audit
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "Every open workstream on which status and the record projection it replaced disagree — band, needs-you, live — with both answers and the position. A reading: exits 0. :project <p>"
+   :task (apply nido-workstream/status-audit-cmd *command-line-args*)}
 
   nido:improvement:backfill-landings
   {:requires ([tasks.nido-workstream :as nido-workstream])

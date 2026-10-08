@@ -3384,6 +3384,16 @@
    [:status  string?]
    [:by      {:optional true} [:enum :poller :backfill]]])
 
+(def Issue
+  "How a workstream raised from a GitHub issue arrived: the issue it was minted for. Written by the
+   issue intake as it mints the workstream, and by the backfill for one minted before — the
+   ledger's record of the arrival, so nothing reading where a workstream stands reads its refs."
+  [:map {:closed true}
+   [:format [:= :issue]]
+   [:id     string?]
+   [:url    {:optional true} string?]
+   [:title  {:optional true} string?]])
+
 (def LayerCompleted
   "One finished layer of a stack built under a design: which layer, of how many the cut planned.
 
@@ -3441,7 +3451,8 @@
    :findings-resolved        FindingsResolved
    :scratch                  Scratch
    :notion-status            NotionStatus
-   :layer-completed          LayerCompleted})
+   :layer-completed          LayerCompleted
+   :issue                    Issue})
 
 (def read-schemas
   "Kinds whose READ contract is wider than their write contract, because records
@@ -4588,6 +4599,8 @@
     :scratch                  (scratch->markdown report)
     :notion-status            (notion-status->markdown report)
     :layer-completed          (layer-completed->markdown report)
+    :issue                    (str "# Issue " (:id report)
+                                   (when-let [t (:title report)] (str "\n\n" t)))
     ""))
 
 (def ^:private index-title-cap
@@ -4636,6 +4649,7 @@
     :scratch                  "One-off"
     :notion-status            (str "Notion status: " (:status report))
     :layer-completed          (str "Layer " (:layer report) "/" (:of report) " done")
+    :issue                    (str "Issue " (:id report))
     :triage-accepted          (if-let [d (:direction report)]
                                 (str "Accepted: direction " (:letter d) " — " (:label d))
                                 "Accepted: no direction chosen")

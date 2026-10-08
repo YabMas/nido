@@ -33,9 +33,9 @@
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.standing :as standing]
-   [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.workstream :as ws]
-   [nido.coordinator.view.workstreams :as wsv]))
+   [nido.platform.process :as proc]
+   [nido.session.lifecycle :as lifecycle]))
 
 ;; ── The vocabulary ──────────────────────────────────────────────────────────
 
@@ -136,7 +136,7 @@
     (some #(= :scratch (:kind %)) (:entries w)) :scratch
     (contains? kinds :triage)   :triaged
     (contains? kinds :proposed-ticket) :proposal
-    (= :github (wsv/ws-source w)) :issue
+    (contains? kinds :issue)    :issue
     :else                       :pickup))
 
 ;; ── Reading the ledger ──────────────────────────────────────────────────────
@@ -168,7 +168,7 @@
    report/event-schemas. Almost all of them are on closed workstreams and place
    as :shipped from `:closed` alone, never reaching here. One open workstream
    does not, and it is the reason this set exists rather than a hypothetical."
-  #{:ticket :triage :triage-accepted :proposed-ticket :intent
+  #{:ticket :issue :triage :triage-accepted :proposed-ticket :intent
     :baseline :baseline-review
     :design :design-decision :design-verdict :design-approved :design-cleared
     :implementation-plan :implementation-completed
@@ -190,6 +190,7 @@
   {:ticket          :intent
    :triage          :intent
    :triage-accepted :intent
+   :issue           :intent
    :proposed-ticket :intent
    :intent          :intent
    :baseline        :baseline
@@ -401,14 +402,18 @@
    An answer names the blocker it answers, and that is the only thing that answers one: not a
    later record of any kind, and not an answer naming another blocker. Answers given in a
    session's chat are recorded with `bb nido:workstream:blocker:answer`, so a halt the work went
-   on past without one is a halt nobody recorded answering — which is what this reports."
+   on past without one is a halt nobody recorded answering — which is what this reports.
+
+   Blockers are found on the index, not by parsing them: a blocker whose payload no longer reads
+   was still raised, and nothing answered it."
   [project ws-id w]
   (when (contains? (into #{} (map :kind) (:entries w)) :blocker)
     ;; :blocker-seq, flat — an answer names the position it answers, and does not
     ;; nest it the way a design nests its :baseline.
     (let [answered (into #{} (keep :blocker-seq)
                          (ws/entries-of project ws-id :blocker-answered))]
-      (->> (ws/entries-of project ws-id :blocker)
+      (->> (:entries w)
+           (filter #(= :blocker (:kind %)))
            (remove #(contains? answered (:seq %)))
            last
            :seq))))
@@ -417,11 +422,38 @@
   closure
   "How the ledger says the workstream stands settled: the newest :closed entry, unless a
    :reopened or a :phase-gate came after it — then nil, since opening the next phase is a reopen
-   by definition. Read off the entries, never off the record's :closed."
+   by definition. Read off the entries, never off the record's :closed.
+
+   The newest close is read by its :seq, and when it cannot be read the answer is still closed —
+   `{:seq n :unreadable? true}`, with no outcome — never an older close's payload, which would
+   report an outcome the workstream has since moved past."
   [project ws-id w]
   (let [newest (last (filter #(#{:closed :reopened :phase-gate} (:kind %)) (:entries w)))]
     (when (= :closed (:kind newest))
-      (last (ws/entries-of project ws-id :closed)))))
+      (or (ws/entry-at-seq project ws-id (:seq newest))
+          {:seq (:seq newest) :unreadable? true}))))
+
+(def ^:private notion-done
+  "Notion statuses that are a person settling the ticket as far as nido is concerned. Review is
+   among them: a ticket in human review has left nido's hands, and keeping it on the board until
+   its ledger catches up would list work nobody here owes."
+  #{"Done" "Not Done" "Review"})
+
+(defn- notion-settlement
+  "The newest :notion-status entry when it settles the ticket and no stage was chosen since — a
+   :stage-set or a :reopened newer than it takes the work back out — else nil. The newer decision
+   wins, so a ticket settled in Notion after a stage choice is settled, and one chosen back onto
+   a stage after it is not.
+
+   Both are found on the index and the newest status read by its :seq: an unreadable newest status
+   settles nothing, rather than letting an older one it replaced settle the ticket, and an
+   unreadable stage choice still takes the work back out."
+  [project ws-id w]
+  (let [newest (fn [kinds] (last (filter #(kinds (:kind %)) (:entries w))))
+        seen   (some->> (newest #{:notion-status}) :seq (ws/entry-at-seq project ws-id))
+        moved  (or (:seq (newest #{:stage-set :reopened})) 0)]
+    (when (and (contains? notion-done (:status seen)) (> (:seq seen) moved))
+      seen)))
 
 (defn- triage-unaccepted?
   "Whether the newest :triage report is one no :triage-accepted cites."
@@ -448,6 +480,10 @@
       (when (seq layers)
         {:done (count (into #{} (map :layer) layers))
          :of   (:of (first layers))}))))
+
+(def ^:private post-layer-kinds
+  "Kinds that record the work under a design past its layers: implemented, reviewed, published."
+  #{:implementation-completed :review :pr-opened})
 
 (defn- newest-phase-gate
   "The seq of the newest :phase-gate entry, or 0 when there is none."
@@ -607,8 +643,11 @@
     ;; Layer entries cite the design they were built under, and `layers` counts only those
     ;; citing the newest one since the newest phase gate — so a re-designed or reopened workstream
     ;; is not held here by layers of work it has since moved past. A findings round is not such a
-    ;; cut: once its halt clears, the layers built under the design still place the work here.
-    (and layers design-stands?)    :implementing
+    ;; cut: once its halt clears, the layers built under the design still place the work here —
+    ;; unless the design was implemented, reviewed or published since, after which the layers
+    ;; are progress alone and the caller passes none. And only on a design something said may be
+    ;; built: a layer recorded under one still owing its grant does not walk past the gate.
+    (and layers design-stands? (or approved? cleared?)) :implementing
     approved?                      :design-approved
     ;; The gate is READ rather than reached. A clearance is a record a round
     ;; appended, so this is a citation like every other clause here — not a
@@ -1031,7 +1070,9 @@
             :intake <kind> :read {…}} — or {:at :unplaceable :why …} when the ledger cannot be
    read at all. :owed rides on :next only when the amendment's own position chose it and its stage
    is the first the amendment of the newest survey's goal still owes: `amendment-owed`'s stages,
-   in order.
+   in order. :settled-in-notion rides only on a ticket a person settled in Notion since its last
+   stage choice and holds no unanswered blocker — the Notion status that did it — which is placed
+   where a close is.
 
    `:read` names the sources this answer was derived from, which is the point:
    the four position vocabularies keep their jobs and this relates them, so a
@@ -1041,7 +1082,6 @@
   [project ws-id]
   (if-let [w (ws/read-ws project ws-id)]
     (let [ks     (kinds w)
-          br     (some #(when (= :notion (:adapter %)) (:id %)) (:external-refs w))
           design (ws/latest-entry project ws-id :design)
           st     (when design (standing/of-design project ws-id design))
           ;; The newest baseline's own standing: whether it is verified, and
@@ -1059,14 +1099,32 @@
           ;; once per rendered row.
           re     (reentry/of* w design st bst)
           closed (closure project ws-id w)
+          blocker (unanswered-blocker project ws-id w)
+          ;; A ticket a person settled in Notion is settled here too: placed where a close is,
+          ;; owing nobody, so the board's band and the pane's owed-by are one answer. Not over an
+          ;; unanswered blocker: only an answer naming its seq clears one, and a Notion status
+          ;; names none.
+          settled (when-not (or closed blocker) (notion-settlement project ws-id w))
           layers (layer-progress project ws-id w design 0)
-          facts  {:closed?        (some? closed)
+          facts  {:closed?        (some? (or closed settled))
                          :closed-outcome (:outcome closed)
                          :restarted-trail (reentry/standing-trail w design)
                          :findings-open? (boolean (seq (standing/open-findings project ws-id)))
-                         :layers         (layer-progress project ws-id w design (newest-phase-gate w))
+                         :layers         (let [gate (newest-phase-gate w)]
+                                           ;; Once the design was implemented, reviewed or
+                                           ;; published since its gate, layers place nothing.
+                                           ;; Only a record citing THIS design says so — work
+                                           ;; under an earlier one recorded late says nothing
+                                           ;; about this one's layers. A record citing nothing
+                                           ;; predates citation, and append order is all it has.
+                                           (when-not (and design
+                                                          (some #(and (post-layer-kinds (:kind %))
+                                                                      (contains? #{nil (:seq design)} (:under %))
+                                                                      (> (:seq %) (max gate (:seq design))))
+                                                                (:entries w)))
+                                             (layer-progress project ws-id w design gate)))
                          :triage-unaccepted? (triage-unaccepted? project ws-id w ks)
-                         :blocker-seq    (unanswered-blocker project ws-id w)
+                         :blocker-seq    blocker
                          :retraction     (retracted-position
                                           (reentry/current-standing st bst ist))
                          :re-entry       re
@@ -1123,7 +1181,6 @@
         :read   {:ledger        (count (:entries w))
                 :kinds         ks
                 :board-stage   (:stage w)
-                :ticket-status (when br (tickets/status project br))
                  :sessions      (mapv (juxt :name #(get-in % [:autonomy :phase]))
                                       (csession/list-sessions project ws-id))
                  :standing      (when st (select-keys st [:live? :decidable? :decided?]))}}
@@ -1131,6 +1188,10 @@
         re (assoc :re-entry re)
 
         layers (assoc :layers layers)
+
+        ;; Which settlement placed it, so a surface can tell a ticket Notion settled from one
+        ;; nido closed without reading the entry a second time.
+        settled (assoc :settled-in-notion (:status settled))
 
         (= :unplaceable pos)
         (assoc :why (str "this ledger's " (count (:entries w)) " entr"
@@ -1144,6 +1205,17 @@
 
 ;; ── What every surface shows ───────────────────────────────────────────────
 
+(defn- observed-live-names
+  "The names of `project`'s sessions holding an open app or nREPL port right now — the probe
+   `nido.coordinator.work/live-session-names` makes, for a caller of `status` that made none."
+  [project]
+  (->> (lifecycle/list-all-data {:project (name project)})
+       :sessions
+       (filter (fn [s] (or (and (pos-int? (:app-port s))   (proc/tcp-open? (:app-port s)))
+                           (and (pos-int? (:nrepl-port s)) (proc/tcp-open? (:nrepl-port s))))))
+       (map :name)
+       set))
+
 (def ^:private owed-by-mode
   "Who owes a move, by the mode it runs in."
   {:human :person :mechanical :machine :authoring :agent :working-copy :agent})
@@ -1156,8 +1228,8 @@
    :owed-by follows the move `of` names, by its mode, and nothing else: a person for a :human
    move, the machine for a :mechanical one, an agent for an authoring or working-copy one,
    nobody when no move is owed. :live is observed, never stored: a held activity claim, a run
-   whose agent holds its lock, or — given `live-names`, the sessions whose ports answer — a
-   person's session that is up. :stalled is an agent owing the move with nothing live: the work
+   whose agent holds its lock, or a person's session whose ports answer — `live-names` when the
+   caller observed them, else observed here. :stalled is an agent owing the move with nothing live: the work
    stopped, and no question was recorded to say why."
   ([project ws-id] (status project ws-id nil))
   ([project ws-id live-names]
@@ -1165,11 +1237,15 @@
          owed-by  (if-let [mode (get-in position [:next :mode])]
                     (owed-by-mode mode :nobody)
                     :nobody)
-         human?   (fn [s] (and (nil? (:autonomy s)) (= :live (:substrate s))
-                               (contains? (or live-names #{}) (:name s))))
+         sessions (csession/list-sessions project ws-id)
+         ;; A person's session is live when its ports answer — observed, never a stored phase.
+         ;; Absent the caller's observation, make one, and only when there is a person's session
+         ;; to ask about: a board passes the set it read once for every row.
+         humans   (filter #(nil? (:autonomy %)) sessions)
+         up       (when (seq humans) (or live-names (observed-live-names project)))
          live     (boolean (or (activity/held? project ws-id)
                                (seq (runs/live-runs project ws-id))
-                               (some human? (csession/list-sessions project ws-id))))]
+                               (some #(contains? up (:name %)) humans)))]
      {:position position
       :owed-by  owed-by
       :live     live
