@@ -943,6 +943,9 @@
    :judge-indeterminate  :escalate
    :no-record            :escalate  ; misconfigured: nothing of that kind to judge
    :no-workstream        :escalate
+   ;; A record run whose session stopped resolving under it mid-run. The workstream is there and
+   ;; nothing about it is wrong; the run just could not read it for a round, so it is run again.
+   :ledger-lost          :retry
    ;; The diff loop's own refusal: it will not review an implementation with no
    ;; design record to judge it against. NOT :route-back, which is the reading
    ;; the neighbours above invite — the earlier record IS at fault and the stage

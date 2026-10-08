@@ -139,7 +139,7 @@
                             ws/latest-entry (fn [_ _ k] (when (= :design k) a-model-design))
                             standing/of-design (constantly {:decidable? true})
                             stages/read-stance (constantly nil)
-                            stages/discover-baseline (constantly nil)
+                            stages/cited-baseline (constantly nil)
                             record/discover-intent (constantly nil)
                             design-check/elements (fn [_ worktree]
                                                     (reset! seen worktree)
@@ -167,7 +167,7 @@
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ k] (when (= :design k) modest))
                   standing/of-design (constantly {:decidable? true})
-                  stages/discover-baseline (fn [_ _] nil)
+                  stages/cited-baseline (fn [_ _] nil)
                   stages/read-stance (constantly nil)
                   record/discover-intent (constantly nil)
                   record/run-round! (fn [_] (swap! launched inc)
@@ -192,7 +192,7 @@
         out      (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                                ws/latest-entry (fn [_ _ k] (when (= :design k) a-design))
                                standing/of-design (constantly {:decidable? true})
-                               stages/discover-baseline (fn [_ _] baseline)
+                               stages/cited-baseline (fn [_ _] baseline)
                                stages/read-stance (constantly nil)
                                record/discover-intent (constantly nil)
                                record/run-round! (fn [opts]
@@ -227,7 +227,7 @@
                                ws/latest-entry (fn [_ _ k] (case k :design design :design-decision last nil))
                                ws/entry-at-seq (fn [_ _ n] (when (= 5 n) design))
                                standing/of-design (constantly {:decidable? true})
-                               stages/discover-baseline (fn [_ _] baseline)
+                               stages/cited-baseline (fn [_ _] baseline)
                                stages/read-stance (constantly nil)
                                record/discover-intent (constantly nil)
                                record/run-round! (fn [opts]
@@ -745,7 +745,7 @@
         state    (atom {:identity "t0" :entries {}})]
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] prev)
-                  stages/discover-baseline (fn [_ _] nil)
+                  stages/cited-baseline (fn [_ _] nil)
                   design-check/design-of (fn [_ _] declared)
                   stages/working-copy-state (fn [_] @state)
                   ws/append-entry! (fn [_ _ _ payload]
@@ -984,7 +984,7 @@
   (let [prompts (atom [])]
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
-                  stages/discover-baseline (fn [_ _] nil)
+                  stages/cited-baseline (fn [_ _] nil)
                   stages/working-copy-state (fn [_] {:identity "t" :entries {}})
                   agent/launch! (fn [{:keys [first-message]}]
                                   (swap! prompts conj first-message) {:num-turns 1})]
@@ -1002,7 +1002,7 @@
   (let [prompt (atom nil)]
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
-                  stages/discover-baseline (fn [_ _] nil)
+                  stages/cited-baseline (fn [_ _] nil)
                   stages/working-copy-state (fn [_] {:identity "t" :entries {}})
                   agent/launch! (fn [{:keys [first-message]}]
                                   (reset! prompt first-message) {:num-turns 1})]
@@ -1031,7 +1031,7 @@
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ kind]
                                     (if (= :baseline kind) corrected-baseline a-design))
-                  stages/discover-baseline (fn [_ _] {:format :baseline :seq 8})
+                  stages/cited-baseline (fn [_ _] {:format :baseline :seq 8})
                   stages/working-copy-state (fn [_] {:identity "t" :entries {}})
                   ws/append-entry! (fn [_ _ _ payload] (reset! appended payload) "/e")
                   agent/launch! (fn [{:keys [first-message]}]
@@ -1085,7 +1085,7 @@
                   tree/with-reading! (fn [_ _ _ _ f] (f "/base-tree"))
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ kind] (if (= :baseline kind) corrected-baseline a-design))
-                  stages/discover-baseline (fn [_ _] {:format :baseline :seq 8})
+                  stages/cited-baseline (fn [_ _] {:format :baseline :seq 8})
                   stages/working-copy-state (fn [_] {:identity "t" :entries {}})
                   agent/launch! (fn [_] {:num-turns 1})]
       (doseq [config [{:cwd "/w" :run-id "r1" :code-cwd "/design-tree"}
@@ -1129,7 +1129,7 @@
     (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :sufficient})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
-                  stages/discover-baseline (fn [_ _] {:format :baseline :seq 8})
+                  stages/cited-baseline (fn [_ _] {:format :baseline :seq 8})
                   stages/working-copy-state (fn [_] {:identity "t" :entries {}})
                   agent/launch! (fn [_] {:num-turns 0})]
       (run record/design-amend-stage
@@ -1148,7 +1148,7 @@
     (with-redefs [rloop/run-loop (fn [_] {:status s})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
-                  stages/discover-baseline (fn [_ _] {:format :baseline :seq 8})]
+                  stages/cited-baseline (fn [_ _] {:format :baseline :seq 8})]
       (let [out (run record/design-amend-stage
                      (assoc (ctx :findings []) :record (decision :resurvey)))]
         (is (= (keyword (str "resurvey-" (name s))) (:status out)))
@@ -1165,7 +1165,7 @@
     (with-redefs [rloop/run-loop (fn [_] (swap! nested inc) {:status :sufficient})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
-                  stages/discover-baseline (fn [_ _] nil)
+                  stages/cited-baseline (fn [_ _] nil)
                   stages/working-copy-state (fn [_] {:identity "t" :entries {}})
                   agent/launch! (fn [_] {:num-turns 0})]
       (doseq [prior (range 5)]
@@ -1187,7 +1187,7 @@
                   record/append! (fn [_ _] nil)
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
-                  stages/discover-baseline (fn [_ _] nil)
+                  stages/cited-baseline (fn [_ _] nil)
                   stages/working-copy-state (fn [_] {:identity "t" :entries {}})
                   ws/append-entry! (fn [_ _ _ _] "/ws/entries/0005-design.edn")
                   agent/launch! (fn [{:keys [first-message]}]
@@ -1205,7 +1205,7 @@
                 record/append! (fn [_ _] nil)
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                 ws/latest-entry (fn [_ _ _] a-design)
-                stages/discover-baseline (fn [_ _] nil)
+                stages/cited-baseline (fn [_ _] nil)
                 stages/working-copy-state (fn [_] {:identity "t" :entries {}})
                 ws/append-entry! (fn [_ _ _ _] "/ws/entries/0005-design.edn")
                 agent/launch! (fn [{:keys [first-message]}]
@@ -1262,7 +1262,7 @@
                                         :amend-error "{:at [\"disallowed key\"]}"})
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                 ws/latest-entry (fn [_ _ _] a-design)
-                stages/discover-baseline (fn [_ _] {:format :baseline :seq 8})]
+                stages/cited-baseline (fn [_ _] {:format :baseline :seq 8})]
     (let [out (run record/design-amend-stage
                    (assoc (ctx :findings []) :record (decision :resurvey)))]
       (is (= :resurvey-amend-invalid (:status out)))
@@ -1373,7 +1373,7 @@
   (let [seen (atom nil)]
     (with-redefs [stages/project+ws-from-cwd (constantly [:nido "ws-1"])
                   ws/latest-entry            (constantly a-design)
-                  stages/discover-baseline   (constantly {:format :baseline})
+                  stages/cited-baseline   (constantly {:format :baseline})
                   rloop/run-loop             (fn [cfg] (reset! seen cfg) {:status :no-progress})]
       (#'record/resurvey! (ctx :config {:cwd "/w" :run-id "design-loop-7"}))
       (is (= "design-loop-7" (:within-run @seen)))
@@ -1393,7 +1393,7 @@
   (let [seen (atom nil)]
     (with-redefs [stages/project+ws-from-cwd (constantly [:nido "ws-1"])
                   ws/latest-entry            (constantly a-design)
-                  stages/discover-baseline   (constantly corrected-baseline)
+                  stages/cited-baseline   (constantly corrected-baseline)
                   rloop/run-loop             (fn [cfg] (reset! seen cfg) {:status :no-progress})]
       (#'record/resurvey! (ctx :config {:cwd "/w" :run-id "design-loop-7"}
                                :appended-seq 14
@@ -1408,7 +1408,7 @@
     (let [seen (atom nil)]
       (with-redefs [stages/project+ws-from-cwd (constantly [:nido "ws-1"])
                     ws/latest-entry            (constantly a-design)
-                    stages/discover-baseline   (constantly corrected-baseline)
+                    stages/cited-baseline   (constantly corrected-baseline)
                     rloop/run-loop             (fn [cfg] (reset! seen cfg) {:status :no-progress})]
         (#'record/resurvey! (ctx :config {:cwd "/w" :run-id "design-loop-7"} :findings []))
         (is (nil? (:refuted @seen)))))))
@@ -1624,7 +1624,7 @@
                   record/undeclared-subjects  (constantly nil)
                   settled/code-identity       (constantly "tree")
                   stages/read-stance          (constantly nil)
-                  stages/discover-baseline    (constantly nil)
+                  stages/cited-baseline    (constantly nil)
                   record/discover-intent      (constantly nil)
                   record/run-round!           (fn [{:keys [kind prompt]}]
                                                 (swap! calls conj {:kind kind :prompt prompt})
@@ -1743,7 +1743,7 @@
                 record/append! (fn [_ r] (swap! appended conj r) nil)
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                 ws/latest-entry (fn [_ _ k] (when (= :design k) (assoc a-model-design :seq 4)))
-                stages/discover-baseline (constantly nil)
+                stages/cited-baseline (constantly nil)
                 settled/code-identity (constantly "tree")
                 settled/ledgers (constantly [])
                 design-check/elements (constantly {:status :listed :elements []})]
@@ -1947,7 +1947,7 @@
             "only the defect the question does not cover is the amender's")))
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ k] (when (= :design k) a-design))
-                  stages/discover-baseline (fn [_ _] nil)
+                  stages/cited-baseline (fn [_ _] nil)
                   design-check/design-of (constantly nil)
                   record/launch-amender! (fn [_ {:keys [first-message]}] (reset! seen first-message) {})]
       (run record/design-amend-stage (ctx :record record :findings [(check :relation-honest :broken)]))
@@ -2076,7 +2076,7 @@
   (let [seen (atom nil)]
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ k] (when (= :design k) a-design))
-                  stages/discover-baseline (fn [_ _] nil)
+                  stages/cited-baseline (fn [_ _] nil)
                   design-check/design-of (constantly nil)
                   record/launch-amender! (fn [_ {:keys [first-message]}] (reset! seen first-message) {})]
       (run record/design-amend-stage
@@ -2122,7 +2122,7 @@
                    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                                  ws/latest-entry (fn [_ _ k] (when (= :design k) (assoc a-design :seq 5)))
                                  standing/of-design (constantly {:decidable? true})
-                                 stages/discover-baseline (fn [_ _] {:format :baseline :seq 1})
+                                 stages/cited-baseline (fn [_ _] {:format :baseline :seq 1})
                                  stages/read-stance (constantly nil)
                                  record/discover-intent (constantly nil)
                                  record/run-round! (fn [opts]
@@ -2139,3 +2139,38 @@
     (let [out (run [{:ok (json/generate-string answer-1)} {:outcome :codex-failed :detail "x"}])]
       (is (= :amend (:recommend out)) "a re-ask that fails leaves the first answer standing")
       (is (= ["c1"] (:self-contradicted out))))))
+
+(deftest a-run-judges-the-ledger-it-pinned-at-start
+  ;; Seen live: round 1 appended its decision, the session restarted, and round 2 re-resolved
+  ;; the workstream from cwd, found none and ended the run :no-workstream — on a workstream the
+  ;; run had just written to.
+  (testing "the round is handed the run's ledger, and does not read cwd for it"
+    (let [seen (atom nil)]
+      (with-redefs [stages/project+ws-from-cwd (fn [_] nil)
+                    ws/latest-entry            (fn [_ _ _] nil)
+                    record/design-decision!    (fn [opts] (reset! seen (:ledger opts))
+                                                 {:outcome :no-record :detail "d"})
+                    record/append!             (fn [_ _] nil)]
+        (run record/design-judge-stage (ctx :config {:cwd "/w" :run-id "r1" :ledger [:nido "ws-1"]}))
+        (is (= [:nido "ws-1"] @seen)
+            "a session restarting under the run must not change which workstream it judges"))))
+  (testing "a pinned ledger outlives a cwd that no longer resolves"
+    (with-redefs [stages/project+ws-from-cwd (fn [_] nil)
+                  ws/latest-entry            (fn [_ _ _] nil)]
+      (is (= :no-record (:outcome (record/design-decision!
+                                   {:cwd "/w" :run-id "r1" :ledger [:nido "ws-1"]})))
+          "the round reached the ledger — :no-workstream would claim there was none"))))
+
+(deftest a-ledger-lost-mid-run-is-not-a-missing-workstream
+  ;; A run started without a pinned ledger resolves it per round; the round that resolves
+  ;; nothing after one that resolved it is owed a re-run, which :no-workstream does not say.
+  (let [launched (atom 0)]
+    (with-redefs [stages/project+ws-from-cwd (fn [_] nil)
+                  record/design-decision!    (fn [_] (swap! launched inc) {:outcome :no-workstream})
+                  record/append!             (fn [_ _] nil)]
+      (let [out (run record/design-judge-stage (ctx :carry {:ledger [:nido "ws-1"]}))]
+        (is (= :ledger-lost (:status out))
+            "a run that had a workstream must not report that it never had one")
+        (is (str/includes? (get-in out [:record :detail]) "nido/ws-1")
+            "the detail names the ledger the run lost, so a re-run knows where to go")
+        (is (zero? @launched) "nothing is judged against a ledger the round cannot write to")))))

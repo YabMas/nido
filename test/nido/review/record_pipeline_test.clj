@@ -175,6 +175,24 @@
       (is (= outcome (:status (run record/judge-stage (ctx))))
           (str outcome " must terminate under its own name")))))
 
+(deftest a-baseline-run-judges-the-ledger-it-pinned-at-start
+  (let [seen (atom nil)]
+    (with-redefs [stages/project+ws-from-cwd (fn [_] nil)
+                  record/baseline-review!    (fn [opts] (reset! seen (:ledger opts))
+                                               {:outcome :no-record :detail "d"})
+                  record/append!             (fn [_ _] nil)]
+      (let [out (run record/judge-stage (ctx :config {:cwd "/w" :run-id "r1" :ledger [:nido "ws-1"]}))]
+        (is (= [:nido "ws-1"] @seen)
+            "a session restarting under the run must not change which workstream it judges")
+        (is (= [:nido "ws-1"] (get-in out [:carry :ledger]))
+            "the ledger rides in :carry, so a later round can tell a lost one from none")))))
+
+(deftest a-baseline-ledger-lost-mid-run-keeps-its-own-name
+  (with-redefs [stages/project+ws-from-cwd (fn [_] nil)
+                record/append!             (fn [_ _] nil)]
+    (is (= :ledger-lost (:status (run record/judge-stage (ctx :carry {:ledger [:nido "ws-1"]}))))
+        "a run that had a workstream must not report that it never had one")))
+
 ;; ── What a claim is about ───────────────────────────────────────────────────
 
 (def ^:private a-model-baseline
@@ -1359,7 +1377,7 @@
     (with-redefs-fn {judge-fn                    (fn [_] (swap! launched inc) judge)
                      #'record/append!            (fn [_ r] (swap! appended conj r) {:seq 99})
                      #'stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
-                     #'stages/discover-baseline  (fn [_ _] a-baseline)
+                     #'stages/cited-baseline  (fn [_ _] a-baseline)
                      #'ws/latest-entry           (fn [_ _ _] subject)
                      #'ws/entries-of             (fn [_ _ kind] (get entries kind []))
                      #'settled/code-identity     (fn [_] tree)
@@ -1471,7 +1489,7 @@
                                      record/append! (fn [_ _] nil)
                                      stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                                      ws/latest-entry (fn [_ _ _] design)
-                                     stages/discover-baseline (fn [_ _] (update-in a-model-baseline [:model :elements]
+                                     stages/cited-baseline (fn [_ _] (update-in a-model-baseline [:model :elements]
                                                                                    conj role))
                                      design-check/elements (fn [_ _] (listing))
                                      settled/code-identity (fn [_] "tree-a")

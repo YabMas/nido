@@ -418,6 +418,11 @@
     "The baseline a design CITED, not the newest one. A design committed to a particular
      reading, and judging it against a later baseline checks it against a premise it never made."
     {:signature [:=> [:catn [:cwd Path] [:design :map]] [:maybe :map]]})
+  (Operation cited-baseline
+    "`discover-baseline` on a ledger already resolved. A run reads through the ledger it pinned
+     at start, because resolving one again from a directory can answer nothing while the session
+     restarts under it."
+    {:signature [:=> [:catn [:ledger [:maybe [:tuple :keyword :string]]] [:design [:maybe :map]]] [:maybe :map]]})
   (Operation discover-prior-verdict
     "The verdict this workstream last recorded against the SAME design record. Matched on
      :design-seq for the reason `discover-baseline` follows a citation rather than reading the

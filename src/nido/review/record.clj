@@ -78,7 +78,7 @@
                     (seq (get-in baseline [:model :claims]))
                     (seq (:health baseline))))))
 
-(defn ^{:malli/schema [:=> [:cat :Path :map] [:maybe :map]]}
+(defn ^{:malli/schema [:=> [:cat [:maybe [:tuple :keyword :string]] :map] [:maybe :map]]}
   discover-intent
   "The intent the design CITED, projected to what a goal may contain. nil when
    the design cites none — a pre-intent record — which the prompt states rather
@@ -91,10 +91,10 @@
    Never throws. The prompt is built as an argument to run-round!, so anything
    that throws here escapes the round's only catch and takes the task down
    instead of degrading."
-  [cwd design]
+  [[project ws-id] design]
   (try
     (when-let [n (get-in design [:intent :seq])]
-      (when-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+      (when project
         (let [e (ws/entry-at-seq project ws-id n)]
           (when (= :intent (:format e))
             {:goal (:goal e) :done-when (:done-when e)}))))
@@ -2012,12 +2012,12 @@
 (defn- relation-prior!
   "`relation-prior` for `design`, ruled on against `baseline`, from the newest decision on the
    workstream and the design it read. nil when there is none, or it ruled on no id."
-  [project ws-id cwd design baseline]
+  [project ws-id design baseline]
   (let [last (ws/latest-entry project ws-id :design-decision)
         then (when-let [n (:design-seq last)] (ws/entry-at-seq project ws-id n))]
     (when (and then (seq (:relation-rulings last)))
       (relation-prior (:relation-rulings last)
-                      [then (stages/discover-baseline cwd then)]
+                      [then (stages/cited-baseline [project ws-id] then)]
                       [design baseline]))))
 
 (defn- held-to-prior
@@ -2509,6 +2509,20 @@
                         " that found it sufficient stands for it; no judge was launched.")
      :carried-from from}))
 
+(defn- ledger-of
+  "The `[project ws-id]` a record run reads and writes, or nil: `opts`' `:ledger`, resolved once
+   when the run started, and resolved from `:cwd` only for a run started without one. A run's
+   config and a round's opts both carry the two keys, and are both read through this.
+
+   Once, because resolving a session from a directory can answer nil mid-run — the registry
+   being rewritten, a session restarting — and a run resolving it again per round would end
+   :no-workstream on a workstream it had been judging, or judge one it then could not write its
+   decision to."
+  [opts]
+  (if (contains? opts :ledger)
+    (:ledger opts)
+    (stages/project+ws-from-cwd (:cwd opts))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   baseline-review!
   "Verify a baseline against the code. Returns the ledger record, or
@@ -2553,7 +2567,7 @@
    and is answered by the verdict that one reached (`carried-review`)."
   [{:keys [cwd code-cwd run-id label disputes baseline settled listing subject-identities
            reviewer prior] :as opts}]
-  (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+  (if-let [[project ws-id] (ledger-of opts)]
     (if-let [baseline (or baseline (ws/latest-entry project ws-id :baseline))]
       (if (baseline-round-worth-running? baseline)
         (or (undeclared-subjects project (or code-cwd cwd) baseline listing)
@@ -2633,9 +2647,9 @@
    subjects and roles over. A design restates nothing it keeps, so a role it carries unchanged from
    its baseline is still one its claims bind, and a declaration playing that role otherwise has to
    stop the round as surely as one playing a restated role. The design as written when either
-   record carries no model."
-  [cwd design]
-  (let [baseline (stages/discover-baseline cwd design)]
+   record carries no model. `ledger` is the `[project ws-id]` the design is on."
+  [ledger design]
+  (let [baseline (stages/cited-baseline ledger design)]
     (if (and (:model design) (:model baseline))
       (assoc design :model (model/overlay (:model baseline) (:model design)))
       design)))
@@ -2797,13 +2811,13 @@
    `:tree-moved` (`tree-moved`), for the report; the caller takes it off before appending."
   [{:keys [cwd code-cwd run-id label disputes design settled listing subject-identities
            reviewer prior] :as opts}]
-  (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+  (if-let [[project ws-id :as ledger] (ledger-of opts)]
     (if-let [design (or design (ws/latest-entry project ws-id :design))]
       (or (unverified-premise project ws-id design)
-          (undeclared-subjects project (or code-cwd cwd) (effective-design cwd design) listing)
+          (undeclared-subjects project (or code-cwd cwd) (effective-design ledger design) listing)
           (let [code-cwd  (or code-cwd cwd)
-                effective (effective-design cwd design)
-                baseline  (stages/discover-baseline cwd design)
+                effective (effective-design ledger design)
+                baseline  (stages/cited-baseline ledger design)
                 settled  (or settled {})
                 before   (if (contains? opts :code-identity)
                            (:code-identity opts)
@@ -2816,11 +2830,11 @@
                                           :listing  (or listing (design-check/elements project code-cwd))}))
                 relation (relation-yardstick design baseline)
                 breaks   (get-in design [:baseline :breaks])
-                prior-rs (when (seq relation) (relation-prior! project ws-id cwd design baseline))
+                prior-rs (when (seq relation) (relation-prior! project ws-id design baseline))
                 asking   {:design   design
                           :baseline baseline
                           :stance   (stages/read-stance project)
-                          :intent   (discover-intent cwd design)
+                          :intent   (discover-intent ledger design)
                           :disputes disputes
                           :settled  settled
                           :prior    prior
@@ -2937,18 +2951,6 @@
                                 :design {:seq design-seq}}))]
               (when (= :stale (:refused res))
                 (recur (inc attempts))))))))))
-
-(defn- ledger-of
-  "The `[project ws-id]` a record run reads and writes, or nil: the config's `:ledger`, resolved
-   once when the run started, and resolved from `:cwd` only for a run started without one.
-
-   Once, because resolving a session from a directory can answer nil mid-run — the registry
-   being rewritten, a session restarting — and a run resolving it again per append would judge
-   a workstream it then could not write its decision to."
-  [config]
-  (if (contains? config :ledger)
-    (:ledger config)
-    (stages/project+ws-from-cwd (:cwd config))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe [:tuple :keyword :string]] :map] :any]}
   append!
@@ -4563,6 +4565,18 @@
                                           (map :id (:unchecked record)))
                                    (rulings record))})))
 
+(defn- ledger-lost
+  "The outcome a round answers in place of a judgement when its run's ledger resolved to nothing
+   after an earlier round of the same run resolved it — `:ledger` in `:carry` — or nil. Its own
+   status, because `:no-workstream` says there was never a ledger to write to, and this run had
+   one: what is owed is a re-run once the session resolves again, not a workstream. A run pinned at
+   start (`ledger-of`) cannot reach it."
+  [ctx ledger]
+  (when-let [[project ws-id] (when (nil? ledger) (get-in ctx [:carry :ledger]))]
+    {:outcome :ledger-lost
+     :detail  (str "this run's ledger " (name project) "/" ws-id
+                   " stopped resolving from its cwd mid-run — re-run it once the session is back up")}))
+
 (defn- run-judge-stage
   [ctx]
   (let [{:keys [cwd code-cwd run-id reviewer]} (:config ctx)
@@ -4587,13 +4601,14 @@
                                                            (concat (get-in ctx [:carry :stale]) (keys refuted)))
                                              (update :prior merge refuted))
         stands? #(and (seq (:findings %)) (not (report/review-holds? %)))
+        lost    (ledger-lost ctx ledger)
         reused  (standing-judgement ctx ledger :baseline-review :baseline-seq subject reading stands?)
         again   (rejudged ctx ledger subject reading
                           (newest-judgement ledger :baseline-review :baseline-seq subject) stands?)
         asked   (cond reused #{} subject (owed-rulings subject settled))
-        judged  (when-not reused
+        judged  (when-not (or lost reused)
                   (baseline-review!
-                   {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
+                   {:cwd cwd :ledger ledger :code-cwd code-cwd :run-id run-id :reviewer reviewer
                     :baseline subject
                     :settled settled
                     :prior prior
@@ -4602,7 +4617,8 @@
                     :subject-identities (:subject-identities reading)
                     :label (str "baseline-review-round-" (:iter ctx))
                     :disputes (disputes-for-judge (:history ctx))}))
-        record (or reused
+        record (or lost
+                   reused
                    (-> (dissoc judged :tree-moved)
                        (stamp-run (:config ctx))
                        (with-readings report/review-holds?
@@ -4625,7 +4641,8 @@
         record    (cond-> record (seq (spent running)) (assoc :spent (spent running)))
         ;; An amender's :stale speaks for the one round after it.
         ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
-                          (update :carry dissoc :stale))
+                          (update :carry dissoc :stale)
+                          (cond-> ledger (assoc-in [:carry :ledger] ledger)))
                       (when (:seq subject) {:judged-seq (:seq subject)})
                       (when-let [m (:tree-moved judged)] {:tree-moved m})
                       (when again {:rejudged again})
@@ -4689,7 +4706,7 @@
   [ctx]
   (or (:under-repair (:carry ctx))
       (:baseline (:config ctx))
-      (when-let [[project ws-id] (stages/project+ws-from-cwd (:cwd (:config ctx)))]
+      (when-let [[project ws-id] (ledger-of (:config ctx))]
         (ws/latest-entry project ws-id :baseline))))
 
 (defn- baseline-amend-message
@@ -4697,7 +4714,7 @@
    `out-path`."
   [ctx prev out-path]
   (let [{:keys [cwd code-cwd]} (:config ctx)
-        [project ws-id] (stages/project+ws-from-cwd cwd)
+        [project ws-id] (ledger-of (:config ctx))
         check (when (and project ws-id) (amend-check-cmd project ws-id :baseline out-path))]
     (amend-prompt {:baseline  prev
                    :findings  (:findings ctx)
@@ -4710,10 +4727,10 @@
 
 (defn- run-amend-stage
   [ctx]
-  (let [{:keys [cwd run-id dry-run?]} (:config ctx)]
+  (let [{:keys [run-id dry-run?]} (:config ctx)]
     (if dry-run?
       (assoc ctx :control :stop :status :dry-run)
-      (let [[project ws-id] (stages/project+ws-from-cwd cwd)
+      (let [[project ws-id] (ledger-of (:config ctx))
             prev      (under-repair ctx)
             dir       (cstate/run-dir run-id)
             out-path  (str (fs/path dir (str "amend-round-" (:iter ctx) ".edn")))
@@ -5494,25 +5511,27 @@
         design  (when project (ws/latest-entry project ws-id :design))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) design)
         {:keys [standing settled prior]}
-        (judge-inputs project ws-id :design design reading (when design (effective-design cwd design)) run-id
+        (judge-inputs project ws-id :design design reading (when design (effective-design ledger design)) run-id
                       (get-in ctx [:carry :stale]))
         ;; A decision that would not proceed, standing at this tree: the round points at it rather
         ;; than asking a judge again, and goes on as that decision sends it — to the amender, or to
         ;; the person it asks.
         stands? (complement report/proceeds?)
+        lost    (ledger-lost ctx ledger)
         reused  (standing-judgement ctx ledger :design-decision :design-seq design reading stands?)
         again   (rejudged ctx ledger design reading
                           (newest-judgement ledger :design-decision :design-seq design) stands?)
         asked   (cond reused #{} design (decision-asked design settled))
-        judged  (when-not reused
+        judged  (when-not (or lost reused)
                   (design-decision!
-                   {:cwd cwd :code-cwd code-cwd :run-id run-id :reviewer reviewer
+                   {:cwd cwd :ledger ledger :code-cwd code-cwd :run-id run-id :reviewer reviewer
                     :design design :settled settled :prior prior :listing listing
                     :code-identity (:code-identity reading)
                     :subject-identities (:subject-identities reading)
                     :label (str "design-decision-round-" (:iter ctx))
                     :disputes (disputes-for-judge (:history ctx))}))
-        record (or reused
+        record (or lost
+                   reused
                    (-> (dissoc judged :tree-moved)
                        (stamp-run (:config ctx))
                        (with-readings #(or (report/proceeds? %) (asks-only? %))
@@ -5531,7 +5550,8 @@
         put!    (fn [ledger record] (if reused (reused-answer reused) (append! ledger record)))
         record (cond-> record (seq (spent running)) (assoc :spent (spent running)))
         ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
-                          (update :carry dissoc :stale))
+                          (update :carry dissoc :stale)
+                          (cond-> ledger (assoc-in [:carry :ledger] ledger)))
                       (when (:seq design) {:judged-seq (:seq design)})
                       (when-let [m (:tree-moved judged)] {:tree-moved m})
                       (when again {:rejudged again})
@@ -5791,7 +5811,7 @@
         ;; narrow follow-up written beside the broad baseline it came out of — and
         ;; repairing the newest instead would leave the cited one untouched
         ;; however many rounds it ran.
-        cited (stages/discover-baseline cwd (ws/latest-entry project ws-id :design))
+        cited (stages/cited-baseline [project ws-id] (ws/latest-entry project ws-id :design))
         ;; Not the design round's tree: that one carries the design's declaration,
         ;; which a baseline describing the area before the change must not be
         ;; judged against. A tree the caller named is read as given.
@@ -5847,7 +5867,7 @@
   "What the design amender is told to repair `prev` for this round's `recommend`, shown `baseline`
    beside it and answering into `out-path`."
   [ctx prev recommend baseline out-path declared?]
-  (let [[project ws-id] (stages/project+ws-from-cwd (:cwd (:config ctx)))]
+  (let [[project ws-id] (ledger-of (:config ctx))]
     (design-amend-prompt
      {:design prev
       :baseline baseline
@@ -5876,7 +5896,7 @@
   [ctx recommend baseline]
   (let [{:keys [cwd run-id]} (:config ctx)
         code-cwd (or (:code-cwd (:config ctx)) cwd)
-        [project ws-id] (stages/project+ws-from-cwd cwd)
+        [project ws-id] (ledger-of (:config ctx))
         prev     (ws/latest-entry project ws-id :design)
         dir      (cstate/run-dir run-id)
         out-path (str (fs/path dir (str "design-amend-round-" (:iter ctx) ".edn")))
@@ -5979,9 +5999,9 @@
 
 (defn- run-design-amend-stage
   [ctx]
-  (let [{:keys [cwd dry-run?]} (:config ctx)
+  (let [{:keys [dry-run?]} (:config ctx)
         recommend (get-in ctx [:record :recommend])
-        [project ws-id] (stages/project+ws-from-cwd cwd)]
+        [project ws-id :as ledger] (ledger-of (:config ctx))]
     (cond
       dry-run?
       (assoc ctx :control :stop :status :dry-run)
@@ -5994,8 +6014,8 @@
 
       :else
       (amend-design! ctx recommend
-                     (stages/discover-baseline
-                      cwd (ws/latest-entry project ws-id :design))))))
+                     (stages/cited-baseline
+                      ledger (ws/latest-entry project ws-id :design))))))
 
 (def design-amend-stage
   "Repair whatever the recommendation named — the record, the cut, or the
@@ -6003,7 +6023,7 @@
 
    The premise takes two steps, and skipping the second is how the loop fails to
    converge. A re-survey repairs the BASELINE, but the design still cites the
-   baseline that was wrong, and `discover-baseline` resolves the citation rather
+   baseline that was wrong, and `cited-baseline` resolves the citation rather
    than the newest entry — deliberately, so a later baseline cannot silently change
    what an already-judged design was judged against. So a re-survey alone changes
    nothing the next round can see: it would judge the same design against the
@@ -6096,10 +6116,10 @@
             path     (str (fs/path dir (str "amend-prompt-round-" iter ".md")))
             cwd      (get-in final [:config :cwd])
             message  (if design?
-                       (let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+                       (let [[project ws-id :as ledger] (ledger-of (:config final))]
                          (design-amend-message
                           final (ws/latest-entry project ws-id :design) (:recommend record)
-                          (stages/discover-baseline cwd (ws/latest-entry project ws-id :design))
+                          (stages/cited-baseline ledger (ws/latest-entry project ws-id :design))
                           out-path
                           (some? (design-check/design-of project (or (get-in final [:config :code-cwd]) cwd)))))
                        (baseline-amend-message final (under-repair final) out-path))]

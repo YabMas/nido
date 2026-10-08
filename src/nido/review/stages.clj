@@ -1743,6 +1743,17 @@
       (when (phase/delivered? d (ledger-rows project ws-id))
         d))))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe [:tuple :keyword :string]] [:maybe :map]] [:maybe :map]]}
+  cited-baseline
+  "`discover-baseline` on a `[project ws-id]` ledger already resolved — what a run that pinned its
+   ledger at start reads through, since resolving it again from a directory can answer nil while
+   the session restarts. nil for a nil ledger, as for a design citing no baseline."
+  [[project ws-id] design]
+  (when-let [n (get-in design [:baseline :seq])]
+    (when project
+      (let [e (ws/entry-at-seq project ws-id n)]
+        (when (= :baseline (:format e)) e)))))
+
 (defn ^{:malli/schema [:=> [:cat :Path :map] [:maybe :map]]}
   discover-baseline
   "The baseline `design` was judged against — the entry it CITES, not the newest
@@ -1754,10 +1765,8 @@
    there was no baseline, and the judge is told so instead of being handed
    something invented in its place."
   [cwd design]
-  (when-let [n (get-in design [:baseline :seq])]
-    (when-let [[project ws-id] (project+ws-from-cwd cwd)]
-      (let [e (ws/entry-at-seq project ws-id n)]
-        (when (= :baseline (:format e)) e)))))
+  (when (get-in design [:baseline :seq])
+    (cited-baseline (project+ws-from-cwd cwd) design)))
 
 (def ^:private named-file-re
   #"[A-Za-z0-9_./-]*[A-Za-z][A-Za-z0-9_./-]*\.(?:clj|cljs|cljc|bb|edn|sql|md|js|ts|tsx|py|java)\b")

@@ -27,8 +27,8 @@
    noticing they are repeating themselves."
   (Operation baseline-round-worth-running? "Whether a baseline is worth verifying."
     {:signature [:=> [:catn [:baseline :map]] :boolean]})
-  (Operation discover-intent "The intent a design cited."
-    {:signature [:=> [:catn [:cwd Path] [:design :map]] [:maybe :map]]})
+  (Operation discover-intent "The intent a design cited, read off the ledger the run pinned."
+    {:signature [:=> [:catn [:ledger [:maybe [:tuple :keyword :string]]] [:design :map]] [:maybe :map]]})
   (Operation unresolved-subjects
     "The subjects a record's claims name that a listing of the declared design does not hold under
      the sort the record gives them — empty when every one resolves. Given the listing rather than

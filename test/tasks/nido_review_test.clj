@@ -2585,3 +2585,17 @@
                                                          :owner-layer "transport" :sweep true}]}
                                             {:rounds []} "/runs/r/report.json"))]
     (is (str/includes? out "ruled, never dispatched: 14d31b83 (transport, sweep)"))))
+
+(deftest a-record-analysis-names-the-ledger-the-run-pinned
+  ;; Seen live: a design run ended while its session restarted, and its analysis headline read
+  ;; `Reviewed:  / ` — re-resolving the session from cwd at the end found nothing, so a run that had
+  ;; appended to a workstream was reported as having reviewed none.
+  (let [sent (atom nil)]
+    (with-redefs [lifecycle/session-from-cwd (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] nil)
+                  nido.review.analysis/enqueue! (fn [run] (reset! sent run))]
+      (#'t/queue-record-analysis! "/code/brian/.worktrees/agentic-rag" [:brian "ws-1"] "design"
+                                  {:status :ledger-lost :history []} {} "/r.json" {:run-id "r1"})
+      (is (= [:brian "agentic-rag" "ws-1"]
+             ((juxt :reviewed-project :reviewed-session :reviewed-ws-id) @sent))
+          "the analysis names the workstream the run judged, not a fresh reading of a restarting session"))))

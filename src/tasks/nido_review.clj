@@ -1903,6 +1903,7 @@
    :amend-touched-code "the amender wrote to the paths named above; whatever it wrote is still there, and its answer was not appended — if the answer is right, append it with the command above rather than re-typing it"
    :dry-run    "nothing was amended"
    :no-workstream "run this from a nido session — its worktree or its session home"
+   :ledger-lost "the workstream this run was judging stopped resolving from its worktree mid-run — the session was restarting under it; nothing is missing, so re-run once the session is back up"
    :codex-failed "the judge did not run — this is NOT a clean result"
    :reviewer-unavailable "the judge's vendor would not run it, retries included — the judge phase's detail quotes why; NOT a clean result"
    :no-output  "the judge ran and wrote nothing — NOT a clean result"
@@ -1978,10 +1979,16 @@
    rounds launched a judge — the gate refuses a run with none — how many amended, what was given up
    and argued, the record it judged and, for a design run, the checks its last decision still marks
    broken. The figures per check are not counted here: `bb nido:review:figures` derives them from
-   the ledger, which holds what this run's report drops."
-  [cwd kind final report report-path {:keys [run-id dry-run?]}]
-  (let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd) {})
-        [_ ws-id] (stages/project+ws-from-cwd cwd)
+   the ledger, which holds what this run's report drops.
+
+   The workstream it names is `ledger`, the one the run pinned at start, and never a fresh reading
+   of `cwd`: a run that ended because its session was restarting would otherwise be reported as
+   having reviewed nothing. The session falls back to the worktree's directory name, which is the
+   session's name, for the same reason."
+  [cwd ledger kind final report report-path {:keys [run-id dry-run?]}]
+  (let [{:keys [session]} (or (lifecycle/session-from-cwd cwd) {})
+        [project ws-id] ledger
+        session   (or session (when project (str (fs/file-name cwd))))
         history   (:history final)
         rec       (:record final)]
     (analysis/enqueue!
@@ -2073,7 +2080,7 @@
     (println (str kind "-loop: " (name status) " · report " report-path))
     ;; Before anything below can throw: the run is over, and how it went is worth reading whatever
     ;; the rest of this prints.
-    (queue-record-analysis! cwd kind final @report-atom report-path {:run-id run-id :dry-run? dry-run?})
+    (queue-record-analysis! cwd ledger kind final @report-atom report-path {:run-id run-id :dry-run? dry-run?})
     ;; :amend-error is one of two ways a run explains itself. The other is the
     ;; :detail on a no-verdict outcome, and it was never printed — so a run that
     ;; stopped because the design cites an unverified baseline said which status it

@@ -531,9 +531,8 @@
   ;; The append boundary refuses a design citing anything but an :intent, so a citation that
   ;; resolves to another kind was never written through it and projects no goal.
   (let [cited (fn [entry]
-                (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
-                              ws/entry-at-seq            (fn [_ _ _] entry)]
-                  (record/discover-intent "/w" {:intent {:seq 1}})))]
+                (with-redefs [ws/entry-at-seq (fn [_ _ _] entry)]
+                  (record/discover-intent [:nido "ws-1"] {:intent {:seq 1}})))]
     (is (= {:goal "Checkout off by a cent" :done-when ["one rounding point"]}
            (cited {:format :intent :goal "Checkout off by a cent"
                    :done-when ["one rounding point"]})))
