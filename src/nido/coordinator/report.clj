@@ -4105,6 +4105,16 @@
 
 (def ^:private held-once-words " on one reading — second reading owed")
 
+(defn- proceeds-once?
+  "Whether a design decision would proceed (`proceeds?`) but for resting on a first reading — of a
+   claim it confirmed (:read-once) or of an amendment its own run made (:amendment-read-once). The
+   design decision's `held-once?`: such a decision is appended as the reading it is and clears
+   nothing, so a surface that names it says so rather than titling it the proceed it is not —
+   one was listed plain 'proceed' beside the clearing decision its second reading became."
+  [decision]
+  (boolean (and (or (seq (:read-once decision)) (:amendment-read-once decision))
+                (proceeds? (dissoc decision :read-once :amendment-read-once)))))
+
 (def verdict-invalidates
   "The design verdicts that put the design itself in question rather than its
    execution — the two a human has to answer rather than read.
@@ -4219,7 +4229,7 @@
    "\n"
    (remove nil?
      (concat
-      [(str "# Design decision: " (name recommend))
+      [(str "# Design decision: " (name recommend) (when (proceeds-once? decision) held-once-words))
        (str "of entry " design-seq)
        "" reason
        "\n## Derived — already ruled on, so you do not have to"]
@@ -4463,7 +4473,8 @@
     :review-report            (str "Review: " (name (:status report)))
     :baseline-review          (str "Baseline review: " (name (:verdict report))
                                    (when (held-once? report) held-once-words))
-    :design-decision          (str "Design decision: " (name (:recommend report)))
+    :design-decision          (str "Design decision: " (name (:recommend report))
+                                   (when (proceeds-once? report) held-once-words))
     :design-verdict           (str "Design verdict: " (name (:verdict report)))
     :findings                 (str "Findings round " (:round report)
                                    " (" (count (:items report)) " items)")

@@ -2107,6 +2107,24 @@
         "the first reading of an amendment is one reading too")
     (is (= "Baseline review: sufficient" (report/report-title (dissoc once :read-once))))))
 
+(deftest a-design-decision-proceeding-on-one-reading-is-not-titled-plain-proceed
+  ;; Entry 41 on brian's ws-20261003-259a1f recommended :proceed over eight claims read once and an
+  ;; amendment's first reading; it was listed 'Design decision: proceed' beside entry 42, the second
+  ;; reading that actually cleared the design, so the index showed two clearances where one stood.
+  (let [once {:format :design-decision :recommend :proceed :design-seq 40 :reason "ok"
+              :checks [] :asks "nothing" :read-once ["queries-are-total"]}]
+    (is (= "Design decision: proceed on one reading — second reading owed" (report/report-title once))
+        "a decision appended as a reading clears nothing, and its title must not read as the one that does")
+    (is (str/starts-with? (report/report->markdown once)
+                          "# Design decision: proceed on one reading — second reading owed"))
+    (is (= "Design decision: proceed on one reading — second reading owed"
+           (report/report-title (-> once (dissoc :read-once) (assoc :amendment-read-once true))))
+        "the first reading of an amendment is one reading too")
+    (is (= "Design decision: proceed" (report/report-title (dissoc once :read-once)))
+        "a second reading that proceeds is the clearing decision, titled as before")
+    (is (= "Design decision: ask" (report/report-title (assoc once :recommend :ask)))
+        "a read-once :ask never read as a clearance, so it gains no qualifier")))
+
 (deftest a-decisions-asks-waits-on-the-repair-it-recommends
   ;; A capped run's :amend decision asked "after the corrections, do you grant…", and every surface
   ;; showed it as a gate open now over corrections the cap had stopped anyone making.
