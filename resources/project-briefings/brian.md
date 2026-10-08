@@ -37,6 +37,15 @@ run `Agent` with `subagent_type=Explore` first.
    the credential is on the machine. See
    `~/Code/nido/docs/reference/notion-access.md`.
 
+### Commits and PR titles
+
+brian's convention is `type(scope): message` — read
+`~/Code/brian/docs/guidelines/commits.md` before the first commit. The
+merge queue squashes, so the PR title becomes the commit on trunk and
+follows the same convention. brian enforces it with a `commit-msg` hook;
+nido's commit gate runs that hook on `jj git push` and on a titled
+`gh pr create` / `gh pr edit`.
+
 ### Clojure REPL execution
 
 The nREPL port for this session is in the briefing at the top of this

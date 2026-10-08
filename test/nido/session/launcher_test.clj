@@ -174,6 +174,9 @@
     (testing "the subject-line rules a writer cannot recover afterwards"
       (is (str/includes? doc "If applied, this commit will"))
       (is (str/includes? doc "never past 72")))
+    (testing "the subject's form defers to the project's convention"
+      (is (str/includes? doc "The subject's form is the project's"))
+      (is (str/includes? doc "commit gate")))
     (testing "narration is evicted, but a rejected alternative is not"
       (is (str/includes? doc "never your route to it"))
       (is (str/includes? doc "MERITS")

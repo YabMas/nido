@@ -543,10 +543,13 @@
        "\n"
        "**Lead with the problem, not with what you built.** What the system did,\n"
        "why that was wrong, who it bit — then what you did, then why this way,\n"
-       "then the shortcomings you already know about. Subject line: imperative\n"
-       "(*If applied, this commit will* ___), about 50 characters, never past 72,\n"
-       "and no \"and\" — needing one means the subject lists parts instead of\n"
-       "naming the change.\n"
+       "then the shortcomings you already know about.\n"
+       "\n"
+       "**The subject's form is the project's, not this doctrine's.** Read its\n"
+       "convention before the first commit — the project briefing names where.\n"
+       "Absent one: imperative (*If applied, this commit will* ___), about 50\n"
+       "characters, never past 72. Either way no \"and\" — needing one means the\n"
+       "subject lists parts. A PR title follows it too: a squash merge keeps it.\n"
        "\n"
        "**Describe the change, never your route to it.** The approach you tried\n"
        "first, what a review round told you, how many rounds it took, what you\n"
@@ -567,7 +570,9 @@
        "after Google's eng-practices, the Linux kernel's SubmittingPatches, Beams\n"
        "and Pope. `/stack` §5 owns the skeleton and your project owns the\n"
        "subject's spelling; the doctrine owns what fills the slots. Nothing\n"
-       "checks it — no lane, no gate — so it holds only if you apply it.\n"))
+       "checks it, so it holds only if you apply it. The spelling IS checked:\n"
+       "nido's commit gate runs the project's `commit-msg` hook, which jj never\n"
+       "runs, and blocks a `jj git push` or titled `gh pr` it rejects.\n"))
 
 (defn- render-edit-location
   "The 'where do edits land' paragraph, conditioned on vcs-mode so the
