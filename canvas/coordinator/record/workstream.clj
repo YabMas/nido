@@ -52,7 +52,12 @@
     {:signature [:=> [:catn] WorkstreamId]
      :delegates [clock/now-iso]})
   (Operation read-ws
-    "One workstream by id, or nil. Normalises what older records spelled differently."
+    "One workstream by id, or nil. Normalises what older records spelled differently, and reads
+     its index as the entries directory has it: an absent index rebuilt, a row naming a file the
+     directory does not hold under that :seq and kind replaced or dropped, and every other row
+     read as the row kept beside its entry — kept there by this read when none was, which freezes
+     the facts only the index held. Files no row names are the one gap left — an interrupted
+     append, which `index-drift` reports."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe Workstream]]
      :delegates [state/workstream-edn-path]})
   (Operation write!
@@ -64,20 +69,24 @@
     {:signature [:=> [:catn [:project ProjectName] [:base :map]] Workstream]
      :delegates [mint-id write! clock/now-iso]})
   (Operation advance-stage!
-    "Move a workstream to a new stage, recording where it came from. A no-op when it is already
-     there, so a repeated event does not litter the history."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:new-stage :keyword]] Workstream]
-     :delegates [read-ws write! clock/now-iso]})
+    "Move a workstream to a new stage, recording where it came from and appending the move as a
+     :stage-set entry naming who decided it. A no-op when it is already there, so a repeated
+     event does not litter the history."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:new-stage :keyword]
+                      [:by [:? [:enum :person :nido :backfill]]]] Workstream]
+     :delegates [read-ws write! clock/now-iso append-lock-path]})
   (Operation set-facets!
     "Overwrite a workstream's classification facets."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:facets :map]] Workstream]
      :delegates [read-ws write!]})
   (Operation close!
-    "Settle a workstream terminally — done, dropped or dismissed."
+    "Settle a workstream terminally — done, dropped or dismissed — and append the close as a
+     :closed entry in the same write."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:outcome :keyword]] Workstream]
      :delegates [read-ws write! clock/now-iso]})
   (Operation reopen!
-    "Un-settle a workstream: clear its outcome and put it back on a stage."
+    "Un-settle a workstream: clear its outcome, put it back on a stage, and append a :reopened
+     entry in the same write."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:stage :keyword]] Workstream]
      :delegates [read-ws write! clock/now-iso]})
   (Operation set-findings!
@@ -89,6 +98,22 @@
      never queue behind each other."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Path]
      :delegates [state/workstream-dir]})
+  (Operation newest-record
+    "The index row of the newest entry that records the work rather than a status decision —
+     what every reader asking `what happened last` means."
+    {:signature [:=> [:catn [:w Workstream]] [:maybe :map]]})
+  (Operation rebuilt-index
+    "The index the entries directory implies: each entry's row as kept beside it, else the row the
+     given record's index holds, else the row its file name implies — a kept or held row only when it names that file. The
+     index is a cache of this."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:w :any]] [:vector :map]]
+     :delegates [state/workstream-dir]})
+  (Operation freeze-index!
+    "Keep beside every indexed entry the row its index holds, for each that has none — the only
+     copy of an earlier entry's :at and :amended-by — so the index can be deleted and rebuilt.
+     `read-ws` is what keeps them; this reads under the lock and counts what that read kept."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :int]
+     :delegates [append-lock-path read-ws state/workstream-dir state/workstream-edn-path]})
   (Operation append-entry!
     "Append an immutable entry and record it in the index, under the workstream's lock."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:entry :map] [:content :string]] Path]

@@ -1281,6 +1281,32 @@
               "every entry file is named by an index row, so the listing hides nothing")))
       (finally (fs/delete-tree tmp)))))
 
+(deftest an-index-whose-rows-disagree-with-the-files-reads-as-the-files-have-it
+  ;; A present index is a cache like an absent one: a row naming a file that is not there, or
+  ;; naming another entry's file, is not an answer a reader may be given.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (let [id   (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+              _    (ws/append-entry! :brian id {:kind :note} "one")
+              _    (ws/append-entry! :brian id {:kind :note} "two")
+              good (:entries (ws/read-ws :brian id))
+              path (cstate/workstream-edn-path :brian id)
+              raw  (io/read-edn path)]
+          (io/write-edn! path (assoc raw :entries
+                                    [(first good)
+                                     (assoc (second good) :file "entries/0001-note.md")
+                                     {:kind :design :seq 7 :file "entries/0007-design.edn"}]))
+          (is (= good (:entries (ws/read-ws :brian id)))
+              "the misnamed row reads as the file its :seq holds, and the phantom is gone")
+          (spit (str (fs/path (cstate/workstream-dir :brian id) "entries" "0003-note.md")) "lost")
+          (io/write-edn! path (assoc raw :entries [(first good) (first good) (second good)]))
+          (is (= good (:entries (ws/read-ws :brian id)))
+              "a repeated row reads once")
+          (is (= ["0003-note.md"] (ws/index-drift :brian id))
+              "and a file no row names is still the interrupted append it was")))
+      (finally (fs/delete-tree tmp)))))
+
 (deftest an-append-identified-by-what-it-records-happens-once
   ;; An append that died between its payload and its index row left a record no reader of the index
   ;; could see, and retrying the same append wrote a second copy beside it.
@@ -1302,10 +1328,19 @@
           (is (= [1 2] (mapv :seq (:entries (ws/read-ws :brian id)))))
           (is (nil? (ws/index-drift :brian id)))
           (is (= "o/r#2" (:pr (ws/latest-entry :brian id :merged))))
+          (is (= (:entries (ws/read-ws :brian id)) (ws/rebuilt-index :brian id {:entries []}))
+              "the row it gave the entry is kept beside it, so a rebuild answers the same")
           (spit (str (fs/path dir "0003-merged.edn")) "{:format :merged")
           (is (contains? (once "o/r#3") :appended) "a file that does not parse matches nothing")
           (is (= "{:format :merged" (slurp (str (fs/path dir "0003-merged.edn"))))
-              "and is left as it is")))
+              "and is left as it is")
+          ;; The crash after the row beside the entry was written: the index takes that row.
+          (let [side {:kind :merged :seq 5 :at "2026-01-01T00:00:00Z" :file "entries/0005-merged.edn"}]
+            (spit (str (fs/path (cstate/workstream-dir :brian id) "entries.meta" "0005.edn")) (pr-str side))
+            (spit (str (fs/path dir "0005-merged.edn")) (pr-str (landed "o/r#5")))
+            (is (contains? (once "o/r#5") :indexed))
+            (is (= side (last (:entries (ws/read-ws :brian id)))))
+            (is (= side (last (ws/rebuilt-index :brian id {:entries []})))))))
       (finally (fs/delete-tree tmp)))))
 
 ;; ── Implementing what nobody granted ────────────────────────────────────────
@@ -1894,10 +1929,11 @@
 (deftest open-phase-refuses-blank-evidence
   (with-tmp
     (fn [_]
-      (let [w (landed-first-phase!)]
+      (let [w      (landed-first-phase!)
+            before (count (:entries (ws/read-ws :brian (:id w))))]
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no evidence"
                               (ws/open-phase! :brian (:id w) (assoc second-phase :evidence "   "))))
-        (is (= 4 (count (:entries (ws/read-ws :brian (:id w))))) "nothing written")))))
+        (is (= before (count (:entries (ws/read-ws :brian (:id w))))) "nothing written")))))
 
 (deftest open-phase-opens-on-the-close-whether-or-not-the-merged-was-written
   ;; The close is the landing's record for the gate. A :merged whose best-effort

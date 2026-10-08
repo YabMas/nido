@@ -145,7 +145,7 @@
    (e.g. a legacy markdown report or a non-triage entry)."
   [project br-id]
   (when-let [w (cws/find-by-ref-id project br-id)]
-    (when-let [e (last (:entries w))]
+    (when-let [e (cws/newest-record w)]
       (when (str/ends-with? (str (:file e)) ".edn")
         (io/read-edn (str (fs/path (cstate/workstream-dir project (:id w)) (:file e))))))))
 

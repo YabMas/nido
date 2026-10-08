@@ -35,7 +35,7 @@
                                      :session "sess-1"})]
             (is (= 1 (:round res)))
             (let [w2 (ws/read-ws :brian (:id w))]
-              (is (= :findings (-> w2 :entries last :kind)))
+              (is (= :findings (-> w2 ws/newest-record :kind)))
               (is (= #{"f1" "f2"} (-> w2 :findings :open)))
               (is (= 1 (-> w2 :findings :round)))
               (is (nil? (:closed w2)))
@@ -103,7 +103,7 @@
           (ws/close! :brian (:id w) :done)
           (findings/file! :brian (:id w) {:items [{:summary "A" :severity :tweak}]})
           ;; active-ledger reads OWN entries when non-empty → findings must land there
-          (is (= :findings (-> (ws/read-ws :brian (:id w)) :entries last :kind)))
+          (is (= :findings (-> (ws/read-ws :brian (:id w)) ws/newest-record :kind)))
           ;; and NOT in the ticket ledger
           (is (not-any? #(= :findings (:kind %))
                         (:entries (tickets/read-meta :brian "BR-8")))))))))

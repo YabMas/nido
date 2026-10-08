@@ -161,8 +161,8 @@
         (println (str "[dry-run] " (:id w) " · " desc))
         (do
           (case (if (keyword? action) action (first action))
-            :close-done    (ws/close! project (:id w) :done)
-            :close-dropped (ws/close! project (:id w) :dropped)
+            :close-done    (ws/close! project (:id w) :done nil :notion)
+            :close-dropped (ws/close! project (:id w) :dropped nil :notion)
             :advance       (ws/advance-stage! project (:id w) (second action)))
           (ws/append-entry! project (:id w) {:kind :note} desc)
           (println (str "notion-sync: " (:id w) " · " desc)))))))

@@ -70,7 +70,7 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   close* [{:keys [project outcome] :as opts}]
-  (ws/close! (keyword project) (resolve-ws-id opts) (keyword (or outcome "done"))))
+  (ws/close! (keyword project) (resolve-ws-id opts) (keyword (or outcome "done")) nil :person))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   ref-add*

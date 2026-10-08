@@ -131,11 +131,15 @@
 ;; ── Reading the ledger ──────────────────────────────────────────────────────
 
 (defn- kinds
-  "The set of entry kinds this ledger holds. Read from the INDEX rather than by
-   parsing every entry: the index is what `append-entry!` maintains, and a
-   presence question does not need a payload."
+  "The set of entry kinds this ledger holds that record the work. Read from the INDEX rather than
+   by parsing every entry: the index is what `append-entry!` maintains, and a presence question
+   does not need a payload.
+
+   A status entry — a close, a stage set — is not among them: it records a decision about the
+   workstream, not a record the arc is made of, and a ledger holding only one is as empty of the
+   work as one holding none."
   [w]
-  (into #{} (map :kind) (:entries w)))
+  (into #{} (comp (map :kind) (remove ws/status-kinds)) (:entries w)))
 
 (def ^:private legible-kinds
   "Every entry kind this vocabulary knows how to read — whether it carries a

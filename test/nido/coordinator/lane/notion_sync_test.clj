@@ -172,10 +172,11 @@
         (with-redefs [notion/keychain-token (constantly "tok")
                       notion/retrieve-page  (fn [pid _] (get pages pid))]
           (ns-sync/poll-and-react! :brian cfg)
-          (ns-sync/poll-and-react! :brian cfg))
-        (let [w (ws/read-ws :brian (:id mine))]
-          (is (= :in-progress (:stage w)))
-          (is (= 1 (count (:entries w))) "second poll is a no-op, appends nothing"))))))
+          (let [after-first (count (:entries (ws/read-ws :brian (:id mine))))]
+            (ns-sync/poll-and-react! :brian cfg)
+            (let [w (ws/read-ws :brian (:id mine))]
+              (is (= :in-progress (:stage w)))
+              (is (= after-first (count (:entries w))) "second poll is a no-op, appends nothing"))))))))
 
 (deftest poll-dry-run-mutates-nothing
   (with-tmp

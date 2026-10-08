@@ -161,7 +161,7 @@
    BR-#### ref), or nil."
   [project br]
   (when (and br (not (str/blank? br)))
-    (:kind (last (:entries (ws/find-by-ref-id project br))))))
+    (some-> (ws/find-by-ref-id project br) ws/newest-record :kind)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :any :RunId :any] :keyword]}
   classify-outcome

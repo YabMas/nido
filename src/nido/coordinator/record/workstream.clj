@@ -103,13 +103,37 @@
   [w]
   (cond-> w (= :inbox (:stage w)) (assoc :stage :incoming)))
 
+(def status-kinds
+  "Entry kinds that record a decision about a workstream's status — settled, reopened, put at a
+   stage, findings resolved, born a one-off, a Notion status seen — rather than a record of the
+   work. They are the ledger's copy of what used to be overwritten in place.
+
+   Kept apart because the work's own records are what everything asking `what happened last`
+   means: a close appended after a completed implementation must not become the answer to
+   `how did the merge run end`."
+  #{:closed :reopened :stage-set :findings-resolved :scratch :notion-status})
+
+(defn ^{:malli/schema [:=> [:cat :Workstream] [:maybe :map]]}
+  newest-record
+  "The index row of the newest entry that records the work rather than its status, or nil."
+  [w]
+  (last (remove #(status-kinds (:kind %)) (:entries w))))
+
+(declare rebuilt-index reconciled-index)
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Workstream]]}
   read-ws
   "Read a workstream.edn by project + id. Returns nil if absent. Normalizes the
    legacy :inbox stage to :incoming (see normalize-legacy-stage)."
   [project ws-id]
   (some-> (io/read-edn-cached (cstate/workstream-edn-path project ws-id))
-          normalize-legacy-stage))
+          normalize-legacy-stage
+          ;; The index is a cache of entries/: a record that lost it reads the one the
+          ;; directory rebuilds rather than an empty ledger, and one whose rows name files the
+          ;; directory does not hold reads those rows as the directory has them.
+          (as-> w (assoc w :entries (if (contains? w :entries)
+                                      (reconciled-index project ws-id w)
+                                      (rebuilt-index project ws-id w))))))
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] :Workstream]}
   write!
@@ -156,22 +180,27 @@
               (seq facets) (assoc :facets facets))]
     (write! w)))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :Workstream]}
+(declare record-status!)
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword [:? [:enum :person :nido :backfill]]] :Workstream]}
   advance-stage!
-  "Move a workstream to `new-stage`, appending to :stage-history. No-op (no
-   history entry) when already at `new-stage`. Throws if the workstream is
-   absent, or if `new-stage` is outside session/storable-stages — checked ahead
-   of the no-op, so re-setting a foreign stage is refused rather than quietly
-   accepted. Returns the updated record."
-  [project ws-id new-stage]
-  (check-stage! new-stage :advance-stage!)
-  (let [w (or (read-ws project ws-id)
-              (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
-    (if (= new-stage (:stage w))
-      w
-      (write! (-> w
-                  (assoc :stage new-stage)
-                  (update :stage-history conj {:at (clock/now-iso) :stage new-stage}))))))
+  "Move a workstream to `new-stage`, appending to :stage-history, and record the move as a
+   :stage-set entry in the same write. `by` is who decided it — a person, or nido itself (the
+   default). No-op (no history entry, no entry) when already at `new-stage`. Throws if the
+   workstream is absent, or if `new-stage` is outside session/storable-stages — checked ahead of
+   the no-op, so re-setting a foreign stage is refused rather than quietly accepted. Returns the
+   updated record."
+  ([project ws-id new-stage] (advance-stage! project ws-id new-stage :nido))
+  ([project ws-id new-stage by]
+   (check-stage! new-stage :advance-stage!)
+   (when-not (read-ws project ws-id)
+     (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+   (record-status! project ws-id
+                   (fn [w] (when-not (= new-stage (:stage w))
+                             {:format :stage-set :stage new-stage :by by}))
+                   (fn [w] (-> w
+                               (assoc :stage new-stage)
+                               (update :stage-history conj {:at (clock/now-iso) :stage new-stage}))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Workstream]}
   set-facets!
@@ -196,13 +225,19 @@
    as the board veto. Idempotent write of :closed. Returns the updated record.
 
    `design-seq`, given with :between-phases, names the design whose plan the landing
-   paused: it governs the workstream until its gate opens (`plan-design`)."
+   paused: it governs the workstream until its gate opens (`plan-design`). `by`, when given,
+   is who settled it, recorded on the :closed entry appended in the same write."
   ([project ws-id outcome] (close! project ws-id outcome nil))
-  ([project ws-id outcome design-seq]
-   (let [w (or (read-ws project ws-id)
-               (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
-     (write! (assoc w :closed (cond-> {:at (clock/now-iso) :outcome outcome}
-                                design-seq (assoc :design {:seq design-seq})))))))
+  ([project ws-id outcome design-seq] (close! project ws-id outcome design-seq nil))
+  ([project ws-id outcome design-seq by]
+   (when-not (read-ws project ws-id)
+     (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+   (record-status! project ws-id
+                   (fn [_] (cond-> {:format :closed :outcome outcome}
+                             design-seq (assoc :design {:seq design-seq})
+                             by         (assoc :by by)))
+                   (fn [w] (assoc w :closed (cond-> {:at (clock/now-iso) :outcome outcome}
+                                              design-seq (assoc :design {:seq design-seq})))))))
 
 (defn- reopened
   "`w` un-terminalized at `stage`: :closed cleared, and a stage-history entry marked :reopened."
@@ -215,15 +250,17 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :Workstream]}
   reopen!
-  "Un-terminalize a settled workstream: clear :closed, set :stage, and record a
-   stage-history entry marked :reopened. No-op write when already open at `stage`.
-   Throws if the workstream is absent. Returns the record."
-  [project ws-id stage]
-  (let [w (or (read-ws project ws-id)
-              (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
-    (if (and (nil? (:closed w)) (= stage (:stage w)))
-      w
-      (write! (reopened w stage)))))
+  "Un-terminalize a settled workstream: clear :closed, set :stage, record a stage-history entry
+   marked :reopened, and append a :reopened entry in the same write. No-op write when already
+   open at `stage`. Throws if the workstream is absent. Returns the record."
+  ([project ws-id stage] (reopen! project ws-id stage nil))
+  ([project ws-id stage by]
+   (when-not (read-ws project ws-id)
+     (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+   (record-status! project ws-id
+                   (fn [w] (when-not (and (nil? (:closed w)) (= stage (:stage w)))
+                             (cond-> {:format :reopened :stage stage} by (assoc :by by))))
+                   #(reopened % stage))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :map]] :Workstream]}
   set-findings!
@@ -1346,6 +1383,148 @@
       ;; reads the index it is handed and parses nothing.
       gate? (assoc :opens (:opens body)))))
 
+(defn- meta-rel
+  "Where the index row of the entry numbered `seq-n` is kept beside the ledger.
+
+   Its own directory rather than a second file under entries/, because entries/ IS the ledger
+   and every reading of it — the next :seq, the drift report — takes any numbered file there for
+   an entry."
+  [seq-n]
+  (format "entries.meta/%04d.edn" seq-n))
+
+(defn- write-entry-files!
+  "Write an entry's index row beside it, then the entry itself. The row first, so any entry file
+   an append wrote has the row its index would have held: :at, :session and :amended-by exist
+   nowhere in the payload, and an index rebuilt without them would answer differently."
+  [project ws-id row abs payload]
+  (io/write-edn! (str (fs/path (cstate/workstream-dir project ws-id) (meta-rel (:seq row)))) row)
+  (io/write-text! abs payload))
+
+(defn- implied-row
+  "The row an entry file's name implies when nothing kept or held one, with what `index-row`
+   mirrors out of the payload — `:under`, and a gate's `:opens` — read back out of it, since a
+   reader of the index parses nothing. A payload that does not parse mirrors nothing."
+  [dir rel seq-n kind]
+  (let [gate? (= :phase-gate kind)
+        body  (when (or gate? (contains? trail-kinds kind))
+                (try (edn/read-string (slurp (str (fs/path dir rel)))) (catch Exception _ nil)))
+        under (when (map? body) (get-in body [:design :seq]))]
+    (cond-> {:kind kind :seq seq-n :file rel}
+      under                    (assoc :under under)
+      (and gate? (map? body))  (assoc :opens (:opens body)))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:vector :map]]}
+  rebuilt-index
+  "The :entries index entries/ implies, in :seq order: each file's row as written beside it, else
+   the row `w`'s index holds for that :seq — the only copy of an earlier entry's :at and
+   :amended-by, which `freeze-index!` keeps beside it — else the row its file name implies
+   (`implied-row`). A row kept or held is taken only when it names that file.
+
+   Files a row names go in however they were written, so this is the index of the directory, not
+   of the appends that succeeded: a file an interrupted append left is in it."
+  [project ws-id w]
+  (let [dir    (cstate/workstream-dir project ws-id)
+        frozen (into {} (map (juxt :seq identity)) (:entries w))]
+    (vec (for [fname (entry-filenames project ws-id)
+               :let  [[_ n kind] (re-find #"^(\d{4})-(.+)\.[a-z]+$" fname)
+                      seq-n      (parse-long n)
+                      side       (io/read-edn (str (fs/path dir (meta-rel seq-n))))]]
+           (or (some #(when (= (str "entries/" fname) (:file %)) %) [side (frozen seq-n)])
+               (implied-row dir (str "entries/" fname) seq-n (keyword kind)))))))
+
+(defn- reconcile-index
+  "`reconciled-index`, computed."
+  [project ws-id w]
+  (let [dir    (cstate/workstream-dir project ws-id)
+        files  (into {} (keep (fn [fname]
+                                (when-let [[_ n kind] (re-find #"^(\d{4})-(.+)\.[a-z]+$" fname)]
+                                  [(str "entries/" fname) [(parse-long n) (keyword kind)]])))
+                     (entry-filenames project ws-id))
+        by-seq (into {} (map (fn [[rel [n _]]] [n rel])) files)
+        sound? (fn [{:keys [file seq kind]}] (= [seq kind] (files file)))
+        side   (fn [n] (io/read-edn (str (fs/path dir (meta-rel n)))))
+        ;; A sound row reads as the row kept beside its entry; one with none kept is kept now,
+        ;; which is the freeze, while its index still holds it.
+        kept   (fn [row]
+                 (let [path (str (fs/path dir (meta-rel (:seq row))))
+                       s    (io/read-edn path)]
+                   (cond
+                     (= (:file row) (:file s)) s
+                     (fs/exists? path)         row
+                     :else                     (do (io/write-edn! path row) row))))
+        implied (fn [n]
+                  (let [rel (by-seq n)
+                        s   (side n)]
+                    (if (= rel (:file s))
+                      s
+                      (let [[seq-n kind] (files rel)] (implied-row dir rel seq-n kind)))))]
+    (:rows (reduce (fn [{:keys [seen] :as acc} row]
+                     (let [n (:seq row)]
+                       (cond
+                         (nil? (:file row)) (update acc :rows conj row)
+                         (seen n)           acc
+                         (sound? row)       (-> acc (update :rows conj (kept row)) (update :seen conj n))
+                         (by-seq n)         (-> acc (update :rows conj (implied n)) (update :seen conj n))
+                         :else              acc)))
+                   {:rows [] :seen #{}}
+                   (:entries w)))))
+
+(defonce ^:private reconciled (atom {}))
+
+(defn- reconciled-index
+  "`w`'s index as entries/ has it. A row naming a file entries/ holds under that name, :seq and
+   kind reads as the row kept beside that file, and the row is kept there when none is — so a
+   rebuild answers what the index did, :at and :amended-by included, once the index has been read.
+   A row naming a file entries/ does not hold so is replaced by the row kept beside the file its
+   :seq does name, else the row that file's name implies; dropped when no file carries that :seq,
+   as is a second row naming a :seq an earlier one did. A row that names no file is kept as it is.
+
+   Files no row names stay unnamed: that gap is an interrupted append, which `index-drift`
+   reports and `append-entry-once!` completes after the checks an append makes.
+
+   Memoised per workstream on the stamps of its record and of both directories: every write to
+   either directory renames a file into it, which moves the directory's stamp. The board reads
+   every workstream on every render, and this reads a file per entry."
+  [project ws-id w]
+  (let [wdir (cstate/workstream-dir project ws-id)
+        k    (cstate/workstream-edn-path project ws-id)
+        st   [(io/file-stamp k)
+              (io/file-stamp (str (fs/path wdir "entries")))
+              (io/file-stamp (str (fs/path wdir "entries.meta")))
+              (:entries w)]
+        hit  (get @reconciled k)]
+    (if (= st (:stamp hit))
+      (:rows hit)
+      (let [rows (reconcile-index project ws-id w)]
+        ;; The stamp after the read, since a freeze moves entries.meta's.
+        (swap! reconciled assoc k {:stamp (assoc st 2 (io/file-stamp (str (fs/path wdir "entries.meta"))))
+                                   :rows  rows})
+        rows))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :int]}
+  freeze-index!
+  "Keep beside every indexed entry the row its index holds, for each that has none. Returns how
+   many were written.
+
+   Rows written before entries carried them are the only record of those entries' :at and
+   :amended-by; once kept beside the ledger, the index can be deleted and rebuilt with nothing
+   lost. Idempotent: a row already kept is never rewritten.
+
+   `read-ws` is what keeps them, as it reads each row against the directory; this reads the
+   workstream and counts the rows that were kept by it."
+  [project ws-id]
+  (io/with-file-lock
+    (append-lock-path project ws-id)
+    (fn []
+      (let [dir     (cstate/workstream-dir project ws-id)
+            path    #(str (fs/path dir (meta-rel (:seq %))))
+            missing (->> (:entries (io/read-edn (cstate/workstream-edn-path project ws-id)))
+                         (filter :file)
+                         (remove #(fs/exists? (path %)))
+                         vec)]
+        (read-ws project ws-id)
+        (count (filter #(fs/exists? (path %)) missing))))))
+
 (defn- check-append!
   "Every refusal an append makes of `payload` joining `w`, in the order `append-entry!` asks them.
    Shared by the two writes that give an entry its index row — a new entry, and one an interrupted
@@ -1399,12 +1578,29 @@
           _     (check-append! project w (:kind entry) payload)
           fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
           rel   (str "entries/" fname)
-          abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
+          abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))
+          row   (index-row entry seq-n payload rel)]
       (refuse-if-taken! abs seq-n)
-      (io/write-text! abs payload)
-      (write! (f (update w :entries (fnil conj [])
-                         (index-row entry seq-n payload rel))))
+      (write-entry-files! project ws-id row abs payload)
+      (write! (f (update w :entries (fnil conj []) row)))
       abs)))
+
+(defn- record-status!
+  "Append the status entry `entry-of` makes of the record, and apply `change` to the record in the
+   same write — or neither, when `entry-of` answers nil because there is nothing to record.
+
+   Under the append lock, so the decision and its entry are one step: a status the record holds
+   that no entry records is the drift this ledger copy exists to end."
+  [project ws-id entry-of change]
+  (io/with-file-lock
+    (append-lock-path project ws-id)
+    (fn []
+      (let [w (or (read-ws project ws-id)
+                  (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
+        (if-let [r (entry-of w)]
+          (do (append-locked! project ws-id w {:kind (:format r)} (pr-str r) change)
+              (read-ws project ws-id))
+          w)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string] :Path]}
   append-entry!
@@ -1495,11 +1691,11 @@
                 _     (check-clearance-earned! w (:kind entry) payload latest)
                 fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
                 rel   (str "entries/" fname)
-                abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
+                abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))
+                row   (index-row entry seq-n payload rel)]
             (refuse-if-taken! abs seq-n)
-            (io/write-text! abs payload)
-            (write! (update w :entries (fnil conj [])
-                            (index-row entry seq-n payload rel)))
+            (write-entry-files! project ws-id row abs payload)
+            (write! (update w :entries (fnil conj []) row))
             abs))))))
 
 (def ^:private entry-file-name
@@ -1547,10 +1743,17 @@
 
           orphan
           (let [[rel seq-n] orphan
-                payload     (slurp (abs rel))]
+                payload     (slurp (abs rel))
+                side-path   (abs (meta-rel seq-n))
+                side        (io/read-edn side-path)]
             (check-append! project w kind payload)
-            ;; Placed by :seq, since readers take a kind's newest entry as the last row of it.
-            (write! (update w :entries #(vec (sort-by :seq (conj (vec %) (index-row entry seq-n payload rel))))))
+            ;; The row the interrupted append kept beside its entry, so the index and a rebuild of
+            ;; it agree; a fresh one, kept beside it first, when it died before writing that.
+            (let [row (if (= rel (:file side))
+                        side
+                        (doto (index-row entry seq-n payload rel) (->> (io/write-edn! side-path))))]
+              ;; Placed by :seq, since readers take a kind's newest entry as the last row of it.
+              (write! (update w :entries #(vec (sort-by :seq (conj (vec %) row))))))
             {:indexed (abs rel)})
 
           :else

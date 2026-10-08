@@ -1024,14 +1024,16 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
   latest-report
-  "The workstream's most recent ledger entry as a `:format`-tagged gate report,
+  "The workstream's most recent record of its work as a `:format`-tagged gate report,
    or nil. Resolves the active ledger (the workstream's own event store), reads
-   its latest entry, and finally falls back to stored intake text so an un-triaged
+   its newest entry that is not a status entry — a close or a stage set says nothing
+   a gate shows — and finally falls back to stored intake text so an un-triaged
    :incoming Slack report still shows its message body."
   [project ws-id]
-  (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
-    (if (seq entries)
-      (hydrate (entry->report base-dir (last entries)))
+  (let [{:keys [base-dir entries]} (active-ledger project ws-id)
+        newest (or (last (remove #(cws/status-kinds (:kind %)) entries)) (last entries))]
+    (if newest
+      (hydrate (entry->report base-dir newest))
       (intake-fallback project ws-id))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
@@ -1461,8 +1463,8 @@
     {:decision :no-workstream}
     (case target
       :in-progress (promote/promote-workstream! project ws-id)
-      :done        (do (cws/close! project ws-id :done) {:decision :done})
-      (do (cws/advance-stage! project ws-id target) {:decision :advanced}))))
+      :done        (do (cws/close! project ws-id :done nil :person) {:decision :done})
+      (do (cws/advance-stage! project ws-id target :person) {:decision :advanced}))))
 
 (defn- bare-row-br
   "The BR-#### behind a bare watched-view row, whose synthetic ws-id IS the Notion
@@ -1492,7 +1494,7 @@
     (do
       (when-let [br (:id (wsv/ledger-ref w))]
         (tickets/dismiss! project br))
-      (cws/close! project ws-id :dismissed)
+      (cws/close! project ws-id :dismissed nil :person)
       {:decision :dismissed})
     ;; Bare watched-view row: no workstream to close, so the ticket stamp IS the
     ;; whole veto — bare-row reads :dismissed? straight off ticket status, which
@@ -1539,7 +1541,7 @@
       (do
         (when-let [br (:id (wsv/ledger-ref w))]
           (tickets/clear-status! project br))
-        (cws/reopen! project ws-id :triaging)
+        (cws/reopen! project ws-id :triaging :person)
         {:decision :restored}))
     (if-let [br (bare-row-br project ws-id)]
       (do (tickets/clear-status! project br)
@@ -2280,7 +2282,7 @@
      (case action-id
        :promote (set-stage! project ws-id :in-progress)
        :done    (set-stage! project ws-id :done)
-       :drop    (do (cws/close! project ws-id :dropped) {:decision :dropped})
+       :drop    (do (cws/close! project ws-id :dropped nil :person) {:decision :dropped})
        :apply   (apply! project ws-id {:at-seq payload})
        :reply   (resume/resume! project ws-id payload)
        :approve (approve! project ws-id payload)
