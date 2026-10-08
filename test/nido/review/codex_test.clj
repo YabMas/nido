@@ -57,6 +57,20 @@
         "the line is kept verbatim — it is the vendor's, and paraphrasing it
          would drop the URL that is half the remedy")))
 
+(deftest a-quota-line-in-typographic-punctuation-is-still-a-quota
+  ;; codex v0.160.0 prints its quota line with U+2019. Read as unclassified, the
+  ;; claude stand-in never ran, and every record and diff run that hit the quota
+  ;; ended codex-failed with the reset hour buried in its log.
+  (let [line (str "ERROR: You\u2019ve hit your usage limit. Visit"
+                  " https://chatgpt.com/codex/settings/usage to purchase more credits or"
+                  " try again at Oct 9th, 2026 11:12 PM.")
+        u    (codex/unavailability (str "thinking\n" line "\n" line "\ntokens used\n39,431\n"))]
+    (is (= :usage-limit (:signal u))
+        "a quota is what hands the round to the claude stand-in; missing it ends the run instead")
+    (is (= "Oct 9th, 2026 11:12 PM" (:retry-at u)))
+    (is (= line (:message u))
+        "the vendor's line is kept as printed — normalising is for matching, not for what a reader is shown")))
+
 (deftest a-credential-failure-names-no-hour-to-come-back-at
   ;; :retry-at is absent rather than invented. Nothing about an expired login
   ;; resolves on a clock, and a reader handed a time would wait for it.
@@ -228,3 +242,17 @@
         "the line a failed layer's row carries — trailing blank lines would leave it saying nothing")
     (is (nil? (codex/last-line (str f ".missing"))) "a reviewer that died before writing leaves nil")
     (is (nil? (codex/last-line nil)))))
+
+(deftest a-log-s-last-line-is-its-error-not-the-token-footer-under-it
+  ;; codex prints `tokens used` and a count after a failed run too. Read as the
+  ;; last line, an unclassified failure's row recorded "55,746" as its cause.
+  (let [f (str (fs/create-temp-file))]
+    (spit f "exec rg foo\nERROR: unexpected EOF from model stream\ntokens used\n55,746\n")
+    (is (= "ERROR: unexpected EOF from model stream" (codex/last-line f))
+        "the cause is the line a reader needs, and nothing else in report.json carries it")
+    (spit f "ERROR: stream retry 1\nreconnecting\nERROR: stream closed\nsummary text\n")
+    (is (= "ERROR: stream closed" (codex/last-line f))
+        "the last ERROR is preferred over whatever codex narrated after it")
+    (spit f "thinking\nworking on it\ntokens used\n1,203\n")
+    (is (= "working on it" (codex/last-line f))
+        "with no ERROR, the last line above the footer is still the reviewer's last words")))

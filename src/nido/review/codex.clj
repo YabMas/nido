@@ -64,9 +64,13 @@
    re-words falls back to the unclassified reading, which costs a classification
    and nothing else — the cheap direction.
 
+   Rows are matched against a line with its typographic punctuation made ASCII
+   (`ascii-punctuation`), so a row is written with a plain apostrophe and survives
+   codex switching between ' and ’ — which it has done once already.
+
    Order decides ties, and the ties are near-synonyms; no row is a superset of
    another."
-  [{:signal :usage-limit  :re #"(?i)you'?ve hit your usage limit"}
+  [{:signal :usage-limit  :re #"(?i)hit your usage limit"}
    {:signal :usage-limit  :re #"(?i)usage limit reached"}
    {:signal :rate-limited :re #"(?i)429 too many requests"}
    {:signal :capacity     :re #"(?i)selected model is at capacity"}
@@ -91,6 +95,13 @@
     (let [s (slurp path)]
       (cond-> s (> (count s) n) (subs (- (count s) n))))
     (catch Throwable _ nil)))
+
+(defn- ascii-punctuation
+  "`line` with curly quotes and apostrophes replaced by their ASCII forms. For
+   matching only — the line a caller is handed stays the vendor's verbatim."
+  [line]
+  (str/replace line #"[\x{2018}\x{2019}\x{201C}\x{201D}]"
+               {"\u2018" "'" "\u2019" "'" "\u201C" "\"" "\u201D" "\""}))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :string]] [:maybe :map]]}
   unavailability
@@ -120,24 +131,37 @@
   (when tail
     (let [lines (str/split-lines tail)]
       (some (fn [{:keys [signal re]}]
-              (when-let [line (some-> (last (filter #(re-find re %) lines)) str/trim)]
+              (when-let [line (some-> (last (filter #(re-find re (ascii-punctuation %)) lines)) str/trim)]
                 (let [when-back (second (re-find #"(?i)try again at (.+?)\.?\s*$" line))]
                   (cond-> {:signal signal :message line}
                     when-back (assoc :retry-at when-back)))))
             unavailability-signatures))))
 
+(defn- usage-footer?
+  "Whether `line` is part of the token count codex prints after a run ends, even a failed one:
+   a `tokens used` line and the bare number under it."
+  [line]
+  (boolean (re-matches #"(?i)tokens used|[\d,]+" line)))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe :string]] [:maybe :string]]}
   last-line
-  "The last non-blank line of the log at `log-path`, trimmed, or nil when there is none or it cannot
-   be read. For a failure `unavailability` cannot classify: the reviewer's own last words are usually
-   the error, and the only other copy of them is at the end of a log hundreds of kilobytes long."
+  "The line of the log at `log-path` most likely to say why the reviewer stopped, trimmed, or nil
+   when the log has no non-blank line or cannot be read: the last line beginning `ERROR`, else the
+   last non-blank line before codex's token-count footer. For a failure `unavailability` cannot
+   classify, the reviewer's own last words are usually the error, and the only other copy of them
+   is at the end of a log hundreds of kilobytes long — under a footer that, read as the last line,
+   reports a token count as the cause."
   [log-path]
   (when log-path
-    (some->> (log-tail log-path unavailability-tail-chars)
-             str/split-lines
-             (map str/trim)
-             (remove str/blank?)
-             last)))
+    (when-let [lines (some->> (log-tail log-path unavailability-tail-chars)
+                              str/split-lines
+                              (map str/trim)
+                              (remove str/blank?)
+                              reverse
+                              (drop-while usage-footer?)
+                              seq)]
+      (or (first (filter #(str/starts-with? % "ERROR") lines))
+          (first lines)))))
 
 ;; ── Which reviewer judges ───────────────────────────────────────────────────
 
