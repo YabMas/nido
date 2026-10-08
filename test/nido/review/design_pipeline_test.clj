@@ -1465,10 +1465,10 @@
     (is (= 3 (:decisions f)))
     (is (= {:derived 2 :held 0 :underivable 0 :broken 2 :alone 1 :at-end true}
            (get-in f [:checks :stratified])))
-    (is (= {:derived 1 :held 0 :underivable 0 :broken 1 :alone 1 :at-end false}
+    (is (= {:derived 1 :held 0 :underivable 0 :broken 1 :alone 1 :at-end false :cleared :reread}
            (get-in f [:checks :decomposable]))
         "a check a proceeding round broke is counted")
-    (is (= {:derived 1 :held 0 :underivable 0 :broken 1 :alone 0 :at-end false}
+    (is (= {:derived 1 :held 0 :underivable 0 :broken 1 :alone 0 :at-end false :cleared :reread}
            (get-in f [:checks :relation-honest])))
     (is (= {:derived 1 :held 1 :underivable 0 :broken 0 :alone 0 :at-end false}
            (get-in f [:checks :goal-served]))
@@ -1487,10 +1487,91 @@
         f (record/run-figures [(d [{:check :stratified :claim-id "c1"} {:claim-id "c2"}]
                                   (check :stratified :broken))
                                (d [{:claim-id "c2"}] (check :stratified :held))])]
-    (is (= {"c2" {:broken 2 :alone 1 :at-end true}} (:claims f))
+    (is (= {:broken 2 :alone 1 :at-end true} (get-in f [:claims "c2"]))
         "a run whose only defect was a check-less refutation read as a clean one")
     (is (= 0 (get-in f [:checks :stratified :alone]))
         "a check is not the only defect of a round that also refuted a claim")))
+
+(deftest a-claim-filed-under-a-broken-check-is-counted-under-it
+  ;; agentic-rag: the claims on both goal-served findings carried the run, and the figures named
+  ;; only the check — and called a claim repaired whose substance the last breach still carried.
+  (let [d (fn [findings & checks] {:format :design-decision :checks (vec checks) :findings findings})
+        f (record/run-figures [(d [{:check :goal-served :claim-id "legacy-set"}]
+                                  (check :goal-served :broken))
+                               (d [{:claim-id "atomic-blocks"}] (check :goal-served :held))
+                               (d [{:check :goal-served :claim-id "atomic-blocks"}
+                                   {:check :goal-served :claim-id "legacy-set"}]
+                                  (check :goal-served :broken))])]
+    (is (= {:broken 2 :alone 0 :at-end true :under {:goal-served 2}} (get-in f [:claims "legacy-set"]))
+        "a claim behind a broken check is the defect the check stands for; counted only as the check, which claim carried the run has to be recounted from the report")
+    (is (= {:broken 2 :alone 1 :at-end true :under {:goal-served 1}} (get-in f [:claims "atomic-blocks"]))
+        "a claim whose substance moved into the final breach is not clear at the end")))
+
+(deftest a-cleared-check-says-how-it-cleared
+  (let [d (fn [seq recommend findings & checks]
+            {:format :design-decision :design-seq seq :recommend recommend :asks "q"
+             :checks (vec checks) :findings findings})]
+    (testing "its claim went on broken under another check"
+      ;; explore/student: routing-coherent broke on a claim, the amend touched only :breaks, and the
+      ;; next round filed the same claim under goal-served — and the figures read routing repaired.
+      (let [f (record/run-figures [(d 1 :amend [{:check :routing-coherent :claim-id "drained"}]
+                                      (check :routing-coherent :broken) (check :goal-served :held))
+                                   (d 2 :amend [{:check :goal-served :claim-id "drained"}]
+                                      (check :routing-coherent :held) (check :goal-served :broken))])]
+        (is (= {:cleared :moved :moved-to [:goal-served]}
+               (select-keys (get-in f [:checks :routing-coherent]) [:cleared :moved-to]))
+            "a check whose claim only changed handle was not repaired, and must not read as if it were")))
+    (testing "an amendment intervened"
+      (let [f (record/run-figures [(d 1 :amend [{:check :stratified :claim-id "c"}] (check :stratified :broken))
+                                   (d 2 :proceed [] (check :stratified :held))])]
+        (is (= :amended (get-in f [:checks :stratified :cleared])))))
+    (testing "the same record read again"
+      (let [f (record/run-figures [(d 1 :amend [{:check :stratified :claim-id "c"}] (check :stratified :broken))
+                                   (d 1 :proceed [] (check :stratified :held))])]
+        (is (= :reread (get-in f [:checks :stratified :cleared]))
+            "a check nothing amended cleared on the judge's say-so; reading it as repaired hides the variance")))
+    (testing "the last decision asks about it"
+      ;; agentic-rag: goal-served broke on whole-block reads, then held while the decision asked
+      ;; whether whole-block reads were allowed — the figures read it repaired.
+      (let [f (record/run-figures [(d 1 :amend [{:check :goal-served :claim-id "whole-block-reads"}]
+                                      (check :goal-served :broken))
+                                   (d 2 :ask [] (check :goal-served :held))])
+            g (record/run-figures [(d 1 :amend [{:check :goal-served :claim-id "edges"}]
+                                      (check :goal-served :broken))
+                                   (d 2 :ask [{:claim-id "edges" :claim "x" :for-person true}]
+                                      (check :goal-served :held))])]
+        (is (= :amended (get-in f [:checks :goal-served :cleared]))
+            "an ask about something else does not make a check the person's")
+        (is (= :asked (get-in g [:checks :goal-served :cleared]))
+            "a check broken on what the decision asks a person is waiting on them, not repaired")
+        (is (= :asked (get-in (record/run-figures
+                               [(d 1 :amend [{:check :goal-served :claim-id "edges"}] (check :goal-served :broken))
+                                (assoc (d 2 :ask [] (check :goal-served :held)) :asks "may edges be read whole?")])
+                              [:checks :goal-served :cleared]))
+            "the :asks naming the claim is the ask being about it")))
+    (testing "a check never broken, or broken at the end, says nothing of clearing"
+      (let [f (record/run-figures [(d 1 :amend [{:check :stratified :claim-id "c"}] (check :stratified :broken)
+                                      (check :goal-served :held))])]
+        (is (nil? (get-in f [:checks :stratified :cleared])))
+        (is (nil? (get-in f [:checks :goal-served :cleared])))))))
+
+(deftest a-check-held-over-a-finding-filed-under-it-counts-the-filing
+  ;; agentic-rag R5: the finding was filed under routing-coherent, routing held, and the figures
+  ;; read routing {:broken 0} as though nothing had been said of it.
+  (let [f (record/run-figures [{:format :design-decision :checks [(check :routing-coherent :held)]
+                                :findings [{:filed-under :routing-coherent :claim-id "retrieval" :claim "x"}]}])]
+    (is (= 1 (get-in f [:checks :routing-coherent :filed])))
+    (is (= {:routing-coherent 1} (get-in f [:claims "retrieval" :under])))))
+
+(deftest a-check-ruled-otherwise-on-one-record-at-one-tree-is-a-flip
+  ;; tool-call-wire-format: goal-served held in R4, R5, R6 and broke in R7, all at one record and
+  ;; one tree, and the figures read a plain :broken 1.
+  (let [d (fn [seq id status] {:format :design-decision :seq seq :design-seq 53 :code-identity id
+                               :checks [(check :goal-served status)]})
+        f (record/run-figures [(d 1 "t" :held) (d 2 "t" :held) (d 3 "t" :held) (d 4 "t" :broken)
+                               (d 5 "u" :held)])]
+    (is (= {:goal-served {:held->broken 1}} (:check-flips f))
+        "the judge's variance must be told from a defect an amendment introduced")))
 
 (deftest a-claim-refuted-under-a-check-the-decision-held-is-counted
   (let [d (fn [findings & checks] {:format :design-decision :checks (vec checks) :findings findings})
@@ -1498,8 +1579,10 @@
                                   (check :stratified :held) (check :goal-served :broken))
                                (d [{:check :relation-honest :claim-id "c2"}]
                                   (check :relation-honest :underivable))])]
-    (is (= {"c1" {:broken 1 :alone 0 :at-end false}} (:claims f))
+    (is (= {:broken 1 :alone 0 :at-end false :under {:stratified 1}} (get-in f [:claims "c1"]))
         "a refutation the amender repaired must not vanish from the figures for naming a held check")
+    (is (= {:broken 1 :alone 0 :at-end true :under {:relation-honest 1}} (get-in f [:claims "c2"]))
+        "a claim is counted whatever check it is filed under, an underivable one included")
     (is (= 0 (get-in f [:checks :stratified :broken])) "and the check it named stays held")))
 
 (deftest what-a-decision-asked-a-person-is-counted-asked-not-broken
@@ -1718,6 +1801,17 @@
     (is (= ["tools-unused"] (:still-unchecked f))
         "a subject confirmed after it was unchecked was ruled on, and is not still owed"))
   (is (nil? (:still-unchecked (record/run-figures [{:format :baseline-review :verdict :sufficient}])))))
+
+(deftest a-subject-the-final-record-dropped-is-not-still-unchecked
+  ;; impl-br-6770: two observations left the record in R1 and were never judged again, and the
+  ;; figures listed both as what the run ended without ruling on.
+  (let [es [{:format :design-decision :checks [] :seq 1
+             :unchecked [{:id "resume-own-device" :reason "r"} {:id "kept" :reason "r"}]}
+            {:format :design-decision :checks [] :seq 2 :confirmed ["other"]}]]
+    (is (= ["kept"] (:still-unchecked (record/run-figures es #{"kept" "other"})))
+        "an id no longer in the record is nobody's to rule on")
+    (is (= ["kept" "resume-own-device"] (:still-unchecked (record/run-figures es)))
+        "without the final record, a dropped id cannot be told from one that stayed")))
 
 (deftest a-runs-figures-count-relation-ids-apart-from-unruled-checks
   (let [f (record/run-figures [{:format :design-decision :checks [] :unruled ["c1"]

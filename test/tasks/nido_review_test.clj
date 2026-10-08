@@ -2385,6 +2385,22 @@
         (is (= {"rows-span" 2} (:still-unchecked all))
             "a subject that comes back unruled run after run is visible as such across runs")))))
 
+(deftest a-runs-still-unchecked-is-held-to-the-record-it-ended-on
+  ;; impl-br-6770: two observations an amendment dropped in R1 were listed as still unchecked at the
+  ;; end of an eight-round run.
+  (let [entries {:design-decision [{:format :design-decision :run-id "d1" :seq 5 :design-seq 3 :checks []
+                                    :unchecked [{:id "dropped" :reason "r"} {:id "kept" :reason "r"}]}]
+                 :baseline-review []}
+        read-at (atom [])]
+    (with-redefs [ws/list-ids     (constantly ["ws-1"])
+                  ws/entries-of   (fn [_ _ kind] (get entries kind))
+                  ws/entry-at-seq (fn [_ w n] (swap! read-at conj [w n])
+                                    {:format :design :model {:claims [{:id "kept"}]}})]
+      (let [all (read-string (with-out-str (t/figures-cmd* {:project "nido"})))]
+        (is (= [["ws-1" 3]] @read-at) "the record read is the one the run's last decision judged")
+        (is (= {"kept" 1} (:still-unchecked all))
+            "a subject the final record no longer has is nobody's to rule on")))))
+
 (deftest the-level-judges-readings-sum-across-runs
   (let [entries {:design-decision [{:format :design-decision :run-id "d1" :seq 3 :checks []
                                     :strata-read [{:stratum "s" :verdict :widens :reason "r"}]}

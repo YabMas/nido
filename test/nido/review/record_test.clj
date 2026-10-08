@@ -184,6 +184,30 @@
     (is (= ["lines-exact"] (:owed r)))
     (is (report/validate-event :design-decision r))))
 
+(deftest a-finding-keyed-to-no-claim-is-paired-with-the-one-its-prose-names
+  ;; agentic-rag R5: the finding was about retrieval-composition and named no claim id, so the claim
+  ;; stayed :unruled and the figures counted the refutation against "the record".
+  (let [answer (fn [& findings]
+                 (json/generate-string {:recommend "amend" :reason "r" :asks "a"
+                                        :checks [{:check "goal_served" :status "held" :note "n"}]
+                                        :findings (vec findings)}))
+        parse  #(record/parse-design-decision % 4 any-era #{"h1"} nil
+                                              #{"retrieval-composition" "window-clips"})
+        one    (first (:findings (parse (answer {:claim "the retrieval composition reads one source"
+                                                 :cites ["record: retrieval-composition"]}))))]
+    (is (= "retrieval-composition" (:claim-id one)))
+    (is (true? (:claim-paired one)) "the ledger has to say the judge did not name it")
+    (is (report/validate-event :design-decision (parse (answer {:claim "retrieval composition" :cites ["c"]}))))
+    (is (nil? (:claim-id (first (:findings (parse (answer {:claim "retrieval composition and window clips"
+                                                            :cites ["c"]}))))))
+        "which of two claims a finding refutes is the judge's to say")
+    (is (= "window-clips" (:claim-id (first (:findings (parse (answer {:claim-id "window-clips"
+                                                                       :claim "retrieval composition"
+                                                                       :cites ["c"]}))))))
+        "a claim the judge named is never re-paired")
+    (is (nil? (:claim-id (first (:findings (parse (answer {:claim "retrieval composition" :cites ["h1"]}))))))
+        "a route cited beside the claim takes the finding off it, as it does a claim the judge named")))
+
 ;; Watched: a design listing modal-footer under :baseline :breaks, and a judge confirming modal-footer
 ;; holds at the pre-change tree — which cleared its refutation run and counted it confirmed, while a
 ;; :breaks id that was no element of the design was dropped.

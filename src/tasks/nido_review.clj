@@ -33,6 +33,7 @@
    [nido.review.reconcile :as reconcile]
    [nido.review.render :as render]
    [nido.review.retreat :as retreat]
+   [nido.review.settled :as settled]
    [nido.review.stages :as stages]
    [nido.review.report :as report]
    [nido.review.tree :as tree]
@@ -2474,14 +2475,27 @@
 (defn- runs-on-ledgers
   "Every baseline review and design decision on `project`'s ledgers that names a run, grouped by the
    run it is read as: its own, or — for a design run's re-survey — the design run it was nested in.
-   Each group is in ledger order, kind by kind, which is all `record/run-figures` reads order from."
+   Each group is in ledger order, kind by kind, which is all `record/run-figures` reads order from.
+   Each entry carries the workstream it was read from as `::ws` metadata, for `final-subjects`."
   [project]
   (group-by #(or (:within-run %) (:run-id %))
             (for [id   (ws/list-ids project)
                   kind [:design-decision :baseline-review]
                   e    (ws/entries-of project id kind)
                   :when (:run-id e)]
-              e)))
+              (vary-meta e assoc ::ws id))))
+
+(defn- final-subjects
+  "The ids of every subject of the records one run's entries `es` last judged — the design its last
+   decision read, the baseline its last review read — or nil when one of them cannot be read back,
+   which `record/run-figures` takes as not knowing rather than as a record with no subjects."
+  [project es]
+  (let [records (for [[kind at] [[:design-decision :design-seq] [:baseline-review :baseline-seq]]
+                      :let [j (last (sort-by :seq (filter #(= kind (:format %)) es)))]
+                      :when (and j (at j))]
+                  (some-> (::ws (meta j)) (as-> w (ws/entry-at-seq project w (at j)))))]
+    (when (and (seq records) (every? map? records))
+      (into #{} (mapcat (comp keys settled/subjects)) records))))
 
 (defn- summed
   "Many runs' figures, per check, per check-less refuted claim and per derivation: in how many runs
@@ -2497,10 +2511,14 @@
    each way and its reversals not taken; per subject, its holds/owed flips each way at one tree
    and its splits. Per subject spent at a run's end, `{:runs n :max n}`: in
    how many runs, and the longest refutation run any of them ended on — the second is not a sum,
-   because each run's count already spans the runs before it."
+   because each run's count already spans the runs before it.
+
+   A check also sums :filed, its rounds ruled held over a finding filed under it, and :cleared, per
+   way it came to be clear in a run (`record/run-figures`), in how many runs; a claim sums :under,
+   per check, the rounds it was filed there. Per check, its held/broken flips at one tree each way."
   [figures]
   (letfn [(add [acc tallies]
-            (reduce-kv (fn [a k {:keys [broken alone at-end asked asked-at-end] :as t}]
+            (reduce-kv (fn [a k {:keys [broken alone at-end asked asked-at-end cleared] :as t}]
                          (update a k (fn [m]
                                        (cond-> (-> (or m {:runs 0 :rounds 0 :alone 0 :at-end 0})
                                                    (update :runs + (if (pos? broken) 1 0))
@@ -2511,7 +2529,10 @@
                                          asked-at-end (update :asked-at-end (fnil + 0) 1)
                                          (:derived t) (update :derived (fnil + 0) (:derived t))
                                          (:held t) (update :held (fnil + 0) (:held t))
-                                         (:underivable t) (update :underivable (fnil + 0) (:underivable t))))))
+                                         (:underivable t) (update :underivable (fnil + 0) (:underivable t))
+                                         (:filed t) (update :filed (fnil + 0) (:filed t))
+                                         cleared (update-in [:cleared cleared] (fnil inc 0))
+                                         (:under t) (update :under #(merge-with + (or % (sorted-map)) (:under t)))))))
                        acc tallies))
           (counts [k] (reduce #(merge-with + %1 %2) (sorted-map) (keep k figures)))]
     {:runs        (count figures)
@@ -2533,6 +2554,7 @@
      :relation-flips     (reduce #(merge-with (partial merge-with +) %1 %2) (sorted-map) (keep :relation-flips figures))
      :relation-reversals (counts :relation-reversals)
      :reading-flips      (reduce #(merge-with (partial merge-with +) %1 %2) (sorted-map) (keep :reading-flips figures))
+     :check-flips        (reduce #(merge-with (partial merge-with +) %1 %2) (sorted-map) (keep :check-flips figures))
      :splits             (counts :splits)
      :spent       (reduce (fn [acc [id n]]
                             (update acc id #(-> (or % {:runs 0 :max 0})
@@ -2547,7 +2569,8 @@
   "Print what record runs' rounds did, derived from the ledger on every call and stored nowhere: one
    run's figures with :run-id, or every attributable run on the project's ledgers summed per check
    and per derivation. Only entries that name their run are read; a run appended before rounds
-   named theirs is not attributed, and its figures are the ones counted by hand."
+   named theirs is not attributed, and its figures are the ones counted by hand. Each run's
+   :still-unchecked is held to the record it ended on (`final-subjects`)."
   [{:keys [project run-id]}]
   (let [project (keyword (or project (some-> (stages/project+ws-from-cwd (System/getProperty "user.dir"))
                                              first name)
@@ -2555,9 +2578,9 @@
         runs    (runs-on-ledgers project)]
     (if run-id
       (if-let [es (get runs (str run-id))]
-        (prn (record/run-figures (vec es)))
+        (prn (record/run-figures (vec es) (final-subjects project es)))
         (println (str "no entry on " (name project) "'s ledgers names run " run-id)))
-      (prn (summed (map (comp record/run-figures vec) (vals runs)))))))
+      (prn (summed (map #(record/run-figures (vec %) (final-subjects project %)) (vals runs)))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   figures-cmd

@@ -1815,8 +1815,26 @@
                               (cons (str (:claim-id finding)) (:cites finding))))]
     (if (and (contains? #{nil :routing-coherent} (:check finding)) (some cited? health))
       (cond-> (assoc finding :check :routing-coherent)
-        (not (health (:claim-id finding))) (dissoc :claim-id))
+        (not (health (:claim-id finding))) (dissoc :claim-id :claim-paired))
       finding)))
+
+(defn- cite-paired
+  "`finding` carrying, as its :claim-id, the one claim of `ids` its claim and cites name, when the
+   judge named none — marked :claim-paired, since the judge did not say it.
+
+   A refutation keyed to no claim refutes nothing `rule` can see: the claim it is about stays
+   :unruled, and the figures count it against \"the record\". Only claims are paired, never elements
+   or :shape — prose names a module beside the claim it breaks, and the word `shape` is in every
+   sentence about one. A finding naming none of them, or more than one, is left as the judge gave
+   it: which of two it refutes is the judge's to say."
+  [ids finding]
+  (if (or (seq (str (:claim-id finding))) (empty? ids))
+    finding
+    (let [texts (cons (:claim finding) (:cites finding))
+          named (filterv (fn [id] (some #(re-find (id-pattern id) (str %)) texts)) ids)]
+      (if (= 1 (count named))
+        (assoc finding :claim-id (first named) :claim-paired true)
+        finding))))
 
 (defn- off-held-checks
   "`findings` with each one filed under a check `checks` rules :held made check-less, the check it
@@ -1874,7 +1892,9 @@
   "The checks that rule on the decomposition — what a :recut asks to redo."
   #{:decomposable :stratified :routing-coherent})
 
-(defn ^{:malli/schema [:=> [:cat :string :any [:set :keyword] [:? [:set :string]] [:? :any]] :map]}
+(defn ^{:malli/schema [:=> [:cat :string :any [:set :keyword] [:? [:maybe [:set :string]]] [:? :any]
+                           [:? [:maybe [:set :string]]]]
+                     :map]}
   parse-design-decision
   "Codex JSON -> a :design-decision ledger record, or nil when unusable.
 
@@ -1891,8 +1911,12 @@
    only the goal broke redraws the strata to repair what a record edit would.
 
    `intent` is the intent the round's prompt stated. On an :ask it and the answer's `asks_about`
-   mark findings for the person whatever the judge marked (`person-marked`)."
-  [json-str design-seq asked & [health intent]]
+   mark findings for the person whatever the judge marked (`person-marked`).
+
+   `claims` is the ids of the design's claims; a finding the judge keyed to none is paired with the
+   one its prose names (`cite-paired`) before routing reads it, so a route cited beside that claim
+   still takes the finding off it."
+  [json-str design-seq asked & [health intent claims]]
   (try
     (let [m (json/parse-string json-str true)
           named  (keep (fn [c]
@@ -1911,7 +1935,8 @@
                                                    (if (:held c) :held :broken)))
                                        :note   (str (:note c))})))
                        named)
-          findings (off-held-checks (mapv (partial routing-attributed (set health))
+          findings (off-held-checks (mapv (comp (partial routing-attributed (set health))
+                                                (partial cite-paired (vec (sort claims))))
                                           (normalize-findings (:findings m) asked))
                                     checks)
           said     (keyword (str (:recommend m)))
@@ -2846,7 +2871,8 @@
                           :schema (design-decision-schema design relation)}
                 prompt   (design-prompt asking)
                 parse    #(parse-design-decision % (:seq design) (set (report/derivations-of design))
-                                                 (health-ids design baseline) (:intent asking))
+                                                 (health-ids design baseline) (:intent asking)
+                                                 (into #{} (keep :id) (model/claims design)))
                 result   (-> (run-round! (assoc round :prompt prompt))
                              (judged parse)
                              (reask-self-contradicted! round prompt parse)
@@ -5334,35 +5360,107 @@
                      [id (keyword (str (name b) "->" (name r)))])))
          (reduce (fn [acc [id k]] (update-in acc [id k] (fnil inc 0))) (sorted-map)))))
 
-(defn- reading-flips
-  "Per subject, how often `judgements` — one run's, in ledger order — ruled it holds where the
-   judgement before it of the same record at the same tree ruled it owed, or the reverse:
-   `{id {:holds->owed n :owed->holds n}}`, ids never flipped absent. Read as the judge ruled, so a
-   flip counts whether or not the round paired anything over it: it is the judge's variance on
-   at_this_tree being measured, which :unpaired records only where a pairing was at stake. A
-   judgement with no :code-identity read no one tree, and is compared with nothing."
-  [judgements]
+(defn- ruled-otherwise
+  "Per key, how often a judgement of `judgements` — one run's, in ledger order — ruled it otherwise
+   than the judgement before it of the same record at the same tree: `{k {:was->now n}}`, keys never
+   flipped absent. `ruled` is a judgement's `{k ruling}`. Two judgements are of one record at one
+   tree when they share kind, judged seq and :code-identity; a judgement with no :code-identity read
+   no one tree, and is compared with nothing."
+  [ruled judgements]
   (->> (vals (group-by (juxt :format :baseline-seq :design-seq) judgements))
        (mapcat #(partition 2 1 %))
        (filter (fn [[a b]] (and (:code-identity a) (= (:code-identity a) (:code-identity b)))))
        (mapcat (fn [[a b]]
-                 (let [was (rulings a)]
-                   (for [[id now] (rulings b)
-                         :let [w (was id)]
+                 (let [was (ruled a)]
+                   (for [[k now] (ruled b)
+                         :let [w (get was k)]
                          :when (and w (not= w now))]
-                     [id (keyword (str (name w) "->" (name now)))]))))
-       (reduce (fn [acc [id k]] (update-in acc [id k] (fnil inc 0))) (sorted-map))))
+                     [k (keyword (str (name w) "->" (name now)))]))))
+       (reduce (fn [acc [k f]] (update-in acc [k f] (fnil inc 0))) (sorted-map))))
 
-(defn ^{:malli/schema [:=> [:cat [:vector :map]] :map]}
+(defn- reading-flips
+  "Per subject, how often `judgements` — one run's, in ledger order — ruled it holds where the
+   judgement before it of the same record at the same tree ruled it owed, or the reverse
+   (`ruled-otherwise`):
+   `{id {:holds->owed n :owed->holds n}}`. Read as the judge ruled, so a flip counts whether or not
+   the round paired anything over it: it is the judge's variance on at_this_tree being measured,
+   which :unpaired records only where a pairing was at stake."
+  [judgements]
+  (ruled-otherwise rulings judgements))
+
+(defn- check-flips
+  "Per derived check, how often a design decision of `decisions` ruled it otherwise than the
+   decision before it of the same record at the same tree (`ruled-otherwise`):
+   `{check {:held->broken n :broken->held n …}}`. A check held three times and broken on the fourth
+   reading of one record at one tree is the judge's variance, which a bare :broken 1 cannot tell
+   from a defect an amendment introduced."
+  [decisions]
+  (ruled-otherwise check-statuses decisions))
+
+(defn- claims-named
+  "Each claim `decision`'s findings name, whatever check carries them, as `[id check kind]`.
+   `check` is the one the finding is filed under — broken, underivable, or held (:filed-under) — or
+   nil; `kind` is :asked for a finding an :ask leaves to the person, else :broken. A finding filed
+   under no check it broke and naming no claim is \"the record\", as in `outstanding` — unless it
+   is the person's, when it is the ask itself. One under a broken check naming no claim is that
+   check's defect, and names nothing here."
+  [decision]
+  (let [statuses (check-statuses decision)
+        ask?     (= :ask (:recommend decision))]
+    (keep (fn [f]
+            (let [id   (not-empty (str (:claim-id f)))
+                  kind (if (and ask? (:for-person f)) :asked :broken)]
+              (cond
+                id [id (or (:check f) (:filed-under f)) kind]
+                (and (= :broken kind) (claim-finding? statuses f))
+                ["the record" (or (:check f) (:filed-under f)) kind])))
+          (:findings decision))))
+
+(defn- cleared-by
+  "How check `c`, broken in some decision of `decisions` and outstanding in none at the end, came to
+   be clear — read off the decision it was last broken in against the run's last. `open` is each
+   decision's `outstanding`, `named` its `claims-named`, both in `decisions`' order. One of:
+
+     :asked    the last decision is an :ask about what it broke on: a claim it broke on is the
+               person's there, or the :asks names the check or one of those claims
+     :moved    a claim it broke on is still broken at the end, filed elsewhere — the defect went on
+               under another handle; `moved-to` says where, :claim for under no check
+     :amended  the record the last decision judged is not the one it broke on
+     :reread   the same record, ruled held — the judge's variance, not a repair
+
+   in that order, since each later one is true of a check that also meets an earlier one. Only the
+   last two say the check was repaired, and only :amended that an amendment can have done it."
+  [c decisions open named]
+  (let [i     (last (keep-indexed (fn [i o] (when (contains? (:broken o) [:check c]) i)) open))
+        ids   (into #{} (comp (filter #(= c (:check %))) (keep (comp not-empty str :claim-id)))
+                    (:findings (nth decisions i)))
+        end   (peek decisions)
+        still (filter (fn [[id under kind]] (and (ids id) (= :broken kind) (not= c under)))
+                      (peek named))]
+    (cond
+      (and (= :ask (:recommend end))
+           (or (some (fn [[id _ kind]] (and (ids id) (= :asked kind))) (peek named))
+               (some #(re-find (id-pattern %) (str (:asks end))) (cons (name c) ids))))
+      {:cleared :asked}
+
+      (seq still)
+      {:cleared :moved :moved-to (vec (sort (distinct (map #(or (second %) :claim) still))))}
+
+      (not= (:design-seq (nth decisions i)) (:design-seq end)) {:cleared :amended}
+      :else                                                    {:cleared :reread})))
+
+(defn ^{:malli/schema [:=> [:cat [:vector :map] [:? [:maybe [:set :string]]]] :map]}
   run-figures
   "What one record run's rounds did, from the entries it appended, in the ledger's order: its design
-   decisions give each derived check's figures and each claim refuted with no check broken, and its
-   baseline reviews — a baseline run's own, or a design run's re-survey — give each derivation's gaps
-   and the claims found false.
+   decisions give each derived check's figures and each claim a finding named, and its baseline
+   reviews — a baseline run's own, or a design run's re-survey — give each derivation's gaps and the
+   claims found false. `final`, when known, is the ids of the subjects of the record the run's last
+   judgement read (`settled/subjects`).
 
      {:decisions n :checks      {check {:derived n :held n :broken n :underivable n
-                                        :alone n :at-end bool}}
-                   :claims      {claim-id {:broken n :alone n :at-end bool}}
+                                        :alone n :at-end bool
+                                        :filed n :cleared kind :moved-to [check]}}
+                   :claims      {claim-id {:broken n :alone n :at-end bool :under {check n}}}
                    :asks        {:rounds n :at-end bool}
                    :strata      {stratum {:read n :fits n :widens n :misplaced n :not-a-level n :failed n}}
       :reviews   n :derivations {derivation {:broken n :alone n :at-end bool}}
@@ -5378,14 +5476,28 @@
       :relation-flips     {id {:stands->breaks n :breaks->stands n}}
       :relation-reversals {id n}
       :reading-flips      {id {:holds->owed n :owed->holds n}}
+      :check-flips        {check {:held->broken n :broken->held n}}
       :splits             {id n}
       :spent              {id n}}
 
    Every check a decision derived has a row, so a run whose checks all held says what it answered
    rather than printing an empty map. :alone and :at-end are over every defect a decision found — a
    broken check or a check-less refutation — so a check is never `alone` in a round that also
-   refuted a claim. A gap is counted under the derivation it :blocks, whatever the review's verdict
-   and whatever claim it cites; :falsified counts the findings of a falsified review that block none.
+   refuted a claim. A check's :filed counts the decisions that ruled it held over a finding filed
+   under it, which the decision carried under its claim instead. A check broken in some round and
+   outstanding at none at the end carries :cleared (`cleared-by`): whether an :ask is about it, its
+   claim went on broken under another check, an amendment intervened, or the same record was simply
+   read again — a cleared check read alone says repaired in all four.
+
+   A claim's row counts every decision with a finding naming it, under whatever check — a claim
+   that carried a broken check all run is otherwise visible only as the check — with :under, per
+   check, the decisions that filed it there; a check-less finding naming no claim counts against
+   \"the record\" (`claims-named`). :at-end is whether the last decision still named it broken.
+   :alone is the decisions in which it was the only defect, so a claim is never `alone` when it was
+   filed under a check that broke with it.
+
+   A gap is counted under the derivation it :blocks, whatever the review's verdict and whatever
+   claim it cites; :falsified counts the findings of a falsified review that block none.
 
    What a decision asked a person about is not a defect (`outstanding`): a check or claim the
    question is about carries :asked n and :asked-at-end beside :broken, and is never counted broken
@@ -5401,8 +5513,10 @@
    :unruled counts, per subject, the judgements handed it as a check that left it without a ruling;
    :relation-unruled, per baseline id, the decisions that left it without a relation ruling.
    :unchecked counts, per subject, the judgements that declared it unchecked, and :still-unchecked
-   names the subjects whose last reading in the run did (`unchecked-running`) — what the run ended
-   without anyone ruling on, which a sufficient status does not say.
+   names the subjects whose last reading in the run did (`unchecked-running`) and that are still
+   subjects of `final` — what the run ended without anyone ruling on, which a sufficient status does
+   not say. A subject an amendment dropped is no longer anyone's to rule on; without `final` it
+   cannot be told from one that stayed.
    :settled-then-found counts, per subject, the judgements that found against it while it was
    settled (`:overrides-settled`) — beside :confirmed, the rate at which settlement shields a false
    confirmation. Each of these eight is present only when non-empty.
@@ -5415,8 +5529,8 @@
    :reading-flips counts, per subject, the judgements that ruled it holds where the one before of
    the same record at the same tree ruled it owed, or the reverse (`reading-flips`), and :splits
    the judgements that refuted it after such a reading held or owed it (`:splits`): the judge's
-   variance on one record at one tree, which the run's last ruling hides. Both present only when
-   non-empty.
+   variance on one record at one tree, which the run's last ruling hides. :check-flips is the same
+   reading for derived checks (`check-flips`). All three present only when non-empty.
 
    :spent is the run's last judgement's :spent: each subject still refuted at the end, with how many
    readings running its lineage has refuted it — across runs, so a claim refuted for the eleventh
@@ -5424,7 +5538,8 @@
 
    Read from the decisions rather than the run's report, because a decision holds every check's
    status and it outlives the run dir. Derived on every read; nothing stores it."
-  [entries]
+  ([entries] (run-figures entries nil))
+  ([entries final]
   (let [decisions (filterv #(= :design-decision (:format %)) entries)
         reviews   (filterv #(= :baseline-review (:format %)) entries)
         judgements (concat decisions reviews)
@@ -5433,7 +5548,8 @@
         ;; By :seq across both kinds, because `entries` arrive kind by kind and a design run's
         ;; re-survey interleaves its reviews with the decisions. Stable, so entries with none keep
         ;; the order they came in.
-        still     (keys (unchecked-running (sort-by :seq judgements)))
+        still     (cond->> (keys (unchecked-running (sort-by :seq judgements)))
+                    final (filter final))
         spent-end (:spent (last (sort-by :seq judgements)))
         relation-unruled (frequencies (mapcat :relation-unruled decisions))
         confirmed (frequencies (mapcat :confirmed judgements))
@@ -5443,12 +5559,22 @@
         flips     (relation-flips decisions)
         reversals (frequencies (mapcat #(map :id (:relation-reversals %)) decisions))
         rflips    (reading-flips (sort-by :seq judgements))
+        cflips    (check-flips (sort-by :seq decisions))
         splits    (frequencies (mapcat #(map :id (:splits %)) judgements))
         statuses  (mapv check-statuses decisions)
         ;; One round's defects and what it asked about, each tagged by the tally it belongs to: a
         ;; check keyword and a claim id do not compare, and `alone` has to see both.
         open      (mapv outstanding decisions)
         defect-tally (tally (mapv :broken open) (mapv :asked open))
+        named     (mapv (comp vec claims-named) decisions)
+        ids-of    (fn [kind ns] (into #{} (keep (fn [[id _ k]] (when (= kind k) id))) ns))
+        claim-tally (tally (mapv #(apply disj (ids-of :broken %) (ids-of :asked %)) named)
+                           (mapv #(ids-of :asked %) named))
+        under     (reduce (fn [acc ns]
+                            (reduce (fn [a [id c]] (update-in a [id c] (fnil inc 0)))
+                                    acc (distinct (keep (fn [[id c]] (when c [id c])) ns))))
+                          {} named)
+        filed     (fn [c] (count (filter (fn [d] (some #(= c (:filed-under %)) (:findings d))) decisions)))
         asking    (mapv #(= :ask (:recommend %)) decisions)
         of-kind   (fn [kind] (into (sorted-map)
                                    (keep (fn [[[k v] figures]] (when (= kind k) [v figures])))
@@ -5466,6 +5592,7 @@
       (seq flips)     (assoc :relation-flips flips)
       (seq reversals) (assoc :relation-reversals (into (sorted-map) reversals))
       (seq rflips)    (assoc :reading-flips rflips)
+      (seq cflips)    (assoc :check-flips cflips)
       (seq splits)    (assoc :splits (into (sorted-map) splits))
       (seq spent-end) (assoc :spent (into (sorted-map) spent-end))
 
@@ -5474,13 +5601,23 @@
              :checks    (let [broken (of-kind :check)]
                           (into (sorted-map)
                                 (for [c (into (sorted-set) (mapcat keys) statuses)]
-                                  [c (merge {:derived     (count (filter #(contains? % c) statuses))
-                                             :held        (derived c :held)
-                                             :underivable (derived c :underivable)}
-                                            (get broken c {:broken 0 :alone 0 :at-end false}))]))))
+                                  (let [row (merge {:derived     (count (filter #(contains? % c) statuses))
+                                                    :held        (derived c :held)
+                                                    :underivable (derived c :underivable)}
+                                                   (get broken c {:broken 0 :alone 0 :at-end false}))
+                                        n   (filed c)]
+                                    [c (cond-> row
+                                         (pos? n) (assoc :filed n)
+                                         (and (some #(contains? (:broken %) [:check c]) open)
+                                              (not (:at-end row)) (not (:asked-at-end row)))
+                                         (merge (cleared-by c decisions open named)))])))))
 
-      (seq (of-kind :claim))
-      (assoc :claims (of-kind :claim))
+      (seq claim-tally)
+      (assoc :claims (let [alone (of-kind :claim)]
+                       (into (sorted-map)
+                             (for [[id t] claim-tally]
+                               [id (cond-> (assoc t :alone (get-in alone [id :alone] 0))
+                                     (get under id) (assoc :under (into (sorted-map) (get under id))))]))))
 
       (some true? asking)
       (assoc :asks {:rounds (count (filter true? asking)) :at-end (last asking)})
@@ -5500,7 +5637,7 @@
                                 (frequencies
                                  (for [r reviews :when (= :falsified (:verdict r))
                                        f (:findings r) :when (and (:claim-id f) (nil? (:blocks f)))]
-                                   (:claim-id f))))))))
+                                   (:claim-id f)))))))))
 
 (defn- numbered-line
   "One of `raised` as the amender's numbered line, over `findings`, the judge's findings it was

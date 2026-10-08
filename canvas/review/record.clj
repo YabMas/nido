@@ -74,9 +74,11 @@
     "The agent's answer as a design decision record, holding only the checks its round asked —
      a finding citing one of the `health` ids is routing-coherent's, and a recommendation or a
      finding contradicting the answer's own check rulings is read as those rulings support. On an
-     :ask, a finding on a claim the asks decides, or citing the `intent`, is the person's."
+     :ask, a finding on a claim the asks decides, or citing the `intent`, is the person's. A
+     finding the judge keyed to no claim is paired with the one of `claims` its prose names."
     {:signature [:=> [:catn [:json-str :string] [:design-seq :any] [:asked [:set :keyword]]
-                            [:health [:? [:set :string]]] [:intent [:? :any]]] :map]})
+                            [:health [:? [:maybe [:set :string]]]] [:intent [:? :any]]
+                            [:claims [:? [:maybe [:set :string]]]]] :map]})
   (Operation baseline-review!
     "Run the verification round over a baseline, recording on its review the code identity its
      judge read when the readings taken either side of the judge agree."
@@ -210,11 +212,13 @@
                              [:named [:maybe :map]]]
                  [:maybe :map]]})
   (Operation run-figures
-    "What one record run's rounds did, per derived check or derivation, read off the decisions and
-     reviews it appended: in how many rounds each was broken, in how many it was the only thing
-     broken, and whether it was still broken when the run's last round answered. Pure over those
+    "What one record run's rounds did, per derived check, claim or derivation, read off the
+     decisions and reviews it appended: in how many rounds each was broken, in how many it was the
+     only thing broken, and whether it was still broken when the run's last round answered — a claim
+     under whatever check it was filed, a check that cleared with how it cleared. What it ended
+     without ruling on is held to the `final` record's subjects when they are known. Pure over those
      entries, so the figures are derived on every read and stored nowhere."
-    {:signature [:=> [:catn [:entries [:vector :map]]] :map]})
+    {:signature [:=> [:catn [:entries [:vector :map]] [:final [:? [:maybe [:set :string]]]]] :map]})
   (Operation outstanding
     "What one design decision leaves open, split by whose it is to close: the subjects broken for an
      amender, and on an :ask the subjects its question is about — outstanding, but a person's to

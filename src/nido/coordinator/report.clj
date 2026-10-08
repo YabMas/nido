@@ -2413,9 +2413,13 @@
    like any check-less defect.
 
    :for-person, on an :ask's finding, marks one whose only repair is the question in :asks.
-   Absent, the finding is a derivable defect, which the round repairs before the person is asked."
+   Absent, the finding is a derivable defect, which the round repairs before the person is asked.
+
+   :claim-paired marks a :claim-id the judge did not give: nido paired the finding with the one
+   claim its prose names. Read it as nido's attribution, not the judge's."
   [:map {:closed true}
    [:claim-id   {:optional true} string?]
+   [:claim-paired {:optional true} [:= true]]
    [:check      {:optional true} keyword?]
    [:filed-under {:optional true} keyword?]
    [:cites      [:vector {:min 1} string?]]
