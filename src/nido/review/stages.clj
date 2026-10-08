@@ -1174,6 +1174,69 @@
   [targets]
   (into #{} (keep :patch-hash) targets))
 
+(defn ^{:malli/schema [:=> [:cat :map] [:vector :map]]}
+  layer-identities
+  "Each layer the round in `ctx` ended over as `{:label :patch-hash}`, bottom first — reviewed
+   and skipped alike, the composition pass excluded, a layer nothing could hash without its
+   hash. What the ledger entry keeps of which content the run ended over, so the next run can say
+   what moved without this run's dir, which is routinely gone by then."
+  [ctx]
+  (->> (concat (map :target (:reviews ctx)) (:skipped ctx))
+       (remove :stack?)
+       (sort-by #(or (:index %) 0))
+       (mapv (fn [{:keys [label patch-hash]}]
+               (cond-> {:label label} patch-hash (assoc :patch-hash patch-hash))))))
+
+(defn ^{:malli/schema [:=> [:cat [:sequential :map] [:sequential :map] :map] :map]}
+  stack-delta
+  "How this round's `targets` stand against `previous`, the `[{:label :patch-hash}]` a :review
+   entry kept, given the workstream `cache`. :added and :removed are labels on one side only, in
+   stack order. A label on both sides whose patch differs is :reverted, `{:label :from :to}`,
+   when the cache already holds the patch it is at now — content an earlier reading saw, so a
+   layer put back rather than moved on, which is what a clean reading of it does not say on its
+   own — and :changed otherwise. The composition pass is no layer and is ignored."
+  [previous targets cache]
+  (let [layers  (sort-by #(or (:index %) 0) (remove :stack? targets))
+        prev    (into {} (map (juxt :label :patch-hash)) previous)
+        now     (into {} (map (juxt :label :patch-hash)) layers)
+        moved   (for [{:keys [label patch-hash]} layers
+                      :when (and (contains? prev label) (not= patch-hash (get prev label)))]
+                  {:label label :from (get prev label) :to patch-hash})
+        {reverted true changed false} (group-by #(contains? cache (:to %)) moved)]
+    {:added    (into [] (comp (map :label) (remove prev)) layers)
+     :removed  (into [] (comp (map :label) (remove now)) previous)
+     :changed  (vec changed)
+     :reverted (vec reverted)}))
+
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  stack-delta-line
+  "`stack-delta`'s answer as one line: each movement that happened, hashes cut to eight
+   characters, or `unchanged`."
+  [{:keys [added removed changed reverted]}]
+  (let [short #(some-> % (subs 0 (min 8 (count %))))
+        arrow (fn [{:keys [label from to]}]
+                (str label " (" (or (short from) "?") "→" (or (short to) "?") ")"))
+        parts (cond-> []
+                (seq added)    (conj (str "added " (str/join ", " added)))
+                (seq removed)  (conj (str "removed " (str/join ", " removed)))
+                (seq changed)  (conj (str "changed " (str/join ", " (map arrow changed))))
+                (seq reverted) (conj (str "reverted " (str/join ", " (map arrow reverted)))))]
+    (if (seq parts) (str/join " · " parts) "unchanged")))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :keyword] [:maybe :string] :map :any] [:maybe :map]]}
+  stack-since-last-review
+  "The stack against the last :review entry on the workstream, for the report's target:
+   `{:seq <that entry> :layers <its layers> :delta <stack-delta> :line <stack-delta-line>}`;
+   `{:seq n}` alone when that entry kept no layers, which an entry written before entries did
+   has none of; nil when no run has recorded one, or there is no workstream. Reads the ledger
+   and the `cache` the round already holds, and writes nothing."
+  [project ws-id cache targets]
+  (when-let [prev (and project ws-id (ws/latest-entry project ws-id :review))]
+    (if-let [layers (seq (:layers prev))]
+      (let [delta (stack-delta layers targets cache)]
+        {:seq (:seq prev) :layers (vec layers) :delta delta :line (stack-delta-line delta)})
+      {:seq (:seq prev)})))
+
 (defn ^{:malli/schema [:=> [:cat :map :any] :map]}
   to-review
   "Split targets into those this round must review and those already converged
@@ -1295,7 +1358,10 @@
 
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]}
   announce-targets!
-  "Publish what this round is about to review, BEFORE any agent starts.
+  "Publish what this round is about to review, BEFORE any agent starts — and, in round 1, how
+   the stack stands against the last :review entry (`stack-since-last-review`, read over the
+   `:cache` the split carries), so a stack recut or a layer put back between runs is on the
+   report's target rather than in a join of two run dirs with review-cache.edn.
 
    Everything here is known at setup: the fork point from jj, the target list
    from the stack, the manifest from one `jj diff --name-only`. It used to reach
@@ -1307,7 +1373,7 @@
    Best-effort by design. A run must not die because a display event could not be
    built, so a failure here is swallowed and the round proceeds exactly as it did
    before this event existed."
-  [ctx {:keys [review skipped]}]
+  [ctx {:keys [review skipped cache]}]
   (when-let [emit (get-in ctx [:config :emit])]
     (try
       (let [cwd      (get-in ctx [:config :cwd])
@@ -1316,14 +1382,19 @@
                        (cond-> {:label  (:label t)
                                 :stack? (boolean (:stack? t))
                                 :status status}
-                         (:index t) (assoc :index (:index t))))]
-        (emit {:event    :targets-resolved
-               :iter     (:iter ctx)
-               :at       (str (java.time.Instant/now))
-               :base-rev base-rev
-               :files    (if base-rev (pass/changed-files cwd base-rev "@") [])
-               :targets  (into (mapv (partial row "pending") review)
-                               (mapv (partial row "skipped") skipped))}))
+                         (:index t) (assoc :index (:index t))))
+            previous (when (= 1 (:iter ctx))
+                       (let [[project ws-id] (project+ws-from-cwd cwd)]
+                         (stack-since-last-review project ws-id (or cache {})
+                                                  (concat review skipped))))]
+        (emit (cond-> {:event    :targets-resolved
+                       :iter     (:iter ctx)
+                       :at       (str (java.time.Instant/now))
+                       :base-rev base-rev
+                       :files    (if base-rev (pass/changed-files cwd base-rev "@") [])
+                       :targets  (into (mapv (partial row "pending") review)
+                                       (mapv (partial row "skipped") skipped))}
+                previous (assoc :previous previous))))
       (catch Throwable _ nil))))
 
 (defn- announce-target!
@@ -1525,7 +1596,7 @@
                          (with-prior-open (get-in ctx [:carry :inherited-open]))))
         {:keys [review skipped]} (to-review cached all)
         targets review
-        _       (announce-targets! ctx {:review review :skipped skipped})
+        _       (announce-targets! ctx {:review review :skipped skipped :cache cached})
         outcomes (in-parallel (map (fn [t] #(review-target! ctx t)) targets))
         failed   (filterv :failure outcomes)
         results  (filterv (complement :failure) outcomes)

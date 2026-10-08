@@ -2600,3 +2600,19 @@
       (is (= [:brian "agentic-rag" "ws-1"]
              ((juxt :reviewed-project :reviewed-session :reviewed-ws-id) @sent))
           "the analysis names the workstream the run judged, not a fresh reading of a restarting session"))))
+
+(deftest the-review-entry-keeps-which-content-each-layer-ended-at
+  ;; The next run reads its stack against this. Without it a recut or a layer put back between
+  ;; runs was visible only by joining two reports with review-cache.edn, and the earlier run dir
+  ;; is routinely gone by then.
+  (let [final {:status :converged :history [] :findings []
+               :reviews [{:target {:label "the branch" :stack? true :patch-hash "s"}}
+                         {:target {:label "domain" :index 2 :patch-hash "b435bc54"}}]
+               :skipped [{:label "persistence" :index 1 :patch-hash "41e9434d"}]}
+        ev    (t/review-event final {:summary {:rounds 1} :target {:base "main" :base-rev "B"}} "/runs/r/report.json")]
+    (is (= [{:label "persistence" :patch-hash "41e9434d"} {:label "domain" :patch-hash "b435bc54"}]
+           (:layers ev)))
+    (is (= ev (report/validate-event :review ev)) "the closed schema admits it, so it survives the ledger"))
+  (let [ev (t/review-event {:status :review-failed :history [] :findings []}
+                           {:summary {:rounds 0} :target {:base "main"}} "/runs/r/report.json")]
+    (is (not (contains? ev :layers)) "a run that resolved no targets claims no layers")))

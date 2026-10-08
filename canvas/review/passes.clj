@@ -382,8 +382,28 @@
      A target nothing could hash contributes nothing, so a round jj could not diff produces the
      empty set rather than a false reading."
     {:signature [:=> [:catn [:targets :any]] :any]})
-  (Operation announce-targets! "Publish what this round is reviewing and what it skipped."
+  (Operation announce-targets!
+    "Publish what this round is reviewing and what it skipped — and, in round 1, how the stack
+     stands against the last :review entry."
     {:signature [:=> [:catn [:ctx :map] [:split :map]] :any]})
+  (Operation layer-identities
+    "Each layer the round ended over as its label and patch hash, bottom first, the composition
+     pass excluded — what the ledger entry keeps for the next run to read its stack against."
+    {:signature [:=> [:catn [:ctx :map]] [:vector :map]]})
+  (Operation stack-delta
+    "How this round's layers stand against those a :review entry kept: added, removed, changed,
+     and reverted — changed to content the cache already holds. Pure."
+    {:signature [:=> [:catn [:previous [:sequential :map]] [:targets [:sequential :map]] [:cache :map]]
+                 :map]})
+  (Operation stack-delta-line
+    "A stack delta as one line, or `unchanged`. Pure."
+    {:signature [:=> [:catn [:delta :map]] :string]})
+  (Operation stack-since-last-review
+    "The stack against the last :review entry on the workstream — that entry, its layers, the
+     delta and its line — or nil when no run has recorded one."
+    {:signature [:=> [:catn [:project [:maybe :keyword]] [:ws-id [:maybe :string]] [:cache :map]
+                             [:targets :any]]
+                 [:maybe :map]]})
   (Operation round-correctness
     "The round's correctness verdict: the worst answer its reviewers gave, or nil when none
      reached one. A round has as many verdicts as it opened targets and the whole-stack pass's

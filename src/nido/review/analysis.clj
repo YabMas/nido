@@ -209,7 +209,7 @@
            drift unavailable stood-in base in-flight errored design-verdict verdict-implementation
            verdict-unverified verdict-unraised
            design-carried-from review-entry reviewed-project reviewed-session reviewed-ws-id
-           machinery owed-reading ruled-not-dispatched] :as run}]
+           machinery owed-reading ruled-not-dispatched previous-stack] :as run}]
   ;; `:in-flight` is the reconciler's reading of an orphan's report and is the
   ;; same value `worth-analysing?` gates on; the phase is the half of it that
   ;; means something to a reader, so it is published and the round is not.
@@ -271,6 +271,13 @@
                                       (n findings-kept) " kept\n"
                                       "Coverage: " (or targets-reviewed 0) " targets read this run, "
                                       (or targets-skipped 0) " carried from an earlier run\n"
+                                      ;; What the stack is against the last run's entry, so a
+                                      ;; clean reading of a layer put back to content an earlier
+                                      ;; run fixed is read as that rather than as a second pass.
+                                      (when previous-stack
+                                        (str "Stack since entry " (:seq previous-stack) ": "
+                                             (or (:line previous-stack) "that entry kept no layers")
+                                             "\n"))
                                       (reviewed-line run (str " (base " base ")"))
                                       ;; What a cap left read quiet once — on :owed-second-reading
                                       ;; the whole of what the run stopped on.
@@ -344,11 +351,16 @@
 
    `continued` is `nido.review.record/continued` of the report: which earlier runs round 1 read,
    which single readings the run paired and which it denied. In the headline because a 1-round
-   run that stopped sufficient is otherwise one the analysis has to explain from the ledger."
+   run that stopped sufficient is otherwise one the analysis has to explain from the ledger.
+
+   `subject` is `nido.review.record/subject-at-start` off the report's target. Two of its facts
+   reach the headline, since each asks something of a person that the run's rounds do not say: a
+   newer entry superseding the one judged was skipped, and a judged baseline the standing design
+   does not cite — its premise has moved, and its re-citation or re-survey is owed."
   [{:keys [loop run-id report-path status rounds launched judged amended unappended weakened disputed
            record-seq still-broken still-asked asks stood-in reviewed-project reviewed-session reviewed-ws-id
            machinery unrecorded spent cap amend-prompt unreadable stale-at-start repair repaired?
-           amender continued]
+           amender continued subject]
     :as run}]
   (let [kind   (name loop)
         broken (seq (map name still-broken))]
@@ -391,6 +403,17 @@
                                ;; settled normally and one whose every confirmation was lost.
                                (when stale-at-start
                                  (str "Working copy at start: " (:line stale-at-start) "\n"))
+                               (when-let [sk (:skipped subject)]
+                                 (when (:supersedes-subject? sk)
+                                   (str "Skipped: entry " (:seq sk) " supersedes entry " (:seq subject)
+                                        ", the one judged"
+                                        (when (:named? subject) " (named by the caller)")
+                                        ", and was the newest " kind " when the run started\n")))
+                               (when-let [p (:premise subject)]
+                                 (when (:moved? p)
+                                   (str "Premise moved: the standing design (entry " (:design-seq p)
+                                        ") cites baseline entry " (:cites p) "; this run judged entry "
+                                        (:seq subject) "\n")))
                                (when (seq unreadable)
                                  (str "Unsettled: tree identity unreadable in round"
                                       (when (next unreadable) "s") " "

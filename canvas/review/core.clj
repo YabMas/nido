@@ -137,6 +137,10 @@
     "The report carrying what a record run found of its judged tree's working copy as it started —
      stale and healed, or stale and left for a person — or unchanged when it was not stale."
     {:signature [:=> [:catn [:report ReviewReport] [:healing [:maybe :map]]] ReviewReport]})
+  (Operation with-subject
+    "The report naming what a record run set out to judge, and what stood beside it on the ledger
+     as it began — or unchanged when the run had none to name."
+    {:signature [:=> [:catn [:report ReviewReport] [:subject [:maybe :map]]] ReviewReport]})
   (Operation with-settlement
     "The report's status and `:reason` read again off the terminal ctx once the design verdict's
      answers are folded in. The rounds and `:ended-at` stand; a report nothing sealed is left

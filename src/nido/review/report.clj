@@ -70,6 +70,17 @@
   (cond-> report
     healing (assoc-in [:target :stale-working-copy] healing)))
 
+(defn ^{:malli/schema [:=> [:cat :ReviewReport [:maybe :map]] :ReviewReport]}
+  with-subject
+  "`report` naming what a record run set out to judge, under `[:target :subject]` —
+   `nido.review.record/subject-at-start`'s answer — or unchanged when the run had none to name.
+   The rounds record which entry each judgement was of; this records what the run was pointed at
+   and what stood beside it as it began, which is where a run that judged past a newer entry, or
+   judged a baseline the standing design no longer cites, is read."
+  [report subject]
+  (cond-> report
+    subject (assoc-in [:target :subject] subject)))
+
 (defn- last-warden
   "The warden of the last round in `ctx` that ran one: the terminal round's own,
    else the newest in `:history`, or nil. A round the read-once hold carried on
@@ -885,12 +896,18 @@
 
    The seeded rows are put in stack order here, the same way the finished
    payload is, so a target sits in the same place from the moment it is named to
-   the moment it reports."
-  [report {:keys [base-rev files targets]}]
+   the moment it reports.
+
+   `:previous`, when the round carries one, is the stack read against the last :review entry on
+   the workstream — `nido.review.stages/stack-since-last-review` — and goes on the target as it
+   came: round 1 is the only round that sends it, since what a later round's stack differs by
+   is this run's own repairs, which the rounds already record."
+  [report {:keys [base-rev files targets previous]}]
   (-> report
       (assoc-in [:target :base-rev] base-rev)
       (assoc-in [:target :files] (vec files))
       (assoc-in [:target :layers] (count (remove :stack? targets)))
+      (cond-> previous (assoc-in [:target :previous] previous))
       (update-current-phase
        "review"
        (fn [ph] (assoc ph :layers (in-stack-order targets))))))

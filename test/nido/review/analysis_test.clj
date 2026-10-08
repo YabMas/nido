@@ -641,3 +641,32 @@
   (let [h (:headline (analysis/payload a-design-run))]
     (is (not-any? #(str/includes? h %) ["Continues:" "Paired:" "Contradicts read-once:"])
         "a run that continued nothing says nothing of it")))
+
+(deftest a-record-run-headline-says-when-it-judged-past-a-newer-entry-or-a-design-premise-moved
+  ;; Watched: a baseline run named entry 4 while entry 6 superseded it, and another judged entry
+  ;; 29 under a design citing 21; both headlines read as ordinary sufficient runs.
+  (let [h (:headline (analysis/payload (assoc a-design-run :loop :baseline :status :sufficient
+                                              :subject {:seq 4 :named? true :newest-at-start 6
+                                                        :skipped {:seq 6 :supersedes-subject? true}})))]
+    (is (str/includes? h "Skipped: entry 6 supersedes entry 4, the one judged (named by the caller), and was the newest baseline when the run started")))
+  (let [h (:headline (analysis/payload (assoc a-design-run :loop :baseline :status :sufficient
+                                              :subject {:seq 29 :named? false :newest-at-start 29
+                                                        :premise {:design-seq 28 :cites 21 :moved? true}})))]
+    (is (str/includes? h "Premise moved: the standing design (entry 28) cites baseline entry 21; this run judged entry 29")))
+  (let [h (:headline (analysis/payload (assoc a-design-run :loop :baseline :status :sufficient
+                                              :subject {:seq 4 :named? true :newest-at-start 6
+                                                        :skipped {:seq 6 :supersedes-subject? false}
+                                                        :premise {:design-seq 3 :cites 4}})))]
+    (is (not-any? #(str/includes? h %) ["Skipped:" "Premise moved:"])
+        "a newer neighbour of another area and a design citing the judged entry ask nothing of a person")))
+
+(deftest a-diff-run-headline-says-how-the-stack-stands-against-the-last-entry
+  (let [h (:headline (analysis/payload (assoc a-run :previous-stack
+                                              {:seq 30 :layers [{:label "domain" :patch-hash "4e746c49"}]
+                                               :line "added transport · reverted domain (4e746c49→b435bc54)"})))]
+    (is (str/includes? h "Stack since entry 30: added transport · reverted domain (4e746c49→b435bc54)")))
+  (let [h (:headline (analysis/payload (assoc a-run :previous-stack {:seq 30})))]
+    (is (str/includes? h "Stack since entry 30: that entry kept no layers")
+        "an entry from before entries kept layers is said to be one, not read as an empty stack"))
+  (is (not (str/includes? (:headline (analysis/payload a-run)) "Stack since"))
+      "a first run on a workstream has nothing to stand against"))

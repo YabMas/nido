@@ -5689,3 +5689,41 @@
     (is (= :owed-second-reading (:status out))
         "a cap that still falls on owed readings says so, not that findings were open")
     (is (= {:read-once ["lower"]} (:owed-reading out)))))
+
+(deftest the-stack-delta-tells-a-layer-put-back-from-a-layer-moved-on
+  ;; Watched: the previous run's domain went b435bc54→…→4e746c49 through fixes; this run had
+  ;; domain back at b435bc54 and a new transport layer, visible only by joining two reports with
+  ;; review-cache.edn. The cache holding the hash is what says 'put back' rather than 'changed'.
+  (let [previous [{:label "persistence" :patch-hash "41e9434d"}
+                  {:label "domain" :patch-hash "4e746c49"}
+                  {:label "stack" :patch-hash "aaaa0000"}]
+        targets  [{:label "persistence" :patch-hash "41e9434d" :index 1}
+                  {:label "domain" :patch-hash "b435bc54" :index 2}
+                  {:label "transport" :patch-hash "cccc0000" :index 3}
+                  {:label "the branch" :stack? true :patch-hash "dddd0000"}]
+        cache    {"b435bc54" {:status :partial :label "domain"}
+                  "41e9434d" {:status :converged :label "persistence"}}
+        delta    (stages/stack-delta previous targets cache)]
+    (is (= {:added ["transport"] :removed ["stack"] :changed []
+            :reverted [{:label "domain" :from "4e746c49" :to "b435bc54"}]}
+           delta)
+        "domain is at content an earlier reading saw, so it was put back, not moved on")
+    (is (= "added transport · removed stack · reverted domain (4e746c49→b435bc54)"
+           (stages/stack-delta-line delta)))
+    (is (= {:added [] :removed [] :changed [{:label "domain" :from "4e746c49" :to "b435bc54"}] :reverted []}
+           (stages/stack-delta [{:label "domain" :patch-hash "4e746c49"}]
+                               [{:label "domain" :patch-hash "b435bc54"}] {}))
+        "the same move with no reading of the new content behind it is a change")
+    (is (= "unchanged" (stages/stack-delta-line (stages/stack-delta previous previous cache)))
+        "nothing moved reads as nothing, not as an empty list of movements")))
+
+(deftest layer-identities-keep-what-the-run-ended-over-in-stack-order
+  (let [final {:reviews [{:target {:label "stack" :stack? true :patch-hash "s"}}
+                         {:target {:label "domain" :index 2 :patch-hash "d2"}}
+                         {:target {:label "unhashed" :index 3}}]
+               :skipped [{:label "persistence" :index 1 :patch-hash "p1"}]}]
+    (is (= [{:label "persistence" :patch-hash "p1"}
+            {:label "domain" :patch-hash "d2"}
+            {:label "unhashed"}]
+           (stages/layer-identities final))
+        "skipped layers count — they are part of what the branch held — and the composition pass does not")))

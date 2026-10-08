@@ -187,7 +187,10 @@
         standing (get-in report [:reason :standing])
         errored  (report/errored report)
         stood-in (report/stood-in report)
-        made     (verdict/settled-the-loop-made final)]
+        made     (verdict/settled-the-loop-made final)
+        ;; Which content the run ended over, per layer, for the next run to read its stack
+        ;; against — the one fact a report comparison needed that no entry kept.
+        layers   (stages/layer-identities final)]
     (cond-> {:format             :review-report
              :status             (:status final)
              :base               (get-in report [:target :base])
@@ -198,6 +201,7 @@
              :findings-remaining (count open)
              :report-path        report-path}
       (seq open)      (assoc :open open)
+      (seq layers)    (assoc :layers layers)
       (seq kept)      (assoc :kept kept :findings-kept (count kept))
       (seq made)      (assoc :defects-introduced (count made))
       (pos? repaired) (assoc :remaining-handed repaired)
@@ -580,7 +584,8 @@
        :reviewed-project   project
        :reviewed-session   session
        :reviewed-ws-id     ws-id
-       :review-entry       (:review-entry report)}
+       :review-entry       (:review-entry report)
+       :previous-stack     (get-in report [:target :previous])}
       (cond-> (dissoc stop :standing)
         (seq standing) (assoc :standing standing))
       (report/verdict-summary report owed)))))
@@ -2025,6 +2030,7 @@
       :unreadable       (record/unreadable-rounds report)
       :continued        (record/continued report)
       :stale-at-start   (get-in report [:target :stale-working-copy])
+      :subject          (get-in report [:target :subject])
       :amend-prompt     (:amend-prompt final)
       :amender          (some-> (:amend-launch final) record/amender-account)
       :unrecorded       (:unrecorded final)
@@ -2192,6 +2198,11 @@
                                                   code-cwd  (assoc :code-cwd (str code-cwd))
                                                   reviewer  (assoc :reviewer (name reviewer))
                                                   dry-run?  (assoc :dry-run? true))}))
+        ;; What the run is pointed at, read against the ledger before any round reads it: a
+        ;; round records the entry it judged, and nothing else records that a newer one stood
+        ;; beside it, or that the standing design cites an older one.
+        _      (swap! report-atom report/with-subject
+                      (record/subject-at-start ledger (keyword kind) baseline))
         plain  (frontend/plain?)
         emit   (frontend/emit-fn report-atom report-path clock plain)
         reading (if code-cwd

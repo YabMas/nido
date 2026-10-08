@@ -2148,6 +2148,15 @@
      [:round   int?]
      [:phase   string?]
      [:message string?]]]
+   ;; Each layer the run ended over, bottom first, as {:label :patch-hash} — the
+   ;; composition pass excluded, a layer nothing could hash without its hash.
+   ;; What the next run on the workstream reads its own stack against
+   ;; (`nido.review.stages/stack-since-last-review`): a stack recut or a layer
+   ;; put back between runs was otherwise visible only by joining two run dirs'
+   ;; reports with review-cache.edn by hand, and the earlier dir is routinely gone.
+   [:layers {:optional true} [:vector [:map {:closed true}
+                                       [:label      string?]
+                                       [:patch-hash {:optional true} string?]]]]
    [:report-path        [:maybe string?]]
    ;; Dormant extension point: no caller populates :summary yet (review-event omits it).
    ;; Kept for a future emitter wanting a one-line human note on the timeline card.

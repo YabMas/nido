@@ -2059,3 +2059,34 @@
   (let [[_ ph] (design-judge-phase {:format :design-decision :recommend :proceed :confirmed ["c1"]})]
     (is (not-any? #(contains? ph %) [:paired-with :contradicts-read-once :continues])
         "absent when the run continued nothing")))
+
+(deftest the-target-names-what-a-record-run-was-pointed-at
+  (let [r (report/with-subject (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+                               {:seq 4 :named? true :newest-at-start 6
+                                :skipped {:seq 6 :supersedes-subject? true}})]
+    (is (= {:seq 4 :named? true :newest-at-start 6 :skipped {:seq 6 :supersedes-subject? true}}
+           (get-in r [:target :subject]))
+        "which entry the run was pointed at, and the newer one it was pointed past, are on the target")
+    (is (= "/w" (get-in r [:target :cwd])) "beside what the target already pins"))
+  (let [r (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})]
+    (is (= r (report/with-subject r nil)) "a run with no subject to name leaves the target alone")))
+
+(deftest targets-resolved-carries-the-stack-since-the-last-review-entry-onto-the-target
+  ;; Watched: a run re-reviewed a stack reshaped after the previous run — a new transport layer,
+  ;; domain reverted to its pre-fix hash — and :target recorded `layers: 3`.
+  (let [previous {:seq 30 :layers [{:label "domain" :patch-hash "4e746c49"}]
+                  :delta {:added ["transport"] :removed [] :changed []
+                          :reverted [{:label "domain" :from "4e746c49" :to "b435bc54"}]}
+                  :line "added transport · reverted domain (4e746c49→b435bc54)"}
+        r (-> (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+              (report/apply-event {:event :targets-resolved :iter 1 :at "t1" :base-rev "B" :files []
+                                   :targets [{:label "domain" :stack? false :status "pending" :index 1}
+                                             {:label "transport" :stack? false :status "pending" :index 2}]
+                                   :previous previous} nil))]
+    (is (= previous (get-in r [:target :previous]))
+        "the previous entry's layers and the delta against them are on the target, not in two run dirs")
+    (is (= 2 (get-in r [:target :layers])))
+    (let [r2 (report/apply-event r {:event :targets-resolved :iter 2 :at "t2" :base-rev "B" :files []
+                                    :targets [{:label "domain" :stack? false :status "pending" :index 1}]} nil)]
+      (is (= previous (get-in r2 [:target :previous]))
+          "a later round, which sends none, leaves round 1's reading standing"))))

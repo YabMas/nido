@@ -1824,3 +1824,52 @@
            (record/continued report))
         "read off the report, so a finished run's headline says it as the run did"))
   (is (= {} (record/continued {:rounds [{:round 1 :phases [{:phase "judge"}]}]}))))
+
+(deftest the-subject-at-start-says-what-the-run-was-pointed-at-and-what-stood-beside-it
+  ;; Watched: a run named entry 4 while entry 6, from a run interrupted a minute earlier,
+  ;; already superseded it; the report's :target held {cwd, base nil, files []}, and the
+  ;; forked lineage — 6 left with no review naming it — was readable only from entry mtimes.
+  (let [entries {4 {:format :baseline :seq 4}
+                 6 {:format :baseline :seq 6 :supersedes {:seq 4 :why "reworded"}}}
+        latest  (fn [kind] (fn [_ _ k] (when (= kind k) (get entries 6))))]
+    (with-redefs [ws/latest-entry  (latest :baseline)
+                  ws/entry-at-seq  (fn [_ _ n] (get entries n))]
+      (is (= {:seq 4 :named? true :newest-at-start 6
+              :skipped {:seq 6 :supersedes-subject? true}}
+             (record/subject-at-start [:nido "ws-1"] :baseline (get entries 4)))
+          "a named run pointed past a superseding entry forks the lineage, and the report says so")
+      (is (= {:seq 6 :named? false :newest-at-start 6}
+             (record/subject-at-start [:nido "ws-1"] :baseline nil))
+          "an unnamed run starts on the newest, and skips nothing")))
+  (let [entries {4 {:format :baseline :seq 4}
+                 6 {:format :baseline :seq 6}}]
+    (with-redefs [ws/latest-entry (fn [_ _ k] (when (= :baseline k) (get entries 6)))
+                  ws/entry-at-seq (fn [_ _ n] (get entries n))]
+      (is (= {:seq 6 :supersedes-subject? false}
+             (:skipped (record/subject-at-start [:nido "ws-1"] :baseline (get entries 4))))
+          "a newer baseline of another area is a neighbour, not a skipped amendment")))
+  (is (nil? (record/subject-at-start nil :baseline nil)) "no ledger, nothing to say")
+  (with-redefs [ws/latest-entry (constantly nil)]
+    (is (nil? (record/subject-at-start [:nido "ws-1"] :design nil)) "no entry of the kind")))
+
+(deftest the-subject-at-start-says-when-the-standing-design-cites-an-older-baseline
+  ;; Watched: design entry 28 cited baseline 21; the run judged 29, which 24, 26 and 29 had
+  ;; superseded 21 to reach, and neither the report nor the headline said the premise had moved.
+  (let [latest (fn [baseline design] (fn [_ _ k] (case k :baseline baseline :design design nil)))]
+    (with-redefs [ws/latest-entry (latest {:format :baseline :seq 29}
+                                          {:format :design :seq 28 :baseline {:seq 21 :relation :revisit}})]
+      (is (= {:design-seq 28 :cites 21 :moved? true}
+             (:premise (record/subject-at-start [:nido "ws-1"] :baseline nil)))
+          "the design was decided on a reading this run no longer judges — its re-citation is owed"))
+    (with-redefs [ws/latest-entry (latest {:format :baseline :seq 21}
+                                          {:format :design :seq 28 :baseline {:seq 21}})]
+      (is (= {:design-seq 28 :cites 21}
+             (:premise (record/subject-at-start [:nido "ws-1"] :baseline nil)))
+          "a design citing the judged baseline has not moved, and says so without a flag"))
+    (with-redefs [ws/latest-entry (latest {:format :baseline :seq 29} nil)]
+      (is (nil? (:premise (record/subject-at-start [:nido "ws-1"] :baseline nil)))
+          "no design stands, so no premise to have moved"))
+    (with-redefs [ws/latest-entry (latest {:format :baseline :seq 29}
+                                          {:format :design :seq 28 :baseline {:seq 21}})]
+      (is (nil? (:premise (record/subject-at-start [:nido "ws-1"] :design nil)))
+          "a design run's subject is the design; the premise question is the baseline run's"))))

@@ -200,6 +200,15 @@
      denied; and the earlier runs round 1 read, with how each ended. What the headline says in
      place of a 1-round run that stopped for a reason only the ledger held."
     {:signature [:=> [:catn [:report [:maybe :map]]] :map]})
+  (Operation subject-at-start
+    "What a record run is about to judge, relative to the ledger as it starts: the subject entry,
+     whether the caller named it, the newest entry of that kind beside it — flagged when it
+     supersedes the subject and was skipped — and, for a baseline, the standing design's citation
+     with whether the subject has moved past it."
+    {:signature [:=> [:catn [:ledger [:maybe [:tuple :keyword :string]]]
+                             [:kind [:enum :baseline :design]]
+                             [:named [:maybe :map]]]
+                 [:maybe :map]]})
   (Operation run-figures
     "What one record run's rounds did, per derived check or derivation, read off the decisions and
      reviews it appended: in how many rounds each was broken, in how many it was the only thing

@@ -5169,6 +5169,56 @@
       (seq denied) (assoc :contradicted denied)
       (seq runs)   (assoc :continues runs))))
 
+(defn- supersedes-reaches?
+  "Whether `entry`'s :supersedes chain on the ledger reaches the entry at `seq-n`. Every link
+   names an older entry, so a link that does not — or names nothing readable — ends the walk
+   at no rather than looping."
+  [project ws-id entry seq-n]
+  (loop [e entry]
+    (let [n (get-in e [:supersedes :seq])]
+      (cond
+        (nil? n)                            false
+        (= (long n) (long seq-n))           true
+        (>= (long n) (long (or (:seq e) 0))) false
+        :else                               (recur (ws/entry-at-seq project ws-id n))))))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe [:tuple :keyword :string]] [:enum :baseline :design]
+                            [:maybe :map]]
+                       [:maybe :map]]}
+  subject-at-start
+  "What a `kind` record run is about to judge, relative to `ledger` as it starts — nil when the
+   ledger is unresolved or holds no entry of that kind. `named` is the entry the caller pointed
+   the run at, or nil for the newest.
+
+   :seq is the subject; :named? whether the caller chose it; :newest-at-start the newest entry
+   of that kind as the run began, which a named run may have been pointed past. When it was,
+   :skipped names that entry and whether its :supersedes chain reaches the subject — judging the
+   subject then forks the lineage, leaving the newer entry with no review naming it, which is
+   the fact nothing in the run's rounds otherwise records. A newer entry of another area is a
+   neighbour, not a skip, and the flag says which.
+
+   For a baseline, :premise is the standing design's citation — the newest :design record and
+   the baseline :seq it names — with :moved? when the subject is newer than what it cites: the
+   design was decided on a reading this run is no longer judging, so its re-citation or
+   re-survey is owed rather than implied. Absent when no design stands or it cites nothing.
+
+   Read ONCE, before round 1. An unnamed run re-reads the newest entry each round; this says
+   what it started on."
+  [[project ws-id] kind named]
+  (when project
+    (let [newest  (ws/latest-entry project ws-id kind)
+          subject (or named newest)]
+      (when (:seq subject)
+        (let [s      (long (:seq subject))
+              n      (long (or (:seq newest) s))
+              design (when (= :baseline kind) (ws/latest-entry project ws-id :design))
+              cites  (get-in design [:baseline :seq])]
+          (cond-> {:seq s :named? (some? named) :newest-at-start n}
+            (> n s) (assoc :skipped {:seq n
+                                     :supersedes-subject? (supersedes-reaches? project ws-id newest s)})
+            cites   (assoc :premise (cond-> {:design-seq (:seq design) :cites (long cites)}
+                                      (> s (long cites)) (assoc :moved? true)))))))))
+
 (defn- tally
   "Per key, in how many of `rounds` it was broken, in how many it was the only thing broken, and
    whether it was broken in the last of them. `rounds` is each round's set of broken keys, in order.
