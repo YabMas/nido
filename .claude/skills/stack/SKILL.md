@@ -236,6 +236,19 @@ disproved.
   *because the collapse means no layer boundary is ever a merge boundary*. When
   a boundary **does** have to be survivable, it is not a layer: it is a phase,
   and `/phase` §2 is the test.
+- **A finished layer is recorded, and it is not a stopping point.** When a
+  layer is done — described, bookmarked, green — say so on the ledger, then
+  start the next one in the same turn:
+
+  ```bash
+  bb nido:workstream:layer:complete :layer <n> :of <N> :bookmark <session>--<slug>
+  ```
+
+  `:of` is the cut you drew for this design; repeat it on every layer. The
+  board reads these entries to show which layer is done and which is owed, and
+  a session that stops between layers with no question recorded reads as
+  stalled. Stop only for something a person must decide — and then record it
+  as a `:blocker`, not as a sentence in chat.
 
 ## 4. Mechanics
 

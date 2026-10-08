@@ -899,8 +899,11 @@ falsifiable.
 If the description cannot carry that bar, **do not invent the missing half**. A
 goal you guessed is worse than no goal, because everything downstream is judged
 against it and nobody can tell it was a guess. Halt on a `:blocker` naming what
-you would need — a `:blocker` entry parks the session, the workstream surfaces as
-a gate, and the answer comes back through `/resume`. That round trip costs a few
+you would need — a `:blocker` entry puts the workstream at a gate a person owes,
+and it stays there until an answer naming that blocker is recorded: a gate
+button writes one, and an answer given to you in chat is recorded with
+`bb nido:workstream:blocker:answer :answer "<their words>"` before you go on.
+Nothing else clears it — carrying on with work does not. That round trip costs a few
 minutes; a survey and a design built on an invented goal cost the whole
 workstream, and the review loop will not catch it, because a design can serve a
 wrong goal perfectly.

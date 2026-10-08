@@ -77,7 +77,8 @@
    Accepts a URL, a page id or a ticket id, because what a person has in their clipboard is
    whichever of those they were looking at."
   (Operation extract-page-id "The page id inside a Notion URL or uuid, dashed."
-    {:signature [:=> [:catn [:s :string]] [:maybe :string]]})
+    {:signature [:=> [:catn [:s [:maybe :string]]] [:maybe :string]]
+     :delegates [notion/extract-page-id]})
   (Operation resolve-ref "What a pasted reference resolves to."
     {:signature [:=> [:catn [:project ProjectName] [:input :string] [:token NotionToken]] :map]
      :delegates [extract-page-id notion/retrieve-page notion/normalise-page]})
@@ -137,6 +138,9 @@
    in for the marker, which held only while nothing else minted a ref-less workstream — the
    described-intent leg does, so the inference and the marker stopped agreeing and the marker is
    the one that was always authored."
+  (Operation bare?
+    "Whether a workstream holds nothing but its own :scratch birth, so discarding it loses nothing."
+    {:signature [:=> [:catn [:w Workstream]] :boolean]})
   (Operation scratch? "Whether a workstream is marked a one-off."
     {:signature [:=> [:catn [:w Workstream]] :boolean]})
   (Operation joinable
@@ -158,3 +162,20 @@
      it was born disposable, the absent ref says nothing outside has claimed it since."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
      :delegates [scratch? workstream/list-ids workstream/read-ws workstream/delete!]}))
+
+(Module lane-backfill
+  "Record as entries the status a workstream's mutable records already hold, so a status read off
+   the ledger alone answers for workstreams decided before decisions were recorded. Idempotent:
+   it appends only what the ledger does not already say."
+  (Operation unaccepted-triage
+    "The :seq of the newest triage no acceptance cites, or nil."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :int]]
+     :delegates [workstream/read-ws workstream/entries-of]})
+  (Operation backfill-workstream!
+    "Bring one workstream's ledger level with its records; the kinds appended, in order."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:facts :map]] [:vector :keyword]]
+     :delegates [workstream/freeze-index! workstream/append-entry!]})
+  (Operation backfill!
+    "Backfill every workstream of a project; counts appended by kind, and what failed."
+    {:signature [:=> [:catn [:project ProjectName]] :map]
+     :delegates [backfill-workstream!]}))

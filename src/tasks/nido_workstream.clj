@@ -12,6 +12,8 @@
    [nido.coordinator.record.fork :as fork]
    [nido.review.merge :as unit-merge]
    [nido.platform.task-args :as task-args]
+   [nido.coordinator.lane.backfill :as backfill]
+   [nido.review.stages :as stages]
    [nido.coordinator.work :as work]
    [tasks.nido-attach :as attach]))
 
@@ -287,6 +289,59 @@
   reserve-cmd   [& args] (run* reserve* args #{:addresses}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   discharge-cmd [& args] (run* discharge* args #{:rev :addresses :worktree :bookmark}))
+(defn- here
+  "[project ws-id] from explicit opts — :project with :ws-id or :ref — else from the session the
+   cwd is in. The agent recording its own progress is standing in its worktree, and naming the
+   workstream it already sits in is a step it can get wrong."
+  [{:keys [project ws-id ref] :as opts}]
+  (if (and project (or ws-id ref))
+    [(keyword project) (resolve-ws-id opts)]
+    (or (stages/project+ws-from-cwd (System/getProperty "user.dir"))
+        (throw (ex-info "No workstream here — run from a session's worktree or session home, or pass :project and :ws-id"
+                        {:cwd (System/getProperty "user.dir")})))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  layer-complete*
+  "Record that layer :layer of :of is finished under the workstream's newest design."
+  [{:keys [layer of bookmark commit] :as opts}]
+  (let [[p id] (here opts)
+        design (or (ws/latest-entry p id :design)
+                   (throw (ex-info "No design on this workstream — a layer is built under one" {:ws-id id})))]
+    (ws/append-entry! p id {:kind :layer-completed}
+                      (pr-str (cond-> {:format :layer-completed :design {:seq (:seq design)}
+                                       :layer layer :of of}
+                                bookmark (assoc :bookmark (str bookmark))
+                                commit   (assoc :commit (str commit)))))))
+
+(defn- unanswered-blockers
+  "The seqs of this workstream's blockers no :blocker-answered names, oldest first."
+  [p id]
+  (let [answered (into #{} (keep :blocker-seq) (ws/entries-of p id :blocker-answered))]
+    (into [] (comp (map :seq) (remove answered)) (ws/entries-of p id :blocker))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  blocker-answer*
+  "Record a person's answer, in their words, to a blocker — :blocker-seq, else the newest one
+   nothing has answered."
+  [{:keys [answer blocker-seq] :as opts}]
+  (let [[p id] (here opts)
+        owed   (unanswered-blockers p id)
+        n      (or blocker-seq (peek owed)
+                   (throw (ex-info "No unanswered blocker on this workstream" {:ws-id id})))]
+    (when (str/blank? (str answer))
+      (throw (ex-info "An answer is the person's words — pass :answer \"…\"" {:ws-id id})))
+    (ws/append-entry! p id {:kind :blocker-answered}
+                      (pr-str {:format :blocker-answered :blocker-seq n :summary (str answer)}))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  layer-complete-cmd [& args] (run* layer-complete* args #{:bookmark :commit}))
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  blocker-answer-cmd [& args] (run* blocker-answer* args #{:answer}))
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  status-backfill-cmd [& args]
+  (let [[_ opts] (task-args/split-args args)]
+    (prn (backfill/backfill! (keyword (:project opts))))))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   backfill-landings-cmd [& args]
   (let [[_ opts] (task-args/split-args args)] (backfill-landings* opts)))

@@ -7,6 +7,7 @@
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.source.core :as source]
+            [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
 (Module source-notion
@@ -15,6 +16,11 @@
     "One iteration: read the prior state, ask the outside world, emit what is new, return the
      state to persist. Separated from the loop so an iteration can be tested without one."
     {:signature [:=> [:catn [:source-config :map] [:token :any] [:emit-fn :any]] :map]})
+  (Operation record-status-changes!
+    "Append a :notion-status entry to each workstream whose page this poll observed, when its
+     newest Notion entry names another status — compared with the ledger, never with an earlier
+     poll; the only way a Notion edit reaches a workstream."
+    {:signature [:=> [:catn [:project ProjectName] [:pages :any]] :any]})
   (Operation start-instance!
     "Start one configured instance, answering with its poll and stop functions."
     {:signature [:=> [:catn [:source-config :map] [:emit-fn :any] [:opts :map]] :map]

@@ -624,6 +624,21 @@
    :doc "Push a reserved claim and record a landing for every address it covers. :project <p> :ws-id <claim-ws> :worktree <dir> :rev <change-id> :addresses a,b,c [:bookmark main]"
    :task (apply nido-workstream/discharge-cmd *command-line-args*)}
 
+  nido:workstream:layer:complete
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "Record a finished stack layer under the workstream's newest design: :layer <n> :of <m> [:bookmark <name>] [:commit <id>]. Resolves the workstream from cwd, or :project with :ws-id/:ref."
+   :task (apply nido-workstream/layer-complete-cmd *command-line-args*)}
+
+  nido:workstream:blocker:answer
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "Record a person's answer to a blocker, in their words: :answer \"…\" [:blocker-seq <n>] (default: the newest unanswered). Resolves the workstream from cwd, or :project with :ws-id/:ref."
+   :task (apply nido-workstream/blocker-answer-cmd *command-line-args*)}
+
+  nido:status:backfill
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "Record as entries the status every workstream's records already hold — closes, one-offs, stages, findings resolutions, Notion statuses — and keep each index row beside its entry. Idempotent. :project <p>"
+   :task (apply nido-workstream/status-backfill-cmd *command-line-args*)}
+
   nido:improvement:backfill-landings
   {:requires ([tasks.nido-workstream :as nido-workstream])
    :doc "One-shot: discharge every approval whose decision note already records the outcome, from before :improvement-landed existed. Idempotent. :project <p>"

@@ -112,6 +112,18 @@
           (is (= holder (scratch/birth! :brian "raced" :light))))
         (is (= [holder] (workstream/list-ids :brian)) "the one-off minted for it is deleted")))))
 
+(deftest a-birth-whose-entry-append-failed-is-completed-by-the-retry
+  (with-tmp
+    (fn [_]
+      (let [real workstream/append-entry!]
+        (with-redefs [workstream/append-entry! (fn [& _] (throw (ex-info "disk full" {})))]
+          (is (thrown? Exception (scratch/birth! :brian "torn" :light))))
+        (with-redefs [workstream/append-entry! real]
+          (let [ws-id (scratch/birth! :brian "torn" :light)]
+            (is (= [:scratch] (mapv :kind (:entries (workstream/read-ws :brian ws-id)))))
+            (scratch/birth! :brian "torn" :light)
+            (is (= 1 (count (:entries (workstream/read-ws :brian ws-id)))) "and only once")))))))
+
 (deftest reap-deletes-a-bare-loose-workstream
   (with-tmp
     (fn [_]

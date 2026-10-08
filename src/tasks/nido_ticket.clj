@@ -2,6 +2,7 @@
   "bb task entry points for the per-ticket triage record (the skill's interface)."
   (:require
    [clojure.pprint :as pprint]
+   [nido.coordinator.lane.backfill :as backfill]
    [nido.coordinator.lane.facets :as facets]
    [nido.coordinator.lane.promote :as promote]
    [nido.coordinator.report :as report]
@@ -60,6 +61,13 @@
         br      (str (:br o))]
     (tickets/complete! project br
                        (keyword (:status o)) (some-> (:disposition o) keyword))
+    ;; A verdict a person took in the session is accepted as surely as one taken at the gate,
+    ;; and the ledger says so — the workstream otherwise still reads as awaiting its triage call.
+    (when (= :triaged (keyword (:status o)))
+      (when-let [w (workstream/find-by-ref-id project br)]
+        (when-let [n (backfill/unaccepted-triage project (:id w))]
+          (workstream/append-entry! project (:id w) {:kind :triage-accepted}
+                                    (pr-str {:format :triage-accepted :triage-seq n})))))
     (facets/refresh-for-ticket! project br)
     (println "completed" br (:status o))))
 

@@ -2553,7 +2553,7 @@
     (->> open
          (filter (fn [w] (and (scratch/scratch? w)
                               (empty? (:external-refs w))
-                              (empty? (:entries w)))))
+                              (scratch/bare? w))))
          (keep (fn [w]
                  (let [sess (csession/list-sessions project (:id w))]
                    (when (and (= 1 (count sess))

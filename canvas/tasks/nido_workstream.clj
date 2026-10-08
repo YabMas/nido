@@ -50,6 +50,21 @@
   (Operation backfill-landings*
     "One-shot: discharge every approval whose note already records the outcome."
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation layer-complete*
+    "Record a finished stack layer under the workstream's newest design."
+    {:signature [:=> [:catn [:opts :map]] :string]})
+  (Operation blocker-answer*
+    "Record a person's answer to a blocker, in their words — the newest unanswered one unless named."
+    {:signature [:=> [:catn [:opts :map]] :string]})
+  (Operation layer-complete-cmd
+    "bb nido:workstream:layer:complete — the entry point for `layer-complete*`."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation blocker-answer-cmd
+    "bb nido:workstream:blocker:answer — the entry point for `blocker-answer*`."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation status-backfill-cmd
+    "bb nido:status:backfill — record as entries the status every workstream's records hold."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation backfill-landings-cmd
     "bb nido:improvement:backfill-landings — the entry point for `backfill-landings*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

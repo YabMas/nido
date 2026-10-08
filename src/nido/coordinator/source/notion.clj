@@ -13,6 +13,7 @@
    [clojure.set :as set]
    [clojure.string :as str]
    [nido.coordinator.record.clock :as clock]
+   [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.source.notion-cache :as notion-cache]
    [nido.coordinator.source.registry :as sources]
    [nido.coordinator.source.state :as sst]
@@ -181,6 +182,78 @@
                            :consecutive-failures next-failures)
               tripped? (assoc :breaker :open :breaker-opened-at (clock/now-iso)))))))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :any] :any]}
+  record-status-changes!
+  "Append a :notion-status entry to the workstream of every page this poll observed, when that
+   workstream's newest :notion-status names another status. Returns the workstreams recorded on.
+
+   The only way a person's edit of a Notion page reaches a workstream: status reads the ledger,
+   never this cache. Each observation is compared with the ledger alone — never with what this
+   view saw before — so a change another view recorded in between, a page that gained its
+   workstream after it was first polled, and a restart all compare against the one record that
+   says what the workstream last saw, and each change is recorded once."
+  [project pages]
+  (let [by-ref (reduce (fn [m w]
+                         (reduce #(if (contains? %1 (:id %2)) %1 (assoc %1 (:id %2) w))
+                                 m (:external-refs w)))
+                       {}
+                       (keep #(ws/read-ws project %) (ws/list-ids project)))]
+    (into []
+          (keep (fn [[page-id {:keys [status br]}]]
+                  (when-let [w (and status br (by-ref br))]
+                    (when-not (= status (:status (last (ws/entries-of project (:id w) :notion-status))))
+                      (ws/append-entry! project (:id w) {:kind :notion-status}
+                                        (pr-str {:format :notion-status :page-id page-id
+                                                 :status status :by :poller}))
+                      (:id w)))))
+          pages)))
+
+(defn- ref-page-id
+  "The page a Notion ref names: its :page-id, else the one its :url names."
+  [r]
+  (or (:page-id r) (notion/extract-page-id (:url r))))
+
+(defn- unrecorded-pages
+  "The pages an open workstream's Notion ref names that neither `prior-pages` nor `pages` holds,
+   while that workstream records no Notion status — a page that left the view before its
+   workstream existed, which no poll would otherwise ask about again. Once recorded it is
+   tracked as any departed page is."
+  [project prior-pages pages]
+  (into {}
+        (for [id    (ws/list-ids project)
+              :let  [w (ws/read-ws project id)]
+              :when (and w (nil? (:closed w))
+                         (not-any? #(= :notion-status (:kind %)) (:entries w)))
+              r     (:external-refs w)
+              :let  [page-id (and (= :notion (:adapter r)) (:id r) (ref-page-id r))]
+              :when (and page-id (not (contains? pages page-id)) (not (contains? prior-pages page-id)))]
+          [page-id {:br (:id r)}])))
+
+(defn- departed-pages
+  "The pages `prior-pages` held that `pages` does not — and the `unrecorded-pages` an open
+   workstream names — each with the status Notion holds for it now while an open workstream
+   carries its BR: fetched, since a view filtering on Status drops the very page whose status a
+   person just changed. The poll keeps the answer as :departed and asks again every poll, so a
+   page that stays outside its view still has each edit recorded, until the page returns to the
+   view. A page no open workstream carries — its workstream closed, or not yet created — is kept
+   as last seen and not asked about, so the BR it maps to is still known when a workstream
+   reopens or first claims it. A page Notion no longer has (404) is left out; any other failure
+   to fetch throws, so the poll keeps its baseline and asks again."
+  [project prior-pages pages token]
+  (into {}
+        (keep (fn [[page-id {:keys [br] :as prior}]]
+                (when (and br (not (contains? pages page-id)))
+                  (let [w (ws/find-by-ref-id project br)]
+                    (if (or (nil? w) (:closed w))
+                      [page-id (select-keys prior [:status :br])]
+                      (let [p (notion/retrieve-page page-id token)]
+                        (cond
+                          (not (:error p))    [page-id {:status (:status (notion/normalise-page p)) :br br}]
+                          (= 404 (:status p)) nil
+                          :else (throw (ex-info (str "fetching departed page " page-id " failed")
+                                                {:page-id page-id :error (:error p)})))))))))
+        (merge (unrecorded-pages project prior-pages pages) prior-pages)))
+
 (defn ^{:malli/schema [:=> [:cat :map :any :map] :map]}
   start-instance!
   "Start one source-instance. Returns {:poll! :stop!} per the source-plugin
@@ -196,8 +269,34 @@
                            :source-config source-config
                            :payload       payload}))]
     {:poll! (fn []
-              (let [next (poll-once! source-config token emit)]
-                (sst/write-state! hash next)))
+              ;; The snapshot is the poll's cursor for which pages left the view, so it
+              ;; advances only once their statuses are recorded. A failed record keeps the
+              ;; pages it started from as :status-baseline, and the next poll asks about the
+              ;; same departures again — the ledger check in `record-status-changes!` keeps
+              ;; what did land from landing twice. Pages already outside the view are carried
+              ;; in :departed.
+              (let [prior-state (sst/read-state hash)
+                    baseline    (merge (:departed prior-state)
+                                       (or (:status-baseline prior-state) (:pages prior-state)))
+                    next        (poll-once! source-config token emit)]
+                (if (= :ok (:last-poll-result next))
+                  (let [project  (:project source-config)
+                        departed (try (let [d (departed-pages project baseline (:pages next) token)]
+                                        (record-status-changes! project (merge (:pages next) d))
+                                        d)
+                                      (catch Exception e
+                                        (binding [*out* *err*]
+                                          (println "notion source: recording status changes failed —"
+                                                   (ex-message e)))
+                                        nil))]
+                    (sst/write-state! hash (if departed
+                                             (-> next
+                                                 (dissoc :status-baseline)
+                                                 (assoc :departed departed))
+                                             (assoc next
+                                                    :status-baseline baseline
+                                                    :departed (:departed prior-state)))))
+                  (sst/write-state! hash next))))
      :stop! (fn []
               nil)}))
 

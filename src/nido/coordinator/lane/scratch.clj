@@ -55,19 +55,39 @@
                        {:reason :name-held :ws-id ws-id :holder holder})))))
 
 (defn- mint-one-off!
-  "A fresh :scratch workstream holding a new human session named `session-name`. When another
+  "A fresh :scratch workstream holding a new human session named `session-name`, its birth
+   recorded as a :scratch entry — the ledger's mark that it may be discarded. When another
    start takes the name first, create! refuses; the workstream minted for it is deleted and the
    holder answered instead, so a lost race leaves no empty one-off behind."
   [project session-name weight]
   (let [w (workstream/create! project {:stage :scratch :external-refs []})]
     (try
       (session/create! project (:id w) {:name session-name :weight (or weight :light) :autonomy nil})
+      ;; After the session, so a lost race deletes a workstream that holds nothing.
+      (workstream/append-entry! project (:id w) {:kind :scratch}
+                                (pr-str {:format :scratch :session session-name}))
       (:id w)
       (catch clojure.lang.ExceptionInfo e
         (if (= :name-held (:reason (ex-data e)))
           (do (workstream/delete! project (:id w))
               (:holder (ex-data e)))
           (throw e))))))
+
+(defn- complete-birth!
+  "Append the :scratch birth entry a one-off holding `session-name` is missing — its session was
+   created and the append after it failed, so the start run again finishes the birth."
+  [project ws-id session-name]
+  (let [w (workstream/read-ws project ws-id)]
+    (when (and (scratch? w) (not-any? #(= :scratch (:kind %)) (:entries w)))
+      (workstream/append-entry! project ws-id {:kind :scratch}
+                                (pr-str {:format :scratch :session session-name})))))
+
+(defn ^{:malli/schema [:=> [:cat :Workstream] :boolean]}
+  bare?
+  "Whether a workstream holds nothing but its own birth: no entry other than its :scratch mark.
+   Discarding it then loses nothing — the birth entry is the record that it could be discarded."
+  [w]
+  (every? #(= :scratch (:kind %)) (:entries w)))
 
 (defn ^{:malli/schema [:function
                        [:=> [:cat :ProjectName :SessionName [:maybe :keyword]] :any]
@@ -85,8 +105,8 @@
    Without one: whichever workstream already holds the name keeps it, else a ref-less
    :scratch-stage one-off is minted for it. An unknown weight births :light, the conservative read.
 
-   Idempotent either way, and it still reconciles a stale `:weight`, since this is the only point
-   every path (manual up, TUI, the orphan sweep) re-runs against a live session."
+   Idempotent either way, and it still reconciles a stale `:weight` and completes a one-off's
+   missing :scratch entry, since this is the only point every path (manual up, TUI, the orphan sweep) re-runs against a live session."
   ([project session-name weight]
    (birth! project session-name weight nil))
   ([project session-name weight ws-id]
@@ -104,6 +124,7 @@
            ws-id))
      (if-let [held (session/workstream-id-for project session-name)]
        (do (reconcile-weight! project held session-name weight)
+           (complete-birth! project held session-name)
            held)
        (mint-one-off! project session-name weight)))))
 
@@ -125,7 +146,7 @@
                       (remove #(= session-name (:name %))))]
       (when (and (scratch? w)
                  (empty? (:external-refs w))
-                 (empty? (:entries w))
+                 (bare? w)
                  (empty? others))
         (workstream/delete! project ws-id))))
   nil)

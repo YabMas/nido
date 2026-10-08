@@ -103,9 +103,10 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any :any] :map]}
   resolve!
-  "Mark findings items resolved by PR/commit `by`. Moves each known id from :open
-   to :resolved {id {:by by :at …}}; unknown ids are ignored. Throws when there is
-   no open findings tracker. Returns the updated tracker.
+  "Mark findings items resolved by PR/commit `by`: record them as a :findings-resolved entry,
+   and move each known id from :open to :resolved {id {:by by :at …}} on the tracker; unknown
+   ids are ignored, and a call resolving none records nothing. Throws when there is no open
+   findings tracker. Returns the updated tracker.
 
    Resolving the last open item of a round filed on a phased workstream between
    its phases settles it between phases again (`settle-between-phases!`)."
@@ -120,6 +121,10 @@
                   (update :open #(reduce disj % ids))
                   (update :resolved merge
                           (into {} (map (fn [id] [id {:by by :at at}])) ids)))]
+      (when (seq ids)
+        (ws/append-entry! project ws-id {:kind :findings-resolved}
+                          (pr-str {:format :findings-resolved :round (:round t)
+                                   :items (vec ids) :by (str by)})))
       (ws/set-findings! project ws-id t')
       (when (empty? (:open t')) (settle-between-phases! project ws-id t'))
       t')))

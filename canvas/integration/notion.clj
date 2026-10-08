@@ -62,6 +62,10 @@
     {:signature [:=> [:catn [:page-id :string] [:property-name :string] [:status-name :string]
                             [:token NotionToken]] :map]
      :delegates [update-page-properties!]})
+  (Operation extract-page-id
+    "The page id inside a Notion URL or uuid, dashed — a `?p=` page first, else the path's last
+     id, so a view id in the query is never read as the page."
+    {:signature [:=> [:catn [:s [:maybe :string]]] [:maybe :string]]})
   (Operation normalise-property-name "A Notion display name as a keyword — `Ticket ID` becomes `:ticket-id`."
     {:signature [:=> [:catn [:s :string]] :keyword]})
   (Operation normalise-page "A Notion page object as the event payload the coordinator consumes."

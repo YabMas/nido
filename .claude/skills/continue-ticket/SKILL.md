@@ -190,6 +190,13 @@ Session reminders:
   and whose record says so in prose can only be answered by typing an essay
   back at it.
 
+  **When the person answers in chat, record it before you act on it:**
+  `bb nido:workstream:blocker:answer :answer "<their words>"` (it answers the
+  newest open blocker; pass `:blocker-seq <n>` for another). A blocker is
+  cleared only by an answer that names it — work appended after it does not
+  clear it, so an unrecorded answer leaves the workstream showing as waiting
+  on a person.
+
   **Before filing a `:blocker` about scope, check you actually read the ticket
   (Step 1.5).** A halt whose `:needs` is "what does this ticket mean" and whose
   session never opened the body is not a decision for the human — it is the
