@@ -38,6 +38,11 @@
      by an intent superseding it."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:intent :map]] :map]
      :delegates [workstream/entries-of]})
+  (Operation open-findings
+    "The items of the newest findings round that no later resolution entry names — the one
+     reading of what a findings round still owes, for the position and the board's count alike."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:set :string]]
+     :delegates [workstream/entries-of]})
   (Operation why-not-decided
     "Why a standing is not decided, in words a person can act on. nil when it is."
     {:signature [:=> [:catn [:standing Standing]] [:maybe :string]]}))

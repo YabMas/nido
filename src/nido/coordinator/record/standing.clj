@@ -506,6 +506,37 @@
                                         r " and not restated since")})}
               {:live? true})))))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:set :string]]}
+  open-findings
+  "The ids of the newest findings round's items that no later :findings-resolved for that round
+   names. Empty when there is no round, or every item of it was resolved.
+
+   What a findings round still owes, read off the ledger: the round is an immutable entry, and
+   each resolution is another, so this is a difference of two sets of records and holds nothing
+   that could drift from them. Only the newest round counts — a round is filed on a landed change,
+   and a newer one supersedes what the older asked of the same work.
+
+   Throws, :reason :unreadable-ledger, when a findings or resolution entry the
+   index claims cannot be read: dropping an unreadable newest round would revive
+   the one it superseded, and dropping a resolution would re-open what it closed,
+   so there is no set this could return that is not a guess."
+  [project ws-id]
+  (let [w      (ws/read-ws project ws-id)
+        rounds (if w (readable project ws-id w :findings) [])
+        rs     (if w (readable project ws-id w :findings-resolved) [])]
+    (when (some #{::unreadable} [rounds rs])
+      (throw (ex-info (str "a findings entry could not be read on " ws-id
+                           " — what its newest round owes cannot be derived")
+                      {:reason :unreadable-ledger :project project :ws-id ws-id})))
+    (if-let [round (last rounds)]
+      (let [resolved (into #{}
+                           (comp (filter #(and (> (:seq %) (:seq round))
+                                               (= (:round %) (:round round))))
+                                 (mapcat :items))
+                           rs)]
+        (into #{} (comp (map :id) (remove resolved)) (:items round)))
+      #{})))
+
 (defn ^{:malli/schema [:=> [:cat :Standing] [:maybe :string]]}
   why-not-decided
   "Why `standing` is not decided, in a form a human can act on, or nil.
