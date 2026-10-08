@@ -29,6 +29,8 @@
    [clojure.string :as str]
    [nido.coordinator.lane.reentry :as reentry]
    [nido.coordinator.report :as report]
+   [nido.coordinator.record.activity :as activity]
+   [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.tickets :as tickets]
@@ -56,8 +58,8 @@
    ;; the gate — nothing moves until someone has watched the running system.
    :awaiting-gate
    :shipped
-   :findings-open
    :blocked
+   :findings-open
    :design-retracted
    :intent-retracted
    :premise-retracted
@@ -68,6 +70,9 @@
    :published
    :reviewed
    :implemented
+   ;; Some layers of the stack built under the design being built now are finished, and the
+   ;; implementation is not. A trail position: everything above outranks it.
+   :implementing
    :design-approved
    ;; A round decided it and its own declarations owed nobody a grant. BELOW
    ;; :design-approved because a person having granted it is the stronger fact
@@ -79,6 +84,10 @@
    :baseline-verified
    :baselined
    :intent-stated
+   ;; A triage report nobody has accepted yet: the verdict is written, and taking it — or
+   ;; dismissing it — is a person's. Below every record of the arc, so work that went on past
+   ;; it is read by that work.
+   :triage-awaiting
    :analysed
    :intake
    :unplaceable])
@@ -122,7 +131,9 @@
    :scratch   a one-off with no external ref at all"
   [w kinds]
   (cond
-    (= :scratch (:stage w))     :scratch
+    ;; The birth entry, not a stored stage: a one-off is one because its ledger says it was born
+    ;; one. A status entry, so `kinds` does not hold it — asked of the index directly.
+    (some #(= :scratch (:kind %)) (:entries w)) :scratch
     (contains? kinds :triage)   :triaged
     (contains? kinds :proposed-ticket) :proposal
     (= :github (wsv/ws-source w)) :issue
@@ -157,13 +168,13 @@
    report/event-schemas. Almost all of them are on closed workstreams and place
    as :shipped from `:closed` alone, never reaching here. One open workstream
    does not, and it is the reason this set exists rather than a hypothetical."
-  #{:ticket :triage :proposed-ticket :intent
+  #{:ticket :triage :triage-accepted :proposed-ticket :intent
     :baseline :baseline-review
     :design :design-decision :design-verdict :design-approved :design-cleared
     :implementation-plan :implementation-completed
     :review :review-analysis :improvement-decision :improvement-landed
     :blocker :blocker-answered :retraction
-    :findings :pr-opened :ship-submitted :merged :phase-gate})
+    :findings :pr-opened :ship-submitted :merged :phase-gate :layer-completed})
 
 (def ^:private stage-of-kind
   "Which stage of the arc each entry kind belongs to.
@@ -178,6 +189,7 @@
    That is the same refusal `:unplaceable` makes, at row granularity."
   {:ticket          :intent
    :triage          :intent
+   :triage-accepted :intent
    :proposed-ticket :intent
    :intent          :intent
    :baseline        :baseline
@@ -195,6 +207,7 @@
    :blocker         :halt
    :blocker-answered :halt
    :implementation-plan      :implementation
+   :layer-completed          :implementation
    :implementation-completed :implementation
    ;; A stage's review belongs to the stage it reviews. `:baseline-review` and
    ;; `:design-decision` already folded that way; `:review` was the one held out,
@@ -382,53 +395,66 @@
                        (sort-by :last-seq)
                        vec)})))
 
-(defn- open-findings?
-  "True when a findings round left items nobody has resolved.
-
-   Findings live on the workstream record rather than only in the ledger, so
-   this reads the tracker the board's badge and the round's completeness both
-   read — not a fifth copy of the same fact."
-  [w]
-  (boolean (seq (remove :resolved-by (vals (:items (:findings w)))))))
-
 (defn- unanswered-blocker
-  "The :seq of a blocker nothing has answered, or nil.
+  "The :seq of the newest blocker no :blocker-answered names, or nil.
 
-   A blocker is answered by a later :blocker-answered naming it. Comparing seqs
-   rather than counting entries, because a workstream can halt more than once
-   and the second halt is not answered by the first answer."
+   An answer names the blocker it answers, and that is the only thing that answers one: not a
+   later record of any kind, and not an answer naming another blocker. Answers given in a
+   session's chat are recorded with `bb nido:workstream:blocker:answer`, so a halt the work went
+   on past without one is a halt nobody recorded answering — which is what this reports."
   [project ws-id w]
-  (when (contains? (kinds w) :blocker)
+  (when (contains? (into #{} (map :kind) (:entries w)) :blocker)
     ;; :blocker-seq, flat — an answer names the position it answers, and does not
-    ;; nest it the way a design nests its :baseline. Reading it as nested matched
-    ;; nothing, so every answered blocker stayed a halt forever.
+    ;; nest it the way a design nests its :baseline.
     (let [answered (into #{} (keep :blocker-seq)
-                         (ws/entries-of project ws-id :blocker-answered))
-          latest   (->> (ws/entries-of project ws-id :blocker)
-                        (remove #(contains? answered (:seq %)))
-                        last)]
-      (when latest
-        ;; …and nothing since it shows the work went on anyway.
-        ;;
-        ;; A :blocker-answered is written when somebody clicks the gate button,
-        ;; and that is not the only way a halt gets answered. Far more often the
-        ;; question is settled in the session chat and the work simply continues,
-        ;; leaving a blocker nobody ever formally closed. Requiring the record
-        ;; made every such workstream permanently :blocked — BR-5099 was halted
-        ;; on 2026-08-21 and then baselined, designed, reviewed clean and had
-        ;; three PRs opened on 2026-08-26, and still read as waiting on a human.
-        ;;
-        ;; So the ledger answers it: a stage record appended AFTER the halt is
-        ;; the work having moved past it, which is the same evidence a person
-        ;; reading the timeline would use. Halts themselves do not count — a
-        ;; later blocker is a new question, not an answer to the old one, and it
-        ;; is already the one this returns.
-        (when-not (some (fn [e]
-                          (and (> (:seq e) (:seq latest))
-                               (when-let [st (stage-of (:kind e))]
-                                 (not= :halt st))))
-                        (:entries w))
-          (:seq latest))))))
+                         (ws/entries-of project ws-id :blocker-answered))]
+      (->> (ws/entries-of project ws-id :blocker)
+           (remove #(contains? answered (:seq %)))
+           last
+           :seq))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:maybe :map]]}
+  closure
+  "How the ledger says the workstream stands settled: the newest :closed entry, unless a
+   :reopened or a :phase-gate came after it — then nil, since opening the next phase is a reopen
+   by definition. Read off the entries, never off the record's :closed."
+  [project ws-id w]
+  (let [newest (last (filter #(#{:closed :reopened :phase-gate} (:kind %)) (:entries w)))]
+    (when (= :closed (:kind newest))
+      (last (ws/entries-of project ws-id :closed)))))
+
+(defn- triage-unaccepted?
+  "Whether the newest :triage report is one no :triage-accepted cites."
+  [project ws-id w ks]
+  (when (contains? ks :triage)
+    ;; Off the index: a triage written as markdown before reports were typed parses as nothing,
+    ;; and its number is still what an acceptance would have cited.
+    (let [newest (:seq (last (filter #(= :triage (:kind %)) (:entries w))))]
+      (not-any? #(= newest (:triage-seq %)) (ws/entries-of project ws-id :triage-accepted)))))
+
+(defn- layer-progress
+  "{:done :of} for the layers finished under `design` after entry `since`, or nil when none.
+   Done counts distinct layer indices; :of is what the earliest of them planned.
+
+   `since` is 0 for the progress a workstream reports — every layer citing the design, whatever
+   came after it — and the newest :phase-gate for placement: a new phase starts its layers afresh.
+   A findings round does not: it unbuilds no layer, so it erases neither the count nor the
+   :implementing it places once the round's halt clears."
+  [project ws-id w design since]
+  (when design
+    (let [layers (->> (ws/entries-of project ws-id :layer-completed)
+                      (filter #(and (= (:seq design) (get-in % [:design :seq]))
+                                    (> (:seq %) since))))]
+      (when (seq layers)
+        {:done (count (into #{} (map :layer) layers))
+         :of   (:of (first layers))}))))
+
+(defn- newest-phase-gate
+  "The seq of the newest :phase-gate entry, or 0 when there is none."
+  [w]
+  (->> (:entries w)
+       (filter #(= :phase-gate (:kind %)))
+       (map :seq) (reduce max 0)))
 
 (defn- retracted-position
   "The retracted position `standing` places a workstream at, or nil — given the
@@ -515,7 +541,7 @@
    then the record arc. Each clause names a fact that is true of the ledger, so
    a position is always answerable by pointing at an entry."
   [{:keys [closed? closed-outcome findings-open? blocker-seq retraction ks decided? approved?
-           cleared? verified? re-entry restarted-trail]}]
+           cleared? verified? re-entry restarted-trail layers triage-unaccepted?]}]
   ;; THE CLAMP. The four trail clauses below place a stage by whether a kind is
   ;; present in the index, and an index is append-only — so each of them, once
   ;; true, is true for ever. `re-entry` is the reading that says how far up the
@@ -553,8 +579,8 @@
     ;; tells a plan with more to land from an end.
     (and closed? (= :between-phases closed-outcome)) :awaiting-gate
     closed?                        :shipped
-    findings-open?                 :findings-open
     blocker-seq                    :blocked
+    findings-open?                 :findings-open
 
     ;; Standing's answer, placed: what the retraction unseats decides where the
     ;; work goes back to, and each position's next stage writes its replacement.
@@ -578,6 +604,11 @@
     (contains? trail-ks :pr-opened)      :published
     (contains? trail-ks :review)         :reviewed
     (contains? trail-ks :implementation-completed) :implemented
+    ;; Layer entries cite the design they were built under, and `layers` counts only those
+    ;; citing the newest one since the newest phase gate — so a re-designed or reopened workstream
+    ;; is not held here by layers of work it has since moved past. A findings round is not such a
+    ;; cut: once its halt clears, the layers built under the design still place the work here.
+    (and layers design-stands?)    :implementing
     approved?                      :design-approved
     ;; The gate is READ rather than reached. A clearance is a record a round
     ;; appended, so this is a citation like every other clause here — not a
@@ -599,6 +630,7 @@
     ;; before, which is the price of a goal that can be amended rather than only
     ;; abandoned.
     (contains? ks :intent)         :intent-stated
+    triage-unaccepted?             :triage-awaiting
 
     ;; A workstream that exists to HOLD a reading, not to do work. The review
     ;; loop mints one per analysed run and files one analysis into it; decisions
@@ -637,6 +669,7 @@
    :human, which is a next action nobody but a person can take."
   {:intake            {:stage :establish-intent      :mode :authoring}
    :intent-stated     {:stage :write-baseline        :mode :authoring}
+   :triage-awaiting   {:stage :accept-triage         :mode :human}
    :baselined          {:stage :verify-baseline         :mode :mechanical}
    :baseline-verified   {:stage :design                :mode :authoring}
    :designed          {:stage :decide-design         :mode :mechanical}
@@ -645,6 +678,7 @@
    :design-decided    {:stage :approve-design        :mode :human}
    :design-approved   {:stage :implement             :mode :working-copy}
    :design-cleared    {:stage :implement             :mode :working-copy}
+   :implementing      {:stage :implement             :mode :working-copy}
    :implemented       {:stage :review-implementation :mode :mechanical}
    :reviewed          {:stage :publish-draft-pr      :mode :working-copy}
    :premise-retracted {:stage :rebaseline              :mode :authoring}
@@ -665,7 +699,9 @@
    ;; run observes production, so the stage is theirs.
    :awaiting-gate     {:stage :assert-gate           :mode :human}
    :blocked           {:stage :answer-blocker        :mode :human}
-   :published         nil
+   ;; The arc's last move is a person's: landing a published draft is their gesture, and a
+   ;; board that called it nobody's showed a ready PR as finished.
+   :published         {:stage :land                  :mode :human}
    :shipped           nil
    ;; Terminal, and not for want of a stage: the analysis is complete when it is
    ;; filed. What happens to its proposals is a decision, which is a human's and
@@ -1022,10 +1058,14 @@
           ;; the two most expensive things on this path, and the board runs this
           ;; once per rendered row.
           re     (reentry/of* w design st bst)
-          facts  {:closed?        (some? (:closed w))
-                         :closed-outcome (get-in w [:closed :outcome])
+          closed (closure project ws-id w)
+          layers (layer-progress project ws-id w design 0)
+          facts  {:closed?        (some? closed)
+                         :closed-outcome (:outcome closed)
                          :restarted-trail (reentry/standing-trail w design)
-                         :findings-open? (open-findings? w)
+                         :findings-open? (boolean (seq (standing/open-findings project ws-id)))
+                         :layers         (layer-progress project ws-id w design (newest-phase-gate w))
+                         :triage-unaccepted? (triage-unaccepted? project ws-id w ks)
                          :blocker-seq    (unanswered-blocker project ws-id w)
                          :retraction     (retracted-position
                                           (reentry/current-standing st bst ist))
@@ -1090,6 +1130,8 @@
 
         re (assoc :re-entry re)
 
+        layers (assoc :layers layers)
+
         (= :unplaceable pos)
         (assoc :why (str "this ledger's " (count (:entries w)) " entr"
                          (if (= 1 (count (:entries w))) "y is" "ies are")
@@ -1099,3 +1141,36 @@
                          "a human's reading, not a derivation"))))
     {:at :unplaceable
      :why (str "no workstream " ws-id " under project " (name project))}))
+
+;; ── What every surface shows ───────────────────────────────────────────────
+
+(def ^:private owed-by-mode
+  "Who owes a move, by the mode it runs in."
+  {:human :person :mechanical :machine :authoring :agent :working-copy :agent})
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? [:maybe [:set :string]]]] :WorkstreamStatus]}
+  status
+  "A workstream's position, who owes its next move, whether anything is working on it now, and
+   whether it has stalled — the one answer every surface renders.
+
+   :owed-by follows the move `of` names, by its mode, and nothing else: a person for a :human
+   move, the machine for a :mechanical one, an agent for an authoring or working-copy one,
+   nobody when no move is owed. :live is observed, never stored: a held activity claim, a run
+   whose agent holds its lock, or — given `live-names`, the sessions whose ports answer — a
+   person's session that is up. :stalled is an agent owing the move with nothing live: the work
+   stopped, and no question was recorded to say why."
+  ([project ws-id] (status project ws-id nil))
+  ([project ws-id live-names]
+   (let [position (of project ws-id)
+         owed-by  (if-let [mode (get-in position [:next :mode])]
+                    (owed-by-mode mode :nobody)
+                    :nobody)
+         human?   (fn [s] (and (nil? (:autonomy s)) (= :live (:substrate s))
+                               (contains? (or live-names #{}) (:name s))))
+         live     (boolean (or (activity/held? project ws-id)
+                               (seq (runs/live-runs project ws-id))
+                               (some human? (csession/list-sessions project ws-id))))]
+     {:position position
+      :owed-by  owed-by
+      :live     live
+      :stalled  (and (= :agent owed-by) (not live))})))

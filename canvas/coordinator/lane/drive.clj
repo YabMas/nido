@@ -1,12 +1,14 @@
 (ns canvas.coordinator.lane.drive
   "Self-spec: the lanes that advance work by themselves — the driver, the arc it reads, the merge
    lane, spawning, review sweeps, run cleanup, and the legacy migration."
-  (:require [fukan.common.vocab.code.module :refer [Module]]
+  (:require [fukan.common.vocab.code.kind :refer [Kind]]
+            [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.agent :as agent]
             [canvas.coordinator.executor :as executor]
             [canvas.coordinator.record.runs :as runs :refer [Run]]
             [canvas.coordinator.record.session :as session :refer [Session]]
+            [canvas.coordinator.record.activity :as activity]
             [canvas.coordinator.record.standing :as standing]
             [canvas.coordinator.record.state :as cstate :refer [Path RunId SessionName WorkstreamId]]
             [canvas.coordinator.record.tickets :as tickets :refer [TicketId]]
@@ -15,12 +17,25 @@
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
+(Kind WorkstreamStatus
+  "What every surface shows of a workstream: where it is, who owes its next move, and whether
+   anything is working on it now.
+
+   THREE FACETS, ONE DERIVATION. Position is the fold over the ledger; owed-by is read off the
+   mode the position's next stage runs in; live is observed from locks the working process holds.
+   None is stored, so no surface can show a combination the records do not support."
+  [:map [:position :map]
+        [:owed-by [:enum :person :agent :machine :nobody]]
+        [:stalled :boolean]
+        [:live :boolean]])
+
 (Module lane-pipeline
   "Where a workstream is in its life, read from its own ledger.
 
    DERIVED, never stored. The arc is what the entries say happened, so a position cannot drift
    from the record it is read out of — and a stage the projection can name is not necessarily
    one the driver can run, which is why parking is the normal case rather than a failure."
+  {:child [WorkstreamStatus]}
   (Operation intake-kind "How a workstream came to exist, which decides how it advances."
     {:signature [:=> [:catn [:w Workstream] [:kinds :any]] [:maybe :keyword]]})
   (Operation stage-of "The arc stage an entry kind belongs to, or nil."
@@ -61,7 +76,19 @@
     {:signature [:=> [:catn [:status :keyword]] :keyword]})
   (Operation of "Where a workstream stands and what should happen to it next."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
-     :delegates [workstream/read-ws intake-kind next-action baseline-verified?]}))
+     :delegates [workstream/read-ws intake-kind next-action baseline-verified?]})
+  (Operation closure
+    "The newest :closed entry, unless a :reopened or a :phase-gate came after it — how the ledger
+     says a workstream stands settled, read off its entries and never off the record's :closed."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:w :any]] [:maybe :map]]
+     :delegates [workstream/entries-of]})
+  (Operation status
+    "A workstream's position, who owes its next move, and whether anything is live — the one
+     answer every surface renders. Stalled when an agent owes the move, nothing is live, and no
+     question is open."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
+                      [:live-names [:? [:maybe [:set :string]]]]] WorkstreamStatus]
+     :delegates [of activity/read-live runs/live-runs]}))
 
 (Module lane-drive
   "The driver: advance every allow-listed workstream by at most one stage per tick.

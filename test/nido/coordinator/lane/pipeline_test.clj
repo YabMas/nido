@@ -9,6 +9,9 @@
    [nido.coordinator.record.state :as cstate]
    [nido.platform.io :as pio]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.record.activity :as activity]
+   [nido.coordinator.record.runs :as runs]
+   [nido.coordinator.record.session :as sess]
    [nido.coordinator.lane.reentry :as reentry]
    [nido.coordinator.lane.pipeline :as p]))
 
@@ -331,8 +334,8 @@
         (add! :pr-opened {:format :pr-opened :url "https://example.test/pr/1"
                           :title "t"})
         (is (= :published (:at (p/of :brian id))))
-        (is (nil? (:next (p/of :brian id)))
-            "the arc ends at the opened draft PR — landing it stays a human's gesture")))))
+        (is (= {:stage :land :mode :human} (:next (p/of :brian id)))
+            "the opened draft PR owes a person its landing")))))
 
 (deftest a-ledger-of-unreadable-kinds-refuses-rather-than-defaulting-to-intake
   ;; The failure this guards: an empty ledger and a ledger full of pre-vocabulary
@@ -369,9 +372,13 @@
           (is (= :triaged (:intake (p/of :brian id)))
               "how it arrived is still read off the triage — that is what
                intake-kind is for, and it is a fact about the workstream")
+          (is (= :triage-awaiting (:at (p/of :brian id)))
+              "a verdict nobody has accepted owes a person the acceptance")
+          (is (= {:stage :accept-triage :mode :human} (:next (p/of :brian id))))
+          (add! :triage-accepted {:format :triage-accepted :triage-seq 1})
           (is (= :intake (:at (p/of :brian id)))
-              "but the goal is not: a triage proposes candidate directions, so a
-               triaged workstream still owes an intent before a unit begins")))
+              "but the goal is not: a triage proposes candidate directions, so an
+               accepted triage still owes an intent before a unit begins")))
 
       (testing "a Slack proposal is a proposal, never a decision"
         (let [[id add!] (ledger)]
@@ -650,24 +657,24 @@
 
 ;; ── A halt the work moved past ──────────────────────────────────────────────
 
-(deftest work-appended-after-a-halt-answers-it
-  ;; BR-5099's exact shape: halted on one day, then baselined, designed, PR'd and
-  ;; reviewed clean five days later, with no :blocker-answered — because that
-  ;; record is written when somebody clicks the gate button, and this question
-  ;; was settled in the session chat. Requiring the record left the workstream
-  ;; permanently "waiting on you" while three PRs sat open against it.
+(deftest only-an-answer-naming-a-halt-answers-it
+  ;; Work appended after a halt does not answer it: an agent that halted and then wrote anything
+  ;; would otherwise clear its own gate. An answer given in chat is recorded as one
+  ;; (`bb nido:workstream:blocker:answer`), and that record is what clears the halt.
   (with-tmp
     (fn [_]
-      (let [[id add!] (ledger)]
-        (add! :blocker {:format :blocker :summary "a product decision"
-                        :needs "which way to name it"})
-        (is (= :blocked (:at (p/of :brian id))) "live while nothing has moved")
+      (let [[id add!] (ledger)
+            b1 (add! :blocker {:format :blocker :summary "a product decision"
+                               :needs "which way to name it"})]
+        (is (= :blocked (:at (p/of :brian id))))
         (intent! add!)
-        (is (not= :blocked (:at (p/of :brian id)))
-            "an intent appended after it is the work going on anyway")
-        (add! :pr-opened {:format :pr-opened :url "https://example.test/pr/1"
-                          :title "t"})
-        (is (= :published (:at (p/of :brian id))))))))
+        (is (= :blocked (:at (p/of :brian id))) "work going on is not an answer")
+        (let [b2 (add! :blocker {:format :blocker :summary "another" :needs "and this?"})]
+          (add! :blocker-answered {:format :blocker-answered :blocker-seq b2 :summary "this way"})
+          (is (= :blocked (:at (p/of :brian id)))
+              "answering the newer halt leaves the older one holding the workstream"))
+        (add! :blocker-answered {:format :blocker-answered :blocker-seq b1 :summary "name it so"})
+        (is (= :intent-stated (:at (p/of :brian id))))))))
 
 (deftest a-halt-with-nothing-after-it-is-still-a-halt
   (with-tmp
@@ -1145,7 +1152,9 @@
           (add! :pr-opened {:format :pr-opened :url "u" :title "t" :design {:seq d}})
           (add! :merged {:format :merged :pr "o/r#1" :url "u" :title "t" :design {:seq d}})
           (add! :findings {:format :findings :round 1 :items [{:id "f1" :summary "s" :severity :tweak}]})
-          (is (= :design-approved (:at (p/of :brian id))) "nothing since the round: its fix is owed")
+          (is (= :findings-open (:at (p/of :brian id))) "the round's item is owed")
+          (add! :findings-resolved {:format :findings-resolved :round 1 :items ["f1"] :by "c1"})
+          (is (= :design-approved (:at (p/of :brian id))) "resolved, and nothing since the round: its fix is owed")
           (add! :pr-opened {:format :pr-opened :url "u2" :title "fix" :design {:seq d}})
           (is (= :published (:at (p/of :brian id))) "its own fix PR, not the landed one's"))))))
 
@@ -1262,3 +1271,78 @@
             "the amendment does owe the same stage")
         (is (nil? (:owed (:next r)))
             "a retraction outranks the amendment, and nothing rides beside its action")))))
+
+;; ── Layers, closure off the ledger, and status ─────────────────────────────
+
+(deftest finished-layers-place-a-workstream-implementing
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (add! :baseline a-baseline)
+        (add! :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})
+        (let [d (add! :design (a-design 2))]
+          (add! :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+          (is (= :design-approved (:at (p/of :brian id))))
+          (add! :layer-completed {:format :layer-completed :design {:seq d} :layer 1 :of 3})
+          (add! :layer-completed {:format :layer-completed :design {:seq d} :layer 1 :of 3})
+          (let [r (p/of :brian id)]
+            (is (= :implementing (:at r)))
+            (is (= {:stage :implement :mode :working-copy} (:next r)))
+            (is (= {:done 1 :of 3} (:layers r)) "a layer recorded twice is one layer"))
+          (testing "a blocker outranks the layers"
+            (let [b (add! :blocker {:format :blocker :summary "s" :needs "n"})]
+              (is (= :blocked (:at (p/of :brian id))))
+              (add! :blocker-answered {:format :blocker-answered :blocker-seq b :summary "go"})))
+          (testing "a findings round does not erase the progress the layers made"
+            (add! :findings {:format :findings :round 1 :items [{:id "f1" :summary "s" :severity :tweak}]})
+            (is (= {:done 1 :of 3} (:layers (p/of :brian id))))
+            (add! :findings-resolved {:format :findings-resolved :round 1 :items ["f1"] :by "c1"})
+            (let [r (p/of :brian id)]
+              (is (= {:done 1 :of 3} (:layers r)))
+              (is (= :implementing (:at r)) "once the round's halt clears, the layers still place it")))
+          (testing "an implementation record moves past them"
+            (add! :implementation-completed {:format :implementation-completed :summary "s" :artifacts [] :design {:seq d}})
+            (is (= :implemented (:at (p/of :brian id))))))))))
+
+(deftest closure-is-read-off-the-ledger
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (ws/write! (assoc (ws/read-ws :brian id) :closed {:at "t" :outcome :done}))
+        (is (= :intent-stated (:at (p/of :brian id))) "a stored close no entry records is not read")
+        (ws/close! :brian id :done)
+        (is (= :shipped (:at (p/of :brian id))))
+        (ws/reopen! :brian id :in-progress)
+        (is (= :intent-stated (:at (p/of :brian id))))))))
+
+(deftest status-says-who-owes-the-move-and-whether-anything-is-live
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (let [s (p/status :brian id)]
+          (is (= :intake (get-in s [:position :at])))
+          (is (= :agent (:owed-by s)) "establishing intent is an agent's authoring turn")
+          (is (false? (:live s)))
+          (is (true? (:stalled s)) "an agent owes it and nothing is working on it"))
+        (testing "a blocker is a person's"
+          (add! :blocker {:format :blocker :summary "s" :needs "n"})
+          (let [s (p/status :brian id)]
+            (is (= :person (:owed-by s)))
+            (is (false? (:stalled s)))))
+        (testing "a live run is live"
+          (with-redefs [runs/live-runs (constantly ["r1"])]
+            (is (true? (:live (p/status :brian id))))))
+        (testing "a held claim is live before its payload is published"
+          (with-redefs [activity/held?     (constantly true)
+                        activity/read-live (constantly nil)]
+            (is (true? (:live (p/status :brian id))))))
+        (testing "a person's session is live when its ports answer"
+          (sess/create! :brian id {:name "human-1" :weight :light :autonomy nil})
+          (is (false? (:live (p/status :brian id))))
+          (is (true? (:live (p/status :brian id #{"human-1"})))))))))
+
+(deftest an-unanswered-blocker-outranks-open-findings
+  (is (= :blocked (#'p/place {:ks #{:intent} :findings-open? true :blocker-seq 7})))
+  (is (= :findings-open (#'p/place {:ks #{:intent} :findings-open? true}))))

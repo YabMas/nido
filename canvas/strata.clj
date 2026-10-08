@@ -49,8 +49,9 @@
    :rests-on    [ledger record-vocabulary]})
 
 (Stratum workstream-position
-  "Where a workstream is and what it owes next, read off the records' standing and the arc they
-   travelled. What the board, attach and the driver are written in."
+  "Where a workstream is, what it owes next and in which mode, who owes it, and whether anything
+   is working on it now — read off the records' standing, the arc they travelled, run records and
+   the locks working processes hold. What the board, attach and the driver are written in."
   {:provided-by [lane-pipeline lane-reentry]
    :rests-on    [record-status ledger record-vocabulary]})
 
