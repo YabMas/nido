@@ -1689,15 +1689,21 @@
    text repeats it: a reader of the timeline should not have to open the entry
    this points at to learn what was decided. `:blocker-seq` is the position it
    answers, so the two can always be read together."
-  [:map {:closed true}
+  [:and
+   [:map {:closed true}
    [:format      [:= :blocker-answered]]
    [:blocker-seq int?]
-   [:letter      string?]
-   [:label       string?]
+   ;; A branch picked at the gate carries its letter and label. An answer a person gave in
+   ;; words — in the session's chat, recorded by `bb nido:blocker:answer` — has neither, and
+   ;; :summary is then the answer itself, in their words.
+   [:letter      {:optional true} string?]
+   [:label       {:optional true} string?]
    [:summary     string?]
    ;; The session told about it, or nil when there was none to tell — the honest
    ;; record of whether this answer reached an agent or is waiting to be read.
-   [:resumed     {:optional true} [:maybe string?]]])
+   [:resumed     {:optional true} [:maybe string?]]]
+   [:fn {:error/message "a branch answer names both its letter and its label, a worded one neither"}
+    (fn [{:keys [letter label]}] (= (some? letter) (some? label)))]])
 
 (def TriageAccepted
   "The human's acceptance of a triage verdict at the gate — written by nido at the
@@ -3311,6 +3317,90 @@
                 [:failure-left {:optional true} string?]
                 [:note         {:optional true} string?]]]]])
 
+
+;; ── Status changes a person or nido decides, recorded where status reads them ──
+;;
+;; Each of these was a field overwritten in place on the workstream record — and an overwritten
+;; field is a second answer to where a workstream is, read by whoever remembered it existed.
+;; Recorded here, the fold reads them like any other fact.
+
+(def Closed
+  "A workstream settled, written as `workstream/close!` decides it.
+
+   :outcome is the close's vocabulary unchanged: :between-phases is a landing whose plan has more,
+   and names under :design the design whose plan it paused. :by says who settled it — a close a
+   person chose and one a poller observed are different facts for whoever reads why."
+  [:map {:closed true}
+   [:format  [:= :closed]]
+   [:outcome [:enum :done :dropped :dismissed :vetoed :orphaned :between-phases]]
+   [:design  {:optional true} [:map {:closed true} [:seq int?]]]
+   [:by      {:optional true} [:enum :person :nido :notion :backfill]]
+   [:note    {:optional true} string?]])
+
+(def Reopened
+  "A settled workstream put back to work — a findings round on a landed change, a gate opened, a
+   dismissal undone. The close before it settles nothing any more."
+  [:map {:closed true}
+   [:format [:= :reopened]]
+   [:stage  {:optional true} keyword?]
+   [:by     {:optional true} [:enum :person :nido :notion :backfill]]
+   [:note   {:optional true} string?]])
+
+(def StageSet
+  "The board stage a workstream is put at by a decision rather than by its records: a person
+   moving it, the merge lane taking it to :shipping, or the backfill naming the stage a stored
+   override held when the ledger began to record it.
+
+   Never a position. The arc is the fold's; this is the one input to the board's band the arc
+   does not determine."
+  [:map {:closed true}
+   [:format [:= :stage-set]]
+   [:stage  keyword?]
+   [:by     [:enum :person :nido :backfill]]])
+
+(def FindingsResolved
+  "Findings items a later change resolved: the round they belong to and what resolved them. The
+   items still open are the round's items no resolution names."
+  [:map {:closed true}
+   [:format [:= :findings-resolved]]
+   [:round  int?]
+   [:items  [:vector {:min 1} string?]]
+   [:by     string?]])
+
+(def Scratch
+  "A one-off's birth: the workstream was minted with no ticket, for a session, and may be
+   discarded with it. The kind is the marker; it carries no position of its own."
+  [:map {:closed true}
+   [:format  [:= :scratch]]
+   [:session {:optional true} string?]])
+
+(def NotionStatus
+  "The status a Notion page showed when the poller saw it change — or, from the backfill, the
+   status the cache held when the ledger began to record it. Written by nido, never by an agent:
+   an observation of a page a person edits, and the only way that edit reaches a workstream."
+  [:map {:closed true}
+   [:format  [:= :notion-status]]
+   [:page-id string?]
+   [:status  string?]
+   [:by      {:optional true} [:enum :poller :backfill]]])
+
+(def LayerCompleted
+  "One finished layer of a stack built under a design: which layer, of how many the cut planned.
+
+   :design cites the design the layer was built under, as :implementation-completed does. :of is
+   the cut /stack drew for that design, repeated on every layer entry; the earliest one under a
+   design is the count read, so a re-cut is a new design rather than a new count."
+  [:and
+   [:map {:closed true}
+    [:format   [:= :layer-completed]]
+    [:design   [:map {:closed true} [:seq int?]]]
+    [:layer    pos-int?]
+    [:of       pos-int?]
+    [:bookmark {:optional true} string?]
+    [:commit   {:optional true} string?]]
+   [:fn {:error/message "a layer's index is at most the number of layers the cut planned"}
+    (fn [{:keys [layer of]}] (<= layer of))]])
+
 (def event-schemas
   "Entry :kind → its Malli schema. Drives ledger-boundary validation + rendering.
    A :kind absent here is stored as verbatim markdown (legacy / freeform)."
@@ -3344,7 +3434,14 @@
    :design-approved          DesignApproved
    :design-cleared           DesignCleared
    :session-diagnosis        SessionDiagnosis
-   :session-restored         SessionRestored})
+   :session-restored         SessionRestored
+   :closed                   Closed
+   :reopened                 Reopened
+   :stage-set                StageSet
+   :findings-resolved        FindingsResolved
+   :scratch                  Scratch
+   :notion-status            NotionStatus
+   :layer-completed          LayerCompleted})
 
 (def read-schemas
   "Kinds whose READ contract is wider than their write contract, because records
@@ -3851,7 +3948,7 @@
 (defn- blocker-answered->markdown [{:keys [blocker-seq letter label summary resumed]}]
   (str/join "\n"
     (remove nil?
-      [(str "# Answered: " letter " — " label)
+      [(if letter (str "# Answered: " letter " — " label) "# Answered")
        (str "_answers the blocker at entry " blocker-seq
             (if resumed (str "; resumed " resumed) "; no session was live to resume")
             "_")
@@ -3872,6 +3969,37 @@
 (defn- pr-opened->markdown [{:keys [url title summary]}]
   (str/join "\n"
     (remove nil? ["# PR opened" (str "**" title "** — " url) (when summary (str "\n" summary))])))
+
+(defn- by-line [by] (when by (str "_by " (name by) "_")))
+
+(defn- closed->markdown [{:keys [outcome design by note]}]
+  (str/join "\n" (remove nil? [(str "# Closed: " (name outcome))
+                                (when design (str "_pauses the plan of the design at entry " (:seq design) "_"))
+                                (by-line by) note])))
+
+(defn- reopened->markdown [{:keys [stage by note]}]
+  (str/join "\n" (remove nil? [(str "# Reopened" (when stage (str " at " (name stage))))
+                                (by-line by) note])))
+
+(defn- stage-set->markdown [{:keys [stage by]}]
+  (str/join "\n" (remove nil? [(str "# Stage set: " (name stage)) (by-line by)])))
+
+(defn- findings-resolved->markdown [{:keys [round items by]}]
+  (str/join "\n" [(str "# Findings resolved (round " round ")")
+                   (str "Resolved by " by ": " (str/join ", " items))]))
+
+(defn- scratch->markdown [{:keys [session]}]
+  (str "# One-off" (when session (str " for session " session))))
+
+(defn- notion-status->markdown [{:keys [page-id status by]}]
+  (str/join "\n" (remove nil? [(str "# Notion status: " status) (str "_page " page-id "_")
+                                (when by (str "_observed by " (name by) "_"))])))
+
+(defn- layer-completed->markdown [{:keys [design layer of bookmark commit]}]
+  (str/join "\n" (remove nil? [(str "# Layer " layer "/" of " done")
+                                (str "_under the design at entry " (:seq design) "_")
+                                (when (or bookmark commit)
+                                  (str/join " · " (remove nil? [(when bookmark (str "`" bookmark "`")) commit])))])))
 
 (defn- merged->markdown [{:keys [pr commit url title merged-at]}]
   (str/join "\n"
@@ -4453,6 +4581,13 @@
     :improvement-plan         (improvement-plan->markdown report)
     :improvement-claim-reserved (improvement-claim-reserved->markdown report)
     :proposed-ticket          (proposed-ticket->markdown report)
+    :closed                   (closed->markdown report)
+    :reopened                 (reopened->markdown report)
+    :stage-set                (stage-set->markdown report)
+    :findings-resolved        (findings-resolved->markdown report)
+    :scratch                  (scratch->markdown report)
+    :notion-status            (notion-status->markdown report)
+    :layer-completed          (layer-completed->markdown report)
     ""))
 
 (def ^:private index-title-cap
@@ -4490,7 +4625,17 @@
     :implementation-plan      (:direction report)
     :implementation-completed (first-line (:summary report))
     :blocker                  (or (:needs report) (first-line (:summary report)))
-    :blocker-answered         (str "Answered " (:letter report) " — " (:label report))
+    :blocker-answered         (if (:letter report)
+                                (str "Answered " (:letter report) " — " (:label report))
+                                (str "Answered: " (first-line (:summary report))))
+    :closed                   (str "Closed: " (name (:outcome report)))
+    :reopened                 (str "Reopened" (some->> (:stage report) name (str " at ")))
+    :stage-set                (str "Stage set: " (name (:stage report)))
+    :findings-resolved        (str "Findings round " (:round report) ": "
+                                   (count (:items report)) " resolved")
+    :scratch                  "One-off"
+    :notion-status            (str "Notion status: " (:status report))
+    :layer-completed          (str "Layer " (:layer report) "/" (:of report) " done")
     :triage-accepted          (if-let [d (:direction report)]
                                 (str "Accepted: direction " (:letter d) " — " (:label d))
                                 "Accepted: no direction chosen")
