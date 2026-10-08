@@ -2037,3 +2037,25 @@
 (deftest a-cap-on-owed-readings-is-on-the-reason
   (is (= {:read-once ["lower"]}
          (:owed-reading (report/stopped-on {:owed-reading {:read-once ["lower"]}})))))
+
+(deftest a-judge-phase-says-which-readings-and-runs-it-continued
+  ;; Watched: a 1-round run that stopped sufficient had paired six single readings from a dead
+  ;; run's entry, and its report held checks/confirmed/settled with nothing naming that entry.
+  (let [r  (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+               (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+               (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                    :ctx {:record {:format :baseline-review :verdict :sufficient
+                                                   :confirmed ["c1"]
+                                                   :paired-with [{:id "c1" :seq 34 :ws-id "ws-1" :run-id "baseline-loop-dead"}]
+                                                   :contradicts-read-once [{:id "c2" :seq 34 :ws-id "ws-1"}]}
+                                          :continues [{:run-id "baseline-loop-dead" :status "interrupted"}]
+                                          :findings []}} nil))
+        ph (first (:phases (first (:rounds r))))]
+    (is (= [{:id "c1" :seq 34 :ws-id "ws-1" :run-id "baseline-loop-dead"}] (:paired-with ph))
+        "why the round could end the run is the pairing, and the report is where a reader looks first")
+    (is (= [{:id "c2" :seq 34 :ws-id "ws-1"}] (:contradicts-read-once ph)))
+    (is (= [{:run-id "baseline-loop-dead" :status "interrupted"}] (:continues ph))
+        "a run picking up where another died says so, with how that one ended"))
+  (let [[_ ph] (design-judge-phase {:format :design-decision :recommend :proceed :confirmed ["c1"]})]
+    (is (not-any? #(contains? ph %) [:paired-with :contradicts-read-once :continues])
+        "absent when the run continued nothing")))

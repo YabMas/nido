@@ -4413,16 +4413,18 @@
 (defn- judge-inputs
   "What a judge stage reads off the ledgers for `subject`, a `kind` of record, at `reading`, before
    it launches a judge:
-   :standing, every subject whose latest judgement at the key confirmed it; :settled, the part of
-   it the judge is not asked — those confirmed twice running (`settled/single-readings`), less the
-   ids the last amender called `stale`; and :prior, what earlier runs found against its subjects
-   and nothing has answered since. `effective` as `settled/settled` takes it."
+   :standing, every subject whose latest judgement at the key confirmed it; :single, the ids of it
+   confirmed once only (`settled/single-readings`); :settled, the part of it the judge is not
+   asked — those confirmed twice running, less the ids the last amender called `stale`; and
+   :prior, what earlier runs found against its subjects and nothing has answered since.
+   `effective` as `settled/settled` takes it."
   [project ws-id kind subject reading effective run-id stale]
   (let [ls       (when (and project subject) (settled/ledgers project ws-id subject))
-        standing (if (and project subject) (settled/settled ls subject reading effective) {})]
+        standing (if (and project subject) (settled/settled ls subject reading effective) {})
+        single   (if (and project subject) (settled/single-readings ls subject reading effective) #{})]
     {:standing standing
-     :settled  (apply dissoc standing (concat (settled/single-readings ls subject reading effective)
-                                              stale))
+     :single   single
+     :settled  (apply dissoc standing (concat single stale))
      :prior    (when subject (settled/prior-findings ls kind subject run-id))}))
 
 (defn- newest-judgement
@@ -4535,8 +4537,18 @@
 
    `asked` is the ids the round owes a ruling on. :read-once holds no other, because the reading
    after it pairs them only by reading them again, and an id it was not asked about can go
-   unread without being :unruled — so the second reading would clear it unread."
-  [record holds? {:keys [standing settled carried prior asked unread-amendment?]}]
+   unread without being :unruled — so the second reading would clear it unread.
+
+   Where the reading before is a confirmation the ledger holds on ONE reading (`single`, the ids
+   of `standing` that `settled/single-readings` names), this reading is what pairs it or denies
+   it, and the record says which. :paired-with `[{:id :seq :ws-id :run-id}]` names, per id this
+   one confirmed, the single confirmation it completes — the run that confirmed it first may be
+   another, dead run, and nothing else joins the two. :contradicts-read-once `[{:id :seq
+   :ws-id}]` names, per id this one refuted, the single confirmation it denies: a :split whose
+   earlier reading is on the ledger, said with the entry, because :overturns runs the other way
+   only and a refutation of a read-once id is otherwise a bare finding. Both only while `record`
+   read the tree the confirmation is keyed on."
+  [record holds? {:keys [standing single settled carried prior asked unread-amendment?]}]
   (if-not (:format record)
     record
     (let [ruled     (rulings record)
@@ -4547,6 +4559,14 @@
           before    (merge {}
                            (when (:code-identity record) (zipmap (keys standing) (repeat :holds)))
                            carried)
+          once-held (when (:code-identity record)
+                      (into (sorted-map) (filter (comp (set single) key)) standing))
+          paired    (vec (for [[id {:keys [ws-id run-id] n :seq}] once-held
+                               :when (= :holds (ruled id))]
+                           (cond-> {:id id :seq n :ws-id ws-id} run-id (assoc :run-id run-id))))
+          denied    (vec (for [[id {:keys [ws-id] n :seq}] once-held
+                               :when (found id)]
+                           {:id id :seq n :ws-id ws-id}))
           unpaired  (vec (for [[id now] (sort-by key ruled)
                                :let [was (before id)]
                                :when (and was (not= was now))]
@@ -4569,7 +4589,43 @@
         (seq overturns)                  (assoc :overturns overturns)
         (seq overrides)                  (assoc :overrides-settled overrides)
         (seq splits)                     (assoc :splits splits)
-        (seq unpaired)                   (assoc :unpaired unpaired)))))
+        (seq unpaired)                   (assoc :unpaired unpaired)
+        (seq paired)                     (assoc :paired-with paired)
+        (seq denied)                     (assoc :contradicts-read-once denied)))))
+
+(defn- run-status
+  "The status a review run `run-id` ended in, read off its report in the run dir, or nil when there
+   is no report to read. A run's own account of itself — `interrupted`, `max-iters`, `sufficient` —
+   which is what a reader joining two runs by hand went to the run dir for."
+  [run-id]
+  (let [path (fs/path (cstate/run-dir (str run-id)) "report.json")]
+    (when (fs/exists? path)
+      (try (some-> (json/parse-string (slurp (str path)) true) :status str)
+           (catch Exception _ nil)))))
+
+(defn- continues
+  "The earlier runs whose judgements of this subject round 1 of run `run-id` read, as
+   `[{:run-id :status}]` sorted by id: the run behind each confirmation standing at the key
+   (`standing`, as `judge-inputs` gives it) and behind each refutation that `refuted-running`
+   still counts (`running`, over `lineage`). A run that starts where another stopped owes a
+   reader that join — its first round pairs, inherits and re-judges what those runs left, and
+   the ledger's :run-id stamps are otherwise the only trace. :status is each run's own
+   (`run-status`), or \"unknown\" when its report is gone. Empty past round 1, where the run
+   reads its own amendments, and for a run with no id."
+  [run-id iter standing running lineage]
+  (when (and run-id (= 1 iter))
+    (let [counted (set (keys running))
+          refuters (for [j lineage
+                         :when (some #(or (counted (some-> (:claim-id %) str))
+                                          (counted (some-> (:check %) name)))
+                                     (:findings j))]
+                     (:run-id j))]
+      (->> (concat (map :run-id (vals standing)) refuters)
+           (remove nil?)
+           (remove #{(str run-id)})
+           distinct
+           sort
+           (mapv (fn [id] {:run-id id :status (or (run-status id) "unknown")}))))))
 
 (defn- unread-amendment?
   "Is the record this round reads one this run amended, with no quiet round of the run since the
@@ -4644,9 +4700,10 @@
         ;; read: never settled, so no round can answer it without a judge, and shown that judge as
         ;; what a confirmation would overturn. Once amended, the record is not the one it refuted.
         refuted (when-not (get-in ctx [:carry :under-repair]) (:refuted (:config ctx)))
-        {:keys [standing settled prior]} (-> (judge-inputs project ws-id :baseline subject reading subject run-id
-                                                           (concat (get-in ctx [:carry :stale]) (keys refuted)))
-                                             (update :prior merge refuted))
+        {:keys [standing single settled prior]}
+        (-> (judge-inputs project ws-id :baseline subject reading subject run-id
+                          (concat (get-in ctx [:carry :stale]) (keys refuted)))
+            (update :prior merge refuted))
         stands? #(and (seq (:findings %)) (not (report/review-holds? %)))
         lost    (ledger-lost ctx ledger)
         reused  (standing-judgement ctx ledger :baseline-review :baseline-seq subject reading stands?)
@@ -4669,7 +4726,7 @@
                    (-> (dissoc judged :tree-moved)
                        (stamp-run (:config ctx))
                        (with-readings report/review-holds?
-                                      {:standing standing :settled settled :prior prior
+                                      {:standing standing :single single :settled settled :prior prior
                                        :carried (carried-readings ctx subject)
                                        :asked asked
                                        :unread-amendment? (unread-amendment? ctx)})))
@@ -4679,11 +4736,10 @@
         mine      (when-not reused [record])
         reviews   (when (:format record)
                     (into (if project (vec (ws/entries-of project ws-id :baseline-review)) []) mine))
-        running   (when reviews
-                    (refuted-running subject (into (if (and project subject)
-                                                     (lineage-of project ws-id :baseline-review :baseline-seq subject)
-                                                     [])
-                                                   mine)))
+        lineage   (if (and project subject)
+                    (lineage-of project ws-id :baseline-review :baseline-seq subject)
+                    [])
+        running   (when reviews (refuted-running subject (into lineage mine)))
         unsettled (if reviews (unsettled-findings record (unchecked-running reviews)) [])
         record    (cond-> record (seq (spent running)) (assoc :spent (spent running)))
         ;; An amender's :stale speaks for the one round after it.
@@ -4693,6 +4749,8 @@
                       (when (:seq subject) {:judged-seq (:seq subject)})
                       (when-let [m (:tree-moved judged)] {:tree-moved m})
                       (when again {:rejudged again})
+                      (when-let [c (seq (continues run-id (:iter ctx) standing running lineage))]
+                        {:continues (vec c)})
                       (when subject (banking asked reading record)))]
     (let [answer (if reused (reused-answer reused) (append! ledger record))]
       (with-appended
@@ -5088,6 +5146,28 @@
              :when (= "judge" (some-> (:phase ph) name))
              :when (:identity-unreadable ph)]
          {:round (:round round) :why (:identity-unreadable ph)})))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :map]}
+  continued
+  "What a record run's report says it continued of earlier readings and runs, read off its judge
+   phases so a finished run's headline says it as the run did:
+   :paired, per entry whose single confirmations this run's readings completed, `{seq [id ...]}`
+   over every round; :contradicted, each read-once confirmation a round denied, `[{:id :seq}]`;
+   and :continues, round 1's `[{:run-id :status}]`. Each absent when the run did none of it."
+  [report]
+  (let [judges (for [round (:rounds report)
+                     ph    (:phases round)
+                     :when (= "judge" (some-> (:phase ph) name))]
+                 ph)
+        paired (reduce (fn [m {:keys [id] n :seq}] (update m n (fnil conj []) id))
+                       (sorted-map)
+                       (mapcat :paired-with judges))
+        denied (vec (for [{:keys [id] n :seq} (mapcat :contradicts-read-once judges)] {:id id :seq n}))
+        runs   (vec (mapcat :continues judges))]
+    (cond-> {}
+      (seq paired) (assoc :paired paired)
+      (seq denied) (assoc :contradicted denied)
+      (seq runs)   (assoc :continues runs))))
 
 (defn- tally
   "Per key, in how many of `rounds` it was broken, in how many it was the only thing broken, and
@@ -5574,7 +5654,7 @@
         [project ws-id :as ledger] (ledger-of (:config ctx))
         design  (when project (ws/latest-entry project ws-id :design))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) design)
-        {:keys [standing settled prior]}
+        {:keys [standing single settled prior]}
         (judge-inputs project ws-id :design design reading (when design (effective-design ledger design)) run-id
                       (get-in ctx [:carry :stale]))
         ;; A decision that would not proceed, standing at this tree: the round points at it rather
@@ -5599,17 +5679,17 @@
                    (-> (dissoc judged :tree-moved)
                        (stamp-run (:config ctx))
                        (with-readings #(or (report/proceeds? %) (asks-only? %))
-                                      {:standing standing :settled settled :prior prior
+                                      {:standing standing :single single :settled settled :prior prior
                                        :carried (carried-readings ctx design)
                                        :asked asked
                                        :unread-amendment? (unread-amendment? ctx)})))
         ;; As the baseline round counts it, over the design's own lineage and this decision — which,
         ;; reused, the lineage already holds.
+        lineage (if (and project design)
+                  (lineage-of project ws-id :design-decision :design-seq design)
+                  [])
         running (when-not (:outcome record)
-                  (refuted-running design (into (if (and project design)
-                                                  (lineage-of project ws-id :design-decision :design-seq design)
-                                                  [])
-                                                (when-not reused [record]))))
+                  (refuted-running design (into lineage (when-not reused [record]))))
         ;; Every append below writes `record`; a reused one is on the ledger already.
         put!    (fn [ledger record] (if reused (reused-answer reused) (append! ledger record)))
         record (cond-> record (seq (spent running)) (assoc :spent (spent running)))
@@ -5619,6 +5699,8 @@
                       (when (:seq design) {:judged-seq (:seq design)})
                       (when-let [m (:tree-moved judged)] {:tree-moved m})
                       (when again {:rejudged again})
+                      (when-let [c (seq (continues run-id (:iter ctx) standing running lineage))]
+                        {:continues (vec c)})
                       (when design (banking asked reading record)))
         traj   (trajectory (:history ctx))
         ;; The status a run ends on is a claim that the ledger holds this decision: an :asked

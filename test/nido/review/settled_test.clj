@@ -649,3 +649,15 @@
                                     :confirmed ["m1"]))]
                       :design (design 7 ["m1"]) "now")
                      "m1")))))
+
+(deftest a-standing-confirmation-names-the-run-that-made-it
+  ;; A second reading pairs with a confirmation that is often another run's, and the pairing is
+  ;; worth recording with that run — which only the judgement carries.
+  (let [l (ledger :baselines [(baseline 1 c1)]
+                  :reviews [(review 2 1 :confirmed ["c1"] :run-id "baseline-loop-first")])]
+    (is (= {"c1" {:ws-id "ws-1" :seq 2 :run-id "baseline-loop-first"}}
+           (settled/settled [l] (baseline 3 c1) tree-a)))
+    (is (= {"c1" (by 2)}
+           (settled/settled [(ledger :baselines [(baseline 1 c1)] :reviews [(review 2 1 :confirmed ["c1"])])]
+                            (baseline 3 c1) tree-a))
+        "and a judgement with no run, appended by hand, names none")))

@@ -626,3 +626,18 @@
   (let [p (analysis/payload (assoc a-run :ruled-not-dispatched
                                    [{:id "14d31b83" :owner-layer "transport" :sweep true}]))]
     (is (str/includes? (:headline p) "Ruled, never dispatched: 14d31b83 (transport, sweep)"))))
+
+(deftest a-record-run-headline-says-which-readings-and-runs-it-continued
+  ;; Watched: 'sufficient · 1 round, 1 judged · 0 amended' was the whole headline of a run whose
+  ;; one round paired six single readings from an interrupted run's entry; the analysis had to
+  ;; rebuild from the ledger why a 1-round run was allowed to stop.
+  (let [h (:headline (analysis/payload (assoc a-design-run :loop :baseline :status :sufficient
+                                              :continued {:paired {34 ["a" "b" "c"] 50 ["d"]}
+                                                          :contradicted [{:id "shape" :seq 154}]
+                                                          :continues [{:run-id "baseline-loop-dead" :status "interrupted"}]})))]
+    (is (str/includes? h "Continues: baseline-loop-dead (interrupted)"))
+    (is (str/includes? h "Paired: 3 single readings from entry 34, 1 single reading from entry 50"))
+    (is (str/includes? h "Contradicts read-once: shape (entry 154)")))
+  (let [h (:headline (analysis/payload a-design-run))]
+    (is (not-any? #(str/includes? h %) ["Continues:" "Paired:" "Contradicts read-once:"])
+        "a run that continued nothing says nothing of it")))

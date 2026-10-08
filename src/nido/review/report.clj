@@ -636,6 +636,12 @@
       ;; :overrides-settled is each subject the judge was shown as settled and found against anyway —
       ;; a confirmation settlement was shielding, caught. :splits and :unpaired are where it disagreed
       ;; with the reading before it at the same tree, which is otherwise only the later ruling.
+      ;; :paired-with is each single confirmation on the ledger this round's confirmation completed,
+      ;; and :contradicts-read-once each it denied — the entry and (paired) the run, since the first
+      ;; reading is often another run's and a 1-round run that stopped is otherwise unexplained.
+      ;; :continues is every earlier run whose judgements round 1 read — paired with, inherited a
+      ;; refutation count from — with the status each ended in, so a run that picked up where an
+      ;; interrupted one died says so instead of leaving the join to the ledger's :run-id stamps.
       ;; :relation-rulings is the per-id relation-honest ruling :breaks was held to, round by round —
       ;; a reversal between rounds is otherwise readable only in the raw decision output — and
       ;; beside it the judge's inconsistencies the round recorded rather than enforced
@@ -699,6 +705,11 @@
                 (assoc :overrides-settled (get-in ctx [:record :overrides-settled]))
                 (seq (get-in ctx [:record :splits]))   (assoc :splits (get-in ctx [:record :splits]))
                 (seq (get-in ctx [:record :unpaired])) (assoc :unpaired (get-in ctx [:record :unpaired]))
+                (seq (get-in ctx [:record :paired-with]))
+                (assoc :paired-with (vec (get-in ctx [:record :paired-with])))
+                (seq (get-in ctx [:record :contradicts-read-once]))
+                (assoc :contradicts-read-once (vec (get-in ctx [:record :contradicts-read-once])))
+                (seq (:continues ctx))                  (assoc :continues (vec (:continues ctx)))
                 (seq (get-in ctx [:record :unchecked])) (assoc :unchecked (get-in ctx [:record :unchecked]))
                 (seq (get-in ctx [:record :relation-rulings]))
                 (assoc :relation-rulings (get-in ctx [:record :relation-rulings]))

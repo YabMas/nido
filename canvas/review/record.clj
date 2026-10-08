@@ -194,6 +194,12 @@
     "Each round of a record run's report whose confirmations could not settle because its tree had
      no identity, with why, read off the report."
     {:signature [:=> [:catn [:report [:maybe :map]]] [:vector :map]]})
+  (Operation continued
+    "What a record run continued of earlier readings and runs, read off its report's judge phases:
+     per entry, the single confirmations its readings paired; each read-once confirmation a reading
+     denied; and the earlier runs round 1 read, with how each ended. What the headline says in
+     place of a 1-round run that stopped for a reason only the ledger held."
+    {:signature [:=> [:catn [:report [:maybe :map]]] :map]})
   (Operation run-figures
     "What one record run's rounds did, per derived check or derivation, read off the decisions and
      reviews it appended: in how many rounds each was broken, in how many it was the only thing

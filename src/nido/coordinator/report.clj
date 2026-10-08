@@ -2522,6 +2522,12 @@
    the same tree disagree: :splits each id that reading held or owed and this one refuted, :unpaired
    each id it ruled holds where that reading ruled owed, or the reverse. Neither pairs, so the id is
    read again; both are kept because otherwise the later ruling silently replaces the earlier one.
+   :paired-with names, per id this judgement confirmed, the confirmation standing on one reading
+   at the same content and tree that it completes — the entry, and the run that made it when it
+   carries one, since a second reading often comes from a later run than the first and nothing
+   else joins the two. :contradicts-read-once is the other answer to such a confirmation: per id
+   this judgement refuted, the single confirmation it denies. Derived by the round, as :splits
+   is, but naming the entry, which :splits does not.
    :spent is each subject this judgement refuted that its lineage has now refuted that many readings
    running (`nido.review.record/spent`) — reworded and refuted again, recorded where a hand amender
    reads before writing the next rewording. Derived by the round."
@@ -2540,6 +2546,11 @@
                                            [:id string?]
                                            [:was [:enum :holds :owed]]
                                            [:now [:enum :holds :owed]]]]]
+   [:paired-with {:optional true} [:vector [:map {:closed true}
+                                            [:id string?] [:seq int?] [:ws-id string?]
+                                            [:run-id {:optional true} string?]]]]
+   [:contradicts-read-once {:optional true} [:vector [:map {:closed true}
+                                                      [:id string?] [:seq int?] [:ws-id string?]]]]
    [:spent      {:optional true} [:map-of string? pos-int?]]])
 
 (def BaselineReview

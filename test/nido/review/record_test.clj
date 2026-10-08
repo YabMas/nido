@@ -1747,3 +1747,80 @@
     (let [[f] (:findings (parse "held" (assoc finding :check "goal_served")))]
       (is (= :goal-served (:filed-under f)) "a check the judge named is its answer, not nido's to move")
       (is (= "attempt-writes-keep-their-commits" (:claim-id f))))))
+
+(deftest a-second-reading-names-the-single-confirmation-it-pairs-with
+  ;; Watched: a run confirmed six ids that an earlier, dead run had confirmed once, stopped
+  ;; sufficient after one round, and nothing on the entry or in the report said why it was allowed
+  ;; to — the pairing lived in the earlier entry's :read-once and a docstring.
+  (let [r (#'record/with-readings {:format :baseline-review :code-identity "t"
+                                   :confirmed ["course-store" "transactions-join" "settled-one"]
+                                   :checked-at {"course-store" ["src/a.clj:1"]
+                                                "transactions-join" ["src/b.clj:2"]
+                                                "settled-one" ["src/c.clj:3"]}}
+                                  (constantly true)
+                                  {:standing {"course-store" {:ws-id "ws-1" :seq 34 :run-id "baseline-loop-dead"}
+                                              "transactions-join" {:ws-id "ws-1" :seq 34 :run-id "baseline-loop-dead"}
+                                              "settled-one" {:ws-id "ws-1" :seq 20}}
+                                   :single #{"course-store" "transactions-join"}
+                                   :settled {"settled-one" {:ws-id "ws-1" :seq 20}}
+                                   :asked ["course-store" "transactions-join"]})]
+    (is (= [{:id "course-store" :seq 34 :ws-id "ws-1" :run-id "baseline-loop-dead"}
+            {:id "transactions-join" :seq 34 :ws-id "ws-1" :run-id "baseline-loop-dead"}]
+           (:paired-with r))
+        "the second reading is what lets the run stop, so it names the first and the run that made it")
+    (is (nil? (:read-once r)) "and a paired id is not read once")
+    (is (report/validate-event :baseline-review (assoc r :verdict :sufficient :reason "r" :baseline-seq 1))
+        "and the ledger takes it"))
+  (is (nil? (:paired-with (#'record/with-readings {:format :baseline-review :confirmed ["c"] :checked-at {"c" ["src/a.clj:1"]}}
+                                                  (constantly true)
+                                                  {:standing {"c" {:ws-id "ws-1" :seq 3}} :single #{"c"} :asked ["c"]})))
+      "a record that read no single tree pairs with nothing on the ledger"))
+
+(deftest a-refutation-of-a-read-once-id-names-the-confirmation-it-denies
+  ;; Watched: #154 confirmed shape on a first reading; #156 refuted it at the same tree and carried
+  ;; nothing joining the two — :overturns runs the other way only.
+  (let [r (#'record/with-readings {:format :baseline-review :code-identity "t"
+                                   :findings [{:claim-id "shape" :cites ["c"] :claim "x"}]}
+                                  (constantly false)
+                                  {:standing {"shape" {:ws-id "ws-1" :seq 154 :run-id "baseline-loop-first"}
+                                              "settled-one" {:ws-id "ws-1" :seq 20}}
+                                   :single #{"shape"}
+                                   :settled {"settled-one" {:ws-id "ws-1" :seq 20}}})]
+    (is (= [{:id "shape" :seq 154 :ws-id "ws-1"}] (:contradicts-read-once r))
+        "one reading each way at one tree is the whole meaning of the run, and the entry has to say it")
+    (is (= [{:id "shape" :was :holds}] (:splits r)) "beside the split, which names no entry")
+    (is (report/validate-event :baseline-review (assoc r :verdict :falsified :reason "r" :baseline-seq 1))
+        "and the ledger takes it")))
+
+(deftest round-1-names-the-runs-whose-judgements-it-read
+  ;; Watched: a run restarted 19 s after its predecessor died in amend-round-2 inherited its
+  ;; refutation count and its settled readings, and the report named the predecessor nowhere.
+  (with-redefs [record/run-status (fn [id] ({"baseline-loop-dead" "interrupted"} id))]
+    (let [lineage [{:seq 6 :run-id "baseline-loop-dead" :findings [{:claim-id "citation-helpers"}]}
+                   {:seq 4 :run-id "baseline-loop-older" :findings [{:claim-id "withdrawn"}]}
+                   {:seq 5 :run-id "baseline-loop-me" :findings [{:claim-id "citation-helpers"}]}]
+          standing {"course-store" {:ws-id "ws-1" :seq 6 :run-id "baseline-loop-dead"}
+                    "by-hand" {:ws-id "ws-1" :seq 2}}]
+      (is (= [{:run-id "baseline-loop-dead" :status "interrupted"}]
+             (#'record/continues "baseline-loop-me" 1 standing {"citation-helpers" 2} lineage))
+          "the run behind a standing confirmation or a counted refutation, with how it ended — never this run, nor one whose refutation no longer counts")
+      (is (= [{:run-id "baseline-loop-gone" :status "unknown"}]
+             (#'record/continues "me" 1 {"c" {:ws-id "ws-1" :seq 1 :run-id "baseline-loop-gone"}} {} []))
+          "a run whose report is gone is still named")
+      (is (nil? (#'record/continues "baseline-loop-me" 2 standing {"citation-helpers" 2} lineage))
+          "past round 1 the run reads its own amendments, which no earlier run judged"))))
+
+(deftest a-report-says-what-the-run-continued
+  (let [report {:rounds [{:round 1 :phases [{:phase "judge"
+                                             :paired-with [{:id "a" :seq 34 :ws-id "w"} {:id "b" :seq 34 :ws-id "w"}]
+                                             :continues [{:run-id "baseline-loop-dead" :status "interrupted"}]}
+                                            {:phase "amend"}]}
+                         {:round 2 :phases [{:phase "judge"
+                                             :paired-with [{:id "c" :seq 50 :ws-id "w"}]
+                                             :contradicts-read-once [{:id "shape" :seq 154 :ws-id "w"}]}]}]}]
+    (is (= {:paired {34 ["a" "b"] 50 ["c"]}
+            :contradicted [{:id "shape" :seq 154}]
+            :continues [{:run-id "baseline-loop-dead" :status "interrupted"}]}
+           (record/continued report))
+        "read off the report, so a finished run's headline says it as the run did"))
+  (is (= {} (record/continued {:rounds [{:round 1 :phases [{:phase "judge"}]}]}))))

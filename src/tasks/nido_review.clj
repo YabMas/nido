@@ -2023,6 +2023,7 @@
       :spent            (record/spent (:refuted-running final))
       :cap              (record/cap-account final)
       :unreadable       (record/unreadable-rounds report)
+      :continued        (record/continued report)
       :stale-at-start   (get-in report [:target :stale-working-copy])
       :amend-prompt     (:amend-prompt final)
       :amender          (some-> (:amend-launch final) record/amender-account)

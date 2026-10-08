@@ -443,8 +443,8 @@
                        [:=> [:cat [:maybe [:vector :map]] :map :map :map] :map]]}
   settled
   "The subjects of `record` whose latest judgement at `reading` — `{:code-identity
-   :subject-identities}`, what the judge is about to read — confirmed them, as `{id {:ws-id :seq}}`,
-   naming that judgement.
+   :subject-identities}`, what the judge is about to read — confirmed them, as `{id {:ws-id :seq
+   :run-id}}`, naming that judgement and, when it carries one, the run that made it.
 
    A subject is confirmed here when a baseline review or a design decision, on any of `ledgers`,
    named its id in :confirmed and said where it read it (:checked-at), while judging a record nobody
@@ -471,7 +471,9 @@
          (keep (fn [[id bearing]]
                  (let [latest (peek bearing)]
                    (when (and latest (not (:breaks? latest)))
-                     [id {:ws-id (:ws-id latest) :seq (get-in latest [:judgement :seq])}]))))
+                     [id (cond-> {:ws-id (:ws-id latest) :seq (get-in latest [:judgement :seq])}
+                           (get-in latest [:judgement :run-id])
+                           (assoc :run-id (get-in latest [:judgement :run-id])))]))))
          (bearings ledgers record reading effective))))
 
 (defn ^{:malli/schema [:function

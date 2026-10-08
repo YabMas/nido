@@ -340,11 +340,15 @@
 
    `repair` is `nido.coordinator.report/repair-before-asking` of that judgement, and `repaired?`
    whether the run amended after it: `asks` on a repair is conditional on it, and is never shown as
-   a question open now."
+   a question open now.
+
+   `continued` is `nido.review.record/continued` of the report: which earlier runs round 1 read,
+   which single readings the run paired and which it denied. In the headline because a 1-round
+   run that stopped sufficient is otherwise one the analysis has to explain from the ledger."
   [{:keys [loop run-id report-path status rounds launched judged amended unappended weakened disputed
            record-seq still-broken still-asked asks stood-in reviewed-project reviewed-session reviewed-ws-id
            machinery unrecorded spent cap amend-prompt unreadable stale-at-start repair repaired?
-           amender]
+           amender continued]
     :as run}]
   (let [kind   (name loop)
         broken (seq (map name still-broken))]
@@ -393,6 +397,25 @@
                                       (str/join ", " (map :round unreadable))
                                       ", so what they confirmed could not settle — "
                                       (:why (last unreadable)) "\n"))
+                               ;; Why a short run was allowed to stop: it finished readings and
+                               ;; runs that came before it, which only the ledger otherwise joins.
+                               (when-let [runs (seq (:continues continued))]
+                                 (str "Continues: "
+                                      (str/join ", " (for [{:keys [run-id status]} runs]
+                                                       (str run-id " (" status ")")))
+                                      "\n"))
+                               (when-let [paired (seq (:paired continued))]
+                                 (str "Paired: "
+                                      (str/join ", " (for [[n ids] paired]
+                                                       (str (count ids) " single reading"
+                                                            (when (not= 1 (count ids)) "s")
+                                                            " from entry " n)))
+                                      "\n"))
+                               (when-let [denied (seq (:contradicted continued))]
+                                 (str "Contradicts read-once: "
+                                      (str/join ", " (for [{:keys [id] n :seq} denied]
+                                                       (str id " (entry " n ")")))
+                                      " — one reading each way at one tree\n"))
                                (when (seq spent)
                                  (str "Spent: "
                                       (str/join ", " (for [[id n] (sort spent)]
