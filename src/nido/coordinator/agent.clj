@@ -95,7 +95,7 @@
    gate reply; otherwise it RECORDS under it (--session-id) — the first burst.
    first-message is the trailing positional argument."
   [{:keys [claude-bin first-message system-prompt claude-session-id resume?
-           mcp-config add-dirs tools allowed model]}]
+           mcp-config add-dirs tools allowed model settings]}]
   (cond-> (into [claude-bin
                  "--print"
                  ;; Stream-json output requires --verbose per claude-code's
@@ -122,6 +122,7 @@
     (and claude-session-id (not resume?)) (into ["--session-id" claude-session-id])
     system-prompt                          (into ["--append-system-prompt" system-prompt])
     mcp-config                             (into ["--mcp-config" mcp-config])
+    settings                               (into ["--settings" settings])
     (seq add-dirs)                         (into (mapcat (fn [d] ["--add-dir" d]) add-dirs))
     ;; --tools narrows only the BUILT-IN set; MCP servers discovered from cwd
     ;; (project .mcp.json, user config, claude.ai connectors) still arrive, so
@@ -175,6 +176,9 @@
                       permissions skipped entirely. A path-scoped write is an
                       `Edit(...)` rule: it governs Write too, and a `Write(...)`
                       rule is ignored (claude 2.x).
+     :settings      — optional; a Claude settings document (JSON text or a
+                      path), passed as --settings: a layer over the cwd's own
+                      settings, so the hooks it declares run beside theirs.
      :out-file      — optional; the file this agent's stdout transcript is
                       written to, INSTEAD of the run's shared agent.log. Unlike
                       :err-file it is not a child-process redirect — stdout is
@@ -204,7 +208,7 @@
    :usage-limit is non-nil when the account's usage limit rejected the agent
    (see usage-limit) — a fact about the account, not about the Run."
   [{:keys [run-id cwd first-message system-prompt claude-bin env budget claude-session-id resume?
-           mcp-config add-dirs tools allowed model err-file out-file]
+           mcp-config add-dirs tools allowed model settings err-file out-file]
     :or   {claude-bin "claude"}}]
   (let [;; BEFORE the spawn, and that ordering is the whole point. Parsed where
         ;; it used to be — beside the timer it arms — the refusal would fire with
@@ -215,7 +219,8 @@
         cmd       (build-cmd {:claude-bin claude-bin :first-message first-message
                               :system-prompt system-prompt :claude-session-id claude-session-id
                               :resume? resume? :mcp-config mcp-config :add-dirs add-dirs
-                              :tools tools :allowed allowed :model model})
+                              :tools tools :allowed allowed :model model
+                              :settings settings})
         proc      (p/process cmd (cond-> {:dir cwd
                                           :env (merge (into {} (System/getenv)) (or env {})
                                                       headless-env)

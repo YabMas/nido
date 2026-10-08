@@ -20,6 +20,7 @@
    [nido.platform.core :as core]
    [nido.platform.io :as io]
    [nido.session.agent-guidance :as agent-guidance]
+   [nido.session.commit-gate :as commit-gate]
    [nido.session.links :as links]
    [nido.session.profiles :as profiles]
    [nido.session.state :as state]))
@@ -966,8 +967,9 @@
                        :command (str "cd '" home "' && bb nido:boundary")
                        :timeout boundary-hook-timeout-s}]}))
 
-(defn- ensure-boundary-hook!
-  "Write nido's Stop hook into a composed session home's
+(defn- ensure-session-hooks!
+  "Write nido's hooks — the Stop boundary hook and the commit gate's
+   `PreToolUse` hook — into a composed session home's
    `.claude/settings.local.json`.
 
    That name is free in the usual case, by measurement rather than by hope.
@@ -1003,7 +1005,8 @@
                                               (ex-message e)))
                           nil)))]
     (when linked? (fs/delete path))
-    (io/write-json! path (boundary-settings (or checkout {}) (str home)))))
+    (io/write-json! path (commit-gate/with-gate
+                          (boundary-settings (or checkout {}) (str home))))))
 
 (defn- ensure-bb-edn-symlink!
   "Create or refresh a `bb.edn` symlink inside the session-home pointing
@@ -1102,7 +1105,7 @@
           (core/log-step (str "warning: worktree symlink: " (ex-message e)))))
       (try
         (ensure-claude-dir! project-name session-name)
-        (ensure-boundary-hook! home)
+        (ensure-session-hooks! home)
         (catch Exception e
           (core/log-step (str "warning: .claude symlink: " (ex-message e)))))
       (try

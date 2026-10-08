@@ -352,7 +352,7 @@
         (@#'launcher/compose-claude-dir! (str home) {})
         (is (fs/sym-link? composed) "precondition: compose linked the checkout's file")
 
-        (@#'launcher/ensure-boundary-hook! (str home))
+        (@#'launcher/ensure-session-hooks! (str home))
 
         (testing "the checkout's file is untouched"
           (is (= own (json/parse-string (slurp own-path) true))))
@@ -369,11 +369,15 @@
     (try
       (let [{:keys [home]} (fake-session-home! tmp)]
         (@#'launcher/compose-claude-dir! (str home) {})
-        (@#'launcher/ensure-boundary-hook! (str home))
+        (@#'launcher/ensure-session-hooks! (str home))
         (let [s (json/parse-string
                  (slurp (str (fs/path home ".claude" "settings.local.json"))) true)]
           (is (= [:hooks] (keys s)))
-          (is (= 1 (count (get-in s [:hooks :Stop]))))))
+          (is (= 1 (count (get-in s [:hooks :Stop]))))
+          (testing "the commit gate runs on every Bash call an agent in the home makes"
+            (is (= ["Bash"] (map :matcher (get-in s [:hooks :PreToolUse]))))
+            (is (str/includes? (get-in s [:hooks :PreToolUse 0 :hooks 0 :command])
+                               "nido:commit:gate")))))
       (finally (fs/delete-tree tmp)))))
 
 (deftest nido-native-entries-skips-mirrored-symlinks-and-wrong-shapes

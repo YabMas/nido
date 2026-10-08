@@ -14,6 +14,7 @@
    [nido.coordinator.record.workstream :as cws]
    [nido.platform.io :as io]
    [nido.platform.process :as proc]
+   [nido.session.commit-gate :as commit-gate]
    [nido.session.engine :as engine]
    [nido.session.fleet :as fleet]
    [nido.session.launcher :as launcher]
@@ -593,7 +594,9 @@
    The agent boots in the worktree (not the session-home); briefing/MCP/skills are
    passed as flags, and artifact/status paths are the absolute run-dir paths the
    coordinator actually reads (no session-home dependency). mcp-config is nil for
-   a session with no postgres (or before its mcp.json is written)."
+   a session with no postgres (or before its mcp.json is written). `:settings`
+   carries the hooks a session's agent runs wherever it starts — the commit
+   gate — since a worktree cwd reads none of the session home's."
   [run]
   (let [{:keys [project session-name id]} run
         pname       (name project)
@@ -604,6 +607,7 @@
      :briefing   (launcher/session-briefing pname session-name instance-id)
      :mcp-config mcp
      :add-dirs   (launcher/nido-add-dirs)
+     :settings   (commit-gate/settings-json)
      :run-paths  (str "Write run artifacts under " (cstate/run-artifacts-dir id)
                       " with stable filenames. Update " (cstate/run-status-path id)
                       " at phase transitions with {:phase :awaiting-input | :working "

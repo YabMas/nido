@@ -20,6 +20,12 @@
                                 :system-prompt nil :claude-session-id nil})]
     (is (not (some #{"--session-id"} cmd)) "omits --session-id when none given")))
 
+(deftest build-cmd-passes-a-settings-layer
+  (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi" :settings "{}"})]
+    (is (= ["--settings" "{}"] (->> cmd (drop-while #(not= % "--settings")) (take 2))))
+    (is (= "hi" (last cmd))))
+  (is (not (some #{"--settings"} (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"})))))
+
 (deftest build-cmd-resume-uses-resume-flag
   (is (= ["claude" "--print" "--verbose" "--output-format=stream-json"
           "--dangerously-skip-permissions" "--disallowedTools" "ScheduleWakeup"
@@ -64,6 +70,19 @@
                         :env           {"FAKE_CLAUDE_SESSION_ID" "ignored-emitted-id"}})]
           (is (= "preset-id" (:claude-session-id result))
               "a pre-generated session-id is returned (not the emitted one)")))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest launch!-hands-its-settings-to-the-command
+  (let [tmp  (fs/create-temp-dir)
+        seen (atom nil)
+        real @#'agent/build-cmd]
+    (try
+      (with-redefs [core/nido-root  (constantly (str tmp))
+                    agent/build-cmd (fn [opts] (reset! seen opts) (real opts))]
+        (fs/create-dirs (cstate/run-dir "r1"))
+        (agent/launch! {:run-id "r1" :cwd (str tmp) :first-message "/x"
+                        :claude-bin fake-claude :budget "5m" :settings "{\"hooks\":{}}"})
+        (is (= "{\"hooks\":{}}" (:settings @seen))))
       (finally (fs/delete-tree tmp)))))
 
 (deftest launch!-captures-session-id-and-exits-clean

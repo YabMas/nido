@@ -210,6 +210,7 @@
                                      :system-prompt     (str (:briefing lc) "\n\n" (:run-paths lc))
                                      :mcp-config        (:mcp-config lc)
                                      :add-dirs          (:add-dirs lc)
+                                     :settings          (:settings lc)
                                      :budget            (-> run :limits :budget)
                                      :claude-session-id sid}))
                    (catch Throwable t {:spawn-error true :detail (.getMessage t)})))

@@ -6,6 +6,7 @@
    [babashka.fs :as fs]
    [babashka.process :as p]
    [cheshire.core :as json]
+   [nido.session.commit-gate :as commit-gate]
    [nido.session.launcher :as launcher]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as state]
@@ -52,14 +53,18 @@
    `:prompt-file` is read now and becomes the first turn. It goes straight after
    the binary because `--add-dir` takes every argument up to the next flag, so a
    prompt placed last would be read as one more directory. `:permission-mode`
-   and `:model` are claude's own, passed through unchecked."
+   and `:model` are claude's own, passed through unchecked. The commit gate
+   goes in as `--settings` because the worktree's own settings are the
+   project's, and the session home's — where the launcher installs it — are
+   not read from here."
   [{:keys [project session worktree instance-id]}
    {:keys [claude-bin name prompt-file permission-mode model] :or {claude-bin "claude"}}]
   (let [briefing (launcher/session-briefing project session instance-id)
         mcp      (state/session-mcp-path instance-id)
         cmd      (cond-> [claude-bin]
                    prompt-file      (conj (slurp (str prompt-file)))
-                   :always          (into ["--append-system-prompt" briefing])
+                   :always          (into ["--append-system-prompt" briefing
+                                           "--settings" (commit-gate/settings-json)])
                    name             (into ["--name" (str name)])
                    permission-mode  (into ["--permission-mode" (str permission-mode)])
                    model            (into ["--model" (str model)])

@@ -83,6 +83,7 @@
                                  :resume?           true
                                  :mcp-config        (:mcp-config lc)
                                  :add-dirs          (:add-dirs lc)
+                                 :settings          (:settings lc)
                                  :budget            budget})]
       ;; launch! SIGTERM-kills on budget overrun but RETURNS normally with
       ;; :timed-out? — the catch never fires. Surface it as a resume error

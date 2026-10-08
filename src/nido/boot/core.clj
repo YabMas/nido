@@ -743,6 +743,7 @@
                                                                    "\n\n" (:run-paths lc))
                                            :mcp-config        (:mcp-config lc)
                                            :add-dirs          (:add-dirs lc)
+                                           :settings          (:settings lc)
                                            :budget            (-> run :limits :budget)
                                            :claude-session-id session-id}))
                          (catch Throwable t
@@ -763,6 +764,7 @@
                                                                    (:briefing lc) "\n\n" (:run-paths lc))
                                            :mcp-config        (:mcp-config lc)
                                            :add-dirs          (:add-dirs lc)
+                                           :settings          (:settings lc)
                                            :budget            (-> run :limits :budget)
                                            :claude-session-id session-id}))
                          (catch Throwable t
