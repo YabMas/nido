@@ -3534,6 +3534,17 @@
             "naming the stage already stored does not skip the vocabulary check")
         (is (empty? (workstream/entries-of :brian (:id w) :stage-set)) "and records no choice")))))
 
+(deftest an-issue-arrival-recorded-after-a-stage-choice-leaves-the-choice-standing
+  (with-tmp
+    (fn [_]
+      (let [w   (workstream/create! :brian {:stage :triaging :external-refs []})
+            row #(first (filter (comp #{(:id w)} :ws-id) (work/list-workstreams :brian)))]
+        (workstream/advance-stage! :brian (:id w) :ready :person)
+        (workstream/append-entry! :brian (:id w) {:kind :issue}
+                                  (pr-str {:format :issue :id "brian#1"}))
+        (is (= :ready (:stage (row)))
+            "the backfill records an issue's arrival after the stage chosen for it")))))
+
 (deftest a-queued-intake-stays-in-the-pen
   (with-tmp
     (fn [_]

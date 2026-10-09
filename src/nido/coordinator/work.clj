@@ -594,10 +594,11 @@
         ;; the choice OUT is not such work: the ship lane chooses :shipping and then records the
         ;; shipment it started, and that record is the choice being acted on, not the work moving
         ;; past it. Nor is a :note: it is an account, never work, and notion-sync writes one to explain
-        ;; each stage it sets.
+        ;; each stage it sets. Nor is an :issue: it records where the work came from, and the
+        ;; backfill appends it after a stage chosen long before it.
         carries (get stage-carried-by chosen #{})
         worked (:seq (last (remove #(or (cws/status-kinds (:kind %)) (carries (:kind %))
-                                        (= :note (:kind %)))
+                                        (#{:note :issue} (:kind %)))
                                    (:entries w))))
         holds? (and move
                     (contains? csession/lifecycle-stages chosen)
