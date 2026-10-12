@@ -296,6 +296,16 @@
                                                                             :needs "elsewhere"}]))))
         "a finding at another claim requested nothing of this one")))
 
+(deftest a-drop-at-a-claim-a-finding-objected-to-is-not-called-unasked
+  ;; Seen live: every drop at a refuted claim read "no finding at it this round asked it to", and
+  ;; the headline's weakenings were narrowings the judge had asked for.
+  (let [prev (with-evidence "src/a.clj:1" "src/out.clj:40")
+        curr (with-evidence "src/a.clj:1")
+        [r]  (retreat/baseline-retreats prev curr nil [{:claim-id "c7" :evidence ["src/a.clj:1"]}])]
+    (is (= "claim c7 no longer cites src/out.clj:40, and a finding at it this round objected to the claim"
+           (:detail r)))
+    (is (nil? (:answering r)) "it answers an objection, not a stated request")))
+
 (deftest evidence-the-judge-asked-to-move-and-the-amender-deleted-is-flagged
   ;; Seen live: the finding asked for three surfaces to be restated as bounded evidence or health,
   ;; and the amended record mentioned none of them anywhere — dropped, not relocated.

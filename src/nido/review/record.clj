@@ -1691,77 +1691,78 @@
         (seq unchecked) (assoc :unchecked unchecked)
         (seq unruled)   (assoc :unruled unruled)))))
 
+(def ^:private derivation-names
+  (into #{} (map name) derivation-keys))
+
 (defn- normalize-findings
-  "`raw` findings with their cites, kept only if they cite something. A finding's :check is kept
-   only if it is one of `asked` (default: any derivation of either era); a finding under any other
-   check is kept check-less, since the defect it names may be real whatever check it was filed under."
+  "`raw` findings, each kept only if it cites something and read on its own `blocks`, never on the
+   verdict beside it: an answer may carry a gap and a refutation together, and a verdict naming one
+   of them is no reason to strip the other's fields.
+
+   A finding whose `blocks` names a derivation is a gap, kept with :blocks and :needs only when
+   :needs says what the record would have to say. That pair is the whole bound on a gap: without
+   it a gap is the unbounded bucket `underscoped` was, and the round that produced twenty-four
+   non-repeating findings would simply produce them under a new name. One whose `blocks` names
+   something no round derives is dropped for the same reason. Any other finding — `blocks` \"none\",
+   blank or absent, which is every design finding — is a refutation, and keeps a non-blank :needs
+   as the repair its judge asked for.
+
+   A finding's :check is kept only if it is one of `asked` (default: any derivation of either era);
+   a finding under any other check is kept check-less, since the defect it names may be real
+   whatever check it was filed under."
   ([raw] (normalize-findings raw derivation-keys))
   ([raw asked]
    (into [] (keep (fn [f]
-                    (let [cites (into [] (remove str/blank?) (map str (:cites f)))]
-                      (when (seq cites)
+                    (let [cites  (into [] (remove str/blank?) (map str (:cites f)))
+                          blocks (str/trim (str (:blocks f)))
+                          gap?   (contains? derivation-names blocks)
+                          needs  (str/trim (str (:needs f)))]
+                      (when (and (seq cites)
+                                 (if gap?
+                                   (not (str/blank? needs))
+                                   (contains? #{"" "none"} blocks)))
                         (cond-> {:cites cites :claim (str (:claim f))}
-                      (not (str/blank? (str (:claim-id f))))
-                      ;; Stripped of the brackets the prompt renders around an id.
-                      ;; A judge shown `[engine-names-no-stage] the engine …` cites
-                      ;; it back with them, and an id that is sometimes bracketed
-                      ;; and sometimes not is no identity at all.
-                      (assoc :claim-id (str/replace (str/trim (str (:claim-id f)))
-                                                    #"^\[|\]$" ""))
-                      ;; Only one of the derivations the round asked. A check named in the answer's
-                      ;; underscore spelling is the same check; anything else ties the finding
-                      ;; to nothing, and is dropped rather than kept as a check the round never derived.
-                      (some #{(keyword (str/replace (str/trim (str (:check f))) "_" "-"))}
-                            asked)
-                      (assoc :check (keyword (str/replace (str/trim (str (:check f))) "_" "-")))
+                          gap?
+                          (assoc :blocks (keyword blocks))
+                          (not (str/blank? needs))
+                          (assoc :needs needs)
+                          (not (str/blank? (str (:claim-id f))))
+                          ;; Stripped of the brackets the prompt renders around an id.
+                          ;; A judge shown `[engine-names-no-stage] the engine …` cites
+                          ;; it back with them, and an id that is sometimes bracketed
+                          ;; and sometimes not is no identity at all.
+                          (assoc :claim-id (str/replace (str/trim (str (:claim-id f)))
+                                                        #"^\[|\]$" ""))
+                          ;; Only one of the derivations the round asked. A check named in the answer's
+                          ;; underscore spelling is the same check; anything else ties the finding
+                          ;; to nothing, and is dropped rather than kept as a check the round never derived.
+                          (some #{(keyword (str/replace (str/trim (str (:check f))) "_" "-"))}
+                                asked)
+                          (assoc :check (keyword (str/replace (str/trim (str (:check f))) "_" "-")))
                           (seq (:evidence f))
                           (assoc :evidence (mapv str (:evidence f)))
                           (true? (:for_person f))
                           (assoc :for-person true))))))
          raw)))
 
-(def ^:private derivation-names
-  (into #{} (map name) derivation-keys))
-
-(defn- normalize-blocked
-  "An insufficient finding, kept only if it names a derivation it blocks and what
-   the baseline would have to say. Those two are the bound: without them
-   `insufficient` is the unbounded bucket `underscoped` was, and the round that
-   produced twenty-four non-repeating findings would simply produce them under a
-   new name."
-  [raw]
-  (into []
-        (keep (fn [f]
-                (let [blocks (str (:blocks f))
-                      cites  (into [] (remove str/blank?) (map str (:cites f)))]
-                  ;; "none" is what a FALSIFIED finding carries — strict output
-                  ;; mode requires every property on every finding, so the field
-                  ;; exists on both kinds and this is where it means something.
-                  (when (and (derivation-names blocks)
-                             (seq cites)
-                             (not (str/blank? (str (:needs f)))))
-                    (cond-> {:blocks (keyword blocks)
-                             :cites  cites
-                             :claim  (str (:claim f))
-                             :needs  (str (:needs f))}
-                      (seq (:evidence f)) (assoc :evidence (mapv str (:evidence f)))
-                      (not (str/blank? (slug (:claim-id f)))) (assoc :claim-id (slug (:claim-id f)))))))
-              raw)))
-
 (defn ^{:malli/schema [:=> [:cat :string :any] :map]}
   parse-baseline-review
   "Codex JSON -> a :baseline-review ledger record, or nil when the answer is
    unusable. nil is a non-answer, never a fabricated :sufficient — the caller
-   records nothing rather than inventing trust."
+   records nothing rather than inventing trust.
+
+   A non-sufficient verdict is read off the findings that survive, not taken from the judge: any
+   refutation makes it :falsified, and gaps alone :insufficient. The judge names one failure for an
+   answer that may carry both, and a record with one claim refuted is not a true one."
   [json-str baseline-seq]
   (try
     (let [m (json/parse-string json-str true)
-          v (keyword (str (:verdict m)))]
-      (when (#{:sufficient :falsified :insufficient} v)
-        (let [findings (case v
-                         :falsified    (normalize-findings (:findings m))
-                         :insufficient (normalize-blocked (:findings m))
-                         [])]
+          said (keyword (str (:verdict m)))]
+      (when (#{:sufficient :falsified :insufficient} said)
+        (let [findings (if (= :sufficient said) [] (normalize-findings (:findings m)))
+              v        (cond (= :sufficient said)                said
+                             (some (complement :blocks) findings) :falsified
+                             :else                                :insufficient)]
           ;; A non-sufficient verdict with nothing usable behind it is exactly the
           ;; theatre this round guards against — read it as no answer.
           (when (or (= :sufficient v) (seq findings))
@@ -4128,8 +4129,8 @@
    every property IS true and a named derivation still cannot be made. An amender
    handed the second under the first's wording corrects a claim that was already
    right — and the fields that say which it is, :blocks and :needs, were on the
-   record and printed nowhere. Only the gap branch is new; the refutation wording
-   is the one that converged and is left alone.
+   record and printed nowhere. A round carrying both is a refutation round, and its gaps are
+   listed among the refutations under their own :blocks and :needs.
 
    `refuted-running` is what `refuted-running` counts over the baseline's own
    lineage of reviews, this round's included. A refuted claim it counts at `withdrawable-after` or more has already
@@ -4141,7 +4142,9 @@
    a claim on offer the same way. A round that found nothing else was judged sufficient,
    which the opening says rather than calling it a refutation."
   [{:keys [baseline findings out-path stance declared? check-cmd settled refuted-running]}]
-  (let [gaps?    (boolean (some :blocks findings))
+  (let [gaps?    (boolean (and (some :blocks findings)
+                                (every? #(or (:blocks %) (:unsettled %)) findings)))
+        mixed?   (boolean (and (not gaps?) (some :blocks findings)))
         unruled? (and (seq findings) (every? :unsettled findings))
         spent    (withdrawable baseline findings refuted-running)
         offered  (merge (unsettled-claims baseline findings) spent)]
@@ -4251,6 +4254,7 @@
    (cond
      gaps?    "\n\nWHAT THE JUDGE COULD NOT DERIVE — numbered, and you answer them by number:\n\n"
      unruled? "\n\nWHAT NO JUDGE COULD RULE ON — numbered, and you answer them by number:\n\n"
+     mixed?   "\n\nWHAT THE JUDGE REFUTED, AND WHAT IT COULD NOT DERIVE — numbered, and you answer\nthem by number:\n\n"
      :else    "\n\nWHAT THE JUDGE REFUTED — numbered, and you answer them by number:\n\n")
    (str/join
     "\n\n"
@@ -4276,7 +4280,8 @@
 
               :else
               (str "refutes: " (str/join "; " (:cites f)) "\n"
-                   "   claim:   " (:claim f)))
+                   "   claim:   " (:claim f)
+                   (when-let [n (:needs f)] (str "\n   needs:   " n))))
             (when (seq (:evidence f))
               (str "\n   evidence: " (str/join ", " (:evidence f))))
             (when-let [n (and (not (:blocks f)) (not (:unsettled f)) (get spent (:claim-id f)))]

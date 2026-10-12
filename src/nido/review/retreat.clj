@@ -176,11 +176,13 @@
    alike in the headline.
 
    `needs` is `{claim-id [needs]}`, the `:needs` of every finding at that claim this round; a
-   retreat with one carries them as `:answering`. `elsewhere` is every place the new record cites
+   retreat with one carries them as `:answering`. `found` is every claim id a finding this round
+   named, needs or none: a drop at one of them answers an objection, and only a drop at a claim
+   nobody found against is one nobody asked for. `elsewhere` is every place the new record cites
    anywhere at all, health and prose included: a place still in it was moved out of the claim,
    not removed. A place in none of it, at a claim whose finding asked for evidence to be
    relocated, is `:relocation-dropped?` — the amender deleted what it was told to move."
-  [{:keys [claim-id citation places]} needs elsewhere]
+  [{:keys [claim-id citation places]} needs found elsewhere]
   (let [asked     (get needs claim-id)
         removed?  (not-every? (fn [loc] (some #(covers? % loc) elsewhere)) places)
         relocate? (and removed? (some #(re-find relocation-asked %) asked))
@@ -201,6 +203,10 @@
                     (seq asked)
                     (str "claim " claim-id " no longer cites " where
                          " — narrowed at its finding's request: " (str/join " / " asked))
+
+                    (found claim-id)
+                    (str "claim " claim-id " no longer cites " where
+                         ", and a finding at it this round objected to the claim")
 
                     :else
                     (str "claim " claim-id " no longer cites " where
@@ -331,6 +337,7 @@
                             {} findings))
          judged    (by-claim :evidence)
          needs     (by-claim :needs)
+         found     (into #{} (keep #(not-empty (str (:claim-id %)))) findings)
          elsewhere (into [] (comp (filter string?) (mapcat locations))
                          (tree-seq coll? seq curr))
          prev (as-survey prev)
@@ -402,7 +409,7 @@
        (for [id (sort unveiled)]
          (retreat :veto-lifted
                   (str "observation " id " was invisibly-incomplete? and no longer is")))
-       (map #(dropped-evidence % needs elsewhere) ev-gone)
+       (map #(dropped-evidence % needs found elsewhere) ev-gone)
        (emptied prev curr))))))
 
 ;; ── Design ──────────────────────────────────────────────────────────────────

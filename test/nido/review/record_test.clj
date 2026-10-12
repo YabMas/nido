@@ -736,12 +736,12 @@
   ;; against a real area a judge finds true things to add forever — five rounds
   ;; of exactly that produced twenty-four findings without one repeating. There
   ;; are four derivations, so there are four ways to be insufficient.
-  (is (nil? (record/parse-baseline-review
-             (baseline-json {:verdict "insufficient" :reason "could say more"
-                             :findings [{:blocks "none" :cites ["a claim"]
-                                         :claim "the cache is not mentioned"
-                                         :needs "mention the cache" :evidence []}]})
-             3))
+  (is (not-any? :blocks (:findings (record/parse-baseline-review
+                                     (baseline-json {:verdict "insufficient" :reason "could say more"
+                                                     :findings [{:blocks "none" :cites ["a claim"]
+                                                                 :claim "the cache is not mentioned"
+                                                                 :needs "mention the cache" :evidence []}]})
+                                     3)))
       "'none' is what a falsified finding carries; it cannot make a gap")
   (is (nil? (record/parse-baseline-review
              (baseline-json {:verdict "insufficient" :reason "could say more"
@@ -749,6 +749,46 @@
                                          :claim "x" :needs "y" :evidence []}]})
              3))
       "a derivation nobody derives"))
+
+(deftest each-finding-keeps-its-own-fields-whatever-the-verdict
+  ;; Seen in seven runs: a falsified answer lost every :needs and :blocks, so a gap read as a
+  ;; refutation and the amender never saw what the judge asked it to say.
+  (let [refute {:claim-id "c1" :blocks "none" :cites ["a claim"] :claim "the store opens no transaction"
+                :needs "name the callers that open the serializable transaction"
+                :evidence ["src/store.clj:12"]}
+        gap    {:claim-id "c2" :blocks "relation-honest" :cites ["another"] :claim "the door is unnamed"
+                :needs "name the door that owns admission" :evidence []}
+        r      (record/parse-baseline-review
+                (baseline-json {:verdict "falsified" :reason "r" :confirmed [] :findings [refute gap]}) 3)
+        [f g]  (:findings r)]
+    (is (= :falsified (:verdict r)))
+    (is (= "name the callers that open the serializable transaction" (:needs f))
+        "the refutation's repair reaches the amender and the retreat detector")
+    (is (nil? (:blocks f)) "'none' makes a refutation, never a gap")
+    (is (= [:relation-honest "name the door that owns admission" "c2"]
+           ((juxt :blocks :needs :claim-id) g))
+        "a gap under a falsified verdict is still a gap: it blocks a derivation and refutes nothing")
+    (is (= r (report/validate-event :baseline-review r))
+        "a falsified review carrying a gap is one the ledger accepts"))
+  (let [r (record/parse-baseline-review
+           (baseline-json {:verdict "insufficient" :reason "r" :confirmed []
+                           :findings [{:claim-id "c1" :blocks "none" :cites ["a claim"]
+                                       :claim "x is false" :needs "" :evidence []}
+                                      {:claim-id "c2" :blocks "goal-served" :cites ["b"]
+                                       :claim "y" :needs "say z" :evidence []}]})
+           3)]
+    (is (= :falsified (:verdict r))
+        "a refutation under an insufficient verdict is kept, and makes the record falsified")
+    (is (= 2 (count (:findings r))))
+    (is (= r (report/validate-event :baseline-review r))))
+  (let [r (record/parse-baseline-review
+           (baseline-json {:verdict "falsified" :reason "r" :confirmed []
+                           :findings [{:claim-id "c2" :blocks "stratified" :cites ["b"]
+                                       :claim "y" :needs "say z" :evidence []}]})
+           3)]
+    (is (= :insufficient (:verdict r))
+        "an answer left with only gaps found the record true and short, whatever verdict it named")
+    (is (= r (report/validate-event :baseline-review r)))))
 
 (deftest an-insufficient-finding-must-say-what-would-fix-it
   (is (nil? (record/parse-baseline-review

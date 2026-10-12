@@ -1093,6 +1093,26 @@
     (is (str/includes? p "CHANGE ONLY WHAT WAS REFUTED"))
     (is (not (str/includes? p "blocks:")))))
 
+(deftest a-refutations-repair-is-in-front-of-the-amender
+  ;; Seen in seven runs: the judge's needs on a refutation never reached the amender, which then
+  ;; answered half of what was asked, and the same claim came back refuted a round or two later.
+  (let [p (record/amend-prompt {:baseline a-baseline
+                                :findings [(assoc a-finding :needs "state the boundary's own contract")]
+                                :out-path "/x"})]
+    (is (str/includes? p "   needs:   state the boundary's own contract")
+        "an amender never shown the requested repair can only guess at it")))
+
+(deftest a-round-with-a-gap-beside-a-refutation-is-a-refutation-round
+  ;; A record with one claim refuted is not a true one, so the round must not open by telling the
+  ;; amender the judge found it true — but the gap keeps its own blocks and needs.
+  (let [p (record/amend-prompt {:baseline a-baseline :findings [a-finding a-gap] :out-path "/x"})]
+    (is (str/includes? p "refuted part of it"))
+    (is (not (str/includes? p "found the baseline TRUE")))
+    (is (str/includes? p "WHAT THE JUDGE REFUTED, AND WHAT IT COULD NOT DERIVE"))
+    (is (str/includes? p "2. blocks:  decomposable")
+        "the gap is still shown as a gap, so the amender adds for it rather than correcting")
+    (is (str/includes? p "what the invoice renderer hides"))))
+
 (deftest the-amend-prompt-offers-the-objection-route-and-names-its-worst-abuse
   (let [p (record/amend-prompt {:baseline a-baseline :findings [a-finding]
                                 :out-path "/run/a.edn"})]

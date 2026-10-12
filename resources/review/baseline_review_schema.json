@@ -106,7 +106,7 @@
           },
           "needs": {
             "type": "string",
-            "description": "On an INSUFFICIENT finding: what the survey would have to say for the blocked derivation to be makeable — the specific missing claim, not 'more detail'. Empty string on a falsified finding."
+            "description": "On an INSUFFICIENT finding: what the survey would have to say for the blocked derivation to be makeable — the specific missing claim, not 'more detail'. On a FALSIFIED finding: what the claim would have to say to be true, or an empty string."
           },
           "evidence": {
             "type": "array",

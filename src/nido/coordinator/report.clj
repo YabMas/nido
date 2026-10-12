@@ -2449,7 +2449,10 @@
    Absent, the finding is a derivable defect, which the round repairs before the person is asked.
 
    :claim-paired marks a :claim-id the judge did not give: nido paired the finding with the one
-   claim its prose names. Read it as nido's attribution, not the judge's."
+   claim its prose names. Read it as nido's attribution, not the judge's.
+
+   :needs, on a baseline refutation, is the repair its judge asked for — what the claim would have
+   to say to be true. It is what tells a narrowing the amender was asked for from one it chose."
   [:map {:closed true}
    [:claim-id   {:optional true} string?]
    [:claim-paired {:optional true} [:= true]]
@@ -2458,6 +2461,7 @@
    [:cites      [:vector {:min 1} string?]]
    [:claim      string?]
    [:evidence   {:optional true} [:vector string?]]
+   [:needs      {:optional true} string?]
    [:for-person {:optional true} [:= true]]])
 
 (def derivations
@@ -2650,7 +2654,9 @@
                        (concat common [[:verdict [:= verdict]]] extra)))]
     [:multi {:dispatch :verdict}
      [:sufficient   (shape :sufficient)]
-     [:falsified    (shape :falsified    [:findings [:vector {:min 1} RecordFinding]])]
+     ;; A falsified review may carry gaps beside its refutations; an insufficient one carries
+     ;; only gaps, since one refutation makes the review falsified.
+     [:falsified    (shape :falsified    [:findings [:vector {:min 1} [:or BlockedFinding RecordFinding]]])]
      [:insufficient (shape :insufficient [:findings [:vector {:min 1} BlockedFinding]])]]))
 
 (def BaselineReviewLegacy
