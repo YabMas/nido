@@ -319,6 +319,9 @@
                                prompts/composition-manifest-note
                                (prompts/manifest-block manifest)))]
         (spit schema-path (schema-json (some? composed)))
+        ;; The reviewer is handed the prompt on stdin, so its transcript opens on an empty user
+        ;; turn: without this file, which variant a reviewer was given cannot be read from the run.
+        (spit (str (fs/path dir (artifact-name label iter "-prompt.txt"))) prompt)
         (let [{:keys [exit judged-by unavailable] ran-log :log-path}
               (codex/run-reviewer! {:reviewer reviewer :cwd cwd :schema-path schema-path
                                     :out-path out-path :log-path log-path

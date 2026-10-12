@@ -305,8 +305,7 @@
                                    (when (= "ok" (:status w)) w)))
                           last :standing
                           (mapv #(select-keys % [:what :why-no-finding])))
-        design  (some->> (:rounds pre) (mapcat :phases)
-                         (filter #(= "review" (:phase %))) (keep :design-seq) last)
+        design  (report/judged-design-seq pre)
         where   (stopped pre final)]
     (cond-> {:format             :review-report
              :status             (keyword (:status post))
@@ -343,14 +342,45 @@
      (try (.isAfter (java.time.Instant/parse last-at) (java.time.Instant/parse started-at))
           (catch Exception _ true)))))
 
+(def ^:private design-seq-stamped-from
+  "When a review phase started carrying the :design-seq its reviewers judged against. A report of a
+   run started before then names no design whatever it judged under, so its absence there is not
+   evidence that the run captured none."
+  (Instant/parse "2026-09-29T20:14:15Z"))
+
+(defn- design-before
+  "The :seq of the newest :design entry on `ws-id` written before `started-at` — the design a run
+   started then read at its first round — or nil when there is none or a date cannot be read."
+  [project ws-id started-at]
+  (try
+    (let [start (Instant/parse (str started-at))]
+      (some->> (ws/entries-of project ws-id :design)
+               (filter #(some-> (:at %) str Instant/parse (.isBefore start)))
+               (keep :seq) seq (apply max)))
+    (catch Exception _ nil)))
+
+(defn- unstamped-design
+  "The design a run from before `design-seq-stamped-from` judged under, for an `entry` that names
+   none: `design-before` its start. nil for a later run, whose silence means it captured none."
+  [entry project ws-id started-at]
+  (when (and (nil? (:design entry)) project ws-id)
+    (when-let [start (try (Instant/parse (str started-at)) (catch Exception _ nil))]
+      (when (.isBefore start design-seq-stamped-from)
+        (design-before project ws-id started-at)))))
+
 (defn- append-settled!
   "Offer the settled run's entry to the workstream it reviewed, and say what
    happened, in `report/with-review-entry`'s shape. Nothing here throws.
 
    `:superseded` is the one answer peculiar to a settled run — see
-   `newer-review?`."
+   `newer-review?`. An entry naming no design from a run older than the stamp
+   cites the design it started under (`unstamped-design`) rather than being
+   refused as :no-design: it judged under one, and could not say so."
   [entry {:keys [reviewed-project reviewed-ws-id]} started-at]
-  (let [project (some-> reviewed-project keyword)]
+  (let [project (some-> reviewed-project keyword)
+        entry   (if-let [d (unstamped-design entry project reviewed-ws-id started-at)]
+                  (assoc entry :design {:seq d})
+                  entry)]
     (if-not (and project reviewed-ws-id)
       {:ledger :no-workstream}
       (try

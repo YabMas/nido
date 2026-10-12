@@ -173,6 +173,24 @@
         (is (= 1 (count findings)))
         (is (= "incorrect" overall-correctness))))))
 
+(deftest review!-keeps-the-prompt-each-reviewer-was-given
+  ;; document-structure: the reviewer's transcript opens on an empty user turn — the prompt goes
+  ;; on stdin — so which variant a second reader was given could not be read from the run.
+  (let [tmp (str (fs/create-temp-dir))
+        given (atom nil)]
+    (with-redefs [jj/jj!         (fn [_dir & args]
+                                   (if (= "diff" (first args))
+                                     {:exit 0 :out "src/x.clj\n" :err ""}
+                                     {:exit 0 :out "BASEREV\n" :err ""}))
+                  cstate/run-dir (fn [_] tmp)
+                  codex/run-codex! (fn [opts]
+                                     (reset! given (:prompt opts))
+                                     (spit (str (fs/path tmp "section-tree-round-2-out.json")) sample-output)
+                                     {:exit 0})]
+      (pass/review! {:cwd "/w" :from "BASEREV" :run-id "r1" :label "section-tree" :iter 2})
+      (is (some? @given))
+      (is (= @given (slurp (str (fs/path tmp "section-tree-round-2-prompt.txt"))))))))
+
 (deftest review!-throws-on-codex-failure
   (let [tmp (str (fs/create-temp-dir))]
     (with-redefs [jj/jj!           (fn [_ & _] {:exit 0 :out "diff --git a/x b/x" :err ""})

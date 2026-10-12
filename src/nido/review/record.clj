@@ -1175,26 +1175,65 @@
        (not= (relation granted) (relation design))      (assoc :relation {:granted (relation granted)
                                                                           :now     (relation design)})))))
 
+(def ^:private subject-fields
+  "The record fields `subject-delta` reads as subjects rather than as :also-changed — what
+   `settled/subjects` reads, and the baseline citation. :model counts only for its claims and
+   elements; the rest of it is compared like any other field."
+  #{:load-bearing :modules :health :shape :composition :baseline})
+
+(def ^:private unauthored-fields
+  "Record fields every amendment changes whatever it repaired: the ledger's stamps and the
+   :supersedes the loop writes. In :also-changed they would name every amendment alike."
+  #{:seq :at :supersedes})
+
+(defn- field-changes
+  "Per field, `{:was :now}` where subject content `was` and `is` differ: field by field when each
+   side is one map, else the whole content under :value — a :shape is a string, and an id a claim
+   and an element share is two things at once."
+  [was is]
+  (if (and (= 1 (count was) (count is)) (map? (first was)) (map? (first is)))
+    (let [[a b] [(first was) (first is)]]
+      (into (sorted-map)
+            (keep (fn [k] (when (not= (get a k) (get b k)) [k {:was (get a k) :now (get b k)}])))
+            (distinct (concat (keys a) (keys b)))))
+    {:value {:was (if (= 1 (count was)) (first was) was)
+             :now (if (= 1 (count is)) (first is) is)}}))
+
 (defn- subject-delta
   "Which subjects (`settled/subjects`) an amendment `record` adds, changes and drops against `prev`,
-   the record it repairs, by id — only the non-empty of the three, and nil when it moves none. A
-   subject whose text an amendment left alone is still settled next round; these are the ones the
-   next judge is asked about again.
+   the record it repairs, by id, and what else it rewrote — only the non-empty keys, and nil when it
+   moves nothing. A subject whose text an amendment left alone is still settled next round; :added
+   :changed and :dropped are the ones the next judge is asked about again.
 
    A design's :baseline citation — its relation and :breaks — counts as one more subject, keyed
    \"baseline\", because extending :breaks is how an amendment repairs relation-honest and a delta
    without it reports that repair as no change. It is here and not in `settled/subjects`, which
-   decides what a judge owes a ruling on: the citation is judged by relation-honest, never by id."
+   decides what a judge owes a ruling on: the citation is judged by relation-honest, never by id.
+
+   :fields is each changed subject's `field-changes` — the clause an amendment dropped from an
+   :interface is otherwise found by diffing two answer files. :also-changed is every other
+   record-level field whose value moved (:phases, :rejected, :seams, :routes, :open, :summary, the
+   rest of :model), sorted: an amendment whose substance is there moves no subject, and a delta
+   without it reports that repair as no change. Neither is a subject — no judge owes them a ruling."
   [prev record]
   (let [with-citation #(cond-> (settled/subjects %)
                          (some? (:baseline %)) (update "baseline" (fnil conj []) (:baseline %)))
-        was (with-citation prev)
-        is  (with-citation record)]
+        was     (with-citation prev)
+        is      (with-citation record)
+        changed (vec (sort (filter #(and (was %) (not= (was %) (is %))) (keys is))))
+        rest-of (fn [r] (let [m (not-empty (dissoc (:model r) :claims :elements))]
+                          (cond-> (apply dissoc r :model (concat subject-fields unauthored-fields))
+                            m (assoc :model m))))
+        [rp rr] [(rest-of prev) (rest-of record)]
+        also    (vec (sort (filter #(not= (get rp %) (get rr %))
+                                   (distinct (concat (keys rp) (keys rr))))))]
     (not-empty
      (into {} (filter (comp seq val))
-           {:added   (vec (sort (remove was (keys is))))
-            :changed (vec (sort (filter #(and (was %) (not= (was %) (is %))) (keys is))))
-            :dropped (vec (sort (remove is (keys was))))}))))
+           {:added        (vec (sort (remove was (keys is))))
+            :changed      changed
+            :dropped      (vec (sort (remove is (keys was))))
+            :fields       (into (sorted-map) (map (fn [id] [id (field-changes (was id) (is id))])) changed)
+            :also-changed also}))))
 
 (declare lineage-of loop-why-prefix)
 
@@ -2625,7 +2664,11 @@
    them apart draws the wrong conclusion from the same blank line.
 
    `:schema`, the schema's JSON text, replaces `kind`'s for a round whose answer is shaped by what it
-   was shown; `kind` still names the parse."
+   was shown; `kind` still names the parse.
+
+   The prompt goes beside the answer as `<label>-prompt.txt`: the judge is handed it on stdin, so
+   neither transcript holds it, and what a judge was told about grants and earlier asks is otherwise
+   only re-derivable from the source at the machinery's revision."
   [{:keys [cwd run-id kind prompt label reviewer schema]}]
   (try
     (let [dir (cstate/run-dir run-id)
@@ -2638,12 +2681,14 @@
           n   (or label (name kind))
           schema-path (str (fs/path dir (str n "-schema.json")))
           out-path    (str (fs/path dir (str n "-out.json")))
-          log-path    (str (fs/path dir (str n ".log")))]
+          log-path    (str (fs/path dir (str n ".log")))
+          prompt      (str judge-reading prompt)]
       (spit schema-path (or schema (schemas kind)))
+      (spit (str (fs/path dir (str n "-prompt.txt"))) prompt)
       (let [{:keys [exit judged-by unavailable] ran-log :log-path}
             (codex/run-reviewer! {:reviewer reviewer :cwd cwd :schema-path schema-path
                                   :out-path out-path :log-path log-path
-                                  :prompt (str judge-reading prompt)})
+                                  :prompt prompt})
             who (name (:reviewer judged-by))]
         ;; :codex-failed names the outcome whichever reviewer ran: it is the
         ;; lanes' vocabulary for a judge that did not answer, and the detail is
@@ -4113,7 +4158,7 @@
    `:repeats` has one row per repeated identity: `:key`, `:moved?`, and when present `:anchors`,
    `:overlap` (the shared sites, anchors out) and `:fresh-cites`."
   [base-key ctx prior]
-  (when-let [prev (last (filter #(= (dec (:iter ctx)) (:iter %)) prior))]
+  (when-let [prev (last (filter #(and (= (dec (:iter ctx)) (:iter %)) (not (:quiet %))) prior))]
     (let [was     (group-by base-key (:findings prev))
           now     (group-by base-key (:findings ctx))
           rounds  (conj (vec prior) {:findings (:findings ctx)})
@@ -4153,7 +4198,8 @@
    iter otherwise. What `unfixable` counts attempts on (`attempt-key`), since an identity is a
    claim and four repaired counterexamples to one claim are not one repair failing four times."
   [base-key iter prior findings]
-  (let [prev   (last prior)
+  (let [prior  (remove :quiet prior)
+        prev   (last prior)
         rounds (conj (vec prior) {:findings findings})]
     (mapv (fn [f]
             (let [k      (base-key f)
@@ -5288,9 +5334,10 @@
   "What the report says about whether a round's confirmations can settle anything: how many subjects
    the judge owed a ruling on, and — when something it confirmed cannot settle — why not. `asked` is
    the set its prompt listed (`owed-rulings`, `decision-asked`), never every unsettled subject: the
-   report reads `:checks` against what the judge ruled on, so counting a subject it was never asked
-   about shows a gap no judge left. `reading` is the one taken as the judge launched, `record` what
-   the round returned.
+   report reads `:claims` against what the judge ruled on, so counting a subject it was never asked
+   about shows a gap no judge left — and :claims, not :checks, because a design decision's :checks
+   are its derivations, a different count on the same phase. `reading` is the one taken as the
+   judge launched, `record` what the round returned.
 
    :unbanked only over a round that confirmed something: one that confirmed nothing lost nothing,
    and saying it did sends a reader after a loss that never happened. When the tree had no
@@ -5300,7 +5347,7 @@
   [asked reading record]
   (let [lost (count (:confirmed record))
         why  (or (:unreadable reading) "no reason was recorded")]
-    (cond-> {:checks (count asked)}
+    (cond-> {:claims (count asked)}
       (and (pos? lost) (nil? (:code-identity reading)))
       (assoc :unbanked (str "no identity could be read for this tree (" why "), so the " lost
                             " subject(s) this round confirmed cannot settle")
@@ -5588,9 +5635,18 @@
    less what it declared unchecked, which a later reading has nothing to pair with — and the round
    it was read in, so an amendment is read a second time and not a third (`unread-amendment?`).
    Bounded: each such round is the other judge's, and pairs what the one before called sound, so it
-   recurs only for a subject the two keep ruling differently, and the engine's cap holds either way."
+   recurs only for a subject the two keep ruling differently, and the engine's cap holds either way.
+
+   The round goes into :history as `:quiet`, at its :iter: what the person reads of the run
+   (`trajectory`) would otherwise skip it, and a proceed a second reading overturned would vanish
+   from the account of how the decision was arrived at. Nothing that counts attempts or stalls
+   reads a quiet entry (`raised-since`, `record-round-veto`, the engine's `unfixable`)."
   [ctx subject record]
   (-> ctx
+      (update :history (fnil conj [])
+              (cond-> {:iter (:iter ctx) :findings [] :retreats [] :disputes [] :quiet true}
+                (seq (:read-once record))     (assoc :read-once (vec (:read-once record)))
+                (:amendment-read-once record) (assoc :amendment-read-once true)))
       (assoc :control :next-round
              :owes-reading (cond-> {:seq (:seq subject)}
                              (seq (:read-once record))      (assoc :read-once (vec (:read-once record)))
@@ -5734,13 +5790,34 @@
             (assoc ctx :record record :findings findings))))
        answer))))
 
+(defn- dispute-endings
+  "How this round ended each dispute the round before it raised, as `[{:claim :ended}]`, or nil
+   when it raised none: \"re-reported\" when a finding this round handed on or asked about keys the
+   same (`base-key`), \"unchecked\" when the judge declared the disputed claim unchecked, and
+   \"withdrawn\" when it did neither — the judge read the objection and let the finding go. The
+   last two look alike from the findings alone, which is all a report otherwise holds."
+  [base-key ctx c]
+  (when-let [ds (seq (:disputes (last (filter #(and (= (dec (:iter ctx)) (:iter %)) (not (:quiet %)))
+                                              (:history ctx)))))]
+    (let [now       (into #{} (map base-key) (concat (:findings c) (:asked-findings c)))
+          unchecked (into #{} (keep (comp not-empty str :id)) (get-in c [:record :unchecked]))]
+      (mapv (fn [{:keys [key claim]}]
+              {:claim (str claim)
+               :ended (cond (contains? now key) "re-reported"
+                            (some #(str/includes? (pr-str key) (pr-str %)) unchecked) "unchecked"
+                            :else "withdrawn")})
+            ds))))
+
 (defn- with-veto
   "`run` (a judge stage's :run), its ctx carrying `record-round-veto` over the findings it hands on
    — what the engine's :changed? reads off the same ctx and prior — as :veto, for the judge phase
-   to report."
+   to report; and, as :disputes-ended, how the round ended each dispute the last raised
+   (`dispute-endings`)."
   [base-key run]
   (fn [ctx]
-    (let [c (run ctx)]
+    (let [c     (run ctx)
+          ended (dispute-endings base-key ctx c)
+          c     (cond-> c ended (assoc :disputes-ended ended))]
       (if-let [v (and (seq (:findings c)) (record-round-veto base-key c (:history ctx)))]
         (assoc c :veto v)
         c))))
@@ -6057,11 +6134,16 @@
   trajectory
   "The run, as the human reading the escalated decision needs it. Rounds that
    found nothing and gave up nothing are still listed: a round that passed
-   quietly is evidence about the ones that did not."
+   quietly is evidence about the ones that did not. A `:quiet` round — one that
+   would have ended the run on a first reading and read again instead — is
+   listed as that. Each is numbered by the run's round (:iter), so a decision's
+   account and the report's rounds name the same round by the same number; a
+   history entry from before entries carried one is numbered by position."
   [history]
   (vec (map-indexed
-        (fn [i {:keys [findings asked retreats disputes amended?]}]
-          (cond-> {:round (inc i)}
+        (fn [i {:keys [iter findings asked retreats disputes amended? quiet]}]
+          (cond-> {:round (or iter (inc i))}
+            quiet (assoc :quiet true)
             (seq findings) (assoc :found (mapv design-finding-label findings))
             (seq asked) (assoc :asked (mapv design-finding-label asked))
             (some? amended?) (assoc :amended (boolean amended?))
@@ -6127,6 +6209,20 @@
              :when (= "judge" (some-> (:phase ph) name))
              :when (:identity-unreadable ph)]
          {:round (:round round) :why (:identity-unreadable ph)})))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :int]]}
+  readable-from
+  "The first round of a record run's report after its last `unreadable-rounds` round whose judge read
+   a tree identity, or nil — when no round was unreadable, or none after it read one. An unreadable
+   round's reason says no round can settle until the tree is read, which is false of the run once a
+   later round has read it."
+  [report]
+  (when-let [last-bad (:round (peek (unreadable-rounds report)))]
+    (first (for [round (:rounds report)
+                 :when (> (long (or (:round round) 0)) (long last-bad))
+                 ph    (:phases round)
+                 :when (and (= "judge" (some-> (:phase ph) name)) (:code-identity ph))]
+             (:round round)))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :map]}
   continued
@@ -6485,7 +6581,7 @@
       (not= (:design-seq (nth decisions i)) (:design-seq end)) {:cleared :amended}
       :else                                                    {:cleared :reread})))
 
-(defn ^{:malli/schema [:=> [:cat [:vector :map] [:? [:maybe [:set :string]]] [:? :any]] :map]}
+(defn ^{:malli/schema [:=> [:cat [:vector :map] [:? [:maybe [:set :string]]] [:? :any] [:? :any]] :map]}
   run-figures
   "What one record run's rounds did, from the entries it appended, in the ledger's order: its design
    decisions give each derived check's figures and each claim a finding named, and its baseline
@@ -6497,11 +6593,13 @@
                                         :alone n :at-end bool
                                         :filed n :cleared kind :moved-to [check]}}
                    :claims      {claim-id {:broken n :alone n :at-end bool :under {check n}}}
-                   :asks        {:rounds n :at-end bool}
+                   :asks        {:rounds n :at-end bool :carried n :proceeding n :backed n
+                                 :question str}
                    :strata      {stratum {:read n :fits n :widens n :misplaced n :not-a-level n :failed n}}
       :reviews   n :derivations {derivation {:broken n :alone n :at-end bool}}
                    :falsified   {claim-id n}
       :confirmed {id n}
+      :contradicted {id n}
       :owed      {id n}
       :judged-by {reviewer n}
       :unruled   {id n}
@@ -6538,15 +6636,24 @@
    filed under a check that broke with it.
 
    A gap is counted under the derivation it :blocks, whatever the review's verdict and whatever
-   claim it cites; :falsified counts the findings of a falsified review that block none.
+   claim it cites; :falsified counts the findings of a falsified review that block none, by the claim
+   each cites — and one that cites none under \"the record\", so the figures account for every
+   finding a round made, as `claims-named` does for a design.
 
    What a decision asked a person about is not a defect (`outstanding`): a check or claim the
    question is about carries :asked n and :asked-at-end beside :broken, and is never counted broken
    in that round, so a run that ended on a question does not read as one that ended unrepaired.
    :asks counts the decisions that recommended :ask, and says whether the last did — the one figure
-   for a round that asked and filed nothing the question could be keyed on.
+   for a round that asked and filed nothing the question could be keyed on. A decision carrying a
+   question on another recommendation stops for a person too — a proceed over a design that owes
+   one a grant, an amend asking once repaired — so beside them :carried counts every decision whose
+   :asks is non-blank, :proceeding the proceeds among them, :backed those that broke a check beside
+   the question, and :question is the last decision's own question when it proceeds carrying one:
+   the run then ends at a person, though no judge recommended :ask.
 
-   :confirmed counts, per subject, the judgements of either kind that confirmed it, and :owed the
+   :confirmed counts, per subject, the judgements of either kind that confirmed it — and
+   :contradicted, beside it, the read-once confirmations of it a later reading at the same tree
+   denied (`:contradicts-read-once`), so the confirmations that stood are the difference — and :owed the
    decisions that held it sound but not yet met at the tree they read — so a claim read every round
    is not absent from the figures because the build had not reached it. :judged-by counts
    judgements per reviewer that answered, a stand-in as `claude for codex`, so a comparison across
@@ -6583,11 +6690,17 @@
    `texts`, a fn from a judgement to the subjects of the record it read: the judgements carry the
    seq of what they read, not its words. Each present only when non-empty.
 
+   `amended`, when given, is the seqs of the records the run appended. One newer than its last
+   decision is an amendment no judge read: a check or claim that decision left broken is then
+   :amended-unjudged rather than :at-end — handed to an amender and never re-read, so not known
+   broken — and the figures say :amended-after with that seq.
+
    Read from the decisions rather than the run's report, because a decision holds every check's
    status and it outlives the run dir. Derived on every read; nothing stores it."
-  ([entries] (run-figures entries nil nil))
-  ([entries final] (run-figures entries final nil))
-  ([entries final texts]
+  ([entries] (run-figures entries nil nil nil))
+  ([entries final] (run-figures entries final nil nil))
+  ([entries final texts] (run-figures entries final texts nil))
+  ([entries final texts amended]
   (let [decisions (filterv #(= :design-decision (:format %)) entries)
         reviews   (filterv #(= :baseline-review (:format %)) entries)
         judgements (concat decisions reviews)
@@ -6601,6 +6714,12 @@
         spent-end (:spent (last (sort-by :seq judgements)))
         relation-unruled (frequencies (mapcat :relation-unruled decisions))
         confirmed (frequencies (mapcat :confirmed judgements))
+        contradicted (frequencies (mapcat #(map :id (:contradicts-read-once %)) judgements))
+        last-seq  (some->> decisions (keep :seq) seq (apply max))
+        amended-after (when last-seq (some->> amended (filter #(> (long %) (long last-seq))) seq (apply max)))
+        unjudged  (fn [row] (if (and amended-after (:at-end row))
+                              (assoc row :at-end false :amended-unjudged true)
+                              row))
         owed      (frequencies (mapcat :owed decisions))
         overridden (frequencies (mapcat #(map :id (:overrides-settled %)) judgements))
         judges    (frequencies (keep (comp judge-name :judged-by) judgements))
@@ -6626,6 +6745,10 @@
                           {} named)
         filed     (fn [c] (count (filter (fn [d] (some #(= c (:filed-under %)) (:findings d))) decisions)))
         asking    (mapv #(= :ask (:recommend %)) decisions)
+        carrying  (filterv #(not (str/blank? (str (:asks %)))) decisions)
+        end-q     (let [d (peek decisions)]
+                    (when (and d (= :proceed (:recommend d)) (not (str/blank? (str (:asks d)))))
+                      (:asks d)))
         of-kind   (fn [kind] (into (sorted-map)
                                    (keep (fn [[[k v] figures]] (when (= kind k) [v figures])))
                                    defect-tally))
@@ -6636,6 +6759,8 @@
       (seq still)     (assoc :still-unchecked (vec (sort still)))
       (seq relation-unruled) (assoc :relation-unruled (into (sorted-map) relation-unruled))
       (seq confirmed) (assoc :confirmed (into (sorted-map) confirmed))
+      (seq contradicted) (assoc :contradicted (into (sorted-map) contradicted))
+      amended-after   (assoc :amended-after amended-after)
       (seq owed)      (assoc :owed (into (sorted-map) owed))
       (seq overridden) (assoc :settled-then-found (into (sorted-map) overridden))
       (seq judges)    (assoc :judged-by (into (sorted-map) judges))
@@ -6658,7 +6783,7 @@
                                                     :underivable (derived c :underivable)}
                                                    (get broken c {:broken 0 :alone 0 :at-end false}))
                                         n   (filed c)]
-                                    [c (cond-> row
+                                    [c (cond-> (unjudged row)
                                          (pos? n) (assoc :filed n)
                                          (and (some #(contains? (:broken %) [:check c]) open)
                                               (not (:at-end row)) (not (:asked-at-end row)))
@@ -6668,11 +6793,17 @@
       (assoc :claims (let [alone (of-kind :claim)]
                        (into (sorted-map)
                              (for [[id t] claim-tally]
-                               [id (cond-> (assoc t :alone (get-in alone [id :alone] 0))
+                               [id (cond-> (unjudged (assoc t :alone (get-in alone [id :alone] 0)))
                                      (get under id) (assoc :under (into (sorted-map) (get under id))))]))))
 
-      (some true? asking)
-      (assoc :asks {:rounds (count (filter true? asking)) :at-end (last asking)})
+      (or (some true? asking) (seq carrying))
+      (assoc :asks (cond-> {:rounds     (count (filter true? asking))
+                            :at-end     (boolean (last asking))
+                            :carried    (count carrying)
+                            :proceeding (count (filter #(= :proceed (:recommend %)) carrying))
+                            :backed     (count (filter #(some #{:broken} (vals (check-statuses %)))
+                                                       carrying))}
+                     end-q (assoc :question end-q)))
 
       (some :strata-read decisions)
       (assoc :strata (reduce (fn [acc {:keys [stratum verdict]}]
@@ -6688,8 +6819,8 @@
              :falsified   (into (sorted-map)
                                 (frequencies
                                  (for [r reviews :when (= :falsified (:verdict r))
-                                       f (:findings r) :when (and (:claim-id f) (nil? (:blocks f)))]
-                                   (:claim-id f)))))))))
+                                       f (:findings r) :when (nil? (:blocks f))]
+                                   (or (not-empty (str (:claim-id f))) "the record")))))))))
 
 (defn- numbered-line
   "One of `raised` as the amender's numbered line, over `findings`, the judge's findings it was

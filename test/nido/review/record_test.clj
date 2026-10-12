@@ -514,6 +514,22 @@
   {:format :design :summary "s" :shape "sh" :invariants ["i"]
    :standing {:relation :conforms} :effort :M})
 
+(deftest a-judge-round-keeps-the-prompt-it-sent
+  ;; document-structure: the decision prompt was not kept, unlike the amend prompt, so what a judge
+  ;; was told about grants and earlier asks was re-derived from the ledger by hand.
+  (let [tmp  (str (fs/create-temp-dir))
+        sent (atom nil)]
+    (with-redefs [cstate/run-dir (fn [_] tmp)
+                  codex/run-reviewer! (fn [{:keys [prompt out-path log-path]}]
+                                        (reset! sent prompt)
+                                        (spit out-path "{}")
+                                        {:exit 0 :log-path log-path :judged-by {:reviewer :codex}})]
+      (#'record/run-round! {:cwd "/w" :run-id "r" :kind :design-decision
+                            :label "design-decision-round-2" :prompt "rule on the claims"})
+      (is (str/ends-with? @sent "rule on the claims"))
+      (is (= @sent (slurp (str (fs/path tmp "design-decision-round-2-prompt.txt"))))
+          "the prompt beside the answer, as the judge received it"))))
+
 (deftest a-legacy-design-does-not-crash-the-prompt
   (let [p (record/design-prompt {:design legacy-design})]
     (is (string? p))
@@ -2326,3 +2342,21 @@
                                           {:format :design :seq 28 :baseline {:seq 21}})]
       (is (nil? (:premise (record/subject-at-start [:nido "ws-1"] :design nil)))
           "a design run's subject is the design; the premise question is the baseline run's"))))
+
+(deftest a-later-round-that-read-an-identity-is-named
+  (let [rep {:rounds [{:round 1 :phases [{:phase "judge" :identity-unreadable "stale"}]}
+                      {:round 2 :phases [{:phase "judge" :code-identity "d54d8bc5"}]}]}]
+    (is (= 2 (record/readable-from rep)))
+    (is (nil? (record/readable-from (update rep :rounds pop))) "none read after it")
+    (is (nil? (record/readable-from {:rounds [{:round 1 :phases [{:phase "judge" :code-identity "x"}]}]})))))
+
+(deftest a-dispute-ends-re-reported-unchecked-or-withdrawn
+  ;; structure-deadline: the report said a dispute was raised and never how the next round
+  ;; settled it — withdrawal was only a finding's absence.
+  (let [ended (fn [c] (#'record/dispute-endings :key
+                       {:iter 2 :history [{:iter 1 :disputes [{:key "a" :claim "a"} {:key "b" :claim "b"}
+                                                               {:key "c" :claim "c"}]}]}
+                       c))]
+    (is (= [{:claim "a" :ended "re-reported"} {:claim "b" :ended "unchecked"} {:claim "c" :ended "withdrawn"}]
+           (ended {:findings [{:key "a"}] :record {:unchecked [{:id "b"}]}})))
+    (is (nil? (#'record/dispute-endings :key {:iter 2 :history [{:iter 1 :disputes []}]} {})))))

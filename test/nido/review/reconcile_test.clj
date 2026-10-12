@@ -520,3 +520,24 @@
     (is (= :unknown (wrote? "{\"name\": \"Bash\", \"input\": {\"command\": \"python3 - <<PY\"}}")))
     (is (true? (wrote? "{\"name\": \"Bash\"} {\"name\": \"Edit\"}")))
     (is (false? (wrote? "{\"name\": \"Read\"}")))))
+
+(deftest a-settled-run-from-before-the-design-stamp-cites-the-design-it-started-under
+  ;; parse-cache: an orphan from 2026-09-24 was refused as :no-design though it judged against
+  ;; design 12; its machinery predated the per-round :design-seq it was held to.
+  (let [appended (atom [])
+        settle   (fn [started-at]
+                   (with-redefs [stages/last-review (fn [_ _] nil)
+                                 ws/read-ws (fn [_ _] {:id "ws-1" :entries [{:kind :design :seq 12}]})
+                                 ws/entries-of (fn [_ _ kind]
+                                                 (when (= :design kind)
+                                                   [{:seq 12 :at "2026-09-24T13:21:00Z"}
+                                                    {:seq 15 :at "2026-09-25T09:00:00Z"}]))
+                                 ws/append-entry! (fn [_ _ _ content] (swap! appended conj content) "/p")]
+                     (#'reconcile/append-settled! {:format :review-report :status :orphaned}
+                                                  {:reviewed-project "brian" :reviewed-ws-id "ws-1"}
+                                                  started-at)))]
+    (is (= :appended (:ledger (settle "2026-09-24T14:13:00Z"))))
+    (is (re-find #":design \{:seq 12\}" (first @appended))
+        "the newest design written before the run started is the one its first round read")
+    (is (= :no-design (:ledger (settle "2026-10-02T10:00:00Z")))
+        "a run after the stamp that names none captured none")))

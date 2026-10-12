@@ -137,9 +137,13 @@
   ;; shared with the record loops — and it is applied to the current round as
   ;; well as the prior ones: a round that attempts nothing must not be the round
   ;; the run gives up on either.
+  ;;
+  ;; A `:quiet` round is not one of them: it read again what the round before it read once, judged
+  ;; nothing worth handing on, and repaired nothing, so it neither extends a run of attempts nor
+  ;; breaks one. It is in the history only so a reader sees it happened.
   (let [runs  (map #(into #{} (comp (filter attempted?) (map attempt-key))
                           (:findings %))
-                   (take-last (dec unfixable-after) prior))]
+                   (take-last (dec unfixable-after) (remove :quiet prior)))]
     (when (= (count runs) (dec unfixable-after))
       (seq (distinct (keep (fn [f]
                              (when (and (attempted? f)

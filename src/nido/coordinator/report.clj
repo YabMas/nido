@@ -1878,6 +1878,15 @@
    ;; a person does.
    [:belongs-in  {:optional true} [:maybe string?]]])
 
+(def ReviewerAnswer
+  "A row the last run left owed that a reviewer of this run answered repaired: the row's id, the
+   evidence it gave, and the layer and round it answered in."
+  [:map {:closed true}
+   [:id       string?]
+   [:evidence string?]
+   [:by       {:optional true} string?]
+   [:round    {:optional true} int?]])
+
 (def ReviewReport
   "The review-loop outcome as one terminal ledger event (verdict + counts). Points
    at the full report.json rather than embedding it. `:at` is stamped by the ledger."
@@ -2024,6 +2033,9 @@
    ;; which for a run that ended holding a park is the only question there is.
    ;; Optional because a run with nothing open omits it rather than carrying [].
    [:open {:optional true} [:sequential ReviewFinding]]
+   ;; The rows the last run left owed that this run's reviewers answered repaired — why they are
+   ;; not in :open, and who closed them.
+   [:inherited-answered {:optional true} [:vector ReviewerAnswer]]
    ;; The decided-and-kept ones, in their own list for the same reason `:open`
    ;; exists: the count says a defect was kept, and only this says which one.
    ;; A decline is the entry here a later reader is most likely to want to argue
@@ -2797,9 +2809,11 @@
    identical either way.
 
    :asked is what the round found that was the person's — left out of :found, which is what the
-   round handed an amender."
+   round handed an amender. :quiet marks a round that would have ended the run on a first reading
+   and was read again instead; :round is the run's own round number."
   [:map {:closed true}
    [:round    int?]
+   [:quiet    {:optional true} boolean?]
    [:found    {:optional true} [:vector string?]]
    [:asked    {:optional true} [:vector string?]]
    [:amended  {:optional true} boolean?]
@@ -4489,11 +4503,12 @@
   [trajectory]
   (when (seq trajectory)
     (cons "\n## How this was arrived at"
-          (for [{:keys [round found amended weakened disputed]} trajectory]
+          (for [{:keys [round found amended weakened disputed quiet]} trajectory]
             (str "- **round " round "** — "
-                 (if (seq found)
-                   (str "found " (str/join ", " found))
-                   "nothing left to derive")
+                 (cond
+                   quiet       "would have ended on a first reading; read again"
+                   (seq found) (str "found " (str/join ", " found))
+                   :else       "nothing left to derive")
                  (when amended "; the record was amended")
                  (when (seq weakened)
                    (str "\n  - ⚠ weakened: " (str/join "; " weakened)))

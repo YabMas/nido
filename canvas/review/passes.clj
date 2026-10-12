@@ -421,9 +421,10 @@
     {:signature [:=> [:catn [:delta :map]] :string]})
   (Operation stack-since-last-review
     "The stack against the last :review entry on the workstream — that entry, its layers, the
-     delta and its line — or nil when no run has recorded one."
+     delta and its line — or nil when no run has recorded one. An entry from before entries kept
+     layers is read through its report while that lasts, and a base that moved since it is said."
     {:signature [:=> [:catn [:project [:maybe :keyword]] [:ws-id [:maybe :string]] [:cache :map]
-                             [:targets :any]]
+                             [:targets :any] [:base [:? :any]]]
                  [:maybe :map]]})
   (Operation round-correctness
     "The round's correctness verdict: the worst answer its reviewers gave, or nil when none

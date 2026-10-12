@@ -212,6 +212,10 @@
     "Each round of a record run's report whose confirmations could not settle because its tree had
      no identity, with why, read off the report."
     {:signature [:=> [:catn [:report [:maybe :map]]] [:vector :map]]})
+  (Operation readable-from
+    "The first round after a record run's last unreadable one whose judge read a tree identity, or
+     nil — what retires an unreadable round's `until then` in the headline."
+    {:signature [:=> [:catn [:report [:maybe :map]]] [:maybe :int]]})
   (Operation continued
     "What a record run continued of earlier readings and runs, read off its report's judge phases:
      per entry, the single confirmations its readings paired; each read-once confirmation a reading
@@ -235,10 +239,12 @@
      without ruling on is held to the `final` record's subjects when they are known. Per subject, its
      reading sequence; and, given `texts` — the subjects of the record each judgement read — how far
      a confirmation can be trusted: refutations after N sound readings of the same text at the same
-     tree, overturned confirmations, same-text splits and the run's flip rate. Pure over those
+     tree, overturned confirmations, same-text splits and the run's flip rate. Given `amended`, the
+     seqs of the records the run appended, a check or claim the last decision broke and an
+     amendment after it repaired is amended-unjudged rather than broken at the end. Pure over those
      entries, so the figures are derived on every read and stored nowhere."
     {:signature [:=> [:catn [:entries [:vector :map]] [:final [:? [:maybe [:set :string]]]]
-                  [:texts [:? :any]]] :map]})
+                  [:texts [:? :any]] [:amended [:? :any]]] :map]})
   (Operation outstanding
     "What one design decision leaves open, split by whose it is to close: the subjects broken for an
      amender, and on an :ask the subjects its question is about — outstanding, but a person's to

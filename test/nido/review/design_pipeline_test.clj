@@ -1017,14 +1017,32 @@
         [out _]  (with-amend {:writes (fn [p] (spit p (pr-str {:record extended})))}
                              (ctx :findings [(check :relation-honest :broken)]
                                   :record (decision :amend)))]
-    (is (= {:changed ["baseline"]} (:amend-delta out))
-        "the citation's change is named, under the key the report reads"))
+    (is (= {:changed ["baseline"]
+            :fields  {"baseline" {:breaks {:was ["p"] :now ["p" "q"]}}}}
+           (:amend-delta out))
+        "the citation's change is named, under the key the report reads, with what moved in it"))
   (testing "and an amendment that leaves the citation alone does not name it"
     (let [reworded (assoc a-design :shape "one rounding boundary, at the invoice")
           [out _]  (with-amend {:writes (fn [p] (spit p (pr-str {:record reworded})))}
                                (ctx :findings [(check :relation-honest :broken)]
                                     :record (decision :amend)))]
-      (is (= {:changed ["shape"]} (:amend-delta out))))))
+      (is (= ["shape"] (:changed (:amend-delta out))))
+      (is (= {"shape" {:value {:was "one rounding boundary" :now "one rounding boundary, at the invoice"}}}
+             (:fields (:amend-delta out)))
+          "a subject that is a sentence reports the sentence either side"))))
+
+(deftest an-amendment-names-what-it-rewrote-outside-every-subject
+  ;; impl-br-6005: an amendment whose substance was in :phases and :rejected reported
+  ;; {:changed ["shape"]}, and a phase repair moved no subject at all, so its delta read as no change.
+  (let [rephased (assoc a-design
+                        :phases [{:n 1 :habitable "every change to them is appended"}]
+                        :rejected ["a second rounding site"])
+        [out _]  (with-amend {:writes (fn [p] (spit p (pr-str {:record rephased})))}
+                             (ctx :findings [(check :relation-honest :broken)]
+                                  :record (decision :amend)))]
+    (is (= [:phases :rejected] (:also-changed (:amend-delta out)))
+        "a repair to the record outside its subjects is named, or the report says the round moved nothing")
+    (is (nil? (:changed (:amend-delta out))) "and no subject is claimed to have moved")))
 
 (deftest recut-and-amend-are-given-different-jobs
   (let [prompts (atom [])]
@@ -1631,6 +1649,52 @@
         "a claim is counted whatever check it is filed under, an underivable one included")
     (is (= 0 (get-in f [:checks :stratified :broken])) "and the check it named stays held")))
 
+(deftest a-proceed-carrying-a-question-is-counted-as-asking
+  ;; impl-br-5702: a proceed over a design owing a grant stopped for a person every round, and the
+  ;; figures read :asks {:rounds 1 :at-end false}; wider-activation printed no :asks at all.
+  (let [d (fn [recommend asks & checks]
+            (cond-> {:format :design-decision :recommend recommend :checks (vec checks)}
+              asks (assoc :asks asks)))
+        f (record/run-figures [(d :amend "lock risk or saving?" (check :goal-served :broken))
+                               (d :proceed "lock risk or saving?" (check :goal-served :held))
+                               (d :proceed "is the :revisit worth it?" (check :goal-served :held))])]
+    (is (= {:rounds 0 :at-end false :carried 3 :proceeding 2 :backed 1
+            :question "is the :revisit worth it?"}
+           (:asks f))
+        "how often a design stops at a person, not only how often a judge recommended :ask")))
+
+(deftest an-amendment-no-judge-read-is-not-broken-at-the-end
+  ;; commit-msg-gate: relation-honest was repaired by the amendment after the last decision and
+  ;; the figures still said :at-end true.
+  (let [f (record/run-figures [{:format :design-decision :seq 15 :recommend :amend
+                                :checks [(check :relation-honest :broken)]
+                                :findings [{:check :relation-honest :claim-id "c1" :claim "x"}]}]
+                              nil nil #{17})]
+    (is (= 17 (:amended-after f)))
+    (is (= {:at-end false :amended-unjudged true}
+           (select-keys (get-in f [:checks :relation-honest]) [:at-end :amended-unjudged])))
+    (is (= {:at-end false :amended-unjudged true}
+           (select-keys (get-in f [:claims "c1"]) [:at-end :amended-unjudged])))
+    (is (true? (get-in (record/run-figures [{:format :design-decision :seq 15 :recommend :amend
+                                             :checks [(check :relation-honest :broken)]}]
+                                           nil nil #{14})
+                       [:checks :relation-honest :at-end]))
+        "an amendment the last decision already read changes nothing")))
+
+(deftest a-confirmation-a-later-reading-denied-is-counted-beside-the-confirmations
+  ;; structure-deadline: :confirmed {set-store 3} beside :splits {set-store 1}, the R1 reading denied.
+  (let [f (record/run-figures [{:format :design-decision :confirmed ["set-store"]}
+                               {:format :design-decision :confirmed ["set-store"]
+                                :contradicts-read-once [{:id "set-store" :seq 3}]}])]
+    (is (= {"set-store" 2} (:confirmed f)))
+    (is (= {"set-store" 1} (:contradicted f)) "so the confirmations that stood are the difference")))
+
+(deftest a-claim-less-refutation-is-in-the-falsified-figures
+  ;; title-row-embeddings: two of six findings named no claim, and :falsified listed four.
+  (let [f (record/run-figures [{:format :baseline-review :verdict :falsified
+                                :findings [{:claim-id "c1" :claim "x"} {:claim "no strata declared"}]}])]
+    (is (= {"c1" 1 "the record" 1} (:falsified f)))))
+
 (deftest what-a-decision-asked-a-person-is-counted-asked-not-broken
   ;; A run that ended on a question read `broken at the end` exactly like one that ended on an
   ;; unrepaired defect, and an underivable check carrying the ask read as not outstanding at all.
@@ -1652,7 +1716,7 @@
         "an underivable check an :ask carries is what the run stopped on, so it is outstanding")
     (is (nil? (get-in f [:claims "the record"]))
         "a claim-less question is the ask itself, not a broken claim called `the record`")
-    (is (= {:rounds 1 :at-end true} (:asks f))
+    (is (= {:rounds 1 :at-end true} (select-keys (:asks f) [:rounds :at-end]))
         "a round that asked is counted whether or not it filed anything the question keys on")))
 
 (deftest outstanding-splits-the-amenders-from-the-persons
@@ -1933,6 +1997,25 @@
          (let [r2 (run record/design-judge-stage (ctx :carry (:carry r1)))]
            (is (= :proceed (:status r2)))
            (is (= :escalate (:control r2)))))))))
+
+(deftest a-quiet-reading-is-a-round-of-the-decisions-account
+  ;; agentic-rag: 'How this was arrived at' listed the amends as rounds 1 and 2 when the report had
+  ;; them in rounds 1 and 3, and the proceeds a re-read overturned were absent altogether.
+  (let [appended (atom [])
+        read     (assoc (decision :proceed :checks [(check :relation-honest :held)])
+                        :confirmed ["rounded-once"] :checked-at {"rounded-once" ["src/a.clj:1"]})]
+    (judging-a-model-design
+     read appended
+     (fn []
+       (let [r1 (run record/design-judge-stage (ctx :iter 3 :history [{:iter 2 :amended? true :findings []}]))]
+         (is (= {:iter 3 :quiet true :read-once ["rounded-once"]}
+                (select-keys (last (:history r1)) [:iter :quiet :amended? :read-once]))
+             "the quiet round enters the history at its own round number")
+         (let [r2 (run record/design-judge-stage (ctx :iter 4 :history (:history r1) :carry (:carry r1)))]
+           (is (= :proceed (:status r2)))
+           (is (= [{:round 2 :amended true} {:round 3 :quiet true}]
+                  (:trajectory (last @appended)))
+               "rounds are named by the run's number, and the quiet one is said, not skipped")))))))
 
 (deftest only-a-subject-the-judge-was-asked-to-confirm-is-read-once
   ;; A decision round asks for its claims by id and shows its elements as what they are about, so a

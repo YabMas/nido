@@ -185,7 +185,11 @@
    `:owed-reading` is what a run that ended :owed-second-reading still owed a second reading of —
    the whole of what it stopped on, since it stopped holding no finding. And
    `:ruled-not-dispatched` is the last warden's `fix` rulings no fixer was launched for, with the
-   sweep each was ordered with — see `ruled-not-dispatched`."
+   sweep each was ordered with — see `ruled-not-dispatched`.
+
+   `:judge-reason` is a record run's last judgement's own reason — a proceed's included, which no
+   status names — so the report says why the run ended where it did without opening the answer
+   file of its last round."
   [ctx]
   (let [parks    (get-in ctx [:carry :parks])
         standing (into [] (distinct) (concat (:standing (last-warden ctx))
@@ -205,6 +209,9 @@
 
        (:unrecorded ctx)
        (assoc :unrecorded (:unrecorded ctx))
+
+       (not (str/blank? (str (get-in ctx [:record :reason]))))
+       (assoc :judge-reason (str (get-in ctx [:record :reason])))
 
        (:owed-reading ctx)
        (assoc :owed-reading (:owed-reading ctx))
@@ -608,6 +615,15 @@
                              :else           "derivable")))
           (:findings decision))))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:vector :map]]}
+  answered-rows
+  "A reviewer's answers to inherited rows, `{id {:by :round :evidence}}`, as rows sorted by id."
+  [answers]
+  (vec (for [[id a] (sort-by key answers)]
+         (cond-> {:id (str id) :evidence (str (:evidence a))}
+           (:by a)    (assoc :by (str (:by a)))
+           (:round a) (assoc :round (:round a))))))
+
 (defn- finish-phase
   [ph phase ctx at]
   (let [ph (assoc ph :status "ok" :ended-at at)]
@@ -624,7 +640,7 @@
       ;; fork's or a merge's confirmations are on another ledger — the one account of a
       ;; skip a reader can check against the ledger, rather than a quiet round that
       ;; looked at less.
-      ;; :checks is how many subjects the judge WAS asked about, :unruled which of them it left
+      ;; :claims is how many subjects the judge WAS asked about — not :derived, its derivations — :unruled which of them it left
       ;; without a ruling, :relation-unruled which baseline ids it gave no relation ruling, :read-once which it confirmed on a first reading and
       ;; :amendment-read-once whether it was the first reading of a record the run amended — why a
       ;; clean round did not end the run — and :unbanked why what it confirmed cannot settle, when it
@@ -647,7 +663,10 @@
       ;; that answered nothing. :findings-made is how many findings the decision itself holds, since
       ;; :findings carries one row per broken check whatever number of findings named it, and one per
       ;; claim refuted under no check. :made is every finding the decision holds, each marked
-      ;; advisory, for-person or derivable (`made`) — :findings is only what the round handed on.
+      ;; advisory, for-person or derivable (`made`) — :findings is only what the round handed on — and
+      ;; :asked the round's findings it held for the person rather than handing on, as the stage
+      ;; carried them (`:asked-findings`). :reads-again is why the next round runs on nothing amended:
+      ;; what this one read once (`nido.review.record/second-reading`), the record and its ids.
       ;; :confirmed is what the round kept of the judge's confirmations, and :owed each claim it held
       ;; sound but not yet met at this tree — without it a round that read every claim owed reads
       ;; like one that read none. :overturns is each earlier run's finding this judgement reversed.
@@ -686,6 +705,9 @@
       ;; both rounds share and the anchors taken out first, and which spent subjects made it yield.
       ;; A :no-progress round is otherwise one whose veto failed for a reason nobody can recompute.
       ;; :spent-awaiting is the spent subjects the judgement held only as a person's question.
+      ;; :disputes-ended is how this round ended each dispute the round before raised — re-reported,
+      ;; unchecked or withdrawn (`nido.review.record/dispute-endings`): a withdrawal is otherwise only
+      ;; a finding's absence, and an unchecked ruling hides that the judge agreed with the amender.
       ;; :status is "unjudged" when the round has an outcome and neither a verdict nor a
       ;; recommendation: no judgement was parsed, whether or not a judge was launched, and an "ok"
       ;; beside a codex failure reads as a round that judged.
@@ -727,7 +749,11 @@
                 (seq (:settled ctx))
                 (assoc :settled (mapv (fn [[id {:keys [ws-id seq]}]] {:id id :by seq :ws-id ws-id})
                                       (sort-by key (:settled ctx))))
-                (:checks ctx)                           (assoc :checks (:checks ctx))
+                (:claims ctx)                           (assoc :claims (:claims ctx))
+                (seq (:asked-findings ctx))
+                (assoc :asked (mapv #(select-keys % [:check :claim-id :claim-ids :claim :cites :evidence :note])
+                                    (:asked-findings ctx)))
+                (:owes-reading ctx)                     (assoc :reads-again (:owes-reading ctx))
                 (seq (get-in ctx [:record :unruled]))   (assoc :unruled (get-in ctx [:record :unruled]))
                 (seq (get-in ctx [:record :relation-unruled]))
                 (assoc :relation-unruled (get-in ctx [:record :relation-unruled]))
@@ -760,6 +786,7 @@
                 (:tree-moved ctx)                       (merge (:tree-moved ctx))
                 (seq (:refuted-running ctx))            (assoc :refuted-running (into (sorted-map) (:refuted-running ctx)))
                 (:veto ctx)                             (assoc :veto (:veto ctx))
+                (seq (:disputes-ended ctx))             (assoc :disputes-ended (vec (:disputes-ended ctx)))
                 (seq (:spent-awaiting ctx))             (assoc :spent-awaiting (:spent-awaiting ctx))
                 (and (get-in ctx [:record :outcome]) (get-in ctx [:record :detail]))
                 (assoc :detail (get-in ctx [:record :detail]))
@@ -836,6 +863,12 @@
       ;; finished run cites it from its terminal ctx; a run that never finished
       ;; has only this, and the ledger refuses a :review that cites none on a
       ;; workstream holding a design.
+      ;; :paired-with-earlier is each layer whose quiet reading this round paired with an earlier
+      ;; run's, naming that run (`stages/paired-with-earlier`) — on the warden phase instead when
+      ;; the round had one.
+      ;; :inherited-answered is each row the last run left owed that this round's reviewers
+      ;; answered repaired, with who answered and the evidence (`stages/reviewer-answers`): the row
+      ;; leaves the open list on that answer, and without it here it leaves silently.
       :review (cond-> (assoc ph :overall-correctness (:overall-correctness ctx)
                              :findings (vec (:findings ctx))
                              :layers (review-layers ctx))
@@ -843,6 +876,10 @@
                 (seq (:conflicted ctx)) (assoc :conflicted (vec (:conflicted ctx)))
                 (seq (:read-once ctx))  (assoc :read-once (vec (:read-once ctx)))
                 (seq (:unplaced ctx))   (assoc :unplaced (vec (:unplaced ctx)))
+                (seq (:inherited-answered ctx))
+                (assoc :inherited-answered (answered-rows (:inherited-answered ctx)))
+                (seq (:paired-with-earlier ctx))
+                (assoc :paired-with-earlier (vec (:paired-with-earlier ctx)))
                 ;; The parks that ended the run before this round read anything:
                 ;; the only fact about a round with no rows and no warden.
                 (seq (:parks-stood ctx)) (assoc :parks-stood (vec (:parks-stood ctx))))
@@ -891,7 +928,13 @@
                    ;; run back for the second. Here for the reason :unfixable is
                    ;; — the phase is the only place the decision and what became
                    ;; of it both sit.
-                   (seq (:read-once ctx)) (assoc :read-once (vec (:read-once ctx)))))
+                   (seq (:read-once ctx)) (assoc :read-once (vec (:read-once ctx)))
+                   ;; Every layer the round left at its first quiet reading, held or not: a
+                   ;; continuing round goes back for them too, and without this the read of an
+                   ;; unchanged layer the round after is explained only by matching patch hashes.
+                   (seq (:first-reading ctx)) (assoc :first-reading (vec (:first-reading ctx)))
+                   (seq (:paired-with-earlier ctx))
+                   (assoc :paired-with-earlier (vec (:paired-with-earlier ctx)))))
       ;; The finding ids a fixer was handed, not only how many. It is the join
       ;; every cross-round question needs — did this fix stop that finding coming
       ;; back — and the report held one side of it and threw the other away.
@@ -1125,7 +1168,10 @@
    recorded identically to one over all eight, and the difference is the whole of
    what the verdict is worth. It is derived from the report rather than from the
    terminal ctx for the same reason `applied-reshapes` is — a ctx holds the round
-   it is in, and this is a question about the run."
+   it is in, and this is a question about the run.
+
+   `:paired`, when any, is how many of the reviewed converged on one reading here paired with an
+   earlier run's (`:paired-with-earlier`): read here once, so not read twice by this run."
   [report]
   (let [by-label (->> (:rounds report)
                       (mapcat :phases)
@@ -1134,9 +1180,12 @@
                       (group-by :label))
         statuses (fn [[_ rows]] (map :status rows))
         read?    (fn [group] (boolean (some read-statuses (statuses group))))
-        skipped? (fn [group] (every? #(= "skipped" %) (statuses group)))]
-    {:reviewed (count (filter read? by-label))
-     :skipped  (count (filter skipped? by-label))}))
+        skipped? (fn [group] (every? #(= "skipped" %) (statuses group)))
+        paired   (into #{} (comp (mapcat :phases) (mapcat :paired-with-earlier) (keep :label))
+                       (:rounds report))]
+    (cond-> {:reviewed (count (filter read? by-label))
+             :skipped  (count (filter skipped? by-label))}
+      (seq paired) (assoc :paired (count paired)))))
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport] [:vector :map]]}
   stood-in
@@ -1162,13 +1211,27 @@
        (sort-by key)
        (mapv (fn [[[reviewer instead-of] n]] {:reviewer reviewer :instead-of instead-of :readings n}))))
 
+(defn- counted-rounds
+  "How many of `rounds` counted against the cap: all but each round entered only to read again what
+   the round before it left at a first reading — a \"read-once\" round — and not the round after
+   that one too, since a re-reading round is never itself re-read for free. Mirrors the engine's
+   count (`nido.review.loop/run-loop`), off the folded rounds."
+  [rounds]
+  (first (reduce (fn [[n rereading?] r]
+                   [(if rereading? n (inc n))
+                    (and (not rereading?) (= "read-once" (:status r)))])
+                 [0 false]
+                 rounds)))
+
 (defn- finalize
   "`report` sealed on the terminal ctx.
 
    `:summary` carries `:max-iters`, the cap, when the run had one. The loop has no default, so a
    cap is always the number whoever invoked the run passed; without it a `max-iters` status names
    the stop and not how short the leash was. `:owed-reading` is what a run that ended
-   :owed-second-reading still owed a second reading of, so the report names it too.
+   :owed-second-reading still owed a second reading of, so the report names it too. `:counted` is
+   the rounds that counted against it (`counted-rounds`), present when a cap was: `rounds 5` beside
+   `max-iters 4` is otherwise a cap that did not hold.
    `:repairs-unverified` is there when any landed repair was — see `repairs-unverified`."
   [report status ctx at]
   (let [s   (name status)
@@ -1180,7 +1243,7 @@
            :summary  (cond-> {:rounds       (count (:rounds report))
                               :fix-attempts (fix-attempts report)
                               :final-status s}
-                       cap (assoc :max-iters cap)
+                       cap (assoc :max-iters cap :counted (counted-rounds (:rounds report)))
                        (pos? (repairs-unverified report))
                        (assoc :repairs-unverified (repairs-unverified report))
                        (:owed-reading ctx) (assoc :owed-reading (:owed-reading ctx))))))
@@ -1614,6 +1677,15 @@
            usage-limit (assoc :usage-limit usage-limit)
            verdict     (assoc :verdict verdict))))
 
+
+(defn- first-sentence
+  "`text`'s first sentence, trimmed, at most 240 characters — the whole text when it has no sentence
+   break."
+  [text]
+  (let [t (str/trim (str text))
+        s (or (second (re-find #"^(.+?[.!?])(\s|$)" t)) t)]
+    (if (> (count s) 240) (str (subs s 0 239) "…") s)))
+
 (defn ^{:malli/schema [:=> [:cat :ReviewReport :any] [:maybe :map]]}
   verdict-summary
   "What the design verdict DECIDED, in the facts that fit somewhere a reader
@@ -1646,12 +1718,13 @@
    open work the rounds never saw, since no finding stands for it. Those not owed
    yet, `:invariants-pending`, are not counted.
 
-   `:verdict-advice` is true when a verdict that leaves the design standing
-   carries `:needs`. That advice is addressed to a person and nothing else routes
-   it: no gate opens on a sound verdict, and a branch merged with two unverified
-   wire premises named there and no entry ever answering them. It is a flag
-   rather than a count because `:needs` is prose, and a number of paragraphs
-   measures nothing.
+   `:verdict-advice` is the first sentence of `:needs` when a verdict that leaves
+   the design standing carries one. That advice is addressed to a person and
+   nothing else routes it: no gate opens on a sound verdict, and a branch merged
+   with two unverified wire premises named there and no entry ever answering
+   them. A sentence rather than a count because `:needs` is prose, and a number of
+   paragraphs measures nothing; the first, because the headline that carries it
+   is one line and the whole is in the verdict.
 
    `:verdict-unraised` counts the `:unraised` rows, only when there are any, and
    is open on the same argument: a located defect no round raised and nobody
@@ -1672,10 +1745,20 @@
         (seq (:unraised v)) (assoc :verdict-unraised (count (:unraised v)))
         (and (not (str/blank? (str (:needs v))))
              (not (creport/verdict-invalidates (keyword (name k)))))
-        (assoc :verdict-advice true)
+        (assoc :verdict-advice (first-sentence (:needs v)))
         (:carried-from v) (assoc :design-carried-from (:carried-from v))))))
 
 ;; ---- the rest of what the run's tail wrote -------------------------------
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :int]]}
+  judged-design-seq
+  "The design the run's reviewers last judged against: the :design-seq of the last review phase
+   that carries one, or nil when no round captured a design. Not the last round's — a round that
+   failed before reading a design leaves the run's judgement under the design of the round before
+   it, which the report names."
+  [report]
+  (some->> (:rounds report) (mapcat :phases)
+           (filter #(= "review" (some-> (:phase %) name))) (keep :design-seq) last))
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport :map] :ReviewReport]}
   with-review-entry

@@ -840,6 +840,81 @@
     (is (not (contains? (finish {:config {}}) :max-iters))
         "an uncapped run has no cap to report, and nil would read as one")))
 
+(deftest a-judge-phase-names-its-claim-count-apart-from-its-checks
+  ;; tool-call-wire-format: every judge phase read "checks": 8 beside four derived checks, and the
+  ;; 8 was the claims asked. agentic-rag: 21 beside 4 — one word for two things in one record.
+  (let [r (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+              (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+              (report/apply-event
+               {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                :ctx {:record {:format :design-decision :recommend :ask :reason "scope is the person's"
+                               :checks [{:check :goal-served :status :broken}]}
+                      :findings [] :claims 8
+                      :asked-findings [{:check :goal-served :claim-ids ["tools"] :for-person true
+                                        :note "which scope?"}]
+                      :owes-reading {:seq 4 :read-once ["tools"]}
+                      :disputes-ended [{:claim "fingerprint" :ended "unchecked"}]}} nil)
+              (report/apply-event {:event :run-finalized :status :asked :at "t3"
+                                   :ctx {:record {:format :design-decision :reason "scope is the person's"}
+                                         :config {:max-iters 4}}} nil))
+        judge (first (:phases (first (:rounds r))))]
+    (is (= 8 (:claims judge)))
+    (is (not (contains? judge :checks)) "the count is not called checks beside :derived")
+    (is (= [{:check :goal-served :claim-ids ["tools"] :note "which scope?"}] (:asked judge))
+        "a finding held for the person is on the phase, not only on the ledger")
+    (is (= {:seq 4 :read-once ["tools"]} (:reads-again judge))
+        "why the next round runs on nothing amended")
+    (is (= [{:claim "fingerprint" :ended "unchecked"}] (:disputes-ended judge)))
+    (is (= "scope is the person's" (get-in r [:reason :judge-reason]))
+        "the last judgement's reason is on the report, a proceed's included")
+    (is (= 1 (get-in r [:summary :counted])))))
+
+(deftest a-capped-report-counts-only-the-rounds-the-cap-counted
+  ;; rag-preprocessing-duration: rounds 5 beside max-iters 4, two of them uncounted re-readings.
+  (let [finish (fn [statuses]
+                 (-> (reduce (fn [r [i st]]
+                               (-> r
+                                   (report/apply-event {:event :phase-started :iter i :phase :judge :at "t"} nil)
+                                   (report/apply-event
+                                    {:event :phase-finished :iter i :phase :judge :at "t"
+                                     :ctx {:record (cond-> {:format :baseline-review :verdict :sufficient}
+                                                     (= st :read-once) (assoc :read-once ["c1"]))
+                                           :findings []}} nil)))
+                             (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+                             (map-indexed (fn [i st] [(inc i) st]) statuses))
+                     (report/apply-event {:event :run-finalized :status :max-iters
+                                          :ctx {:config {:max-iters 3}} :at "t9"} nil)
+                     :summary))]
+    (is (= {:rounds 5 :counted 3}
+           (select-keys (finish [:read-once :read-once :read-once :read-once :clean]) [:rounds :counted]))
+        "a round entered only to read again is not counted, and the round after it is")))
+
+(deftest a-reviewers-answer-to-an-inherited-row-is-on-the-round
+  ;; explore/content: two inherited rows answered repaired left the ledger with defects-settled 0
+  ;; and no record of who closed them.
+  (let [r (-> (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+              (report/apply-event {:event :phase-started :iter 1 :phase :review :at "t1"} nil)
+              (report/apply-event {:event :phase-finished :iter 1 :phase :review :at "t2"
+                                   :ctx {:findings [] :reviews []
+                                         :inherited-answered {"5a1ebf09" {:by "file-domain" :round 1
+                                                                          :evidence "file.clj:40 — guarded"}}
+                                         :paired-with-earlier [{:label "section-tree" :run-id "review-19f1" :round 2}]}}
+                                  nil))
+        review (first (:phases (first (:rounds r))))]
+    (is (= [{:id "5a1ebf09" :evidence "file.clj:40 — guarded" :by "file-domain" :round 1}]
+           (:inherited-answered review)))
+    (is (= [{:label "section-tree" :run-id "review-19f1" :round 2}] (:paired-with-earlier review))
+        "a layer that converged with an earlier run's reading names that run")
+    (is (= 1 (:paired (report/coverage r))))))
+
+(deftest a-review-is-attributed-to-the-last-round-that-read-a-design
+  ;; explore/identity: round 1 judged under entry 27, round 2 errored before reading one, and the
+  ;; whole judgement was refused as :no-design.
+  (is (= 27 (report/judged-design-seq
+             {:rounds [{:phases [{:phase "review" :design-seq 27}]}
+                       {:phases [{:phase "error"}]}]})))
+  (is (nil? (report/judged-design-seq {:rounds [{:phases [{:phase "review"}]}]}))))
+
 (deftest a-record-report-names-the-tree-its-judges-read
   (let [r (report/with-judged-tree (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
                                    "/runs/r/tree" {:rev "abc" :ahead 3})]
@@ -1535,7 +1610,8 @@
             {:outcome :answered :ledger :appended
              :verdict (assoc a-verdict :carried-from 18
                              :findings-classified [{:finding "b0229ac9" :as :implementation}])})]
-    (is (= {:design-verdict "strained" :verdict-implementation 0 :verdict-advice true :design-carried-from 18}
+    (is (= {:design-verdict "strained" :verdict-implementation 0
+            :verdict-advice "amend the invariant's wording to scope it to the act" :design-carried-from 18}
            (report/verdict-summary r #{}))
         "an earlier run's classification is not this run's repair, and a reader
          has to know no judge read this run's code")))
@@ -1563,7 +1639,8 @@
                         :verdict (assoc a-verdict :findings-classified
                                         [{:finding "f1" :as :implementation}])})
                      path)
-    (is (= {:design-verdict "strained" :verdict-implementation 1 :verdict-advice true}
+    (is (= {:design-verdict "strained" :verdict-implementation 1
+            :verdict-advice "amend the invariant's wording to scope it to the act"}
            (report/verdict-summary (json/parse-string (slurp path) true) #{"f1"})))))
 
 ;; ---- the rest of what the run's tail wrote --------------------------------
@@ -2157,8 +2234,9 @@
                            (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
                            {:outcome :answered :ledger :appended :verdict v})
                          #{}))]
-    (is (true? (:verdict-advice (summary {:verdict :sound :reason "r" :round 1 :needs "run the live suite"})))
-        "nothing else routes a standing verdict's advice to a person")
+    (is (= "Run the live suite." (:verdict-advice (summary {:verdict :sound :reason "r" :round 1
+                                                            :needs "Run the live suite. Then the soak."})))
+        "nothing else routes a standing verdict's advice to a person, and the headline carries one line of it")
     (is (nil? (:verdict-advice (summary {:verdict :invalidated :reason "r" :round 1 :needs "supersede"
                                          :invariants-broken [{:invariant "i" :finding "f"}]})))
         "a decision's needs reaches a person through the gate already")

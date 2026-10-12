@@ -1183,6 +1183,35 @@
       (is (str/includes? (first @appended) ":design {:seq 3}")
           "the design the run captured is the citation"))))
 
+(deftest a-last-round-that-read-no-design-leaves-the-run-under-the-one-before
+  ;; explore/content, explore/identity: round 1 judged under design 53, round 2 errored before
+  ;; reading one, and the whole judgement — a closed false positive, two standing items — was
+  ;; refused as :no-design.
+  (let [appended (atom [])]
+    (with-redefs [lifecycle/session-from-cwd (fn [_] {:project "brian" :session "s1"})
+                  csession/workstream-id-for (fn [_ _] "ws-1")
+                  ws/read-ws (fn [_ _] {:id "ws-1" :entries [{:kind :design :seq 53}]})
+                  ws/append-entry! (fn [_ _ _ content] (swap! appended conj content) "/path")]
+      (is (= {:ledger :appended :ws-id "ws-1"}
+             (t/append-review-entry! "/w" {:status :review-failed :findings []}
+                                     {:summary {:rounds 2 :fix-attempts 0}
+                                      :target {:base "main" :base-rev "abc"}
+                                      :rounds [{:phases [{:phase "review" :design-seq 53}]}
+                                               {:phases [{:phase "error"}]}]}
+                                     "/runs/r/report.json")))
+      (is (str/includes? (first @appended) ":design {:seq 53}")))))
+
+(deftest a-review-entry-says-which-inherited-rows-a-reviewer-answered
+  ;; explore/dialogue: none of the six inherited ids was in report.json or on the :review entry.
+  (let [e (t/review-event {:status :clean :findings []
+                           :carry {:inherited-answers {"ada3f4e6" {:by "file-domain" :round 1
+                                                                   :evidence "file.clj:12 — closed"}}}}
+                          {:summary {:rounds 1 :fix-attempts 0} :target {:base "main"}}
+                          "/r/report.json")]
+    (is (= [{:id "ada3f4e6" :evidence "file.clj:12 — closed" :by "file-domain" :round 1}]
+           (:inherited-answered e)))
+    (is (= e (report/validate-event :review e)) "the ledger's closed schema takes it")))
+
 (deftest append-review-entry-noops-without-workstream
   (let [called (atom false)]
     (with-redefs [lifecycle/session-from-cwd (fn [_] nil)

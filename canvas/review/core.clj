@@ -281,6 +281,15 @@
      counted on its own: both are open — nobody ruled on either — and neither is a finding the
      loop is holding."
     {:signature [:=> [:catn [:report ReviewReport] [:owed :any]] [:maybe :map]]})
+  (Operation judged-design-seq
+    "The design the run's reviewers last judged against: the :design-seq of the last review phase
+     carrying one, or nil when no round captured a design. What a :review entry is attributed to
+     when its last round failed before reading one."
+    {:signature [:=> [:catn [:report [:maybe :map]]] [:maybe :int]]})
+  (Operation answered-rows
+    "A reviewer's answers to inherited rows, `{id {:by :round :evidence}}`, as rows sorted by id —
+     the shape the report's review phase and the `:review` entry carry them in."
+    {:signature [:=> [:catn [:answers [:maybe :map]]] [:vector :map]]})
   (Operation with-review-entry
     "The report carrying what became of the run's own `:review` ledger entry.
 

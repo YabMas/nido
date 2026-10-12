@@ -295,6 +295,23 @@
     (is (= ["cannot-fix"] (:unfixable out))
         "and it names the finding, not the round")))
 
+(deftest a-quiet-round-neither-breaks-nor-extends-a-run-of-attempts
+  ;; A record round that read again what the round before read once enters the history as :quiet,
+  ;; so the decision's account can name it. It repaired nothing, so it is no attempt either way:
+  ;; counted, the stuck finding between two quiet rounds would never be called unfixable.
+  (let [[_ emit] (capturing)
+        stuck {:id "cannot-fix"}
+        pipe [(stage :judge (fn [c] (if (even? (:iter c))
+                                      (-> (assoc c :findings [] :control :next-round)
+                                          (update :history (fnil conj [])
+                                                  {:iter (:iter c) :findings [] :quiet true}))
+                                      (assoc c :findings [stuck {:id (str "fresh-" (:iter c))}]))))
+              (stage :amend (fn [c] (update c :history (fnil conj [])
+                                            {:iter (:iter c) :findings (:findings c)})))]
+        out (run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id :max-iters 12})]
+    (is (= :unfixable (:status out)))
+    (is (= 7 (:iter out)) "the fourth round that raised it, with three quiet rounds between")))
+
 (deftest a-run-that-keeps-resolving-findings-is-not-called-unfixable
   (let [[_ emit] (capturing)
         pipe [(stage :judge (fn [c] (assoc c :findings [{:id (str "new-" (:iter c))}])))

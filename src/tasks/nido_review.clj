@@ -167,7 +167,11 @@
    prior obligation and said nothing about it writes an entry holding nothing —
    and that entry is the whole of what the run after gets, so the obligation
    disappears at the first quiet run rather than at the run that settled it.
-   The list is `verdict/owed-rows`, which the analysis payload counts too."
+   The list is `verdict/owed-rows`, which the analysis payload counts too.
+
+   `:inherited-answered` is each of those rows a reviewer of this run answered repaired, with the
+   evidence: it is why the row is not in `:open`, and without it a row settled by a reading leaves
+   the ledger with `defects-settled 0` and nothing saying who closed it."
   [final report report-path]
   (let [refused  (refused-repairs final)
         unstarted (launch-failures final)
@@ -202,6 +206,8 @@
              :findings-remaining (count open)
              :report-path        report-path}
       (seq open)      (assoc :open open)
+      (seq (get-in final [:carry :inherited-answers]))
+      (assoc :inherited-answered (report/answered-rows (get-in final [:carry :inherited-answers])))
       (seq layers)    (assoc :layers layers)
       (seq kept)      (assoc :kept kept :findings-kept (count kept))
       (seq made)      (assoc :defects-introduced (count made))
@@ -286,14 +292,18 @@
     (try
       ;; The design the run's last round JUDGED against, which it read at the
       ;; round's start — not the newest at append time, which a design written
-      ;; mid-run would make one no reviewer saw. That is the only citation:
-      ;; attribution is read, never inferred, so a run that captured none on
-      ;; a workstream holding a design has a judgement nobody can attribute,
-      ;; and it is reported rather than filed under whichever design is newest.
-      (let [d (get-in final [:design :seq])]
+      ;; mid-run would make one no reviewer saw. A last round that failed
+      ;; before reading one leaves the judgement under the design of the last
+      ;; round that did (`report/judged-design-seq`): the rounds before it
+      ;; judged under that design, and dropping them as :no-design lost every
+      ;; ruling they made. That is the only citation: attribution is read,
+      ;; never inferred, so a run no round of which captured a design on a
+      ;; workstream holding one has a judgement nobody can attribute, and it
+      ;; is reported rather than filed under whichever design is newest.
+      (let [d (or (get-in final [:design :seq]) (report/judged-design-seq report))]
         (if (and (nil? d) (ws/holds-design? (ws/read-ws project ws-id)))
           {:ledger  :no-design :ws-id ws-id
-           :because (str "the run captured no design, and the workstream holds one,"
+           :because (str "no round of the run captured a design, and the workstream holds one,"
                          " so there is no design this judgement was made under")}
           (do (ws/append-entry! project ws-id {:kind :review}
                                 (pr-str (cond-> (review-event final report report-path)
@@ -628,6 +638,19 @@
         (println (str "review-loop: could not append the :blocker — " (ex-message e))))
       nil)))
 
+(defn- ws-closure
+  "`{:outcome :seq}` of `ws-id`'s closure when it is closed — :seq its newest :closed entry — or nil
+   when it is open or cannot be read."
+  [project ws-id]
+  (try
+    (when (and project ws-id)
+      (let [w (ws/read-ws (keyword (name project)) ws-id)]
+        (when-let [c (:closed w)]
+          (cond-> {:outcome (some-> (:outcome c) name)}
+            (some #(= :closed (:kind %)) (:entries w))
+            (assoc :seq (:seq (last (filter #(= :closed (:kind %)) (:entries w)))))))))
+    (catch Exception _ nil)))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   queue-analysis!
   "Queue this run for nido-side analysis. Best-effort, for the same reason
@@ -666,7 +689,11 @@
    the verdict's reason: the report is the copy that survives a ledger which
    would not take it. An analysis that cannot tell a recorded run from an
    unrecorded one grades the next run's inherited open list as the loop's
-   judgement, when it is the last run's."
+   judgement, when it is the last run's.
+
+   `:ws-closed` is the reviewed workstream's closure when it is closed — a run
+   over a workstream already closed `:done` writes its entries after the close,
+   and nothing else in the run says so."
   [cwd final report report-path config ws-id]
   (let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd) {})
         open   (verdict/owed-rows final)
@@ -694,6 +721,7 @@
        :remaining-parked   (count (filter #(= :park (:disposition %)) open))
        :targets-reviewed   (:reviewed cover)
        :targets-skipped    (:skipped cover)
+       :targets-paired     (:paired cover)
        ;; Where a throw ended the run, which the payload titles as `died in` —
        ;; see `analysis/payload`.
        :errored            (report/errored report)
@@ -703,7 +731,8 @@
        :reviewed-session   session
        :reviewed-ws-id     ws-id
        :review-entry       (:review-entry report)
-       :previous-stack     (get-in report [:target :previous])}
+       :previous-stack     (get-in report [:target :previous])
+       :ws-closed          (ws-closure project ws-id)}
       (cond-> (dissoc stop :standing)
         (seq standing) (assoc :standing standing))
       (report/verdict-summary report owed)))))
@@ -2150,6 +2179,8 @@
   (concat (sort (keep (fn [[kind v]] (when (= :check kind) (name v))) ks))
           (sort (keep (fn [[kind v]] (when (= :claim kind) (str "claim " v))) ks))))
 
+(declare judge-variance)
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   queue-record-analysis!
   "Queue a finished baseline or design run for nido-side analysis, through the gate a diff run
@@ -2204,6 +2235,8 @@
       :spent-awaiting   (:spent-awaiting final)
       :cap              (record/cap-account final)
       :unreadable       (record/unreadable-rounds report)
+      :readable-from    (record/readable-from report)
+      :variance         (judge-variance ledger run-id)
       :continued        (record/continued report)
       :stale-at-start   (get-in report [:target :stale-working-copy])
       :subject          (get-in report [:target :subject])
@@ -2225,22 +2258,39 @@
             w (ws-of j)]
         (when (and w n) (subjects w n))))))
 
-(defn- flip-rate
-  "A run's flip rate as a headline says it — `flip rate 1/7`, the readings that disagreed with the
-   last reading of the same text at the same tree over those that had one — or nil when the run
-   read no text twice at one tree, or its entries cannot be read. Read off `ledger`, the one the
-   run pinned at start, by the entries naming `run-id`."
+(defn- figures-of-run
+  "`record/run-figures` of the entries on `ledger`, the one the run pinned at start, that name
+   `run-id` — or nil when there is no ledger or its entries cannot be read."
   [[project ws-id] run-id]
   (try
     (when (and project run-id)
       (let [es (for [kind [:design-decision :baseline-review]
                      e    (ws/entries-of project ws-id kind)
                      :when (= (str run-id) (or (:within-run e) (:run-id e)))]
-                 e)
-            {:keys [flips pairs]} (:flip-rate (record/run-figures (vec es) nil
-                                                                  (texts-read project (constantly ws-id))))]
-        (when pairs (str "flip rate " flips "/" pairs))))
+                 e)]
+        (record/run-figures (vec es) nil (texts-read project (constantly ws-id)))))
     (catch Exception _ nil)))
+
+(defn- flip-rate
+  "A run's flip rate as a headline says it — `flip rate 1/7`, the readings that disagreed with the
+   last reading of the same text at the same tree over those that had one — or nil when the run
+   read no text twice at one tree, or its entries cannot be read."
+  [ledger run-id]
+  (when-let [{:keys [flips pairs]} (:flip-rate (figures-of-run ledger run-id))]
+    (str "flip rate " flips "/" pairs)))
+
+(defn- judge-variance
+  "How often the run's judges disagreed with themselves on one record at one tree, as the analysis
+   headline counts it: `:splits`, refutations after a sound reading of the same record and tree,
+   and `:reading-flips`, holds/owed reversals — or nil when neither happened or the entries cannot
+   be read. Beside weakenings and disputes because a reading that flips on an unchanged record is
+   what a reader weighs an ask against, and the run's last ruling hides it."
+  [ledger run-id]
+  (let [f      (figures-of-run ledger run-id)
+        splits (reduce + 0 (vals (:splits f)))
+        flips  (reduce + 0 (mapcat vals (vals (:reading-flips f))))]
+    (when (pos? (+ splits flips))
+      {:splits splits :reading-flips flips})))
 
 (defn- record-loop-body
   "One record round, from the engine to the last printed line. Split out of
@@ -2701,13 +2751,28 @@
     (when (and (seq records) (every? map? records))
       (into #{} (mapcat (comp keys settled/subjects)) records))))
 
+(defn- amended-by
+  "The seqs of the records `run-id` appended as amendments, on the workstreams its entries `es` were
+   read from — the index's :amended-by stamp. Empty when none can be read."
+  [project es run-id]
+  (try
+    (into #{} (for [w  (distinct (keep (comp ::ws meta) es))
+                    e  (:entries (ws/read-ws project w))
+                    :when (= (str run-id) (str (:amended-by e)))]
+                (:seq e)))
+    (catch Exception _ #{})))
+
 (defn- summed
   "Many runs' figures, per check, per check-less refuted claim and per derivation: in how many runs
    it was broken, in how many rounds, in how many of those alone, and in how many runs it was still
    broken at the end — and for a check, in how many rounds it was derived, held and underivable.
    A subject a person was asked about also carries :asked, in how many rounds, and :asked-at-end, in
-   how many runs the last decision asked about it; :asks is the runs that asked, their asking
-   rounds, and how many ended asking. Per
+   how many runs the last decision asked about it, and :amended-unjudged, in how many runs an
+   amendment no judge read followed the decision that broke it; :asks is the runs that asked, their
+   asking rounds, how many ended asking, the decisions carrying a question on any recommendation,
+   the proceeds among them, those backed by a broken check, and how many runs ended proceeding
+   with a question for a person. :contradicted sums the read-once confirmations a later reading
+   denied, and :amended-after counts the runs that ended on an amendment no judge read. Per
    stratum, its level judges' readings summed; per claim found false, per subject confirmed, left
    unruled, declared unchecked or found against while settled, and per reviewer that answered, the
    runs' counts summed, and likewise per claim held owed; per subject, in how many runs it was still unchecked at the end — and per
@@ -2726,7 +2791,8 @@
    both halves across runs, so it is the rate over every comparable reading, not a mean of rates."
   [figures]
   (letfn [(add [acc tallies]
-            (reduce-kv (fn [a k {:keys [broken alone at-end asked asked-at-end cleared] :as t}]
+            (reduce-kv (fn [a k {:keys [broken alone at-end asked asked-at-end cleared
+                                        amended-unjudged] :as t}]
                          (update a k (fn [m]
                                        (cond-> (-> (or m {:runs 0 :rounds 0 :alone 0 :at-end 0})
                                                    (update :runs + (if (pos? broken) 1 0))
@@ -2735,6 +2801,7 @@
                                                    (update :at-end + (if at-end 1 0)))
                                          asked (update :asked (fnil + 0) asked)
                                          asked-at-end (update :asked-at-end (fnil + 0) 1)
+                                         amended-unjudged (update :amended-unjudged (fnil + 0) 1)
                                          (:derived t) (update :derived (fnil + 0) (:derived t))
                                          (:held t) (update :held (fnil + 0) (:held t))
                                          (:underivable t) (update :underivable (fnil + 0) (:underivable t))
@@ -2747,11 +2814,19 @@
      :checks      (reduce add (sorted-map) (keep :checks figures))
      :claims      (reduce add (sorted-map) (keep :claims figures))
      :asks        (reduce #(-> %1 (update :runs inc) (update :rounds + (:rounds %2))
-                               (update :at-end + (if (:at-end %2) 1 0)))
-                          {:runs 0 :rounds 0 :at-end 0} (keep :asks figures))
+                               (update :at-end + (if (:at-end %2) 1 0))
+                               (update :carried + (or (:carried %2) 0))
+                               (update :proceeding + (or (:proceeding %2) 0))
+                               (update :backed + (or (:backed %2) 0))
+                               (update :end-proceeding + (if (:question %2) 1 0)))
+                          {:runs 0 :rounds 0 :at-end 0 :carried 0 :proceeding 0 :backed 0
+                           :end-proceeding 0}
+                          (keep :asks figures))
      :derivations (reduce add (sorted-map) (keep :derivations figures))
      :falsified   (counts :falsified)
      :confirmed   (counts :confirmed)
+     :contradicted (counts :contradicted)
+     :amended-after (count (keep :amended-after figures))
      :owed        (counts :owed)
      :unruled     (counts :unruled)
      :unchecked   (counts :unchecked)
@@ -2792,9 +2867,13 @@
         texts   (texts-read project (comp ::ws meta))]
     (if run-id
       (if-let [es (get runs (str run-id))]
-        (prn (record/run-figures (vec es) (final-subjects project es) texts))
+        (prn (record/run-figures (vec es) (final-subjects project es) texts
+                                 (amended-by project es run-id)))
         (println (str "no entry on " (name project) "'s ledgers names run " run-id)))
-      (prn (summed (map #(record/run-figures (vec %) (final-subjects project %) texts) (vals runs)))))))
+      (prn (summed (map (fn [[id es]]
+                          (record/run-figures (vec es) (final-subjects project es) texts
+                                              (amended-by project es id)))
+                        runs))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   figures-cmd

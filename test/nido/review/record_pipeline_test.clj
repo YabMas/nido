@@ -378,9 +378,14 @@
                                           :evidence ["src/x.clj:1"]}))
         [out _] (with-amend {:writes (fn [p] (spit p (pr-str amended)))}
                             (ctx :findings [a-finding]))]
-    (is (= {:changed ["c1"] :added ["new-obs"]} (:amend-delta out)))
-    (is (= {:changed ["c1"] :added ["new-obs"]} (:delta (persisted-phase :amend out)))
-        "and the report a reader has keeps it")))
+    (is (= {:changed ["c1"] :added ["new-obs"]} (select-keys (:amend-delta out) [:changed :added])))
+    (is (= {:property {:was "the aggregate is the only summing path"
+                       :now "the aggregate sums; the invoice reads it"}}
+           (get-in out [:amend-delta :fields "c1"]))
+        "the clause a repair changed is read off the delta, not by diffing two answer files")
+    (is (= ["c1"] (:changed (:delta (persisted-phase :amend out))))
+        "and the report a reader has keeps it")
+    (is (some? (get-in (persisted-phase :amend out) [:delta :fields :c1 :property :now])))))
 
 (deftest a-dry-run-never-launches-an-amender
   (let [launched (atom false)]
@@ -1401,7 +1406,7 @@
 (deftest the-report-is-told-how-much-was-checked-and-whether-it-banks
   (let [out (judged-with {:format :baseline-review :verdict :sufficient :reason "ok"
                           :confirmed ["c2"] :checked-at {"c2" ["a.clj:1"]}} (ctx))]
-    (is (= 4 (:checks out)) "the subjects left once c1 was settled")
+    (is (= 4 (:claims out)) "the subjects left once c1 was settled")
     (is (str/includes? (:unbanked out) "the tree moved while the judge read it, so the 1 subject(s)")
         "a review appended with no identity settles what it confirmed nowhere, and says why")))
 
@@ -1488,7 +1493,7 @@
   ;; Counted among the checks, every round reads as if the judge left it unruled.
   (let [out (judged-with {:format :baseline-review :verdict :sufficient :reason "ok"} (ctx)
                         (assoc a-baseline :model {:elements [{:id "order" :sort :kind}] :claims []}))]
-    (is (= 4 (:checks out))
+    (is (= 4 (:claims out))
         "the bare kind is not a check, so the count still matches the ids the prompt listed")))
 
 ;; ── A judgement already standing at the run's key ──────────────────────────

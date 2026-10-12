@@ -476,6 +476,31 @@
     (is (not (str/includes? h "Unsettled")) "a run whose rounds all banked says nothing of it")
     (is (not (str/includes? h "Working copy")))))
 
+(deftest a-check-amended-after-the-last-judgement-is-not-broken-at-the-end
+  ;; commit-msg-gate: entry 17 repaired relation-honest exactly as the finding asked, and the
+  ;; headline still read `broken at the end: goal-served, relation-honest`.
+  (let [p (analysis/payload (assoc a-design-run :repaired? true))]
+    (is (str/includes? (:headline p) "Record: the design at entry 14 · amended, not re-judged: stratified"))
+    (is (not (str/includes? (:headline p) "broken at the end")))
+    (is (str/includes? (:title p) "stratified amended, not re-judged"))))
+
+(deftest a-judge-disagreeing-with-itself-is-in-the-headline
+  ;; agentic-rag: one split and two flips on an unchanged record, and the headline said
+  ;; `0 weakenings · 0 disputed`.
+  (is (str/includes? (:headline (analysis/payload (assoc a-design-run :variance {:splits 1 :reading-flips 2})))
+                     "0 disputed · 1 split · 2 reading flips"))
+  (is (not (str/includes? (:headline (analysis/payload a-design-run)) "split"))))
+
+(deftest an-identity-a-later-round-read-retires-the-until-then
+  ;; agentic-rag: round 1's `until then no round can settle` was quoted at the end of a run whose
+  ;; round 5 settled seventeen subjects.
+  (let [h (:headline (analysis/payload
+                      (assoc a-design-run
+                             :unreadable [{:round 1 :why "the copy is stale; until then no round can settle what it confirms"}]
+                             :readable-from 2)))]
+    (is (str/includes? h "the copy is stale; readable from round 2"))
+    (is (not (str/includes? h "until then")))))
+
 (deftest a-record-runs-envelope-says-what-the-run-did
   (let [p (analysis/payload a-design-run)]
     (is (= :review-run (:adapter p)))
@@ -688,10 +713,26 @@
   (is (not (str/includes? (:headline (analysis/payload a-run)) "Stack since"))
       "a first run on a workstream has nothing to stand against"))
 
+(deftest a-review-of-a-closed-workstream-says-so
+  ;; explore/identity: the run appended :review and :design-verdict after entry 62 closed the
+  ;; workstream :done, and the headline was silent on it.
+  (is (str/includes? (:headline (analysis/payload (assoc a-run :ws-closed {:outcome "done" :seq 62})))
+                     "Reviewing a closed workstream (done, entry 62)"))
+  (is (not (str/includes? (:headline (analysis/payload a-run)) "closed workstream"))))
+
+(deftest coverage-names-layers-paired-with-an-earlier-runs-reading
+  ;; document-structure: two layers converged on one reading paired with another run's, and
+  ;; `0 carried from an earlier run` implied none had.
+  (is (str/includes? (:headline (analysis/payload (assoc a-run :targets-paired 2)))
+                     "Coverage: 3 targets read this run (2 paired with an earlier run's reading), 5 carried")))
+
 (deftest a-standing-verdicts-advice-is-on-the-open-side-of-the-headline
   ;; A sound verdict named two live-run-only premises in :needs and the branch
   ;; merged with no entry ever answering them.
-  (let [p (analysis/payload (assoc a-run :design-verdict "sound" :verdict-advice true))]
+  (let [p (analysis/payload (assoc a-run :design-verdict "sound"
+                                  :verdict-advice "Is this the Phase 1 or the Phase 2 boundary?"))]
     (is (str/includes? (:headline p) "verdict advice owed a person · ")
         "advice nothing routes is owed until someone answers it")
+    (is (str/includes? (:headline p) "Design: sound\nDesign asks: Is this the Phase 1 or the Phase 2 boundary?")
+        "the question travels with the verdict it qualifies, or a clean run reads as finished")
     (is (true? (:verdict-advice p)))))

@@ -160,7 +160,12 @@
 
    `:verdict-advice` is a standing verdict's `:needs`, on the open side on the
    same argument: advice addressed to a person that no gate routes is owed until
-   someone answers it. Carried only when true.
+   someone answers it. Carried only when true; its first sentence is said under
+   the `Design:` line, as the question the verdict leaves.
+
+   `:targets-paired` is how many of the targets read converged by pairing with an
+   earlier run's reading, said in the Coverage line, and `:ws-closed` a closure
+   the reviewed workstream already carried: a run's entries land after it.
 
    A `Design:` line says the verdict in the headline too, and that it was
    carried when it was: the unraised count may be an earlier judge's, and a
@@ -217,7 +222,7 @@
            drift unavailable stood-in base in-flight errored design-verdict verdict-implementation
            verdict-unverified verdict-unraised verdict-advice
            design-carried-from review-entry reviewed-project reviewed-session reviewed-ws-id
-           machinery owed-reading ruled-not-dispatched previous-stack] :as run}]
+           machinery owed-reading ruled-not-dispatched previous-stack ws-closed targets-paired] :as run}]
   ;; `:in-flight` is the reconciler's reading of an orphan's report and is the
   ;; same value `worth-analysing?` gates on; the phase is the half of it that
   ;; means something to a reader, so it is published and the round is not.
@@ -289,8 +294,12 @@
                                       (when verdict-advice
                                         "verdict advice owed a person · ")
                                       (n findings-kept) " kept\n"
-                                      "Coverage: " (or targets-reviewed 0) " targets read this run, "
-                                      (or targets-skipped 0) " carried from an earlier run\n"
+                                      "Coverage: " (or targets-reviewed 0) " targets read this run"
+                                      ;; Read once here and paired with an earlier run's reading:
+                                      ;; converged, but not on two readings of this run's.
+                                      (when (pos? (or targets-paired 0))
+                                        (str " (" targets-paired " paired with an earlier run's reading)"))
+                                      ", " (or targets-skipped 0) " carried from an earlier run\n"
                                       ;; What the stack is against the last run's entry, so a
                                       ;; clean reading of a layer put back to content an earlier
                                       ;; run fixed is read as that rather than as a second pass.
@@ -299,6 +308,13 @@
                                              (or (:line previous-stack) "that entry kept no layers")
                                              "\n"))
                                       (reviewed-line run (str " (base " base ")"))
+                                      ;; A closed workstream still takes the run's entries, after its
+                                      ;; close, so a run that reviewed one says it did.
+                                      (when ws-closed
+                                        (str "\nReviewing a closed workstream ("
+                                             (or (:outcome ws-closed) "closed")
+                                             (when (:seq ws-closed) (str ", entry " (:seq ws-closed)))
+                                             ")"))
                                       ;; What a cap left read quiet once — on :owed-second-reading
                                       ;; the whole of what the run stopped on.
                                       (when-let [owed (seq (:read-once owed-reading))]
@@ -315,6 +331,10 @@
                                              (when design-carried-from
                                                (str ", carried from entry " design-carried-from
                                                     " — not read again"))))
+                                      ;; The question a standing verdict leaves a person, beside the
+                                      ;; verdict it qualifies: a clean run otherwise reads as finished.
+                                      (when (string? verdict-advice)
+                                        (str "\nDesign asks: " verdict-advice))
                                       (when unavailable
                                         (str "\nReviewer unavailable: " (:message unavailable)))
                                       (some->> (stood-in-line stood-in) (str "\n"))
@@ -379,21 +399,32 @@
    `subject` is `nido.review.record/subject-at-start` off the report's target. Two of its facts
    reach the headline, since each asks something of a person that the run's rounds do not say: a
    newer entry superseding the one judged was skipped, and a judged baseline the standing design
-   does not cite — its premise has moved, and its re-citation or re-survey is owed."
+   does not cite — its premise has moved, and its re-citation or re-survey is owed.
+
+   `repaired?` also decides how the last judgement's broken checks are named: a run that amended
+   after that judgement handed them to an amender and never read the result, so they are
+   `amended, not re-judged` — called broken at the end, a repaired claim reads as still open.
+
+   `variance` is the run's `{:splits n :reading-flips n}` — its judges disagreeing with themselves
+   on one record at one tree — said beside weakenings and disputes. `readable-from` is the round
+   after the unreadable ones that read a tree identity, which retires their `until then`."
   [{:keys [loop run-id report-path status rounds launched judged amended unappended weakened unasked disputed
            record-seq still-broken still-asked asks stood-in reviewed-project reviewed-session reviewed-ws-id
            machinery unrecorded spent spent-awaiting cap amend-prompt unreadable stale-at-start repair repaired?
-           amender continued subject]
+           amender continued subject variance readable-from]
     :as run}]
   (let [kind   (name loop)
-        broken (seq (map name still-broken))]
+        broken (seq (map name still-broken))
+        ;; Broken in a judgement the run then amended against: not judged again, so not known broken.
+        at-end (if repaired? " · amended, not re-judged: " " · broken at the end: ")]
     (cond-> {:adapter     :review-run
              :id          (str run-id)
              :loop        kind
              :title       (str kind "-loop " (name (or status :unknown))
                                (when reviewed-session (str " · " reviewed-session))
                                " · " (or rounds 0) " round" (when (not= 1 rounds) "s")
-                               (when broken (str " · " (str/join ", " broken) " still broken")))
+                               (when broken (str " · " (str/join ", " broken)
+                                                 (if repaired? " amended, not re-judged" " still broken"))))
              :run-id      (str run-id)
              :run-dir     (cstate/run-dir (str run-id))
              :report-path report-path
@@ -412,10 +443,14 @@
                                ;; answer a finding or moved within the record, and a reader looking
                                ;; for an amender that gave ground reads this figure, not the total.
                                (when (and unasked (pos? (or weakened 0))) (str " (" unasked " unasked)"))
-                               " · " (or disputed 0) " disputed\n"
+                               " · " (or disputed 0) " disputed"
+                               (when-let [{:keys [splits reading-flips]} variance]
+                                 (str " · " splits " split" (when (not= 1 splits) "s")
+                                      " · " reading-flips " reading flip" (when (not= 1 reading-flips) "s")))
+                               "\n"
                                (when unappended (str "Refused amendment, not appended: " unappended "\n"))
                                "Record: the " kind (when record-seq (str " at entry " record-seq))
-                               (when broken (str " · broken at the end: " (str/join ", " broken)))
+                               (when broken (str at-end (str/join ", " broken)))
                                (when (seq still-asked)
                                  (str " · asked at the end: " (str/join ", " still-asked)))
                                " · figures: bb nido:review:figures"
@@ -447,7 +482,11 @@
                                       (when (next unreadable) "s") " "
                                       (str/join ", " (map :round unreadable))
                                       ", so what they confirmed could not settle — "
-                                      (:why (last unreadable)) "\n"))
+                                      (if readable-from
+                                        (str (str/replace (str (:why (last unreadable))) #";\s*until then.*$" "")
+                                             "; readable from round " readable-from)
+                                        (:why (last unreadable)))
+                                      "\n"))
                                ;; Why a short run was allowed to stop: it finished readings and
                                ;; runs that came before it, which only the ledger otherwise joins.
                                (when-let [runs (seq (:continues continued))]

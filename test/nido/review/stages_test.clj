@@ -270,6 +270,55 @@
       (is (= :continue (:control ctx)))
       (is (= :fix (-> ctx :findings first :disposition))))))
 
+(deftest the-warden-prompt-is-kept-in-the-run-dir
+  ;; workflow-orchestrator, rag-vission-support: agent.log held the warden's answers and never
+  ;; what it was shown about prior answers and parks.
+  (let [tmp  (str (fs/create-temp-dir))
+        sent (atom nil)]
+    (with-redefs [agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! sent first-message)
+                                  {:num-turns 1 :result-error? false
+                                   :result-text "```json\n{\"decision\":\"stop\",\"reason\":\"r\"}\n```"})
+                  cstate/run-dir (fn [_] tmp)
+                  stages/discover-design-record (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] nil)]
+      ((:run stages/warden-stage) {:config {:cwd "/w" :run-id "r1"} :iter 3
+                                   :findings [{:id "aa11" :title "x"}]})
+      (is (= @sent (slurp (str (fs/path tmp "warden-round-3-prompt.txt"))))))))
+
+(deftest a-quiet-reading-that-pairs-with-an-earlier-run-names-it
+  ;; document-structure: two layers converged on one reading by pairing with review-19f13b4e's,
+  ;; found only by scanning other runs' reports for matching patch hashes.
+  (let [ctx {:config {:run-id "r2"}
+             :reviews [{:target {:label "layout-read" :patch-hash "h1"}}
+                       {:target {:label "section-tree" :patch-hash "h2"}}
+                       {:target {:label "mine" :patch-hash "h3"}}]
+             :cache {"h1" {:status :read-once :run-id "review-19f13b4e" :round 2 :at "t"}
+                     "h2" {:status :read-once :round 1}
+                     "h3" {:status :read-once :run-id "r2" :round 1}}}]
+    (is (= [{:label "layout-read" :run-id "review-19f13b4e" :round 2 :at "t"}
+            {:label "section-tree" :round 1}]
+           (#'stages/paired-with-earlier ctx #{"h1" "h2" "h3"}))
+        "an entry this run wrote is its own first reading, not a pairing with another")
+    (is (= [] (#'stages/paired-with-earlier ctx #{})) "only a reading that left nothing owed pairs")))
+
+(deftest the-stack-is-read-against-an-entry-from-before-entries-kept-layers
+  ;; explore/identity: `Stack since entry 60: that entry kept no layers`, while entry 60's report
+  ;; still held its eight layer rows — and the base had moved, which nothing said.
+  (let [tmp  (str (fs/create-temp-dir))
+        path (str (fs/path tmp "report.json"))]
+    (spit path (json/generate-string
+                {:rounds [{:phases [{:phase "review"
+                                     :layers [{:label "a" :index 0 :patch-hash "p1"}
+                                              {:label "stack" :stack? true :patch-hash "s"}]}]}]}))
+    (with-redefs [ws/latest-entry (fn [_ _ _] {:seq 60 :base "main" :report-path path})]
+      (let [prev (stages/stack-since-last-review :brian "ws-1" {} [{:label "a" :index 0 :patch-hash "p2"}]
+                                                 "explore/identity--doors")]
+        (is (= [{:label "a" :patch-hash "p1"}] (:layers prev)))
+        (is (true? (:from-report prev)))
+        (is (= "main" (:base-was prev)))
+        (is (= "changed a (p1→p2) · base was main" (:line prev)))))))
+
 (deftest warden-prompt-uses-the-design-record-as-its-yardstick
   (let [captured (atom nil)]
     (with-redefs [agent/launch! (fn [{:keys [first-message]}]

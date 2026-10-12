@@ -1439,19 +1439,50 @@
                 (seq reverted) (conj (str "reverted " (str/join ", " (map arrow reverted)))))]
     (if (seq parts) (str/join " · " parts) "unchanged")))
 
-(defn ^{:malli/schema [:=> [:cat [:maybe :keyword] [:maybe :string] :map :any] [:maybe :map]]}
+(defn- reported-layers
+  "The `[{:label :patch-hash}]` the last round of the report at `path` reviewed or skipped, bottom
+   first, the composition pass out — nil when the file is gone or holds no such rows. What an entry
+   from before entries kept :layers can still be read against, while its run dir lasts."
+  [path]
+  (try
+    (when (and path (fs/exists? (str path)))
+      (let [r      (json/parse-string (slurp (str path)) true)
+            review (some->> (:rounds r) (keep #(last (filter (fn [ph] (= "review" (:phase ph))) (:phases %))))
+                            last)]
+        (not-empty (into [] (comp (remove :stack?)
+                                  (filter :label)
+                                  (map #(cond-> {:label (:label %)}
+                                          (:patch-hash %) (assoc :patch-hash (:patch-hash %)))))
+                         (sort-by #(or (:index %) 0) (:layers review))))))
+    (catch Exception _ nil)))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :keyword] [:maybe :string] :map :any [:? :any]] [:maybe :map]]}
   stack-since-last-review
   "The stack against the last :review entry on the workstream, for the report's target:
    `{:seq <that entry> :layers <its layers> :delta <stack-delta> :line <stack-delta-line>}`;
-   `{:seq n}` alone when that entry kept no layers, which an entry written before entries did
-   has none of; nil when no run has recorded one, or there is no workstream. Reads the ledger
-   and the `cache` the round already holds, and writes nothing."
-  [project ws-id cache targets]
-  (when-let [prev (and project ws-id (ws/latest-entry project ws-id :review))]
-    (if-let [layers (seq (:layers prev))]
-      (let [delta (stack-delta layers targets cache)]
-        {:seq (:seq prev) :layers (vec layers) :delta delta :line (stack-delta-line delta)})
-      {:seq (:seq prev)})))
+   `{:seq n}` alone when that entry kept no layers and its report can no longer say which it
+   ended over; nil when no run has recorded one, or there is no workstream. An entry written
+   before entries kept :layers is read through its :report-path (`reported-layers`), marked
+   `:from-report`. `base`, this run's, beside that entry's when they differ, is `:base-was` and
+   said on the line: a range read whole again because its base moved is otherwise a cache miss
+   nothing explains. Reads the ledger, that report and the `cache` the round already holds, and
+   writes nothing."
+  ([project ws-id cache targets] (stack-since-last-review project ws-id cache targets nil))
+  ([project ws-id cache targets base]
+   (when-let [prev (and project ws-id (ws/latest-entry project ws-id :review))]
+     (let [kept     (seq (:layers prev))
+           layers   (or kept (reported-layers (:report-path prev)))
+           base-was (when (and base (:base prev) (not= (str base) (str (:base prev))))
+                      (str (:base prev)))
+           moved    (when base-was (str "base was " base-was))]
+       (if layers
+         (let [delta (stack-delta layers targets cache)]
+           (cond-> {:seq (:seq prev) :layers (vec layers) :delta delta
+                    :line (str/join " · " (remove nil? [(stack-delta-line delta) moved]))}
+             (not kept) (assoc :from-report true)
+             base-was   (assoc :base-was base-was)))
+         (cond-> {:seq (:seq prev)}
+           base-was (assoc :base-was base-was :line (str "that entry kept no layers · " moved))))))))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :map]}
   to-review
@@ -1625,7 +1656,8 @@
             previous (when (= 1 (:iter ctx))
                        (let [[project ws-id] (project+ws-from-cwd cwd)]
                          (stack-since-last-review project ws-id (or cache {})
-                                                  (concat review skipped))))]
+                                                  (concat review skipped)
+                                                  (get-in ctx [:config :base]))))]
         (emit (cond-> {:event    :targets-resolved
                        :iter     (:iter ctx)
                        :at       (str (java.time.Instant/now))
@@ -1699,7 +1731,7 @@
 ;; `read-once-targets` and `with-quiet-reads` read what the write resolved, so
 ;; they belong to the same reasoning and are called from the same two stages.
 (declare record-review! record-statuses! salvaged-statuses unanswered-of
-         read-once-targets with-quiet-reads quiet-patches)
+         read-once-targets with-quiet-reads quiet-patches paired-with-earlier)
 
 (defn- review-target!
   "One target's review, as a VALUE: the reviewer's result, or `{:target …
@@ -1849,8 +1881,8 @@
         ;; everything below — the warden's view, the quiet round's status, the
         ;; cache's denial — reads a row this round settled as settled. Kept on
         ;; the carry because the rows are re-read off the ledger every round.
-        answers  (merge (get-in ctx [:carry :inherited-answers])
-                        (reviewer-answers results (:iter ctx)))
+        answered (reviewer-answers results (:iter ctx))
+        answers  (merge (get-in ctx [:carry :inherited-answers]) answered)
         ;; What reviewers set aside, onto the carry: the verdict pass is its one
         ;; reader and runs after the last round, and a round's own fields do
         ;; not outlive it.
@@ -1859,6 +1891,8 @@
                                          set-aside)))
                        results)
         ctx      (cond-> ctx
+                   ;; This round's own, for its review phase; the carry holds the run's.
+                   (seq answered) (assoc :inherited-answered answered)
                    (seq answers)
                    (-> (assoc-in [:carry :inherited-answers] answers)
                        (assoc-in [:carry :inherited-open] (with-answers inherit answers)))
@@ -1967,8 +2001,10 @@
             parked?  (some #(and (= :park (:disposition %)) (park-blocks? %))
                            (run-owed reading))
             sampled  (when-not parked? (read-once-targets statuses))
+            paired   (paired-with-earlier reading (quiet-patches results []))
             ctx'     (-> (with-quiet-reads reading statuses
                                            (quiet-patches results []))
+                         (cond-> (seq paired) (assoc :paired-with-earlier paired))
                          (assoc :control (if (seq sampled) :next-round :stop)
                                 :status (cond
                                           nothing?               :nothing-to-review
@@ -2951,6 +2987,27 @@
         (keep (fn [[h _]] (when (cache/read-quiet? (:cache ctx) h) h)))
         (:cache ctx)))
 
+(defn- paired-with-earlier
+  "The targets this round read quiet (`quiet`, its patches) whose reading pairs with a quiet one an
+   EARLIER run left in the cache, as `[{:label :run-id :round :at}]` — the cached entry's, :run-id
+   absent on an entry written before entries named their run. Read off `ctx` before its own reads
+   are folded into the carry, and against the cache as the round found it. A layer that converges
+   this way rows exactly like one this run read twice, and the partner is otherwise found only by
+   matching patch hashes across other runs' reports."
+  [ctx quiet]
+  (let [mine (get-in ctx [:carry :quiet-reads] #{})
+        run  (str (get-in ctx [:config :run-id]))]
+    (vec (for [{:keys [target]} (:reviews ctx)
+               :let [h (:patch-hash target)
+                     e (get (:cache ctx) h)]
+               :when (and h (contains? quiet h) (not (contains? mine h))
+                          (cache/read-quiet? (:cache ctx) h)
+                          (not= run (str (:run-id e))))]
+           (cond-> {:label (:label target)}
+             (:run-id e) (assoc :run-id (str (:run-id e)))
+             (:round e)  (assoc :round (:round e))
+             (:at e)     (assoc :at (:at e)))))))
+
 (defn ^{:malli/schema [:=> [:cat :map :any :any] :map]}
   with-quiet-reads
   "ctx with what this round read of each patch folded into the carry: the
@@ -3149,11 +3206,15 @@
         (let [now (str (java.time.Instant/now))
               c   (reduce (fn [c [t status]]
                             (cache/record c (:patch-hash t)
-                                          {:status   status
-                                           :label    (:label t)
-                                           :round    (:iter ctx)
-                                           :at       now
-                                           :answered (answered-for (:label t) rounds)}))
+                                          (cond-> {:status   status
+                                                   :label    (:label t)
+                                                   :round    (:iter ctx)
+                                                   :at       now
+                                                   :answered (answered-for (:label t) rounds)}
+                                            ;; Which run read it, so a later run pairing with
+                                            ;; this reading can name it (`paired-with-earlier`).
+                                            (get-in ctx [:config :run-id])
+                                            (assoc :run-id (str (get-in ctx [:config :run-id]))))))
                           (or (:cache ctx) (cache/read-cache project ws-id))
                           statuses)
               c   (reduce (fn [c h] (cache/reopen c h now)) c reopen)]
@@ -3718,6 +3779,15 @@
            (assoc :introduced-by-round nil))
         rulings))
 
+(defn- spit-prompt!
+  "Leave `prompt` in `run-dir` as `file`, when the dir exists. Best-effort: a prompt that cannot be
+   kept costs the reader, never the round."
+  [run-dir file prompt]
+  (try
+    (when (fs/directory? run-dir)
+      (spit (str (fs/path run-dir file)) prompt))
+    (catch Exception _ nil)))
+
 (defn- run-warden-stage
   [ctx]
   (let [{:keys [cwd run-id budget]} (:config ctx)
@@ -3765,7 +3835,11 @@
                  :fix-outcomes (fix-outcomes (:history ctx) (:carry ctx))
                  :answered (answered-by-layer ctx)})
         run-dir (str (cstate/run-dir run-id))
-        ask (fn [message]
+        ;; `file` is the prompt's name in the run dir. The warden is handed its prompt as an
+        ;; argument, so agent.log never holds it, and its docstring's promise — inputs
+        ;; reconstructable from the report afterwards — rests on the prompt being kept.
+        ask (fn [message file]
+              (spit-prompt! run-dir file message)
               (let [{:keys [num-turns result-error? result-text] :as launch}
                     ;; In the run dir, not the reviewed worktree. Started there,
                     ;; claude hands the agent that directory's CLAUDE.md and its
@@ -3784,12 +3858,14 @@
                  :failure  (when (or (zero? (or num-turns 0)) result-error?
                                      (= :indeterminate (:decision decision)))
                              (warden-failure launch decision))}))
-        first-ask (ask prompt)
+        prompt-file (str "warden-round-" (:iter ctx) "-prompt.txt")
+        first-ask (ask prompt prompt-file)
         relaunched (when-let [f (:failure first-ask)]
                      (when (ask-the-warden-again? (:launch first-ask) (:decision first-ask) f)
                        f))
         {:keys [launch decision failure]} (if relaunched
-                                            (ask (restated-warden-prompt prompt relaunched))
+                                            (ask (restated-warden-prompt prompt relaunched)
+                                                 (str "warden-round-" (:iter ctx) "-relaunch-prompt.txt"))
                                             first-ask)]
     (if failure
       (let [limited (when (= :usage-limited (:cause failure)) (usage-limited "warden" launch))]
@@ -3884,6 +3960,7 @@
             ;; derivation of the same rule.
             statuses (record-review! cwd ctx')
             sampled  (read-once-targets statuses)
+            paired   (paired-with-earlier ctx' (quiet-patches (:reviews ctx') (:findings ctx')))
             ;; A stop over a layer read quiet once ends the ROUND and not the
             ;; run. The warden is never told which layers are on their first
             ;; reading — it rules on findings, and this is a fact about content
@@ -3903,6 +3980,8 @@
         ;; entered in `:history`, so it is entered here.
         (cond-> (with-quiet-reads ctx' statuses
                                   (quiet-patches (:reviews ctx') (:findings ctx')))
+          (seq sampled) (assoc :first-reading (mapv :label sampled))
+          (seq paired)  (assoc :paired-with-earlier paired)
           hold? (-> (assoc :read-once (mapv :label sampled) :control :next-round)
                     with-round-history))))))
 
