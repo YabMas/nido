@@ -1268,9 +1268,10 @@
    asked a person for it every run."
   (str "VERIFY — before you report done.\n"
        "Run the tests covering every namespace you changed and every caller you\n"
-       "re-routed: focused, not a whole suite, excluding only what this project\n"
-       "forbids running here. Do not assume they are all integration tests —\n"
-       "look. A regression test you add must be shown FAILING on the code\n"
+       "re-routed, and the test namespaces this layer adds or touches — its own\n"
+       "integration tests included: focused, not a whole suite, excluding only\n"
+       "what this project forbids running here. Do not assume they are all\n"
+       "integration tests — look. A regression test you add must be shown FAILING on the code\n"
        "before your repair, then passing after it; say in your account that it\n"
        "was. If a test namespace will not reload in the REPL (\"Alias already\n"
        "exists\"), `(remove-ns 'that.ns)` and require it again rather than\n"
@@ -1282,6 +1283,8 @@
        "not evidence: do not spend a call on it and do not cite it.\n"
        "Do not add a code path for an input you believe does not occur. A limit\n"
        "you know about goes in your account, not into shipped code.\n\n"))
+
+(declare fixer-design-block)
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   fix-prompt
@@ -1390,8 +1393,15 @@
    search from a sweep's: a sweep looks for the finding's siblings, and a leak a
    reorder opens on another exit of the same `with-open` is no sibling of
    anything. It is also different from the whole-artifact re-read above, which
-   checks the text for consistency and not each control path for each resource."
-  [{:keys [findings layer stack settled handoffs]}]
+   checks the text for consistency and not each control path for each resource.
+
+   `:design` is the record the run is judged against — see
+   `fixer-design-block`. The warden cites one invariant per ruling, and a
+   fixer holding only that one repairs against it and breaks the next: the
+   repairs that created a later round's defect were, run after run, ones that
+   satisfied the cited clause and contradicted an uncited one in the same
+   files, which the fixer had never been shown."
+  [{:keys [findings layer stack settled handoffs design]}]
   (str
    "Fix the following code-review findings in this working directory. Make the\n"
    "MINIMAL change that resolves each. Do NOT commit — the orchestrator commits.\n\n"
@@ -1425,6 +1435,7 @@
    "Name in your final message the resources and exits you checked. A sweep\n"
    "looks for this defect elsewhere; this is the defect your own edit can make\n"
    "here, and it is the one the next round otherwise reports as new.\n\n"
+   (fixer-design-block design)
    (stacked-change-block stack layer)
    (handoffs-block handoffs)
    (settled-block settled)
@@ -1474,12 +1485,24 @@
                              "  signature that hit nothing is an answer, and a class\n"
                              "  that shares a requirement and no token is one too —\n"
                              "  there, name what you read instead.\n"
+                             "  The class is the INVARIANT this defect breaks, not\n"
+                             "  the mechanism it happened to show: search for every\n"
+                             "  way that clause can be false here, not only for the\n"
+                             "  instance's surface. Where the finding sits inside one\n"
+                             "  function, its siblings are mostly the other INPUTS\n"
+                             "  reaching that function — enumerate them against the\n"
+                             "  clause, not only the call sites that share a token.\n"
                              "  Finding them one per round is what this is here to\n"
                              "  stop — the minimal change rule does not apply to the\n"
-                             "  search, only to each edit. A sibling you may not\n"
-                             "  touch here — another layer's, or outside this\n"
-                             "  change — is to be NAMED in your final message, never\n"
-                             "  silently left.\n")))
+                             "  search, only to each edit. A sibling in a file you\n"
+                             "  may edit is to be FIXED, not named: leaving it is not\n"
+                             "  an option. A sibling you may not touch here — another\n"
+                             "  layer's, or outside this change — is to be\n"
+                             "  NAMED in your final message, never silently left.\n"
+                             "  A site you looked at and kept unchanged needs its\n"
+                             "  reason in your final message, said against the\n"
+                             "  invariant: that it is outside the words of the\n"
+                             "  ruling is not one.\n")))
                     "  " (:body f))))
         (str/join "\n\n"))
    "\n\n"
@@ -1598,7 +1621,47 @@
                          (str "  [a reader sees it: " visible-how "]"))))
                 seams)))
 
-(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :string]]}
+(defn- fixer-design-block
+  "The design record rendered for a FIXER — what every repair must leave true.
+
+   Narrower than `design-yardstick-block` for the same reason that one is
+   narrower than the warden's: what a reader is shown is what it acts on. A
+   fixer gets the claims and the strata and nothing that settles a finding —
+   no seams, no rejected remedies — because it is handed findings already
+   ruled, and a field that closes one is a licence to stop short of the repair.
+
+   The strata are here because a repair is the one edit in the loop that can
+   move code between levels without anyone having asked whether it should:
+   restoring a query the finding said was missing put it back in the stratum
+   the design had moved it out of, and the next round raised the opposite
+   defect. Told the levels, the fixer can see the move it is making and name
+   it instead of landing it.
+
+   nil when there is no record, or the record states no claim."
+  [{:keys [strata] :as design}]
+  (when (and design (seq (claim-model/claims design)))
+    (str "THE DESIGN THIS CHANGE COMMITTED TO — every repair you make must leave\n"
+         "ALL of these true, not only the one a finding cites. A repair that\n"
+         "resolves its finding and breaks another of them is the next round's\n"
+         "defect, and it is yours. A new entry point you add — an arity, a\n"
+         "function, a branch — is bound by them as much as the code you were\n"
+         "handed:\n"
+         (claim-lines design) "\n\n"
+         (when (seq strata)
+           (str "THE STRATA, floor first — each level is written in the ones below\n"
+                "it and never in one above:\n"
+                (bullets strata) "\n"
+                "A repair that moves code from one stratum to another, or makes a\n"
+                "lower one reach a higher one, breaks the design even when it\n"
+                "resolves the finding. Do not land it: name the move in your final\n"
+                "message and repair within the stratum the code is in.\n\n"))
+         "Where a repair and one of these cannot both hold, do not choose: answer\n"
+         "the finding `UNREPAIRED <id> disputes` and name the claim that stands\n"
+         "in the way.\n\n")))
+
+(defn ^{:malli/schema [:function
+                       [:=> [:cat [:maybe :map]] [:maybe :string]]
+                       [:=> [:cat [:maybe :map] [:maybe [:sequential :string]]] [:maybe :string]]]}
   design-yardstick-block
   "The design record rendered for a REVIEWER — what the implementation is to be
    validated against.
@@ -1635,10 +1698,31 @@
    reviewer bounded to one layer cannot see the stack it would be checked
    against.
 
+   `:strata` — the levels the change writes in, floor first. Not a cut, which
+   is why it is here when `:layers` is not: a require pointing from a lower
+   stratum into a higher one is a defect in the code that survives the
+   collapse, and a reviewer holding only the claims cannot see it — in one run
+   every layer and composition reading passed a domain namespace requiring a
+   UI one, and only the post-run judge, holding the strata, raised it.
+
+   The quantified-claim clause overrides the review prompt's \"introduced by
+   this change\" for one case. A claim of the form every X through Y is made
+   TRUE by the change, so a call site the diff left unmoved is the change's
+   defect, not a pre-existing one; read as the latter, a run converged clean
+   on two readings while the verdict found the claim broken outside the diff.
+
+   `swept` — the claims a warden has already ruled a sweep for this run, as
+   rendered lines. A sweep is a statement that the claim can fail at more than
+   one site, and the fixer's account of it is one reader's search; handing the
+   claim back to the next round's reviewers as a lens is what lets a sibling
+   the sweep missed arrive as a finding instead of in the verdict's unraised
+   list.
+
    nil when there is no record. `tasks.nido-review/no-yardstick` now refuses such
    a run outright, so this is the second reader of the same fact rather than the
    one that has to cope with it."
-  [{:keys [shape invariants seams model] :as design}]
+  ([design] (design-yardstick-block design nil))
+  ([{:keys [shape invariants seams model strata] :as design} swept]
   (when (or (seq invariants) (seq model) (not (str/blank? (str shape))))
     (str
      "THE DESIGN THIS CHANGE COMMITTED TO — your job is to validate the\n"
@@ -1663,14 +1747,32 @@
             "DESIGN is what is in question here, which is a decision for a person\n"
             "rather than a repair for a fixer, and nothing else in this review can\n"
             "say it: you are the reader holding the code against the claim.\n"
-            "Most findings contradict nothing. Leave it null then.\n\n"))
+            "Most findings contradict nothing. Leave it null then.\n\n"
+            "A claim of the form EVERY X goes through Y is one this change makes\n"
+            "true, so an X the diff left where it was is this change's defect, not\n"
+            "a pre-existing one: search for the X that did not move, outside the\n"
+            "diff too, and report each one you find.\n\n"))
+     (when (seq swept)
+       (str "ALREADY BROKEN AND SWEPT THIS RUN — a fix was ruled for a break of\n"
+            "each of these and its siblings were searched for once:\n"
+            (bullets swept) "\n\n"
+            "Read for every other place each could still be false — another\n"
+            "caller, another input, another path — and report each as its own\n"
+            "finding. One fixer's search is not the last word on a class.\n\n"))
+     (when (seq strata)
+       (str "THE STRATA THIS CHANGE WRITES IN, floor first — each level is written\n"
+            "in the ones below it and never in one above:\n"
+            (bullets strata) "\n\n"
+            "A require or call that reaches from a lower stratum into a higher one\n"
+            "is a finding, whichever layer it sits in; put the claim it breaks in\n"
+            "`contradicts` where there is one.\n\n"))
      (when (seq seams)
        (str "KNOWN GAPS — noticed when this was designed and deliberately left:\n"
             (seam-lines seams) "\n\n"
             "Do not report these; they are decisions already taken. A defect they\n"
             "do not COVER is still yours, including one at the same seam — say\n"
             "what is outside what the gap declares. And a seam whose stated\n"
-            "visibility is not actually in the code is itself a finding.\n\n")))))
+            "visibility is not actually in the code is itself a finding.\n\n"))))))
 
 (defn- design-block
   "The design record, rendered for the warden. This is the yardstick: findings are
@@ -1809,15 +1911,27 @@
    this prompt: that carries what each round DECIDED, and deciding whether this
    defect is that one needs the defect. Titles only — a body per finding per
    round would grow the prompt without helping, because what a fresh reviewer
-   rewrites between rounds is exactly the title."
+   rewrites between rounds is exactly the title.
+
+   The markers are the repair history, and they are here because the two
+   questions the warden is asked beside `same_as` — `sibling_of`, and whether
+   a park has a history behind it — are about what earlier rounds DID to a
+   finding, which the titles do not carry. Without them a warden judged one
+   class sibling, sibling, same across three rounds, and parked a sixth
+   finding from one design gap as though it were the first."
   [seen inherited]
   (when (or (seq seen) (seq inherited))
-    (str "ALREADY RAISED IN AN EARLIER ROUND — the pool `same_as` points into.\n"
+    (str "ALREADY RAISED IN AN EARLIER ROUND — the pool `same_as` and\n"
+         "`sibling_of` point into.\n"
          "A finding here was seen before; whether it is the same DEFECT as one\n"
          "below is what you are being asked. `last run` rows are the ones under\n"
          "LEFT OWED BY THE LAST RUN: naming one in `same_as` answers it.\n"
-         (->> (concat (map (fn [{:keys [round id title]}]
-                             (str "  r" round " " id "  " title))
+         (->> (concat (map (fn [{:keys [round id title swept made-by class-of]}]
+                             (str "  r" round " " id "  " title
+                                  (when swept "  [swept]")
+                                  (when made-by (str "  [made by r" made-by "'s repair]"))
+                                  (when (and class-of (not= class-of id))
+                                    (str "  [class of " class-of "]"))))
                            seen)
                       (map (fn [{:keys [id title disposition]}]
                              (str "  last run " id "  " title
@@ -2102,6 +2216,10 @@
          "handed to that layer's fixer — and it holds that layer open even if no\n"
          "reviewer read it this round because its patch was already converged,\n"
          "which is where a surviving sibling usually is.\n"
+         "A site an account says it examined and LEFT ALONE as outside the\n"
+         "sweep's class is named too. Rule it against the invariant the class\n"
+         "breaks, not against the words the sweep was ordered in: where the\n"
+         "invariant covers it, it is a sibling and you promote it.\n"
          "Promote only what an account above NAMED and you can place. The fixer\n"
          "read the code and diagnosed it; you are supplying the layer. A defect\n"
          "you inferred yourself is not a promotion — everything else here was\n"
@@ -2169,6 +2287,8 @@
    " \"findings\": [{\"id\": \"<finding id>\",\n"
    "               \"same_as\": \"<id of the earlier-round finding this is the\n"
    "                             same defect as, or null>\",\n"
+   "               \"sibling_of\": \"<id of the earlier-round finding whose CLASS\n"
+   "                             this is a different member of, or null>\",\n"
    "               \"introduced_by_round\": <the earlier round whose REPAIR\n"
    "                             created this defect, or null when the branch\n"
    "                             arrived with it>,\n"
@@ -2289,7 +2409,23 @@
    "`sweep` and `because` are one ruling. The fixer is told to sweep by the\n"
    "FIELD — your sentence is not read for it — so a `because` that says the\n"
    "fixer should audit for siblings, over a field that says false, orders\n"
-   "nothing and leaves the class open with an account claiming it was closed.\n\n"
+   "nothing and leaves the class open with an account claiming it was closed.\n"
+   "Name the class as the INVARIANT the defect breaks, quoted — and where\n"
+   "more than one governs the sites it reaches, the WIDEST of them. Never\n"
+   "as the mechanism the instance showed, its surface change, or the input\n"
+   "that triggered it: \"audit every check constraint\" and \"tests of\n"
+   "functions whose arity changed\" are each one road into a class, and the\n"
+   "fixer searches exactly the road you name, declares no siblings left, and\n"
+   "the next round finds the member on the road beside it. With no design\n"
+   "record, state the rule every member breaks, not where this one sits.\n\n"
+   "FIX ACROSS A BOUNDARY — check the remedy, not only the defect\n"
+   "A `fix` whose remedy moves code from one stratum to another, or across\n"
+   "a band of the project's declared design, satisfies the claim the finding\n"
+   "cites and can break another one the record makes. Before ruling it, hold\n"
+   "the REMEDY against every claim of the design below. If it breaks one,\n"
+   "it is not a repair: `park` it on ground (a), naming both claims — the\n"
+   "design is in tension with itself, and a fixer told to resolve that\n"
+   "picks a side that the next round reports as the opposite defect.\n\n"
    "SAME_AS — is this a defect we have already seen?\n"
    "A reviewer starts fresh every round and writes its own words, so one defect\n"
    "comes back under a new title, at a line the last round's fixes moved. You are\n"
@@ -2300,6 +2436,16 @@
    "This is what lets the loop tell a defect it cannot move from a run that is\n"
    "still making progress. Guessing costs more than leaving it null: two defects\n"
    "welded together are reported as one, and the second is never fixed.\n\n"
+   "SIBLING_OF — is this another member of a class already swept?\n"
+   "A different defect — not `same_as` — that breaks the same invariant in\n"
+   "the same way as an earlier finding you ruled a sweep for: a sibling that\n"
+   "sweep's account named or left alone, one the sweep should have reached,\n"
+   "or one a swept repair wrote in the same function. Put the earlier id in\n"
+   "`sibling_of`. Unlike `same_as` it welds nothing: both defects stay open\n"
+   "and both are fixed. What it changes is the remedy — the loop tells the\n"
+   "fixer of a class that came back to change what its members are derived\n"
+   "from rather than enumerate them again. Null when nothing earlier was\n"
+   "swept for this class, and always null beside a `same_as`.\n\n"
    "INTRODUCED_BY_ROUND — did the loop make this defect?\n"
    (when round (str "This is round " round ".\n"))
    "A NEW defect — not `same_as` anything — can be one an earlier round's fixer\n"
@@ -2311,7 +2457,19 @@
    "for a recurrence, which the branch had before any fixer touched it.\n"
    "The run counts what it settled with and without these, so a run whose\n"
    "repairs kept breaking what they touched does not read as one that found\n"
-   "more.\n\n"
+   "more.\n"
+   "A defect a repair wrote is the sweep's class when that repair was swept\n"
+   "and it breaks the same invariant: give it `sibling_of` as well. The loop\n"
+   "already reads that from the round number, so the link only has to be\n"
+   "right, not remembered.\n\n"
+   "A REPAIR HISTORY — when a park is not enough\n"
+   "ALREADY RAISED below marks each earlier finding that was swept, that a\n"
+   "repair made, and the class it belongs to. Before you `park`, count the\n"
+   "findings there on the same invariant or class as this one. Two or more,\n"
+   "or a defect a repair wrote while repairing a defect a repair wrote, is\n"
+   "a history the design keeps producing rather than one finding: decide\n"
+   "`escalate`, naming the invariant, instead of parking it as one more\n"
+   "decision. Say the count in your reason.\n\n"
    (disposition-block)
    "Each finding carries a reach the reviewer assigned, and the reviewer was\n"
    "holding the same design record you are: local (the design settles it and the\n"
@@ -2349,6 +2507,16 @@
           "design record.\n\n"))
    (when stance (str (stance-block stance) "\n"))
    (when-let [t (toc-block toc)] (str t "\n"))
+   (when (and design (seq toc))
+     (str "A BRIEF THAT DEFERS AN INVARIANT\n"
+          "Hold each layer's `out of scope` above against the design's claims. One\n"
+          "naming the subject of a claim that holds ALWAYS — not one marked ON\n"
+          "COMPLETION — defers what the design says must already be true, and\n"
+          "every reviewer is told out of scope is a prohibition, so the run reads\n"
+          "clean while the claim is broken. Put each in `standing`, naming the\n"
+          "layer and quoting the claim: a person narrows the claim or marks it\n"
+          "ON COMPLETION with a seam naming what closes it. Do not fix it and do\n"
+          "not park it; it is neither code nor a finding.\n\n"))
    (answered-block answered)
    (when (seq parked)
      ;; A park is never raised again — that is what a park IS — so it leaves the

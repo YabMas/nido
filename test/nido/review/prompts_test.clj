@@ -1584,3 +1584,60 @@ layers, it is not yours"))
     (is (str/includes? out "even one your own layer touches too"))
     (is (str/includes? out "never handed to you")
         "the fence and the routing say the same thing, so the finding's own file is never behind it")))
+
+(deftest a-fixer-repairs-against-every-claim-not-only-the-cited-one
+  (let [out (prompts/fix-prompt {:findings findings
+                                 :design (assoc design :strata ["record" "view"])})]
+    (is (str/includes? out "a total is rounded exactly once")
+        "a fixer never shown the record repairs against the one clause the ruling quoted")
+    (is (str/includes? out "THE STRATA")
+        "a repair is the one edit that moves code between levels without anyone asking")
+    (is (str/includes? out "UNREPAIRED <id> disputes")
+        "a repair that cannot hold beside a claim is answered in a line the stage parses"))
+  (is (not (str/includes? (prompts/fix-prompt {:findings findings}) "COMMITTED TO"))
+      "no record, no block — a heading over nothing reads as a lookup that failed"))
+
+(deftest a-sweep-is-over-the-invariant-and-its-owned-siblings-are-fixed
+  (let [out (prompts/fix-prompt {:findings [{:priority 1 :title "t" :body "b" :sweep true}]})]
+    (is (str/includes? out "INVARIANT this defect breaks"))
+    (is (str/includes? out "other INPUTS")
+        "a family living in one function's inputs was found one member per round by grepping call sites")
+    (is (str/includes? out "is to be FIXED, not named")
+        "a fixer that named two siblings in its own file and left both cost a round")))
+
+(deftest reviewers-hold-the-strata-and-the-swept-claims
+  (let [out (prompts/design-yardstick-block (assoc design :strata ["domain" "ui"])
+                                            ["a total is rounded exactly once"])]
+    (is (str/includes? out "THE STRATA THIS CHANGE WRITES IN")
+        "a domain namespace requiring a UI one passed every in-loop reading")
+    (is (str/includes? out "ALREADY BROKEN AND SWEPT THIS RUN"))
+    (is (str/includes? out "EVERY X goes through Y")
+        "an unmoved call site breaks a quantified claim the change makes true"))
+  (is (not (str/includes? (prompts/design-yardstick-block design) "ALREADY BROKEN"))))
+
+(deftest the-warden-links-a-class-without-welding-it
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
+    (is (str/includes? out "\"sibling_of\""))
+    (is (str/includes? out "Name the class as the INVARIANT the defect breaks")
+        "a sweep phrased by mechanism is searched by exactly that mechanism")
+    (is (str/includes? out "FIX ACROSS A BOUNDARY"))
+    (is (str/includes? out "decide\n`escalate`")
+        "a park with a repair history behind it is the design in question, not one more decision")))
+
+(deftest the-warden-sees-the-repair-history-of-what-it-already-raised
+  (let [out (prompts/warden-prompt
+             {:findings findings :history [] :design design
+              :seen [{:round 2 :id "aa11" :title "one" :swept true}
+                     {:round 3 :id "bb22" :title "two" :made-by 2 :class-of "aa11"}]})]
+    (is (str/includes? out "r2 aa11  one  [swept]"))
+    (is (str/includes? out "[made by r2's repair]  [class of aa11]")
+        "without the markers a warden cannot count the history it is told to count")))
+
+(deftest a-brief-deferring-an-always-claim-is-raised-for-a-person
+  (let [with-toc (prompts/warden-prompt {:findings findings :history [] :design design
+                                         :toc a-toc})]
+    (is (str/includes? with-toc "A BRIEF THAT DEFERS AN INVARIANT"))
+    (is (not (str/includes? (prompts/warden-prompt {:findings findings :history []
+                                                    :design design})
+                            "A BRIEF THAT DEFERS"))
+        "a flat branch has no brief to defer anything")))

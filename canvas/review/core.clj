@@ -465,8 +465,12 @@
      reviewer reports, and every closing field is one that can suppress a report. So the
      invariants and the shape are here, the seams are here under the bound that makes them safe
      (a defect the gap does not cover is still the reviewer's), and the refused remedies and the
-     claimed decomposition are not."
-    {:signature [:=> [:catn [:design [:maybe :map]]] [:maybe :string]]})
+     claimed decomposition are not. The strata are here too: a require reaching up a level
+     survives the collapse, so it is the code's defect and not the cut's. `swept` is the
+     claims a sweep was already ruled for this run, handed back as a lens."
+    {:signature [:function
+                 [:=> [:catn [:design [:maybe :map]]] [:maybe :string]]
+                 [:=> [:catn [:design [:maybe :map]] [:swept [:maybe [:sequential :string]]]] [:maybe :string]]]})
   (Operation layer-brief-block "The bounding brief for one layer."
     {:signature [:=> [:catn [:brief :map]] :string]})
   (Operation manifest-block

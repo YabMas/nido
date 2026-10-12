@@ -343,6 +343,39 @@
               f))
           findings)))
 
+(defn ^{:malli/schema [:=> [:cat :any [:maybe :map]] [:vector :string]]}
+  swept-claims
+  "The design's claims a warden ruled a SWEEP for earlier in this run — cited in
+   a swept `fix` ruling's `because`, or in its finding's `contradicts` — each
+   rendered as the reviewer is shown claims: `[id] statement` in the shared
+   model, the clause before it. In the design's order, each once.
+
+   Read from what was quoted rather than from a field, because a quote is the
+   one part of a ruling the loop has already checked against the record (see
+   `uncited-invariant`); a sweep whose `because` cites no claim contributes
+   nothing, which is the cheap direction — a lens missed costs a round, a lens
+   invented points every reviewer at a claim nothing broke."
+  [history design]
+  (if-not design
+    []
+    (let [inv   (design-invariants design)
+          cited (into #{}
+                      (comp (mapcat :findings)
+                            (filter #(and (:sweep %) (= :fix (:disposition %))))
+                            (mapcat (fn [f]
+                                      (cond-> (vec (quoted-spans (citation-text (:because f))))
+                                        (:contradicts f) (conj (citation-text (:contradicts f))))))
+                            (keep #(cites? inv %)))
+                      history)
+          model? (contains? design :model)]
+      (into []
+            (keep (fn [{:keys [id statement]}]
+                    (when (if model?
+                            (contains? cited id)
+                            (contains? cited (citation-text statement)))
+                      (if model? (str "[" id "] " statement) (str statement)))))
+            (claim-model/claims design)))))
+
 (defn- uncited-invariant
   "Why this `because` does not establish the design invariant it appeals to, as
    a sentence for the fixer, or nil when it appeals to none.
@@ -412,6 +445,10 @@
                                            uncited]))
         base    {:id          (:id r)
                  :same-as     (:same_as r)
+                 ;; A class link, not an identity: never beside a `same_as`,
+                 ;; which already files the finding under the earlier handle and
+                 ;; so already carries its class.
+                 :sibling-of  (when-not (:same_as r) (:sibling_of r))
                  :owner-layer (:owner_layer r)
                  :disposition d
                  :authority   (:authority r)
@@ -1504,6 +1541,7 @@
                        :from (:from t) :to (:to t)
                        :label (:label t) :brief (:brief t)
                        :design (:design ctx)
+                       :swept (swept-claims (:history ctx) (:design ctx))
                        :composition (:composition t)
                        :prior-fixes (:prior-fixes t)
                        :standing (:standing t)
@@ -2926,13 +2964,19 @@
    direction and it is what keeps \"nothing is dropped\" true of a malformed
    answer: an omitted finding is worked on, never silently discarded. It keeps
    its own id as its handle for the same reason — an unrecognised repeat costs a
-   round, an invented one loses a defect."
+   round, an invented one loses a defect.
+
+   `:class-of` is the handle of the finding the warden named in `sibling_of`,
+   resolved through the same `handles` and as strictly: a link to an id this
+   run never issued is no link. It welds nothing — see `with-sweep-memory`,
+   its one reader."
   [findings rulings handles]
   (let [by-id (into {} (map (juxt :id identity)) rulings)]
     (mapv (fn [f]
             (let [r (get by-id (:id f))
                   merged (merge f
                                 {:same-as     (:same-as r)
+                                 :class-of    (some->> (:sibling-of r) (get handles))
                                  :owner-layer (:owner-layer r)
                                  :disposition (or (:disposition r) :fix)
                                  :authority   (:authority r)
@@ -3136,7 +3180,10 @@
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   seen-findings
-  "Every finding an earlier round raised, oldest first, as {:round :id :title}.
+  "Every finding an earlier round raised, oldest first, as {:round :id :title},
+   with `:swept`, `:made-by` (the round whose repair made it) and `:class-of`
+   where the round's ruling gave them — the repair history the warden counts
+   before it parks.
 
    This is the pool the warden's `same_as` points into, and it cannot come from
    the round history beside it in the prompt: that carries what each round
@@ -3150,9 +3197,16 @@
                             (if (contains? seen (:id f))
                               a
                               {:seen (conj seen (:id f))
-                               :out  (conj (:out a) {:round (:iter h)
-                                                     :id    (:id f)
-                                                     :title (:title f)})}))
+                               :out  (conj (:out a)
+                                           (cond-> {:round (:iter h)
+                                                    :id    (:id f)
+                                                    :title (:title f)}
+                                             (and (:sweep f) (= :fix (:disposition f)))
+                                             (assoc :swept true)
+                                             (:introduced-by-round f)
+                                             (assoc :made-by (:introduced-by-round f))
+                                             (:class-of f)
+                                             (assoc :class-of (:class-of f))))}))
                           acc
                           (:findings h)))
                 {:seen #{} :out []}
@@ -4115,6 +4169,25 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   [fix]
   (if (contains? fix :repaired) (:repaired fix) (:handed fix)))
 
+(defn- class-roots
+  "Each handle in `history` mapped to the handle its class was first swept
+   under, following `:class-of` links. A link to a handle that is itself a
+   sibling resolves through it, so a class keeps one key however many rounds
+   it comes back in; a cycle — a warden linking two findings to each other —
+   stops at the first handle seen twice rather than looping."
+  [history]
+  (let [links (into {}
+                    (comp (mapcat :findings)
+                          (filter :class-of)
+                          (map (juxt #(or (:handle %) (:id %)) :class-of)))
+                    history)]
+    (fn root [k]
+      (loop [k k seen #{}]
+        (let [next-k (get links k)]
+          (if (or (nil? next-k) (= next-k k) (contains? seen k))
+            k
+            (recur next-k (conj seen k))))))))
+
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   with-sweep-memory
   "Mark each finding whose class a fixer has ALREADY swept in this run, with the
@@ -4126,9 +4199,20 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    and the only one never told: `:history` reaches the reviewer through
    `with-fix-memory` and stops there.
 
-   Keyed on the handle, so this is a claim about the CLASS and not about a
-   wording — every instance is filed under the handle the class was first raised
-   with, and a return under fresh words keeps it.
+   A finding is matched to a swept class three ways, because a class comes back
+   in three shapes:
+   - under the same HANDLE — the warden ruled it `same_as` a swept finding;
+   - under a CLASS LINK — `:class-of`, from the warden's `sibling_of`: a
+     different defect of a class already swept, which `same_as` must not weld
+     to it. Keyed on handle alone, every such sibling arrived fresh and its
+     fixer was told to enumerate again, while the warden wrote the
+     derive-from-the-source remedy into `because` as prose;
+   - by REPAIR — introduced by round N, on an owner layer where round N landed
+     a swept fix. A swept repair that wrote a new defect is that sweep's class
+     coming back whatever the warden calls it, and its identity calls on one
+     such class drifted sibling, sibling, same over three rounds; this one
+     needs no judgement, so it carries the swept rounds of every class that
+     round's fix on that layer repaired.
 
    Only a sweep a landed fix commit named counts, so a round named here is one
    whose sweep was carried out and survived. A round enters `:history` once its
@@ -4137,23 +4221,34 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    carried out. One that answered absent swept nothing and is skipped too, so
    nothing here mistakes a refusal for a sweep that failed."
   [findings history]
-  (let [swept (reduce (fn [acc round]
-                        (reduce (fn [a f]
-                                  (if (and (:sweep f)
-                                           (contains? (into #{} (mapcat repaired-ids) (:fixes round))
-                                                      (or (:handle f) (:id f)))
-                                           (not (contains? fixer-close-authorities (:authority f))))
-                                    (update a (or (:handle f) (:id f))
-                                            (fnil conj []) (:iter round))
-                                    a))
-                                acc
-                                (:findings round)))
-                      {}
-                      history)]
+  (let [root (class-roots history)
+        key-of #(root (or (:class-of %) (:handle %) (:id %)))
+        {:keys [swept by-repair]}
+        (reduce (fn [acc round]
+                  (let [repaired (into #{} (mapcat repaired-ids) (:fixes round))]
+                    (reduce (fn [a f]
+                              (if (and (:sweep f)
+                                       (contains? repaired (or (:handle f) (:id f)))
+                                       (not (contains? fixer-close-authorities (:authority f))))
+                                (-> a
+                                    (update-in [:swept (key-of f)] (fnil conj []) (:iter round))
+                                    (update-in [:by-repair [(:iter round) (:owner-layer f)]]
+                                               (fnil conj #{}) (key-of f)))
+                                a))
+                            acc
+                            (:findings round))))
+                {}
+                history)]
     (mapv (fn [f]
-            (if-let [rounds (seq (get swept (or (:handle f) (:id f))))]
-              (assoc f :swept-before (vec (distinct rounds)))
-              f))
+            (let [own     (concat (get swept (key-of f))
+                                  (get swept (root (or (:handle f) (:id f)))))
+                  n       (:introduced-by-round f)
+                  made-by (when-let [ks (and n (get by-repair [n (:owner-layer f)]))]
+                            (mapcat swept ks))
+                  rounds  (sort (distinct (concat own made-by)))]
+              (if (seq rounds)
+                (assoc f :swept-before (vec rounds))
+                f)))
           findings)))
 
 (defn- owned-by
@@ -5192,6 +5287,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                           ;; own, and the row alone cannot say
                                           ;; where its own sits.
                                           :stack (:toc ctx)
+                                          :design (:design ctx)
                                           :settled (get decided label)
                                           :handoffs (accounts-naming
                                                      @!said

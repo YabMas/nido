@@ -778,8 +778,17 @@
   (Operation with-sweep-memory
     "Each finding told which earlier rounds already swept its class. A class that comes back
      has disproved the enumerate-the-instances remedy, and the fixer is the reader who could
-     act on that and the only one the run's history never reaches."
+     act on that and the only one the run's history never reaches. A class is matched by
+     handle, by the warden's class link — a sibling, which `same_as` must not weld — and by
+     repair: a defect a swept fix on the same layer wrote is that sweep's class coming back,
+     which needs no identity call from anyone."
     {:signature [:=> [:catn [:findings :any] [:history :any]] :any]})
+  (Operation swept-claims
+    "The design's claims a warden ruled a sweep for earlier in the run, as the reviewers are
+     shown claims — a lens for the next round, so a sibling the sweep missed arrives as a
+     finding rather than in the verdict's unraised list. Read off checked quotes only: a
+     paraphrase names no claim."
+    {:signature [:=> [:catn [:history :any] [:design [:maybe :map]]] [:vector :string]]})
   (Operation carried-parks
     "The open parks this run is holding, each with the round it was first parked in and the
      layer it names. A park is never raised again, so it vanishes from the findings the moment

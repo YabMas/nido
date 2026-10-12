@@ -29,7 +29,7 @@
                  "```\n")
         d   (stages/parse-warden-decision txt)]
     (is (= :continue (:decision d)))
-    (is (= [{:id "aa11" :same-as nil :owner-layer "drop-legacy" :disposition :fix
+    (is (= [{:id "aa11" :same-as nil :sibling-of nil :owner-layer "drop-legacy" :disposition :fix
              :authority nil :of nil :duplicate-of nil :sweep false
              :introduced-by-round nil :because "real"}]
            (:rulings d))
@@ -5937,3 +5937,105 @@
             {:label "unhashed"}]
            (stages/layer-identities final))
         "skipped layers count — they are part of what the branch held — and the composition pass does not")))
+
+(deftest a-sibling-link-is-a-class-and-never-an-identity
+  ;; same_as welds two findings into one defect, so a warden that saw a sibling
+  ;; of a swept class had only two answers, and both were wrong: weld it, and
+  ;; one defect is never fixed; leave it fresh, and the fixer is told to
+  ;; enumerate a class that has already disproved enumeration.
+  (let [rule (fn [m] (-> (str "```json\n{\"decision\":\"continue\",\"findings\":["
+                              (json/generate-string (merge {:id "bb22" :disposition "fix"} m))
+                              "]}\n```")
+                         stages/parse-warden-decision :rulings first))]
+    (is (= "aa11" (:sibling-of (rule {:sibling_of "aa11"}))))
+    (is (nil? (:sibling-of (rule {:same_as "aa11" :sibling_of "aa11"})))
+        "beside a same_as the finding already carries the earlier handle, and with it the class"))
+  (let [[f g] (stages/apply-rulings [{:id "bb22" :title "t"} {:id "cc33" :title "u"}]
+                                    [{:id "bb22" :disposition :fix :sibling-of "aa12"}
+                                     {:id "cc33" :disposition :fix :sibling-of "zz99"}]
+                                    {"aa12" "aa11"})]
+    (is (= "bb22" (:handle f)) "a sibling keeps its own identity, so both defects stay open")
+    (is (= "aa11" (:class-of f)) "the link resolves to the handle the class was filed under")
+    (is (nil? (:class-of g))
+        "an id this run never issued links nothing — an invented class would send a
+         fixer the derive-from-the-source remedy for a class that was never swept")))
+
+(deftest a-sibling-of-a-swept-class-is-told-to-sweep-again
+  ;; The sibling a sweep left behind returned under a fresh handle in run after
+  ;; run, so a memory keyed on handle alone never fired for it.
+  (let [history [{:iter 1 :fixes [{:handed ["h1"]}]
+                  :findings [{:handle "h1" :id "h1" :sweep true}]}
+                 {:iter 2 :fixes [{:handed ["h2"]}]
+                  :findings [{:handle "h2" :id "h2" :sweep true :class-of "h1"}]}]
+        [sib sib-of-sib] (stages/with-sweep-memory
+                           [{:handle "h3" :id "h3" :sweep true :class-of "h1"}
+                            {:handle "h4" :id "h4" :sweep true :class-of "h2"}]
+                           history)]
+    (is (= [1 2] (:swept-before sib))
+        "a class is every round that swept a member of it, not only the first")
+    (is (= [1 2] (:swept-before sib-of-sib))
+        "a link to a sibling resolves through it to the class, so the key does not
+         depend on which member the warden happened to name")))
+
+(deftest a-defect-a-swept-repair-wrote-inherits-that-sweep
+  ;; The warden's identity call on one class drifted sibling, sibling, same over
+  ;; three rounds. Which repair wrote a defect is already recorded, so this half
+  ;; of the memory needs no identity call at all.
+  (let [history [{:iter 2 :fixes [{:handed ["h1"]}]
+                  :findings [{:handle "h1" :id "h1" :sweep true :owner-layer "figures"}]}]
+        [made other-layer unswept-round]
+        (stages/with-sweep-memory
+          [{:handle "h5" :id "h5" :sweep true :introduced-by-round 2 :owner-layer "figures"}
+           {:handle "h6" :id "h6" :sweep true :introduced-by-round 2 :owner-layer "pages"}
+           {:handle "h7" :id "h7" :sweep true :introduced-by-round 1 :owner-layer "figures"}]
+          history)]
+    (is (= [2] (:swept-before made)))
+    (is (nil? (:swept-before other-layer))
+        "a repair on another layer did not write this; inheriting its sweep would
+         tell a fixer a remedy failed that never touched its code")
+    (is (nil? (:swept-before unswept-round)))))
+
+(deftest a-class-link-cycle-does-not-hang-the-memory
+  (let [history [{:iter 1 :fixes [{:handed ["a" "b"]}]
+                  :findings [{:handle "a" :id "a" :sweep true :class-of "b"}
+                             {:handle "b" :id "b" :sweep true :class-of "a"}]}]]
+    (is (vector? (stages/with-sweep-memory [{:handle "c" :id "c" :class-of "a"}] history)))))
+
+(deftest reviewers-are-handed-the-claims-a-sweep-was-ruled-for
+  ;; Three instances of one break: a sweep was ruled, two siblings were raised
+  ;; by no round, and only the post-run verdict found them.
+  (let [design  {:shape "s"
+                 :invariants ["every transport call reaches identity through its doors"
+                              "identity queries are total over their inputs"]}
+        history [{:iter 1
+                  :findings [{:sweep true :disposition :fix
+                              :because "breaks \"every transport call reaches identity through its doors\""}
+                             {:sweep false :disposition :fix
+                              :contradicts "identity queries are total over their inputs"}]}]]
+    (is (= ["every transport call reaches identity through its doors"]
+           (stages/swept-claims history design))
+        "only a SWEPT ruling says the claim can fail at another site")
+    (is (= [] (stages/swept-claims history nil)))
+    (is (= [] (stages/swept-claims
+               [{:iter 1 :findings [{:sweep true :disposition :fix
+                                     :because "breaks \"transport reaches identity somehow\""}]}]
+               design))
+        "a paraphrase cites nothing, and a lens on a claim nothing broke spends every reviewer's attention")))
+
+(deftest the-fixer-is-shown-the-design-it-repairs-against
+  ;; Repairs that satisfied the one clause a ruling cited and broke an uncited
+  ;; one in the same files were, run after run, where a later round's defect
+  ;; came from — and the fixer had never been shown the record.
+  (let [seen (atom nil)]
+    (with-redefs [agent/launch! (fn [opts]
+                                  (reset! seen (:first-message opts))
+                                  {:num-turns 3 :result-error? false :result-text "no"})
+                  stages/working-copy-dirty? (fn [_] false)
+                  jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+      ((:run stages/fix-stage)
+       {:config {:cwd "/w" :run-id "r1"} :iter 1
+        :design {:shape "s" :invariants ["search ranks blocks and returns passages"]
+                 :strata ["domain" "ui"]}
+        :findings [{:id "aa11" :handle "aa11" :title "x" :body "y" :disposition :fix}]})
+      (is (str/includes? @seen "search ranks blocks and returns passages"))
+      (is (str/includes? @seen "THE STRATA")))))

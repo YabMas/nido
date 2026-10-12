@@ -239,6 +239,10 @@
    reaches the same readers as `standing` and for the same reasons — see
    `stages/with-prior-open`.
 
+   `swept` is the design's claims a warden has ruled a sweep for earlier in
+   this run, rendered — see `stages/swept-claims`. It reaches every target,
+   because the sibling a sweep missed can sit in any layer.
+
    The schema follows the primer and not the target: the composition variant
    demands a `kind` and the `layers` a defect spans, and asking that of a
    reviewer that was never taught the taxonomy is a contract nothing can meet.
@@ -254,7 +258,7 @@
    one layer at a time, and the flat union is the range in which the cut it is
    here to judge cannot be seen."
   [{:keys [cwd from to run-id iter label brief composition prior-fixes standing
-           prior-open design reviewer]}]
+           prior-open design swept reviewer]}]
   (let [to       (or to "@")
         {:keys [exit out err]} (diff-name-only cwd from to)
         _        (when-not (zero? exit)
@@ -283,7 +287,7 @@
                              ;; the design is what the whole change committed to,
                              ;; and a reviewer reading the narrower one first
                              ;; reads the wider one as a qualification of it.
-                             "\n\n" (prompts/design-yardstick-block design)
+                             "\n\n" (prompts/design-yardstick-block design swept)
                              "\n\n" (or (prompts/layer-brief-block brief) composed)
                              ;; Appended rather than folded into the brief block,
                              ;; because a layer with no brief still gets fixed and
