@@ -219,6 +219,9 @@
       ;; the report lives in a run dir that is routinely gone by the time anyone
       ;; reads the workstream, and the reviewer's own log is gone with it.
       (:unavailable final) (assoc :unavailable (:unavailable final))
+      ;; The reset time is the whole of what to do about it, durable here for
+      ;; :unavailable's reason.
+      (:usage-limit final) (assoc :usage-limit (:usage-limit final))
       ;; Readings a stand-in made, on a run that completed without the reviewer it chose: durable
       ;; for the reason :unavailable is, and the only place a run with no independent reviewer
       ;; says so once the run dir is gone.
@@ -663,8 +666,9 @@
   design-verdict
   "Run the design verdict and say what became of it, as the outcome map
    `report/with-verdict` folds — `:outcome` (`:answered` / `:no-answer` /
-   `:skipped`) and the verdict itself when there was one — before any ledger has
-   been offered it. nil when there was nothing to judge against at all.
+   `:skipped` / `:launch-failed` / `:usage-limited`) and the verdict itself when
+   there was one — before any ledger has been offered it. nil when there was
+   nothing to judge against at all.
 
    Apart from the ledger write because the two happen at different moments: the
    verdict has to be folded into the run (`verdict/settled`) before the `:review`
@@ -690,7 +694,18 @@
     ;; again for the prompt. One extra ledger read, against not handing run! a
     ;; record it is the authority on finding.
     (let [design (stages/discover-design-record cwd)]
-      (when (and design (verdict-worth-running? (:status final) final design))
+      (cond
+        (not design) nil
+
+        ;; The account that refused the run's own agent refuses this one too.
+        (= :usage-limited (:status final))
+        {:outcome :skipped
+         :because (str "the run ended on the account's usage limit, which this pass would meet"
+                       " as well"
+                       (when-let [at (get-in final [:usage-limit :resets-at])]
+                         (str " — it resets " at)))}
+
+        (verdict-worth-running? (:status final) final design)
         (if (:off-yardstick final)
           ;; The run already said the record names none of what this stack
           ;; changes, as a standing item on its :review entry. Judged anyway,
@@ -708,15 +723,18 @@
                            (str/join ", " markers)
                            " — resolve them and re-run; the pass reads the worktree"
                            " with tools and would judge the design against them")}
-            (if-let [v (verdict/run! {:cwd cwd
-                                      :run-id (:run-id config)
-                                      :budget (:budget config)
-                                      :final final
-                                      :report report})]
-              {:outcome :answered :verdict v}
-              {:outcome :no-answer
-               :because (str "the pass ran and its answer carried no verdict"
-                             " — the transcript is agent.log in this run dir")})))))
+            (let [v (verdict/run! {:cwd cwd
+                                   :run-id (:run-id config)
+                                   :budget (:budget config)
+                                   :final final
+                                   :report report})]
+              (cond
+                ;; The launch failed, and run! says how: that is the outcome.
+                (:outcome v) v
+                v            {:outcome :answered :verdict v}
+                :else        {:outcome :no-answer
+                              :because (str "the pass ran and its answer carried no verdict"
+                                            " — the transcript is agent.log in this run dir")}))))))
     (catch Exception e
       (binding [*out* *err*]
         (println (str "review-loop: design verdict skipped — " (ex-message e))))
@@ -753,6 +771,11 @@
       (case (:outcome outcome)
         :no-answer (println (str "review-loop: the design verdict pass returned no verdict — "
                                  (:because outcome)))
+        (:launch-failed :usage-limited)
+        (println (str "review-loop: the design verdict pass could not run — "
+                      (:because outcome)
+                      (when-let [at (get-in outcome [:usage-limit :resets-at])]
+                        (str " (usage limit; resets " at ")"))))
         ;; Said here as well as in the report because the reader who most needs
         ;; it is the one sitting in front of a conflicted branch deciding
         ;; whether resolving it buys them anything.
@@ -1378,6 +1401,7 @@
    :reviewer-unavailable "the reviewer could not be run — every target it did not read is unjudged, and a loop launched in the next five minutes is refused rather than sent to the same wall"
    :warden-indeterminate "the warden returned no decision, so nothing was attributed and no repair was attempted — re-run"
    :workspace-drifted "the working copy moved after the reviewers read it, so no further repair could land on the tree they judged — the repairs that landed first are kept; re-run"
+   :usage-limited "the account's usage limit refused an agent the run needed, so nothing past that point was decided — no relaunch was attempted, since it meets the same limit; re-run after the reset named above"
 
    ;; ── the branch was judged, and jj would not let the loop act on it ──
    :stack-unmovable "jj refused a step the loop needed on the stack after the review and the rulings, which both stand, as do the repairs that landed first — the error above names the step and what jj said; clear that before re-running, or the re-run reviews whatever jj left"})
@@ -1447,6 +1471,19 @@
       ;; and a fixer's uncommitted edits exist only in the patch it names.
       (:recover drift)
       (conj (str "  " (:recover drift)))
+
+      ;; Who staled it, when another operation did: the newest operation since
+      ;; the copy's last update, by its command line where jj kept one.
+      (seq (:moved-by drift))
+      (conj (let [{:keys [op args description at]} (first (:moved-by drift))]
+              (str "  moved by operation " op (when at (str " at " at)) ": "
+                   (or args description))))
+
+      ;; When the run can next be answered, and which agent met the limit.
+      (:usage-limit final)
+      (conj (let [{:keys [agent type resets-at]} (:usage-limit final)]
+              (str "  usage limit" (when type (str " (" type ")")) " refused the " agent
+                   (if resets-at (str "; resets " resets-at) "; no reset time given"))))
 
       ;; The loop rewrote the branch. Said here because the status is about the
       ;; REVIEW and this is about the code the operator is standing in — a run
@@ -1905,6 +1942,7 @@
    :unruled    "the judge would have ended the run leaving checks it neither confirmed, refuted nor called uncheckable, or baseline ids with no relation ruling, and asked again it still did not rule — the record does not hold over them; the report's judge phase names them, under :unruled and :relation-unruled"
    :amend-noop "the amender completed and produced no record — nothing was appended"
    :amend-launch-failed "the amender never completed — it exited or was killed before answering, so the round's findings are still unanswered and nothing was appended; read its transcript, then re-run"
+   :usage-limited "the account's usage limit refused the amender — nothing was appended and nothing was decided; re-run after the reset named above"
    :amend-unreadable "the amender's answer would not parse as EDN"
    :amend-invalid "the ledger refused the amended record, and refused the amender's repairs of it too"
    :amend-touched-code "the amender wrote to the paths named above; whatever it wrote is still there, and its answer was not appended — if the answer is right, append it with the command above rather than re-typing it"

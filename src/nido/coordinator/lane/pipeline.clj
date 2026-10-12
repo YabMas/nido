@@ -978,6 +978,12 @@
    ;; remedy are the whole content of the outcome. The one thing a person can do
    ;; about it is the only thing that changes anything.
    :reviewer-unavailable :escalate
+   ;; The account's usage limit refused an agent the run needed — the warden, a
+   ;; fixer, an amender. :reviewer-unavailable's reasoning, for a different
+   ;; agent: a five-second backoff cannot outwait a window that resets in hours
+   ;; or days, and each retry spends a round of reviewers to meet the wall again.
+   ;; The run records `:resets-at`; the person decides when to re-run.
+   :usage-limited        :escalate
    ;; The diff loop refusing to launch minutes after one met that wall, and for
    ;; its reason: the launch would meet it again. It writes nothing, so this is
    ;; `:no-design-record`'s case too — anything but a park re-fires it.

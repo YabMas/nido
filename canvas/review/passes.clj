@@ -309,6 +309,11 @@
      that left the files as they were. Asked apart from descent, whose check reads the same
      refusal as a move and so cannot say that this one needs `jj workspace update-stale`."
     {:signature [:=> [:catn [:cwd Path]] :boolean]})
+  (Operation staleness
+    "Why jj refuses the working copy as stale, or nil when it does not: the operation the copy
+     was last updated at, and the operations recorded since — the rewrite that staled it among
+     them. Read from the op log without snapshotting, the one way a stale copy lets it be read."
+    {:signature [:=> [:catn [:cwd Path]] [:maybe :map]]})
   (Operation working-copy-patch
     "The files on disk against a commit's tree as a git patch, read without jj — the one
      reading a stale working copy still allows, and the only copy of edits no commit holds."
@@ -360,7 +365,12 @@
      its json block. Such an answer is unusable whatever its json says: the call ran nothing,
      so what follows it may rest on output the model invented."
     {:signature [:=> [:catn [:text [:maybe :string]]] :boolean]})
-  (Operation warden-failure "Why a round has no ruling: no run, no answer, or no parse."
+  (Operation usage-limited
+    "The account usage limit that refused an agent's launch, as the run records it — which
+     agent, which limit, when it resets — or nil when none did. Every agent a run launches
+     spends one account, so a caller reading one ends the run rather than launching again."
+    {:signature [:=> [:catn [:agent :string] [:launch :map]] [:maybe :map]]})
+  (Operation warden-failure "Why a round has no ruling: no run, a usage limit, no answer, or no parse."
     {:signature [:=> [:catn [:launch :map] [:decision :map]] :map]})
   (Operation project+ws-from-cwd "The project and workstream a directory belongs to."
     {:signature [:=> [:catn [:cwd Path]] :any]})

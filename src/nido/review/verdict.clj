@@ -402,6 +402,26 @@
               "is — see NOT IN THE CODE below.\n\n")
          "What its fixers landed is in the code.\n\n")))
 
+(defn- drift-section
+  "What the judge is told when the run ended because the working copy moved under it: the files
+   on disk are not the tree the reviewers read, so reading them judges code nobody reviewed — a
+   judge left to find this out for itself reported the stale copy and judged a third tree. Empty
+   when nothing moved."
+  [{:keys [reviewed-at now stale?] :as drift}]
+  (if-not drift
+    ""
+    (str "THE WORKING COPY MOVED UNDER THIS RUN, which is why it ended.\n"
+         (if reviewed-at
+           (str "The reviewers read the tree at " reviewed-at ". Judge THAT tree: read files\n"
+                "with `jj file show -r " reviewed-at " <path>`, not off the disk.\n")
+           (str "No revision was pinned for what the reviewers read; say in your reason which\n"
+                "tree you judged.\n"))
+         (cond
+           stale? (str "jj refuses this copy as stale: the files on disk are neither that tree\n"
+                       "nor the rewritten one, so do not read them as either.\n")
+           now    (str "The working copy is now at " now ", which no reviewer read.\n"))
+         "\n")))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   build-prompt
   "The verdict prompt. `design` is the workstream's :design record, `baseline` the
@@ -421,13 +441,15 @@
    `inherited-section`. `moved` and `parks` say what has happened to `prior`
    since it was reached; see `prior-verdict-section`. `amended` is the rows a
    verdict against a superseded record left that the amendment does not name,
-   see `amended-section`."
+   see `amended-section`. `drift` is the run's `:drift` when it ended on the working copy moving,
+   see `drift-section`."
   [{:keys [design baseline stance findings inherited closed history rounds prior status
-           fix-outcomes progress standing moved parks amended]}]
+           fix-outcomes progress standing moved parks amended drift]}]
   (str
    (opening status (not-landed fix-outcomes))
    "Read the code where you need to — you have tools, and the question cannot be\n"
    "answered from the diff summary alone.\n\n"
+   (drift-section drift)
    "THE DESIGN THIS CHANGE COMMITTED TO:\n"
    "Shape: " (:shape design) "\n"
    ;; A design in the shared model names its claims, and the judge names them back by id in
@@ -1514,6 +1536,12 @@
    names as broken a claim the design does not state — each means 'nothing to
    record', never a fabricated :sound.
 
+   A launch that errored returns `{:outcome :launch-failed :because <its result
+   text>}` instead — or `{:outcome :usage-limited :because … :usage-limit …}`
+   (`stages/usage-limited`) when the account refused it — so the caller records
+   why there is no verdict rather than calling the pass's answer empty. Told
+   apart from a verdict by `:outcome`, which no verdict carries.
+
    A fresh verdict is recorded as `against-the-run` reconciles it, stamped with
    `run-id`; the prompt that reached it is kept in the run dir.
 
@@ -1546,13 +1574,25 @@
                        :parks (open-parks final #{})
                        :progress (plan-progress cwd)
                        :standing standing
-                       :amended (when-not prior (amended-rows cwd design))})
+                       :amended (when-not prior (amended-rows cwd design))
+                       :drift (:drift final)})
               _ (write-prompt! run-id prompt)
-              {:keys [num-turns result-error? result-text]}
+              {:keys [num-turns result-error? result-text] :as launch}
               (agent/launch! {:run-id run-id :cwd cwd
                               :first-message prompt :budget budget
-                              :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})]
-          (when-not (or (zero? (or num-turns 0)) result-error?)
+                              :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})
+              because (or (some-> result-text str/trim not-empty)
+                          "the agent exited with an error and said nothing")]
+          (cond
+            (:usage-limit launch)
+            {:outcome     :usage-limited
+             :because     because
+             :usage-limit (stages/usage-limited "design-verdict" launch)}
+
+            result-error?
+            {:outcome :launch-failed :because because}
+
+            (pos? (or num-turns 0))
             (some-> (parse result-text rounds (:seq design))
                     (held-to-claims (when (contains? design :model)
                                       (into #{} (map :id) (claim-model/claims design))))

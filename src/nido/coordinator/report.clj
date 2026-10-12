@@ -1939,6 +1939,11 @@
                                ;; findings and the stack refused the edits.
                                :fix-rolled-back
                                :warden-indeterminate
+                               ;; The account's usage limit refused the warden
+                               ;; or a fixer. Nothing past it was decided, and
+                               ;; asking again before `:usage-limit`'s reset
+                               ;; meets the same refusal.
+                               :usage-limited
                                ;; A run in which every diff was empty. Distinct
                                ;; from :clean, which is a reviewer's verdict on
                                ;; code it read.
@@ -2090,7 +2095,29 @@
      [:reviewed-at {:optional true} string?]
      [:now [:maybe string?]]
      [:stale? {:optional true} boolean?]
+     ;; On a stale copy: the operation jj says it was last updated at, and the
+     ;; operations recorded since, newest first — the rewrite that staled it is
+     ;; among them, and `:args` is its command line. A drift that recurs on one
+     ;; workspace is attributable from these and from nothing else the run keeps.
+     [:since-op {:optional true} string?]
+     [:moved-by {:optional true}
+      [:sequential
+       [:map {:closed true}
+        [:op          string?]
+        [:at          {:optional true} string?]
+        [:description {:optional true} string?]
+        [:args        {:optional true} string?]]]]
      [:recover {:optional true} string?]]]
+   ;; The account limit that refused an agent, on the one status that ends that
+   ;; way. `:agent` is which launch met it; `:resets-at` (an ISO instant, from
+   ;; claude's own `resetsAt`) is when a re-run can next be answered, and absent
+   ;; when claude named none. `:message` is claude's sentence verbatim.
+   [:usage-limit {:optional true}
+    [:map {:closed true}
+     [:agent     string?]
+     [:type      {:optional true} string?]
+     [:resets-at {:optional true} string?]
+     [:message   {:optional true} string?]]]
    ;; What the loop did to the BRANCH, as against what it found in it. A recut
    ;; the reshape stage carried out rewrote the layers the reader is about to
    ;; look at, and it reached report.json and stopped — so the entry said `0

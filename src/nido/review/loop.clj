@@ -48,6 +48,15 @@
    caller's."
   #{:review-failed :reviewer-unavailable})
 
+(def ^:private failure-keys
+  "What a terminal throw's ex-data says about the command that refused, carried
+   onto its phase event beside the message: the exit code, the command's own
+   stderr, and the base it was asked about. The message is the stage's summary
+   of the refusal and the stderr is the refusal — a stale copy and a missing
+   base read the same in the first and nothing alike in the second. Opaque here,
+   as `:unavailable` is."
+  [:exit :err :base])
+
 (defn- no-progress?
   "The same findings again, by whatever identity this pipeline keys on, on a
    round that also moved nothing.
@@ -224,7 +233,8 @@
    the stage was handed — which holds everything the stages before it did this
    round. Only the first reaches the phase event, because it is the stage's own
    account of itself and the second is not: folded as one, it would overwrite
-   what the phase had already recorded with what the phase was given.
+   what the phase had already recorded with what the phase was given. The
+   throw's `failure-keys` ride beside it as `:failure`.
 
    An `:escalate` from the judging stage ends the round there unless
    `repair-before-escalate?` says the judgement also ruled repairs that do not wait on the
@@ -245,7 +255,9 @@
                         (do (emit (cond-> {:event :phase-errored :iter (:iter ctx)
                                            :phase (:name stage) :error (ex-message e)
                                            :at (str (clock))}
-                                    (:ctx data) (assoc :ctx (:ctx data))))
+                                    (:ctx data) (assoc :ctx (:ctx data))
+                                    (seq (select-keys data failure-keys))
+                                    (assoc :failure (select-keys data failure-keys))))
                             (throw (ex-info (ex-message e) (update data :ctx #(or % ctx)) e)))
                         (throw e)))))]
        (emit {:event :phase-finished :iter (:iter ctx') :phase (:name stage)

@@ -925,6 +925,54 @@
         (is (nil? (:carried-from v)) "a verdict an agent reached is not marked as carried")
         (is (= 3 (:design-seq v)))))))
 
+(defn- run-with-launch
+  "verdict/run! over a run with something to judge and no standing verdict, where the agent's
+   launch answers `launch`. Returns [what run! returned, the prompt the agent was handed]."
+  ([launch] (run-with-launch launch {}))
+  ([launch final-extra]
+   (let [seen (atom nil)]
+     (with-redefs [stages/discover-design-record (fn [_] design)
+                   stages/discover-prior-verdict (fn [_ _] nil)
+                   stages/discover-baseline (fn [_ _] nil)
+                   stages/read-stance (fn [_] nil)
+                   stages/project+ws-from-cwd (fn [_] nil)
+                   agent/launch! (fn [{:keys [first-message]}] (reset! seen first-message) launch)]
+       [(verdict/run! {:cwd "/w" :run-id "r" :budget "30m"
+                       :final (merge {:status :escalated
+                                      :findings [{:title "t" :body "b" :disposition :park}]
+                                      :history []}
+                                     final-extra)
+                       :report {:summary {:rounds 1 :fix-attempts 0}}})
+        @seen]))))
+
+(deftest a-pass-whose-launch-failed-returns-why-rather-than-nothing
+  ;; The verdict pass returned nil for a rate-limited launch, and its caller wrote
+  ;; `the pass ran and its answer carried no verdict` — the collapse warden-failure
+  ;; was already fixed for, still standing one stage later.
+  (is (= {:outcome :launch-failed :because "API Error: 529 overloaded"}
+         (first (run-with-launch {:num-turns 1 :result-error? true
+                                  :result-text "API Error: 529 overloaded"}))))
+  (let [[v] (run-with-launch {:num-turns 1 :result-error? true
+                              :result-text "You've hit your session limit · resets 6:10pm"
+                              :usage-limit {:type "five_hour" :resets-at-ms 1791475800000}})]
+    (is (= :usage-limited (:outcome v)) "a usage limit is its own cause, as it is for the warden")
+    (is (= "2026-10-08T16:10:00Z" (get-in v [:usage-limit :resets-at]))))
+  (is (nil? (first (run-with-launch {:num-turns 0 :result-error? false})))
+      "an agent that ran no turns and reported no error still has nothing to record"))
+
+(deftest a-pass-after-the-tree-moved-is-told-which-tree-to-judge
+  ;; After a drift stop the judge found the stale copy on its own, read a mix of
+  ;; trees, and stamped its verdict with the round's pre-rewrite patch hashes.
+  (let [[_ prompt] (run-with-launch {:num-turns 1 :result-text (fenced "{\"verdict\":\"sound\",\"reason\":\"r\"}")}
+                                    {:status :workspace-drifted
+                                     :drift {:reviewed-at "f66d089c" :now nil :stale? true}})]
+    (is (str/includes? prompt "THE WORKING COPY MOVED UNDER THIS RUN"))
+    (is (str/includes? prompt "jj file show -r f66d089c")
+        "the tree the reviewers read, and how to read it without the disk")
+    (is (str/includes? prompt "stale")))
+  (let [[_ prompt] (run-with-launch {:num-turns 1 :result-text (fenced "{\"verdict\":\"sound\",\"reason\":\"r\"}")})]
+    (is (not (str/includes? prompt "MOVED UNDER THIS RUN")) "and nothing when nothing moved")))
+
 (def ^:private phased
   (assoc design
          :invariants [{:invariant "a total is rounded exactly once" :holds :always}

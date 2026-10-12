@@ -386,6 +386,37 @@
       (is (= 1 (count launches)) "it already had the whole wall clock")
       (is (= :budget-spent (get-in ctx [:warden :cause]))))))
 
+(def ^:private weekly-limit
+  "The launch a seven-day usage limit refuses: one error turn, the limit's own
+   sentence, and the rejected rate-limit event `agent/launch!` reads it from."
+  {:num-turns 1 :result-error? true :exit-code 1
+   :result-text "You've hit your weekly limit · resets Oct 11 at 8am"
+   :usage-limit {:type "seven_day" :resets-at-ms 1791698400000}})
+
+(deftest a-usage-limit-is-read-as-the-account-not-the-run
+  (is (= {:agent "warden" :type "seven_day" :resets-at "2026-10-11T06:00:00Z"
+          :message "You've hit your weekly limit · resets Oct 11 at 8am"}
+         (stages/usage-limited "warden" weekly-limit))
+      "which agent met it, which limit, and when a re-run can next be answered")
+  (is (nil? (stages/usage-limited "warden" (dissoc weekly-limit :usage-limit)))
+      "an error the account did not cause is not one")
+  (is (= :usage-limited
+         (:cause (stages/warden-failure weekly-limit (stages/parse-warden-decision nil))))
+      "ahead of :launch-failed, which a 429 used to be filed under and relaunched as"))
+
+(deftest a-warden-refused-by-the-usage-limit-ends-the-run-without-asking-again
+  ;; Two runs relaunched the warden into the identical weekly-limit sentence and
+  ;; then ran the verdict pass into it too, ending `warden-indeterminate` — a
+  ;; status that tells a reader to re-run now, when now is the one time it fails.
+  (let [[ctx launches] (warden-launches [weekly-limit
+                                         {:num-turns 1 :result-error? false :result-text stop-answer}])]
+    (is (= 1 (count launches)) "a second launch meets the same account")
+    (is (= :usage-limited (:status ctx)))
+    (is (= :stop (:control ctx)))
+    (is (= "2026-10-11T06:00:00Z" (get-in ctx [:usage-limit :resets-at]))
+        "the reset is the whole of what a reader can do about it")
+    (is (nil? (get-in ctx [:warden :relaunched])))))
+
 (deftest the-warden-runs-outside-the-reviewed-worktree
   ;; Started in the worktree, claude gave the warden that directory's git status
   ;; — the PARENT repo's, in a jj workspace — and two wardens reported the branch
@@ -517,6 +548,26 @@
         (is (nil? (:conflicted ctx))
             ":conflicted means the branch is holding markers right now, which is
              what sends a human to resolve them")))))
+
+(deftest a-fixer-refused-by-the-usage-limit-is-the-last-one-launched
+  ;; After a fixer met a seven-day limit the loop launched the next agent into
+  ;; it anyway; every launch after the first on an exhausted account is one more
+  ;; error turn with the identical sentence.
+  (let [launches (atom [])]
+    (with-redefs [agent/launch! (fn [m] (swap! launches conj m) weekly-limit)
+                  stages/working-copy-dirty? (fn [_] false)
+                  stages/session-stack (fn [_ _] two-layer-stack)
+                  jj/jj! (jj-scripted [[] []])]
+      (let [ctx ((:run stages/fix-stage)
+                 {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 2
+                  :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "lower"}
+                             {:id "bb22" :title "y" :disposition :fix :owner-layer "upper"}]})]
+        (is (= ["lower"] (fixers-run @launches)) "the upper fixer would meet the same account")
+        (is (= :usage-limited (:status ctx)))
+        (is (= {:agent "fixer" :type "seven_day"}
+               (select-keys (:usage-limit ctx) [:agent :type])))
+        (is (= [{:layer "upper" :handed ["bb22"]}] (:unattempted ctx))
+            "the layer the stop never reached is owed, not forgotten")))))
 
 (deftest every-fixer-is-launched-knowing-the-session-services-are-up
   ;; A fixer's cwd is the WORKTREE, so the only nido guidance it can discover
@@ -3653,6 +3704,67 @@
              (:unattempted ctx))
           "both layers, named — the whole plan, because none of it was reached"))))
 
+(deftest a-stale-stop-over-a-stack-jj-will-not-list-names-the-layers-the-review-saw
+  ;; A stale copy makes `session-stack` answer [], so a plan drawn over it owed
+  ;; everything to `:layer nil` — while the warden had named the owner layer and
+  ;; the review phase of the same round had seen both layers.
+  (with-redefs [stages/session-stack (fn [& _] [])
+                layers/staleness (fn [_] {:since-op "aaa111"})
+                agent/launch! (fn [_] (throw (ex-info "no fixer should launch" {})))]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 1 :reviewed-at "THENREV"
+                :toc [{:label "lower"} {:label "upper"}]
+                :findings [{:id "aa11" :handle "h-1" :title "x" :disposition :fix
+                            :owner-layer "upper"}]})]
+      (is (= :workspace-drifted (:status ctx)))
+      (is (= [{:layer "upper" :handed ["h-1"]}] (:unattempted ctx))
+          "owed by the layer the warden ruled, which the stop can still name"))))
+
+(deftest a-stale-stop-names-the-operation-that-moved-the-copy
+  ;; The second drift stop on one workstream recorded `:now nil` and nothing
+  ;; else; the op id was in agent.log, from a later agent's own jj call.
+  (let [moved-by [{:op "198003fe241d" :at "2026-10-05T19:04:00+00:00"
+                   :description "rebase commit abc" :args "jj rebase -b explore/x -d main"}]]
+    (with-redefs [stages/session-stack (fn [& _] two-layer-stack)
+                  layers/staleness (fn [_] {:since-op "77aa00" :moved-by moved-by})
+                  agent/launch! (fn [_] (throw (ex-info "no fixer should launch" {})))]
+      (let [ctx ((:run stages/fix-stage)
+                 {:config {:cwd "/w" :run-id "r1"} :iter 2 :reviewed-at "THENREV"
+                  :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "lower"}]})]
+        (is (= "77aa00" (get-in ctx [:drift :since-op])))
+        (is (= moved-by (get-in ctx [:drift :moved-by]))
+            "the command line that staled it is what tells a recurring rewriter apart")))))
+
+(deftest a-merge-base-that-stops-resolving-mid-run-is-the-copy-going-stale
+  ;; Round 2 died in 120ms on `jj could not resolve a merge base — cwd is not a
+  ;; reviewable workspace`, four minutes after round 1 resolved the same base on
+  ;; the same cwd, and the run ended :review-failed — "the reviewer broke".
+  (let [refusal (ex-info "jj could not resolve a merge base — cwd is not a reviewable workspace"
+                         {:reason :review-failed :step :merge-base :exit 1 :base "main"
+                          :err "Error: The working copy is stale (not updated since operation 77aa00)."})]
+    (with-redefs [layers/conflicted (fn [& _] [])
+                  layers/resolve-rev (fn [& _] nil)
+                  pass/merge-base (fn [& _] (throw refusal))
+                  layers/staleness (fn [_] {:since-op "77aa00"})]
+      (let [ctx ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 2})]
+        (is (= :workspace-drifted (:status ctx)))
+        (is (= :stop (:control ctx)))
+        (is (true? (get-in ctx [:drift :stale?])))
+        (is (str/includes? (get-in ctx [:drift :recover]) "jj workspace update-stale")
+            "the remedy, which a reviewer failure would never have named"))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"merge base"
+                            ((:run stages/review-stage)
+                             {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1}))
+          "on the first round no base has resolved yet, so nothing says the cwd ever was reviewable"))
+    (with-redefs [layers/conflicted (fn [& _] [])
+                  layers/resolve-rev (fn [& _] nil)
+                  pass/merge-base (fn [& _] (throw refusal))
+                  layers/staleness (fn [_] nil)]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"merge base"
+                            ((:run stages/review-stage)
+                             {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 2}))
+          "a copy jj still answers for is not drift, and the refusal stands as it was"))))
+
 (deftest a-round-whose-tree-did-not-move-fixes-normally
   (with-redefs [stages/session-stack (fn [& _] [])
                 layers/descends-from? (fn [_ _] true)
@@ -3683,7 +3795,7 @@
   ;; Staleness needs no pin to be seen, and a round that could not pin one is
   ;; exactly the round whose jj was already refusing it.
   (with-redefs [stages/session-stack (fn [& _] two-layer-stack)
-                layers/stale? (fn [_] true)
+                layers/staleness (fn [_] {})
                 layers/descends-from? (fn [& _] (throw (ex-info "never asked" {})))
                 agent/launch! (fn [_] (throw (ex-info "no fixer should launch" {})))]
     (let [ctx ((:run stages/fix-stage)
@@ -3706,7 +3818,7 @@
                                   {:num-turns 7 :result-text "fixed; suite green"})
                   jj/current-change-id (fn [_] "seatchange")
                   layers/working-copy-patch (fn [_ _] (swap! seen conj :patch) "+fixed\n")
-                  layers/stale? (fn [_] (swap! seen conj :guard) false)
+                  layers/staleness (fn [_] (swap! seen conj :guard) nil)
                   layers/descends-from? (fn [_ pin] (not= "seatchange" pin))
                   layers/resolve-rev (fn [_ _] "ELSEWHERE")
                   layers/land-fix! (fn [& _] (throw (ex-info "nothing may land" {})))

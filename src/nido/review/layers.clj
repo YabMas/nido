@@ -687,6 +687,56 @@
     (lifecycle/workspace-stale? (jj/jj! cwd "log" "-r" "@" "--no-graph" "-T" "commit_id"))
     (catch Throwable _ false)))
 
+(def ^:private op-row-template
+  "One tab-separated row per operation. First lines only: a description or an
+   `args:` attribute can carry a commit message, and a row must stay one line."
+  (str "self.id().short() ++ \"\\t\" ++ self.time().end().format(\"%Y-%m-%dT%H:%M:%S%:z\")"
+       " ++ \"\\t\" ++ self.description().first_line()"
+       " ++ \"\\t\" ++ self.attributes().first_line() ++ \"\\n\""))
+
+(def ^:private moved-by-limit
+  "How many operations since the stale copy's last update `staleness` names. The
+   one that moved it is among the first few; past that the list is another
+   workspace's ordinary work."
+  5)
+
+(defn- op-row [line]
+  (let [[id at description args] (str/split line #"\t" 4)]
+    (cond-> {:op id :at at :description (str description)}
+      (str/starts-with? (str args) "args: ") (assoc :args (subs args 6)))))
+
+(defn ^{:malli/schema [:=> [:cat :Path] [:maybe :map]]}
+  staleness
+  "Why jj refuses this working copy as stale, or nil when it does not:
+   `{:since-op <id> :moved-by [{:op :at :description :args} …]}`.
+
+   `:since-op` is the operation jj says the copy was last updated at, and
+   `:moved-by` is every operation recorded after it, newest first and at most
+   `moved-by-limit` — the one that rewrote this workspace's commit is among them,
+   and its `:args` is the command line that did it. Read without snapshotting
+   (`--ignore-working-copy`), which is the only way a stale copy lets the op log
+   be read. `:moved-by` is absent when the log cannot be read; the refusal is
+   still a stale copy."
+  [cwd]
+  (try
+    (let [r (jj/jj! cwd "log" "-r" "@" "--no-graph" "-T" "commit_id")]
+      (when (lifecycle/workspace-stale? r)
+        (let [since (second (re-find #"not updated since operation ([0-9a-f]+)" (str (:err r))))
+              {:keys [exit out]} (jj/jj! cwd "op" "log" "--ignore-working-copy" "--no-graph"
+                                         "--limit" (str (inc moved-by-limit))
+                                         "-T" op-row-template)
+              ops   (when (zero? exit)
+                      (->> (str/split-lines (str out))
+                           (remove str/blank?)
+                           (map op-row)
+                           (take-while #(not (and since (str/starts-with? since (:op %)))))
+                           (take moved-by-limit)
+                           vec))]
+          (cond-> {}
+            since     (assoc :since-op since)
+            (seq ops) (assoc :moved-by ops)))))
+    (catch Throwable _ nil)))
+
 (defn ^{:malli/schema [:=> [:cat :Path [:maybe :string]] [:maybe :string]]}
   working-copy-patch
   "The files on disk against commit `from`'s tree as a git patch — \"\" when they

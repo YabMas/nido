@@ -475,6 +475,21 @@
     (is (= ["lower"] (mapv :label (:layers ph))))
     (is (= {:round 1 :phase "review" :message "codex review failed"} (report/errored r)))))
 
+(deftest an-errored-phase-keeps-jj-s-own-words
+  (let [err "Error: The working copy is stale (not updated since operation 77aa00)."
+        r   (drive
+             [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+              {:event :phase-started :iter 2 :phase :review :at "t1"}
+              {:event :phase-errored :iter 2 :phase :review :at "t2"
+               :error "jj could not resolve a merge base — cwd is not a reviewable workspace"
+               :failure {:exit 1 :err err :base "main"}}
+              {:event :run-finalized :status :review-failed :ctx {} :at "t3"}])
+        ph  (first (:phases (first (:rounds r))))]
+    (is (= "error" (:status ph)))
+    (is (= [1 err "main"] ((juxt :exit :err :base) ph))
+        "the message is the stage's reading of the refusal; the stderr is the refusal, and
+         the run dir holds no other copy of it")))
+
 (deftest a-failed-layer-row-carries-its-reviewer-s-last-line
   (let [ph (first (:phases (first (:rounds
             (drive

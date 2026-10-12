@@ -333,6 +333,30 @@
         "the enum is closed and a refused append is swallowed to stderr, so an
          entry this schema will not take is an entry that silently never exists")))
 
+(deftest the-ledger-entry-carries-the-usage-limit-and-when-it-resets
+  ;; Two runs ended on a weekly limit and recorded `warden-indeterminate` — a
+  ;; status whose remedy is to re-run, which is the one thing that fails until
+  ;; the reset nothing on the entry named.
+  (let [limit {:agent "warden" :type "seven_day" :resets-at "2026-10-11T06:00:00Z"
+               :message "You've hit your weekly limit · resets Oct 11 at 8am"}
+        ev (t/review-event {:status :usage-limited :usage-limit limit}
+                           {:target {:base "main" :base-rev nil}}
+                           "/runs/r/report.json")]
+    (is (= limit (:usage-limit ev)))
+    (is (= ev (report/validate-event :review ev))
+        "a closed enum and a closed map: an entry they refuse silently never exists")))
+
+(deftest the-ledger-entry-names-the-operation-that-staled-the-copy
+  (let [drift {:now nil :stale? true :since-op "77aa00"
+               :moved-by [{:op "198003fe241d" :at "2026-10-05T19:04:00+00:00"
+                           :description "rebase commit abc" :args "jj rebase -b explore/x -d main"}]
+               :recover "Run `jj workspace update-stale` before anything else."}
+        ev (t/review-event {:status :workspace-drifted :drift drift}
+                           {:target {:base "main" :base-rev nil}}
+                           "/runs/r/report.json")]
+    (is (= drift (:drift ev)))
+    (is (= ev (report/validate-event :review ev)))))
+
 (deftest the-ledger-entry-says-which-readings-a-stand-in-made
   (let [by-claude {:reviewer :claude :instead-of :codex :because "usage limit"}
         ev (t/review-event {:status :clean :history [] :findings []}
@@ -1855,6 +1879,29 @@
       (is (= :no-answer (:outcome outcome))
           "the budget was spent; a run has to be able to tell that from a pass that never started")
       (is (nil? (:verdict outcome))))))
+
+(deftest a-verdict-pass-the-agent-could-not-run-says-why
+  ;; review-353302b7 recorded a rate-limited launch as `:no-answer — the pass ran and its answer
+  ;; carried no verdict`; the 429 was in agent.log and nowhere a reader looks.
+  (with-redefs [stages/discover-design-record (fn [_] a-design)
+                verdict/run! (fn [_] {:outcome :launch-failed :because "API Error: 529 overloaded"})]
+    (let [outcome (t/append-design-verdict! "/w" {:status :converged :findings [{:title "x"}]}
+                                            {} {:run-id "r"})]
+      (is (= {:outcome :launch-failed :because "API Error: 529 overloaded"} outcome)
+          "the launch's own words, and no ledger offered a verdict nobody reached"))))
+
+(deftest a-run-ended-on-the-usage-limit-spends-no-design-verdict
+  ;; Both usage-limited runs went on to launch the verdict pass into the same exhausted account.
+  (let [ran (atom false)]
+    (with-redefs [stages/discover-design-record (fn [_] a-design)
+                  verdict/run! (fn [_] (reset! ran true) a-verdict)]
+      (let [outcome (t/append-design-verdict!
+                     "/w" {:status :usage-limited :findings [{:title "x"}]
+                           :usage-limit {:agent "warden" :resets-at "2026-10-11T06:00:00Z"}}
+                     {} {:run-id "r"})]
+        (is (false? @ran))
+        (is (= :skipped (:outcome outcome)))
+        (is (str/includes? (:because outcome) "resets 2026-10-11T06:00:00Z"))))))
 
 (deftest a-design-naming-none-of-the-stack-spends-no-design-verdict
   ;; Judged against another story's record, every invariant holds over files it

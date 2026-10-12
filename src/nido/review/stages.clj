@@ -40,10 +40,12 @@
    when a round stops holding something, and the review stage reaches it over a
    round that found nothing while the last run's `:open` list still names a
    layer nobody answered for. `:stack-unmovable` is reached by a throw rather
-   than returned — see `terminal-reasons`."
+   than returned — see `terminal-reasons`. `:usage-limited` is the warden's or a
+   fixer's launch refused by the account — see `usage-limited`."
   #{:stack-conflicted :nothing-to-review :clean :warden-indeterminate :unfixable
     :dry-run :workspace-drifted :fix-unrouted :fix-conflicted :fix-rolled-back
-    :fix-declined :fix-timed-out :fix-launch-failed :unresolved :stack-unmovable})
+    :fix-declined :fix-timed-out :fix-launch-failed :unresolved :stack-unmovable
+    :usage-limited})
 
 (def terminal-reasons
   "The `:reason`s a diff stage throws with that end the run on that status
@@ -1746,6 +1748,26 @@
              :base-rev (:base-rev whole)
              :manifest (:manifest whole)))))
 
+(declare workspace-moved recovery drift-record)
+
+(defn- drifted-before-review
+  "The stop a round ends on when `e`, thrown resolving the merge base, was the
+   working copy going stale rather than the workspace being unreviewable — or nil
+   when it was not, or when this is the first round.
+
+   Only after the first round, because only then has this run's merge base
+   resolved on this cwd: the same question failing minutes later is the copy
+   having changed under the run, not a cwd that was never reviewable, and filed
+   as `:review-failed` it sends a reader to look for a broken reviewer. Only
+   staleness is asked — a copy jj still answers for resolves a merge base
+   wherever `@` has moved to."
+  [ctx e]
+  (let [{:keys [cwd]} (:config ctx)]
+    (when (and (= :merge-base (:step (ex-data e))) (> (:iter ctx) 1))
+      (when-let [moved (workspace-moved cwd nil)]
+        (assoc ctx :control :stop :status :workspace-drifted
+               :drift (drift-record nil moved (recovery moved nil)))))))
+
 (defn- run-review-stage
   "Ask whether the stack can be reviewed at all, then review it.
 
@@ -1762,7 +1784,10 @@
     (announce-conflicts! ctx conflicted)
     (if (seq conflicted)
       (assoc ctx :control :stop :status :stack-conflicted :conflicted conflicted)
-      (fan-out-reviews ctx))))
+      (try
+        (fan-out-reviews ctx)
+        (catch clojure.lang.ExceptionInfo e
+          (or (drifted-before-review ctx e) (throw e)))))))
 
 (def review-stage
   "Every layer and the whole stack, reviewed in one round.
@@ -3117,6 +3142,28 @@
                 {:seen #{} :out []}
                 history)))
 
+(defn ^{:malli/schema [:=> [:cat :string :map] [:maybe :map]]}
+  usage-limited
+  "The account usage limit that refused `agent`'s launch, as the run records it —
+   `{:agent \"warden\" :type \"seven_day\" :resets-at <ISO instant> :message <its
+   result text>}` — or nil when `launch` (`agent/launch!`'s answer) met none.
+
+   Every agent a run launches spends one account, so a limit that refused one
+   refuses the next: asking again, or launching the stage after, costs seconds
+   and learns nothing until `:resets-at`. A caller that reads non-nil here ends
+   the run on `:usage-limited` rather than on whatever the missing answer would
+   otherwise be read as. `:resets-at` is absent when claude named no reset, and
+   `:message` when it said nothing."
+  [agent {:keys [usage-limit result-text]}]
+  (when usage-limit
+    (cond-> {:agent agent}
+      (:type usage-limit)
+      (assoc :type (str (:type usage-limit)))
+      (:resets-at-ms usage-limit)
+      (assoc :resets-at (str (java.time.Instant/ofEpochMilli (long (:resets-at-ms usage-limit)))))
+      (not (str/blank? (str result-text)))
+      (assoc :message (str/trim (str result-text))))))
+
 (defn ^{:malli/schema [:=> [:cat :map :map] :map]}
   warden-failure
   "Why there is no ruling, when the round cannot use the answer.
@@ -3137,12 +3184,21 @@
    timer destroys the process before claude emits its `result` event, so
    `num-turns` is nil exactly as it is for an agent that never started, and
    `:timed-out?` is the only field that tells a warden that spent thirty minutes
-   from one that was rejected at the door."
-  [{:keys [num-turns result-error? result-text timed-out?]} decision]
+   from one that was rejected at the door.
+
+   A usage limit is asked next, ahead of the error it also is: the account
+   refused the agent, so the answer is missing for a reason no relaunch can
+   change — see `usage-limited`."
+  [{:keys [num-turns result-error? result-text timed-out?] :as launch} decision]
   (cond
     timed-out?
     {:cause  :budget-spent
      :reason "the agent was killed on its budget mid-answer — whatever it had settled went with the process"}
+
+    (:usage-limit launch)
+    {:cause  :usage-limited
+     :reason (or (some-> result-text str/trim not-empty)
+                 "the account's usage limit refused the agent")}
 
     result-error?
     {:cause  :launch-failed
@@ -3166,11 +3222,13 @@
    whole round's reviewer fan-out, and a warden retry costs seconds.
 
    Never on `:budget-spent`: that warden already had the whole wall clock, and a
-   second one would spend it again on the same findings. Never once a ruling
+   second one would spend it again on the same findings. Never on
+   `:usage-limited`: the second launch meets the same exhausted account, and the
+   relaunch carrying the identical limit text is all it would add. Never once a ruling
    parsed, either — a launch that errored after writing rulings has given the
    round something, and asking again could only replace it."
   [{:keys [terminal-reason]} decision {:keys [cause]}]
-  (and (not= :budget-spent cause)
+  (and (not (#{:budget-spent :usage-limited} cause))
        (empty? (:rulings decision))
        (or (= "malformed_tool_use_exhausted" terminal-reason)
            (contains? #{:launch-failed :unusable-answer} cause))))
@@ -3375,13 +3433,15 @@
                                             (ask (restated-warden-prompt prompt relaunched))
                                             first-ask)]
     (if failure
-      (assoc ctx :warden (cond-> (merge decision failure)
-                           (not (str/blank? (str (:result-text launch))))
-                           (assoc :result-text (let [t (str (:result-text launch))]
-                                                 (subs t 0 (min (count t) kept-answer-chars))))
-                           relaunched (assoc :relaunched relaunched))
-             :control :stop
-             :status :warden-indeterminate)
+      (let [limited (when (= :usage-limited (:cause failure)) (usage-limited "warden" launch))]
+        (cond-> (assoc ctx :warden (cond-> (merge decision failure)
+                                     (not (str/blank? (str (:result-text launch))))
+                                     (assoc :result-text (let [t (str (:result-text launch))]
+                                                           (subs t 0 (min (count t) kept-answer-chars))))
+                                     relaunched (assoc :relaunched relaunched))
+                       :control :stop
+                       :status (if limited :usage-limited :warden-indeterminate))
+          limited (assoc :usage-limit limited)))
       (let [{promoted :findings unplaceable :standing}
             (promoted-findings cwd (:toc ctx) handles (:findings ctx) (:promote decision))
             ;; A sibling the warden could not place is one it is told to list
@@ -4465,21 +4525,22 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
 
    `{:stale? true :now nil}` when jj refuses the working copy as stale, asked
    first because that refusal fails the descent check too and is the one case
-   whose remedy must be named. `{:now <rev>}` when jj answers and `@` is no
-   longer at or above `pin`. A nil `pin`, a round that could not pin, is still
-   asked about staleness, which needs none.
+   whose remedy must be named — with `layers/staleness`'s `:since-op` and
+   `:moved-by` beside it, because the loop's own fixers run no jj and the
+   operation that rewrote the copy is somebody else's, nameable from nothing
+   else the run keeps. `{:now <rev>}` when jj answers and `@` is no longer at or
+   above `pin`. A nil `pin`, a round that could not pin, is still asked about
+   staleness, which needs none.
 
    Asked at the top of the stage and again the moment each fixer returns. The
    stage holds the workspace for as long as its fixers take — 24 and 36 minutes
    on the branch whose working copy went stale under two consecutive runs, by
    operations that were not the loop's, since its fixers ran no jj at all."
   [cwd pin]
-  (cond
-    (layers/stale? cwd)
-    {:stale? true :now nil}
-
-    (and pin (not (layers/descends-from? cwd pin)))
-    {:now (layers/resolve-rev cwd "@")}))
+  (if-let [stale (layers/staleness cwd)]
+    (merge {:stale? true :now nil} stale)
+    (when (and pin (not (layers/descends-from? cwd pin)))
+      {:now (layers/resolve-rev cwd "@")})))
 
 (defn- save-fixer-patch!
   "Copy what a fixer left on the disk since `from` to its
@@ -4538,6 +4599,15 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                       (when (and stale? layer)
                         (str " The working copy is on " layer "'s fix, not the stack's top."))))])))))
 
+(defn- drift-record
+  "The `:drift` a stop records: the revisions, the staleness and the operations
+   `workspace-moved` read, and `recover` when there is something to do."
+  [reviewed-at moved recover]
+  (cond-> (merge {:now (:now moved)} (select-keys moved [:since-op :moved-by]))
+    reviewed-at     (assoc :reviewed-at reviewed-at)
+    (:stale? moved) (assoc :stale? true)
+    recover         (assoc :recover recover)))
+
 (defn- drift-stop
   "Stop the stage on `:workspace-drifted` with what it has: whatever `acc` has
    landed, the plan from entry `from` on as never attempted, and a `:drift`
@@ -4549,10 +4619,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   [acc reviewed-at moved plan from]
   (let [recover (recovery moved (:stranded acc))]
     (assoc acc :control :stop :status :workspace-drifted
-           :drift (cond-> {:now (:now moved)}
-                    reviewed-at     (assoc :reviewed-at reviewed-at)
-                    (:stale? moved) (assoc :stale? true)
-                    recover         (assoc :recover recover))
+           :drift (drift-record reviewed-at moved recover)
            :unattempted (unattempted-tail plan from))))
 
 (defn- refused-repair
@@ -4686,6 +4753,22 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
               fixing (assoc :fixing fixing)))
       (catch Throwable _ nil))))
 
+(defn- until-usage-limited
+  "`f`, a fix plan's step, stopping the plan after the step whose fixer met the
+   account's usage limit — `@!limited`, which the step sets — with the limit as
+   `:usage-limit` and every later entry of `@!plan` unattempted.
+
+   After the step rather than instead of it: the fixer may have written before
+   the limit refused it, and what it wrote is settled the way any fixer's is. What
+   is refused is the NEXT launch, which meets the same account. A step that
+   already stopped the plan keeps its own stop."
+  [!limited !plan f]
+  (fn [acc [i :as step]]
+    (let [r (f acc step)]
+      (if-let [limit (and (not (reduced? r)) @!limited)]
+        (reduced (assoc r :usage-limit limit :unattempted (unattempted-tail @!plan (inc i))))
+        r))))
+
 (defn- reduce-plan
   "`reduce` of `f` over the plan in `!plan`, each entry as `[i entry]`, reading
    the plan afresh before every step — so an entry `f` adds after the one it is
@@ -4726,9 +4809,10 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    fixer declining or timing out beside a design question leaves the question what the person is
    asked, with the fix rows in the report beside it. Two are about the BRANCH and stand, because
    nothing can be answered on it until they are cleared: conflict markers the repair left, and a
-   working copy someone else moved."
+   working copy someone else moved. A usage limit stands too: it is about the account, and the
+   person is asked nothing until it resets."
   [ctx]
-  (if (#{:fix-conflicted :workspace-drifted} (:status ctx))
+  (if (#{:fix-conflicted :workspace-drifted :usage-limited} (:status ctx))
     ctx
     (assoc (dissoc ctx :status) :control :escalate)))
 
@@ -4777,8 +4861,19 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
         ;; beside it, which is the same shape a round with no work at all
         ;; produces — and the round that stopped here is the one whose repairs
         ;; a reader most needs named.
+        ;;
+        ;; Owed by the layers the round's reviewers saw, when the stack read
+        ;; here came back empty: `session-stack` answers [] for a copy jj
+        ;; refuses, which is the stale stop itself, and a plan drawn over no
+        ;; stack names no layer for anything it owes.
         moved
-        (drift-stop ctx (:reviewed-at ctx) moved plan 0)
+        (drift-stop ctx (:reviewed-at ctx) moved
+                    (if (seq stack)
+                      plan
+                      (fix-plan (into [] (comp (keep :label) (map (fn [l] {:slug l})))
+                                      (:toc ctx))
+                                to-fix))
+                    0)
 
         :else
         (if (empty? plan)
@@ -4800,6 +4895,8 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
               ;; local: the next round's warden reads the same accounts off
               ;; the fix rows, as rulings' evidence rather than as a handoff.
               !said (volatile! [])
+              ;; The usage limit the last fixer launched met, or nil.
+              !limited (volatile! nil)
               left! (fn [a from]
                       (tell-fix-progress!
                        ctx (vreset! !left (assoc a :unattempted (unattempted-tail @!plan from)))
@@ -4812,6 +4909,8 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                 (with-round-carried
                  !left
                  #(reduce-plan
+               (until-usage-limited
+                !limited !plan
                ;; Indexed, because where in the plan the stage stopped is the
                ;; only thing that says which fixers it never reached.
                (fn [acc [i {:keys [label layer findings]}]]
@@ -4851,7 +4950,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        ;; budget, and the number is the whole of what a reader
                        ;; would do about the kill.
                        wall   (fix-budget budget (count findings))
-                       {:keys [num-turns result-text timed-out? exit-code]}
+                       {:keys [num-turns result-text timed-out? exit-code] :as launch}
                        (agent/launch!
                         {:run-id run-id :cwd cwd
                          :system-prompt sys-prompt
@@ -4887,6 +4986,9 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                          ;; order of its own tool calls, which a merge of
                          ;; several destroys.
                          :out-file (fixer-log run-id label (:iter ctx) ".log")})
+                       ;; Whatever becomes of this repair below, the stage
+                       ;; launches nothing after it — see `until-usage-limited`.
+                       _      (vreset! !limited (usage-limited "fixer" launch))
                        ;; A KILL COUNTS AS HAVING RUN, and everything below turns
                        ;; on it. The budget timer destroys the process before
                        ;; claude emits its `result` event, so `num-turns` comes
@@ -5191,7 +5293,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        (left! acc (inc i))
                        (layers/restore-top! cwd stack)
                        acc))))))
-                 ctx !plan))))
+                 ) ctx !plan))))
               ctx' (with-round-history ctx')]
           (cond
             ;; The plan stopped itself on a moved workspace, and the stop it
@@ -5199,6 +5301,11 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
             ;; that did not finish as one that did.
             (:drift ctx')
             ctx'
+
+            ;; Conflict markers outrank it: they are on the branch, and the
+            ;; limit is only on the account.
+            (and (:usage-limit ctx') (empty? (:conflicted ctx')))
+            (assoc ctx' :control :stop :status :usage-limited)
 
             ;; Reached only when the rollback above could not clear the conflict,
             ;; so the stack really is holding markers. Stop with it named rather

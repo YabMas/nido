@@ -184,6 +184,21 @@
           "the phase event carries the stage's own account, so the report's fix
            phase says what it did as well as that it failed"))))
 
+(deftest an-errored-phase-carries-what-the-refusing-command-said
+  ;; A round-2 merge-base failure kept only the stage's message, `cwd is not a
+  ;; reviewable workspace`; jj's own stderr, which said the copy was stale, was
+  ;; on the ex-data and reached nothing the run dir keeps.
+  (let [[events emit] (capturing)
+        err  "Error: The working copy is stale (not updated since operation 77aa00)."
+        pipe [(stage :review (fn [_] (throw (ex-info "jj could not resolve a merge base"
+                                                     {:reason :review-failed :exit 1 :base "main"
+                                                      :err err :cwd "/w"}))))]
+        out  (run-loop {:run-id "r1" :pipeline pipe :emit emit})]
+    (is (= :review-failed (:status out)))
+    (is (= {:exit 1 :err err :base "main"}
+           (:failure (first (filter #(= :phase-errored (:event %)) @events))))
+        "the command's exit, its stderr and the base it was asked about — not the rest of the ex-data")))
+
 (deftest a-stage-with-no-account-of-its-own-ends-on-what-it-was-handed
   ;; The stages before it ran and what they did is the round's; a throw that
   ;; carries nothing must not take that with it.

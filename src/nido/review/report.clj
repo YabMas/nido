@@ -175,6 +175,10 @@
    status names the condition; this is the remedy and the hour to come back,
    whose only other copies are the `:review` entry and a log in the run dir.
 
+   `:usage-limit` is the account limit that refused an agent the run needed, on the run that ended
+   `usage-limited` — `nido.review.stages/usage-limited`'s map, whose `:resets-at` is when a re-run
+   can next be answered.
+
    `:unrecorded` is what a record run that ended `unrecorded` would otherwise have ended as, and
    the ledger it could not write to: the decision it reached is in this report and nowhere else.
 
@@ -195,6 +199,9 @@
      (cond-> {}
        (:unavailable ctx)
        (assoc :unavailable (:unavailable ctx))
+
+       (:usage-limit ctx)
+       (assoc :usage-limit (:usage-limit ctx))
 
        (:unrecorded ctx)
        (assoc :unrecorded (:unrecorded ctx))
@@ -784,7 +791,7 @@
                 (seq (:out-of-reach ctx)) (assoc :out-of-reach (vec (:out-of-reach ctx)))
                 (:amend-tree ctx) (assoc :tree (:amend-tree ctx))
                 (:amend-launch ctx) (assoc :launch (:amend-launch ctx))
-                (= :amend-launch-failed (:status ctx)) (assoc :status "failed")
+                (#{:amend-launch-failed :usage-limited} (:status ctx)) (assoc :status "failed")
                 (:amend-unappended ctx) (assoc :status "refused"
                                                :unappended (:amend-unappended ctx)))
 
@@ -1496,14 +1503,17 @@
       ;; on its third layer still lists the two before it and the one it never
       ;; reached. An errored phase with no account is just the error: the
       ;; engine hands none over rather than the ctx the stage was given, which
-      ;; would overwrite the rows the phase already holds.
+      ;; would overwrite the rows the phase already holds. What the refusing
+      ;; command said — `:exit`, `:err`, `:base` — goes on the phase beside the
+      ;; message, which is the run dir's only copy of jj's own words.
       :phase-errored
       (let [ctx (some-> (:ctx ev) (assoc :iter (:iter ev)))]
         (update-current-phase report (name (:phase ev))
                               #(cond-> %
                                  ctx  (finish-phase (:phase ev) ctx (:at ev))
                                  true (assoc :status "error" :error (:error ev)
-                                             :ended-at (:at ev)))))
+                                             :ended-at (:at ev))
+                                 (:failure ev) (merge (:failure ev)))))
 
       :run-finalized
       (-> report
@@ -1534,7 +1544,9 @@
 
    `outcome` describes the pass and not what it decided. `:outcome` is what the
    pass returned (`:answered`, `:no-answer`, `:skipped` — the pass never
-   launched, and `:because` says what stopped it), `:ledger` is whether the
+   launched, and `:because` says what stopped it — or `:launch-failed` /
+   `:usage-limited`, the agent refused, with its words as `:because` and the
+   limit as `:usage-limit`), `:ledger` is whether the
    workstream took the verdict (`:appended`, `:refused`, `:no-workstream`), and
    either half can be the one that went wrong: a verdict the ledger refuses is
    as lost as a verdict that was never produced, and both used to leave one
@@ -1543,12 +1555,13 @@
 
    Keywords are written out as strings to match the rest of the report, whose
    statuses have been strings since it was a JSON document."
-  [report {:keys [outcome ledger because verdict]}]
+  [report {:keys [outcome ledger because verdict usage-limit]}]
   (assoc report :design-verdict
          (cond-> {:outcome (name outcome)}
-           ledger  (assoc :ledger (name ledger))
-           because (assoc :because because)
-           verdict (assoc :verdict verdict))))
+           ledger      (assoc :ledger (name ledger))
+           because     (assoc :because because)
+           usage-limit (assoc :usage-limit usage-limit)
+           verdict     (assoc :verdict verdict))))
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport :any] [:maybe :map]]}
   verdict-summary

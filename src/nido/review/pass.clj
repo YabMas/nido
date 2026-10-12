@@ -142,7 +142,8 @@
    work `base` gained since the branch forked shows up as spurious deletions
    (e.g. 180 files instead of the PR's actual 29). Diffing from the fork point
    matches what the PR's \"Files changed\" shows. Throws :review-failed if jj
-   can't resolve it (not a workspace, unrelated histories, …)."
+   can't resolve it (not a workspace, unrelated histories, a stale copy, …),
+   with `:step :merge-base` so a caller can tell this refusal from a reviewer's."
   [cwd base]
   (let [{:keys [exit out err]}
         (jj/jj! cwd "log" "--no-graph"
@@ -151,7 +152,8 @@
         rev (->> (str/split-lines (str out)) (remove str/blank?) first)]
     (when (or (not (zero? exit)) (str/blank? rev))
       (throw (ex-info "jj could not resolve a merge base — cwd is not a reviewable workspace"
-                      {:reason :review-failed :exit exit :cwd cwd :base base :err err})))
+                      {:reason :review-failed :step :merge-base
+                       :exit exit :cwd cwd :base base :err err})))
     rev))
 
 (defn- diff-name-only

@@ -521,6 +521,22 @@
       (is (str/includes? (:amend-error out) "amend-round-1.log")
           "the stop names the transcript, which is where the cause is"))))
 
+(deftest an-amender-refused-by-the-usage-limit-says-when-it-can-answer
+  ;; design-loop-e85454fa ended `did not complete — exit 1 · 1 turn` on an amender the account's
+  ;; weekly limit turned away; the limit and its reset were in agent/launch!'s answer and dropped.
+  (let [launch {:exit-code 1 :num-turns 1 :result-error? true
+                :result-text "You've hit your weekly limit · resets Oct 11 at 8am"
+                :usage-limit {:type "seven_day" :resets-at-ms 1791698400000}}
+        [out appended] (with-amend {:launch launch} (ctx :findings [a-finding]))]
+    (is (= :usage-limited (:status out))
+        "not :amend-launch-failed, whose remedy is to read a transcript and re-run now")
+    (is (nil? appended))
+    (is (= {:agent "amender" :type "seven_day" :resets-at "2026-10-11T06:00:00Z"}
+           (select-keys (:usage-limit out) [:agent :type :resets-at])))
+    (is (str/includes? (:amend-error out) "resets 2026-10-11T06:00:00Z"))
+    (is (str/includes? (record/amender-account (:amend-launch out)) "usage limit (seven_day)")
+        "and the headline account says which limit, where it used to say only `exit 1`")))
+
 (deftest an-amender-that-completed-and-wrote-nothing-still-declined
   (let [[out _] (with-amend {:launch {:exit-code 0 :num-turns 4}} (ctx :findings [a-finding]))]
     (is (= :amend-noop (:status out)))

@@ -552,6 +552,24 @@
            staleness is asked apart from it")
       (finally (fs/delete-tree root)))))
 
+(deftest a-stale-workspace-names-the-operation-that-staled-it
+  ;; A drift that recurs on one workspace was attributable from agent.log alone,
+  ;; where a later agent's own jj call happened to print the op id. The stale
+  ;; reading is what names it, from the op log a stale copy still lets jj read.
+  (let [{:keys [root work home]} (edited-workspace!)]
+    (try
+      (is (nil? (layers/staleness work)) "a copy jj answers for is not stale")
+      (rewrite-under! home)
+      (let [{:keys [since-op moved-by]} (layers/staleness work)]
+        (is (re-matches #"[0-9a-f]+" (str since-op))
+            "the operation jj says the copy was last updated at")
+        (is (seq moved-by) "the operations recorded since, which the rewrite is among")
+        (is (some #(str/includes? (str (:args %)) "squash --into main") moved-by)
+            "the rewrite's own command line, which is what names who did it")
+        (is (not-any? #(str/starts-with? since-op (:op %)) moved-by)
+            "the copy's own last update is not one of the operations that moved it"))
+      (finally (fs/delete-tree root)))))
+
 (deftest the-edits-of-a-stale-workspace-are-still-read-without-jj
   ;; `jj diff` is refused on a stale working copy, and the edits in it are not
   ;; in any commit — so a copy has to be read off the disk, or there is none.

@@ -3883,28 +3883,39 @@
    `:timed-out?` and `:num-turns`, and the transcript it wrote — with `:failed` set to why it did
    not complete, or absent when it did.
 
-   It did not complete when it was killed on its budget, exited non-zero, or ended with no `result`
-   event. The last is read off `:num-turns`, which is taken from that event and so is nil exactly
+   It did not complete when it was killed on its budget, was refused by the account's usage limit
+   (kept as `:usage-limit` — `stages/usage-limited` — for the stop to name), exited non-zero, or
+   ended with no `result` event. The last is read off `:num-turns`, which is taken from that event and so is nil exactly
    when none arrived: claude died mid-turn, and whatever the amender meant to write went with it.
    An amender that completed and wrote nothing has declined; one that did not complete has said
    nothing at all, and only this tells the two apart once the answer file is found absent."
-  [{:keys [exit-code timed-out? num-turns]} transcript]
-  (let [failed (cond timed-out?                          "killed on its budget"
+  [{:keys [exit-code timed-out? num-turns] :as launched} transcript]
+  (let [limit  (stages/usage-limited "amender" launched)
+        failed (cond timed-out?                          "killed on its budget"
+                     limit                               "was refused by the account's usage limit"
                      (and exit-code (not (zero? exit-code))) (str "exited " exit-code)
                      (nil? num-turns)                    "ended with no result event")]
     (cond-> {:exit-code exit-code :timed-out? (boolean timed-out?) :num-turns num-turns
              :log transcript}
-      failed (assoc :failed failed))))
+      failed (assoc :failed failed)
+      limit  (assoc :usage-limit limit))))
+
+(defn- usage-limit-line
+  "`stages/usage-limited`'s map as the phrase a reader acts on: which limit, and when it resets."
+  [{:keys [type resets-at]}]
+  (str "usage limit" (when type (str " (" type ")"))
+       (if resets-at (str ", resets " resets-at) ", no reset time given")))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :string]]}
   amender-account
   "One line on how an amender's agent ended, from the amend phase's `:launch` (`amender-launch`) —
    whether it completed, its exit code, and its turns or that no result event arrived — or nil when
    no amender was launched."
-  [{:keys [exit-code timed-out? num-turns failed] :as launch}]
+  [{:keys [exit-code timed-out? num-turns failed usage-limit] :as launch}]
   (when launch
     (str (if failed "did not complete — " "completed — ")
          (str/join " · " (cond-> []
+                           usage-limit       (conj (usage-limit-line usage-limit))
                            (some? exit-code) (conj (str "exit " exit-code))
                            timed-out?        (conj "killed on its budget")
                            (some? num-turns) (conj (str num-turns " turn" (when (not= 1 num-turns) "s")))
@@ -3914,12 +3925,23 @@
   "End a round whose amender left no record and no objection. `:amend-noop` only when its agent
    completed — it read the findings and declined; `:amend-launch-failed` when the agent did not,
    with the reason and transcript as `:amend-error`, since that round's question was never answered
-   and re-running it is a different remedy from overruling a refusal."
-  [ctx {:keys [failed log]}]
-  (if failed
+   and re-running it is a different remedy from overruling a refusal. `:usage-limited`, carrying the
+   limit as `:usage-limit`, when the account refused it: re-running before the reset meets the same
+   refusal, so the remedy is to wait, not to read a transcript."
+  [ctx {:keys [failed log usage-limit]}]
+  (cond
+    usage-limit
+    (assoc ctx :control :stop :status :usage-limited :usage-limit usage-limit
+           :amend-error (str "the amender was refused by the account's "
+                             (usage-limit-line usage-limit)
+                             " — nothing was appended; re-run after the reset"))
+
+    failed
     (assoc ctx :control :stop :status :amend-launch-failed
            :amend-error (str "the amender " failed " before answering — nothing was appended; its"
                              " transcript is " log))
+
+    :else
     (assoc ctx :control :stop :status :amend-noop)))
 
 (defn- launch-amender!
@@ -5066,10 +5088,10 @@
        Terminal, and loud: whatever it wrote is still there for a human, and the
        stop names it and the answer that was not appended.
      no usable record came back — the ledger untouched, and terminal under one of
-       two statuses (`unanswered-stop`): :amend-noop when the amender's agent
-       completed and declined, mirroring the diff loop's :fix-noop, and
+       three statuses (`unanswered-stop`): :amend-noop when the amender's agent
+       completed and declined, mirroring the diff loop's :fix-noop,
        :amend-launch-failed when it never completed, as the diff loop's
-       :fix-launch-failed is.
+       :fix-launch-failed is, and :usage-limited when the account refused it.
      the record came back smaller — reported always, and terminal when it fell
        below the point its own round would still run. That last one is the whole
        reason this stage measures rather than trusts: a loop that converges by
