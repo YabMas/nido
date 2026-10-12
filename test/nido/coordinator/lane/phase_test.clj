@@ -50,9 +50,21 @@
                (lphase/advance! :brian id {:evidence "error rate flat for a week"})))
         (let [w (ws/read-ws :brian id)]
           (is (nil? (:closed w)))
-          (is (= {:format :phase-gate :design {:seq 3} :opens "the old path is removed"
+          (is (= {:format :phase-gate :design {:seq 3} :phase 2 :opens "the old path is removed"
                   :evidence "error rate flat for a week"}
-                 (dissoc (ws/latest-entry :brian id :phase-gate) :seq :at))))))))
+                 (dissoc (ws/latest-entry :brian id :phase-gate) :seq :at)))
+          (is (= 2 (:phase (last (filter #(= :phase-gate (:kind %)) (:entries w)))))
+              "the index row carries the gate's identity, since progress parses nothing"))))))
+
+(deftest a-gate-naming-another-phase-number-is-refused
+  (with-tmp
+    (fn []
+      (let [id (between-phases)]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"opens phase 3"
+                              (ws/open-phase! :brian id {:format :phase-gate :design {:seq 3} :phase 3
+                                                         :opens "the old path is removed"
+                                                         :evidence "e"}))
+            "a gate's number is its identity, so it must name the phase it opens")))))
 
 (deftest advance-refuses-blank-evidence-and-a-workstream-not-between-phases
   (with-tmp

@@ -1275,21 +1275,16 @@
 
    `:state` is :landed below the current phase — and the current one once it has landed —
    :current while its work is underway, :ahead above it. `:opened-by` is the gate that opened
-   a phase, read oldest first with each gate opening the first phase after the one already
-   reached whose claim it names — `record.phase/progress`'s reading, so the phase a gate is
-   shown against is the phase it opened. `:owed-gate` is the landed phase's exit while the
+   a phase, joined by `record.phase/opened-by` — `record.phase/progress`'s reading, so the
+   phase a gate is shown against is the phase it opened. `:owed-gate` is the landed phase's exit while the
    workstream waits between phases, the gate a person asserts."
   [project ws-id w]
   (when-let [d (cws/plan-design project ws-id)]
     (when-let [p (phase/progress d (:entries w))]
       (let [phases   (vec (:phases d))
-            opened   (loop [i 0 [g & more] (cws/entries-of project ws-id :phase-gate) acc {}]
-                       (if-not g
-                         acc
-                         (if-let [k (some #(when (= (:opens g) (:claim (phases %))) %)
-                                          (range (inc i) (count phases)))]
-                           (recur k more (assoc acc k g))
-                           (recur i more acc))))
+            opened   (let [rows (into {} (map (juxt :seq identity))
+                                      (cws/entries-of project ws-id :phase-gate))]
+                       (update-vals (phase/opened-by d (:entries w)) #(get rows (:seq %) %)))
             waiting? (= :between-phases (get-in w [:closed :outcome]))
             cur      (:current p)]
         {:current   cur

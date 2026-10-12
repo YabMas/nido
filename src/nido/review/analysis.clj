@@ -158,6 +158,10 @@
    which is the loop's own derivation and what the ledger entry agrees with.
    Carried only when non-zero.
 
+   `:verdict-advice` is a standing verdict's `:needs`, on the open side on the
+   same argument: advice addressed to a person that no gate routes is owed until
+   someone answers it. Carried only when true.
+
    A `Design:` line says the verdict in the headline too, and that it was
    carried when it was: the unraised count may be an earlier judge's, and a
    reader has to know whether a judge read THIS run's code to weigh it.
@@ -211,7 +215,7 @@
            findings-remaining findings-kept remaining-handed remaining-parked
            targets-reviewed targets-skipped unfixable parked standing
            drift unavailable stood-in base in-flight errored design-verdict verdict-implementation
-           verdict-unverified verdict-unraised
+           verdict-unverified verdict-unraised verdict-advice
            design-carried-from review-entry reviewed-project reviewed-session reviewed-ws-id
            machinery owed-reading ruled-not-dispatched previous-stack] :as run}]
   ;; `:in-flight` is the reconciler's reading of an orphan's report and is the
@@ -275,10 +279,15 @@
                                       (n findings-remaining) " still open · "
                                       (when (pos? (or verdict-unraised 0))
                                         (str verdict-unraised " unraised by the verdict · "))
+                                      ;; The judge's sample, not the code's debt: an
+                                      ;; invariant it confirmed once and skipped the
+                                      ;; next time moves this over an unmoved tree.
                                       (when (pos? (or verdict-unverified 0))
                                         (str verdict-unverified " verification"
                                              (when (not= 1 verdict-unverified) "s")
-                                             " owed · "))
+                                             " owed by the verdict's reading · "))
+                                      (when verdict-advice
+                                        "verdict advice owed a person · ")
                                       (n findings-kept) " kept\n"
                                       "Coverage: " (or targets-reviewed 0) " targets read this run, "
                                       (or targets-skipped 0) " carried from an earlier run\n"
@@ -336,6 +345,7 @@
                               :verdict-implementation (or verdict-implementation 0))
       (pos? (or verdict-unverified 0)) (assoc :verdict-unverified verdict-unverified)
       (pos? (or verdict-unraised 0)) (assoc :verdict-unraised verdict-unraised)
+      verdict-advice   (assoc :verdict-advice true)
       design-carried-from (assoc :design-carried-from design-carried-from)
       reviewed-project (assoc :reviewed-project (name reviewed-project))
       reviewed-session (assoc :reviewed-session reviewed-session)

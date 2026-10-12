@@ -1535,7 +1535,7 @@
             {:outcome :answered :ledger :appended
              :verdict (assoc a-verdict :carried-from 18
                              :findings-classified [{:finding "b0229ac9" :as :implementation}])})]
-    (is (= {:design-verdict "strained" :verdict-implementation 0 :design-carried-from 18}
+    (is (= {:design-verdict "strained" :verdict-implementation 0 :verdict-advice true :design-carried-from 18}
            (report/verdict-summary r #{}))
         "an earlier run's classification is not this run's repair, and a reader
          has to know no judge read this run's code")))
@@ -1563,7 +1563,7 @@
                         :verdict (assoc a-verdict :findings-classified
                                         [{:finding "f1" :as :implementation}])})
                      path)
-    (is (= {:design-verdict "strained" :verdict-implementation 1}
+    (is (= {:design-verdict "strained" :verdict-implementation 1 :verdict-advice true}
            (report/verdict-summary (json/parse-string (slurp path) true) #{"f1"})))))
 
 ;; ---- the rest of what the run's tail wrote --------------------------------
@@ -2150,3 +2150,27 @@
     (is (= "unfixable" (:status round)))
     (is (true? (:review-aborted? (report/as-final r)))
         "it read nothing, so the round before's repairs are still unchecked")))
+
+(deftest a-standing-verdicts-needs-is-flagged-as-owed
+  (let [summary (fn [v] (report/verdict-summary
+                         (report/with-verdict
+                           (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+                           {:outcome :answered :ledger :appended :verdict v})
+                         #{}))]
+    (is (true? (:verdict-advice (summary {:verdict :sound :reason "r" :round 1 :needs "run the live suite"})))
+        "nothing else routes a standing verdict's advice to a person")
+    (is (nil? (:verdict-advice (summary {:verdict :invalidated :reason "r" :round 1 :needs "supersede"
+                                         :invariants-broken [{:invariant "i" :finding "f"}]})))
+        "a decision's needs reaches a person through the gate already")
+    (is (nil? (:verdict-advice (summary {:verdict :sound :reason "r" :round 1}))))))
+
+(deftest an-invariant-not-owed-yet-is-not-counted-owed
+  (is (not (contains? (report/verdict-summary
+                       (report/with-verdict
+                         (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+                         {:outcome :answered :ledger :appended
+                          :verdict {:verdict :sound :reason "r" :round 1
+                                    :invariants-pending [{:invariant "one-writer" :missing "phase 2"}]}})
+                       #{})
+                      :verdict-unverified))
+      "ten of twelve `verifications owed` were invariants the plan does not hold until its last phase"))

@@ -1643,14 +1643,21 @@
 
    `:verdict-unverified` counts the invariants the judge could not confirm, only
    when there are any. Each is evidence somebody owes before the branch ships —
-   open work the rounds never saw, since no finding stands for it.
+   open work the rounds never saw, since no finding stands for it. Those not owed
+   yet, `:invariants-pending`, are not counted.
+
+   `:verdict-advice` is true when a verdict that leaves the design standing
+   carries `:needs`. That advice is addressed to a person and nothing else routes
+   it: no gate opens on a sound verdict, and a branch merged with two unverified
+   wire premises named there and no entry ever answering them. It is a flag
+   rather than a count because `:needs` is prose, and a number of paragraphs
+   measures nothing.
 
    `:verdict-unraised` counts the `:unraised` rows, only when there are any, and
    is open on the same argument: a located defect no round raised and nobody
    ruled on is not a decision to ship it. It is owed to the next run, whose
    reviewers `stages/standing-needs` seeds with it — and a CARRIED verdict's
-   rows are the earlier run's, re-offered rather than decided twice. `:needs`
-   is advice and counts as nothing here."
+   rows are the earlier run's, re-offered rather than decided twice."
   [report owed]
   (let [v     (get-in report [:design-verdict :verdict])
         owed? (fn [text] (some #(and (not (str/blank? (str %))) (str/includes? (str text) (str %)))
@@ -1663,6 +1670,9 @@
                                           (count (:unraised v)))}
         (seq (:invariants-unverified v)) (assoc :verdict-unverified (count (:invariants-unverified v)))
         (seq (:unraised v)) (assoc :verdict-unraised (count (:unraised v)))
+        (and (not (str/blank? (str (:needs v))))
+             (not (creport/verdict-invalidates (keyword (name k)))))
+        (assoc :verdict-advice true)
         (:carried-from v) (assoc :design-carried-from (:carried-from v))))))
 
 ;; ---- the rest of what the run's tail wrote -------------------------------

@@ -1851,10 +1851,19 @@
         ;; the carry because the rows are re-read off the ledger every round.
         answers  (merge (get-in ctx [:carry :inherited-answers])
                         (reviewer-answers results (:iter ctx)))
+        ;; What reviewers set aside, onto the carry: the verdict pass is its one
+        ;; reader and runs after the last round, and a round's own fields do
+        ;; not outlive it.
+        aside    (into [] (mapcat (fn [{:keys [target set-aside]}]
+                                    (map #(assoc % :layer (:label target) :round (:iter ctx))
+                                         set-aside)))
+                       results)
         ctx      (cond-> ctx
                    (seq answers)
                    (-> (assoc-in [:carry :inherited-answers] answers)
-                       (assoc-in [:carry :inherited-open] (with-answers inherit answers))))
+                       (assoc-in [:carry :inherited-open] (with-answers inherit answers)))
+                   (seq aside)
+                   (update-in [:carry :set-aside] (fnil into []) aside))
         ;; The last point at which this round can leave anything behind: the
         ;; engine has no stage after a throw, so a clean bill a reviewer already
         ;; paid for is discarded unless it is written here. Best-effort like
@@ -2286,7 +2295,8 @@
   across-amendment
   "The workstream's last verdict when it was reached against a record `design`
    has since superseded, holding only the `:unraised` rows `design` does not
-   name — or nil when there are none.
+   name and, from a verdict that left its record standing, its `:needs` — or nil
+   when there is neither.
 
    `discover-prior-verdict` refuses such a verdict, and rightly for its JUDGMENT:
    whether the old record held is not a question about the new one. A row is not
@@ -2297,6 +2307,14 @@
    the amendment does name may be exactly what it re-decided, so it is not
    carried.
 
+   A standing verdict's `:needs` is carried on the same argument: advice to a
+   person is not a judgment of the record either, and refused with the verdict
+   one phase question was re-derived from scratch by each verdict after each
+   amendment. The judge re-checks it against what changed; it is not filtered
+   here, because whether an amendment answered a paragraph of prose is that
+   reading's question. A decision's `:needs` asked whether the record stands,
+   which the amendment is the answer to.
+
    Never across a phase gate, for `same-phase?`'s reason, and only from a record
    older than `design`."
   [cwd design]
@@ -2306,8 +2324,12 @@
         (when (and (integer? (:design-seq v)) (< (:design-seq v) n)
                    (same-phase? design v #(try (:entries (ws/read-ws project ws-id))
                                                (catch Exception _ nil))))
-          (when-let [rows (seq (remove #(named-by? design (:where %)) (:unraised v)))]
-            (assoc v :unraised (vec rows))))))))
+          (let [rows  (vec (remove #(named-by? design (:where %)) (:unraised v)))
+                needs (when-not (report/verdict-invalidates (:verdict v))
+                        (not-empty (str/trim (str (:needs v)))))]
+            (when (or (seq rows) needs)
+              (cond-> (assoc (dissoc v :needs) :unraised rows)
+                needs (assoc :needs needs)))))))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :any] [:maybe :map]]}
   standing-needs

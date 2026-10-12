@@ -88,3 +88,15 @@
                         (gate "the old column is dropped"))))
           "the last phase is open and has not landed")))
   (is (not (phase/delivered? nil (rows :merged)))))
+
+(deftest a-gate-joins-its-phase-by-number-not-by-wording
+  ;; An amendment reworded phase 2's claim after its gate was asserted; joined by
+  ;; the text, the gate was uncounted and the judge was told phase 1 of 2 over a
+  ;; phase that had landed and been gated.
+  (let [reworded (assoc-in plan [:phases 1 :claim] "reads move, reworded by an amendment")
+        g        {:kind :phase-gate :phase 2 :opens "reads move to the new column"}]
+    (is (= 2 (:current (phase/progress reworded (rows :design :merged g)))))
+    (is (= {1 (assoc g :seq 3)} (phase/opened-by reworded (rows :design :merged g)))
+        "the board shows the gate against the phase it opened")
+    (is (= 1 (:current (phase/progress plan (rows :design :merged (assoc g :phase 7)))))
+        "a phase this plan does not have was a superseded plan's, and is not counted")))

@@ -521,3 +521,19 @@
     (is (some #{"prior_open"} (:required schema))
         "strict structured output demands every property be required, the
          composition variant included — it is derived from the same base")))
+
+(deftest a-reviewers-set-aside-is-parsed-for-the-design-judge
+  ;; A round-1 reviewer named a record/code mismatch and set it aside; the judge
+  ;; re-derived it from scratch at the cost of a whole pass.
+  (let [out (pass/parse-output
+             (json/generate-string
+              {:findings [] :overall_correctness "correct" :prior_open []
+               :set_aside [{:observation "read_passage marks a page before the first block"
+                            :why "its own tests expect it"}
+                           {:observation " " :why "blank"}]}))]
+    (is (= [{:observation "read_passage marks a page before the first block"
+             :why "its own tests expect it"}]
+           (:set-aside out))))
+  (is (= [] (:set-aside (pass/parse-output
+                         (json/generate-string {:findings [] :overall_correctness "correct" :prior_open []}))))
+      "an output written before the field existed reads as none"))

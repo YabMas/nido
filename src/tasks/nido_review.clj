@@ -303,9 +303,17 @@
         {:ledger :refused :ws-id ws-id :because (refusal-reason e)}))
     {:ledger :no-workstream}))
 
+(defn- classified-as
+  "What `verdict` classified the parked finding `f` as — `:implementation`,
+   `:design`, `:stance`, `:baseline` — or nil when it did not classify it. The
+   judge names a finding by the handle it was shown, which is the row's id."
+  [verdict f]
+  (some #(when (= (str (:id f)) (str (:finding %))) (some-> (:as %) name keyword))
+        (:findings-classified verdict)))
+
 (defn- verdict-supports
-  "What this run's design verdict says about the design record, or nil when there
-   is no verdict to read.
+  "What this run's design verdict says about the design record, given the
+   `parked` findings the gate is over, or nil when there is no verdict to read.
 
    A lookup rather than a judgment: it reads the verdict's own vocabulary and
    nothing else. One that invalidates the record says it should be superseded;
@@ -313,12 +321,23 @@
    that leaves it standing AND names a repair says neither, and that third
    answer is the one the gate could not express.
 
+   Its `:needs` is a repair only when a fixer could make it. Where the verdict
+   classifies a parked finding as anything but implementation, `:needs` speaks
+   to the record, the survey or the stance — and on a park it opens with the
+   very decision the gate is asking for. Offered as a repair, that decision was
+   recommended to a person as a patch, and a workstream merged with the
+   question still open. `:amend` names that answer: the record moves, not the
+   code.
+
    Whether any of it bears on the question the gate is asking is `gate-question`
    and `gate-options`' business — on a park made on recurrence the verdict is an
    answer to a question nobody asked."
-  [v]
+  [v parked]
   (when v
     (cond (verdict/decision? v) :supersede
+          (and (:needs v)
+               (some #(contains? #{:design :stance :baseline} (classified-as v %)) parked))
+          :amend
           (:needs v)            :repair
           :else                 :stands)))
 
@@ -358,9 +377,8 @@
   "Whether `verdict` classifies every one of `parked` as an implementation
    finding — its own answer that the design is not what they question."
   [parked verdict]
-  (let [as (into {} (map (juxt :finding :as)) (:findings-classified verdict))]
-    (boolean (and (seq as)
-                  (every? #(= :implementation (get as (str (:id %)))) parked)))))
+  (boolean (and (seq (:findings-classified verdict))
+                (every? #(= :implementation (classified-as verdict %)) parked))))
 
 (defn- parked-detail
   "The parked findings as the gate shows them — each title with the warden's own
@@ -404,6 +422,7 @@
            "the design is not what they question. "
            (case supports
              :repair    "It names the repair. Is that repair owed here?"
+             :amend     "What it names is a change to the record. Is the record amended?"
              :stands    "It names no repair. Are these findings declined?"
              :supersede "It still puts the record in question. Is the record superseded?"))
 
@@ -414,6 +433,9 @@
            (case supports
              :repair    (str "The design stands and the verdict names the "
                              "repair. Is that repair owed here?")
+             :amend     (str "The verdict classifies a parked finding as more "
+                             "than implementation, so what it names is a change "
+                             "to the record, not a repair. Is the record amended?")
              :stands    (str "The design stands and the verdict names no "
                              "repair. Are these findings declined?")
              :supersede (str "The design does not stand. Is the record "
@@ -426,6 +448,9 @@
          (case supports
            :repair    (str " This run's design verdict — " (name (:verdict verdict))
                            " — names a repair neither attempt made.")
+           :amend     (str " This run's design verdict — " (name (:verdict verdict))
+                           " — classifies one as more than implementation: what it"
+                           " names is a decision on the record.")
            :supersede (str " This run's design verdict — " (name (:verdict verdict))
                            " — puts the design record itself in question.")
            ""))))
@@ -437,7 +462,12 @@
    answer neither of the first two can express, since on either ground they are
    `leave it as it is` and `stop patching it`. Its summary is the repair
    verbatim: `option-input` replays a chosen branch in full, so that is how the
-   remedy survives the click."
+   remedy survives the click.
+
+   On `:amend` there is no third branch: the verdict's `:needs` is a change to
+   the record, which is the second branch's move, so it is that branch —
+   recommended, carrying the verdict's words — rather than a repair promising
+   the record stays untouched."
   [ground supports verdict]
   (cond-> (case ground
             :design
@@ -450,10 +480,13 @@
               (= :stands supports))
              (recommend
               {:label "The design is wrong"
-               :summary "Supersede the design record, then re-run the review."
+               :summary (if (= :amend supports)
+                          (str "Amend the design record as this run's design verdict "
+                               "names, then re-run the review:\n\n" (:needs verdict))
+                          "Supersede the design record, then re-run the review.")
                :consequence (str "Everything judged against the old record is "
                                  "judged again, including work already fixed.")}
-              (= :supersede supports))]
+              (contains? #{:supersede :amend} supports))]
 
             :recurrence
             [{:label "It is still a repair"
@@ -469,7 +502,7 @@
                :consequence (str "The defect stays on the branch until the decision "
                                  "lands, and the rounds already spent narrowing it "
                                  "bought nothing.")}
-              (= :supersede supports))])
+              (contains? #{:supersede :amend} supports))])
     (= :repair supports)
     (conj {:label "Take the repair the verdict names"
            :summary (:needs verdict)
@@ -531,7 +564,7 @@
   ([findings verdict] (parked-blocker findings verdict nil))
   ([findings verdict status]
    (when-let [parked (seq (filter #(= :park (:disposition %)) findings))]
-     (let [supports (verdict-supports verdict)
+     (let [supports (verdict-supports verdict parked)
            ground   (park-ground parked)
            ids      (into (sorted-set) (keep #(some-> (:id %) str)) parked)]
        (cond-> {:format  :blocker

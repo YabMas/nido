@@ -29,6 +29,12 @@
      entries, or nil when the design has none. Reads no ledger and resolves no design: the caller
      supplies both, which is what lets the ledger's own gate check ask it without a cycle."
     {:signature [:=> [:catn [:design [:maybe :map]] [:entries [:sequential :map]]] [:maybe PhaseProgress]]})
+  (Operation opened-by
+    "Which :phase-gate entry opened each phase of a design's plan, by the phase's 0-based index —
+     the join `progress` reads. A gate is joined by the phase number it records, its identity;
+     only a gate from before gates recorded one is joined by the claim text it names, which an
+     amendment rewording the claim would otherwise break."
+    {:signature [:=> [:catn [:design [:maybe :map]] [:entries [:sequential :map]]] :map]})
   (Operation landing-outcome
     "The outcome a landing closes a workstream with, given the same: :between-phases when the
      plan has a phase after the one that just landed, :done otherwise."

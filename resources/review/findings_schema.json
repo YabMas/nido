@@ -4,7 +4,8 @@
   "required": [
     "findings",
     "overall_correctness",
-    "prior_open"
+    "prior_open",
+    "set_aside"
   ],
   "properties": {
     "findings": {
@@ -108,6 +109,25 @@
             ]
           },
           "evidence": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "set_aside": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "observation",
+          "why"
+        ],
+        "properties": {
+          "observation": {
+            "type": "string"
+          },
+          "why": {
             "type": "string"
           }
         }

@@ -2771,3 +2771,28 @@
     (is (not (str/includes? (:summary (t/parked-blocker rows nil :unresolved))
                             "The run itself ended"))
         "a run that stopped over its parks needs no second reason")))
+
+(deftest a-verdict-classifying-a-park-as-design-offers-no-repair
+  ;; The verdict's :needs opened with the parked decision itself, was offered as
+  ;; "Take the repair the verdict names" with "the design record is untouched",
+  ;; and a workstream merged with the question still open.
+  (let [needs "Decide finding 5f57f4ec on the design record: amend depth-is-level"
+        b     (t/parked-blocker [{:disposition :park :id "5f57f4ec" :title "depth is not level"}]
+                                {:verdict :sound :needs needs
+                                 :findings-classified [{:finding "5f57f4ec" :as :design}]})]
+    (is (= 2 (count (:options b)))
+        "what a fixer cannot do is no repair, so there is no third branch")
+    (is (not-any? #(str/includes? (str (:consequence %)) "untouched") (:options b))
+        "a record amendment must never be offered as leaving the record alone")
+    (is (true? (:recommended? (second (:options b))))
+        "the verdict's own answer is that the record moves")
+    (is (str/includes? (:summary (second (:options b))) needs)
+        "option-input replays the branch verbatim, so the verdict's words ride on it")
+    (is (str/includes? (:needs b) "amended"))
+    (is (= b (report/validate-event :blocker b))))
+  (testing "a park the verdict calls implementation still gets the repair"
+    (let [b (t/parked-blocker [{:disposition :park :id "a1" :title "t"}]
+                              {:verdict :sound :needs "guard the nil"
+                               :findings-classified [{:finding "a1" :as :implementation}]})]
+      (is (= 3 (count (:options b))))
+      (is (= "guard the nil" (:summary (last (:options b))))))))

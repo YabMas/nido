@@ -132,7 +132,7 @@
   ;; One run published `0 still open · 1 kept` over a verdict whose :needs said
   ;; an invariant was never verified on Linux.
   (let [p (analysis/payload (assoc a-run :design-verdict "sound" :verdict-unverified 1))]
-    (is (str/includes? (:headline p) "still open · 1 verification owed · ")
+    (is (str/includes? (:headline p) "still open · 1 verification owed by the verdict's reading · ")
         "evidence somebody owes is open work, and reads as such before `kept`")
     (is (= 1 (:verdict-unverified p))))
   (let [p (analysis/payload (assoc a-run :design-verdict "sound"))]
@@ -687,3 +687,11 @@
         "an entry from before entries kept layers is said to be one, not read as an empty stack"))
   (is (not (str/includes? (:headline (analysis/payload a-run)) "Stack since"))
       "a first run on a workstream has nothing to stand against"))
+
+(deftest a-standing-verdicts-advice-is-on-the-open-side-of-the-headline
+  ;; A sound verdict named two live-run-only premises in :needs and the branch
+  ;; merged with no entry ever answering them.
+  (let [p (analysis/payload (assoc a-run :design-verdict "sound" :verdict-advice true))]
+    (is (str/includes? (:headline p) "verdict advice owed a person · ")
+        "advice nothing routes is owed until someone answers it")
+    (is (true? (:verdict-advice p)))))

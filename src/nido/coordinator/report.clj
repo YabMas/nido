@@ -1800,9 +1800,10 @@
    the current phase off these and nothing else — never off how many :merged the
    ledger holds, which a findings round or a landing recorded twice also add to.
 
-   :opens names the phase by its :claim, as a seam's :closed-by :phase does, so a
-   design superseded mid-plan keeps its progress for exactly the phases whose
-   claims it keeps. :evidence is what the person looked at: nido observes no
+   :phase is the number of the phase it opened, and is the gate's identity: an
+   amendment that rewords a phase's :claim does not un-open it. :opens names that
+   phase by its :claim, for a reader, and is what a gate written before :phase
+   existed is joined by. :evidence is what the person looked at: nido observes no
    production, so a gate is asserted rather than checked, and the record is what
    lets a reader tell a number from a vibe. Written only by
    `record.workstream/open-phase!`, which the generic appends refuse to stand in
@@ -1810,6 +1811,7 @@
   [:map {:closed true}
    [:format   [:= :phase-gate]]
    [:design   [:map {:closed true} [:seq int?]]]
+   [:phase    {:optional true} pos-int?]
    [:opens    [:string {:min 1}]]
    [:evidence [:string {:min 1}]]])
 
@@ -2314,6 +2316,16 @@
    [:invariant string?]
    [:missing   string?]])
 
+(def OffRecordId
+  "An id the design judge named that the record it was named against does not
+   state — `:listed-as` is the list it was in. Dropped from that list and kept
+   here, so a judge filing design invariants as baseline properties, or owing a
+   verification of an id no record carries, is visible as drift rather than
+   banked as a confirmation or counted as debt."
+  [:map {:closed true}
+   [:id        string?]
+   [:listed-as [:enum :invariants-held :invariants-unverified :load-bearing-held]]])
+
 (def StandingAnswer
   "One of the terminal warden's standing items the judge answered from the code.
    `:item` is the warden's text, verbatim, for a person to read; `:standing` is
@@ -2378,6 +2390,9 @@
    ;; stands and the code falls short of it. Never listed as held.
    [:invariants-unmet {:optional true} [:vector BrokenInvariant]]
    [:invariants-unverified {:optional true} [:vector UnverifiedInvariant]]
+   ;; Unverified, and holding :on-completion while a later phase of the plan
+   ;; remains: not owed yet, so never counted beside :invariants-unverified.
+   [:invariants-pending {:optional true} [:vector UnverifiedInvariant]]
    [:load-bearing-held {:optional true} [:vector string?]]
    [:load-bearing-broken {:optional true} [:vector BrokenInvariant]]
    [:findings-classified {:optional true} [:vector ClassifiedFinding]]
@@ -2385,6 +2400,10 @@
    [:standing-answered {:optional true} [:vector StandingAnswer]]
    [:inherited-answered {:optional true} [:vector InheritedAnswer]]
    [:contested-closes {:optional true} [:vector ContestedClose]]
+   [:off-record {:optional true} [:vector OffRecordId]]
+   ;; Where a boundary is under structural pressure, found with or without a
+   ;; finding — its own field, so it is not advice beside a landing chore.
+   [:pressure {:optional true} string?]
    [:needs {:optional true} string?]])
 
 (defn- design-verdict-branch
@@ -4505,8 +4524,8 @@
 
 (defn- design-verdict->markdown
   [{:keys [verdict round reason invariants-held invariants-broken invariants-unmet
-           invariants-unverified load-bearing-held load-bearing-broken findings-classified
-           unraised standing-answered needs carried-from]}]
+           invariants-unverified invariants-pending load-bearing-held load-bearing-broken
+           findings-classified unraised standing-answered pressure off-record needs carried-from]}]
   (str/join
    "\n"
    (remove nil?
@@ -4532,6 +4551,10 @@
         (cons "\n## Invariants not verified — the evidence is owed before merge"
               (for [{:keys [invariant missing]} invariants-unverified]
                 (str "- " invariant "\n  - missing: " missing))))
+      (when (seq invariants-pending)
+        (cons "\n## Not owed yet — holds on completion, and a later phase remains"
+              (for [{:keys [invariant missing]} invariants-pending]
+                (str "- " invariant "\n  - missing: " missing))))
       (when (seq load-bearing-held)
         (cons "\n## Load-bearing properties still standing"
               (for [i load-bearing-held] (str "- " i))))
@@ -4550,7 +4573,11 @@
         (cons "\n## Standing items the verdict answered"
               (for [{:keys [item answer]} standing-answered]
                 (str "- " item "\n  - " answer))))
-      (when needs [(str "\n## " (verdict-needs-heading verdict)) needs])))))
+      (when pressure ["\n## Where the design is under pressure" pressure])
+      (when needs [(str "\n## " (verdict-needs-heading verdict)) needs])
+      (when (seq off-record)
+        (cons "\n## Named by the judge, stated by no record — dropped"
+              (for [{:keys [id listed-as]} off-record] (str "- " id " (as " (name listed-as) ")"))))))))
 
 (defn- findings->markdown [{:keys [round staging-ref note items]}]
   (str/join "\n"

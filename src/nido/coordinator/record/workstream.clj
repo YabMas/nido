@@ -1388,7 +1388,8 @@
       under (assoc :under under)
       ;; A gate's phase is mirrored for the same reason: `record.phase/progress`
       ;; reads the index it is handed and parses nothing.
-      gate? (assoc :opens (:opens body)))))
+      gate? (assoc :opens (:opens body))
+      (and gate? (:phase body)) (assoc :phase (:phase body)))))
 
 (defn- meta-rel
   "Where the index row of the entry numbered `seq-n` is kept beside the ledger.
@@ -1409,7 +1410,7 @@
 
 (defn- implied-row
   "The row an entry file's name implies when nothing kept or held one, with what `index-row`
-   mirrors out of the payload — `:under`, and a gate's `:opens` — read back out of it, since a
+   mirrors out of the payload — `:under`, and a gate's `:opens` and `:phase` — read back out of it, since a
    reader of the index parses nothing. A payload that does not parse mirrors nothing."
   [dir rel seq-n kind]
   (let [gate? (= :phase-gate kind)
@@ -1418,7 +1419,8 @@
         under (when (map? body) (get-in body [:design :seq]))]
     (cond-> {:kind kind :seq seq-n :file rel}
       under                    (assoc :under under)
-      (and gate? (map? body))  (assoc :opens (:opens body)))))
+      (and gate? (map? body))  (assoc :opens (:opens body))
+      (and gate? (map? body) (:phase body)) (assoc :phase (:phase body)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:vector :map]]}
   rebuilt-index
@@ -1797,7 +1799,8 @@
    fact about the ledger an append could change: the workstream is closed
    :between-phases, `gate`'s `:evidence` is not blank, it cites the design that
    close names, and `record.phase/progress` over that design and these rows
-   names `:opens` as the next phase. Whether the landing's :merged was written is
+   names `:opens` — and `:phase`, where the gate carries one — as the next phase.
+   Whether the landing's :merged was written is
    not asked: the close is the landing's record for the gate, and each landing
    path attempts its :merged before it closes, so none can follow the gate.
 
@@ -1835,7 +1838,12 @@
           (not= (:opens gate) (:claim (:next p)))
           (refuse (str "it opens \"" (:opens gate) "\", and the next phase of the plan is "
                        (if-let [c (:claim (:next p))] (str "\"" c "\"") "none"))
-                  {:opens (:opens gate) :next (:claim (:next p))}))
+                  {:opens (:opens gate) :next (:claim (:next p))})
+
+          (and (:phase gate) (not= (:phase gate) (inc (:current p))))
+          (refuse (str "it opens phase " (:phase gate) ", and the next phase of the plan is "
+                       (inc (:current p)))
+                  {:phase (:phase gate) :next (inc (:current p))}))
         ;; One write: a gate indexed on a record still closed :between-phases would read its
         ;; phase as open and unlanded, and every retry would be refused on that.
         (append-locked! project ws-id w {:kind :phase-gate} (pr-str gate)

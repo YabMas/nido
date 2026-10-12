@@ -209,20 +209,62 @@
          "Overturning it is allowed. Re-deriving it from scratch is not.\n")))
 
 (defn- amended-section
-  "The defects a verdict against the record this one superseded left unraised,
-   put to the judge to carry or let go — `rows` is `stages/across-amendment`'s
-   `:unraised`. Its verdict is not offered, since it judged another record; its
-   rows are, because the judge is the one reader that writes `unraised`, and a
-   row it is never shown is lost after the first run on the new record."
+  "What a verdict against the record this one superseded left for later, put to
+   the judge to carry or let go — `amended` is `stages/across-amendment`: its
+   `:unraised` rows and its `:needs`. Its verdict is not offered, since it judged
+   another record; these are, because the judge is the one reader that writes
+   `unraised` and `needs`, and what it is never shown is lost after the first run
+   on the new record — one question about the phase boundary was answered from
+   scratch three times, in three wordings, across two amendments."
+  [{rows :unraised needs :needs}]
+  (when (or (seq rows) (not (str/blank? (str needs))))
+    (str "\nBEFORE THE DESIGN RECORD WAS LAST AMENDED, the verdict against the record\n"
+         "it replaced left these. That verdict judged another record, so do not weigh\n"
+         "its conclusion.\n"
+         (when (seq rows)
+           (str "It found these defects in the code that no round raised, and the\n"
+                "amendment does not name them:\n"
+                (bullets (map #(str (:where %) " — " (:what %)) rows)) "\n"
+                "Read each defect where it stands now, and copy every one still in the\n"
+                "code into `unraised` under the bar below.\n"))
+         (when-not (str/blank? (str needs))
+           (str "It advised a person:\n" needs "\n"
+                "Re-check each piece against what the amendment changed. Copy what still\n"
+                "stands into `needs` as it is worded; drop what the amendment answered.\n")))))
+
+(defn- out-of-scope-section
+  "What each layer's brief declared out of scope — `toc`, `stages/build-toc`'s
+   table — or nil when no layer declared anything.
+
+   Every reviewer is told an Out of scope is a prohibition, so what one names is
+   a thing no round could raise. A judge not shown them read a gap a brief had
+   deferred on purpose as the reviewers being blind to it, and said so in its
+   reason."
+  [toc]
+  (when-let [rows (seq (filter #(not (str/blank? (str (:out-of-scope %)))) toc))]
+    (str "\nWHAT EACH LAYER DECLARED OUT OF SCOPE — every reviewer was told this is a\n"
+         "prohibition, so no round could raise what it names:\n"
+         (bullets (map #(str (or (:label %) "the branch") ": " (:out-of-scope %)) rows)) "\n"
+         "A gap one of these names was DEFERRED by its brief, not missed by a reviewer:\n"
+         "say which in your reason. Where it defers an invariant marked \"holds always\",\n"
+         "the brief contradicts the design — say so in needs.\n")))
+
+(defn- set-aside-section
+  "What reviewers of this run saw and judged below the bar for a finding —
+   `rows`, the carry's `:set-aside` — or nil when there is none. Each is a
+   reading somebody already paid for: a judge not shown one re-derived a
+   record/code mismatch a round-1 reviewer had named and set aside, at the cost
+   of a whole pass."
   [rows]
   (when (seq rows)
-    (str "\nBEFORE THE DESIGN RECORD WAS LAST AMENDED, the verdict against the record\n"
-         "it replaced found these defects in the code that no round raised. The\n"
-         "amendment does not name them:\n"
-         (bullets (map #(str (:where %) " — " (:what %)) rows)) "\n"
-         "That verdict judged another record, so do not weigh its conclusion. Read\n"
-         "each defect where it stands now, and copy every one still in the code into\n"
-         "`unraised` under the bar below.\n")))
+    (str "\nSEEN AND SET ASIDE BY A REVIEWER — below the bar for a finding, with why:\n"
+         (bullets (map (fn [{:keys [layer round observation why]}]
+                         (str (or layer "the branch") (when round (str ", round " round)) ": "
+                              observation (when-not (str/blank? (str why)) (str " — set aside: " why))))
+                       rows))
+         "\nConfirm or dismiss each against the code before you re-derive anything:\n"
+         "one that is a defect goes in `unraised`, one where the record and the code\n"
+         "disagree goes in `needs`.\n")))
 
 (defn- standing-section
   "The terminal warden's standing items — `report/stopped-on`'s `:standing` —
@@ -475,9 +517,11 @@
    since it was reached; see `prior-verdict-section`. `amended` is the rows a
    verdict against a superseded record left that the amendment does not name,
    see `amended-section`. `drift` is the run's `:drift` when it ended on the working copy moving,
-   see `drift-section`."
+   see `drift-section`. `toc` is the stack's table of contents, see
+   `out-of-scope-section`, and `set-aside` what reviewers set aside, see
+   `set-aside-section`."
   [{:keys [design baseline stance findings inherited closed history rounds prior status
-           fix-outcomes progress standing moved parks amended drift]}]
+           fix-outcomes progress standing moved parks amended drift toc set-aside]}]
   (str
    (opening status (not-landed fix-outcomes))
    "Read the code where you need to — you have tools, and the question cannot be\n"
@@ -516,6 +560,7 @@
    (when stance
      (str "PROJECT STANCE — framing only, never cite it against a specific\n"
           "finding:\n" stance "\n\n"))
+   (out-of-scope-section toc)
    "Rounds run: " rounds "\n"
    "Round history (findings + what was fixed):\n" (pr-str history) "\n"
    (not-landed-section (not-landed fix-outcomes))
@@ -540,6 +585,7 @@
    "\n"
    (inherited-section inherited)
    (closed-section closed)
+   (set-aside-section set-aside)
    (standing-section standing)
    ;; Last, so the judge reads this round's evidence before it is reminded what
    ;; it already decided — the standing answer is what the new evidence is
@@ -561,6 +607,7 @@
    " \"inherited_answered\": [{\"id\": \"...\", \"evidence\": \"file:line — ...\"}],\n"
    " \"contested_closes\": [{\"id\": \"...\", \"reason\": \"...\"}],\n"
    " \"unmet_lifted\": [{\"invariant\": \"...\", \"changed\": \"file:line — ...\"}],\n"
+   " \"pressure\": \"...\",\n"
    " \"needs\": \"...\"}\n\n"
    "- findings_classified: name each finding by the handle shown before its\n"
    "  title, then say what it is.\n"
@@ -575,11 +622,17 @@
    "  needs. So does a defect in a file this change does not touch. A row\n"
    "  about a finding the rounds did raise names its handle in `finding`;\n"
    "  it is already counted, so prefer leaving it out.\n"
-   "- invariants_unverified: every invariant you could not confirm from what\n"
-   "  you could read or run, each with the evidence that would confirm it —\n"
-   "  a test only run on one platform, a path nobody exercised. An invariant\n"
-   "  your needs says is still to be verified belongs HERE and never in\n"
-   "  invariants_held: held means you confirmed it.\n"
+   "- invariants_unverified: only an invariant whose evidence is OUT OF YOUR\n"
+   "  REACH. From this worktree you can read any file, diff it against trunk\n"
+   "  (`jj diff -r 'trunk()..@'`), grep it, and run the project's cheap checks\n"
+   "  and the unit tests a REPL here can load. Do those BEFORE you answer: an\n"
+   "  invariant one of them settles is not unverified, it is unchecked, so\n"
+   "  check it. What you cannot do here — an integration-tagged or other slow\n"
+   "  suite, another platform, a live system, a decision only a person can\n"
+   "  make — is what may be owed. Each row's `missing` names what to run or\n"
+   "  decide AND why you could not. An invariant whose only evidence is a test\n"
+   "  you could not run, or one your needs says is still to be verified,\n"
+   "  belongs HERE and never in invariants_held: held means you confirmed it.\n"
    "- inherited_answered: only ids from the left-owed list above, each with\n"
    "  the evidence in the code. Leave it empty when there is no such list.\n"
    "- contested_closes: only handles from the closed-by-the-warden list.\n"
@@ -587,13 +640,18 @@
    "  what changed in the code since. Leave it empty otherwise.\n"
    "- needs: what a PERSON should do or decide — advice, a record to amend,\n"
    "  a chore before landing. Never a defect in the code; those go in\n"
-   "  unraised. Leave it empty when there is nothing to say.\n"
+   "  unraised. Never a structural pressure; that goes in pressure. Leave it\n"
+   "  empty when there is nothing to say.\n"
+   "- pressure: where a boundary of the design is under structural pressure,\n"
+   "  whether findings clustered on it or you found it reading the code with\n"
+   "  no finding at all. Empty when there is none.\n"
    "- sound: the findings were implementation details. THIS IS THE EXPECTED\n"
    "  OUTCOME. Populate invariants_held with the ones this round actually\n"
    "  confirmed — that is the point of the verdict, not a formality.\n"
    "- strained: the design holds, but a boundary is visibly under pressure —\n"
-   "  findings clustering on one cut, the same argument recurring. Ship it, but\n"
-   "  say where the pressure is.\n"
+   "  findings clustering on one cut, the same argument recurring, or a\n"
+   "  pressure you found reading the code when the rounds raised nothing.\n"
+   "  Ship it, but say where the pressure is, in pressure.\n"
    "- invalidated: the findings contradict a named invariant; the design itself\n"
    "  is wrong. REQUIRES invariants_broken and needs.\n"
    "- standing_challenged: the finding is right, the change is right, and the\n"
@@ -700,6 +758,9 @@
                                    (when-not (or (str/blank? i) (str/blank? c))
                                      {:invariant i :changed c}))))
                          (:unmet_lifted m)))
+
+            (not (str/blank? (str (:pressure m))))
+            (assoc :pressure (str/trim (str (:pressure m))))
 
             (not (str/blank? (str (:needs m))))
             (assoc :needs (str (:needs m))))))
@@ -1190,33 +1251,66 @@
   [x]
   (str/replace (str/trim (str x)) #"^\[|\]$" ""))
 
-(defn- held-to-claims
-  "`verdict` as the ledger may record it against a design stating `claim-ids`, or nil when it
-   cannot be. A design in the shared model names its claims by id and asks for them back by id,
-   and an id the design does not state names nothing a reader can find.
+(defn- held-to-record
+  "`verdict` as the ledger may record it, its ids held to the records they name, or nil when it
+   cannot be. `claim-ids` is the design's claim ids and `baseline-ids` the cited baseline's —
+   each nil for a record from before the shared model, whose clauses carry no ids, and then
+   nothing is checked against it. `pending` is the invariants not owed yet: those holding
+   `:on-completion` while a later phase of the plan remains (`pending-claims`).
 
-   The two lists fail differently, so they are held differently. A held id the design does not
-   state is dropped: a confirmation of nothing loses nothing true by going. A broken one makes the
-   whole answer a non-answer, because dropping it could turn an accusation into a clean verdict.
+   Each list fails differently, so each is held differently:
+   - A held or unverified id the design does not state, and a load-bearing held id the baseline
+     does not state, names nothing a reader can find. It is dropped and recorded under
+     `:off-record` with the list it was in, so judge drift is visible rather than banked as a
+     confirmation or counted as debt — a judge filed the design's own invariants as baseline
+     properties, and another owed a verification of an id no record carries, moving the owed
+     count with no change to the code.
+   - A broken id the design does not state makes the whole answer a non-answer, because
+     dropping it could turn an accusation into a clean verdict.
+   - An unverified invariant in `pending` moves to `:invariants-pending`. The prompt tells the
+     judge not to expect it yet, and counted as owed it put ten of twelve `verifications owed`
+     on a phase that had not started.
 
-   An unverified one is kept whatever it names, bare when it is an id: it is evidence somebody
-   owes, and dropping it would turn an owed verification into a clean verdict just as dropping a
-   broken one turns an accusation into one.
+   Ids are compared bare — see `bare-claim`."
+  [verdict claim-ids baseline-ids pending]
+  (let [states?  (fn [ids x] (or (nil? ids) (contains? ids (bare-claim x))))
+        bare     (fn [x] (if claim-ids (bare-claim x) (str x)))
+        broken   (mapv #(update % :invariant bare) (:invariants-broken verdict))
+        [held held-off]   ((juxt filter remove) #(states? claim-ids %) (:invariants-held verdict))
+        [unver unver-off] ((juxt filter remove) #(states? claim-ids (:invariant %))
+                           (:invariants-unverified verdict))
+        [lb lb-off]       ((juxt filter remove) #(states? baseline-ids %) (:load-bearing-held verdict))
+        {wait true unver false} (group-by #(contains? pending (bare-claim (:invariant %)))
+                                          (map #(update % :invariant bare) unver))
+        off      (into [] cat [(map (fn [x] {:id (bare-claim x) :listed-as :invariants-held}) held-off)
+                               (map (fn [r] {:id (bare-claim (:invariant r)) :listed-as :invariants-unverified})
+                                    unver-off)
+                               (map (fn [x] {:id (bare-claim x) :listed-as :load-bearing-held}) lb-off)])]
+    (when (every? #(states? claim-ids (:invariant %)) broken)
+      (cond-> (dissoc verdict :invariants-held :invariants-broken :invariants-unverified
+                      :load-bearing-held)
+        (seq held)   (assoc :invariants-held (mapv bare held))
+        (seq unver)  (assoc :invariants-unverified (vec unver))
+        (seq wait)   (assoc :invariants-pending (vec wait))
+        (seq broken) (assoc :invariants-broken broken)
+        (seq lb)     (assoc :load-bearing-held (if baseline-ids (mapv bare-claim lb) (vec lb)))
+        (seq off)    (assoc :off-record off)))))
 
-   Ids are compared bare — see `bare-claim`.
-   `claim-ids` nil, for a design from before the shared model whose invariants carry no ids,
-   leaves the verdict as parsed."
-  [verdict claim-ids]
-  (if (nil? claim-ids)
-    verdict
-    (let [broken (mapv #(update % :invariant bare-claim) (:invariants-broken verdict))
-          held   (into [] (comp (map bare-claim) (filter claim-ids)) (:invariants-held verdict))
-          unver  (mapv #(update % :invariant bare-claim) (:invariants-unverified verdict))]
-      (when (every? #(contains? claim-ids (:invariant %)) broken)
-        (cond-> (dissoc verdict :invariants-held :invariants-broken :invariants-unverified)
-          (seq held)   (assoc :invariants-held held)
-          (seq unver)  (assoc :invariants-unverified unver)
-          (seq broken) (assoc :invariants-broken broken))))))
+(defn- pending-claims
+  "The invariants of `design` not owed yet, as `held-to-record` compares them: every one holding
+   `:on-completion` while `progress` — `record.phase/progress` — names a later phase. Empty on the
+   last phase, for an unphased design, and when progress could not be read, since then whether
+   one is owed is not known and it is counted as owed. A claim by its id; a clause from before the
+   shared model by its text, which is what a judge quotes back."
+  [design progress]
+  (if-not (:next progress)
+    #{}
+    (if (contains? design :model)
+      (into #{} (comp (map :id) (filter #(= :on-completion (get (:holds design) % :always))) (map str))
+            (claim-model/claims design))
+      (into #{} (comp (map report/invariant) (filter #(= :on-completion (:holds %)))
+                      (map (comp bare-claim :invariant)))
+            (:invariants design)))))
 
 (defn- raised-identities
   "Every id and handle the run raised or was handed — every round's findings
@@ -1563,13 +1657,13 @@
         (phase/progress (ws/plan-design project ws-id) (:entries w))))
     (catch Exception _ nil)))
 
-(defn- amended-rows
-  "`stages/across-amendment`'s rows, or nil when the ledger could not be read —
-   for `plan-progress`'s reason: an unread carry is a prompt the pass can still
+(defn- amended-carry
+  "`stages/across-amendment`, or nil when the ledger could not be read — for
+   `plan-progress`'s reason: an unread carry is a prompt the pass can still
    answer, not a run lost."
   [cwd design]
   (try
-    (:unraised (stages/across-amendment cwd design))
+    (stages/across-amendment cwd design)
     (catch Exception _ nil)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
@@ -1585,8 +1679,9 @@
    why there is no verdict rather than calling the pass's answer empty. Told
    apart from a verdict by `:outcome`, which no verdict carries.
 
-   A fresh verdict is recorded as `against-the-run` reconciles it, stamped with
-   `run-id`; the prompt that reached it is kept in the run dir.
+   A fresh verdict is recorded as `held-to-record` and `against-the-run`
+   reconcile it, stamped with `run-id`; the prompt that reached it is kept in the
+   run dir.
 
    A standing verdict this run gave no reason to revisit is carried forward
    instead of re-derived; see `still-answers?` for when that holds and
@@ -1601,9 +1696,11 @@
           standing (vec (get-in report [:reason :standing]))]
       (if (still-answers? prior final report)
         (carried-forward prior)
-        (let [prompt (build-prompt
+        (let [baseline (stages/discover-baseline cwd design)
+              progress (plan-progress cwd)
+              prompt (build-prompt
                       {:design design
-                       :baseline (stages/discover-baseline cwd design)
+                       :baseline baseline
                        :stance (stages/read-stance (first (stages/project+ws-from-cwd cwd)))
                        :findings (still-open (owed-and-final final))
                        :inherited (as-questions final)
@@ -1615,10 +1712,12 @@
                        :prior (as-reached cwd prior)
                        :moved (moved-since prior final)
                        :parks (open-parks final #{})
-                       :progress (plan-progress cwd)
+                       :progress progress
                        :standing standing
-                       :amended (when-not prior (amended-rows cwd design))
-                       :drift (:drift final)})
+                       :amended (when-not prior (amended-carry cwd design))
+                       :drift (:drift final)
+                       :toc (:toc final)
+                       :set-aside (get-in final [:carry :set-aside])})
               _ (write-prompt! run-id prompt)
               {:keys [num-turns result-error? result-text] :as launch}
               (agent/launch! {:run-id run-id :cwd cwd
@@ -1637,8 +1736,11 @@
 
             (pos? (or num-turns 0))
             (some-> (parse result-text rounds (:seq design))
-                    (held-to-claims (when (contains? design :model)
-                                      (into #{} (map :id) (claim-model/claims design))))
+                    (held-to-record (when (contains? design :model)
+                                      (into #{} (map :id) (claim-model/claims design)))
+                                    (when (contains? baseline :model)
+                                      (into #{} (keep :id) (claim-model/claims baseline)))
+                                    (pending-claims design progress))
                     (against-the-run final standing prior)
                     (outside-the-change (get-in report [:target :files]))
                     (cond-> run-id (assoc :run-id run-id)))))))))

@@ -14,13 +14,49 @@
    Reads no ledger and resolves no design. Both are the caller's, which is what lets the
    ledger's own gate check ask this under its lock without the two namespaces depending
    on each other: every reader outside the ledger passes the design it stands on and the
-   workstream's index rows, whose `:phase-gate` rows carry the `:opens` they name.")
+   workstream's index rows, whose `:phase-gate` rows carry the `:phase` they opened and the
+   `:opens` claim they name.")
 
 
 (defn- gate-rows
   "The `:phase-gate` index rows, oldest first."
   [entries]
   (->> entries (filter #(= :phase-gate (:kind %))) (sort-by :seq)))
+
+(defn- gate-opens
+  "The 0-based index of the phase of `phases` that `gate` opened, given the furthest one
+   already reached is `i`, or nil when it opened none of this plan's.
+
+   By the gate's `:phase` — the number of the phase it opened, which is the gate's identity
+   — wherever it carries one. Its `:opens` text is a description, and a design amended
+   after the gate rewords the claim it names without moving the plan: joined by that
+   text, the reworded plan read its gated phase as never opened, and a judge was told the
+   second phase was the first. A `:phase` past this plan's end is a phase of a design this
+   one superseded with fewer phases, and is not counted.
+
+   A gate written before gates carried `:phase` is joined by its `:opens`, to the first
+   phase after `i` whose `:claim` it names — so a plan that repeats a claim is read one
+   phase per gate rather than jumping to that claim's last position."
+  [phases i gate]
+  (if-let [n (:phase gate)]
+    (let [k (dec n)]
+      (when (and (< i k) (< k (count phases))) k))
+    (some #(when (= (:opens gate) (:claim (phases %))) %)
+          (range (inc i) (count phases)))))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map] [:sequential :map]] :map]}
+  opened-by
+  "`{phase-index gate-row}` — the `:phase-gate` row among `entries` that opened each phase of
+   `design`'s plan it opened, 0-based. The join `progress` reads, so a phase a gate is shown
+   against is the phase it opened. Empty for an unphased design."
+  [design entries]
+  (let [phases (vec (:phases design))]
+    (loop [i 0 [g & more] (gate-rows entries) acc {}]
+      (if-not g
+        acc
+        (if-let [k (gate-opens phases i g)]
+          (recur k more (assoc acc k g))
+          (recur i more acc))))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map] [:sequential :map]] [:maybe :PhaseProgress]]}
   progress
@@ -33,19 +69,13 @@
    workstream between phases awaits. `:next` is the phase after the current one, the whole
    plan entry with its `:claim` and `:exit`, or nil on the last phase.
 
-   Gates are read oldest first, each opening the first phase AFTER the one already reached
-   whose `:claim` it names, so a plan that repeats a claim is read one phase per gate
-   rather than jumping to that claim's last position. A gate whose `:opens` names no such
-   phase is not counted: it opened a phase of a design this one superseded without keeping
-   that phase's claim, and progress under a plan is only ever progress through ITS phases."
+   Gates are read oldest first and joined to the phase each opened by `gate-opens`; a gate
+   that opened none of this plan's phases is not counted, since progress under a plan is
+   only ever progress through ITS phases."
   [design entries]
   (when-let [phases (not-empty (vec (:phases design)))]
     (let [gates     (gate-rows entries)
-          opens     (fn [i gate]
-                      (or (some #(when (= (:opens gate) (:claim (phases %))) %)
-                                (range (inc i) (count phases)))
-                          i))
-          current   (inc (reduce opens 0 gates))
+          current   (inc (reduce (fn [i g] (or (gate-opens phases i g) i)) 0 gates))
           last-gate (or (:seq (last gates)) 0)]
       {:current current
        :of      (count phases)

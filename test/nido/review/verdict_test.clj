@@ -24,26 +24,64 @@
 (defn- fenced [m] (str "prose before\n```json\n" m "\n```"))
 
 (deftest a-verdict-records-only-claim-ids-its-design-states
-  (let [held-to-claims #'verdict/held-to-claims
+  (let [held-to-record #'verdict/held-to-record
         ids            #{"rounded-once" "one-summing-path"}]
-    (testing "a held id the design does not state is dropped, and brackets are not part of an id"
-      (is (= {:verdict :sound :invariants-held ["rounded-once"]}
-             (held-to-claims {:verdict :sound :invariants-held ["[rounded-once]" "a total is rounded"]}
-                             ids)))
-      (is (= {:verdict :sound}
-             (held-to-claims {:verdict :sound :invariants-held ["nothing it states"]} ids))))
+    (testing "a held id the design does not state is dropped and recorded, and brackets are not part of an id"
+      (is (= {:verdict :sound :invariants-held ["rounded-once"]
+              :off-record [{:id "a total is rounded" :listed-as :invariants-held}]}
+             (held-to-record {:verdict :sound :invariants-held ["[rounded-once]" "a total is rounded"]}
+                             ids nil #{}))
+          "a confirmation of nothing is drift, and drift kept silent is banked as confirmation"))
     (testing "a broken id the design does not state makes the answer a non-answer"
-      (is (nil? (held-to-claims {:verdict :invalidated :needs "n"
+      (is (nil? (held-to-record {:verdict :invalidated :needs "n"
                                  :invariants-broken [{:invariant "not-a-claim" :finding "f"}]}
-                                ids)))
+                                ids nil #{})))
       (is (= [{:invariant "one-summing-path" :finding "f"}]
-             (:invariants-broken (held-to-claims {:verdict :invalidated :needs "n"
+             (:invariants-broken (held-to-record {:verdict :invalidated :needs "n"
                                                   :invariants-broken [{:invariant "[one-summing-path]"
                                                                        :finding "f"}]}
-                                                 ids)))))
+                                                 ids nil #{})))))
     (testing "a design from before the shared model has no ids to hold a verdict to"
       (let [v {:verdict :sound :invariants-held ["a total is rounded exactly once"]}]
-        (is (= v (held-to-claims v nil)))))))
+        (is (= v (held-to-record v nil nil #{})))))))
+
+(deftest a-load-bearing-id-is-held-to-the-cited-baseline
+  (let [v ((var verdict/held-to-record)
+           {:verdict :sound :load-bearing-held ["[headings-shape-every-row]" "rounded-once"]}
+           #{"rounded-once"} #{"headings-shape-every-row"} #{})]
+    (is (= ["headings-shape-every-row"] (:load-bearing-held v))
+        "a design invariant listed as a baseline property confirms no property of the baseline")
+    (is (= [{:id "rounded-once" :listed-as :load-bearing-held}] (:off-record v))
+        "what was dropped stays visible, so the judge's drift can be seen")
+    (let [e (assoc v :format :design-verdict :round 1 :reason "r")]
+      (is (= e (report/validate-event :design-verdict e))
+          "the ledger takes what the boundary records"))))
+
+(deftest an-on-completion-invariant-is-not-owed-while-a-later-phase-remains
+  (let [phased  {:seq 3 :shape "s" :model {:elements [] :claims [{:id "one-writer" :about [] :statement "x" :evidence {:by :round}}
+                                                                  {:id "rounded-once" :about [] :statement "y" :evidence {:by :round}}]}
+                 :holds {"one-writer" :on-completion}
+                 :phases [{:claim "expand"} {:claim "contract"}]}
+        pending ((var verdict/pending-claims) phased {:current 1 :of 2 :next {:claim "contract"}})
+        v       ((var verdict/held-to-record)
+                 {:verdict :sound
+                  :invariants-unverified [{:invariant "one-writer" :missing "phase 2"}
+                                          {:invariant "rounded-once" :missing "a live run"}]}
+                 #{"one-writer" "rounded-once"} nil pending)]
+    (is (= #{"one-writer"} pending))
+    (is (= [{:invariant "rounded-once" :missing "a live run"}] (:invariants-unverified v))
+        "only what is owed now is counted as owed")
+    (is (= [{:invariant "one-writer" :missing "phase 2"}] (:invariants-pending v))
+        "the pending one is still recorded, under its own name")
+    (is (= #{} ((var verdict/pending-claims) phased {:current 2 :of 2 :next nil}))
+        "on the last phase every invariant is owed")
+    (is (= #{} ((var verdict/pending-claims) phased nil))
+        "a position nobody could read is not one an invariant is excused at")
+    (testing "a clause from before the shared model, by its text"
+      (is (= #{"one writer"}
+             ((var verdict/pending-claims)
+              {:invariants [{:invariant "one writer" :holds :on-completion} "rounded once"]}
+              {:next {:claim "c"}}))))))
 
 (deftest prompt-carries-the-record-and-fences-off-the-stance
   (let [p (verdict/build-prompt {:design design :stance "shape of the data is the design"
@@ -362,6 +400,7 @@
    "contested_closes"    [{"id" "h-closed" "reason" "the reader still re-rounds"}]
    "unmet_lifted"        [{"invariant" "a total is rounded exactly once"
                            "changed"   "invoice.clj:40 — the reader no longer sums"}]
+   "pressure"            "the aggregate boundary carries the invoice's summing too"
    "needs"               "move the sum back behind the aggregate"})
 
 (def ^:private a-run-holding-what-the-template-names
@@ -403,7 +442,7 @@
                    :invariants-held :invariants-unverified :invariants-broken
                    :load-bearing-held :load-bearing-broken
                    :findings-classified :unraised :standing-answered
-                   :inherited-answered :contested-closes :needs}
+                   :inherited-answered :contested-closes :pressure :needs}
                  (set (keys parsed)))
               "parse keeps every field the template asked for, whatever the
                verdict — it is not the place a branch's vocabulary is applied")
@@ -1189,15 +1228,15 @@
     (is (nil? (:invariants-unverified v)))
     (is (nil? (:invariants-held v)))))
 
-(deftest an-unverified-row-survives-the-claim-id-check
-  (let [held-to-claims #'verdict/held-to-claims]
-    (is (= [{:invariant "rounded-once" :missing "m"} {:invariant "not-a-claim" :missing "m"}]
-           (:invariants-unverified
-            (held-to-claims {:verdict :sound
-                             :invariants-unverified [{:invariant "[rounded-once]" :missing "m"}
-                                                     {:invariant "not-a-claim" :missing "m"}]}
-                            #{"rounded-once"})))
-        "dropping an owed verification would turn it into a clean verdict")))
+(deftest an-unverified-id-the-design-does-not-state-is-dropped-and-recorded
+  (let [v ((var verdict/held-to-record)
+           {:verdict :sound
+            :invariants-unverified [{:invariant "[rounded-once]" :missing "m"}
+                                    {:invariant "not-a-claim" :missing "m"}]}
+           #{"rounded-once"} nil #{})]
+    (is (= [{:invariant "rounded-once" :missing "m"}] (:invariants-unverified v))
+        "an id no record carries is owed by nobody, and counted it moved the owed figure over an unmoved tree")
+    (is (= [{:id "not-a-claim" :listed-as :invariants-unverified}] (:off-record v)))))
 
 (deftest a-standing-answer-is-recorded-with-the-item-it-answers
   (let [v (verdict/against-the-run
@@ -1562,3 +1601,32 @@
     (is (empty? (stages/unanswered-of [(assoc row :inherited true)]
                                       [[{:id "73ebd36a" :title "t" :disposition :fix}]]))
         "a re-raise under the latest id is this run's again, not counted twice")))
+
+(deftest the-judge-is-told-what-it-can-run-and-what-no-round-could-raise
+  (let [p (verdict/build-prompt
+           {:design design :findings [] :history [] :rounds 1
+            :toc [{:label "layer-4" :out-of-scope "admin and jobs' direct Persistence calls"}
+                  {:label "layer-1"}]
+            :set-aside [{:layer "materials" :round 1
+                         :observation "read_passage marks a page before the first block"
+                         :why "its own tests expect it"}]
+            :amended {:unraised [] :needs "Decide whether this round is phase 1's boundary"}})]
+    (is (str/includes? p "layer-4: admin and jobs' direct Persistence calls")
+        "a gap a brief deferred must not read as reviewer blindness")
+    (is (not (str/includes? p "layer-1:")) "a layer that declared nothing has no row")
+    (is (str/includes? p "materials, round 1: read_passage marks a page")
+        "a mismatch a reviewer already read is confirmed or dismissed, not re-derived")
+    (is (str/includes? p "Decide whether this round is phase 1's boundary")
+        "advice survives an amendment instead of being re-spent per record")
+    (is (str/includes? p "OUT OF YOUR\n  REACH")
+        "unverified is for what the judge cannot run, not what it did not")
+    (is (str/includes? p "in pressure.")
+        "a pressure found with no finding has its own field, not :sound plus prose"))
+  (is (not (str/includes? (verdict/build-prompt {:design design :findings [] :history [] :rounds 1})
+                          "OUT OF SCOPE"))))
+
+(deftest a-pressure-is-parsed-into-its-own-field
+  (let [v (verdict/parse (fenced "{\"verdict\":\"strained\",\"reason\":\"r\",\"pressure\":\" the model reaches the engine \"}")
+                         1 3)]
+    (is (= "the model reaches the engine" (:pressure v)))
+    (is (= v (report/validate-event :design-verdict v)))))

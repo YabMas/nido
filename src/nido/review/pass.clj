@@ -78,17 +78,27 @@
 (defn ^{:malli/schema [:=> [:cat :string] :any]}
   parse-output
   "Parse codex --output-schema JSON string into
-   {:findings [...] :overall-correctness <str> :prior-open-answers [...]}.
+   {:findings [...] :overall-correctness <str> :prior-open-answers [...] :set-aside [...]}.
 
    `:prior-open-answers` is the reviewer's answer per id to what an earlier run
    left owed, as it wrote them — `{:id :status :evidence}`. Which of them count
    is `stages/reviewer-answers`' question: only the target knows which ids it
-   was asked about."
+   was asked about.
+
+   `:set-aside` is what the reviewer saw and judged below the bar,
+   `{:observation :why}`, rows with no observation dropped. Absent from an
+   output written before the field existed, which reads as none."
   [json-str]
   (let [m (json/parse-string json-str true)]
     {:findings            (mapv (comp with-id normalize-finding) (:findings m))
      :overall-correctness (:overall_correctness m)
-     :prior-open-answers  (vec (:prior_open m))}))
+     :prior-open-answers  (vec (:prior_open m))
+     :set-aside           (into []
+                                (keep (fn [{:keys [observation why]}]
+                                        (when-not (str/blank? (str observation))
+                                          {:observation (str/trim (str observation))
+                                           :why         (str/trim (str why))})))
+                                (:set_aside m))}))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   composition-schema

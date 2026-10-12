@@ -39,6 +39,7 @@
     (let [opens (:claim (:next p))]
       (ws/open-phase! project ws-id {:format   :phase-gate
                                      :design   {:seq (:seq design)}
+                                     :phase    (inc (:current p))
                                      :opens    (or opens "")
                                      :evidence evidence})
       {:opened opens :phase (inc (:current p)) :of (:of p)})))
