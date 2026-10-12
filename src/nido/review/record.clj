@@ -561,20 +561,159 @@
    "                      no phase plan is the ordinary case and is NOT a finding.\n"
    "                      This check blocks like the others.\n"))
 
-(def ^:private compound-clause-rule
-  "What a record judge owes a subject that says several things. A judge left to itself stops at
-   the first counterexample it finds, the amender repairs exactly what the finding names, and a
-   clause the judge had already read false becomes the next round's finding on text it was shown
-   — a whole round spent on nothing new. One finding per subject, not one per clause: findings
-   are keyed on the subject, so a second finding against the same id would be the same identity."
-  (str "A SUBJECT THAT SAYS SEVERAL THINGS IS RULED CLAUSE BY CLAUSE. A statement, the\n"
-       "counterexample it names, an interface and what it hides, each exclusivity it\n"
-       "asserts — check every one, not until the first falls. Report ONE finding for\n"
+;; ── Clauses a judge rules one by one ─────────────────────────────────────────
+
+(defn- clauses
+  "`statement` cut at each sentence or semicolon, trimmed — the unit a grant is compared in, and
+   the unit a judge rules a subject in."
+  [statement]
+  (into [] (comp (map str/trim) (remove str/blank?))
+        (str/split (str statement) #"(?<=[.;])\s+")))
+
+(defn- alternatives
+  "A :falsified-by cut into the counterexamples it names: at each sentence, and at each `or` that
+   opens another one (`…, or a caller that …`). An `or` inside one counterexample (`read or
+   written`) opens nothing and stays."
+  [falsified-by]
+  (into [] (comp (mapcat #(str/split % #",?\s+or\s+(?=(?:an?|any|some|the|one)\s)"))
+                 (map str/trim) (remove str/blank?))
+        (clauses falsified-by)))
+
+(def ^:private search-words
+  "What marks a clause as true only of the whole tree: exclusivity (only, nothing, no other) and
+   universality (every, never). A judge confirming one on the sites its subject cites has confirmed
+   the sites, not the clause — an `only X reserves room` claim was confirmed three times by judges
+   who never read the global rule that also reserved it."
+  #"(?i)\b(only|solely|exclusively|no other|nothing|none|never|nowhere|every|no (?:caller|callers|code|module|namespace|other|one|path|site|reader|writer|write|read|call))\b")
+
+(defn- subject-clauses
+  "What one subject says, as the clauses a judge rules one by one — `content` being what carries
+   its id (`settled/subjects`). Each is {:field :text :search?}: the sentences of a statement,
+   property, observation or [shape]/[composition] text; each counterexample its :falsified-by
+   names; the sentences of what a module hides and of its interface; each reading. :search? marks
+   a clause only a search of the whole tree can hold: every counterexample (held means it exists
+   nowhere), and every clause asserting exclusivity or universality (`search-words`)."
+  [content]
+  (into []
+        (comp (mapcat (fn [part]
+                        (if (string? part)
+                          (for [s (clauses part)] [:text s])
+                          (concat
+                           (for [s (clauses (or (:statement part) (:property part) (:observation part)))]
+                             [:statement s])
+                           (for [s (alternatives (:falsified-by part))] [:refuted-by s])
+                           (for [s (clauses (:hides part))] [:hides s])
+                           (for [s (clauses (:interface part))] [:interface s])
+                           (for [{:keys [lens verdict because]} (:readings part)]
+                             [:reading (str (namespace lens) "/" (name lens) " = " (name verdict)
+                                            " — " because)])))))
+              (map (fn [[field text]]
+                     {:field   field
+                      :text    text
+                      :search? (or (= :refuted-by field) (boolean (re-find search-words text)))})))
+        content))
+
+(defn- keyed
+  "`clauses` of the subject `id`, each given the key a judge rules it by: `<id>#<n>`, from 1."
+  [id clauses]
+  (into [] (map-indexed (fn [i c] (assoc c :key (str id "#" (inc i))))) clauses))
+
+(defn- clauses-owed
+  "Per id of `asked` in `record`, the clauses its judge owes a ruling one by one (`keyed`) —
+   sorted by id, and only for a subject saying more than one thing or holding a clause only a
+   search can hold (:search?). A subject of one plain clause is ruled by its id alone.
+
+   A phased design adds each phase's :habitable sentences under `phase-<n>`, numbered from 1 in
+   plan order. A phase is no subject — nothing confirms or refutes it by id — so those clauses are
+   ruled for the checks that read them, and their omissions recorded, never counted as an unruled
+   subject."
+  [record asked]
+  (let [subjects (settled/subjects record)]
+    (into (sorted-map)
+          (concat
+           (keep (fn [id]
+                   (let [cs (subject-clauses (subjects id))]
+                     (when (or (next cs) (some :search? cs)) [id (keyed id cs)])))
+                 asked)
+           (keep-indexed (fn [i {:keys [habitable]}]
+                           (let [id (str "phase-" (inc i))
+                                 cs (for [s (clauses habitable)]
+                                      {:field :habitable :text s
+                                       :search? (boolean (re-find search-words s))})]
+                             (when (seq cs) [id (keyed id cs)])))
+                         (:phases record))))))
+
+(defn- clause-rules
+  "What a record judge owes a subject that says several things, as rules a schema field carries
+   rather than prose a judge may skim. A judge left to itself stops at the first counterexample it
+   finds, the amender repairs exactly what the finding names, and a clause the judge had already
+   read false becomes the next round's finding on text it was shown — a whole round spent on
+   nothing new, and the same rule in prose did not stop it. So every clause is listed by key
+   (`clauses-owed`) and each needs a ruling in clause_rulings; a subject ruled with one of its
+   clauses open is no ruling (`held-to-clauses`).
+
+   One finding per subject, not one per clause: findings are keyed on the subject, so a second
+   finding against the same id would be the same identity. `decision?` adds what only a decision
+   round derives: every subject against every check, and a baseline id's clauses under
+   relation-honest."
+  [owed decision?]
+  (str "A SUBJECT THAT SAYS SEVERAL THINGS IS RULED CLAUSE BY CLAUSE, in clause_rulings.\n"
+       "Every clause listed under THE CLAUSES below gets one ruling by its key: held,\n"
+       "with the file:line you read it at, or false, with the counterexample's site. A\n"
+       "`refuted by` clause is held when the counterexample it names exists NOWHERE.\n"
+       "A subject you confirm or find against while any of its clauses is unruled is an\n"
+       "incomplete judgment: it is not counted, and the round is asked again. Confirm a\n"
+       "subject only when every clause held. When any is false, report ONE finding for\n"
        "the subject naming EVERY clause you found false, each with its counterexample:\n"
        "the amender repairs what the finding names, so a false clause you saw and did\n"
        "not report costs a whole round to find again. Hold each stated counterexample\n"
        "against the record's own text as well — one the record itself already\n"
-       "satisfies is a contradiction, and a false clause like any other.\n\n"))
+       "satisfies is a contradiction, and so is a subject another subject of this\n"
+       "record denies: both are false clauses like any other.\n\n"
+       "A CLAUSE MARKED (search owed) is true only of the whole tree: it says something\n"
+       "exists nowhere, only in one place, or everywhere. Held, its ruling's search names\n"
+       "the search you ran over the WHOLE tree, tests included — the pattern and the\n"
+       "root it ran from — not the sites the subject cites or the bound the record\n"
+       "names. Held with no search is unruled. A counterexample that exists only in\n"
+       "code no caller reaches is held only with that site in the ruling's evidence,\n"
+       "marked unreached; never park it in reason, where nothing reads it.\n\n"
+       "AN ENUMERATION IS RULED MEMBER BY MEMBER. A clause listing N things — an\n"
+       "interface, a set of writes, an inventory — is false at every member that is\n"
+       "wrong and at every one missing that something outside depends on. Name every\n"
+       "one in the one finding: an interface ruled incomplete names each var missing\n"
+       "from it that the namespace's requirers across the tree depend on, not the\n"
+       "first ones you reached. A clause stating an exact count is ruled by the\n"
+       "structure it stands for; an off-by-one whose structure holds is not a finding.\n\n"
+       "REFUTE THE CLASS, NOT THE INSTANCE. When you find a subject false on a ground\n"
+       "that is a class — a conformance over every caller, an omission, a count — hold\n"
+       "every other subject of this record that rests on the same ground to it before\n"
+       "you confirm one.\n\n"
+       "A CONFIRMATION MAY NOT DENY WHAT YOUR OWN FINDINGS CITE. Before you answer, hold\n"
+       "each subject you confirm against every site your findings in this answer cite.\n"
+       "A confirmation saying a call, read or write does not happen, where one of your\n"
+       "own findings cites it happening, is a finding against that subject instead.\n"
+       "nido records each confirmation reading a site your findings cite.\n\n"
+       (when decision?
+         (str "RULE EVERY SUBJECT AGAINST EVERY CHECK, not until the first falls. Before\n"
+              "you recommend, hold each claim to each of the four, and report one finding\n"
+              "per subject a check breaks — every one, not the first: each one left for the\n"
+              "next round costs an amendment and a reading. Under relation-honest, `stands`\n"
+              "means EVERY clause of that baseline id's statement still holds, not its\n"
+              "outcome alone, and its reason names the clause most at risk. A fact you cite\n"
+              "to break one id, hold against every id whose statement names the same module\n"
+              "or decision.\n\n"))
+       (if (seq owed)
+         (str "THE CLAUSES — each subject below is ruled one clause at a time, by the key\n"
+              "before the clause; a subject not listed here says one thing and is ruled\n"
+              "by its id:\n"
+              (str/join
+               (for [[id cs] owed]
+                 (str "[" id "]\n"
+                      (str/join (for [{:keys [key field text search?]} cs]
+                                  (str "  " key "  " (str/replace (name field) "-" " ") ": " text
+                                       (when search? "  (search owed)") "\n"))))))
+              "\n")
+         "THE CLAUSES — none: every subject here says one thing, and clause_rulings\nstays empty.\n\n")))
 
 (defn- strata-era?
   "Whether `record` names its strata — the field that marks a record written since strata entered
@@ -802,7 +941,7 @@
       "the counterexample the subject states does not name that clause. Leave the id\n"
       "out of confirmed, and do not park the correction in reason: nothing reads it\n"
       "there.\n\n"
-      compound-clause-rule
+      (clause-rules (clauses-owed full owed) false)
       "Ids, not sentences. A confirmation worded differently each round cannot be\n"
       "matched to the claim it is about, so the next round cannot tell what is\n"
       "settled and checks it again instead of checking what nobody has looked at\n"
@@ -984,12 +1123,6 @@
                            (str "\n    its judge: " (name (:verdict reading)) " — " (:reason reading))
                            (str "\n    its judge did not answer (" (name (:outcome reading)) ")")))))
          "\n")))
-
-(defn- clauses
-  "`statement` cut at each sentence or semicolon, trimmed — the unit a grant is compared in."
-  [statement]
-  (into [] (comp (map str/trim) (remove str/blank?))
-        (str/split (str statement) #"(?<=[.;])\s+")))
 
 (defn- clause-delta
   "What one claim's text and :about lost and gained between `was` and `is` — {:granted :now}, each
@@ -1286,6 +1419,8 @@
           "raise one, cite the entries above and pose it at the CLASS level — what kind of case\n"
           "the claim admits or excludes, named so that one answer also covers the next instance.\n"))))
 
+(declare decision-asked)
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   design-prompt
   "The decision prompt. Derives what can be derived; hands the rest over.
@@ -1464,7 +1599,7 @@
    "(`command -v <tool>`, `<tool> --version`). Documentation, a man page or a\n"
    "package page says what is true of some host, not of this one; it is not\n"
    "evidence for a host finding. Cannot run it? Leave the claim unchecked with why.\n\n"
-   compound-clause-rule
+   (clause-rules (clauses-owed design (decision-asked design settled)) true)
    "Populate confirmed with the claims you checked and found to hold — each by its\n"
    "id, the bracketed slug without the brackets, with the file:line references you\n"
    "read, and at_this_tree: `holds` when the code you read already makes the claim\n"
@@ -1580,9 +1715,25 @@
   [derivations]
   (mapv #(str/replace (name %) "-" "_") derivations))
 
+(defn- with-clause-keys
+  "`schema`, a parsed round schema, whose clause_rulings admits exactly the keys of `owed`
+   (`clauses-owed`): each item's clause one of them, and as many items as there are keys. The same
+   bound as `exactly-these-rulings`, for the same reason — it makes a skipped clause the unlikely
+   answer, and `held-to-clauses` checks by key what comes back."
+  [schema owed]
+  (let [ks (into [] (comp (mapcat val) (map :key)) owed)]
+    (cond-> (update-in schema [:properties :clause_rulings] assoc :minItems (count ks) :maxItems (count ks))
+      (seq ks) (assoc-in [:properties :clause_rulings :items :properties :clause :enum] ks))))
+
+(defn- baseline-review-schema
+  "The verification round's output schema for a round owing `owed`'s clauses (`with-clause-keys`)."
+  [owed]
+  (json/generate-string (with-clause-keys (json/parse-string (schemas :baseline-review) true) owed)))
+
 (defn- design-decision-schema
   "The decision round's output schema for `design`, ruled on per id over `subjects`
-   (`relation-yardstick`): relation_rulings must name every one of them, and a check — on the
+   (`relation-yardstick`): relation_rulings must name every one of them, clause_rulings every
+   clause `owed` lists (`with-clause-keys`), and a check — on the
    checks list or on a finding — must be one of the four the design's era is judged by
    (`report/derivations-of`), the same four `design-prompt` defines.
 
@@ -1592,10 +1743,11 @@
    The check enum is per round for the same reason: offered `decomposable` beside a prompt that
    defines only `stratified`, a judge answers the check it was never asked, and a `broken` on it
    reads as the advisory check `report/proceeds?` waives."
-  [design subjects]
+  [design subjects owed]
   (let [checks (check-names (report/derivations-of design))]
     (-> (json/parse-string (schemas :design-decision) true)
         (update-in [:properties :relation_rulings] exactly-these-rulings (mapv second subjects))
+        (with-clause-keys owed)
         (assoc-in [:properties :checks :items :properties :check :enum] checks)
         (assoc-in [:properties :findings :items :properties :check :enum] (conj checks ""))
         json/generate-string)))
@@ -1658,18 +1810,36 @@
                  (distinct))
         (if (sequential? raw) raw [])))
 
+(defn- parse-clause-rulings
+  "A judge's clause_rulings as `{key {:ruling :held|:false :evidence [file:line …] :search str}}`,
+   brackets off. One ruling per key — the first, so a clause ruled twice cannot be ruled both ways."
+  [raw]
+  (reduce (fn [acc e]
+            (let [k (when (map? e) (slug (:clause e)))
+                  r (when (map? e) (keyword (str (:ruling e))))]
+              (if (or (str/blank? k) (not (#{:held :false} r)) (contains? acc k))
+                acc
+                (assoc acc k {:ruling   r
+                              :evidence (into [] (comp (map str) (remove str/blank?)) (:evidence e))
+                              :search   (str/trim (str (:search e)))}))))
+          {}
+          (if (sequential? raw) raw [])))
+
 (defn- with-ruling
   "`record` carrying the judge's confirmed and unchecked lists from the answer `m`, as the round
-   filters them next (`rule`)."
+   filters them next (`rule`), and its clause rulings as :clause-rulings, which `held-to-clauses`
+   reads and takes off — they are the answer's, kept in its out.json, and no ledger field."
   [record m]
   (let [{:keys [confirmed checked-at owed owed-at]} (parse-confirmed (:confirmed m))
-        unchecked (parse-unchecked (:unchecked m))]
+        unchecked (parse-unchecked (:unchecked m))
+        clause    (parse-clause-rulings (:clause_rulings m))]
     (cond-> record
       (seq confirmed)  (assoc :confirmed (vec (distinct confirmed)))
       (seq checked-at) (assoc :checked-at checked-at)
       (seq owed)       (assoc :owed (vec (distinct owed)))
       (seq owed-at)    (assoc :owed-at owed-at)
-      (seq unchecked)  (assoc :unchecked unchecked))))
+      (seq unchecked)  (assoc :unchecked unchecked)
+      (seq clause)     (assoc :clause-rulings clause))))
 
 (declare refuted-ids)
 
@@ -1714,6 +1884,102 @@
 
 (def ^:private derivation-names
   (into #{} (map name) derivation-keys))
+
+(defn- open-clauses
+  "The keys of `cs` that `rulings` leaves open: no ruling, held citing nothing, or — on a clause
+   only a search can hold — held with no search named. A false clause is ruled whatever it cites:
+   the finding beside it carries the counterexample."
+  [cs rulings]
+  (into [] (comp (remove (fn [{:keys [key search?]}]
+                           (let [{:keys [ruling evidence search]} (get rulings key)]
+                             (or (= :false ruling)
+                                 (and (= :held ruling) (seq evidence)
+                                      (or (not search?) (not (str/blank? search))))))))
+                 (map :key))
+        cs))
+
+(defn- held-to-clauses
+  "A ruled judgement (`rule`) held to the clauses its prompt listed (`clauses-owed`), with the
+   answer's :clause-rulings taken off.
+
+   A subject the judgement confirmed, held :owed or found against, while a clause of it is open
+   (`open-clauses`), is an incomplete judgment: it is named under :unruled, which stops the
+   judgement holding as any unruled check does, and its confirmation is not counted. A
+   confirmation with a clause ruled false is incomplete the same way — it confirmed what it read
+   false. A finding stays: what it found is found, and the next round is asked for the rest.
+   :incomplete-clauses names, per subject, the keys that made it so; a phase's open clauses are
+   named there and nowhere else, since no id confirms or refutes a phase.
+
+   A subject only :unchecked owes no clause: it was ruled as out of the code's reach."
+  [result owed]
+  (let [rulings  (:clause-rulings result)
+        affirmed (set (concat (:confirmed result) (:owed result)))
+        judged   (into affirmed (keep :claim-id) (:findings result))
+        phase?   (fn [cs] (every? #(= :habitable (:field %)) cs))
+        gaps     (into (sorted-map)
+                       (keep (fn [[id cs]]
+                               (let [open (into #{} (open-clauses cs rulings))
+                                     open (cond-> open
+                                            (affirmed id) (into (comp (map :key)
+                                                                      (filter #(= :false (get-in rulings [% :ruling]))))
+                                                                cs))]
+                                 (when (and (seq open) (or (phase? cs) (judged id)))
+                                   [id (filterv open (map :key cs))]))))
+                       owed)
+        subjects (into #{} (comp (map key) (remove (comp phase? owed))) gaps)
+        kept     (fn [xs] (not-empty (filterv (complement subjects) xs)))
+        put      (fn [r k v] (if v (assoc r k v) (dissoc r k)))]
+    (cond-> (dissoc result :clause-rulings)
+      (seq subjects) (-> (put :confirmed (kept (:confirmed result)))
+                         (put :owed (kept (:owed result)))
+                         (put :checked-at (not-empty (apply dissoc (:checked-at result) subjects)))
+                         (put :owed-at (not-empty (apply dissoc (:owed-at result) subjects)))
+                         (assoc :unruled (vec (sort (into (set (:unruled result)) subjects)))))
+      (seq gaps)     (assoc :incomplete-clauses gaps))))
+
+(def ^:private site-pattern
+  "A file:line reference, a range or a comma list of lines after it (`a.clj:12`, `a.clj:12-30`,
+   `a.clj:12,40`)."
+  #"([\w./-]+\.\w+):(\d+)(?:-(\d+))?((?:,\d+)*)")
+
+(defn- site-spans
+  "Every [file from to] `refs` name, file:line references read by `site-pattern`."
+  [refs]
+  (for [r refs
+        [_ file from to more] (re-seq site-pattern (str r))
+        [a b] (cons [(parse-long from) (parse-long (or to from))]
+                    (for [n (re-seq #"\d+" (str more))] [(parse-long n) (parse-long n)]))]
+    [file a b]))
+
+(defn- confirmed-over-findings
+  "Each confirmation of `result` whose evidence reads a site one of its own findings against
+   another subject cites — `[{:id :site}]`, the finding's reference as it wrote it. `clause` is the
+   answer's clause rulings, whose evidence counts as the confirmation's.
+
+   Recorded, not ruled: a shared site is where a confirmation denying what the round's own finding
+   shows would be, and a chokepoint every reading passes through is a shared site as well, so
+   nothing tells the two apart without reading both. A judge confirmed a claim that the chat
+   session calls no content view, beside its own finding citing the session making that call."
+  [result clause]
+  (let [overlaps? (fn [[f a b] [g c d]] (and (= f g) (<= a d) (<= c b)))]
+    (into []
+          (for [id    (:confirmed result)
+                :let  [mine (site-spans (concat (get-in result [:checked-at id])
+                                                (mapcat :evidence (vals (filter #(str/starts-with? (key %) (str id "#"))
+                                                                                clause)))))]
+                f     (:findings result)
+                :when (not= id (:claim-id f))
+                ref   (distinct (:evidence f))
+                :when (some (fn [s] (some #(overlaps? s %) mine)) (site-spans [ref]))]
+            {:id id :site ref}))))
+
+(defn- held-to-answer
+  "A ruled judgement (`rule`) held to the clauses its prompt listed (`held-to-clauses`), carrying
+   :confirmed-over-findings for what it still confirms (`confirmed-over-findings`)."
+  [result owed]
+  (let [r    (held-to-clauses result owed)
+        over (vec (distinct (confirmed-over-findings r (:clause-rulings result))))]
+    (cond-> r (seq over) (assoc :confirmed-over-findings over))))
 
 (defn- normalize-findings
   "`raw` findings, each kept only if it cites something and read on its own `blocks`, never on the
@@ -2701,6 +2967,7 @@
                                  (settled/code-identity code-cwd))
                       result   (judged (run-round! {:cwd code-cwd :run-id run-id :kind :baseline-review
                                                     :label label :reviewer reviewer
+                                                    :schema (baseline-review-schema (clauses-owed baseline asked))
                                                     :prompt (baseline-prompt {:baseline baseline
                                                                               :disputes disputes
                                                                               :settled settled
@@ -2718,7 +2985,7 @@
                 result
                 (let [kept  (select-keys subject-identities rests-on)
                       moved (tree-moved before after)]
-                  (cond-> (rule result checks asked)
+                  (cond-> (held-to-answer (rule result checks asked) (clauses-owed baseline asked))
                     one-tree                  (assoc :code-identity one-tree)
                     (and one-tree (seq kept)) (assoc :subject-identities kept)
                     moved                     (assoc :tree-moved moved))))))))
@@ -2962,7 +3229,8 @@
                           :relation-prior prior-rs}
                 round    {:cwd code-cwd :run-id run-id :kind :design-decision
                           :label label :reviewer reviewer
-                          :schema (design-decision-schema design relation)}
+                          :schema (design-decision-schema design relation
+                                                          (clauses-owed design (decision-asked design settled)))}
                 prompt   (design-prompt asking)
                 parse    #(parse-design-decision % (:seq design) (set (report/derivations-of design))
                                                  (health-ids design baseline) (:intent asking)
@@ -2994,6 +3262,7 @@
               (let [kept  (select-keys subject-identities rests-on)
                     moved (tree-moved before after)]
                 (cond-> (-> (rule result checks asked breaks)
+                            (held-to-answer (clauses-owed design asked))
                             (relation-held relation breaks))
                   (seq levels)              (assoc :strata-read (mapv :reading levels))
                   one-tree                  (assoc :code-identity one-tree)

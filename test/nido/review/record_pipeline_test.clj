@@ -1643,13 +1643,21 @@
 
 (defn- read-at [id] {:id id :evidence ["src/order/aggregate.clj:12"]})
 
+(defn- held
+  "A clause ruling holding every clause `a-baseline` lists for `ids`, each read and searched."
+  [& ids]
+  (vec (for [[_ cs] (#'record/clauses-owed a-baseline ids)
+             {:keys [key]} cs]
+         {:clause key :ruling "held" :evidence ["src/order/aggregate.clj:12"] :search "rg -n sum ."})))
+
 (deftest a-review-confirms-only-what-its-own-judge-checked
   ;; A subject outside the checks was not checked, so a judge listing it confirmed
   ;; nothing; nor does an id naming nothing — watched live, a judge answered with
   ;; health AXIS values. Either kept would let a later round settle on a check
   ;; that never happened.
   (let [r (reviewed {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
-                     :confirmed (mapv read-at ["c1" "mod-the-order-aggregate" "design" "shape" "shape"])})]
+                     :confirmed (mapv read-at ["c1" "mod-the-order-aggregate" "design" "shape" "shape"])
+                     :clause_rulings (held "mod-the-order-aggregate" "shape")})]
     (is (= ["mod-the-order-aggregate" "shape"] (:confirmed r)))
     (is (= #{"mod-the-order-aggregate" "shape"} (set (keys (:checked-at r))))
         "and where each was read, which is what lets it settle")))
@@ -1658,7 +1666,7 @@
   ;; A sufficient verdict ended runs with checks nobody confirmed or refuted, and the ledger's
   ;; confirmed list read as the whole check.
   (let [r (reviewed {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
-                     :confirmed [(read-at "shape")]})]
+                     :confirmed [(read-at "shape")] :clause_rulings (held "shape")})]
     (is (= ["composition" "invoice-resums" "mod-the-order-aggregate"] (:unruled r)))
     (is (not (ledger-report/review-holds? r)) "a sufficient verdict over an unruled check does not hold")))
 
@@ -1671,6 +1679,7 @@
 (deftest a-subject-the-judge-could-not-check-is-ruled-and-not-confirmed
   (let [r (reviewed {:verdict "sufficient" :reason "ok" :findings []
                      :confirmed (mapv read-at ["shape" "composition" "mod-the-order-aggregate"])
+                     :clause_rulings (held "shape" "composition" "mod-the-order-aggregate")
                      :unchecked [{:id "invoice-resums" :reason "its evidence is a production log"}]})]
     (is (nil? (:unruled r)))
     (is (= [{:id "invoice-resums" :reason "its evidence is a production log"}] (:unchecked r)))
@@ -1682,11 +1691,79 @@
   ;; claim-id). A gap refutes nothing, so the confirmation itself stands beside it.
   (let [r (reviewed {:verdict "insufficient" :reason "gap" :unchecked []
                      :confirmed (mapv read-at ["shape" "composition" "mod-the-order-aggregate" "invoice-resums"])
+                     :clause_rulings (held "shape" "composition" "mod-the-order-aggregate" "invoice-resums")
                      :findings [{:claim-id "[shape]" :blocks "relation-honest" :cites ["the shape"]
                                  :claim "c" :needs "n" :evidence []}]})]
     (is (= "shape" (:claim-id (first (:findings r)))))
     (is (some #{"shape"} (:confirmed r)) "a gap asks for more record and doubts no claim")
     (is (nil? (:unruled r)) "a finding is a ruling")))
+
+;; ── a subject is ruled clause by clause ─────────────────────────────────────
+;; A judge told in prose to rule every clause still stopped at the first false one, round after
+;; round: one compound subject cost three amend rounds, each finding a clause the first judge read.
+;; So the clauses are listed by key and every one needs a ruling the parse can count.
+
+(deftest a-subject-with-an-unruled-clause-is-an-incomplete-judgment
+  (let [one-short (butlast (held "mod-the-order-aggregate"))
+        r (reviewed {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
+                     :confirmed (mapv read-at ["shape" "mod-the-order-aggregate"])
+                     :clause_rulings (into (held "shape") one-short)})]
+    (is (= ["shape"] (:confirmed r))
+        "a confirmation that skipped a clause is not counted: the skipped clause is where the next round's finding was")
+    (is (some #{"mod-the-order-aggregate"} (:unruled r))
+        "unruled, so the sufficient verdict over it does not stand and the judge is asked again")
+    (is (= {"mod-the-order-aggregate" ["mod-the-order-aggregate#2"]} (:incomplete-clauses r))
+        "which clause was skipped is recorded, so whether the rule binds a judge can be read off the ledger")
+    (is (nil? (:clause-rulings r)) "the answer's clause rulings are no ledger field")
+    (is (m/validate ledger-report/BaselineReview (dissoc r :tree-moved))
+        "the closed ledger schema admits what the round derives — an append it refuses is lost whole")))
+
+(deftest an-exclusivity-held-without-a-whole-tree-search-is-unruled
+  ;; Watched: an `only X reserves room` claim confirmed three times on the sites it cited, while a
+  ;; global rule elsewhere in the tree also reserved it.
+  (let [unsearched (mapv #(assoc % :search "") (held "shape"))
+        r (reviewed {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
+                     :confirmed [(read-at "shape")] :clause_rulings unsearched})]
+    (is (nil? (:confirmed r)) "held on the cited sites alone confirms the sites, not the exclusivity")
+    (is (= {"shape" ["shape#1"]} (:incomplete-clauses r)))))
+
+(deftest a-confirmation-with-a-clause-ruled-false-is-not-counted
+  (let [r (reviewed {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
+                     :confirmed [(read-at "mod-the-order-aggregate")]
+                     :clause_rulings (assoc-in (held "mod-the-order-aggregate") [1 :ruling] "false")})]
+    (is (nil? (:confirmed r)) "it confirmed what it read false")
+    (is (= {"mod-the-order-aggregate" ["mod-the-order-aggregate#2"]} (:incomplete-clauses r)))))
+
+(deftest a-finding-over-a-partly-ruled-subject-stands-and-the-rest-is-owed
+  (let [r (reviewed {:verdict "falsified" :reason "r" :unchecked [] :confirmed []
+                     :clause_rulings [{:clause "mod-the-order-aggregate#1" :ruling "false"
+                                       :evidence ["src/order/invoice.clj:88"] :search ""}]
+                     :findings [{:claim-id "mod-the-order-aggregate" :blocks "none"
+                                 :cites ["the order in which lines are summed"] :claim "c"
+                                 :needs "" :evidence ["src/order/invoice.clj:88"]}]})]
+    (is (= :falsified (:verdict r)) "what it found is found")
+    (is (some #{"mod-the-order-aggregate"} (:unruled r))
+        "and the clause it never ruled is owed, not passed by the finding beside it")))
+
+(deftest a-subject-the-judge-could-not-check-owes-no-clause
+  (let [r (reviewed {:verdict "sufficient" :reason "ok" :findings [] :confirmed []
+                     :clause_rulings []
+                     :unchecked [{:id "mod-the-order-aggregate" :reason "production data"}]})]
+    (is (not (contains? (:incomplete-clauses r) "mod-the-order-aggregate"))
+        "unchecked is a ruling: the subject is out of the code's reach, clause by clause")))
+
+(deftest a-confirmation-reading-a-site-its-own-finding-cites-is-recorded
+  ;; Watched: a judge confirmed `chat sessions call no content view` beside its own finding citing
+  ;; the chat session making that call; the next round refuted the unchanged claim on those lines.
+  (let [r (reviewed {:verdict "falsified" :reason "r" :unchecked []
+                     :confirmed [{:id "shape" :evidence ["src/order/invoice.clj:80-90"]}]
+                     :clause_rulings (held "shape")
+                     :findings [{:claim-id "mod-the-order-aggregate" :blocks "none" :cites ["h"]
+                                 :claim "c" :needs "" :evidence ["src/order/invoice.clj:88"]}]})]
+    (is (= [{:id "shape" :site "src/order/invoice.clj:88"}] (:confirmed-over-findings r))
+        "recorded where the judgement is, so a self-contradicting confirmation is visible")
+    (is (= ["shape"] (:confirmed r))
+        "and still counted: a chokepoint every reading passes through shares a site as surely")))
 
 (deftest a-review-keeps-only-the-identities-its-subjects-rest-on
   ;; One ledger held 730 KB of 790 KB in identity maps: every declared element of the project, on

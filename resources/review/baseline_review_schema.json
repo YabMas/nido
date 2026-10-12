@@ -6,7 +6,8 @@
     "reason",
     "confirmed",
     "unchecked",
-    "findings"
+    "findings",
+    "clause_rulings"
   ],
   "properties": {
     "verdict": {
@@ -118,6 +119,45 @@
           "claim-id": {
             "type": "string",
             "description": "The id of the claim, module, health observation or whole-record field this finding is about — the slug shown in brackets before it, WITHOUT the brackets. That includes [shape] and [composition], which are bracketed for exactly this reason. Empty string only when the finding is about no single one. This is how the next round knows whether a claim you refuted was fixed or is still wrong; without it an amended claim looks like a new subject."
+          }
+        }
+      }
+    },
+    "clause_rulings": {
+      "type": "array",
+      "description": "One ruling per clause listed under THE CLAUSES, by its key — every one of them. A subject confirmed or found against while one of its listed clauses has no ruling here is an incomplete judgment, and is not counted. Empty only when the prompt lists no clauses.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "clause",
+          "ruling",
+          "evidence",
+          "search"
+        ],
+        "properties": {
+          "clause": {
+            "type": "string",
+            "description": "The clause's key as listed, `<id>#<n>`, without brackets."
+          },
+          "ruling": {
+            "type": "string",
+            "enum": [
+              "held",
+              "false"
+            ],
+            "description": "held: the clause is true of the code — for a `refuted by` clause, the counterexample it names exists nowhere. false: it is not, and a finding against the subject names it."
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The file:line references you read to rule it: where it holds, or the counterexample's site. A held clause citing nothing is not counted."
+          },
+          "search": {
+            "type": "string",
+            "description": "On a held clause marked (search owed): the search over the WHOLE tree, tests included, that found nothing to deny it — the pattern and the root it ran from. A held clause marked (search owed) with this empty is not counted. Empty on any other clause."
           }
         }
       }

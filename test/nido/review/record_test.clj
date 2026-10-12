@@ -864,6 +864,47 @@
     (is (str/includes? p "one the record itself already\nsatisfies is a contradiction")
         (str kind ": a refuter the record satisfies is a false clause, not a claim"))))
 
+(deftest a-subject-is-cut-into-the-clauses-a-judge-rules
+  (let [record {:model {:claims [{:id "c" :about ["e"] :statement "It sums once. Nothing else sums."
+                                  :falsified-by "a caller summing lines, or a second summer"}
+                                 {:id "plain" :about ["e"] :statement "It sums."}]}
+                :phases [{:claim "p" :habitable "Old readers work. New writers wait."}
+                         {:claim "q" :habitable "Done."}]}
+        owed   (#'record/clauses-owed record ["c" "plain"])]
+    (is (= ["c#1" "c#2" "c#3" "c#4"] (map :key (owed "c")))
+        "each sentence and each counterexample is a clause of its own")
+    (is (= [false true true true] (map :search? (owed "c")))
+        "a counterexample, and an exclusivity, hold only on a search of the whole tree")
+    (is (not (contains? owed "plain")) "a subject saying one plain thing is ruled by its id")
+    (is (= ["phase-1#1" "phase-1#2"] (map :key (owed "phase-1")))
+        "a phase's habitable state is ruled sentence by sentence too")
+    (is (= ["phase-2#1"] (map :key (owed "phase-2"))))))
+
+(deftest every-judge-prompt-lists-the-clauses-it-owes
+  (let [b (record/baseline-prompt {:baseline (assoc baseline :shape "Only the aggregate sums. It hides order.")})
+        d (record/design-prompt {:design design})]
+    (is (str/includes? b "shape#1  text: Only the aggregate sums.  (search owed)")
+        "a clause is shown with the key its ruling names, and whether it owes a search")
+    (is (str/includes? b "shape#2  text: It hides order.\n"))
+    (doseq [[kind p] [[:baseline b] [:design d]]]
+      (is (str/includes? p "THE CLAUSES") (str kind ": the list the clause rulings are drawn from"))
+      (is (str/includes? p "A CONFIRMATION MAY NOT DENY WHAT YOUR OWN FINDINGS CITE")
+          (str kind ": a confirmation contradicting the round's own finding cost a round")))
+    (is (str/includes? d "RULE EVERY SUBJECT AGAINST EVERY CHECK")
+        "a decision reported one defect per check per round, so each one already there cost an amendment")
+    (is (not (str/includes? b "RULE EVERY SUBJECT AGAINST EVERY CHECK"))
+        "a baseline round derives no check per subject")))
+
+(deftest a-round-schema-admits-exactly-the-clauses-owed
+  (let [owed {"c" [{:key "c#1"} {:key "c#2"}]}
+        bs   (json/parse-string (#'record/baseline-review-schema owed) true)
+        ds   (json/parse-string (#'record/design-decision-schema {} [] owed) true)]
+    (doseq [s [bs ds]]
+      (is (= ["c#1" "c#2"] (get-in s [:properties :clause_rulings :items :properties :clause :enum])))
+      (is (= 2 (get-in s [:properties :clause_rulings :minItems]))
+          "as many rulings as clauses makes a skipped clause the unlikely answer, not the free one")
+      (is (some #{"clause_rulings"} (:required s))))))
+
 ;; ── a record that names its strata ───────────────────────────────────────────
 ;; The era a record was written in is read off :strata, and it picks the yardstick: the stratified
 ;; check and derivation for a record that names its strata, decomposable as before for one that
@@ -1027,7 +1068,7 @@
   (get-in (json/parse-string schema-json true) [:properties :relation_rulings]))
 
 (deftest the-decision-schema-admits-exactly-the-listed-ids
-  (let [s (rulings-schema (#'record/design-decision-schema {} ids))]
+  (let [s (rulings-schema (#'record/design-decision-schema {} ids nil))]
     (is (= (mapv second ids) (get-in s [:items :properties :id :enum]))
         "an id outside the list is no ruling the record can be held to")
     (is (= [(count ids) (count ids)] [(:minItems s) (:maxItems s)])
@@ -1035,7 +1076,7 @@
     (is (= (set (map name (keys (get-in s [:items :properties])))) (set (get-in s [:items :required])))
         "the provider rejects a schema whose required is not every property"))
   (testing "a design ruled on no ids may rule on none"
-    (let [s (rulings-schema (#'record/design-decision-schema {} []))]
+    (let [s (rulings-schema (#'record/design-decision-schema {} [] nil))]
       (is (= [0 0] [(:minItems s) (:maxItems s)]))
       (is (nil? (get-in s [:items :properties :id :enum])) "an empty enum is no schema a provider takes"))))
 
@@ -1320,11 +1361,11 @@
 (deftest the-decision-schema-offers-only-the-checks-the-prompt-defines
   (is (= [["relation_honest" "goal_served" "stratified" "routing_coherent"]
           ["relation_honest" "goal_served" "stratified" "routing_coherent" ""]]
-         (check-enums (#'record/design-decision-schema {:strata ["totals"]} [])))
+         (check-enums (#'record/design-decision-schema {:strata ["totals"]} [] nil)))
       "a strata-era judge offered decomposable answers a check its prompt never asked")
   (is (= [["relation_honest" "goal_served" "decomposable" "routing_coherent"]
           ["relation_honest" "goal_served" "decomposable" "routing_coherent" ""]]
-         (check-enums (#'record/design-decision-schema {} [])))
+         (check-enums (#'record/design-decision-schema {} [] nil)))
       "a design from before strata is still judged by decomposable, as its prompt says"))
 
 (deftest a-check-the-round-never-asked-is-dropped-and-named

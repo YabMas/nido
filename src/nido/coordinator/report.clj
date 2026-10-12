@@ -2588,8 +2588,19 @@
    (`nido.review.record/spent`) — reworded and refuted again, recorded where a hand amender reads
    before writing the next rewording. :spent-awaiting is those of them this judgement held only as
    a person's question: their count stopped when it was asked and is owed an answer, not a
-   rewording. Derived by the round."
+   rewording. Derived by the round.
+   :incomplete-clauses names, per subject, the clauses its prompt listed to be ruled one by one
+   that the judgement left open — no ruling, held citing nothing, held with no whole-tree search
+   where the clause owed one — or ruled false under a confirmation. Such a subject is :unruled and
+   none of its confirmation is counted (`nido.review.record/held-to-clauses`); a phase's clauses are
+   named here only. :confirmed-over-findings is each confirmation whose evidence reads a site the
+   same judgement's own finding against another subject cites — recorded, not ruled, since a
+   chokepoint both pass through shares a site as surely as a confirmation denying the finding
+   does. Both derived by the round."
   [[:checked-at {:optional true} [:map-of string? [:vector {:min 1} string?]]]
+   [:incomplete-clauses {:optional true} [:map-of string? [:vector {:min 1} string?]]]
+   [:confirmed-over-findings {:optional true} [:vector [:map {:closed true}
+                                                        [:id string?] [:site string?]]]]
    [:unchecked  {:optional true} [:vector [:map {:closed true} [:id string?] [:reason string?]]]]
    [:unruled    {:optional true} [:vector string?]]
    [:read-once  {:optional true} [:vector string?]]
