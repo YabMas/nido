@@ -64,3 +64,11 @@
               (finally (.destroy ^java.lang.Process (:proc blocker)) @blocker)))
           (is (false? @waited))))
       (fs/delete-tree d))))
+
+(deftest a-failed-command-throws-naming-itself
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo #"Project command failed: :probe \(exit 3\)"
+       (commands/run-command! {:probe {:cmd "exit 3"}} :probe {} {:out :string :err :string})))
+  (is (= 3 (:exit (commands/run-command! {:probe {:cmd "exit 3"}} :probe {}
+                                         {:continue? true :out :string :err :string})))
+      ":continue? still hands the failure back instead of throwing"))

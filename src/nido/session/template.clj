@@ -106,6 +106,47 @@
         (restore-snapshot! data-dir)
         (throw t)))))
 
+(defn- dir-bytes
+  "Total size in bytes of the regular files under `dir`."
+  [dir]
+  (transduce (comp (filter #(.isFile ^java.io.File %))
+                   (map #(.length ^java.io.File %)))
+             + 0 (file-seq (fs/file dir))))
+
+(defn- free-bytes
+  "Bytes available to this user on the volume holding `dir`."
+  [dir]
+  (.getUsableSpace (fs/file dir)))
+
+(def ^:private refresh-headroom
+  "Slack on top of the template's current size, for WAL and for a restore
+   that comes out somewhat larger than the last one."
+  1.1)
+
+(defn- ensure-room-for-refresh!
+  "Refuse a refresh the volume cannot hold, before anything slow or
+   destructive runs.
+
+   A refresh needs about a whole template's worth of FREE space, not the
+   difference between old and new: the pre-refresh snapshot is an APFS clone
+   that keeps every block of the old template alive until the refresh ends,
+   so dropping the old database frees nothing and the restore writes every
+   block anew. Space a refresh step itself uses (a fetched dump, say) is not
+   counted — nido cannot know it."
+  [data-dir]
+  (let [need (long (* refresh-headroom (dir-bytes data-dir)))
+        have (free-bytes data-dir)
+        gb   #(format "%.1f GB" (/ (double %) 1e9))]
+    (when (< have need)
+      (throw (ex-info (str "Not enough free disk space to refresh the template: "
+                           "needs about " (gb need) ", " (gb have) " free")
+                      {:data-dir data-dir :need-bytes need :free-bytes have
+                       :hint (str "Free at least " (gb (- need have))
+                                  " on the volume holding " data-dir
+                                  ". The restore writes a full new copy while "
+                                  "the old template is kept as the rollback "
+                                  "snapshot.")})))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
   rollback!
   "Restore the template a killed refresh left half-built from its pre-refresh
@@ -207,6 +248,7 @@
       (throw (ex-info "No :refresh-steps declared in :templates :pg"
                       {:project-name project-name})))
     (ensure-stopped! data-dir)
+    (ensure-room-for-refresh! data-dir)
     ;; Snapshot the known-good template before the destructive dropdb!. If any
     ;; step throws (a failed staging fetch, a half-completed restore), the
     ;; snapshot is rolled back over data-dir so the template is never left

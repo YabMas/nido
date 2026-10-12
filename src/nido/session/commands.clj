@@ -97,7 +97,10 @@
      ;; resolve-java-home). The command's own :env always wins.
      (let [java-home (when-not (get env "JAVA_HOME") (resolve-java-home))
            env       (cond-> env java-home (assoc "JAVA_HOME" java-home))
-           shell-opts (cond-> {:continue continue? :out out :err err}
+           ;; Always :continue, so a failure surfaces as the throw below —
+           ;; which names the command — rather than babashka's own, which
+           ;; carries only the process map.
+           shell-opts (cond-> {:continue true :out out :err err}
                         cwd (assoc :dir cwd)
                         (seq env) (assoc :extra-env env))
            invoke #(shell shell-opts "bash" "-lc" cmd)
@@ -115,7 +118,8 @@
                       invoke)
                     (invoke))]
        (when (and (not continue?) (not (zero? (:exit result))))
-         (throw (ex-info (str "Project command failed: " ref)
+         (throw (ex-info (str "Project command failed: " ref
+                              " (exit " (:exit result) ")")
                          {:ref ref
                           :exit (:exit result)
                           :cmd cmd})))

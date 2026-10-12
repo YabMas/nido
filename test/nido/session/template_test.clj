@@ -118,3 +118,16 @@
                               (tpl/rollback! "proj"))))
       (is (= "HALF-BUILT" (slurp marker)) "a live refresh is left alone")
       (is (fs/exists? backup-dir)))))
+
+(deftest a-refresh-the-disk-cannot-hold-is-refused-up-front
+  (with-temp-template
+    (fn [data-dir _backup-dir marker]
+      (spit marker (apply str (repeat 1000 "x")))
+      (with-redefs-fn {#'tpl/free-bytes (constantly 500)}
+        #(is (thrown-with-msg?
+              clojure.lang.ExceptionInfo #"Not enough free disk space"
+              (#'tpl/ensure-room-for-refresh! data-dir))
+             "less free space than the template occupies is refused"))
+      (with-redefs-fn {#'tpl/free-bytes (constantly 10000)}
+        #(is (nil? (#'tpl/ensure-room-for-refresh! data-dir))
+             "room for a full new copy is enough")))))
