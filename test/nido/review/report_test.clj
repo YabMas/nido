@@ -378,6 +378,23 @@
     (is (nil? (:fixed-count r2-fix)) "round-2 noop fix has no fixed-count")
     (is (= 2 (:fix-attempts (:summary r))) "summary counts only the one real fix")))
 
+(deftest the-summary-separates-repairs-nobody-ran
+  ;; A repair nobody executed and a REPL-checked one published as one count,
+  ;; and the debt reached a reader only when the design judge restated it.
+  (let [fixes [{:layer "a" :commit "c1" :handed ["h1" "h2"] :repaired ["h1"] :fixed-count 1
+                :verified {:ran? false :stated? false}}
+               {:layer "b" :commit "c2" :handed ["h3"] :repaired ["h3"] :fixed-count 1
+                :verified {:ran? true :what "bb test"}}]
+        r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :fix :at "t1"}
+            {:event :phase-finished :iter 1 :phase :fix :at "t2"
+             :ctx {:fixes fixes
+                   :history [{:iter 1 :fixed-count 2 :fixes fixes}]}}
+            {:event :run-finalized :status :max-iters :at "t3"}])]
+    (is (= 1 (:repairs-unverified (:summary r)))
+        "the one id the unverified fixer repaired — not the one it left, not the verified one")))
+
 (deftest repairs-dispatched-counts-every-launched-fixer-not-only-the-landed-ones
   ;; `:fixed-count` is written only by a LANDED fix, so a round whose fixer
   ;; wrote nothing summed to zero: two findings handed to a fixer that ran for

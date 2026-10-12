@@ -188,6 +188,13 @@
                (- budget (reduce + (map #(nth lens %) whole))))
         (reduce #(assoc %1 %2 share) budgets open)))))
 
+(def ^:private typed-line
+  "A line of a fixer's account written in one of the forms `answers-block` asks
+   for — an UNREPAIRED answer, a SIBLING, the VERIFIED line — which
+   `nido.review.stages` parses into the fix row. Bullets and backticks around
+   it are tolerated, as the parser tolerates them."
+  #"^[^\S\n]*(?:[-*>•][^\S\n]*)?`?(?:UNREPAIRED|SIBLING|VERIFIED)`?[^\S\n]")
+
 (defn- account-excerpt
   "A fixer's account, cut to what its handed findings buy — from the middle of
    each SECTION, so both ends of every one of them survive.
@@ -209,19 +216,33 @@
    the next round needs.
 
    The budget buys account text; the elision markers are extra, and
-   `min-section-chars` is what bounds how many of them there can be."
+   `min-section-chars` is what bounds how many of them there can be.
+
+   A TYPED line — see `typed-line` — is never cut and never paid for: each is
+   taken out before the budget is spent and appended whole after it. They are
+   the account's conclusions as data, and a conclusion is exactly what a middle
+   cut kept landing on — a sweep's named sites, a residual's file path, both
+   elided in six runs running and each time filed by the warden as unplaceable."
   [account handed]
-  (let [a (str/trim (str account))
-        budget (* fixer-account-chars (max 1 handed))]
-    (if (<= (count a) budget)
-      a
-      (let [secs (merge-adjacent (account-sections a)
-                                 (max 1 (quot budget min-section-chars)))]
-        (str/join "\n" (map cut-middle secs (section-budgets (map count secs) budget)))))))
+  (let [lines  (str/split-lines (str/trim (str account)))
+        typed  (into [] (comp (filter #(re-find typed-line %)) (map str/trim)) lines)
+        a      (str/trim (str/join "\n" (remove #(re-find typed-line %) lines)))
+        budget (* fixer-account-chars (max 1 handed))
+        cut    (if (<= (count a) budget)
+                 a
+                 (let [secs (merge-adjacent (account-sections a)
+                                            (max 1 (quot budget min-section-chars)))]
+                   (str/join "\n" (map cut-middle secs (section-budgets (map count secs) budget)))))]
+    (str/join "\n" (remove str/blank? (cons cut typed)))))
 
 (defn- handed-line
-  [{:keys [title sweep]}]
-  (str "    · " title (when sweep "  [SWEEP]") "\n"))
+  "One finding a fixer was handed. On a landed row, `answer` is what the fixer
+   said instead of repairing it — see `nido.review.stages/fix-outcomes` — and is
+   marked, because a commit beside the id otherwise reads as its repair."
+  [{:keys [title sweep answer]}]
+  (str "    · " title (when sweep "  [SWEEP]")
+       (when answer (str "  [" (str/upper-case (name answer)) " — not repaired]"))
+       "\n"))
 
 (defn ^{:malli/schema [:=> [:cat :any] [:maybe :string]]}
   prior-fixes-block
@@ -278,7 +299,9 @@
    for on every round of every layer a fixer touched, and most of them hold
    only landed repairs."
   [prior-fixes]
-  (when (seq prior-fixes)
+  ;; A decline carried beside a landed edit is already on that edit's own row,
+  ;; marked per finding; listed again it would read as a fixer that wrote nothing.
+  (when-let [prior-fixes (seq (remove #(and (= :declined (:outcome %)) (:commit %)) prior-fixes))]
     (let [has?   (set (map :outcome prior-fixes))
           above? (some :above prior-fixes)]
       (str
@@ -302,6 +325,11 @@
               "head, beneath that repair, so the defect is still in the range below\n"
               "— and gone in the merged tree. Its commit is in the branch, not in\n"
               "your range; read it there if you need to see what it changed.\n\n"))
+       (when (some :answer (mapcat :findings prior-fixes))
+         (str "A finding marked NOT REPAIRED under a landed entry was answered by its\n"
+              "fixer instead: absent or refuted (it says the defect is not there),\n"
+              "partial or residual (it says part of the remedy is still owed),\n"
+              "rerouted or disputed. The commit beside it is not its repair.\n\n"))
        (->> prior-fixes
             (map (fn [{:keys [outcome round commit findings account conflicted layer above]}]
                    (str "- round " round
@@ -1079,7 +1107,7 @@
                   "made this round, not just that one — is rolled back and lost.\n"
                   "If a finding cannot be resolved without touching one of those\n"
                   "files, do everything else and answer it `belongs-in` that file\n"
-                  "(see IF YOU CHANGE NOTHING below). That is what reaches the\n"
+                  "(see WHAT YOU DID NOT FINISH below). That is what reaches the\n"
                   "layer that owns it — its fixer is launched this round with\n"
                   "your words; editing the file here reaches nobody. A finding\n"
                   "whose own file is listed there is never handed to you — it\n"
@@ -1173,28 +1201,87 @@
               (apply str))
          "\n")))
 
-(def ^:private unrepaired-block
-  "How a fixer answers a finding it leaves unrepaired, parsed by
-   `nido.review.stages/fixer-answers`.
+(def ^:private answers-block
+  "How a fixer reports what it did NOT finish, parsed by
+   `nido.review.stages/fixer-answers`, `fixer-siblings` and `fixer-verified`.
 
-   Three answers because the fix stage does three different things with them:
-   settles an absent defect on the evidence and lets the next round confirm it,
-   hands a belongs-in one to the layer whose files it names, and stops the run
-   for a person only on a dispute. In prose they were one refusal, and a run
-   stopped `:fix-declined` over findings its own fixer had shown were already
-   gone. The evidence each needs is the one a later reader can check: a line
-   for absent, a file for belongs-in."
-  (str "IF YOU CHANGE NOTHING FOR A FINDING, answer it. End your final message\n"
-       "with one line per finding you left unrepaired, by its id, in exactly one\n"
-       "of these forms:\n"
+   Typed lines rather than prose because the fix stage acts on each kind
+   differently, and on prose it acted on none: settles an absent or refuted
+   finding on the evidence and lets the next round confirm it, hands a
+   belongs-in one to the layer whose files it names, keeps a partial or residual
+   one owed for the next warden to rule on, and stops the run for a person only
+   on a dispute over an unchanged tree. A fixer that landed an edit and wrote
+   `UNREPAIRED … absent` in prose had the answer ignored and the finding counted
+   fixed; one that admitted a leftover had it counted fixed too, and the next
+   round's reviewer had to find it again by chance.
+
+   Silence means repaired where an edit landed, and disputed where none did —
+   so the one answer a fixer may leave unwritten is the one its edit shows.
+
+   VERIFIED is required, and a missing line is read as nothing run: a repair
+   nobody executed otherwise reads exactly like a REPL-checked one, and the
+   report separates the two on this line alone."
+  (str "WHAT YOU DID NOT FINISH — answer it, in lines the orchestrator reads.\n"
+       "End your final message with one line per finding you did NOT fully\n"
+       "repair, by its id, in exactly one of these forms:\n"
        "  UNREPAIRED <id> absent <file>:<line> — what the code there shows\n"
+       "  UNREPAIRED <id> refuted <file>:<line> — why the finding was never true\n"
        "  UNREPAIRED <id> belongs-in <file> — what that file needs\n"
+       "  UNREPAIRED <id> partial — the part of the remedy you did not make, and why\n"
+       "  UNREPAIRED <id> residual — what you left undone\n"
        "  UNREPAIRED <id> disputes — why the finding is wrong or not this branch's\n"
-       "`absent` is for a defect already gone from the code in front of you — the\n"
-       "line is where you saw that, and it settles the finding until a reviewer\n"
-       "reads it there again. `belongs-in` is for a repair in a file you may not\n"
-       "edit. `disputes` is everything else, and it is the one a person reads.\n"
-       "A finding you leave with no such line is taken as disputed.\n"))
+       "`absent` is for a defect already gone from the code in front of you, and\n"
+       "`refuted` for one that was never there — any edit you made for it anyway\n"
+       "is hardening, and it is not counted as a repair. Both settle the finding\n"
+       "until a reviewer reads that line again. `belongs-in` is for a repair in a\n"
+       "file you may not edit. `partial` is a narrower remedy than the one asked\n"
+       "for, `residual` work you could not finish: both keep the finding open\n"
+       "for the next reviewer of the whole stack to rule on, so never write a\n"
+       "narrower remedy up as done. `disputes` is everything else.\n"
+       "A finding you give no line is taken as REPAIRED if you changed the code,\n"
+       "and as DISPUTED if you changed nothing.\n"
+       "Then one line for each piece of open work you found and did not repair\n"
+       "that is not a finding above — a sibling of the class in a file you may\n"
+       "not touch, a failure outside this change:\n"
+       "  SIBLING <file>:<line> — what is wrong there, and whose it is\n"
+       "These lines are read whole by the next reviewer; prose around them may\n"
+       "be cut.\n"
+       "Last, exactly one line saying what you ran to check your repair:\n"
+       "  VERIFIED ran — the tests or REPL checks, and what they showed\n"
+       "  VERIFIED nothing — why nothing could be run\n"
+       "A missing VERIFIED line is read as nothing run.\n"))
+
+(def ^:private verification-block
+  "What a fixer must run before it reports done, and what it must not take for
+   evidence.
+
+   Fixers asked nothing about tests ran none: four in a row landed untested
+   repairs on the belief that the covering tests were all integration tests,
+   and the fifth found three failures one of them had introduced. A regression
+   test never seen failing proves nothing about the repair, and the design
+   verdict ended up handing both checks to a person as `:needs`.
+
+   The inert-gate paragraph is here because the worktree is a jj workspace
+   nested in a colocated repo: a gate that reads `git diff` or `git merge-base`
+   binds to the parent repo, sees an empty diff, and passes. Fixers ran one and
+   cited `:empty-diff` as a clean self-review, or skipped it and the verdict
+   asked a person for it every run."
+  (str "VERIFY — before you report done.\n"
+       "Run the tests covering every namespace you changed and every caller you\n"
+       "re-routed: focused, not a whole suite, excluding only what this project\n"
+       "forbids running here. Do not assume they are all integration tests —\n"
+       "look. A regression test you add must be shown FAILING on the code\n"
+       "before your repair, then passing after it; say in your account that it\n"
+       "was. If a test namespace will not reload in the REPL (\"Alias already\n"
+       "exists\"), `(remove-ns 'that.ns)` and require it again rather than\n"
+       "falling back to a whole shard.\n"
+       "INERT HERE: this working directory is a jj workspace, not a git checkout.\n"
+       "A project gate that reads `git diff`, `git status` or `git merge-base` —\n"
+       "a self-review or changed-files sweep such as `bb agent:self-review` — sees\n"
+       "the parent repository, finds nothing, and reports clean. Its result is\n"
+       "not evidence: do not spend a call on it and do not cite it.\n"
+       "Do not add a code path for an input you believe does not occur. A limit\n"
+       "you know about goes in your account, not into shipped code.\n\n"))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   fix-prompt
@@ -1294,7 +1381,8 @@
    may make it, running minutes later in the same stage.
 
    Each finding carries the id the fix stage knows it by, because a finding the
-   fixer leaves unrepaired is answered by that id — see `unrepaired-block`.
+   fixer does not fully repair is answered by that id — see `answers-block`.
+   `verification-block` says what it runs before it answers.
 
    The SCOPES clause is unconditional because nothing before the fixer runs can
    tell a repair that restructures a resource's lifetime from one that does not.
@@ -1395,7 +1483,8 @@
                     "  " (:body f))))
         (str/join "\n\n"))
    "\n\n"
-   unrepaired-block))
+   verification-block
+   answers-block))
 
 (defn- bullets [xs] (str/join "\n" (map #(str "- " %) xs)))
 
@@ -1816,29 +1905,63 @@
    disposition the warden issues — a decision that the defect is real and this
    branch is shipping it — and a fixer refusing work it was handed has decided
    nothing. One word for both is how a warden comes to read this block as a
-   ruling already made."
+   ruling already made.
+
+   A fixer that LANDED an edit can leave findings open too — a remedy it
+   narrowed, a residual it could not finish, a finding it disputed beside a
+   repair of another. Those are the second section, said whole with the fixer's
+   own words per finding: counted as repaired they were re-found a round later
+   by chance, and the warden, shown them only as a recurrence, parked a reasoned
+   refusal as a failed repair."
   [declines]
-  (when (seq declines)
-    (str "A FIXER WAS HANDED THESE AND CHANGED NOTHING\n"
-         "It read the finding, refused to repair it, and said why. That is an\n"
-         "argument, not a ruling: the finding is still open and nobody has\n"
-         "answered it. Answer it now, by RULING on its id in `findings` even\n"
-         "though no reviewer raised it this round — accept the argument and\n"
-         "settle the finding, or rule it `fix` and say in `because` what the\n"
-         "fixer missed. Accepting it in your `reason` settles nothing: the\n"
-         "finding stays open on the ledger. Handing it back unchanged buys\n"
-         "another refusal from the same session:\n"
-         (->> declines
-              (map (fn [{:keys [layer round findings account]}]
-                     (str "- " (or layer "the branch") ", refused in round " round "\n"
-                          (->> findings
-                               (map (fn [{:keys [id title]}]
-                                      (str "    · " id " " title "\n")))
-                               (apply str))
-                          (when-not (str/blank? (str account))
-                            (str "  its argument: " account "\n")))))
-              (apply str))
-         "\n")))
+  (let [{landed true unchanged false} (group-by (comp boolean :commit) declines)
+        rows (fn [verb ds]
+               (->> ds
+                    (map (fn [{:keys [layer round findings account commit]}]
+                            (str "- " (or layer "the branch") ", " verb " round " round
+                                 (when commit (str " (landed " commit ")")) "\n"
+                                 (->> findings
+                                      (map (fn [{:keys [id title answer evidence]}]
+                                             (str "    · " id " " title
+                                                  (when answer
+                                                    (str "\n      " (str/upper-case (name answer))
+                                                         ": " evidence))
+                                                  "\n")))
+                                      (apply str))
+                                 (when-not (str/blank? (str account))
+                                   ;; An argument is the whole of what the warden
+                                   ;; rules on; beside a landed edit the account
+                                   ;; is mostly the repair, and the per-finding
+                                   ;; words above are what it rules on.
+                                   (if commit
+                                     (str "  its account: "
+                                          (account-excerpt account (count findings)) "\n")
+                                     (str "  its argument: " account "\n"))))))
+                    (apply str)))]
+    (when (seq declines)
+      (str
+       (when (seq unchanged)
+         (str "A FIXER WAS HANDED THESE AND CHANGED NOTHING\n"
+              "It read the finding, refused to repair it, and said why. That is an\n"
+              "argument, not a ruling: the finding is still open and nobody has\n"
+              "answered it. Answer it now, by RULING on its id in `findings` even\n"
+              "though no reviewer raised it this round — accept the argument and\n"
+              "settle the finding, or rule it `fix` and say in `because` what the\n"
+              "fixer missed. Accepting it in your `reason` settles nothing: the\n"
+              "finding stays open on the ledger. Handing it back unchanged buys\n"
+              "another refusal from the same session:\n"
+              (rows "refused in" unchanged)
+              "\n"))
+       (when (seq landed)
+         (str "A FIXER LANDED AN EDIT AND LEFT THESE OPEN\n"
+              "Its edit is in the branch, and it said these findings are NOT repaired\n"
+              "by it: a PARTIAL remedy it chose to narrow (the part it refused, and\n"
+              "why), a RESIDUAL it could not finish, or one it disputes. None of\n"
+              "them is a failed repair and none is a recurrence. RULE on each by its\n"
+              "id in `findings`: accept the narrowing or the dispute and settle it,\n"
+              "or rule `fix` and say in `because` what is still owed:\n"
+              (rows "in" landed)
+              "\n"))))))
 
 (defn- refused-repairs-block
   "The repairs a fixer WROTE for these findings that the stack would not take —
@@ -1973,7 +2096,8 @@
          "files hold those lines — say so in `because`.\n"
          "And a sibling named here and never repaired is open work with no\n"
          "finding behind it: no reviewer raised it, and none will until one\n"
-         "happens to read that file again. PROMOTE it. Each `promote` entry\n"
+         "happens to read that file again — a `SIBLING <file>:<line>` line is a\n"
+         "fixer naming exactly that, whole. PROMOTE it. Each `promote` entry\n"
          "becomes a finding of THIS round, ruled `fix` on the layer you name and\n"
          "handed to that layer's fixer — and it holds that layer open even if no\n"
          "reviewer read it this round because its patch was already converged,\n"
@@ -2095,8 +2219,9 @@
      (str "A row under LEFT OWED BY THE LAST RUN may appear too, by its id — see\n"
           "that section.\n"))
    (when (seq fixer-declines)
-     (str "So may a finding under A FIXER WAS HANDED THESE AND CHANGED NOTHING,\n"
-          "by its id — see that section.\n"))
+     (str "So may a finding under A FIXER WAS HANDED THESE AND CHANGED NOTHING\n"
+          "or A FIXER LANDED AN EDIT AND LEFT THESE OPEN, by its id — see that\n"
+          "section.\n"))
    "\n"
    "DECISION:\n"
    "- continue: something is worth fixing now.\n"

@@ -351,6 +351,9 @@
          "  <commit>\" in `needs` rather than describing how to build it again.\n"
          "- ARGUED: a fixer read the findings and argued for changing nothing.\n"
          "  The argument is evidence to weigh, not a ruling.\n"
+         "- LEFT OPEN: a fixer landed an edit and said these are NOT repaired by\n"
+         "  it — a remedy it narrowed, a residual it could not finish, or a\n"
+         "  dispute. Its words per finding are below.\n"
          "- NEVER STARTED: no fixer read the findings at all. They are untried,\n"
          "  not resisted — their coming back is no pressure on the design.\n\n"
          (->> rows
@@ -363,7 +366,9 @@
                                             (when (seq conflicted)
                                               (str ", conflicted "
                                                    (str/join ", " conflicted))))
-                            :declined  "ARGUED — no edit was written"
+                            :declined  (if commit
+                                         (str "LEFT OPEN beside the edit it landed at " commit)
+                                         "ARGUED — no edit was written")
                             :unstarted (str "NEVER STARTED"
                                             (when (some? exit-code)
                                               (str " (exit " exit-code ")"))
@@ -371,14 +376,42 @@
                             (name outcome))
                           "\n"
                           (->> findings
-                               (map (fn [{:keys [id title]}]
-                                      (str "    · " id (when title (str " " title)) "\n")))
+                               (map (fn [{:keys [id title answer evidence]}]
+                                      (str "    · " id (when title (str " " title))
+                                           (when answer
+                                             (str " — " (str/upper-case (name answer)) ": " evidence))
+                                           "\n")))
                                (apply str))
                           (when-not (str/blank? (str account))
                             (str (if (= :declined outcome)
                                    "  the fixer's argument for changing nothing: "
                                    "  the fixer said of the edit that was put back: ")
                                  account "\n")))))
+              (apply str)))))
+
+(defn- unverified-section
+  "The landed repairs whose fixer says it ran nothing to check them — its
+   VERIFIED line, `stages/fixer-verified` — or nil when every landed repair was
+   checked. A repair nobody ran reads in the round history exactly like a
+   REPL-checked one, and this judge was left to find the difference in the
+   fixer's prose, or to restate it in `needs` when it happened to read it."
+  [fix-outcomes]
+  (when-let [rows (seq (filter #(and (= :landed (:outcome %))
+                                     (some? (:verified %))
+                                     (not (:ran? (:verified %))))
+                               fix-outcomes))]
+    (str "\nLANDED AND UNVERIFIED — the fixer ran nothing that checks these repairs.\n"
+         "Weigh them as untested; a verification they owe is `needs`, not a\n"
+         "broken invariant:\n"
+         (->> rows
+              (map (fn [{:keys [layer round commit findings verified]}]
+                     (str "- " (or layer "the branch") ", round " round
+                          (when commit (str ", landed " commit))
+                          ": " (str/join ", " (map :id (remove :answer findings)))
+                          " — " (if (str/blank? (str (:what verified)))
+                                  "it wrote no VERIFIED line"
+                                  (:what verified))
+                          "\n")))
               (apply str)))))
 
 (defn- opening
@@ -486,6 +519,7 @@
    "Rounds run: " rounds "\n"
    "Round history (findings + what was fixed):\n" (pr-str history) "\n"
    (not-landed-section (not-landed fix-outcomes))
+   (unverified-section fix-outcomes)
    "\n"
    "Findings still open at the end. Each carries the reach the reviewer assigned:\n"
    "local (a defect inside the current design), structural (about where a\n"
@@ -719,16 +753,17 @@
   (or (:handle f) (:id f) [(:file f) (:line-start f) (:title f)]))
 
 (defn- repairs-aimed-at
-  "The findings a round's fix commits named as their own — the handles under
-   `:handed` on each of its `:fixes` rows, written by `stages/handed-ids` as the
-   warden's handle where it assigned one and the reviewer's id otherwise.
+  "The findings a round's fix commits REPAIRED — `stages/repaired-ids` of each of
+   its `:fixes` rows: the handed ids its fixer did not answer as absent,
+   refuted, partial, residual, rerouted or disputed, named by the warden's
+   handle where it assigned one and the reviewer's id otherwise.
 
    `:fixes` holds only what the stack KEPT. A repair it refused was rolled back
    and is recorded under `:rolled-back`, and a round that stopped before its
    fixers ran has no rows at all — so a handle here means a commit aimed at that
    finding is in the branch, which is the premise both readers below rest on."
   [fixes]
-  (into #{} (comp (mapcat :handed) (remove nil?)) fixes))
+  (into #{} (comp (mapcat stages/repaired-ids) (remove nil?)) fixes))
 
 (defn- fold-rulings
   "Every finding the run raised, folded over all its rounds to one entry each

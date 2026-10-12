@@ -16,6 +16,7 @@
    [nido.review.prompts :as prompts]
    [nido.review.loop :as rloop]
    [nido.review.stages :as stages]
+   [nido.review.verdict :as verdict]
    [nido.session.launcher :as launcher]
    [nido.session.lifecycle :as lifecycle]
    [nido.vsdd.jj :as jj]))
@@ -472,6 +473,10 @@
           "the fixer is named before it launches — a stop inside the launch is the
            one moment nothing else says what was running")
       (is (contains? (:fixing @seen) :op) "with the operation that undoes it")
+      (is (empty? (get-in @seen [:ctx :unattempted]))
+          "the layer being repaired is not one never attempted — a stop now is a
+           repair interrupted, and summarising it as untried hides a fixer that
+           may have edited")
       (is (some #(seq (get-in % [:ctx :fixes])) (filter #(= :fix-progress (:event %)) @events))
           "and the repair is reported the moment it lands, not when the phase ends"))))
 
@@ -750,6 +755,99 @@
     (is (= :disputes (:kind (a "dd44"))))
     (is (= :disputes (:kind (a "ee55")))
         "silence is the refusal :fix-declined was always for; it must settle or move nothing")))
+
+(deftest a-fixer-answers-what-it-left-whether-or-not-it-landed-anything
+  (let [text (str "UNREPAIRED aa11 refuted src/a.clj:12 — the guard is there\n"
+                  "UNREPAIRED bb22 partial — compared stored labels, not the live layout\n"
+                  "UNREPAIRED cc33 residual — the build job is still missing\n"
+                  "UNREPAIRED dd44 refuted it never happens\n"
+                  "UNREPAIRED ff66 residual\n")
+        a    (stages/fixer-answers text ["aa11" "bb22" "cc33" "dd44" "ee55" "ff66"] :repaired)]
+    (is (= {:kind :refuted :where "src/a.clj:12"} (select-keys (a "aa11") [:kind :where])))
+    (is (= :partial (:kind (a "bb22"))))
+    (is (str/includes? (:evidence (a "bb22")) "stored labels")
+        "the refused part and why is what the next warden rules on")
+    (is (= :residual (:kind (a "cc33"))))
+    (is (= :disputes (:kind (a "dd44")))
+        "a refutation nobody can check at a line is an assertion, for a person")
+    (is (= :disputes (:kind (a "ff66")))
+        "a residual that names nothing left hands the warden nothing to rule on")
+    (is (= :repaired (:kind (a "ee55")))
+        "beside a landed edit, silence is the one answer the edit itself shows")))
+
+(deftest a-fixers-siblings-and-verification-are-read-as-data
+  (let [text (str "Fixed it.\n"
+                  "- SIBLING `src/login_codes.clj:190` — same unscoped read, auth layer's\n"
+                  "SIBLING src/dialogue.clj:470 — same class\n"
+                  "VERIFIED ran — bb test :only chat.message-test, 14 tests; new test failed first\n")]
+    (is (= [{:where "src/login_codes.clj:190" :evidence "same unscoped read, auth layer's"}
+            {:where "src/dialogue.clj:470" :evidence "same class"}]
+           (stages/fixer-siblings text))
+        "named siblings are parsed whole, so no excerpt can cut them")
+    (is (= {:ran? true :what "bb test :only chat.message-test, 14 tests; new test failed first"}
+           (stages/fixer-verified text)))
+    (is (= false (:ran? (stages/fixer-verified "VERIFIED nothing — no REPL here"))))
+    (is (= {:ran? false :stated? false} (stages/fixer-verified "I did not run the tests."))
+        "a repair with no VERIFIED line is unverified, not unknown")))
+
+(deftest a-fixer-that-landed-an-edit-is-credited-only-with-what-it-repaired
+  ;; review runs counted `(count findings)` on every landed fix: an admitted
+  ;; residual, a refuted finding the fixer hardened anyway and an absent one
+  ;; all published as repairs, and the residual came back a round later only
+  ;; because a reviewer happened to re-find it.
+  (with-redefs [agent/launch! (fn [_] {:num-turns 6 :result-error? false
+                                       :result-text
+                                       (str "Repaired aa11.\n"
+                                            "UNREPAIRED bb22 absent src/b.clj:3 — already reads file-id\n"
+                                            "UNREPAIRED cc33 residual — the build job is still missing\n"
+                                            "UNREPAIRED dd44 refuted src/d.clj:9 — every row has the key; hardened anyway\n"
+                                            "SIBLING src/e.clj:40 — same class, outside this change\n"
+                                            "VERIFIED nothing — the covering tests are integration-only here")})
+                stages/working-copy-dirty? (fn [_] true)
+                jj/jj! (jj-with-conflicts [])]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 2
+                :findings (mapv (fn [id] {:id id :title id :disposition :fix})
+                                ["aa11" "bb22" "cc33" "dd44"])})
+          [fix] (:fixes ctx)
+          by-id (into {} (map (juxt :id identity)) (:findings ctx))]
+      (is (= ["aa11" "bb22" "cc33" "dd44"] (:handed fix)) ":handed still says what was dispatched")
+      (is (= ["aa11"] (:repaired fix)))
+      (is (= 1 (:fixed-count fix)) "only the remedy that landed is a repair")
+      (is (= [[:closed "absent-at-head"] [:closed "refuted-at-head"]]
+             (mapv (juxt :disposition :authority) [(by-id "bb22") (by-id "dd44")]))
+          "absent and refuted settle on the fixer's evidence, as on an unchanged tree")
+      (is (= :fix (:disposition (by-id "cc33"))) "a residual keeps its finding owed")
+      (is (= [{:id "cc33" :evidence "the build job is still missing"}] (:residual fix)))
+      (is (= [{:where "src/e.clj:40" :evidence "same class, outside this change"}] (:siblings fix)))
+      (is (= false (get-in fix [:verified :ran?])))
+      (let [carried (get-in ctx [:carry :fixer-declines nil])]
+        (is (= [{:id "cc33" :title "cc33" :answer :residual
+                 :evidence "the build job is still missing"}]
+               (:findings carried))
+            "the residual is handed to the next warden as a ruling it owes, so the layer
+             stays owed rather than waiting for a reviewer to happen on it")
+        (is (some? (:commit carried)) "beside the edit that landed, not as a fixer that wrote nothing"))
+      (is (= #{"aa11"} (#'verdict/repairs-aimed-at (:fixes ctx)))
+          "the run's settled-by-fixing count reads the same set"))))
+
+(deftest a-fixer-that-ended-on-an-error-landed-no-repair
+  ;; A fixer the API cut off five turns in, its last test run failing, was
+  ;; landed as a complete repair of its finding.
+  (with-redefs [agent/launch! (fn [_] {:num-turns 5 :result-error? true
+                                       :result-text "API Error: overloaded"})
+                stages/working-copy-dirty? (fn [_] true)
+                jj/jj! (jj-with-conflicts [])]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 2
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})
+          [fix] (:fixes ctx)]
+      (is (some? (:commit fix)) "what it wrote is landed, as a kill's is")
+      (is (= [0 [] true] [(:fixed-count fix) (:repaired fix) (:result-error? fix)])
+          "and none of it counts as a repair: the finding stays owed")
+      (is (= :fix (:disposition (first (:findings ctx)))))
+      (is (nil? (get-in ctx [:carry :fixer-declines]))
+          "an error message is not an argument for a warden to answer"))))
 
 (deftest a-rerouted-finding-joins-the-plan-above-the-layer-that-named-it
   (let [stack [{:slug "a"} {:slug "b"} {:slug "c"}]

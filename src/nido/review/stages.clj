@@ -724,12 +724,19 @@
      :refused   — a repair the stack put back; `:conflicted` is what the rebase
                   collided with, and `:commit` names an edit that is not in the
                   branch, reachable only through the operation log
-     :declined  — no edit, and the fixer's argument for writing none
+     :declined  — findings a fixer answered instead of repairing, and its words:
+                  with no edit, its argument for writing none; with `:commit`,
+                  what it left partial, residual or disputed beside the edit
+                  it landed there
      :unstarted — a launch that never took a turn; `:exit-code` where it left one
 
    Every row carries `:layer` (nil on a branch with no layers), `:round`, and the
    `:findings` it was handed as `{:id :title :sweep}`, named by handle where the
-   warden gave one, as `:handed` is. `:account` is what the fixer said, where it
+   warden gave one, as `:handed` is. A landed row carries the fixer's
+   `:verified` where it has one — see `fixer-verified`. On a landed row, a finding the fixer
+   answered rather than repaired carries `:answer` — :absent, :refuted,
+   :rerouted, :partial, :residual or :disputed — because a commit beside a
+   handed id is not a repair of it. `:account` is what the fixer said, where it
    said anything. An unstarted row's findings have ids only: the launch record
    holds nothing else.
 
@@ -754,15 +761,22 @@
         landed   (for [{:keys [iter fixes findings]} history
                        :let [by-id (into {} (map (juxt #(or (:handle %) (:id %)) identity))
                                          findings)]
-                       {:keys [layer commit handed account]} fixes]
+                       {:keys [layer commit handed account] :as fix} fixes
+                       :let [answer (into {}
+                                          (for [k [:absent :refuted :rerouted :partial :residual]
+                                                {:keys [id]} (get fix k)]
+                                            [id k]))
+                             answer (into answer (map (fn [id] [id :disputed])) (:disputed fix))]]
                    (cond-> {:outcome :landed :layer layer :round iter
                             :findings (mapv (fn [h]
                                               (let [f (get by-id h)]
-                                                {:id h
-                                                 :title (or (:title f) h)
-                                                 :sweep (boolean (:sweep f))}))
+                                                (cond-> {:id h
+                                                         :title (or (:title f) h)
+                                                         :sweep (boolean (:sweep f))}
+                                                  (answer h) (assoc :answer (answer h)))))
                                             handed)}
                      commit                             (assoc :commit commit)
+                     (:verified fix)                    (assoc :verified (:verified fix))
                      (not (str/blank? (str account)))   (assoc :account (str account))))
         refused  (for [[label {:keys [since commit account conflicted findings]}]
                        (:rolled-back carry)]
@@ -771,9 +785,11 @@
                             :findings (carried findings)}
                      commit                             (assoc :commit commit)
                      (not (str/blank? (str account)))   (assoc :account (str account))))
-        declined (for [[label {:keys [since reason findings]}] (:fixer-declines carry)]
+        declined (for [[label {:keys [since reason findings commit]}] (:fixer-declines carry)]
                    (cond-> {:outcome :declined :layer label :round since
-                            :findings (carried findings)}
+                            :findings (mapv #(select-keys % [:id :title :sweep :answer :evidence])
+                                            findings)}
+                     commit                             (assoc :commit commit)
                      (not (str/blank? (str reason)))    (assoc :account (str reason))))
         unstarted (for [{:keys [layer round handed exit-code]}
                         (unstarted-fixers (:fixer-launches carry))]
@@ -4085,6 +4101,20 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                (some #(str/includes? (str account) %) names))
              said)))
 
+(def ^:private fixer-close-authorities
+  "The authorities a fixer's own answer settles a finding on — see
+   `absent-ruling`. A finding settled on one and raised again is a dispute the
+   second time, because a reviewer read the code after the fixer's evidence."
+  #{"absent-at-head" "refuted-at-head"})
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  repaired-ids
+  "The ids a landed fix row's remedy reached: `:repaired` where the row carries
+   it, else `:handed` — a row written before fixers answered on the landed
+   branch, when every handed id was taken as repaired."
+  [fix]
+  (if (contains? fix :repaired) (:repaired fix) (:handed fix)))
+
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   with-sweep-memory
   "Mark each finding whose class a fixer has ALREADY swept in this run, with the
@@ -4110,9 +4140,9 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   (let [swept (reduce (fn [acc round]
                         (reduce (fn [a f]
                                   (if (and (:sweep f)
-                                           (contains? (into #{} (mapcat :handed) (:fixes round))
+                                           (contains? (into #{} (mapcat repaired-ids) (:fixes round))
                                                       (or (:handle f) (:id f)))
-                                           (not= "absent-at-head" (:authority f)))
+                                           (not (contains? fixer-close-authorities (:authority f))))
                                     (update a (or (:handle f) (:id f))
                                             (fnil conj []) (:iter round))
                                     a))
@@ -4204,24 +4234,26 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
          (group-by #(owned-by known top %)))))
 
 (def ^:private unrepaired-re
-  "One line of a fixer's final message answering a finding it left unrepaired —
-   see `prompts/fix-prompt` for the wording it is asked to write. Leading list
+  "One line of a fixer's final message answering a finding it was handed — see
+   `prompts/fix-prompt` for the wording it is asked to write. Leading list
    markers and backticks are tolerated, because a model that writes the line
    inside a bullet or a code span has still answered."
-  #"(?m)^[^\S\n]*(?:[-*>•][^\S\n]*)?`?UNREPAIRED`?[^\S\n]+`?([^\s`]+)`?[^\S\n]+(absent|belongs-in|disputes)\b(.*)$")
+  #"(?m)^[^\S\n]*(?:[-*>•][^\S\n]*)?`?UNREPAIRED`?[^\S\n]+`?([^\s`]+)`?[^\S\n]+(absent|belongs-in|disputes|refuted|partial|residual)\b(.*)$")
 
 (defn- answer
   "One parsed UNREPAIRED line as `{:kind … :evidence …}`, `:where` on an absent
-   answer and `:file` on a belongs-in one. An answer missing the part its kind
-   stands on is read as `:disputes` — an absent claim without a `file:line` is
-   an assertion nobody can check, and a belongs-in naming no file routes
-   nowhere, so both fall to the reading that puts them in front of a person."
+   or refuted answer and `:file` on a belongs-in one. An answer missing the part
+   its kind stands on is read as `:disputes` — an absent or refuted claim
+   without a `file:line` is an assertion nobody can check, a belongs-in naming
+   no file routes nowhere, and a partial or residual that does not say what was
+   left hands the next reader nothing to rule on, so each falls to the reading
+   that puts it in front of a person."
   [kind rest]
   (let [evidence (str/trim (str/replace (str rest) #"^[\s:—–-]+" ""))]
     (case kind
-      "absent"
+      ("absent" "refuted")
       (if-let [[_ where] (re-find #"^`?([^\s`]+?:\d+)" evidence)]
-        {:kind :absent :where where :evidence evidence}
+        {:kind (keyword kind) :where where :evidence evidence}
         {:kind :disputes :evidence evidence})
 
       "belongs-in"
@@ -4229,46 +4261,232 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
         {:kind :belongs-in :file file :evidence evidence}
         {:kind :disputes :evidence evidence})
 
+      ("partial" "residual")
+      (if (str/blank? evidence)
+        {:kind :disputes :evidence evidence}
+        {:kind (keyword kind) :evidence evidence})
+
       {:kind :disputes :evidence evidence})))
 
-(defn ^{:malli/schema [:=> [:cat :any :any] :map]}
+(defn ^{:malli/schema [:=> [:cat :any :any [:? :keyword]] :map]}
   fixer-answers
-  "What a fixer that changed nothing said about each finding it was handed,
-   keyed by the handed id: `:absent` (the defect is not in the code at its head,
-   `:where` is the line that shows it), `:belongs-in` (the repair is in `:file`,
-   which it may not edit) or `:disputes` (the finding is wrong or not this
-   branch's).
+  "What a fixer said about each finding it was handed, keyed by the handed id:
 
-   The three are different facts about the branch and the fix stage acts on
-   each differently — an absent defect is settled, a belongs-in one is handed to
-   the layer that may make it, and only a dispute is a decision a person reads.
-   Read as prose they were one refusal, and a fixer answering `already fixed at
-   my head` ended the run `:fix-declined` over a tip that was right.
+     :absent     the defect is not in the code at its head; `:where` shows it
+     :refuted    the finding is false; `:where` shows it, and an edit the fixer
+                 made anyway is hardening, not a repair
+     :belongs-in the repair is in `:file`, which it may not edit
+     :partial    it made less than the remedy asked for; `:evidence` is the
+                 part it refused and why
+     :residual   it left part of the repair undone; `:evidence` says what
+     :disputes   the finding is wrong or not this branch's
 
-   Every handed id gets an answer. One the fixer gave no line for is
-   `:disputes`: an unexplained refusal is exactly what that status was for, and
-   reading silence as either of the other two would settle or move a finding on
-   nobody's word. The first line naming an id wins."
-  [text ids]
-  (let [parsed (reduce (fn [m [_ id kind rest]]
-                         (if (contains? m id) m (assoc m id (answer kind rest))))
-                       {}
-                       (re-seq unrepaired-re (str text)))]
-    (into {} (map (fn [id] [id (get parsed id {:kind :disputes})])) ids)))
+   Each is a different fact about the branch and the fix stage acts on each
+   differently — absent and refuted settle the finding, belongs-in hands it to
+   the layer that may make it, partial and residual keep it owed for the next
+   warden to rule on, and only a dispute on an untouched tree is a decision a
+   person reads.
+
+   Every handed id gets an answer. One the fixer gave no line for is `silent`:
+   `:disputes` (the default) on a tree the fixer left unchanged, where an
+   unexplained refusal is exactly what that status is for and reading silence
+   as anything else would settle or move a finding on nobody's word; `:repaired`
+   where its edit landed, because a fixer is told to answer only what it left.
+   The first line naming an id wins."
+  ([text ids] (fixer-answers text ids :disputes))
+  ([text ids silent]
+   (let [parsed (reduce (fn [m [_ id kind rest]]
+                          (if (contains? m id) m (assoc m id (answer kind rest))))
+                        {}
+                        (re-seq unrepaired-re (str text)))]
+     (into {} (map (fn [id] [id (get parsed id {:kind silent})])) ids))))
+
+(def ^:private sibling-re
+  "A SIBLING line of a fixer's final message: open work at a place it was not
+   handed and did not repair — see `prompts/fix-prompt`."
+  #"(?m)^[^\S\n]*(?:[-*>•][^\S\n]*)?`?SIBLING`?[^\S\n]+`?([^\s`]+?)`?(?:[^\S\n]+(.*))?$")
+
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  fixer-siblings
+  "The SIBLING lines of a fixer's final message, as `{:where :evidence}` in the
+   order written. Data rather than prose, because prose is what an account
+   excerpt cuts, and a named sibling cut from the middle of a section reached no
+   warden in six runs running."
+  [text]
+  (mapv (fn [[_ where rest]]
+          {:where where
+           :evidence (str/trim (str/replace (str rest) #"^[\s:—–-]+" ""))})
+        (re-seq sibling-re (str text))))
+
+(def ^:private verified-re
+  #"(?m)^[^\S\n]*(?:[-*>•][^\S\n]*)?`?VERIFIED`?[^\S\n]+`?(ran|nothing)`?\b(.*)$")
+
+(defn ^{:malli/schema [:=> [:cat :any] :map]}
+  fixer-verified
+  "What a fixer says it ran to check its own repair, from its VERIFIED line:
+   `{:ran? true :what …}` for `VERIFIED ran — …`, `{:ran? false :what …}` for
+   `VERIFIED nothing — …`, and `{:ran? false :stated? false}` when it wrote no
+   such line. A repair nobody ran reads like a REPL-checked one on every other
+   field of its row, so silence is unverified rather than unknown."
+  [text]
+  (if-let [[_ kind rest] (re-find verified-re (str text))]
+    {:ran? (= "ran" kind)
+     :what (str/trim (str/replace (str rest) #"^[\s:—–-]+" ""))}
+    {:ran? false :stated? false}))
 
 (defn- absent-ruling
-  "The ruling a finding is settled on when the fixer handed it found it already
-   absent at its head: a close on that authority, with the fixer's evidence as
-   the reason. A close and not a decline, because a decline keeps a defect the
-   branch is shipping and this one says the branch no longer has it.
+  "The ruling a finding is settled on when the fixer handed it answered that it
+   is already absent at its head, or that it was never true there: a close on
+   that authority, with the fixer's evidence as the reason. A close and not a
+   decline, because a decline keeps a defect the branch is shipping and this one
+   says the branch does not have it. A refuted finding is a false positive, and
+   it is not counted as a repair even where the fixer edited for it.
 
    It is the fixer's word until the round after reads the code: a reviewer that
    raises the finding again there overrides it, as any later ruling does."
-  [label {:keys [evidence]}]
-  {:disposition :closed
-   :authority   "absent-at-head"
-   :because     (str "the fixer on " (or label "the branch")
-                     " found it already absent at its head: " evidence)})
+  [label {:keys [kind evidence]}]
+  (let [on (str "the fixer on " (or label "the branch"))]
+    (if (= :refuted kind)
+      {:disposition :closed
+       :authority   "refuted-at-head"
+       :because     (str on " refuted it, a false positive at its head: " evidence)}
+      {:disposition :closed
+       :authority   "absent-at-head"
+       :because     (str on " found it already absent at its head: " evidence)})))
+
+(defn- answered
+  "What a fixer's `answers` (see `fixer-answers`) do to the `findings` it was
+   handed on layer `label`, whether or not its edit `landed?`:
+
+     :by-fate  the findings grouped by what becomes of them — :repaired,
+               :absent, :refuted, :rerouted, :partial, :residual, :disputed
+     :revised  per id, what is merged onto the round's copy of the finding: the
+               closing ruling of an absent or refuted one, the new owner of a
+               rerouted one
+     :moved    the rerouted findings, carrying their new owner and reason
+     :scoped   per id, the file a belongs-in answer named
+
+   One reading for both outcomes of a launch. Read on the unchanged tree alone,
+   a fixer that landed anything had every answer it gave dropped and every
+   finding it was handed counted repaired — an admitted residual, a refused
+   half-remedy, a finding it showed was absent all filed as fixes.
+
+   A partial or residual answer is a fact about a landed edit; on a tree the
+   fixer left unchanged nothing was partly done, so it is a dispute there. A
+   belongs-in counts only where the file sits on a layer ABOVE this one: a file
+   at or below it is one this fixer was free to edit, and naming it instead is a
+   refusal like any other."
+  [{:keys [cwd ctx stack label findings answers landed?]}]
+  (let [hid     (fn [f] (or (:handle f) (:id f)))
+        settled-before (into #{}
+                             (comp (mapcat :findings)
+                                   (filter #(contains? fixer-close-authorities (:authority %)))
+                                   (map hid))
+                             (:history ctx))
+        height  (into {} (map-indexed (fn [k l] [(layer-label l) k])) stack)
+        owner   (fn [{:keys [kind file]}]
+                  (when (= :belongs-in kind)
+                    (let [to (placed-on cwd (:toc ctx) nil file)]
+                      (when (and to (height label)
+                                 (> (get height to -1) (height label)))
+                        to))))
+        fate    (fn [f]
+                  (let [{:keys [kind] :as a} (get answers (hid f))]
+                    (cond
+                      (= :repaired kind)                                :repaired
+                      (and (#{:absent :refuted} kind)
+                           (not (contains? settled-before (hid f))))    kind
+                      (owner a)                                         :rerouted
+                      (and landed? (#{:partial :residual} kind))        kind
+                      :else                                             :disputed)))
+        by-fate (group-by fate findings)
+        moved   (mapv (fn [f]
+                        (let [{:keys [file evidence] :as a} (get answers (hid f))
+                              to (owner a)]
+                          (assoc f
+                                 :owner-layer to
+                                 :because (str/join
+                                           " — "
+                                           (remove str/blank?
+                                                   [(:because f)
+                                                    (str "the fixer on " label
+                                                         " answered that the repair belongs in "
+                                                         file ", which " to " touches: "
+                                                         evidence)])))))
+                      (:rerouted by-fate))]
+    {:by-fate by-fate
+     :moved   moved
+     :revised (into {}
+                    (concat
+                     (for [f (concat (:absent by-fate) (:refuted by-fate))]
+                       [(hid f) (absent-ruling label (get answers (hid f)))])
+                     (for [f moved]
+                       [(hid f) (select-keys f [:owner-layer :because])])))
+     :scoped  (into {}
+                    (keep (fn [[id a]]
+                            (when (= :belongs-in (:kind a)) [id (:file a)])))
+                    answers)}))
+
+(defn- answer-fields
+  "`row` — a fix stage row for one fixer — with what its answers settled, under
+   one key per fate. Absent and refuted carry the ruling each was closed on,
+   because a report rebuilt from its phases has no other copy; partial and
+   residual carry the fixer's words, which are what the next warden rules on."
+  [row answers {:keys [by-fate revised moved]}]
+  (let [hid  (fn [f] (or (:handle f) (:id f)))
+        said (fn [fs] (mapv (fn [f] {:id (hid f) :evidence (:evidence (get answers (hid f)))}) fs))]
+    (cond-> row
+      (seq (:absent by-fate))
+      (assoc :absent (mapv #(assoc (get revised (hid %)) :id (hid %)) (:absent by-fate)))
+      (seq (:refuted by-fate))
+      (assoc :refuted (mapv #(assoc (get revised (hid %)) :id (hid %)) (:refuted by-fate)))
+      (seq moved)
+      (assoc :rerouted (mapv (fn [f] {:id (hid f) :to (:owner-layer f)}) moved))
+      (seq (:partial by-fate))  (assoc :partial (said (:partial by-fate)))
+      (seq (:residual by-fate)) (assoc :residual (said (:residual by-fate)))
+      (seq (:disputed by-fate)) (assoc :disputed (mapv hid (:disputed by-fate))))))
+
+(defn- with-fixer-answers
+  "`acc` with a fixer's answers applied: the round's copy of each finding
+   revised as `answered` says, and — where the fixer `argued?` — every finding
+   it disputed, or on a landed edit left partial or residual, carried to the
+   next warden under `[:carry :fixer-declines label]`.
+
+   Into :carry, the only thing a round hands the next one. Such a finding stays
+   at :fix, so without this the fixer's words reach report.json and no reader —
+   not the warden that could settle it, not the fixer that would otherwise have
+   to rediscover it. A residual is open work on the layer, and handing it to the
+   next warden as a ruling it owes is what keeps the layer owed rather than
+   waiting for a reviewer to happen on it again.
+
+   `commit` is the landed edit's, nil on an unchanged tree: it is what tells the
+   next warden that these findings sit beside a repair rather than in front of
+   a fixer that changed nothing."
+  [acc {:keys [label iter findings answers argued? reason commit]}
+   {:keys [by-fate revised scoped]}]
+  (let [hid  (fn [f] (or (:handle f) (:id f)))
+        open (concat (:disputed by-fate) (:partial by-fate) (:residual by-fate))]
+    (cond-> (update acc :findings
+                    (partial mapv (fn [f]
+                                    (let [k (hid f)]
+                                      (cond-> (merge f (get revised k))
+                                        (scoped k) (assoc :belongs-in (scoped k)))))))
+      (and argued? (seq open))
+      (assoc-in [:carry :fixer-declines label]
+                (cond-> {:layer label
+                         :since iter
+                         :reason reason
+                         ;; Named by handle where the warden gave one, exactly
+                         ;; as :handed is, so the carry and the report row
+                         ;; point at one finding rather than at two spellings
+                         ;; of it a round apart.
+                         :findings (mapv (fn [f]
+                                           (let [{:keys [kind evidence]} (get answers (hid f))]
+                                             (cond-> {:id (hid f) :title (:title f)}
+                                               (#{:partial :residual} kind)
+                                               (assoc :answer kind :evidence evidence))))
+                                         open)}
+                  commit (assoc :commit commit))))))
 
 (defn ^{:malli/schema [:=> [:cat :any :any :int :any :any] :any]}
   plan-with-rerouted
@@ -4662,7 +4880,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
 (defn- with-round-history
   "`ctx` with this round entered in `:history` when its warden ruled on anything,
    landed a fix, or settled a finding on a fixer's evidence that it is already
-   absent — the only channel that carries a round's account to the termination
+   absent or never true — the only channel that carries a round's account to the termination
    check and to the readers of the run's final value. A round that did none of
    these enters nothing, and one that did enters it however the plan ended: run
    through, stopped, or thrown out of part-way.
@@ -4676,7 +4894,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
 
    Call it at most once per round: a second call enters the round twice."
   [ctx]
-  (if (or (seq (:fixes ctx)) (some :absent (:declined ctx))
+  (if (or (seq (:fixes ctx)) (some #(or (:absent %) (:refuted %)) (:declined ctx))
           (seq (get-in ctx [:warden :rulings])))
     (update ctx :history (fnil conj [])
             {:iter (:iter ctx)
@@ -4942,7 +5160,12 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        ;; Launched and not yet settled, with the operation that
                        ;; undoes it: the one fact about a stop mid-repair that the
                        ;; tree cannot say for itself.
-                       _      (tell-fix-progress! ctx @!left
+                       ;; Not unattempted any more: it is the one being
+                       ;; attempted, and a stop now is a repair interrupted,
+                       ;; which `:fixing` says.
+                       _      (tell-fix-progress! ctx
+                                                  (assoc @!left :unattempted
+                                                         (unattempted-tail @!plan (inc i)))
                                                   {:layer label :handed handed :op op})
                        ;; This fixer's own wall, not the loop's. Bound here
                        ;; because the rows below report it: once the wall varies
@@ -4950,7 +5173,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        ;; budget, and the number is the whole of what a reader
                        ;; would do about the kill.
                        wall   (fix-budget budget (count findings))
-                       {:keys [num-turns result-text timed-out? exit-code] :as launch}
+                       {:keys [num-turns result-text timed-out? exit-code result-error?] :as launch}
                        (agent/launch!
                         {:run-id run-id :cwd cwd
                          :system-prompt sys-prompt
@@ -5068,11 +5291,34 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                            ;; part-done: the kill lands whatever the tree held at
                            ;; the moment it arrived, which is the only reading of
                            ;; that commit anyone gets.
-                           fix (cond-> {:layer label :commit cid
-                                        :handed handed
-                                        :fixed-count (count findings)}
+                           ;;
+                           ;; What it said is also what it DID, per finding: an
+                           ;; id it answered is not one its edit repaired, so
+                           ;; `:repaired` and `:fixed-count` hold only the ids it
+                           ;; left unanswered. A fixer that ended on an error
+                           ;; result said nothing it finished — its text is the
+                           ;; error — so none of what it was handed counts, and
+                           ;; every finding stays owed for the next round to read.
+                           answers (if result-error?
+                                     (zipmap handed (repeat {:kind :residual
+                                                             :evidence "the fixer ended on an error"}))
+                                     (fixer-answers result-text handed :repaired))
+                           ans (answered {:cwd cwd :ctx ctx :stack stack :label label
+                                          :findings findings :answers answers
+                                          :landed? true})
+                           repaired (mapv (fn [f] (or (:handle f) (:id f)))
+                                          (:repaired (:by-fate ans)))
+                           fix (cond-> (-> {:layer label :commit cid
+                                            :handed handed
+                                            :repaired repaired
+                                            :fixed-count (count repaired)
+                                            :verified (fixer-verified result-text)}
+                                           (answer-fields answers ans))
+                                 (seq (fixer-siblings result-text))
+                                 (assoc :siblings (fixer-siblings result-text))
                                  (not (str/blank? (str result-text)))
                                  (assoc :account (str result-text))
+                                 result-error? (assoc :result-error? true)
                                  timed-out? (assoc :timed-out? true :budget wall))
                            ;; On its layer from here, whatever jj answers next.
                            _   (left! (update acc :fixes (fnil conj []) fix) (inc i))
@@ -5093,7 +5339,15 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                            ;; to it.
                            bad (layers/conflicted cwd base)]
                        (if (empty? bad)
-                         (update acc :fixes (fnil conj []) fix)
+                         (do (doseq [[to fs] (group-by :owner-layer (:moved ans))]
+                               (vswap! !plan plan-with-rerouted stack i to fs))
+                             (-> (update acc :fixes (fnil conj []) fix)
+                                 (with-fixer-answers {:label label :iter (:iter ctx)
+                                                      :findings findings :answers answers
+                                                      :argued? (and (not result-error?)
+                                                                    (not (str/blank? (str result-text))))
+                                                      :reason (str result-text) :commit cid}
+                                                     ans)))
                          ;; The stack refusing ONE repair is not the round refusing
                          ;; the rest. Rolling this layer's fix back by operation id
                          ;; — the shape `layers/attempt-reshape!` already treats a
@@ -5168,126 +5422,48 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                      (let [;; An argument, as against silence. A killed fixer ran,
                            ;; and the argument it might have made was never
                            ;; emitted; carrying its empty account would tell the
-                           ;; next warden a fixer had made a case nobody made.
-                           argued? (not (str/blank? (str result-text)))
-                           answers (fixer-answers result-text handed)
-                           hid     (fn [f] (or (:handle f) (:id f)))
-                           ;; A finding the run already settled on this answer and
-                           ;; a later round raised again: a reviewer read the code
-                           ;; after the fixer's evidence and disagreed, and settling
-                           ;; it twice on the fixer's word would end that argument
-                           ;; for it. It is a dispute, for a person.
-                           absent-before (into #{}
-                                               (comp (mapcat :findings)
-                                                     (filter (fn [f] (= "absent-at-head" (:authority f))))
-                                                     (map hid))
-                                               (:history ctx))
-                           height  (into {} (map-indexed (fn [k l] [(layer-label l) k])) stack)
-                           ;; Only a layer ABOVE this one: a file at or below it is
-                           ;; one this fixer was free to edit, and naming it instead
-                           ;; is a refusal like any other.
-                           owner   (fn [{:keys [kind file]}]
-                                     (when (= :belongs-in kind)
-                                       (let [to (placed-on cwd (:toc ctx) nil file)]
-                                         (when (and to (height label)
-                                                    (> (get height to -1) (height label)))
-                                           to))))
-                           fate    (fn [f]
-                                     (let [a (get answers (hid f))]
-                                       (cond
-                                         (and (= :absent (:kind a))
-                                              (not (contains? absent-before (hid f)))) :absent
-                                         (owner a)                                    :rerouted
-                                         :else                                        :disputed)))
-                           by-fate (group-by fate findings)
-                           moved   (mapv (fn [f]
-                                           (let [{:keys [file evidence] :as a} (get answers (hid f))
-                                                 to (owner a)]
-                                             (assoc f
-                                                    :owner-layer to
-                                                    :because (str/join
-                                                              " — "
-                                                              (remove str/blank?
-                                                                      [(:because f)
-                                                                       (str "the fixer on " label
-                                                                            " answered that the repair belongs in "
-                                                                            file ", which " to " touches: "
-                                                                            evidence)])))))
-                                         (:rerouted by-fate))
-                           ;; What each answer does to the round's own copy of the
-                           ;; finding, which is what the run's remainder is folded
-                           ;; from. `:belongs-in` rides on whatever the finding's
-                           ;; fate: it is what lets an owed row outlive one hop — see
-                           ;; `prior-open`.
-                           revised (into {}
-                                         (concat
-                                          (for [f (:absent by-fate)]
-                                            [(hid f) (absent-ruling label (get answers (hid f)))])
-                                          (for [f moved]
-                                            [(hid f) (select-keys f [:owner-layer :because])])))
-                           scoped  (into {}
-                                         (keep (fn [[id a]]
-                                                 (when (= :belongs-in (:kind a)) [id (:file a)])))
-                                         answers)
+                           ;; next warden a fixer had made a case nobody made. An
+                           ;; error result is the same: its text is the error.
+                           argued? (and (not result-error?)
+                                        (not (str/blank? (str result-text))))
+                           answers (fixer-answers (when-not result-error? result-text) handed)
+                           ;; A finding the run already settled on a fixer's
+                           ;; answer and a later round raised again is a dispute,
+                           ;; for a person — see `answered`.
+                           ans     (answered {:cwd cwd :ctx ctx :stack stack :label label
+                                              :findings findings :answers answers
+                                              :landed? false})
+                           moved   (:moved ans)
                            acc
-                           (cond-> (update acc :declined (fnil conj [])
-                                           ;; :handed for the same reason it is on a
-                                           ;; landed fix and on an unattempted layer:
-                                           ;; the lists are one account of every :fix
-                                           ;; ruling the round held, and they add up
-                                           ;; only if the finding ids are under one
-                                           ;; key.
-                                           ;;
-                                           ;; :timed-out? is what makes a row with no
-                                           ;; `:reason` legible. Every other row of
-                                           ;; that shape is a fixer that ran and said
-                                           ;; nothing; this one is a fixer whose
-                                           ;; account was still in the process when
-                                           ;; the budget destroyed it, and the
-                                           ;; findings it was handed stand for want of
-                                           ;; time rather than on an argument.
-                                           ;;
-                                           ;; The three fates partition :handed.
-                                           ;; :absent carries the ruling each was
-                                           ;; settled on, because a report rebuilt
-                                           ;; from its phases has no other copy.
-                                           (cond-> {:layer label :handed handed}
-                                             result-text (assoc :reason (str result-text))
-                                             timed-out?  (assoc :timed-out? true :budget wall)
-                                             (seq (:absent by-fate))
-                                             (assoc :absent (mapv (fn [f] (assoc (get revised (hid f)) :id (hid f)))
-                                                                  (:absent by-fate)))
-                                             (seq moved)
-                                             (assoc :rerouted (mapv (fn [f] {:id (hid f) :to (:owner-layer f)})
-                                                                    moved))
-                                             (seq (:disputed by-fate))
-                                             (assoc :disputed (mapv hid (:disputed by-fate)))))
-                             :always
-                             (update :findings
-                                     (partial mapv (fn [f]
-                                                     (let [k (hid f)]
-                                                       (cond-> (merge f (get revised k))
-                                                         (scoped k) (assoc :belongs-in (scoped k)))))))
-                             ;; Into :carry, the only thing a round hands the next
-                             ;; one. A refusal leaves its finding at :fix, so without
-                             ;; this the argument reaches report.json and no reader —
-                             ;; not the warden that could settle it, not the session
-                             ;; that would otherwise have to build it again. Only the
-                             ;; findings it DISPUTED: the others are settled or on
-                             ;; their way to the layer that can repair them.
-                             (and argued? (seq (:disputed by-fate)))
-                             (assoc-in [:carry :fixer-declines label]
-                                       {:layer label
-                                        :since (:iter ctx)
-                                        :reason (str result-text)
-                                        ;; Named by handle where the warden gave one,
-                                        ;; exactly as :handed is, so the carry and the
-                                        ;; report row point at one finding rather than
-                                        ;; at two spellings of it a round apart.
-                                        :findings (mapv (fn [f]
-                                                          {:id (hid f)
-                                                           :title (:title f)})
-                                                        (:disputed by-fate))}))]
+                           (-> (update acc :declined (fnil conj [])
+                                       ;; :handed for the same reason it is on a
+                                       ;; landed fix and on an unattempted layer:
+                                       ;; the lists are one account of every :fix
+                                       ;; ruling the round held, and they add up
+                                       ;; only if the finding ids are under one
+                                       ;; key.
+                                       ;;
+                                       ;; :timed-out? is what makes a row with no
+                                       ;; `:reason` legible. Every other row of
+                                       ;; that shape is a fixer that ran and said
+                                       ;; nothing; this one is a fixer whose
+                                       ;; account was still in the process when
+                                       ;; the budget destroyed it, and the
+                                       ;; findings it was handed stand for want of
+                                       ;; time rather than on an argument.
+                                       ;; :result-error? is the same for a fixer
+                                       ;; the API stopped.
+                                       ;;
+                                       ;; The fates partition :handed.
+                                       (-> (cond-> {:layer label :handed handed}
+                                             result-text   (assoc :reason (str result-text))
+                                             result-error? (assoc :result-error? true)
+                                             timed-out?    (assoc :timed-out? true :budget wall))
+                                           (answer-fields answers ans)))
+                               (with-fixer-answers {:label label :iter (:iter ctx)
+                                                    :findings findings :answers answers
+                                                    :argued? argued? :reason (str result-text)}
+                                                   ans))]
                        (doseq [[to fs] (group-by :owner-layer moved)]
                          (vswap! !plan plan-with-rerouted stack i to fs))
                        (left! acc (inc i))
@@ -5354,7 +5530,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
             ;; at all.
             ;; Nothing landed because nothing was left to land: every fixer that
             ;; changed nothing answered that its finding is already absent at its
-            ;; head, or handed it up to a layer this stage then launched. No one
+            ;; head or was never true there, or handed it up to a layer this stage then launched. No one
             ;; declined anything, and the tip may well be right — so the run goes
             ;; on to the round that reads it, which is what confirms the fixers'
             ;; evidence or raises the finding again over it. A second such answer
@@ -5363,7 +5539,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
             (and (empty? (:fixes ctx'))
                  (empty? (:launch-failed ctx'))
                  (not-any? :timed-out? (:declined ctx'))
-                 (some :absent (:declined ctx'))
+                 (some #(or (:absent %) (:refuted %)) (:declined ctx'))
                  (not-any? (comp seq :disputed) (:declined ctx')))
             ctx'
 
@@ -5425,7 +5601,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   (let [prev  (last (filter #(= (dec (:iter ctx)) (:iter %)) prior))
         was   (:patch-hashes prev)
         holds (:patch-hashes ctx)]
-    (boolean (and (pos? (long (or (:fixed-count prev) 0)))
+    (boolean (and (or (pos? (long (or (:fixed-count prev) 0))) (seq (:fixes prev)))
                   (seq was) (seq holds)
                   (not= was holds)))))
 

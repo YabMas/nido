@@ -240,6 +240,28 @@
         "a landed repair is in the round history already, and an empty heading
          reads as repairs the judge failed to be shown")))
 
+(deftest a-judge-is-shown-the-repairs-nobody-ran-and-what-a-fixer-left-open
+  ;; Untested repairs reached the judge only as fixer prose, and it restated
+  ;; them in `needs` when it happened to read them; a residual beside a landed
+  ;; edit read as part of the repair.
+  (let [p (verdict/build-prompt
+           {:design design :findings [] :history [] :rounds 2 :status :converged
+            :fix-outcomes [{:outcome :landed :layer "core" :round 1 :commit "c1"
+                            :verified {:ran? false :what "the integration shard was not run"}
+                            :findings [{:id "h1" :title "t"} {:id "h2" :title "u" :answer :residual}]}
+                           {:outcome :landed :layer "ui" :round 1 :commit "c2"
+                            :verified {:ran? true :what "bb test :only ui-test"}
+                            :findings [{:id "h3" :title "v"}]}
+                           {:outcome :declined :layer "core" :round 1 :commit "c1"
+                            :findings [{:id "h2" :title "u" :answer :residual
+                                        :evidence "the build job is still missing"}]}]})]
+    (is (str/includes? p "LANDED AND UNVERIFIED"))
+    (is (str/includes? p "core, round 1, landed c1: h1 — the integration shard was not run")
+        "only the repaired id, with what the fixer said it did not run")
+    (is (not (str/includes? p "landed c2:")) "a verified repair is not listed")
+    (is (str/includes? p "core, round 1, LEFT OPEN beside the edit it landed at c1"))
+    (is (str/includes? p "h2 u — RESIDUAL: the build job is still missing"))))
+
 (deftest a-judge-is-told-what-was-argued-and-what-nobody-tried
   ;; One judge read a defect ruled `fix` three rounds running with no commit on
   ;; its layer as pressure on the design. One repair had been written and put

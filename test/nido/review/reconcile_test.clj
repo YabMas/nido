@@ -505,3 +505,17 @@
      (write-run! (report-in "review-fresh" tree killed-mid-fix) (* 5 60 1000))
      (is (empty? (reconcile/settle-abandoned! {})))
      (is (= "running" (:status (read-back "review-fresh")))))))
+
+(deftest a-fixer-that-only-ran-shell-commands-may-have-written
+  ;; A fixer that rewrote storage.clj through a python3 heredoc made nine Bash
+  ;; calls and no Edit, and was reported as having only read — which withholds
+  ;; the `jj op restore` that puts the stack back.
+  (let [dir (str (fs/create-temp-dir))
+        log (str (fs/path dir "fix.log"))
+        wrote? (fn [text]
+                 (spit log text)
+                 (with-redefs [stages/fixer-log (fn [& _] log)]
+                   (#'reconcile/fixer-wrote? "r" {:layer "a"} 1)))]
+    (is (= :unknown (wrote? "{\"name\": \"Bash\", \"input\": {\"command\": \"python3 - <<PY\"}}")))
+    (is (true? (wrote? "{\"name\": \"Bash\"} {\"name\": \"Edit\"}")))
+    (is (false? (wrote? "{\"name\": \"Read\"}")))))

@@ -66,6 +66,10 @@
    the first and at most one of the second, so one number for both overstates
    what the loop achieved by roughly its own persistence.
 
+   `:repairs-unverified` is how many landed repairs their fixer says it ran
+   nothing to check — `report/repairs-unverified` — and is said in the headline
+   only when non-zero.
+
    `:defects-introduced` is the part of `:defects-settled` the loop made itself —
    see `verdict/settled-the-loop-made`. Carried at zero, since it is a warden's
    attribution and not a derivation, so a settled run's entry that predates it
@@ -203,7 +207,7 @@
                                " reading" (when (not= 1 readings) "s")))))))
 
 (defn- diff-payload
-  [{:keys [run-id report-path status rounds fix-attempts defects-settled defects-introduced
+  [{:keys [run-id report-path status rounds fix-attempts repairs-unverified defects-settled defects-introduced
            findings-remaining findings-kept remaining-handed remaining-parked
            targets-reviewed targets-skipped unfixable parked standing
            drift unavailable stood-in base in-flight errored design-verdict verdict-implementation
@@ -260,7 +264,14 @@
                                       " rounds · " (n defects-settled) " defects settled ("
                                       (when (pos? (or defects-introduced 0))
                                         (str defects-introduced " made by the loop's own repairs; "))
-                                      (n fix-attempts) " repairs dispatched) · "
+                                      (n fix-attempts) " repairs dispatched"
+                                      ;; Repaired as against repaired-and-verified:
+                                      ;; a fixer's own VERIFIED line, so the debt
+                                      ;; of an unrun repair does not depend on the
+                                      ;; design judge restating it.
+                                      (when (pos? (or repairs-unverified 0))
+                                        (str ", " repairs-unverified " landed unverified"))
+                                      ") · "
                                       (n findings-remaining) " still open · "
                                       (when (pos? (or verdict-unraised 0))
                                         (str verdict-unraised " unraised by the verdict · "))

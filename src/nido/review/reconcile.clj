@@ -394,14 +394,25 @@
   "A tool call in a fixer's stream-json transcript that writes a file."
   #"\"name\"\s*:\s*\"(?:Edit|MultiEdit|Write|NotebookEdit)\"")
 
+(def ^:private shell-tool-re
+  "A tool call in a fixer's stream-json transcript that runs a shell command."
+  #"\"name\"\s*:\s*\"Bash\"")
+
 (defn- fixer-wrote?
-  "Whether the fixer a run stopped under had called a tool that writes — read off
-   its own transcript, the only record of what it did before the stop. nil when
-   there is no transcript to read, which says nothing either way."
+  "Whether the fixer a run stopped under had written to the tree — read off its
+   own transcript, the only record of what it did before the stop: true for a
+   tool that writes, `:unknown` for a shell command, which may have (a heredoc
+   rewriting a source file is a Bash call like any read), false when it called
+   neither. nil when there is no transcript to read, which says nothing either
+   way."
   [run-id {:keys [layer]} round]
   (let [log (stages/fixer-log run-id layer round ".log")]
     (when (fs/exists? log)
-      (boolean (re-find write-tools-re (slurp log))))))
+      (let [t (slurp log)]
+        (cond
+          (re-find write-tools-re t) true
+          (re-find shell-tool-re t)  :unknown
+          :else                      false)))))
 
 (defn- settle-one!
   "Force one orphan terminal, keep what it was holding on the workstream it

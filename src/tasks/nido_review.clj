@@ -572,6 +572,7 @@
        :base               (get-in report [:target :base])
        :rounds             (or (get-in report [:summary :rounds]) 0)
        :fix-attempts       (or (get-in report [:summary :fix-attempts]) 0)
+       :repairs-unverified (or (get-in report [:summary :repairs-unverified]) 0)
        :defects-settled    (count (verdict/settled-by-fixing final))
        :defects-introduced (count (verdict/settled-the-loop-made final))
        :findings-remaining (count open)
@@ -988,6 +989,7 @@
               (case wrote?
                 true  " — it had written to the tree, so its edits may sit on an undescribed commit above that layer."
                 false " — it had only read; nothing of it reached the tree."
+                :unknown " — it ran shell commands, which may have written, so its edits may sit on an undescribed commit above that layer."
                 " — its transcript is gone, so whether it wrote is unknown."))
          (when (and wrote? (:op fixing))
            (str "  → to put the stack back as it was before that fixer: jj op restore " (:op fixing)))]

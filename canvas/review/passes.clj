@@ -705,13 +705,31 @@
     {:signature [:=> [:catn [:stack :any] [:rounds :any]] :any]
      :delegates [layer-label settled?]})
   (Operation fixer-answers
-    "What a fixer that changed nothing said about each finding it was handed: absent at its
-     head (with the line that shows it), belongs in a file its layer may not edit, or disputed.
-     The fix stage settles the first, hands the second to the layer that may make it, and stops
-     for a person only on the third — read as one refusal, a fixer showing its finding already
-     gone ended the run `fix-declined` over a tip that was right. Silence is a dispute: nothing
-     is settled or moved on nobody's word."
-    {:signature [:=> [:catn [:text :any] [:ids :any]] :map]})
+    "What a fixer said about each finding it was handed, whether or not its edit landed: absent
+     at its head or refuted there (each with the line that shows it), belongs in a file its layer
+     may not edit, partial (the part of the remedy it refused, and why), residual (what it left
+     undone), or disputed. The fix stage settles the first two, hands belongs-in to the layer
+     that may make it, keeps partial and residual owed for the next warden to rule on, and stops
+     for a person only on a dispute over an unchanged tree. Read on the unchanged tree alone, a
+     fixer that landed anything had its answers dropped and every handed finding counted
+     repaired. Silence is a dispute on an unchanged tree and a repair beside a landed edit:
+     nothing is settled or moved on nobody's word."
+    {:signature [:=> [:catn [:text :any] [:ids :any] [:silent [:? :keyword]]] :map]})
+  (Operation fixer-siblings
+    "The open work a fixer named outside what it was handed — a sibling of the class in a file
+     it may not touch, a failure outside the change — as data. Prose is what an account excerpt
+     cuts, and a sibling cut from the middle of a section reached no warden."
+    {:signature [:=> [:catn [:text :any]] :any]})
+  (Operation fixer-verified
+    "What a fixer says it ran to check its own repair, read from its required VERIFIED line;
+     a missing line is nothing run. A repair nobody executed otherwise reads exactly like a
+     REPL-checked one, and the report separates repaired from repaired-and-verified on this."
+    {:signature [:=> [:catn [:text :any]] :map]})
+  (Operation repaired-ids
+    "The ids a landed fix row's remedy actually reached — its handed ids less those its fixer
+     answered rather than repaired. What `:fixed-count`, the settled-by-fixing fold and sweep
+     memory count, so a commit beside a handed id is never read as that id's repair."
+    {:signature [:=> [:catn [:fix :map]] :any]})
   (Operation plan-with-rerouted
     "The fix plan with a finding added to the entry of a layer above the one whose fixer named
      that layer's file, inserted at its place in the stack when the plan held no entry for it —
@@ -728,8 +746,9 @@
     {:signature [:=> [:catn [:targets :any] [:history :any]] :any]})
   (Operation fix-outcomes
     "What the fix stage has recorded of its fixers this run, one row per outcome — a repair
-     that landed, one the stack refused and put back, a fixer's argument for writing nothing,
-     a launch that never started — each with its layer, its round, the findings it was handed
+     that landed (marking each handed finding its fixer answered rather than repaired), one the
+     stack refused and put back, what a fixer left open with its words — beside a landed edit or
+     as its argument for writing nothing — and a launch that never started — each with its layer, its round, the findings it was handed
      and what the fixer said. Off the history for what landed and the carry for the rest,
      because a round that landed nothing enters the history only when it settled a finding.
 

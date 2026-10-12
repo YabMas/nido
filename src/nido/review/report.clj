@@ -1056,6 +1056,25 @@
        (map #(if (contains? % :handed) (count (:handed %)) (or (:fixed-count %) 0)))
        (reduce + 0)))
 
+(defn- repairs-unverified
+  "How many repairs the run LANDED whose fixer says it ran nothing to check
+   them — the repaired ids on every kept fix row whose `:verified` says so (see
+   `nido.review.stages/fixer-verified`). The report's split between repaired
+   and repaired-and-verified: without it a repair nobody executed and a
+   REPL-checked one publish as the same count, and the debt reached a reader
+   only when the design judge happened to restate it.
+
+   A row with no `:verified` predates the field and is not counted either way.
+   Put on the summary only when non-zero, as the headline says it."
+  [report]
+  (->> (:rounds report)
+       (mapcat :phases)
+       (filter #(= "fix" (:phase %)))
+       (mapcat :fixes)
+       (filter #(and (map? (:verified %)) (not (:ran? (:verified %)))))
+       (map #(count (if (contains? % :repaired) (:repaired %) (:handed %))))
+       (reduce + 0)))
+
 (def ^:private read-statuses
   "The row statuses that say THIS run answered for the target: a reviewer came
    back, or the diff was empty and there was nothing to come back about.
@@ -1139,7 +1158,8 @@
    `:summary` carries `:max-iters`, the cap, when the run had one. The loop has no default, so a
    cap is always the number whoever invoked the run passed; without it a `max-iters` status names
    the stop and not how short the leash was. `:owed-reading` is what a run that ended
-   :owed-second-reading still owed a second reading of, so the report names it too."
+   :owed-second-reading still owed a second reading of, so the report names it too.
+   `:repairs-unverified` is there when any landed repair was — see `repairs-unverified`."
   [report status ctx at]
   (let [s   (name status)
         cap (get-in ctx [:config :max-iters])]
@@ -1151,6 +1171,8 @@
                               :fix-attempts (fix-attempts report)
                               :final-status s}
                        cap (assoc :max-iters cap)
+                       (pos? (repairs-unverified report))
+                       (assoc :repairs-unverified (repairs-unverified report))
                        (:owed-reading ctx) (assoc :owed-reading (:owed-reading ctx))))))
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport :map] :ReviewReport]}
@@ -1304,9 +1326,11 @@
                    :status   status
                    :ended-at at
                    :reason   (when flight {(keyword status) flight})
-                   :summary  {:rounds       (count (:rounds report))
-                              :fix-attempts (fix-attempts report)
-                              :final-status status})
+                   :summary  (cond-> {:rounds       (count (:rounds report))
+                                      :fix-attempts (fix-attempts report)
+                                      :final-status status}
+                               (pos? (repairs-unverified report))
+                               (assoc :repairs-unverified (repairs-unverified report))))
       flight (update-in [:rounds (dec (count (:rounds report)))]
                         close-unfinished-round status at))))
 

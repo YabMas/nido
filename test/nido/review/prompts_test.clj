@@ -1269,6 +1269,66 @@ layers, it is not yours"))
     (doseq [form ["absent <file>:<line>" "belongs-in <file>" "disputes"]]
       (is (str/includes? out (str "UNREPAIRED <id> " form))))))
 
+(deftest the-fixer-reports-what-it-did-not-finish-and-what-it-ran
+  ;; Fixers asked nothing about verification ran nothing, and a narrowed remedy
+  ;; or an admitted leftover written as prose beside a landed edit was counted as
+  ;; a repair.
+  (let [out (prompts/fix-prompt {:findings [{:priority 1 :title "t" :body "b" :id "h1"}]})]
+    (doseq [form ["refuted <file>:<line>" "partial" "residual"]]
+      (is (str/includes? out (str "UNREPAIRED <id> " form))))
+    (is (str/includes? out "SIBLING <file>:<line>"))
+    (is (str/includes? out "VERIFIED ran") "what it ran is a required line, not prose")
+    (is (str/includes? out "shown FAILING on the code\nbefore your repair")
+        "a regression test never seen failing proves nothing about the repair")
+    (is (str/includes? out "INERT HERE")
+        "a git-reading gate in a jj workspace sees an empty diff and reports clean")
+    (is (str/includes? out "Do not add a code path for an input you believe does not occur"))))
+
+(deftest a-fixers-typed-lines-survive-any-cut-of-its-account
+  ;; The account excerpt cut a sweep's named sites and a residual's file path
+  ;; out of the middle of their sections, six runs running, and the warden
+  ;; could only file them as unplaceable.
+  (let [account (str "## Repair\nchanged the guard\n"
+                     "## Sweep\n" (apply str (repeat 3000 "x")) "\n"
+                     "- SIBLING src/login_codes.clj:190 — same unscoped read\n"
+                     (apply str (repeat 3000 "y")) "\n"
+                     "UNREPAIRED h1 residual — document_embeddings_test still unwritten\n"
+                     "VERIFIED nothing — no REPL")
+        out (prompts/prior-fixes-block [{:round 1 :commit "c1" :findings [{:title "t"}]
+                                         :account account}])]
+    (is (str/includes? out "chars elided") "the prose is still cut")
+    (is (str/includes? out "SIBLING src/login_codes.clj:190 — same unscoped read"))
+    (is (str/includes? out "UNREPAIRED h1 residual — document_embeddings_test still unwritten"))
+    (is (str/includes? out "VERIFIED nothing — no REPL"))))
+
+(deftest the-warden-rules-on-what-a-landed-fixer-left-open
+  ;; A fixer that partly refused a finding in prose and reported it fixed had
+  ;; the refused part re-raised a round later, and the warden parked it as a
+  ;; failed repair rather than ruling on the refusal.
+  (let [out (prompts/warden-prompt
+             {:findings findings :history []
+              :fix-outcomes [{:outcome :declined :layer "core" :round 2 :commit "c9"
+                              :findings [{:id "f94e0553" :title "owners omitted"
+                                          :answer :partial
+                                          :evidence "the draft-door part does not hold"}]
+                              :account "Repaired the scanner."}]})]
+    (is (str/includes? out "A FIXER LANDED AN EDIT AND LEFT THESE OPEN"))
+    (is (not (str/includes? out "CHANGED NOTHING\nIt read the finding"))
+        "it wrote an edit, so it is no fixer that changed nothing")
+    (is (str/includes? out "PARTIAL: the draft-door part does not hold")
+        "the refused part and why, whole, is what the ruling is on")
+    (is (str/includes? out "landed c9"))))
+
+(deftest a-reviewer-sees-which-handed-findings-a-landed-fix-did-not-repair
+  (let [out (prompts/prior-fixes-block
+             [{:outcome :landed :round 1 :commit "c1"
+               :findings [{:title "repaired one"} {:title "left one" :answer :residual}]}
+              {:outcome :declined :round 1 :commit "c1"
+               :findings [{:id "x" :title "left one" :answer :residual}]}])]
+    (is (str/includes? out "left one  [RESIDUAL — not repaired]"))
+    (is (not (str/includes? out "ARGUED"))
+        "the decline beside a landed edit is that edit's row, not a fixer that wrote nothing")))
+
 (deftest a-round-no-fixer-refused-anything-in-says-so-by-silence
   (let [out (prompts/warden-prompt {:findings findings :history []})]
     (is (not (str/includes? out "A FIXER WAS HANDED THESE")))))

@@ -2260,6 +2260,14 @@
           out (str/join "\n" (t/orphans-refusal-lines {:settled [o] :writing []}))]
       (is (str/includes? out "it had only read"))
       (is (not (str/includes? out "jj op restore")))))
+  (testing "a fixer that ran shell commands may have written, so the restore is offered"
+    (let [o   (assoc a-dead-fixer :report {:status "orphaned"}
+                     :entry {:fix-attempts 1 :stopped {:round 1 :phase "fix"
+                                                       :fixing {:layer "a" :handed ["h"] :op "op-9"}}}
+                     :wrote? :unknown)
+          out (str/join "\n" (t/orphans-refusal-lines {:settled [o] :writing []}))]
+      (is (str/includes? out "it ran shell commands, which may have written"))
+      (is (str/includes? out "jj op restore op-9"))))
   (testing "a report with no account says what it cannot say"
     (let [o   (assoc a-dead-fixer :report {:status "orphaned"}
                      :entry {:fix-attempts nil :stopped {:round 1 :phase "fix"}})
