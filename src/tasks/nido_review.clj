@@ -2078,6 +2078,34 @@
       :reviewed-session session
       :reviewed-ws-id   ws-id})))
 
+(defn- texts-read
+  "A fn from a judgement on `project`'s ledgers to the subjects of the record it read
+   (`settled/subjects`), or nil when that record cannot be read back — what `record/run-figures`
+   compares readings of one text by. `ws-of` names the workstream a judgement was read from."
+  [project ws-of]
+  (let [subjects (memoize (fn [w n] (some-> (ws/entry-at-seq project w n) settled/subjects)))]
+    (fn [j]
+      (let [n (if (= :design-decision (:format j)) (:design-seq j) (:baseline-seq j))
+            w (ws-of j)]
+        (when (and w n) (subjects w n))))))
+
+(defn- flip-rate
+  "A run's flip rate as a headline says it — `flip rate 1/7`, the readings that disagreed with the
+   last reading of the same text at the same tree over those that had one — or nil when the run
+   read no text twice at one tree, or its entries cannot be read. Read off `ledger`, the one the
+   run pinned at start, by the entries naming `run-id`."
+  [[project ws-id] run-id]
+  (try
+    (when (and project run-id)
+      (let [es (for [kind [:design-decision :baseline-review]
+                     e    (ws/entries-of project ws-id kind)
+                     :when (= (str run-id) (or (:within-run e) (:run-id e)))]
+                 e)
+            {:keys [flips pairs]} (:flip-rate (record/run-figures (vec es) nil
+                                                                  (texts-read project (constantly ws-id))))]
+        (when pairs (str "flip rate " flips "/" pairs))))
+    (catch Exception _ nil)))
+
 (defn- record-loop-body
   "One record round, from the engine to the last printed line. Split out of
    `record-loop-cmd*` only so the claim can wrap it — everything here is what the
@@ -2129,7 +2157,9 @@
                  (assoc final :amend-prompt p)
                  final)
         status (:status final)]
-    (println (str kind "-loop: " (name status) " · report " report-path))
+    (println (str kind "-loop: " (name status)
+                  (some->> (flip-rate ledger run-id) (str " · "))
+                  " · report " report-path))
     ;; Before anything below can throw: the run is over, and how it went is worth reading whatever
     ;; the rest of this prints.
     (queue-record-analysis! cwd ledger kind final @report-atom report-path {:run-id run-id :dry-run? dry-run?})
@@ -2555,7 +2585,11 @@
 
    A check also sums :filed, its rounds ruled held over a finding filed under it, and :cleared, per
    way it came to be clear in a run (`record/run-figures`), in how many runs; a claim sums :under,
-   per check, the rounds it was filed there. Per check, its held/broken flips at one tree each way."
+   per check, the rounds it was filed there. Per check, its held/broken flips at one tree each way.
+
+   Per subject, its reading sequence in each run, the runs' joined by ` | `; every refuted-after
+   count, concatenated; its overturned confirmations and same-text splits summed. :flip-rate sums
+   both halves across runs, so it is the rate over every comparable reading, not a mean of rates."
   [figures]
   (letfn [(add [acc tallies]
             (reduce-kv (fn [a k {:keys [broken alone at-end asked asked-at-end cleared] :as t}]
@@ -2596,6 +2630,11 @@
      :reading-flips      (reduce #(merge-with (partial merge-with +) %1 %2) (sorted-map) (keep :reading-flips figures))
      :check-flips        (reduce #(merge-with (partial merge-with +) %1 %2) (sorted-map) (keep :check-flips figures))
      :splits             (counts :splits)
+     :readings           (reduce #(merge-with (fn [a b] (str a " | " b)) %1 %2) (sorted-map) (keep :readings figures))
+     :refuted-after      (reduce #(merge-with into %1 %2) (sorted-map) (keep :refuted-after figures))
+     :overturned         (counts :overturned)
+     :text-splits        (counts :text-splits)
+     :flip-rate          (reduce #(merge-with + %1 %2) {:flips 0 :pairs 0} (keep :flip-rate figures))
      :spent       (reduce (fn [acc [id n]]
                             (update acc id #(-> (or % {:runs 0 :max 0})
                                                 (update :runs inc)
@@ -2615,12 +2654,13 @@
   (let [project (keyword (or project (some-> (stages/project+ws-from-cwd (System/getProperty "user.dir"))
                                              first name)
                              "nido"))
-        runs    (runs-on-ledgers project)]
+        runs    (runs-on-ledgers project)
+        texts   (texts-read project (comp ::ws meta))]
     (if run-id
       (if-let [es (get runs (str run-id))]
-        (prn (record/run-figures (vec es) (final-subjects project es)))
+        (prn (record/run-figures (vec es) (final-subjects project es) texts))
         (println (str "no entry on " (name project) "'s ledgers names run " run-id)))
-      (prn (summed (map #(record/run-figures (vec %) (final-subjects project %)) (vals runs)))))))
+      (prn (summed (map #(record/run-figures (vec %) (final-subjects project %) texts) (vals runs)))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   figures-cmd

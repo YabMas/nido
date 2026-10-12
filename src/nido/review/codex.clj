@@ -175,6 +175,13 @@
   "The reviewer when neither the run nor its project names one."
   :codex)
 
+(defn ^{:malli/schema [:=> [:cat :keyword] :keyword]}
+  other-reviewer
+  "The reviewer that is not `reviewer` — who reads a record a second time, so that two agreeing
+   readings are two judges agreeing rather than one judge sampled twice."
+  [reviewer]
+  (first (disj reviewers reviewer)))
+
 (defn ^{:malli/schema [:=> [:cat :any :any] :keyword]}
   reviewer-for
   "The reviewer a run is judged by: `override`, the run's own choice, else

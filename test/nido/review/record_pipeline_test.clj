@@ -1336,13 +1336,13 @@
 
 (def ^:private settling-ledger
   "A ledger on which two reviews running, both reading tree-a, confirmed c1 of `a-baseline` — the
-   two readings that settle it."
+   two readings, by two judges, that settle it."
   {:reviews     [{:format :baseline-review :seq 0 :baseline-seq 1 :verdict :sufficient
                   :reason "ok" :confirmed ["c1"] :checked-at {"c1" ["src/order/aggregate.clj:12"]}
-                  :code-identity "tree-a"}
+                  :code-identity "tree-a" :judged-by {:reviewer :codex}}
                  {:format :baseline-review :seq 2 :baseline-seq 1 :verdict :sufficient
                   :reason "ok" :confirmed ["c1"] :checked-at {"c1" ["src/order/aggregate.clj:12"]}
-                  :code-identity "tree-a"}]
+                  :code-identity "tree-a" :judged-by {:reviewer :claude}}]
    :baselines   [(assoc a-baseline :seq 1)]
    :retractions []})
 
@@ -1367,9 +1367,10 @@
   ;; amendment had changed it. The ledger reading keys on content and tree, and
   ;; still covers the run's own earlier rounds, whose tree does not move.
   (let [[seen out] (judged-at "tree-a")]
-    (is (= {"c1" {:ws-id "ws-1" :seq 2}} (:settled seen)))
+    (is (= {"c1" {:ws-id "ws-1" :seq 2 :judged-by {:reviewer :claude}}} (:settled seen)))
     (is (= "tree-a" (:code-identity seen)) "with the reading the settling was made at")
-    (is (= {"c1" {:ws-id "ws-1" :seq 2}} (:settled out)) "and the report is told what was not asked, and where")))
+    (is (= {"c1" {:ws-id "ws-1" :seq 2 :judged-by {:reviewer :claude}}} (:settled out))
+        "and the report is told what was not asked, and where")))
 
 (defn- judged-with
   "The judge stage's ctx over `baseline` (`a-baseline` unless named) when its judge returns
@@ -1607,12 +1608,12 @@
                   :falsified-by "a summer that visits a line twice" :evidence {:by :round}}
         design   {:format :design :strata [] :seq 1 :baseline {:seq 0} :model {:elements [] :claims [claim]}}
         ids      {"canvas.order/aggregate" "agg-1" "canvas.order/summers" "role-1"}
-        decided  (fn [n] {:format :design-decision :seq n :design-seq 1 :recommend :proceed
-                          :confirmed ["summers-sum-once"]
-                          :checked-at {"summers-sum-once" ["src/order/aggregate.clj:3"]}
-                          :subject-identities ids})
+        decided  (fn [n judge] {:format :design-decision :seq n :design-seq 1 :recommend :proceed
+                                :confirmed ["summers-sum-once"]
+                                :checked-at {"summers-sum-once" ["src/order/aggregate.clj:3"]}
+                                :subject-identities ids :judged-by {:reviewer judge}})
         ledger   {:ws-id "ws-1" :reviews [] :baselines [] :retractions [] :designs [design]
-                  :decisions [(decided 0) (decided 2)]}
+                  :decisions [(decided 0 :codex) (decided 2 :claude)]}
         settled-at (fn [now]
                      (let [seen (atom nil)]
                        (with-redefs [record/design-decision! (fn [opts] (reset! seen opts)
@@ -1628,7 +1629,7 @@
                                      settled/ledgers (fn [_ _ _] [ledger])]
                          (run record/design-judge-stage (ctx))
                          (:settled @seen))))]
-    (is (= {"summers-sum-once" {:ws-id "ws-1" :seq 2}} (settled-at ids)))
+    (is (= {"summers-sum-once" {:ws-id "ws-1" :seq 2 :judged-by {:reviewer :claude}}} (settled-at ids)))
     (is (= {} (settled-at (assoc ids "canvas.order/aggregate" "agg-2")))
         "a player the design never restated moved, so the claim is a check again")))
 
@@ -2128,9 +2129,14 @@
 (defn- judged-over
   "The judge stage's ctx over `a-baseline` at seq 1, its judge answering `review` and the
    workstream holding `reviews`, at `tree`. Everything it appends lands in `appended`; what the
-   judge was handed in `seen`."
+   judge was handed in `seen`. The answer names the reviewer it was asked of, as a launched judge's
+   does."
   [{:keys [review reviews tree appended seen] :or {tree "tree-a"}} c]
-  (with-redefs [record/baseline-review! (fn [opts] (some-> seen (reset! opts)) review)
+  (with-redefs [record/baseline-review! (fn [opts]
+                                          (some-> seen (reset! opts))
+                                          (cond-> review
+                                            (and (:format review) (not (:judged-by review)))
+                                            (assoc :judged-by {:reviewer (or (:reviewer opts) :codex)})))
                 record/append! (fn [_ r] (some-> appended (swap! conj r)) nil)
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                 ws/latest-entry (fn [_ _ _] (assoc a-baseline :seq 1))
@@ -2163,6 +2169,8 @@
                               (ctx :carry (:carry r1)))]
       (is (not (contains? (:settled @seen) "invoice-resums"))
           "the subject read once is put to the next judge again, not skipped")
+      (is (= :claude (:reviewer @seen))
+          "by the other judge: one judge confirming twice is that judge's sample taken twice")
       (is (= :sufficient (:status r2)) "the second consecutive clean reading ends the run")
       (is (nil? (:read-once (last @appended)))))))
 
@@ -2637,11 +2645,20 @@
          (record/unchecked-running [(unchecked "c1" "needs production history")
                                     (unchecked "c1" "deploy history, not code")]))
       "two judges never word one reason alike, so the run is of the subject and both reasons are kept")
-  (is (= {"c1" {:n 1 :reasons ["b"]}}
+  (is (= {"c1" {:n 2 :reasons ["a" "b"]}}
          (record/unchecked-running [(unchecked "c1" "a") (review :confirmed ["c1"]) (unchecked "c1" "b")]))
-      "a confirmation ends a run: the claim was checkable at some wording")
+      "watched: a subject alternating confirmed and unchecked reached neither a pair nor the amender — a confirmation between does not reset the count")
+  (is (= {} (record/unchecked-running [(unchecked "c1" "a") (review :confirmed ["c1"])]))
+      "a subject whose newest reading confirmed it is not unchecked")
   (is (= {} (record/unchecked-running [(unchecked "c1" "a") (review :refuted ["c1"])]))
       "a refutation is a ruling too")
+  (is (= {"c1" {:n 1 :reasons ["b"]}}
+         (record/unchecked-running [(unchecked "c1" "a") (review :refuted ["c1"]) (unchecked "c1" "b")]))
+      "and the count starts again after one: the amender has had the subject since")
+  (is (= {"c1" {:n 1 :reasons ["a"]}}
+         (record/unchecked-running [(unchecked "c1" "a")
+                                    (assoc-in (unchecked "c1" "sandbox denied the eval") [:unchecked 0 :tool-failure] true)]))
+      "a tool failing says nothing about the claim, and no amender repairs a sandbox")
   (is (= {"c1" {:n 2 :reasons ["a" "b"]}}
          (record/unchecked-running [(unchecked "c1" "a") (review :confirmed ["c2"]) (unchecked "c1" "b")]))
       "a judgement that did not rule on the subject — settled, or unruled — neither breaks nor extends"))
@@ -2712,7 +2729,9 @@
   ;; second reading the first one owed.
   (let [review (dissoc confirming :code-identity)
         judged (atom 0)]
-    (with-redefs [record/baseline-review! (fn [_] (swap! judged inc) review)
+    (with-redefs [record/baseline-review! (fn [opts]
+                                            (swap! judged inc)
+                                            (assoc review :judged-by {:reviewer (or (:reviewer opts) :codex)}))
                   record/append! (fn [_ _] nil)
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] (assoc a-baseline :seq 1))

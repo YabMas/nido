@@ -229,9 +229,13 @@
      decisions and reviews it appended: in how many rounds each was broken, in how many it was the
      only thing broken, and whether it was still broken when the run's last round answered — a claim
      under whatever check it was filed, a check that cleared with how it cleared. What it ended
-     without ruling on is held to the `final` record's subjects when they are known. Pure over those
+     without ruling on is held to the `final` record's subjects when they are known. Per subject, its
+     reading sequence; and, given `texts` — the subjects of the record each judgement read — how far
+     a confirmation can be trusted: refutations after N sound readings of the same text at the same
+     tree, overturned confirmations, same-text splits and the run's flip rate. Pure over those
      entries, so the figures are derived on every read and stored nowhere."
-    {:signature [:=> [:catn [:entries [:vector :map]] [:final [:? [:maybe [:set :string]]]]] :map]})
+    {:signature [:=> [:catn [:entries [:vector :map]] [:final [:? [:maybe [:set :string]]]]
+                  [:texts [:? :any]]] :map]})
   (Operation outstanding
     "What one design decision leaves open, split by whose it is to close: the subjects broken for an
      amender, and on an :ask the subjects its question is about — outstanding, but a person's to

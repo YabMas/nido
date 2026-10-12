@@ -2557,12 +2557,14 @@
    judge's word, and is counted as no ruling at all.
    :unchecked is what the judge declared it could not check here, and why — evidence that is not
    in the code (production data, a deploy history), say. A ruling, visibly not a confirmation.
+   :tool-failure on one marks a tool the judge needed failing (a sandbox denial, say), which a
+   further reading with the same tools would only repeat.
    :unruled is every check the judge left without any ruling: not confirmed with evidence, not
    found against, not declared unchecked (nor, on a decision, :owed). Derived by the round, never
    by the judge, and it is what stops the judgement holding — see `review-holds?` and `proceeds?`.
    :read-once is every id the judgement was asked to rule on and confirmed (or, on a decision, held
-   :owed) that no confirmation before it, at the same content and tree, had: a first reading. Derived by the round, and it
-   stops the judgement holding too — one clean reading of a record is a sample, and the round
+   :owed) that no reading before it by another judge, at the same content and tree, had: a first
+   reading. Derived by the round, and it stops the judgement holding too — one clean reading of a record is a sample, and the round
    reads it again. Only asked ids, because the reading after it pairs them: an id it is not asked
    about is not :unruled when it goes unconfirmed, so its silence would clear it unread.
    :amendment-read-once marks the first judgement of a record its own run amended, whatever it
@@ -2575,10 +2577,11 @@
    a settlement that was shielding a false claim, recorded where it was caught.
    :splits and :unpaired are where this judgement and the reading before it of the same record at
    the same tree disagree: :splits each id that reading held or owed and this one refuted, :unpaired
-   each id it ruled holds where that reading ruled owed, or the reverse. Neither pairs, so the id is
-   read again; both are kept because otherwise the later ruling silently replaces the earlier one.
+   each id it ruled holds where that reading ruled owed, or the reverse. A split never pairs, so the
+   id is read again; holds and owed both say the claim is sound, so from independent judges they
+   pair. Both are kept because otherwise the later ruling silently replaces the earlier one.
    :paired-with names, per id this judgement confirmed, the confirmation standing on one reading
-   at the same content and tree that it completes — the entry, and the run that made it when it
+   at the same content and tree, by another judge than this one, that it completes — the entry, and the run that made it when it
    carries one, since a second reading often comes from a later run than the first and nothing
    else joins the two. :contradicts-read-once is the other answer to such a confirmation: per id
    this judgement refuted, the single confirmation it denies. Derived by the round, as :splits
@@ -2601,7 +2604,8 @@
    [:incomplete-clauses {:optional true} [:map-of string? [:vector {:min 1} string?]]]
    [:confirmed-over-findings {:optional true} [:vector [:map {:closed true}
                                                         [:id string?] [:site string?]]]]
-   [:unchecked  {:optional true} [:vector [:map {:closed true} [:id string?] [:reason string?]]]]
+   [:unchecked  {:optional true} [:vector [:map {:closed true} [:id string?] [:reason string?]
+                                           [:tool-failure {:optional true} [:= true]]]]]
    [:unruled    {:optional true} [:vector string?]]
    [:read-once  {:optional true} [:vector string?]]
    [:amendment-read-once {:optional true} [:= true]]

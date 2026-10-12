@@ -43,6 +43,8 @@
 
 (def ^:private tree-a {:code-identity "tree-a"})
 (defn- by [seq-n] {:ws-id "ws-1" :seq seq-n})
+(def ^:private codex {:reviewer :codex})
+(def ^:private claude {:reviewer :claude})
 
 (deftest nothing-settles-without-an-identity-or-a-ledger
   (let [l (ledger :baselines [(baseline 1 c1)] :reviews [(review 2 1 :confirmed ["c1"])])]
@@ -400,6 +402,13 @@
     (is (= {} (settled/settled l (design 6 3 1) at-agg-1)) "the baseline was re-surveyed")
     (is (= {} (settled/settled l (design 6 2 7) at-agg-1)) "the intent was replaced")))
 
+(deftest a-baselines-subjects-stay-settled-when-only-its-intent-moves
+  ;; Watched: a baseline re-cited unchanged under an amended intent at an unchanged tree had every
+  ;; claim re-judged over two full rounds; a baseline is surveyed without knowing the change.
+  (let [base     (fn [n intent] (assoc (baseline n c1) :intent {:seq intent}))
+        l        (ledger :baselines [(base 1 1)] :reviews [(review 2 1 :confirmed ["c1"])])]
+    (is (= {"c1" (by 2)} (settled/settled [l] (base 3 9) tree-a)))))
+
 (deftest a-judgement-keeps-only-the-identities-its-record-rests-on
   (let [role   {:id "canvas.a/summers" :sort :role :plays ["canvas.a/agg"]}
         claim  {:id "summers-once" :about ["canvas.a/summers"] :statement "s" :falsified-by "f"
@@ -519,11 +528,27 @@
   ;; loop ended on the one clean reading between. A single confirmation is a sample.
   (let [once  (ledger :baselines [(baseline 1 c1)] :reviews [(review 2 1 :confirmed ["c1"])])
         twice (ledger :baselines [(baseline 1 c1)]
-                      :reviews [(review 2 1 :confirmed ["c1"]) (review 4 1 :confirmed ["c1"])])]
+                      :reviews [(review 2 1 :confirmed ["c1"] :judged-by codex)
+                                (review 4 1 :confirmed ["c1"] :judged-by claude)])]
     (is (= #{"c1"} (settled/single-readings [once] (baseline 5 c1) tree-a))
         "one reading is still put to the judge")
     (is (= #{} (settled/single-readings [twice] (baseline 5 c1) tree-a))
-        "the second consecutive reading at the same key settles it")
+        "the second consecutive reading at the same key, by another judge, settles it")
+    (testing "two confirmations by one judge are one judge's sample, taken twice"
+      ;; Watched: a claim one judge confirmed in four rounds at one tree was refuted in the fifth on
+      ;; a fact present from the first.
+      (doseq [[a b] [[codex codex] [nil nil] [codex nil]]]
+        (let [l (ledger :baselines [(baseline 1 c1)]
+                        :reviews [(review 2 1 :confirmed ["c1"] :judged-by a)
+                                  (review 4 1 :confirmed ["c1"] :judged-by b)])]
+          (is (= #{"c1"} (settled/single-readings [l] (baseline 5 c1) tree-a)) (pr-str [a b])))))
+    (testing "a stand-in asked in the other judge's place still pairs"
+      (let [l (ledger :baselines [(baseline 1 c1)]
+                      :reviews [(review 2 1 :confirmed ["c1"] :judged-by claude)
+                                (review 4 1 :confirmed ["c1"] :judged-by {:reviewer :claude :instead-of :codex})])]
+        (is (= #{} (settled/single-readings [l] (baseline 5 c1) tree-a))
+            "with codex out of quota there is no other judge to ask, and refusing would re-read it until the quota lifts")))
+
     (testing "a finding between two confirmations ends the pair"
       (let [l (ledger :baselines [(baseline 1 c1)]
                       :reviews [(review 2 1 :confirmed ["c1"])
@@ -661,3 +686,22 @@
            (settled/settled [(ledger :baselines [(baseline 1 c1)] :reviews [(review 2 1 :confirmed ["c1"])])]
                             (baseline 3 c1) tree-a))
         "and a judgement with no run, appended by hand, names none")))
+
+(deftest an-owed-ruling-between-two-confirmations-ends-the-pair
+  ;; Watched: holds, owed, holds at one tree settled as two consecutive confirmations, although the
+  ;; judge in the middle said the claim was not yet true of the tree.
+  (let [l (ledger :designs [(design 1 [] c1)]
+                  :decisions [(decision 2 1 :confirmed ["c1"] :judged-by codex)
+                              (decision 3 1 :owed ["c1"] :judged-by claude)
+                              (decision 4 1 :confirmed ["c1"] :judged-by claude)])]
+    (is (= #{"c1"} (settled/single-readings [l] (design 5 [] c1) tree-a)))
+    (is (= {} (settled/settled [(update l :decisions pop)] (design 5 [] c1) tree-a))
+        "and a confirmation does not stand once the reading after it held the claim owed")))
+
+(deftest a-second-reading-is-independent-only-when-asked-of-another-judge
+  (is (settled/independent? codex claude))
+  (is (not (settled/independent? codex codex)))
+  (is (settled/independent? claude {:reviewer :claude :instead-of :codex})
+      "asked of codex, answered by its stand-in: there was no third judge to ask")
+  (is (not (settled/independent? nil claude)) "a reading nobody can attribute pairs with nothing")
+  (is (not (settled/independent? codex nil))))

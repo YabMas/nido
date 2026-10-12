@@ -16,7 +16,10 @@
    claim nobody has checked. Nor is the content alone: a claim is judged in the context of its
    record, so the record's own entries for the elements it is about, the other claims about those
    elements, and the intent and baseline the record cites are part of the key — amending any of
-   them leaves a claim whose words did not move unchecked under what it now sits beside. What it was
+   them leaves a claim whose words did not move unchecked under what it now sits beside — except
+   the intent, for a baseline's own subjects: a baseline is written independent of the change, so
+   the goal moving re-asks the derivations a round runs against it and leaves its code claims where
+   they stood. What it was
    checked against depends on what it rests on. A claim or element of a model, in a project that
    declares a design, rests on the declared elements it names: each one's declaration and the code
    its module pairs with, so a change anywhere else leaves it settled. Anything else — a health
@@ -25,8 +28,9 @@
    unsettles it.
 
    One confirmation is a reading, not a settlement: a round skips a subject only on the second
-   consecutive one at the same content and key (`single-readings`), because a judge is not
-   deterministic at an unchanged record.
+   consecutive one at the same content and key, by a judge independent of the first's
+   (`single-readings`), because a judge is not deterministic at an unchanged record and the same
+   judge sampled twice can be wrong twice.
 
    A confirmation counts from a baseline review or a design decision, on the workstream's own
    ledger, on the parent ledger its :fork entry cites, and on the child ledger a merged design's
@@ -355,11 +359,15 @@
 (defn- cites-as?
   "Whether `judged` cites the intent and the baseline `record` cites, wherever `record` cites one. A
    design resting on a re-surveyed baseline, or on a goal that moved, is judged against a different
-   yardstick; a record citing neither asks nothing of the judged one."
+   yardstick; a record citing neither asks nothing of the judged one.
+
+   A baseline's intent is not part of it: what a baseline claims about the code is surveyed without
+   knowing the change, so its claims read the same under any goal, and only the derivations judged
+   against the goal — checks, never subjects — have to be read again when it moves."
   [record judged]
   (every? (fn [k] (or (nil? (get-in record [k :seq]))
                       (= (get-in record [k :seq]) (get-in judged [k :seq]))))
-          [:intent :baseline]))
+          (if (= :baseline (:format record)) [:baseline] [:intent :baseline])))
 
 (defn- at-key?
   "`judgement` read the subject as `reading` would now: the whole tree was this tree, or every
@@ -377,6 +385,21 @@
   [judgement id]
   (and (some #{id} (:confirmed judgement))
        (seq (get-in judgement [:checked-at id]))))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map] [:maybe :map]] :boolean]}
+  independent?
+  "Whether a reading by `later` — a judgement's :judged-by, `{:reviewer :instead-of}` — is a second
+   sample of what `earlier`'s reading said rather than the same judge asked again: it was asked of
+   another reviewer than the one that answered `earlier`. Asked, not answered: when the other one
+   could not be run and a stand-in answered, there is no third judge to ask, and refusing the pair
+   would leave the subject read again for as long as the quota lasts.
+
+   False when either is unknown — a judgement from before who answered was kept — since a pair of
+   readings nobody can tell apart is the one this exists to refuse."
+  [earlier later]
+  (let [a (:reviewer earlier)
+        b (or (:instead-of later) (:reviewer later))]
+    (boolean (and a b (not= a b)))))
 
 (defn- judged
   "Every judgement on `ledgers` with the record it judged — nil-record judgements dropped — as
@@ -407,13 +430,15 @@
 
 (defn- bearings
   "Per subject id of `record`, oldest first, every judgement at its content, context, cited
-   yardstick and key (`reading`) that bears on it — a finding naming it (`names?`) or a declaration
-   that it could not be checked, over any record (`:breaks? true`), or a checked confirmation over
-   one nobody retracted. Empty when nothing can be keyed.
+   yardstick and key (`reading`) that bears on it — a finding naming it (`names?`), a declaration
+   that it could not be checked or a ruling it is :owed, over any record (`:breaks? true`), or a
+   checked confirmation over one nobody retracted. Empty when nothing can be keyed.
 
-   An unchecked reading breaks like a finding: it is not a confirmation, so the confirmations either
-   side of it are not two consecutive ones, and a subject the judge says it cannot check does not
-   settle through the rounds that happened to confirm it."
+   An unchecked or owed reading breaks like a finding: it is not a confirmation, so the
+   confirmations either side of it are not two consecutive ones. A subject the judge says it cannot
+   check does not settle through the rounds that happened to confirm it, and neither does one it
+   says is not yet true of this tree — holds, owed, holds is a judge disagreeing with itself, not a
+   pair."
   [ledgers record reading effective]
   (if (or (nil? ledgers) (and (nil? (:code-identity reading)) (nil? (:subject-identities reading))))
     {}
@@ -433,6 +458,7 @@
                                       (cond
                                         (some #(names? % id) (:findings j))  (assoc m :breaks? true)
                                         (some #(= id (:id %)) (:unchecked j)) (assoc m :breaks? true)
+                                        (some #{id} (:owed j))                (assoc m :breaks? true)
                                         (and (not (:retracted? m)) (checked? j id)) m)))
                               chronological
                               vec)])))
@@ -444,14 +470,15 @@
   settled
   "The subjects of `record` whose latest judgement at `reading` — `{:code-identity
    :subject-identities}`, what the judge is about to read — confirmed them, as `{id {:ws-id :seq
-   :run-id}}`, naming that judgement and, when it carries one, the run that made it.
+   :run-id :judged-by}}`, naming that judgement and, when it carries them, the run that made it and
+   who answered it (what a reading pairing with it has to be `independent?` of).
 
    A subject is confirmed here when a baseline review or a design decision, on any of `ledgers`,
    named its id in :confirmed and said where it read it (:checked-at), while judging a record nobody
    retracted that carries that subject identically, around the same context, under the same cited
    intent and baseline, at this subject's key — and no judgement at that same content and key has
    found against it since, whether under its id or by quoting it in a finding filed under another,
-   nor declared it unchecked.
+   nor declared it unchecked or :owed.
    The newest judgement at the key that bears on the subject decides,
    ordered by :at whichever ledger it is on: a finding stands until a later confirmation answers
    it, so a record amended elsewhere in answer to a finding leaves the subject to be confirmed
@@ -473,7 +500,9 @@
                    (when (and latest (not (:breaks? latest)))
                      [id (cond-> {:ws-id (:ws-id latest) :seq (get-in latest [:judgement :seq])}
                            (get-in latest [:judgement :run-id])
-                           (assoc :run-id (get-in latest [:judgement :run-id])))]))))
+                           (assoc :run-id (get-in latest [:judgement :run-id]))
+                           (get-in latest [:judgement :judged-by])
+                           (assoc :judged-by (get-in latest [:judgement :judged-by])))]))))
          (bearings ledgers record reading effective))))
 
 (defn ^{:malli/schema [:function
@@ -481,13 +510,15 @@
                        [:=> [:cat [:maybe [:vector :map]] :map :map :map] [:set :string]]]}
   single-readings
   "The ids `settled` names on ONE reading: the confirmation standing at the key is not itself
-   preceded, at that key, by another. A subject settles on the second consecutive confirmation of
-   the same content at the same key, so these are still put to the judge.
+   preceded, at that key, by another from an `independent?` judge. A subject settles on the second
+   consecutive confirmation of the same content at the same key, so these are still put to the
+   judge.
 
    A judge is not deterministic at a byte-identical record — the same one has held and broken one
-   claim a round apart on text neither round touched — so a single confirmation is a sample. The
-   two readings need not be in one run; a finding or an unchecked reading between them ends the
-   pair."
+   claim a round apart on text neither round touched — so a single confirmation is a sample, and
+   two from one judge are that judge's sample twice: a claim one judge confirmed in four rounds was
+   refuted in the fifth on a fact present from the first. The two readings need not be in one run;
+   a finding, an unchecked reading or an owed one between them ends the pair."
   ([ledgers record reading] (single-readings ledgers record reading record))
   ([ledgers record reading effective]
    (into #{}
@@ -496,7 +527,9 @@
                        latest (peek bearing)
                        before (when (> n 1) (nth bearing (- n 2)))]
                    (when (and latest (not (:breaks? latest))
-                              (or (nil? before) (:breaks? before)))
+                              (or (nil? before) (:breaks? before)
+                                  (not (independent? (get-in before [:judgement :judged-by])
+                                                     (get-in latest [:judgement :judged-by])))))
                      id))))
          (bearings ledgers record reading effective))))
 

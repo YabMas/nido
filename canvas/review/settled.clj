@@ -106,14 +106,18 @@
      :delegates [subjects]})
   (Operation single-readings
     "The subjects `settled` names on one reading: the confirmation standing at the key is not
-     itself preceded there by another. Still put to the judge; the next confirmation settles them.
-     Pure."
+     itself preceded there by another from an independent judge. Still put to the judge; the next
+     confirmation by another judge settles them. Pure."
     {:signature [:function
                  [:=> [:catn [:ledgers [:maybe [:vector :map]]] [:record :map] [:reading :map]]
                   [:set :string]]
                  [:=> [:catn [:ledgers [:maybe [:vector :map]]] [:record :map] [:reading :map]
                        [:effective :map]] [:set :string]]]
      :delegates [subjects]})
+  (Operation independent?
+    "Whether a second reading was asked of another reviewer than the one that answered the first —
+     a second sample, not one judge asked twice. False when either judge is unknown. Pure."
+    {:signature [:=> [:catn [:earlier [:maybe :map]] [:later [:maybe :map]]] :boolean]})
   (Operation checked-confirmations
     "The ids a judgement confirmed and said where it read — the only confirmations that count.
      Pure."

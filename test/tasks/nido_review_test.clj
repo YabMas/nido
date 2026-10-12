@@ -2444,7 +2444,7 @@
                   ws/entry-at-seq (fn [_ w n] (swap! read-at conj [w n])
                                     {:format :design :model {:claims [{:id "kept"}]}})]
       (let [all (read-string (with-out-str (t/figures-cmd* {:project "nido"})))]
-        (is (= [["ws-1" 3]] @read-at) "the record read is the one the run's last decision judged")
+        (is (= #{["ws-1" 3]} (set @read-at)) "the record read is the one the run's last decision judged")
         (is (= {"kept" 1} (:still-unchecked all))
             "a subject the final record no longer has is nobody's to rule on")))))
 
@@ -2469,6 +2469,30 @@
       (is (= {"writers-order" {:runs 2 :max 7}}
              (:spent (read-string (with-out-str (t/figures-cmd* {:project "nido"})))))
           "each run's count already spans the runs before it, so the longest is the figure, never a sum"))))
+
+(deftest a-confirmations-trustworthiness-sums-across-runs-and-reaches-the-headline
+  ;; Watched: confirmations of unchanged claims overturned by a later reading two times in three,
+  ;; and the proceed that ended the run rested on the same kind of agreement — with nothing on the
+  ;; terminal line to say so to the person weighing it.
+  (let [r (fn [run n & {:as more}] (merge {:format :baseline-review :run-id run :seq n :baseline-seq 1
+                                           :code-identity "t" :verdict :sufficient} more))
+        no {:claim-id "a" :cites ["x"] :claim "no"}
+        entries {:design-decision []
+                 :baseline-review [(r "b1" 1 :confirmed ["a"]) (r "b1" 2 :confirmed ["a"])
+                                   (r "b1" 3 :findings [no] :verdict :falsified)
+                                   (r "b2" 4 :confirmed ["a"]) (r "b2" 5 :confirmed ["a"])]}]
+    (with-redefs [ws/list-ids     (constantly ["ws-1"])
+                  ws/entries-of   (fn [_ _ kind] (get entries kind))
+                  ws/entry-at-seq (fn [_ _ _] {:format :baseline :load-bearing [{:id "a" :property "p"}]})]
+      (let [all (read-string (with-out-str (t/figures-cmd* {:project "nido"})))]
+        (is (= #{"C,C,F" "C,C"} (set (str/split (get-in all [:readings "a"]) #" \| ")))
+            "each run's reading sequence, side by side")
+        (is (= {"a" [2]} (:refuted-after all)))
+        (is (= {"a" 1} (:overturned all)))
+        (is (= {:flips 1 :pairs 3} (:flip-rate all))
+            "the rate over every comparable reading of every run, not a mean of rates"))
+      (is (= "flip rate 1/2" (#'t/flip-rate [:nido "ws-1"] "b1")) "one run's rate, as its terminal line says it")
+      (is (nil? (#'t/flip-rate nil "b1")) "a run with no ledger has nothing to say"))))
 
 ;; ---- one remainder, published once ---------------------------------------
 

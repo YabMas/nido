@@ -1896,11 +1896,17 @@
     (is (str/includes? p "LEVEL — every stratum the design declares or restates is"))
     (is (str/includes? p "Four\n                      questions of the COMMITMENT"))))
 
+(defn- named-by
+  "`answer` as a launched judge returns it: a judgement names the reviewer `opts` asked."
+  [answer opts]
+  (cond-> answer
+    (:format answer) (assoc :judged-by {:reviewer (or (:reviewer opts) :codex)})))
+
 (defn- judging-a-model-design
   "`f` called with the design stage reading `a-model-design` at seq 4 over an empty ledger, its
    judge answering `answer` and every append landing in `appended`."
   [answer appended f]
-  (with-redefs [record/design-decision! (fn [_] answer)
+  (with-redefs [record/design-decision! (fn [opts] (named-by answer opts))
                 record/append! (fn [_ r] (swap! appended conj r) nil)
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                 ws/latest-entry (fn [_ _ k] (when (= :design k) (assoc a-model-design :seq 4)))
@@ -1999,29 +2005,29 @@
              (is (= :asked (:status r2)) "the second reading agreeing is what stops for the person")
              (is (= :escalate (:control r2))))))))))
 
-;; Watched: a claim the judge held owed, then holds, on one design at one tree was paired by the
-;; holds and settled — though the owed reading was the true one. Two readings that disagree are not
-;; a pair, and the disagreement is kept.
-(deftest an-owed-reading-then-a-holds-one-is-read-a-third-time
+;; Watched: a 'carries no X' claim, X not yet built, alternated holds and owed for two rounds — both
+;; meaning sound — while pairing read them as disagreement. From two judges they pair; the flip is
+;; still kept, so the later ruling does not overwrite the earlier one unseen.
+(deftest an-owed-reading-then-a-holds-one-by-another-judge-pairs
   (let [appended (atom [])
         owed     (assoc (decision :proceed :checks [(check :relation-honest :held)])
                         :owed ["rounded-once"])
         holds    (assoc (decision :proceed :checks [(check :relation-honest :held)])
                         :confirmed ["rounded-once"] :checked-at {"rounded-once" ["src/a.clj:1"]})
-        answers  (atom [owed holds holds])]
+        answers  (atom [owed holds])
+        asked    (atom [])]
     (judging-a-model-design
      owed appended
      (fn []
-       (with-redefs [record/design-decision! (fn [_] (let [a (first @answers)] (swap! answers rest) a))]
+       (with-redefs [record/design-decision! (fn [opts]
+                                               (swap! asked conj (:reviewer opts))
+                                               (let [a (first @answers)] (swap! answers rest) (named-by a opts)))]
          (let [r1 (run record/design-judge-stage (ctx))
                r2 (run record/design-judge-stage (ctx :carry (:carry r1)))]
-           (is (= :next-round (:control r2)) "a judge that said owed then holds has not said one thing twice")
+           (is (= [nil :claude] @asked) "the second reading is asked of the other judge")
+           (is (= :proceed (:status r2)) "two judges calling the claim sound is the pair")
            (is (= [{:id "rounded-once" :was :owed :now :holds}] (:unpaired (second @appended)))
-               "the disagreement is on the ledger, not overwritten by the later ruling")
-           (is (= ["rounded-once"] (:read-once (second @appended))))
-           (let [r3 (run record/design-judge-stage (ctx :carry (:carry r2)))]
-             (is (= :proceed (:status r3)) "the third reading agreeing with the second pairs it")
-             (is (nil? (:unpaired (last @appended)))))))))))
+               "the flip is on the ledger, not overwritten by the later ruling")))))))
 
 ;; Watched: a claim confirmed on round 1 and left unchecked on round 2, at one tree, ended the run
 ;; :sufficient — confirmed once, never paired, and unchecked once is below the amender's bar.
@@ -2035,13 +2041,49 @@
     (judging-a-model-design
      holds appended
      (fn []
-       (with-redefs [record/design-decision! (fn [_] (let [a (first @answers)] (swap! answers rest) a))]
+       (with-redefs [record/design-decision! (fn [opts] (let [a (first @answers)] (swap! answers rest) (named-by a opts)))]
          (let [r1 (run record/design-judge-stage (ctx))
                r2 (run record/design-judge-stage (ctx :carry (:carry r1)))]
            (is (= :next-round (:control r2)) "one confirmation and one shrug are not two readings")
            (is (= ["rounded-once"] (:read-once (second @appended))))
            (is (not (contains? (get-in r2 [:carry :quiet :read]) "rounded-once"))
                "the confirmation before the shrug pairs with nothing after it")))))))
+
+;; Watched: a claim declared unchecked in all three readings of a design run, which ended :proceed
+;; over it — the baseline round hands such a subject to its amender, and the design round did not.
+(deftest a-design-subject-unchecked-twice-goes-to-the-amender-not-past-a-proceed
+  (let [appended (atom [])
+        shrug    {:id "rounded-once" :reason "only production traffic shows it"}
+        earlier  (assoc (decision :proceed :checks [(check :relation-honest :held)])
+                        :seq 5 :unchecked [shrug])
+        read     (assoc (decision :proceed :checks [(check :relation-honest :held)]) :unchecked [shrug])]
+    (judging-a-model-design
+     read appended
+     (fn []
+       (with-redefs [ws/entries-of (fn [_ _ kind] (if (= :design-decision kind) [earlier] []))]
+         (let [out (run record/design-judge-stage (ctx))]
+           (is (nil? (:status out)) "a proceed over a subject nobody can rule on does not end the run")
+           (is (not= :next-round (:control out)) "nor is it read a third time")
+           (is (= [{:claim-ids ["rounded-once"] :unsettled 2}]
+                  (map #(select-keys % [:claim-ids :unsettled]) (:findings out)))
+               "it is the amender's to reword, move to :open, or drop")))
+       (with-redefs [ws/entries-of (fn [_ _ kind]
+                                     (if (= :design-decision kind)
+                                       [(assoc-in earlier [:unchecked 0 :tool-failure] true)]
+                                       []))]
+         (is (empty? (:findings (run record/design-judge-stage (ctx))))
+             "a reading a tool failed is not the claim's evidence being absent"))))))
+
+(deftest the-design-amender-is-told-what-to-do-with-a-subject-no-reading-can-rule-on
+  (let [p (record/design-amend-prompt {:design (assoc a-model-design :seq 4) :recommend :amend
+                                       :reason "r" :out-path "/x"
+                                       :raised [{:claim-ids ["rounded-once"] :claim-id "rounded-once"
+                                                 :claim "[rounded-once] has come back unchecked 2 readings running"
+                                                 :unsettled 2 :reasons ["a" "b"] :cites []}]})]
+    (is (str/includes? p "A SUBJECT NO READING CAN RULE ON. [rounded-once]"))
+    (is (str/includes? p "MOVE what the code cannot show into :open")
+        "a design parks the undetermined under :open, not a baseline's :unknowns")
+    (is (not (str/includes? p ":withdrawn")) "a design has no withdrawal to offer")))
 
 ;; ── A decision that is a person's to make ───────────────────────────────────
 

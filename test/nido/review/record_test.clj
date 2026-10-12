@@ -252,23 +252,65 @@
         "holding a refuted claim sound reverses the refutation, and the ledger has to say so")
     (is (= ["writers-state-order"] (:read-once r)))))
 
-(deftest a-holds-reading-then-an-owed-one-does-not-pair
+(def ^:private codex {:reviewer :codex})
+(def ^:private claude {:reviewer :claude})
+
+(deftest a-holds-reading-then-an-owed-one-is-kept-as-unpaired
   ;; Watched: no-cutoff held on round 1 and owed on round 2 at one tree; the run kept the owed
   ;; ruling, and neither the report nor the figures showed there had been two.
-  (let [r (#'record/with-readings {:format :design-decision :owed ["no-cutoff"] :code-identity "t"}
+  (let [r (#'record/with-readings {:format :design-decision :owed ["no-cutoff"] :code-identity "t"
+                                   :judged-by codex}
                                   (constantly true)
-                                  {:standing {"no-cutoff" {:ws-id "ws-1" :seq 3}}
+                                  {:standing {"no-cutoff" {:ws-id "ws-1" :seq 3 :judged-by codex}}
                                    :asked ["no-cutoff"]})]
     (is (= [{:id "no-cutoff" :was :holds :now :owed}] (:unpaired r)))
-    (is (= ["no-cutoff"] (:read-once r)) "a disagreement settles nothing, so the claim is read again")
+    (is (= ["no-cutoff"] (:read-once r)) "one judge reading a claim twice is one sample, so it is read again")
     (is (report/validate-event :design-decision (assoc r :reason "r" :asks "a" :recommend :proceed
                                                        :design-seq 4
                                                        :checks [{:check :relation-honest :status :held :note "n"}]))
         "and the ledger takes it"))
-  (is (nil? (:read-once (#'record/with-readings {:format :design-decision :owed ["no-cutoff"]}
+  (let [r (#'record/with-readings {:format :design-decision :owed ["no-cutoff"] :code-identity "t"
+                                   :judged-by claude}
+                                  (constantly true)
+                                  {:standing {"no-cutoff" {:ws-id "ws-1" :seq 3 :judged-by codex}}
+                                   :asked ["no-cutoff"]})]
+    (is (= [{:id "no-cutoff" :was :holds :now :owed}] (:unpaired r)) "the flip is still recorded")
+    (is (nil? (:read-once r))
+        "watched: a 'carries no X' claim alternated holds and owed for two rounds — from two judges both say sound, and pair")))
+
+(deftest only-a-reading-by-another-judge-pairs
+  ;; Watched: three codex readings of one record at one tree agreed and the fourth refuted a claim
+  ;; with a race in unchanged code — a pair from one judge is that judge sampled twice.
+  (is (= ["no-cutoff"] (:read-once (#'record/with-readings {:format :design-decision :owed ["no-cutoff"]
+                                                            :judged-by codex}
+                                                           (constantly true)
+                                                           {:carried {"no-cutoff" {:ruling :owed :judged-by codex}}
+                                                            :asked ["no-cutoff"]})))
+      "the same judge agreeing with itself settles nothing")
+  (is (nil? (:read-once (#'record/with-readings {:format :design-decision :owed ["no-cutoff"]
+                                                 :judged-by claude}
                                                 (constantly true)
-                                                {:carried {"no-cutoff" :owed} :asked ["no-cutoff"]})))
-      "two owed readings agree, and pair"))
+                                                {:carried {"no-cutoff" {:ruling :owed :judged-by codex}}
+                                                 :asked ["no-cutoff"]})))
+      "two judges agreeing pair")
+  (is (= ["no-cutoff"] (:read-once (#'record/with-readings {:format :design-decision :owed ["no-cutoff"]}
+                                                           (constantly true)
+                                                           {:carried {"no-cutoff" {:ruling :owed :judged-by codex}}
+                                                            :asked ["no-cutoff"]})))
+      "a reading naming no judge cannot be told from the first, so it pairs nothing"))
+
+(deftest a-reading-pairs-with-one-comparison
+  ;; Watched: an id was reported as completing a ledger pairing and as owing a second reading at
+  ;; once, forcing a round the ledger then treated as settled.
+  (let [r (#'record/with-readings {:format :design-decision :confirmed ["a"] :checked-at {"a" ["x:1"]}
+                                   :code-identity "t" :judged-by claude}
+                                  (constantly true)
+                                  {:standing {"a" {:ws-id "ws-1" :seq 3 :judged-by codex}}
+                                   :single #{"a"}
+                                   :carried {"a" {:ruling :owed :judged-by claude}}
+                                   :asked ["a"]})]
+    (is (= ["a"] (map :id (:paired-with r))))
+    (is (nil? (:read-once r)) "an id it pairs is never also read once")))
 
 (deftest a-reading-refuting-what-the-one-before-held-is-a-split
   ;; Watched: enrolment-deleter was confirmed on round 1 and refuted on round 2 at one tree, and the
@@ -277,7 +319,8 @@
                {:claim-id "settled-one" :cites ["c"] :claim "y"}]
         r     (#'record/with-readings {:format :baseline-review :findings found}
                                       (constantly false)
-                                      {:carried {"enrolment-deleter" :holds "settled-one" :holds}
+                                      {:carried {"enrolment-deleter" {:ruling :holds :judged-by codex}
+                                                 "settled-one"       {:ruling :holds :judged-by codex}}
                                        :settled {"settled-one" {:ws-id "ws-1" :seq 2}}})]
     (is (= [{:id "enrolment-deleter" :was :holds}] (:splits r)))
     (is (= ["settled-one"] (map :id (:overrides-settled r)))
@@ -289,9 +332,50 @@
   (let [r (#'record/with-readings {:format :baseline-review
                                    :unchecked [{:id "structure-not-exposed" :reason "needs response data"}]}
                                   (constantly true)
-                                  {:carried {"structure-not-exposed" :holds} :asked ["structure-not-exposed"]})]
+                                  {:carried {"structure-not-exposed" {:ruling :holds :judged-by codex}}
+                                   :asked ["structure-not-exposed"]})]
     (is (= ["structure-not-exposed"] (:read-once r))
-        "confirmed once and then not read is one reading, and a run must not stop on it")))
+        "confirmed once and then not read is one reading, and a run must not stop on it"))
+  (let [r (#'record/with-readings {:format :baseline-review
+                                   :unchecked [{:id "structure-not-exposed" :reason "sandbox denied the eval"
+                                                :tool-failure true}]}
+                                  (constantly true)
+                                  {:carried {"structure-not-exposed" {:ruling :holds :judged-by codex}}
+                                   :asked ["structure-not-exposed"]})]
+    (is (nil? (:read-once r))
+        "watched: a sandbox-blocked eval forced a second reading that could only fail the same way")))
+
+(deftest figures-measure-how-far-a-confirmation-can-be-trusted
+  ;; Watched: claims confirmed two to five times on identical text at an identical tree were then
+  ;; refuted on a fact present all along, and nothing in the figures said so — per-subject totals
+  ;; cannot tell a judge disagreeing with itself from an amendment repairing a claim.
+  (let [r     (fn [n & {:as more}] (merge {:format :baseline-review :seq n :baseline-seq 1
+                                           :code-identity "t" :verdict :sufficient} more))
+        found (fn [id] {:claim-id id :cites ["x"] :claim "no"})
+        es    [(r 1 :confirmed ["a" "b"])
+               (r 2 :confirmed ["a"] :findings [(found "b")] :verdict :falsified)
+               (r 3 :findings [(found "a")] :verdict :falsified :unchecked [{:id "c" :reason "r"}])]
+        f     (record/run-figures es nil (constantly {"a" [:a-text] "b" [:b-text] "c" [:c-text]}))]
+    (is (= {"a" "C,C,F" "b" "C,F" "c" "U"} (:readings f)) "each subject's readings, in order")
+    (is (= {"a" [2] "b" [1]} (:refuted-after f))
+        "how many sound readings of the same text at the same tree each refutation followed")
+    (is (= {"a" 1 "b" 1} (:overturned f)) "a refutation of text the run had confirmed")
+    (is (= {"a" 1 "b" 1} (:text-splits f)))
+    (is (= {:flips 2 :pairs 3} (:flip-rate f)) "of three readings with one before them, two disagreed")
+    (is (nil? (:flip-rate (record/run-figures es nil (fn [j] (when (= 1 (:seq j)) {"a" [:a-text]})))))
+        "a judgement whose record cannot be read back is compared with nothing")
+    (is (nil? (:refuted-after (record/run-figures (mapv #(assoc % :code-identity (str "t" (:seq %))) es)
+                                                  nil (constantly {"a" [:a-text] "b" [:b-text]}))))
+        "readings at different trees are not the same reading repeated")
+    (is (= {"a" 1 "b" 1} (:overturned (record/run-figures (mapv #(assoc % :code-identity (str "t" (:seq %))) es)
+                                                          nil (constantly {"a" [:a-text] "b" [:b-text]}))))
+        "an overturned confirmation is the text's, whatever the tree")))
+
+(deftest a-tool-failure-is-kept-on-the-unchecked-reading
+  (is (= [{:id "a" :reason "sandbox denied the eval" :tool-failure true}
+          {:id "b" :reason "production data"}]
+         (#'record/parse-unchecked [{:id "a" :reason "sandbox denied the eval" :cause "tool-failure"}
+                                    {:id "[b]" :reason "production data" :cause "out-of-code"}]))))
 
 (deftest figures-count-each-claim-held-owed
   ;; A claim judged owed every round was in no figure at all, so an owed->holds flip could only be
@@ -1923,10 +2007,13 @@
                                    :confirmed ["course-store" "transactions-join" "settled-one"]
                                    :checked-at {"course-store" ["src/a.clj:1"]
                                                 "transactions-join" ["src/b.clj:2"]
-                                                "settled-one" ["src/c.clj:3"]}}
+                                                "settled-one" ["src/c.clj:3"]}
+                                   :judged-by claude}
                                   (constantly true)
-                                  {:standing {"course-store" {:ws-id "ws-1" :seq 34 :run-id "baseline-loop-dead"}
-                                              "transactions-join" {:ws-id "ws-1" :seq 34 :run-id "baseline-loop-dead"}
+                                  {:standing {"course-store" {:ws-id "ws-1" :seq 34 :run-id "baseline-loop-dead"
+                                                              :judged-by codex}
+                                              "transactions-join" {:ws-id "ws-1" :seq 34 :run-id "baseline-loop-dead"
+                                                                   :judged-by codex}
                                               "settled-one" {:ws-id "ws-1" :seq 20}}
                                    :single #{"course-store" "transactions-join"}
                                    :settled {"settled-one" {:ws-id "ws-1" :seq 20}}
@@ -1941,7 +2028,13 @@
   (is (nil? (:paired-with (#'record/with-readings {:format :baseline-review :confirmed ["c"] :checked-at {"c" ["src/a.clj:1"]}}
                                                   (constantly true)
                                                   {:standing {"c" {:ws-id "ws-1" :seq 3}} :single #{"c"} :asked ["c"]})))
-      "a record that read no single tree pairs with nothing on the ledger"))
+      "a record that read no single tree pairs with nothing on the ledger")
+  (is (nil? (:paired-with (#'record/with-readings {:format :baseline-review :code-identity "t" :confirmed ["c"]
+                                                   :checked-at {"c" ["src/a.clj:1"]} :judged-by codex}
+                                                  (constantly true)
+                                                  {:standing {"c" {:ws-id "ws-1" :seq 3 :judged-by codex}}
+                                                   :single #{"c"} :asked ["c"]})))
+      "the judge that confirmed it once confirming it again completes nothing"))
 
 (deftest a-refutation-of-a-read-once-id-names-the-confirmation-it-denies
   ;; Watched: #154 confirmed shape on a first reading; #156 refuted it at the same tree and carried

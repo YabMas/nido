@@ -160,7 +160,8 @@
         "additionalProperties": false,
         "required": [
           "id",
-          "reason"
+          "reason",
+          "cause"
         ],
         "properties": {
           "id": {
@@ -169,6 +170,14 @@
           },
           "reason": {
             "type": "string"
+          },
+          "cause": {
+            "type": "string",
+            "enum": [
+              "out-of-code",
+              "tool-failure"
+            ],
+            "description": "out-of-code: the evidence is not in the code, so no reading of the code can have it. tool-failure: a tool you needed to check it failed here — the sandbox denied it, a command errored or hung — so another reading with the same tools would fail the same way."
           }
         }
       }

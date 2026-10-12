@@ -44,6 +44,10 @@
     "The last non-blank line of a reviewer's log — what a failure nothing classifies is reported
      by, since the reviewer's own last words are usually its error."
     {:signature [:=> [:catn [:log-path [:maybe :string]]] [:maybe :string]]})
+  (Operation other-reviewer
+    "The reviewer that is not the one given — who reads a record the second time, so two agreeing
+     readings are two judges agreeing."
+    {:signature [:=> [:catn [:reviewer :keyword]] :keyword]})
   (Operation reviewer-for
     "The reviewer a run is judged by: its own choice, else its project's, else codex. A name that
      is no reviewer is refused, never read as the default."
