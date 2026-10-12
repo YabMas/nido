@@ -298,6 +298,9 @@
       ;; asked, so nothing was reviewed and "clean" would be the report asserting
       ;; a clean bill nobody issued.
       (seq (:conflicted review))                                   "stack-conflicted"
+      ;; The same shape: a park that stood too long ended the run before the
+      ;; round read a line, and it is not a round that found nothing.
+      (seq (:parks-stood review))                                  "unfixable"
 
       ;; Before "clean", because the two are indistinguishable by findings
       ;; alone — both have none — and only this one had no reviewer read a line.
@@ -477,8 +480,12 @@
          ;; offers nothing to check that against, and a wrongly cached
          ;; convergence is precisely the failure that hides a finding for as long
          ;; as the layer sits unchanged.
+         ;; A layer skipped because its park answers it is not converged: it is
+         ;; still owed, and `:park-held` is what keeps the row from saying
+         ;; otherwise. See `stages/answered-by-park`.
          (into (mapv (fn [t] (row t (cond-> {:status "skipped"}
-                                      (:converged-at t) (assoc :converged-at (:converged-at t)))))
+                                      (:converged-at t) (assoc :converged-at (:converged-at t))
+                                      (:park-held t)    (assoc :park-held true))))
                      (:skipped ctx)))
          ;; A round that aborted names the targets it lost a reviewer on, and
          ;; they are rowed as the fan-out already moved them.
@@ -835,7 +842,10 @@
                 (get-in ctx [:design :seq]) (assoc :design-seq (get-in ctx [:design :seq]))
                 (seq (:conflicted ctx)) (assoc :conflicted (vec (:conflicted ctx)))
                 (seq (:read-once ctx))  (assoc :read-once (vec (:read-once ctx)))
-                (seq (:unplaced ctx))   (assoc :unplaced (vec (:unplaced ctx))))
+                (seq (:unplaced ctx))   (assoc :unplaced (vec (:unplaced ctx)))
+                ;; The parks that ended the run before this round read anything:
+                ;; the only fact about a round with no rows and no warden.
+                (seq (:parks-stood ctx)) (assoc :parks-stood (vec (:parks-stood ctx))))
       ;; :cause as well as :reason, and they are not alternatives: a reason says
       ;; what was wrong with the answer, a cause says whether there WAS one. A
       ;; phase that kept only the first renders a 429 exactly like a malformed
@@ -1423,7 +1433,7 @@
                          (merge f (update a :disposition keyword))
                          f))]
     {:iter     (:round round)
-     :read?    (= "ok" (:status review))
+     :read?    (and (= "ok" (:status review)) (empty? (:parks-stood review)))
      :findings (mapv settle
                      (if (= "ok" (:status warden))
                        (mapv ruled (:rulings warden))

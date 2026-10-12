@@ -4094,13 +4094,14 @@
             entries (vals @written)]
         (is (= :reviewer-unavailable (:reason (ex-data thrown)))
             "the round still fails — salvaging is not swallowing")
-        (is (= [["a" :read-once]]
-               (map (juxt :label :status) (filter #(= :read-once (:status %)) entries)))
-            "layer a read its patch and reported nothing, so a re-run has the
-             reading it already paid for and needs only the second")
+        (is (= [["a" :read-once] ["stack" :read-once]]
+               (sort (map (juxt :label :status) (filter #(= :read-once (:status %)) entries))))
+            "layer a and the composition each read their patch and reported
+             nothing, so a re-run has the readings it already paid for and needs
+             only the second — the composition is paired on its reading, though
+             an aborted round never grants it convergence")
         (is (= #{"a" "stack"} (set (map :label entries)))
-            "the composition target is recorded as still owing something, and
-             the layer nobody reviewed is not recorded at all")
+            "the layer nobody reviewed is not recorded at all")
         (is (= 2 (:round (first (filter #(= "a" (:label %)) entries))))
             "stamped with the round it was reviewed in, like any other entry")
         (is (some #(and (= :target-moved (:event %)) (= "b" (:label %))
@@ -6039,3 +6040,185 @@
         :findings [{:id "aa11" :handle "aa11" :title "x" :body "y" :disposition :fix}]})
       (is (str/includes? @seen "search ranks blocks and returns passages"))
       (is (str/includes? @seen "THE STRATA")))))
+
+(deftest a-park-that-has-stood-too-long-ends-the-run-before-the-round-reads
+  ;; Decided after the warden, a park whose staleness was certain at round
+  ;; start still cost a full fan-out — and its fix rulings were then thrown away
+  ;; to stop. A read-once round has no warden at all and went past it.
+  (let [parks {"edc1d304" {:since 1 :title "who owns the cut"}
+               "0b1deca4" {:since 3 :title "rebuild the index"}
+               "c4c4c4c4" {:since 1 :kind :misplaced-cut :title "a cut question"}}]
+    (is (nil? (#'stages/stood-too-long parks 3))
+        "three rounds standing is not yet four")
+    (is (= ["edc1d304"] (#'stages/stood-too-long parks 4))
+        "round 4 opens with the round-1 park at its fourth round; a cut park never blocks")
+    (with-redefs [stages/stack-conflicts (fn [& _] (throw (ex-info "the round must not read" {})))]
+      (let [ctx (#'stages/run-review-stage {:config {:cwd "/w" :base "main"} :iter 4
+                                            :carry {:parks parks}})]
+        (is (= :unfixable (:status ctx)))
+        (is (= ["edc1d304"] (:parks-stood ctx) (:unfixable ctx)))
+        (is (:review-aborted? ctx)
+            "the round read nothing, so the round before's repairs stay unchecked")))))
+
+(deftest a-layer-held-only-by-its-park-is-answered-from-the-park
+  ;; ledger-entries sat at hash 5f810601 from R2 to R5 owing nothing but a
+  ;; park, was read every round, and re-raised the parked defect three times
+  ;; under three fresh ids for a warden to rule again.
+  (let [parks {"0b1deca4" {:since 2 :owner-layer "ledger-entries" :title "rebuild the index"}}]
+    (testing "which layers a park alone holds"
+      (is (= #{"ledger-entries"}
+             (#'stages/park-held-layers [{:id "a" :disposition :closed :owner-layer "surfaces"}]
+                                      parks)))
+      (is (= #{}
+             (#'stages/park-held-layers [{:id "b" :disposition :fix :owner-layer "ledger-entries"}]
+                                      parks))
+          "a repair owed on the same layer is a reviewer's to check")
+      (is (= #{}
+             (#'stages/park-held-layers [] {"c" {:since 1 :owner-layer "ledger-entries"
+                                               :kind :misplaced-cut}}))
+          "a park that does not block holds nothing open, so it answers nothing either"))
+    (testing "skipped while its patch is the one the park was read at"
+      (let [targets [{:label "ledger-entries" :patch-hash "5f810601"}
+                     {:label "surfaces" :patch-hash "aa"}
+                     {:label "stack" :stack? true :patch-hash "5f810601"}]
+            {:keys [review held]} (#'stages/answered-by-park {"ledger-entries" "5f810601"
+                                                            "stack" "5f810601"}
+                                                           targets)]
+        (is (= ["surfaces" "stack"] (mapv :label review))
+            "the composition is never answered by a park")
+        (is (= [{:label "ledger-entries" :patch-hash "5f810601" :park-held true}] held))))
+    (testing "read again once its content moves, or a row from the last run is owed of it"
+      (is (empty? (:held (#'stages/answered-by-park {"ledger-entries" "5f810601"}
+                                                  [{:label "ledger-entries" :patch-hash "77"}]))))
+      (is (empty? (:held (stages/answered-by-park
+                          {"ledger-entries" "5f810601"}
+                          [{:label "ledger-entries" :patch-hash "5f810601"
+                            :prior-open [{:id "r1"}]}])))))))
+
+(deftest a-fix-owned-above-its-reporter-leaves-a-broken-intermediate
+  ;; figure-store reported two defects in figures.clj; both were owned and fixed
+  ;; on figure-recipe above it. figure-store converged with both still at its
+  ;; tip, and only one was ever re-found and recorded as a deviation.
+  (let [order  ["figure-store" "figure-recipe"]
+        claims {"figure-store" "figures are stored once"}
+        r1     [{:id "a80e283d" :handle "a80e283d" :title "store reads twice" :file "/w/figures.clj"
+                 :disposition :fix :from-layer "figure-store" :owner-layer "figure-recipe"}
+                {:id "c1" :title "local" :disposition :fix
+                 :from-layer "figure-recipe" :owner-layer "figure-recipe"}
+                {:id "s1" :title "composition" :disposition :fix
+                 :from-layer "stack" :owner-layer "figure-recipe"}]
+        [dev :as devs] (stages/broken-intermediates order claims [r1])]
+    (is (= 1 (count devs)) "one deviation, for the one finding routed above its reporter")
+    (is (= :deviation (:disposition dev)))
+    (is (= "figure-store" (:owner-layer dev) (:from-layer dev))
+        "owned by the layer whose tip keeps the defect, so its stamp lands there")
+    (is (= "figures are stored once" (:of dev)) "it qualifies the reporter's own claim")
+    (is (stages/settled? dev) "it holds nothing open: the routing chose exactly this code")
+    (testing "two layers re-reporting one defect each keep their own"
+      (is (= #{"bi-figure-store-H" "bi-figure-tray-H"}
+             (set (map :id (stages/broken-intermediates
+                            ["figure-store" "figure-tray" "figure-recipe"] {}
+                            [[{:handle "H" :disposition :fix :from-layer "figure-store"
+                               :owner-layer "figure-recipe"}
+                              {:handle "H" :disposition :fix :from-layer "figure-tray"
+                               :owner-layer "figure-recipe"}]]))))))
+    (testing "a later round that moves the repair onto the reporter withdraws it"
+      (is (empty? (stages/broken-intermediates
+                   order claims
+                   [r1 [{:id "x" :handle "a80e283d" :disposition :fix
+                         :from-layer "figure-store" :owner-layer "figure-store"}]]))
+          "the reporter's own tip is being repaired, so it no longer holds the defect"))))
+
+(deftest the-warden-is-told-every-cited-files-layers-uncapped
+  ;; Each layer's file list stops at twelve. A warden owning a finding whose
+  ;; file sat past `+16 more` guessed, and said so in its standing list.
+  (let [many  (mapv #(str "src/f" % ".clj") (range 20))
+        toc   [{:label "domain" :files (conj many "src/entitlement.clj")}
+               {:label "transport" :files ["src/entitlement.clj" "src/route.clj"]}]
+        cited (#'stages/cited-files "/w" toc [{:file "/w/src/entitlement.clj"}
+                                            {:file "/w/src/f19.clj"}
+                                            {:file "/w/src/elsewhere.clj"}
+                                            {:file "/w/src/entitlement.clj"}])
+        out   (prompts/warden-prompt {:findings [] :history [] :design nil
+                                      :toc toc :cited cited})]
+    (is (= [{:file "/w/src/entitlement.clj" :layers ["domain" "transport"]}
+            {:file "/w/src/f19.clj" :layers ["domain"]}
+            {:file "/w/src/elsewhere.clj" :layers []}]
+           cited))
+    (is (str/includes? out "+9 more") "the map is still capped")
+    (is (str/includes? out "- /w/src/f19.clj — domain")
+        "a file the cap hides is still placed for the warden")
+    (is (str/includes? out "- /w/src/elsewhere.clj — no layer of this stack"))
+    (is (= "transport" (stages/placed-on "/w" toc nil "/w/src/entitlement.clj"))
+        "placement is still the highest toucher, the last layer the block names")))
+
+(deftest a-layers-reviewer-is-told-what-is-already-ruled-against-it
+  ;; poll-domain's round-3 and round-4 prompts were byte-identical and named
+  ;; none of the five deviations already ruled against it, so its reviewer
+  ;; re-raised the same broken intermediate each time it was read.
+  (let [targets [{:label "poll-domain" :patch-hash "p1" :brief {:claims "polls are domain values"}}
+                 {:label "poll-transport" :patch-hash "p2" :brief {:claims "routes serve polls"}}
+                 {:label "stack" :stack? true :composition {} :patch-hash "p3"}]
+        ctx     {:history [{:findings [{:id "09376bb0" :title "route model missing"
+                                        :from-layer "poll-domain" :owner-layer "poll-transport"
+                                        :disposition :deviation :because "transport adds it"}
+                                       {:id "78f90e36" :handle "78f90e36" :title "votes keyed by a constructed key"
+                                        :from-layer "poll-domain" :owner-layer "poll-transport"
+                                        :disposition :fix}]}]
+                 :carry {:parks {"ecbe91d8" {:since 1 :owner-layer "poll-domain"
+                                             :title "who owns votes" :because "a person decides"}}}}
+        cached  {"p1" {:answered [{:id "d349a785" :title "false alarm" :disposition :closed
+                                   :authority "false-positive" :because "read the guard"}]}}
+        toc     [{:label "poll-domain"} {:label "poll-transport"}]
+        [domain transport stack] (#'stages/with-rulings-against targets ctx cached toc)]
+    (is (= ["d349a785" "09376bb0" "bi-poll-domain-78f90e36" "ecbe91d8"]
+           (mapv :id (:ruled-against domain)))
+        "earlier runs' answers on this patch, this run's rulings, the broken
+         intermediate its routing left here, and its standing parks")
+    (is (= [{:label "poll-transport" :claim "routes serve polls"}] (:above domain))
+        "an intermediate layer is told what the layers above it close")
+    (is (nil? (:above transport)) "the top layer has nothing above it")
+    (is (nil? (:ruled-against stack)) "the composition judges the cut, not lines")
+    (let [block (prompts/ruled-against-block (:ruled-against domain) (:above domain))]
+      (is (str/includes? block "09376bb0  route model missing\n  deviation: transport adds it"))
+      (is (str/includes? block "false-positive"))
+      (is (str/includes? block "Do NOT report any of these again"))
+      (is (str/includes? block "- poll-transport: routes serve polls")))))
+
+(deftest a-deviation-of-a-layers-name-is-no-claim-and-is-fixed
+  ;; ec4fcc9c was ruled a deviation `of` "voice-materials-tools" — a layer, not
+  ;; a claim — while a finding of the same shape beside it was sent to a fixer.
+  (let [toc [{:label "voice-materials-tools"} {:label "dialogue-session-rag"}]
+        [named claimed] (#'stages/of-a-claim
+                         toc
+                         [{:id "ec4fcc9c" :disposition :deviation :of " voice-materials-tools "
+                           :because "the head holds the remedy"}
+                          {:id "0678b459" :disposition :deviation :of "dialogue-rag-iff-links"}])]
+    (is (= :fix (:disposition named)))
+    (is (nil? (:of named)))
+    (is (str/includes? (:because named) "names no claim"))
+    (is (str/includes? (:because named) "the head holds the remedy")
+        "what the warden said survives behind the refusal")
+    (is (= :deviation (:disposition claimed)) "a claim is still a claim")))
+
+(deftest a-standing-park-ends-a-quiet-round-without-its-second-reading
+  ;; The inherited park already decided the run ends unresolved; the second
+  ;; reading of patch 7e7149e2 changed nothing and left its cache entry at
+  ;; :partial all the same.
+  (let [ctx {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1
+             :carry {:parks {"08469cff" {:since 1 :title "who owns it" :owner-layer nil}}}}]
+    (with-redefs [layers/patch-hash (fn [& _] "h")
+                  pass/merge-base  (fn [& _] "FORK")
+                  stages/session-stack (fn [& _] [])
+                  cache/read-cache  (fn [& _] {})
+                  cache/write!      (fn [& _] true)
+                  conformance/findings (fn [& _] [])
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [& _] nil)
+                  pass/review! (fn [_] {:status nil :findings []})]
+      (let [out ((:run stages/review-stage)
+                 (assoc-in ctx [:config :owed]
+                           (fn [_] [{:id "08469cff" :disposition :park}])))]
+        (is (= :unresolved (:status out))
+            "a first quiet reading under a blocking park ends the run as the park decides")
+        (is (nil? (:read-once out)) "and goes back for no second reading")))))

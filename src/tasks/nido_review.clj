@@ -342,9 +342,25 @@
 
    A run with no design record parks on recurrence and nothing else, so reading
    the ground off the ruling is what keeps the gate from asking whether a record
-   that does not exist still stands."
+   that does not exist still stands.
+
+   `same-as` is a recurrence only where a repair was tried — `:attempts`, or a
+   repair `:handed` and unread. A park re-found under its own earlier id carries
+   `same-as` with no repair ever aimed at it, and a gate reading that as `fixed
+   in an earlier round and came back` tells a person something that did not
+   happen."
   [parked]
-  (if (every? :same-as parked) :recurrence :design))
+  (if (every? #(and (:same-as %) (or (pos? (or (:attempts %) 0)) (:handed %))) parked)
+    :recurrence
+    :design))
+
+(defn- implementation-only?
+  "Whether `verdict` classifies every one of `parked` as an implementation
+   finding — its own answer that the design is not what they question."
+  [parked verdict]
+  (let [as (into {} (map (juxt :finding :as)) (:findings-classified verdict))]
+    (boolean (and (seq as)
+                  (every? #(= :implementation (get as (str (:id %)))) parked)))))
 
 (defn- parked-detail
   "The parked findings as the gate shows them — each title with the warden's own
@@ -370,13 +386,28 @@
    that does not stand says the remedy is a decision, and a repair the verdict
    names is a move neither attempt made. A record that stands says nothing about
    whether a third patch would hold, so it is not mentioned."
-  [ground supports verdict]
+  [ground supports verdict parked]
   (case ground
     :design
-    (if-not supports
+    (cond
+      (not supports)
       (str "Each of these says the design is in question rather than its "
            "execution, so the loop stopped rather than patching it away. "
            "Does the design stand?")
+
+      ;; The verdict read the code and classified each one. Framing the gate
+      ;; as a design question over its own answer that none is a design
+      ;; question asks the person to overrule the judge without saying so.
+      (implementation-only? parked verdict)
+      (str "The loop parked these, but this run's design verdict — "
+           (name (:verdict verdict)) " — classifies each as implementation: "
+           "the design is not what they question. "
+           (case supports
+             :repair    "It names the repair. Is that repair owed here?"
+             :stands    "It names no repair. Are these findings declined?"
+             :supersede "It still puts the record in question. Is the record superseded?"))
+
+      :else
       (str "Each of these says the design is in question rather than its "
            "execution. This run's design verdict answers that — "
            (name (:verdict verdict)) ". "
@@ -452,6 +483,13 @@
                                            "lands."))
            :recommended? true})))
 
+(def ^:private park-statuses
+  "The statuses a run ends on BECAUSE of what it is holding — the ones a
+   blocker over its parks can be read as the reason for."
+  #{:unresolved :unfixable :escalated :converged :clean})
+
+(declare diff-remedies)
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   parked-blocker
   "Pure: the halt a run holding parked findings owes a human, or nil.
@@ -484,32 +522,74 @@
    parks. The last run's parks nobody answered are in it, marked inherited.
 
    `verdict` is this run's design verdict, or nil when the pass found nothing to
-   judge against, was skipped, or produced no answer."
-  [findings verdict]
-  (when-let [parked (seq (filter #(= :park (:disposition %)) findings))]
-    (let [supports (verdict-supports verdict)
-          ground   (park-ground parked)]
-      {:format  :blocker
-       :summary (str "The review loop is holding " (count parked)
-                     (if (= 1 (count parked)) " finding" " findings")
-                     " it has no move for:\n\n"
-                     (parked-detail parked))
-       :needs   (gate-question ground supports verdict)
-       :options (gate-options ground supports verdict)})))
+   judge against, was skipped, or produced no answer.
+
+   `status` is how the run ended. One that ended on something other than its
+   parks — a usage limit, a fixer that would not start — says so: the parks
+   are still the question, but a gate that read as the reason the run stopped
+   sent a person to settle a design while the run was waiting on a quota."
+  ([findings verdict] (parked-blocker findings verdict nil))
+  ([findings verdict status]
+   (when-let [parked (seq (filter #(= :park (:disposition %)) findings))]
+     (let [supports (verdict-supports verdict)
+           ground   (park-ground parked)
+           ids      (into (sorted-set) (keep #(some-> (:id %) str)) parked)]
+       (cond-> {:format  :blocker
+                :summary (str "The review loop is holding " (count parked)
+                              (if (= 1 (count parked)) " finding" " findings")
+                              " it has no move for:\n\n"
+                              (parked-detail parked)
+                              (when (and status (not (park-statuses status)))
+                                (str "\n\nThe run itself ended `" (name status)
+                                     "`, not on these: " (diff-remedies status))))
+                :needs   (gate-question ground supports verdict parked)
+                :options (gate-options ground supports verdict)}
+         (seq ids) (assoc :parks (vec ids)))))))
+
+(defn- already-asked
+  "The unanswered blocker among `standing` that already asks what `blocker`
+   would, or nil when `blocker` is a new question.
+
+   It asks the same thing when it parks every finding `blocker` parks and offers
+   the same branches: the parked set and the verdict-backed options are the
+   only two things a re-ask could change. A blocker written before halts named
+   their parks is matched on its text instead, which is all it carries.
+
+   A second copy of an unanswered question is not a louder one. The person
+   answers one of them and the other dangles, read by every later gate as a
+   decision still owed."
+  [blocker standing]
+  (let [labels (comp (partial mapv :label) :options)
+        covers (fn [b]
+                 (if-let [prior (seq (:parks b))]
+                   (and (seq (:parks blocker))
+                        (every? (set prior) (:parks blocker))
+                        (= (labels b) (labels blocker)))
+                   (= (select-keys b [:summary :needs :options])
+                      (select-keys blocker [:summary :needs :options]))))]
+    (some #(when (covers %) %) (reverse standing))))
+
+(defn- unanswered-blockers
+  "This workstream's blockers no :blocker-answered names, oldest first."
+  [project ws-id]
+  (let [answered (into #{} (keep :blocker-seq) (ws/entries-of project ws-id :blocker-answered))]
+    (into [] (remove #(contains? answered (:seq %))) (ws/entries-of project ws-id :blocker))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   append-blocker!
-  "Append the halt, if there is one. Best-effort for the same reason
-   `append-review-entry!` is: a finished review must not become a failure because
-   a side record could not be written. Returns the blocker, or nil."
+  "Append the halt, if there is one and no unanswered blocker already asks it —
+   see `already-asked`. Best-effort for the same reason `append-review-entry!`
+   is: a finished review must not become a failure because a side record could
+   not be written. Returns the blocker standing on the ledger, or nil."
   [cwd final verdict]
   (try
-    (when-let [blocker (parked-blocker (verdict/owed-rows final) verdict)]
+    (when-let [blocker (parked-blocker (verdict/owed-rows final) verdict (:status final))]
       (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
         (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
-          (ws/append-entry! (keyword project) ws-id {:kind :blocker}
-                            (pr-str blocker))
-          blocker)))
+          (let [p (keyword project)]
+            (or (already-asked blocker (unanswered-blockers p ws-id))
+                (do (ws/append-entry! p ws-id {:kind :blocker} (pr-str blocker))
+                    blocker))))))
     (catch Exception e
       (binding [*out* *err*]
         (println (str "review-loop: could not append the :blocker — " (ex-message e))))
@@ -1527,6 +1607,18 @@
                  (str/join ", " (map #(or % "the branch")
                                      (get-in final [:owed-reading :read-once])))))
 
+      ;; The parks the run stopped on. Read under :unfixable alone they are
+      ;; findings repaired and re-raised, and no repair was ever aimed at one:
+      ;; a park dispatches nothing, so what ran out is the time it may stand.
+      (seq (:parks-stood final))
+      (conj (str "  parks stood unanswered: "
+                 (str/join ", "
+                           (for [k (:parks-stood final)
+                                 :let [since (get-in final [:carry :parks k :since])]]
+                             (str k (when since
+                                      (str " (parked round " since ", stood "
+                                           (- (:iter final) since) " rounds)")))))))
+
       ;; Rulings the last warden made that no fixer was launched for — see
       ;; `report/ruled-not-dispatched`. A re-run re-reads and re-rules them, so the sweep
       ;; each was ordered with is said here or lost.
@@ -1554,9 +1646,12 @@
    and this needs none, because the loop has ended. A dry run stamps nothing and
    owes nothing.
 
-   Scoped to findings the warden gave an `owner-layer`: the layer whose claim it
-   is, is the layer whose message says so. A deviation on an unlayered branch
-   has no such commit and is left to the ledger.
+   Two kinds: the warden's, and the broken intermediates its routing left —
+   see `stages/broken-intermediates`, derived here from the run's final
+   rulings. Each is stamped on the layer whose claim its `of` quotes — see
+   `layers/claim-layer` — and on its `owner-layer` when no layer's claims hold
+   that sentence. A deviation on an unlayered branch has no such commit and is
+   left to the ledger.
 
    Best-effort, and SAYS SO when it fails. A throw here would take the run's
    whole tail with it — the design verdict, the halt, the queued analysis — for
@@ -1570,17 +1665,22 @@
    well: a `jj describe` that fails drops its label from `:stamped` and changes
    nothing else, so a partial stamp is legible only as the difference."
   [cwd config final]
-  (let [devs (if (:dry-run? config)
-               []
-               (into [] (filter #(= :deviation (:disposition %)))
-                     (verdict/kept-across-run final)))
-        owed (into [] (distinct) (keep :owner-layer devs))]
+  (let [ruled  (when-not (:dry-run? config)
+                 (into [] (filter #(= :deviation (:disposition %)))
+                       (verdict/kept-across-run final)))
+        rounds (conj (mapv :findings (:history final)) (vec (:findings final)))
+        owed   (into [] (distinct) (keep :owner-layer ruled))]
     (try
-      {:owed    owed
-       :stamped (if (seq devs)
-                  (layers/record-deviations!
-                   cwd (stages/session-stack cwd (:base config)) devs)
-                  [])}
+      (if-let [stack (when-not (:dry-run? config) (not-empty (stages/session-stack cwd (:base config))))]
+        (let [claims (layers/layer-claims cwd stack)
+              devs   (into (mapv #(assoc % :owner-layer (layers/claim-layer claims %)) ruled)
+                           (stages/broken-intermediates
+                            (mapv stages/layer-label stack)
+                            (into {} (map (juxt :label :claim)) claims)
+                            rounds))]
+          {:owed    (into [] (distinct) (keep :owner-layer devs))
+           :stamped (if (seq devs) (layers/record-deviations! cwd stack devs) [])})
+        {:owed owed :stamped []})
       (catch Throwable e
         (println (str "review-loop: ⚠ could not record this run's deviations on their"
                       " layers — " (ex-message e)

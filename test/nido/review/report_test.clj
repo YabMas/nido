@@ -2132,3 +2132,21 @@
                                     :targets [{:label "domain" :stack? false :status "pending" :index 1}]} nil)]
       (is (= previous (get-in r2 [:target :previous]))
           "a later round, which sends none, leaves round 1's reading standing"))))
+
+(deftest a-round-a-stale-park-stopped-before-reading-is-not-clean
+  ;; The stop now comes before the round reads anything, so the round has no
+  ;; rows, no findings and no warden — the exact shape of a clean round.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 4 :phase :review :at "t1"}
+            {:event :phase-finished :iter 4 :phase :review :at "t2"
+             :ctx {:findings [] :parks-stood ["edc1d304"] :unfixable ["edc1d304"]
+                   :status :unfixable}}
+            {:event :run-finalized :status :unfixable
+             :ctx {:findings [] :unfixable ["edc1d304"]} :at "t3"}])
+        round  (first (:rounds r))
+        review (some #(when (= "review" (:phase %)) %) (:phases round))]
+    (is (= ["edc1d304"] (:parks-stood review)))
+    (is (= "unfixable" (:status round)))
+    (is (true? (:review-aborted? (report/as-final r)))
+        "it read nothing, so the round before's repairs are still unchecked")))

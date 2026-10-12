@@ -188,9 +188,9 @@
     ""))
 
 (defn- layer-text
-  [{:keys [status findings read-once]}]
+  [{:keys [status findings read-once park-held]}]
   (case status
-    "skipped" "converged"
+    "skipped" (if park-held "answered by its park" "converged")
     "pending" "queued"
     "running" "reviewing …"
     "error"   "failed"

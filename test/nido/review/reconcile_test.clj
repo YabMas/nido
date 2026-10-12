@@ -400,11 +400,11 @@
        (is (= :orphaned (:status entry)))
        (is (= 1 (:fix-attempts entry)) "the repair that landed is counted, not zero")
        (is (= 3 (:findings-remaining entry)))
-       (is (true? (:handed (open "f1")))
+       (is (true? (:handed (open "h1")))
            "a repair for it is in the branch and no reviewer read it — it needs
             checking, not doing")
-       (is (nil? (:handed (open "f2"))) "its fixer never finished")
-       (is (= :park (:disposition (open "f3"))) "a question put to a person outlives the run")
+       (is (nil? (:handed (open "h2"))) "its fixer never finished")
+       (is (= :park (:disposition (open "h3"))) "a question put to a person outlives the run")
        (is (= 1 (:remaining-parked entry)))
        (is (= [{:what "the retry path" :why-no-finding "outside the change"}] (:standing entry)))
        (is (= {:round 1 :phase "fix"
@@ -412,8 +412,9 @@
                :landed [{:layer "a1" :commit "c1" :handed ["h1"]}]}
               (:stopped entry))
            "where it stopped, which fixer it stopped under, and how to undo it")
-       (is (= #{"f1" "f2" "f3"} (set (map :id (stages/prior-open tree))))
-           "and the next run inherits it, rather than the run before it")
+       (is (= #{"h1" "h2" "h3"} (set (map :id (stages/prior-open tree))))
+           "and the next run inherits it under the warden's handles, the identity
+            a park keeps from run to run")
        (is (= "appended" (get-in (read-back "review-dead") [:review-entry :ledger])))))))
 
 (deftest a-person-stopping-a-fix-is-not-labelled-an-accident

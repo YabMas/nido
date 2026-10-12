@@ -258,7 +258,7 @@
    one layer at a time, and the flat union is the range in which the cut it is
    here to judge cannot be seen."
   [{:keys [cwd from to run-id iter label brief composition prior-fixes standing
-           prior-open design swept reviewer]}]
+           prior-open ruled-against above design swept reviewer]}]
   (let [to       (or to "@")
         {:keys [exit out err]} (diff-name-only cwd from to)
         _        (when-not (zero? exit)
@@ -297,6 +297,7 @@
                              (prompts/prior-fixes-block prior-fixes)
                              (prompts/standing-needs-block standing)
                              (prompts/prior-open-block prior-open)
+                             (prompts/ruled-against-block ruled-against above)
                              "\nBase revision (use this exact value as <base> in the"
                              " commands above): " from "\n"
                              "Head revision (use this exact value as <head>): " to "\n"

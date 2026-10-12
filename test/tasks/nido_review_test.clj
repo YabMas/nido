@@ -1208,6 +1208,7 @@
   ;; `jj describe` that fails drops its layer and changes nothing else, so the
   ;; two lists are what make a partial stamp legible at all.
   (with-redefs [stages/session-stack (fn [_ _] [{:slug "voice-core"} {:slug "voice-api"}])
+                layers/layer-claims (fn [_ _] [])
                 layers/record-deviations! (fn [_ _ _] ["voice-core"])]
     (let [out (#'t/record-deviations! "/w" {:base "main"} two-deviations)]
       (is (= ["voice-core" "voice-api"] (:owed out)))
@@ -1754,7 +1755,7 @@
   ;; record at all. Asking whether the design stands is how the gate offered to
   ;; supersede a record the run's own report listed as missing.
   (let [b (t/parked-blocker
-           [{:disposition :park :title "start races the socket" :same-as "aeee857f"
+           [{:disposition :park :title "start races the socket" :same-as "aeee857f" :attempts 2
              :because "two repairs each narrowed the window and left a smaller one"}]
            nil)]
     (is (not (str/includes? (:needs b) "design")))
@@ -1771,7 +1772,7 @@
   ;; to be decided over the whole set. A design question present anywhere in it
   ;; is the one no other branch can express, so it is the one that gets asked.
   (let [b (t/parked-blocker
-           [{:disposition :park :title "start races the socket" :same-as "aeee857f"}
+           [{:disposition :park :title "start races the socket" :same-as "aeee857f" :attempts 2}
             {:disposition :park :title "the aggregate rounds twice"}]
            nil)]
     (is (str/includes? (:needs b) "Does the design stand?"))))
@@ -1781,7 +1782,7 @@
   ;; direct answer to "is the remedy another patch?" — and the two ground
   ;; branches can only say "try again" and "stop trying".
   (let [b (t/parked-blocker
-           [{:disposition :park :title "start races the socket" :same-as "aeee857f"}]
+           [{:disposition :park :title "start races the socket" :same-as "aeee857f" :attempts 2}]
            {:verdict :strained :needs "let the server's start claim own transport liveness"})
         third (last (:options b))]
     (is (= 3 (count (:options b))))
@@ -1795,10 +1796,10 @@
   ;; record that does not stand says the remedy is a decision. One that stands
   ;; says nothing about whether a third patch would hold, so nothing is flagged.
   (let [invalidated (t/parked-blocker
-                     [{:disposition :park :title "t" :same-as "aeee857f"}]
+                     [{:disposition :park :title "t" :same-as "aeee857f" :attempts 2}]
                      {:verdict :invalidated :needs "the boundary has to move"})
         sound       (t/parked-blocker
-                     [{:disposition :park :title "t" :same-as "aeee857f"}]
+                     [{:disposition :park :title "t" :same-as "aeee857f" :attempts 2}]
                      {:verdict :sound})]
     (is (true? (:recommended? (second (:options invalidated)))))
     (is (nil? (:recommended? (first (:options invalidated)))))
@@ -2550,6 +2551,7 @@
   (let [run     {:status :unresolved
                  :history [{:iter 2
                             :findings [{:id "r2" :handle "f94e0553" :same-as "f94e0553"
+                                        :prior-attempts 1
                                         :title "census omits the draft door"
                                         :disposition :park
                                         :because "recurrence (park ground b)"}]}]
@@ -2563,7 +2565,7 @@
     (is (not (str/includes? (:needs blocker) "Does the design stand?")))
     (is (= blocker (report/validate-event :blocker blocker))))
   (let [inherited {:status :unresolved :history [] :findings []
-                   :carry {:inherited-open [{:id "ip" :title "t" :same-as "aeee857f"
+                   :carry {:inherited-open [{:id "ip" :title "t" :same-as "aeee857f" :attempts 1
                                              :disposition :park :inherited true}]}}
         blocker   (t/parked-blocker (verdict/owed-rows inherited) nil)]
     (is (str/includes? (:needs blocker) "third attempt")
@@ -2712,3 +2714,60 @@
   (let [ev (t/review-event {:status :review-failed :history [] :findings []}
                            {:summary {:rounds 0} :target {:base "main"}} "/runs/r/report.json")]
     (is (not (contains? ev :layers)) "a run that resolved no targets claims no layers")))
+
+;; ---- one question, asked once ---------------------------------------------
+
+(deftest a-halt-already-standing-unanswered-is-not-asked-again
+  ;; Two runs over one park filed two identical blockers; the person answered
+  ;; the second and the first dangled as a decision still owed.
+  (let [rows  [{:id "593ee1d3" :disposition :park :title "who owns the cut"}]
+        prior (assoc (t/parked-blocker rows nil) :seq 61)]
+    (is (= ["593ee1d3"] (:parks prior)) "a halt names the parks it asks about")
+    (is (= prior (#'t/already-asked (t/parked-blocker rows nil) [prior]))
+        "the same parks with the same branches are the question already standing")
+    (is (nil? (t/already-asked
+               (t/parked-blocker (conj rows {:id "0b1deca4" :disposition :park :title "t"}) nil)
+               [prior]))
+        "a park the standing blocker does not hold is a new question")
+    (is (nil? (t/already-asked
+               (t/parked-blocker rows {:verdict :strained :needs "fork the scope"})
+               [prior]))
+        "a verdict that adds a branch changes what the person can answer")
+    (is (= (dissoc prior :parks)
+           (#'t/already-asked (t/parked-blocker rows nil) [(dissoc prior :parks)]))
+        "a blocker from before halts named their parks is matched on its text")))
+
+(deftest a-halt-naming-its-parks-validates-against-the-ledger
+  (let [b (t/parked-blocker [{:id "593ee1d3" :disposition :park :title "t"}] nil)]
+    (is (= b (report/validate-event :blocker b)))))
+
+
+(deftest a-park-re-found-without-a-repair-is-not-called-a-recurrence
+  ;; Every park carried same-as because each run re-found it under its earlier
+  ;; id, and with no repair ever aimed at one the gate would have said they
+  ;; were "fixed in an earlier round and came back".
+  (let [b (t/parked-blocker [{:id "593ee1d3" :disposition :park :title "t" :same-as "303ca07e"}]
+                            nil)]
+    (is (not (str/includes? (:needs b) "fixed in an earlier round")))))
+
+(deftest a-gate-defers-to-a-verdict-that-classifies-its-parks-as-implementation
+  ;; The blocker said the design was in question while the same run's verdict
+  ;; classified both parks as implementation and the design as not contradicted.
+  (let [v {:verdict :sound :findings-classified [{:finding "593ee1d3" :as :implementation}
+                                                 {:finding "3d7af6b0" :as :implementation}]}
+        b (t/parked-blocker [{:id "593ee1d3" :disposition :park :title "t"}
+                             {:id "3d7af6b0" :disposition :park :title "u"}]
+                            v)]
+    (is (not (str/includes? (:needs b) "the design is in question")))
+    (is (str/includes? (:needs b) "classifies each as implementation"))
+    (is (= b (report/validate-event :blocker b)))))
+
+(deftest a-halt-says-when-the-run-stopped-on-something-else
+  ;; The blocker gave a park-stale stop as the reason the run ended; it had
+  ;; stopped on a usage limit, with seven findings unruled.
+  (let [rows [{:id "0b1deca4" :disposition :park :title "rebuild the index"}]]
+    (is (str/includes? (:summary (t/parked-blocker rows nil :usage-limited))
+                       "The run itself ended `usage-limited`, not on these"))
+    (is (not (str/includes? (:summary (t/parked-blocker rows nil :unresolved))
+                            "The run itself ended"))
+        "a run that stopped over its parks needs no second reason")))

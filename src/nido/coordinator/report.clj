@@ -1675,7 +1675,11 @@
    ;; two apart without opening a run log.
    [:tried   {:optional true} [:vector Attempt]]
    [:options {:optional true}
-    [:vector {:min 2 :max authoring-branch-cap} BlockerOption]]])
+    [:vector {:min 2 :max authoring-branch-cap} BlockerOption]]
+   ;; The ids of the parked findings a review run's halt asks about, under the
+   ;; identity a park keeps across runs. Absent on every other halt. It is how
+   ;; the next run tells a question already standing unanswered from a new one.
+   [:parks   {:optional true} [:vector string?]]])
 
 (def BlockerAnswered
   "The human's answer to a blocker that named its branches — written by nido at
@@ -1825,7 +1829,13 @@
    needs and nothing that only makes sense inside a run. Shared by the two lists
    below because they hold the same thing and differ only in what is owed on it."
   [:map {:closed true}
+   ;; The warden's handle where it gave one — the identity a finding keeps
+   ;; across rounds and runs — else the reviewer's id.
    [:id          {:optional true} [:maybe string?]]
+   ;; The reviewer's id for its latest raising, when that differs from `:id`.
+   ;; A re-raise at the same site derives this id again, so it is what lets a
+   ;; later run recognise one without a warden saying `same_as`.
+   [:aka         {:optional true} string?]
    [:title       string?]
    [:where       {:optional true} [:maybe string?]]
    [:disposition {:optional true} [:maybe keyword?]]

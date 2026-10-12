@@ -1539,3 +1539,26 @@
       (is (str/includes? @seen "- job/sync.clj:244 — two writes, no transaction"))
       (is (not (str/includes? @seen "WHAT YOU CONCLUDED LAST TIME"))
           "its verdict judged another record and is still not the standing answer"))))
+
+(deftest a-park-keeps-its-handle-as-its-ledger-id
+  ;; One parked question took a new id every run — edc1d304, then 303ca07e,
+  ;; then 593ee1d3 — because its :open row was written under the reviewer's
+  ;; per-run id and the next run seeds its handles from the row ids.
+  (let [final {:status :unresolved :iter 2 :history [{:findings []}]
+               :findings [{:id "73ebd36a" :handle "593ee1d3" :title "who owns the cut"
+                           :disposition :park :owner-layer "domain"}]}
+        [row] (verdict/owed-rows (assoc final :owed (verdict/still-owed final)))]
+    (is (= "593ee1d3" (:id row))
+        "the row is filed under the handle, so the next run, its report and its blocker name one park")))
+
+(deftest a-row-filed-under-its-handle-still-answers-to-a-plain-re-raise
+  ;; Filed under the handle, a row's id is the FIRST raising's; a reviewer
+  ;; re-raising the defect at its latest site derives the latest one, and no
+  ;; warden is there to say they are the same.
+  (let [final {:status :unresolved :iter 2 :history [{:findings []}]
+               :findings [{:id "73ebd36a" :handle "593ee1d3" :title "t" :disposition :fix}]}
+        [row] (verdict/owed-rows (assoc final :owed (verdict/still-owed final)))]
+    (is (= {:id "593ee1d3" :aka "73ebd36a"} (select-keys row [:id :aka])))
+    (is (empty? (stages/unanswered-of [(assoc row :inherited true)]
+                                      [[{:id "73ebd36a" :title "t" :disposition :fix}]]))
+        "a re-raise under the latest id is this run's again, not counted twice")))

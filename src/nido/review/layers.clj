@@ -38,14 +38,15 @@
    name, and a layer read with one on it is unusable as a revision: the moment
    this loop lands a fix on a pushed layer, the layer diverges from its remote
    and every later round would ask jj for `<layer>*`, which does not exist."
-  "commit_id ++ \"\\t\" ++ change_id ++ \"\\t\" ++ local_bookmarks.map(|b| b.name()).join(\" \") ++ \"\\n\"")
+  "commit_id ++ \"\\t\" ++ change_id ++ \"\\t\" ++ local_bookmarks.map(|b| b.name()).join(\" \") ++ \"\\t\" ++ if(empty, \"empty\", \"\") ++ \"\\n\"")
 
 (defn- parse-row
   [line]
-  (let [[commit change bookmarks] (str/split line #"\t" -1)]
+  (let [[commit change bookmarks empty] (str/split line #"\t" -1)]
     {:commit    commit
      :change    change
-     :bookmarks (remove str/blank? (str/split (or bookmarks "") #"\s+"))}))
+     :bookmarks (remove str/blank? (str/split (or bookmarks "") #"\s+"))
+     :empty?    (= "empty" empty)}))
 
 (defn- layer-bookmark
   "The bookmark naming a layer of THIS session, or nil. `<session>--<slug>` is a
@@ -64,27 +65,56 @@
     (when (str/starts-with? bookmark prefix)
       (subs bookmark (count prefix)))))
 
+(def unbookmarked-slug
+  "The label of the layer `stack` makes of the commits above the top bookmark."
+  "unbookmarked")
+
 (defn ^{:malli/schema [:=> [:cat :Path :any :any] :any]}
   stack
   "This session's layers, ordered bottom→top:
      [{:bookmark :slug :tip <commit-id> :change <change-id>} …]
 
    Empty when the branch carries no session bookmark at all — which is a normal
-   state (work in progress before `/stack` has cut anything), not an error."
+   state (work in progress before `/stack` has cut anything), not an error.
+
+   Non-empty commits ABOVE the top bookmark are one more layer on top, with no
+   `:bookmark` and the slug `unbookmarked-slug`; its tip is the highest of them.
+   They are in `<base>..@`, so a reviewer reads them, and leaving them out of
+   the stack put every repair on the top bookmark — beneath code the reviewer
+   cited and the fixer could not see. An empty working copy is no commit of
+   anyone's and makes no layer. Every jj call on a layer names it by `rev-of`."
   [cwd session base]
   (let [{:keys [exit out]} (jj/jj! cwd "log" "-r" (str base "..@")
                                    "--reversed" "--no-graph" "-T" row-template)]
     (if-not (zero? exit)
       []
-      (into []
-            (keep (fn [line]
-                    (let [{:keys [commit change bookmarks]} (parse-row line)]
-                      (when-let [bm (layer-bookmark session bookmarks)]
-                        {:bookmark bm
-                         :slug     (slug-of session bm)
-                         :tip      commit
-                         :change   change}))))
-            (remove str/blank? (str/split-lines out))))))
+      (let [rows   (mapv parse-row (remove str/blank? (str/split-lines out)))
+            layers (into []
+                         (keep (fn [{:keys [commit change bookmarks]}]
+                                 (when-let [bm (layer-bookmark session bookmarks)]
+                                   {:bookmark bm
+                                    :slug     (slug-of session bm)
+                                    :tip      commit
+                                    :change   change})))
+                         rows)
+            above  (when-let [top (peek layers)]
+                     (->> rows
+                          (drop-while #(not= (:tip top) (:commit %)))
+                          rest
+                          (remove :empty?)
+                          last))]
+        (cond-> layers
+          above (conj {:bookmark nil
+                       :slug     unbookmarked-slug
+                       :tip      (:commit above)
+                       :change   (:change above)}))))))
+
+(defn- rev-of
+  "The revision a layer is addressed by: its bookmark, which jj carries across
+   every rewrite, else its change id, which survives them too. A commit id does
+   not — landing a fix below rewrites every tip above it."
+  [layer]
+  (or (:bookmark layer) (:change layer)))
 
 ;; ---- what each layer contributes ----------------------------------------
 
@@ -279,6 +309,36 @@
              (str/join "\n" (map #(str "Deviation: " %) new))
              "\n")))))
 
+(defn ^{:malli/schema [:=> [:cat [:sequential :map] :map] [:maybe :string]]}
+  claim-layer
+  "The layer a deviation is stamped on: the one whose `claims` hold the claim
+   its `of` quotes, else its `:owner-layer`. `claims` is `[{:label :claim}]`.
+
+   Not the owner alone, because the warden's owner is where a FIXER works, and
+   for a deviation that is often not the layer that made the claim — a broken
+   intermediate is owned by the layer above that remedies it, while the claim
+   that does not hold is the one beneath. Stamped by owner, the line qualifying
+   a claim landed on a layer that never made it."
+  [claims {:keys [of owner-layer]}]
+  (let [norm #(str/lower-case (one-line %))
+        q    (norm of)]
+    (or (when-not (str/blank? q)
+          (some (fn [{:keys [label claim]}]
+                  (when (str/includes? (norm claim) q) label))
+                claims))
+        owner-layer)))
+
+(defn ^{:malli/schema [:=> [:cat :Path :any] [:vector :map]]}
+  layer-claims
+  "Each layer of `stack` with the `Claims:` its commit message carries, as
+   `claim-layer` reads them."
+  [cwd stack]
+  (into []
+        (keep (fn [{:keys [bookmark slug] :as layer}]
+                (when-let [c (:claims (brief cwd (rev-of layer)))]
+                  {:label (or slug bookmark) :claim c})))
+        stack))
+
 (defn ^{:malli/schema [:=> [:cat :Path :any :any] :any]}
   record-deviations!
   "Write each finding the run settled as a `deviation` onto the layer whose
@@ -296,20 +356,23 @@
 
    Best-effort per layer. A stamp that cannot be written costs a reader a line
    they would have liked; a throw here would take the run's whole record with
-   it, and the record is what everything downstream reads."
+   it, and the record is what everything downstream reads.
+
+   Each finding goes where its `:owner-layer` says; callers resolve that with
+   `claim-layer` first."
   [cwd stack findings]
   (let [by-label (into {} (map (juxt #(or (:slug %) (:bookmark %)) identity)) stack)]
     (into []
           (keep (fn [[label fs]]
                   (when-let [layer (get by-label label)]
                     (let [lines (into [] (keep deviation-line) fs)
-                          desc  (description cwd (:bookmark layer))]
+                          desc  (description cwd (rev-of layer))]
                       (when (and (seq lines) desc)
                         (let [next-desc (with-deviations desc lines)]
                           (when (not= (str/trim next-desc) (str/trim desc))
                             (try
                               (let [{:keys [exit]} (jj/jj! cwd "describe" "-r"
-                                                           (:bookmark layer) "-m" next-desc)]
+                                                           (rev-of layer) "-m" next-desc)]
                                 (when (zero? exit) label))
                               (catch Throwable _ nil)))))))))
           (group-by :owner-layer findings))))
@@ -371,8 +434,8 @@
    bookmark still names the right commit because jj carries it along."
   [cwd layer]
   (when layer
-    (step! cwd layer (str "position the working copy on layer " (:bookmark layer))
-           "new" "--insert-after" (or (:bookmark layer) (:tip layer)))
+    (step! cwd layer (str "position the working copy on layer " (or (:bookmark layer) (:slug layer)))
+           "new" "--insert-after" (or (rev-of layer) (:tip layer)))
     nil))
 
 (defn ^{:malli/schema [:=> [:cat :Path :map :string] :any]}
@@ -395,12 +458,15 @@
    did not happen, and a skipped bookmark move is exactly the silent failure
    the paragraph above describes.
 
-   With no layer this degrades to the flat-branch behaviour it replaces."
+   With no layer this degrades to the flat-branch behaviour it replaces. The
+   unbookmarked top layer has no bookmark to move: its fix is simply the new
+   top of it, which is where `stack` reads its tip from next time."
   [cwd layer msg]
   (if layer
     (let [bm (:bookmark layer)]
-      (step! cwd layer (str "describe the fix commit for " bm) "describe" "-m" msg)
-      (step! cwd layer (str "move " bm " onto its fix") "bookmark" "set" bm "-r" "@")
+      (step! cwd layer (str "describe the fix commit for " (or bm (:slug layer))) "describe" "-m" msg)
+      (when bm
+        (step! cwd layer (str "move " bm " onto its fix") "bookmark" "set" bm "-r" "@"))
       (:out (step! cwd layer "read the fix commit's id"
                    "log" "-r" "@" "-T" "commit_id" "--no-graph")))
     (do (step! cwd nil "commit the fix" "commit" "-m" msg)
@@ -432,13 +498,19 @@
    update-stale` in front of it."
   [cwd stack]
   (when-let [top (last stack)]
-    (let [r (jj/jj! cwd "new" (:bookmark top))]
+    ;; The unbookmarked top layer is named by the change id of its tip as the
+    ;; stack was read, and a fix landed on it since sits ABOVE that change — so
+    ;; the top is the newest head of its descendants, the empty working copy
+    ;; left out. `jj new` on the change itself would fork the fix off.
+    (let [to (or (:bookmark top)
+                 (str "latest(heads(" (:change top) ":: ~ (@ & empty())))"))
+          r  (jj/jj! cwd "new" to)]
       (when-not (zero? (:exit r))
         (throw (refusal (str "could not return the working copy to the top of the stack ("
-                             (:bookmark top) ")")
+                             to ")")
                         r {:cwd cwd :layer top}
                         (str "The working copy is parked mid-stack: move it back with"
-                             " `jj new " (:bookmark top) "` before reviewing again,"
+                             " `jj new " to "` before reviewing again,"
                              " or the next run will see a truncated stack.")))))))
 
 ;; ── Reshaping the stack ─────────────────────────────────────────────────────
@@ -499,6 +571,16 @@
   (when op
     (try (jj/jj! cwd "op" "restore" op) (catch Throwable _ nil))))
 
+(defn- unbookmarked-refusal
+  "The refusal a reshape owes when either layer is the unbookmarked top, or nil.
+   A reshape moves layers by bookmark, and that layer is a run of commits no
+   bookmark bounds — there is no one thing to move."
+  [& layers]
+  (when (some #(nil? (:bookmark %)) layers)
+    {:ok? false
+     :reason (str "the commits above the top bookmark are no bookmarked layer, "
+                  "so the loop cannot move them — bookmark them as a layer first")}))
+
 (defn ^{:malli/schema [:=> [:cat :Path :any :any] :map]}
   attempt-reshape!
   "Run `f`, and keep what it did only if the stack came out clean.
@@ -540,9 +622,10 @@
    a layer above it supplies is in the wrong place, and moving it is the repair
    rather than patching either side."
   [cwd base layer other]
-  (attempt-reshape!
-   cwd base
-   #(jj/jj! cwd "rebase" "-r" (:bookmark layer) "--insert-before" (:bookmark other))))
+  (or (unbookmarked-refusal layer other)
+      (attempt-reshape!
+       cwd base
+       #(jj/jj! cwd "rebase" "-r" (:bookmark layer) "--insert-before" (:bookmark other)))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :any :map :map] :map]}
   fold!
@@ -558,13 +641,14 @@
    read of the stack, while whatever that bookmark had published stayed
    published."
   [cwd base layer into-layer]
-  (let [r (attempt-reshape!
-           cwd base
-           #(jj/jj! cwd "squash" "--from" (:bookmark layer)
-                    "--into" (:bookmark into-layer) "--use-destination-message"))]
-    (when (:ok? r)
-      (jj/jj! cwd "bookmark" "delete" (:bookmark layer)))
-    r))
+  (or (unbookmarked-refusal layer into-layer)
+      (let [r (attempt-reshape!
+               cwd base
+               #(jj/jj! cwd "squash" "--from" (:bookmark layer)
+                        "--into" (:bookmark into-layer) "--use-destination-message"))]
+        (when (:ok? r)
+          (jj/jj! cwd "bookmark" "delete" (:bookmark layer)))
+        r)))
 
 (defn ^{:malli/schema [:=> [:cat :Path :string] :string]}
   workspace-relative
@@ -621,15 +705,16 @@
    or it would hide a layer from every later read of the stack; here both layers
    survive and only their contents move."
   [cwd base layer into-layer path]
-  (let [rel (workspace-relative cwd path)]
-    (if-not (layer-touches? cwd layer rel)
-      {:ok? false
-       :reason (str "the finding names " rel " but " (:bookmark layer)
-                    " does not change it, so there is nothing there to move down")}
-      (attempt-reshape!
-       cwd base
-       #(jj/jj! cwd "squash" "--from" (:bookmark layer)
-                "--into" (:bookmark into-layer) "--use-destination-message" rel)))))
+  (or (unbookmarked-refusal layer into-layer)
+      (let [rel (workspace-relative cwd path)]
+        (if-not (layer-touches? cwd layer rel)
+          {:ok? false
+           :reason (str "the finding names " rel " but " (:bookmark layer)
+                        " does not change it, so there is nothing there to move down")}
+          (attempt-reshape!
+           cwd base
+           #(jj/jj! cwd "squash" "--from" (:bookmark layer)
+                    "--into" (:bookmark into-layer) "--use-destination-message" rel))))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :string] [:maybe :string]]}
   resolve-rev

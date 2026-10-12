@@ -1033,13 +1033,21 @@
 
    `:same-as` is the warden's recurrence mark. A blocker raised over these rows
    reads its ground from it, so a row that dropped it would put a park on
-   recurrence to a person as a design question."
+   recurrence to a person as a design question.
+
+   `:id` is the warden's handle where it assigned one, the per-run id only
+   otherwise. The next run seeds its handles from these ids, so a row written
+   under the per-run id gives one park a new name every run — and the report,
+   the ledger row and the blocker over it each name it differently. `:aka` is
+   the per-run id when it differs: the id a re-raise at the same site derives
+   again, which the next run files under `:id`."
   [handed findings]
   (into []
-        (map (fn [{:keys [id title file line-start disposition because same-as
+        (map (fn [{:keys [id handle title file line-start disposition because same-as
                           owner-layer from-layer attempts belongs-in] :as f}]
                (cond-> {:title (str (or title "(untitled finding)"))}
-                 id          (assoc :id (str id))
+                 (or handle id) (assoc :id (str (or handle id)))
+                 (and handle id (not= (str handle) (str id))) (assoc :aka (str id))
                  file        (assoc :where (str file (when line-start (str ":" line-start))))
                  disposition (assoc :disposition (keyword disposition))
                  because     (assoc :because (str because))
@@ -1054,7 +1062,7 @@
   "What an inherited row may carry back into an entry: the ledger's own
    `ReviewFinding` keys. The carry adds what the run used it for, and none of
    that is a fact about the branch."
-  [:id :title :where :disposition :because :same-as :layer :attempts :inherited
+  [:id :aka :title :where :disposition :because :same-as :layer :attempts :inherited
    :belongs-in])
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}

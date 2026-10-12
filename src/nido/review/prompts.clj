@@ -471,6 +471,48 @@
      "An id you leave out is read as still owed — silence is not an answer,\n"
      "and neither is `repaired` without evidence.\n\n")))
 
+(defn ^{:malli/schema [:=> [:cat :any :any] [:maybe :string]]}
+  ruled-against-block
+  "What is already decided about this layer, and what the layers above it
+   claim — see `nido.review.stages/with-rulings-against` for where each comes
+   from.
+
+   Put as settled rather than as a question, which is the difference from
+   `prior-open-block`: these are not owed. A ruling is re-opened only by
+   evidence it did not have, so that is the one ground on which the reviewer
+   may raise one again."
+  [ruled above]
+  (str
+   (when (seq ruled)
+     (str
+      "ALREADY RULED AGAINST THIS LAYER — settled by the loop, or put to a person.\n"
+      (->> ruled
+           (map (fn [{:keys [id title disposition authority because]}]
+                  (str "- " id "  " title
+                       (when disposition
+                         (str "\n  " (name disposition)
+                              (when authority (str " (" authority ")"))))
+                       (when-not (str/blank? (str because))
+                         (str ": " because)))))
+           (str/join "\n"))
+      "\n\n"
+      "Do NOT report any of these again. A `deviation` says this layer's tip\n"
+      "holds the defect and a layer above remedies it; a `park` is a question\n"
+      "already put to a person, which a finding cannot answer. Raise one again\n"
+      "only with evidence its ruling did not have, and say what that is.\n\n"))
+   (when (seq above)
+     (str
+      "THE LAYERS ABOVE THIS ONE, AND WHAT EACH CLAIMS\n"
+      (->> above
+           (map (fn [{:keys [label claim]}]
+                  (str "- " label ": " (str/replace (str/trim (str claim)) #"\s+" " "))))
+           (str/join "\n"))
+      "\n\n"
+      "You are reviewing an INTERMEDIATE layer. A defect at this layer's tip\n"
+      "that one of these claims closes is a broken intermediate the cut chose,\n"
+      "not a defect of the change: report it only if you can see that the\n"
+      "claim above does not close it.\n\n"))))
+
 (def disposition-vocabulary
   "What may become of a finding. One entry per destination: the word the warden
    answers with, what it means, and the extra field it may not omit.
@@ -823,7 +865,8 @@
        (str (asks-heading asks) "\n\n")))
 
 (defn- file-list
-  "A layer's files on one line, capped at twelve with a count of the rest.
+  "A layer's files on one line, capped at twelve with a count of the rest. A
+   file a finding cites is listed whole beside it — see `cited-block`.
 
    Every block that names a layer's files is a MAP: the reader has to recognise
    a path it is already holding, not inventory the layer. One sweeping layer
@@ -1543,6 +1586,24 @@
               (str/join ""))
          "\n")))
 
+(defn- cited-block
+  "Each file this round's findings cite, with the layers that touch it — see
+   `nido.review.stages/cited-files`. Every one, whatever the stack map's cap."
+  [cited]
+  (when (seq cited)
+    (str "WHERE THE CITED FILES LIVE — every file a finding below cites, with\n"
+         "the layers that touch it, bottom to top. The stack map caps each\n"
+         "layer's list; this does not, so own a finding from here and never from\n"
+         "a guess past a `+N more`. The LAST layer named is the highest toucher,\n"
+         "where the loop places a repair to that file.\n"
+         (->> cited
+              (map (fn [{:keys [file layers]}]
+                     (str "- " file " — "
+                          (if (seq layers) (str/join ", " layers) "no layer of this stack")
+                          "\n")))
+              (apply str))
+         "\n")))
+
 (defn- findings-list
   [findings]
   (->> findings
@@ -2244,8 +2305,8 @@
    rather than a dispatch: what it knows to be open that this round is handing
    to nobody. It is asked for on every answer, not only on a `stop`, because the
    round that turns out to be the last one is not knowable while it is running."
-  [{:keys [findings history design stance toc answered seen parked inherited inherited-standing
-           fix-outcomes round]}]
+  [{:keys [findings history design stance toc cited answered seen parked inherited
+           inherited-standing fix-outcomes round]}]
   ;; A branch with no layers is reviewed flat, and there is then no layer label
   ;; for a finding to be attributed to. Asked for one anyway, the warden supplied
   ;; the only stack-shaped thing it had — a file path — on every ruling of the
@@ -2384,6 +2445,9 @@
       "for `park`. A finding you move UP onto a layer whose own head already\n"
       "holds the remedy is not `fix`: it is a broken intermediate, a `deviation`\n"
       "against the claim of the layer that reported it.\n"
+      "A `fix` you own ABOVE the layer that reported it leaves that layer's tip\n"
+      "holding the defect; the loop records that broken intermediate against the\n"
+      "reporting layer itself, so rule the repair and not a second deviation.\n"
       "A finding from the `stack` pass exists only in the COMPOSITION of layers,\n"
       "and names the ones it spans after `across`. Use them:\n"
       "assign it to the HIGHEST layer involved, because that is the first point in\n"
@@ -2433,6 +2497,10 @@
    "it is yours. When a finding below is the SAME DEFECT as one already seen —\n"
    "not merely similar, not merely the same file — put that earlier id in\n"
    "`same_as`. Otherwise null.\n"
+   "A ruling whose `because` says it repeats, re-reports or is the same as an\n"
+   "earlier id CARRIES that id in `same_as`. Said only in prose, the repeat\n"
+   "keeps its own id and is counted as a second defect: the loop reads\n"
+   "identity from the field, never from your sentence.\n"
    "This is what lets the loop tell a defect it cannot move from a run that is\n"
    "still making progress. Guessing costs more than leaving it null: two defects\n"
    "welded together are reported as one, and the second is never fixed.\n\n"
@@ -2507,6 +2575,7 @@
           "design record.\n\n"))
    (when stance (str (stance-block stance) "\n"))
    (when-let [t (toc-block toc)] (str t "\n"))
+   (cited-block cited)
    (when (and design (seq toc))
      (str "A BRIEF THAT DEFERS AN INVARIANT\n"
           "Hold each layer's `out of scope` above against the design's claims. One\n"

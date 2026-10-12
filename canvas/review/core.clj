@@ -494,6 +494,11 @@
      cache; an UNSETTLED one had no channel at all, so a defect ruled `fix` and never repaired
      was invisible to the reviewer of its own file."
     {:signature [:=> [:catn [:prior-open :any]] [:maybe :string]]})
+  (Operation ruled-against-block
+    "What is already settled about this layer — closes, declines, deviations, and the parks
+     standing on it — and what the layers above it claim, put to its reviewer as decided. A
+     reviewer starts blank every round, so a ruling it is not shown is one it re-raises."
+    {:signature [:=> [:catn [:ruled :any] [:above :any]] [:maybe :string]]})
   (Operation fix-prompt "The instruction to fix given findings."
     {:signature [:=> [:catn [:opts :map]] :string]})
   (Operation toc-block "The stack's table of contents."

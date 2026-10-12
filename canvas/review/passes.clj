@@ -255,6 +255,13 @@
   (Operation with-deviations
     "A layer message with the deviations it does not yet carry appended."
     {:signature [:=> [:catn [:description :string] [:lines [:sequential :string]]] :string]})
+  (Operation claim-layer
+    "The layer a deviation is stamped on: the one whose claims hold the sentence its `of`
+     quotes, else the warden's owner — which is where a fixer works, not who made the claim."
+    {:signature [:=> [:catn [:claims [:sequential :map]] [:deviation :map]] [:maybe :string]]})
+  (Operation layer-claims "Each layer of a stack with the claims its message carries."
+    {:signature [:=> [:catn [:cwd Path] [:stack :any]] [:vector :map]]
+     :delegates [brief]})
   (Operation record-deviations!
     "Write each settled deviation onto the layer whose claim it qualifies, so the sentence
      that says the claim did not hold ships in the same message as the claim."
@@ -538,6 +545,13 @@
      toucher was put there on purpose."
     {:signature [:=> [:catn [:cwd Path] [:toc :any] [:findings :any]] :any]
      :delegates [placed-on]})
+  (Operation broken-intermediates
+    "The deviations routing makes: one for every `fix` whose latest ruling owns it ABOVE the
+     layer that reported it, against that reporting layer — a repair at the owner never
+     reaches the reporter's tip. Derived from the latest rulings rather than stored, so a
+     round that re-owns the repair onto the reporter withdraws it."
+    {:signature [:=> [:catn [:order [:sequential :string]] [:claims :map] [:rounds :any]]
+                 [:vector :map]]})
   (Operation accounts-naming
     "The accounts of fixers that already ran this stage that name one of a layer's files, by
      path or by file name. What a lower fixer could not make because the file is above it is

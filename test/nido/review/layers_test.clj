@@ -598,3 +598,55 @@
       (is (= "" (layers/working-copy-patch dir (layers/resolve-rev dir "@"))))
       (is (nil? (layers/working-copy-patch dir nil)) "no starting commit, no reading")
       (finally (fs/delete-tree root)))))
+
+(deftest a-deviation-is-stamped-on-the-layer-whose-claim-it-quotes
+  ;; The warden's owner is where a fixer works. Two rulings quoted
+  ;; chatbot-domain's claim and were owned by chatbot-transport, so the line
+  ;; qualifying the claim landed on a layer that never made it.
+  (let [claims [{:label "chatbot-domain"
+                 :claim "brian.domain.dialogue.chatbot answers the chatbot save as one command."}
+                {:label "chatbot-transport" :claim "the route calls the domain."}]]
+    (is (= "chatbot-domain"
+           (layers/claim-layer claims {:of "brian.domain.dialogue.chatbot answers the chatbot save as one command"
+                                       :owner-layer "chatbot-transport"})))
+    (is (= "chatbot-transport"
+           (layers/claim-layer claims {:of "a claim nobody made" :owner-layer "chatbot-transport"}))
+        "a claim no layer holds goes where the warden put it")))
+
+(defn- log-out4
+  "`log-out` with the template's fourth field, `empty` for an empty commit."
+  [rows]
+  (str/join "\n" (map (fn [[c ch bms e]] (str c "\t" ch "\t" bms "\t" e)) rows)))
+
+(deftest commits-above-the-top-bookmark-are-one-more-layer
+  ;; Two unbookmarked commits sat above the only bookmark. The review read
+  ;; base..@ while every fix landed on the bookmark, beneath code the reviewer
+  ;; cited and the fixer could not see.
+  (let [out (log-out4 [["c1" "ch1" "sess--pdf-extraction" ""]
+                       ["c2" "ch2" "" ""]
+                       ["c3" "ch3" "" ""]
+                       ["c4" "ch4" "" "empty"]])]
+    (with-redefs [jj/jj! (stub-log out (atom []))]
+      (is (= [{:bookmark "sess--pdf-extraction" :slug "pdf-extraction" :tip "c1" :change "ch1"}
+              {:bookmark nil :slug layers/unbookmarked-slug :tip "c3" :change "ch3"}]
+             (layers/stack "/w" "sess" "main"))
+          "one layer up to the highest non-empty commit; the empty working copy is nobody's"))
+    (with-redefs [jj/jj! (stub-log (log-out4 [["c1" "ch1" "sess--a" ""] ["c2" "ch2" "" "empty"]])
+                                   (atom []))]
+      (is (= ["sess--a"] (map :bookmark (layers/stack "/w" "sess" "main")))
+          "an empty working copy above the top bookmark adds no layer"))))
+
+(deftest the-unbookmarked-top-layer-is-fixed-and-restored-by-change-id
+  (let [calls (atom [])
+        top   {:bookmark nil :slug "unbookmarked" :tip "c3" :change "ch3"}]
+    (with-redefs [jj/jj! (stub-log "abc123" calls)]
+      (layers/position-for-fix! "/w" top)
+      (is (= "abc123" (layers/land-fix! "/w" top "msg")))
+      (layers/restore-top! "/w" [top]))
+    (is (= ["new" "--insert-after" "ch3"] (first @calls))
+        "positioned after its tip by change id, which a fix below does not rewrite")
+    (is (not-any? #(= "bookmark" (first %)) @calls) "there is no bookmark to move")
+    (is (= ["new" "latest(heads(ch3:: ~ (@ & empty())))"] (last @calls))
+        "back on the newest commit above it, so a fix landed there is not forked off")
+    (is (false? (:ok? (layers/reorder! "/w" "main" top {:bookmark "sess--a"})))
+        "a reshape has no bookmark to move it by, and refuses rather than guessing")))

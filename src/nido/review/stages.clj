@@ -35,7 +35,8 @@
    lives in a test rather than in the enum itself.
 
    `:unfixable` is in both: the engine's give-up counter reaches it, and so does
-   the warden stage, over the warden's own head, when a park has stood too long.
+   the review stage, before a round reads anything, when a park has stood too
+   long.
    `:unresolved` is in both for the same shape of reason — the engine reaches it
    when a round stops holding something, and the review stage reaches it over a
    round that found nothing while the last run's `:open` list still names a
@@ -934,6 +935,38 @@
     (mapv #(cond-> % (nil? (:composition %)) (assoc :standing standing))
           targets)))
 
+(defn- touching
+  "The labels of the `toc` layers whose files include `file`, bottom→top; empty
+   for a blank file or one no layer touches. Both paths are resolved against
+   `cwd` before they are compared: a finding's file is absolute, and the file
+   lists are relative to the worktree."
+  [cwd toc file]
+  (let [path #(str (fs/normalize (fs/path (str cwd) (str %))))]
+    (if (str/blank? (str file))
+      []
+      (let [target (path file)]
+        (into [] (comp (filter (fn [{:keys [files]}] (some #(= target (path %)) files)))
+                       (map :label))
+              toc)))))
+
+(defn- cited-files
+  "Every distinct file `findings` cite, each with the layers touching it —
+   `{:file :layers}`, in the order first cited. Read by the warden beside the
+   stack map.
+
+   The map lists each layer's files capped, and the warden owns a finding at
+   the highest layer touching its file. A file past the cap is one it cannot
+   place, so it guessed — owning a domain defect at the layer that plausibly
+   calls it, in its own words unable to verify — and the guess reached a
+   fixer, then a person's standing list. Uncapped here because these are the
+   only files a ruling has to place. A file no layer touches is listed with
+   none, which is itself the answer."
+  [cwd toc findings]
+  (into []
+        (comp (keep :file) (map str) (remove str/blank?) (distinct)
+              (map (fn [f] {:file f :layers (touching cwd toc f)})))
+        findings))
+
 (defn ^{:malli/schema [:=> [:cat :Path :any :any :any] [:maybe :string]]}
   placed-on
   "The layer of `toc` a finding NO REVIEWER RAISED is owed of: `named` when that
@@ -958,14 +991,9 @@
    Both paths are resolved against `cwd` before they are compared: a finding's
    file is absolute, and the file lists are relative to the worktree."
   [cwd toc named file]
-  (let [labels (into #{} (map :label) toc)
-        path   #(str (fs/normalize (fs/path (str cwd) (str %))))
-        target (when-not (str/blank? (str file)) (path file))]
-    (cond
-      (contains? labels named) named
-      target (some (fn [{:keys [label files]}]
-                     (when (some #(= target (path %)) files) label))
-                   (rseq (vec toc))))))
+  (if (contains? (into #{} (map :label) toc) named)
+    named
+    (peek (touching cwd toc file))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :any :any] :any]}
   within-the-fence
@@ -1006,6 +1034,83 @@
                                                  ": a fixer below it may not edit that file")])))
                   f)))
             findings))))
+
+(defn- of-a-claim
+  "`ruled` with every `deviation` whose `of` is a layer's LABEL demoted to
+   `:fix`, the way `ruling` demotes a disposition missing its field.
+
+   `of` is the claim a deviation qualifies, and a label is no claim: the
+   warden that writes one has not found the sentence the finding contradicts.
+   Accepted, two findings of one broken-intermediate shape in one round got
+   opposite rulings — one settled on a layer's name, the other sent to a
+   fixer — and the settled one ships no claim anybody can read qualified."
+  [toc ruled]
+  (let [labels (into #{} (map :label) toc)]
+    (mapv (fn [{:keys [disposition of because] :as f}]
+            (if (and (= :deviation disposition) (contains? labels (str/trim (str of))))
+              (assoc f :disposition :fix :of nil
+                     :because (str "the warden ruled `deviation` of the layer " of
+                                   ", which names no claim, so this is being fixed"
+                                   " rather than settled"
+                                   (when-not (str/blank? (str because))
+                                     (str " — it said: " because))))
+              f))
+          ruled)))
+
+(defn ^{:malli/schema [:=> [:cat [:sequential :string] :map :any] [:vector :map]]}
+  broken-intermediates
+  "The deviations the run's routing makes: one for every `:fix` owned ABOVE the
+   layer that reported it, against that reporting layer. `order` is the layer
+   labels bottom→top, `claims` each label's claim, `rounds` each round's
+   findings, oldest first.
+
+   A repair made at the owner reaches the owner's tip and every tip above it,
+   never the reporting layer's: that layer converges while its own tip keeps
+   the defect. A deviation used to exist only if a later reviewer happened to
+   re-find the defect — one of two such findings in one run was, and the other
+   appeared in no deviation, standing item or verdict — and the re-finding cost
+   a round to rule again on a move the loop had made itself.
+
+   DERIVED, never stored, and from each finding's LATEST ruling only: a later
+   round that re-owns the repair onto the reporting layer has changed that
+   layer's tip, and a stored deviation would outlive it into a false
+   `Deviation:` line. One per reporting layer, keyed `bi-<layer>-<handle>`, so
+   two layers re-reporting one defect each keep theirs. Owned by the reporting
+   layer, whose claim it qualifies in `of`, and settled: the code it describes
+   is exactly what the routing chose. A fix later found absent at the owner
+   leaves it standing — the reporting layer's tip is unchanged either way.
+
+   Only between two layers of `order`: the composition pass reports from no
+   layer, and an owner the stack does not hold sits nowhere."
+  [order claims rounds]
+  (let [at     (into {} (map-indexed (fn [i l] [l i])) order)
+        k      #(or (:handle %) (:id %))
+        latest (reduce (fn [m [i fs]] (reduce #(assoc %1 (k %2) i) m fs))
+                       {} (map-indexed vector rounds))]
+    (into []
+          (comp (mapcat (fn [[i fs]] (filter #(= i (latest (k %))) fs)))
+                (keep (fn [{:keys [disposition from-layer owner-layer] :as f}]
+                        (when (and (= :fix disposition)
+                                   (at from-layer) (at owner-layer)
+                                   (> (at owner-layer) (at from-layer)))
+                          (let [id (str "bi-" from-layer "-" (k f))]
+                            (-> (select-keys f [:title :file :line-start :line-end :priority :reach])
+                                (assoc :id id :handle id
+                                       :from-layer from-layer :owner-layer from-layer
+                                       :disposition :deviation :kind :broken-intermediate
+                                       :broken-intermediate-of (k f)
+                                       :of (or (get claims from-layer) from-layer)
+                                       :because (str "owned by " owner-layer ", above " from-layer
+                                                     ": its repair reaches " owner-layer
+                                                     "'s tip and not " from-layer
+                                                     "'s, which holds this defect by the stack's cut")))))))
+                (distinct))
+          (map-indexed vector rounds))))
+
+(defn- routed-deviations
+  "`broken-intermediates` over a round's `toc` and the run's rounds."
+  [toc rounds]
+  (broken-intermediates (mapv :label toc) (into {} (map (juxt :label :claim)) toc) rounds))
 
 (defn- where-file
   "The file in a ledger row's `:where` — `file:line`, or the file alone when the
@@ -1096,6 +1201,62 @@
                 (assoc t :prior-open (vec owed))
                 t))
             targets))))
+
+(declare answered-for merge-answered park-blocks?)
+
+(defn- with-rulings-against
+  "Hand each layer what is already ruled against its own patch, and what the
+   layers above it claim — see `prompts/ruled-against-block`.
+
+   The warden has always been shown what a layer's earlier readings settled;
+   the reviewer of that layer, which is the reader that re-raises it, was shown
+   none of it. A reviewer starts blank every round, so a settled finding at an
+   unchanged patch came back under a fresh id each time it was read: one
+   broken intermediate, ruled a deviation owned by the top layer, was reported
+   six times across two runs from the two layers beneath it.
+
+   Four sources, each the one that reaches its own case. What this run's
+   wardens settled of the layer, by label — `answered-for`; what earlier runs
+   settled of this exact patch, out of the workstream cache; the broken
+   intermediates the routing left at this layer's tip — `broken-intermediates`;
+   and every park standing on the layer, a question already put to a person.
+
+   `above` is the claims of the layers over this one, because a defect at this
+   layer's tip that a later layer claims to close is a broken intermediate and
+   not a defect of the change — and nothing else tells the reviewer of an
+   intermediate layer what the layers above it are for.
+
+   Never the composition pass, which judges the cut, not lines. Nothing it adds
+   reaches the cache key, for the reason `with-fix-memory` gives."
+  [targets ctx cached toc]
+  (let [rounds (mapv :findings (:history ctx))
+        routed (routed-deviations toc rounds)
+        parks  (get-in ctx [:carry :parks] {})
+        layers (vec (remove :stack? targets))]
+    (mapv (fn [t]
+            (if (some? (:composition t))
+              t
+              (let [above   (into []
+                                  (comp (drop-while #(not= (:label t) (:label %)))
+                                        (drop 1)
+                                        (keep (fn [{:keys [label brief]}]
+                                                (when-not (str/blank? (str (:claims brief)))
+                                                  {:label label :claim (:claims brief)}))))
+                                  layers)
+                    parked  (for [[k p] (sort-by key parks)
+                                  :when (= (:label t) (:owner-layer p))]
+                              {:id (str k) :title (:title p) :disposition :park
+                               :because (:because p)})
+                    against (-> (merge-answered (cache/answered cached (:patch-hash t))
+                                                (answered-for (:label t) rounds))
+                                (into (comp (filter #(= (:label t) (:from-layer %)))
+                                            (map #(select-keys % [:id :title :disposition :because])))
+                                      routed)
+                                (into parked))]
+                (cond-> t
+                  (seq against) (assoc :ruled-against (vec against))
+                  (seq above)   (assoc :above above)))))
+          targets)))
 
 (defn- with-answers
   "`rows` with each one a reviewer answered marked `:answered` — `answers` is the
@@ -1323,6 +1484,29 @@
                                    (cond-> t at (assoc :converged-at at))))))
                     targets)}))
 
+(defn- answered-by-park
+  "Split `review`, the targets `to-review` would read, into those still to be
+   read and those a standing park answers. `held` is the carry's `:park-held`:
+   each layer whose only debt was a blocking park, at the patch it was last
+   read at.
+
+   A layer whose only debt is a park cannot be settled by a reviewer — a park
+   is a question for a person — so re-reading it at the same patch buys
+   nothing, and every reading is another chance to re-raise the parked defect
+   under a fresh id for a warden to rule again. It is answered from its park
+   instead: skipped, and still owed, because the park still names it. A patch
+   that moved is new content and is read; so is a layer carrying a row the last
+   run left owed, which a reviewer can answer.
+
+   Never the composition target, whose question is whether the pieces fit."
+  [held review]
+  (let [held? (fn [t] (and (not (:stack? t))
+                           (:patch-hash t)
+                           (= (:patch-hash t) (get held (:label t)))
+                           (empty? (:prior-open t))))]
+    {:review (into [] (remove held?) review)
+     :held   (into [] (comp (filter held?) (map #(assoc % :park-held true))) review)}))
+
 (defn- collect-findings
   "Flatten every target's findings, stamping each with the target that reported
    it, and drop exact repeats.
@@ -1545,7 +1729,9 @@
                        :composition (:composition t)
                        :prior-fixes (:prior-fixes t)
                        :standing (:standing t)
-                       :prior-open (:prior-open t)})
+                       :prior-open (:prior-open t)
+                       :ruled-against (:ruled-against t)
+                       :above (:above t)})
                      :target t)]
         (announce-target! ctx "reviewed" t {:findings (count (:findings r))})
         r)
@@ -1650,7 +1836,10 @@
                                                                         targets))
                                                              inherit))
                          (with-prior-open (get-in ctx [:carry :inherited-open]))))
+        all     (with-rulings-against all ctx cached toc)
         {:keys [review skipped]} (to-review cached all)
+        {review :review held :held} (answered-by-park (get-in ctx [:carry :park-held]) review)
+        skipped (into skipped held)
         targets review
         _       (announce-targets! ctx {:review review :skipped skipped :cache cached})
         outcomes (in-parallel (map (fn [t] #(review-target! ctx t)) targets))
@@ -1675,13 +1864,17 @@
         ;; The FIRST failure is rethrown, in target order. Which of several
         ;; matters most is a judgement this makes no claim about; ordering it
         ;; makes the report of a round two reviewers died in reproducible.
+        ;;
+        ;; Quiet is what each reviewer READ, not what its status grants: the
+        ;; composition target is never granted `:converged` here, and pairing
+        ;; only grants left its quiet reading of an unchanged patch unpaired
+        ;; through every abort — `pair-quiet-readings` pairs on the reading.
         _        (when (seq failed)
                    (let [salvaged (salvaged-statuses results)]
                      (record-statuses! cwd (assoc ctx :cache cached) salvaged nil
-                                       (into #{} (keep (fn [[t st]]
-                                                         (when (= :converged st)
-                                                           (:patch-hash t))))
-                                             salvaged)))
+                                       (into #{} (comp (filter #(empty? (:findings %)))
+                                                       (keep (comp :patch-hash :target)))
+                                             results)))
                    (throw (with-aborted-round (:failure (first failed))
                             (aborted-round ctx results failed skipped toc))))
         ;; The whole-range target, and only what is a fact about that range:
@@ -1757,7 +1950,14 @@
             ;; `round-correctness` and `nido.review.prompts`). There is no
             ;; cross-check between layers to stand in for the second reading.
             statuses (when-not nothing? (record-review! cwd reading))
-            sampled  (read-once-targets statuses)
+            ;; A second reading is owed so the run may END over a quiet patch.
+            ;; A blocking park it is holding already decides how it ends —
+            ;; `:unresolved`, whatever the second reading finds — so the round
+            ;; would buy only a cache pairing, which the `:read-once` entry
+            ;; just written lets the next run make anyway.
+            parked?  (some #(and (= :park (:disposition %)) (park-blocks? %))
+                           (run-owed reading))
+            sampled  (when-not parked? (read-once-targets statuses))
             ctx'     (-> (with-quiet-reads reading statuses
                                            (quiet-patches results []))
                          (assoc :control (if (seq sampled) :next-round :stop)
@@ -1822,8 +2022,16 @@
         (assoc ctx :control :stop :status :workspace-drifted
                :drift (drift-record nil moved (recovery moved nil)))))))
 
+(declare stood-too-long)
+
 (defn- run-review-stage
-  "Ask whether the stack can be reviewed at all, then review it.
+  "Ask whether the round should run and whether the stack can be reviewed at
+   all, then review it.
+
+   A park that has stood too long ends the run before anything is read — see
+   `stood-too-long`. The round then read nothing, so the round before it is the
+   last that read the branch and its repairs are unchecked; `:review-aborted?`
+   is what says so to `nido.review.verdict/fold-rulings`.
 
    A stack holding conflict markers is not reviewable: the markers are in
    committed text, so a reviewer reads a namespace that does not parse and a
@@ -1834,10 +2042,18 @@
    into a second."
   [ctx]
   (let [{:keys [cwd base]} (:config ctx)
-        conflicted (stack-conflicts cwd base)]
+        stood (stood-too-long (get-in ctx [:carry :parks]) (:iter ctx))
+        conflicted (when-not stood (stack-conflicts cwd base))]
     (announce-conflicts! ctx conflicted)
-    (if (seq conflicted)
+    (cond
+      stood
+      (assoc ctx :control :stop :status :unfixable :unfixable stood :parks-stood stood
+             :findings [] :review-aborted? true)
+
+      (seq conflicted)
       (assoc ctx :control :stop :status :stack-conflicted :conflicted conflicted)
+
+      :else
       (try
         (fan-out-reviews ctx)
         (catch clojure.lang.ExceptionInfo e
@@ -2359,6 +2575,15 @@
                         (owed? t (conj seen (:id f)))))))]
     (concat (filter #(owed? % #{}) findings) (filter park-blocks? parks))))
 
+(defn- park-held-layers
+  "The layers whose every debt this round is a blocking park — see
+   `answered-by-park`. `parks` is the carry's, after this round's rulings."
+  [findings parks]
+  (let [blocking (filter park-blocks? (vals parks))
+        other    (into #{} (comp (remove #(= :park (:disposition %))) (keep :owner-layer))
+                       (owed-by findings nil))]
+    (into #{} (comp (keep :owner-layer) (remove other)) blocking)))
+
 (defn ^{:malli/schema [:=> [:cat :any :any :any] :any]}
   converged-targets
   "Pure: the targets this round left with nothing OWED, paired with the patch
@@ -2386,7 +2611,10 @@
    would.
 
    A finding an upper layer reported but a lower one owns leaves the upper layer
-   converged, correctly: nothing about it needs changing. Something open that
+   converged, correctly: nothing about it needs changing. The other direction
+   converges the reporter too, and there its tip still holds the defect, since
+   the repair lands above it — `broken-intermediates` records that as a
+   deviation against it, so converging it loses nothing. Something open that
    names no layer — a finding the warden gave no owner, a park raised for the
    shape of the stack rather than for a line in it — blocks none of them, but it
    is still open, so the whole-stack target holds it, and that target converging
@@ -2573,7 +2801,8 @@
      accounting decides whether it is open, kept or settled, and carrying the
      inherited copy beside it would count one defect twice.
    - the same defect raised again at the same file, line and title, which
-     `pass/finding-id` derives the same id from.
+     `pass/finding-id` derives the same id from — the row's `:aka`, when its
+     `:id` is the warden's handle.
    - an explicit answer with its evidence, marked on the row as `:answered`:
      a reviewer's `repaired`, by `fan-out-reviews`, or the design verdict's
      `inherited_answered`, by `nido.review.verdict/settled` after the loop. The
@@ -2587,7 +2816,9 @@
   [inherited rounds]
   (let [ruled (into #{} (comp (mapcat (juxt :id :handle)) (remove nil?))
                     (latest-rulings rounds))]
-    (into [] (remove #(or (:answered %) (contains? ruled (:id %)))) inherited)))
+    (into [] (remove #(or (:answered %) (contains? ruled (:id %))
+                          (contains? ruled (:aka %))))
+          inherited)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   unanswered-inherited
@@ -2785,16 +3016,24 @@
    and this looked up their complement; a target that owes something is recorded
    too, and that is the entry a next run comes back to.
 
+   The broken intermediates the routing left at a layer's tip are answers too —
+   see `broken-intermediates` — so a stack reviewer re-finding one meets a
+   warden that already holds it, rather than one ruling it new.
+
    Layers with nothing answered are dropped rather than carried as empty rows:
    the prompt block is evidence, and a layer named with nothing under it reads
    as a layer that was asked and had no answer."
   [ctx]
-  (let [rounds (mapv :findings (:history ctx))]
+  (let [rounds (mapv :findings (:history ctx))
+        routed (routed-deviations (:toc ctx) rounds)]
     (into []
           (keep (fn [{:keys [target]}]
                   (let [a (merge-answered
                            (cache/answered (:cache ctx) (:patch-hash target))
-                           (answered-for (:label target) rounds))]
+                           (into (answered-for (:label target) rounds)
+                                 (comp (filter #(= (:label target) (:from-layer %)))
+                                       (map #(select-keys % [:id :title :disposition :because])))
+                                 routed))]
                     (when (seq a)
                       {:label (:label target) :answered (vec a)}))))
           (:reviews ctx))))
@@ -3370,6 +3609,27 @@
             prior'
             (filter #(= :park (:disposition %)) ruled))))
 
+(defn- stood-too-long
+  "The keys of the carried `parks` that have stood `park-persists-for` rounds
+   by round `iter`, counting the round each was parked in; nil when none has.
+
+   A park is a question put to a human, and a run that keeps fixing around one
+   is answering a different question. Once a park has stood this long the loop
+   has nothing further to offer it, and stopping is the report — even while
+   other findings are still fixable, because those fixes are not what the
+   branch is waiting on.
+
+   Asked at the START of a round, and only there: whether the round runs is
+   decided by parks the rounds before it carried, which nothing this round
+   reads can change. Asked after the warden instead, it let a read-once round
+   go past it — that round has no warden — and let a warden round fan out its
+   reviewers, rule repairs, and then throw the repairs away to stop."
+  [parks iter]
+  (not-empty (vec (for [[k p] (sort-by key parks)
+                        :when (and (park-blocks? p)
+                                   (>= (inc (- iter (:since p))) park-persists-for))]
+                    k))))
+
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   carried-while-open
   "A per-layer carry, with every entry this round SETTLED taken out.
@@ -3445,7 +3705,9 @@
         ;; as one of them is filed under the row's id and answers it.
         inherited (unanswered-of (get-in ctx [:carry :inherited-open])
                                  (conj (mapv :findings (:history ctx)) (:findings ctx)))
-        handles (merge (into {} (map (juxt :id :id)) inherited)
+        handles (merge (into {} (mapcat (fn [{:keys [id aka]}]
+                                          (cond-> [[id id]] aka (conj [aka id]))))
+                             inherited)
                        (get-in ctx [:carry :handles] {}))
         ;; Read once and used twice: the block the warden is shown is the list
         ;; its quotes are checked against, so a citation that does not match is
@@ -3470,6 +3732,11 @@
                  :round    (:iter ctx)
                  :stance   (read-stance (first (project+ws-from-cwd cwd)))
                  :toc      (:toc ctx)
+                 :cited    (when (seq (:toc ctx))
+                             (cited-files cwd (:toc ctx)
+                                          (concat (:findings ctx)
+                                                  (map #(assoc % :file (where-file (:where %)))
+                                                       inherited))))
                  :parked   (vals (get-in ctx [:carry :parks] {}))
                  :inherited inherited
                  :inherited-standing (get-in ctx [:carry :inherited-standing])
@@ -3527,6 +3794,7 @@
                                                  (:rulings decision) handles
                                                  (mapv :findings (:history ctx))
                                                  (:findings ctx))))
+                       (of-a-claim (:toc ctx))
                        (within-the-fence cwd (:toc ctx)))
             parks (carried-parks (get-in ctx [:carry :parks] {}) ruled (:iter ctx))
             declines (carried-while-open (get-in ctx [:carry :fixer-declines] {}) ruled)
@@ -3535,19 +3803,6 @@
             ;; it was aimed at is settled, and holding it past that would tell
             ;; the next reviewer to look for a defect this round just closed.
             refused  (carried-while-open (get-in ctx [:carry :rolled-back] {}) ruled)
-            ;; A park is a question put to a human, and a run that keeps fixing
-            ;; around one is answering a different question. Once a park has
-            ;; stood this long the loop has nothing further to offer it, and
-            ;; stopping is the report — even while other findings are still
-            ;; fixable, because those fixes are not what the branch is waiting
-            ;; on. The warden said exactly this in its own prose and then
-            ;; returned :continue, because there was no state between "keep
-            ;; fixing" and "escalate".
-            stale (seq (for [[k p] parks
-                             :when (and (park-blocks? p)
-                                        (>= (inc (- (:iter ctx) (:since p)))
-                                            park-persists-for))]
-                         k))
             ctx' (assoc ctx
                         :warden  (cond-> decision relaunched (assoc :relaunched relaunched))
                         :findings ruled
@@ -3570,6 +3825,17 @@
                                                      (map (juxt :id :handle))
                                                      ruled)
                                       :parks parks
+                                      ;; Read off every target the round held,
+                                      ;; skipped ones too: a layer answered by
+                                      ;; its park this round stays answered at
+                                      ;; the patch it is still at.
+                                      :park-held (let [held (park-held-layers ruled parks)]
+                                                   (into {}
+                                                         (keep (fn [{:keys [label patch-hash]}]
+                                                                 (when (and patch-hash (contains? held label))
+                                                                   [label patch-hash])))
+                                                         (concat (map :target (:reviews ctx))
+                                                                 (:skipped ctx))))
                                       :fixer-declines declines
                                       :rolled-back refused
                                       ;; Shown the last run's standing list, this
@@ -3590,10 +3856,6 @@
                                           (= :stop (:decision decision)))
                                    :continue
                                    (:decision decision)))
-            ctx' (if stale
-                   (assoc ctx' :control :stop :status :unfixable
-                          :unfixable (vec stale))
-                   ctx')
             ;; What the round leaves each patch at, and the only reading of it:
             ;; the write is what resolves a reading into a status, so the stop
             ;; below is decided off what was written rather than off a second
@@ -3610,11 +3872,10 @@
             ;; it costs the one fan-out the rule is about and nothing else.
             ;;
             ;; Only a stop, and only one the stage did not already end the run
-            ;; on. `escalate` puts a design question to a human and a stale
-            ;; park has nothing further to offer; neither is waiting on another
-            ;; reading. A round that is CONTINUING anyway leaves this alone —
-            ;; its layers are about to be repaired or read again regardless,
-            ;; and the round did not go back for them.
+            ;; on. `escalate` puts a design question to a human, which no
+            ;; further reading answers. A round that is CONTINUING anyway
+            ;; leaves this alone — its layers are about to be repaired or read
+            ;; again regardless, and the round did not go back for them.
             hold?    (and (seq sampled) (= :stop (:control ctx')) (not (:status ctx')))]
         ;; A held round runs no fix stage, which is where a round is otherwise
         ;; entered in `:history`, so it is entered here.
