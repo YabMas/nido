@@ -759,14 +759,19 @@
    combination can see it change.
 
    A stratum is a level of the code, and its :interface is the vocabulary it provides to the
-   strata written in it — the claim a level makes. Its readings are of its level."
+   strata written in it — the claim a level makes. Its readings are of its level.
+
+   :read-at is where the author looked, as on a claim: an :interface or :hides is as universal as
+   any statement — `the rest calls only these` is refuted by one outside caller — and the search
+   that established it has to be somewhere the next reader can run it again."
   [:map {:closed true}
    [:id        string?]
    [:sort      [:enum :module :operation :kind :role :stratum]]
    [:hides     {:optional true} string?]
    [:interface {:optional true} string?]
    [:plays     {:optional true} [:vector {:min 1} string?]]
-   [:readings  {:optional true} [:vector ElementReading]]])
+   [:readings  {:optional true} [:vector ElementReading]]
+   [:read-at   {:optional true} [:vector string?]]])
 
 (def Claim
   "One claim about the area, the same in a baseline and a design.
@@ -3789,12 +3794,13 @@
   [{:keys [elements claims]} holds]
   (concat
    ["## Elements"]
-   (for [{:keys [id sort hides interface plays readings]} elements]
+   (for [{:keys [id sort hides interface plays readings read-at]} elements]
      (str "- `" id "` *(" (name sort) ")*"
           (when (seq plays) (str " played by " (str/join ", " (map #(str "`" % "`") plays))))
           (when hides (str " hides " hides))
           (when interface (str "\n  - interface: " interface))
-          (readings->markdown readings)))
+          (readings->markdown readings)
+          (when (seq read-at) (str "\n  - " (str/join ", " (map #(str "`" % "`") read-at))))))
    ["" "## Claims"]
    (for [{:keys [id about statement falsified-by evidence readings read-at drift]} claims]
      (str "- `" id "` " statement

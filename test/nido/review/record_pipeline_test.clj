@@ -2214,6 +2214,94 @@
                                                   :out-path "/x"})
                      ":stale")))
 
+;; ── A sweep of the class, and the question it leaves the next judge ───────
+
+(deftest a-stale-sibling-carries-its-reason-and-the-sweep-is-recorded
+  ;; A bare :stale id only unsettled the subject; the next judge re-read it cold and confirmed what
+  ;; the amender had said, with a reason, was false.
+  (let [answer {:record a-baseline
+                :stale [{:id "c1" :because "finding 1 shows the merge writes the log too"} "c2" {:id " "}]
+                :swept [{:finding 1 :amended ["c1"] :unaffected ["c3"]} {:finding 9 :amended ["x"]}]}
+        parsed (record/parse-amend-answer answer [a-finding] record/baseline-finding-base-key)]
+    (is (= #{"c1" "c2"} (:stale parsed)) "a bare id still names a subject, as answers did before reasons")
+    (is (= {"c1" "finding 1 shows the merge writes the log too"} (:stale-because parsed)))
+    (is (= [{:finding 1 :amended ["c1"] :unaffected ["c3"]}] (:swept parsed))
+        "a sweep of a finding the amender was never shown names nothing")
+    (let [[out _] (with-amend {:writes (fn [p] (spit p (pr-str answer)))} (ctx :findings [a-finding]))
+          phase   (persisted-phase :amend out)]
+      (is (= "finding 1 shows the merge writes the log too" (get-in out [:carry :stale-because "c1"]))
+          "carried to the next round's judge")
+      (is (= [{:finding 1 :amended ["c1"] :unaffected ["c3"]}] (:swept phase))
+          "and the report keeps what the sweep found, which is recorded nowhere else"))))
+
+(deftest the-next-judge-is-asked-the-stale-question
+  (let [seen (atom nil)]
+    (with-redefs [record/baseline-review! (fn [opts] (reset! seen opts)
+                                            {:format :baseline-review :verdict :sufficient :reason "ok"})
+                  record/append! (fn [_ _] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] a-baseline)
+                  settled/code-identity (fn [_] "tree-a")
+                  settled/ledgers (fn [_ _ _] [(assoc settling-ledger :ws-id "ws-1")])]
+      (run record/judge-stage (ctx :carry {:stale #{"c1" "c2"} :stale-because {"c1" "the merge writes it"}}))
+      (is (= {"c1" "the merge writes it" "c2" nil} (:stale @seen)))))
+  (let [p (record/baseline-prompt {:baseline a-baseline :stale {"c1" "the merge writes it"}})]
+    (is (str/includes? p "QUESTIONED BY THE LAST AMENDMENT"))
+    (is (str/includes? p "- [c1] the merge writes it")
+        "the judge rules on the amender's reason, not on a cold re-read")))
+
+(deftest refutations-gather-every-counterexample-a-lineage-found
+  (let [refutations #'record/refutations]
+    (is (= {"c1" [{:seq 3 :claim "the merge writes it" :cites ["a"]}
+                  {:seq 5 :claim "the sweep writes it" :cites ["b"]}]}
+           (refutations [{:seq 3 :findings [{:claim-id "c1" :claim "the merge writes it" :cites ["a"]}
+                                            {:claim-id "c2" :claim "gap" :blocks :goal-served :cites ["x"]}]}
+                         {:seq 5 :findings [{:claim-id "c1" :claim "the merge writes it" :cites ["a"]}
+                                            {:claim-id "c1" :claim "the sweep writes it" :cites ["b"]}]}]))
+        "distinct by what was found, oldest first, and a gap refutes nothing")))
+
+(deftest the-baseline-amender-is-shown-earlier-refutations-and-held-to-them
+  ;; A rewrite answering round five brought back the clause round one refuted, and round seven
+  ;; refuted it again with round one's counterexample: the amender saw only this round's findings.
+  (let [f (assoc a-finding :claim-id "c1")
+        p (record/amend-prompt {:baseline a-baseline :findings [f] :out-path "/x"
+                                :refuted-with {"c1" [{:seq 2 :claim "release happens before the write"
+                                                      :cites ["src/order/aggregate.clj:30"]}]}})]
+    (is (str/includes? p "WHAT THESE SUBJECTS HAVE BEEN REFUTED WITH BEFORE"))
+    (is (str/includes? p "entry 2: release happens before the write"))
+    (is (str/includes? p "A rewrite must not bring one back"))))
+
+(deftest the-baseline-amender-sweeps-the-class-and-narrows-to-the-finding
+  (let [p (record/amend-prompt {:baseline a-baseline :findings [a-finding] :out-path "/x"})]
+    (is (str/includes? p "SWEEP THE RECORD FOR EVERY FINDING YOU ACCEPT"))
+    (is (str/includes? p "repair it in this amendment")
+        "a sibling it names stale is repaired, not left for the next round to re-find")
+    (is (str/includes? p "NARROW TO THE FINDING, NOT PAST IT"))
+    (is (str/includes? p "a judge's counterexample is one reading of one site")
+        "wording taken from a finding is held to the universal check like the amender's own")
+    (is (str/includes? p "or on\nthe element whose :interface or :hides it establishes")
+        "an element's :interface has somewhere to name its search")
+    (is (str/includes? p "money amounts on an order") "the :bounded-by it may not extend past")
+    (is (str/includes? p "or by widening :bounded-by and reading"))
+    (is (str/includes? p "or name it under :unknowns"))))
+
+(deftest the-loop-writes-why-an-amendment-superseded-from-what-it-answered
+  (let [other (assoc a-finding :claim "the export re-sums" :cites ["the export"] :evidence ["src/x.clj:3"])
+        [_ appended] (with-amend {:prev (assoc a-baseline :seq 7 :at "t")
+                                  :writes (fn [p] (spit p (pr-str {:record (assoc a-baseline :area "corrected"
+                                                                                  :supersedes {:why "as the person asked"})
+                                                                   :disputes [{:finding 2 :because "no it does not"}]})))}
+                                 (ctx :findings [a-finding other]))
+        why (get-in (read-string appended) [:supersedes :why])]
+    (is (str/includes? why "answering the invoice renderer sums independently"))
+    (is (not (str/includes? why "the export re-sums")) "a finding the amender disputed was not answered")
+    (is (not (str/includes? why "as the person asked")) "and the amender's own account is not kept"))
+  (is (= "[c1] x" (#'record/answered-line {:claim-id "c1" :claim "x"}))))
+
+(deftest an-element-may-name-where-its-interface-was-read
+  (is (m/validate ledger-report/Element {:id "m" :sort :module :interface "only f"
+                                         :read-at ["rg -n 'm/f' src"]})))
+
 ;; ── What an amendment has to stay true beside ───────────────────────────────
 
 (def ^:private an-audit-baseline

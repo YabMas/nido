@@ -777,8 +777,10 @@
       ;; :unappended is the answer file holding an amendment the ledger refused
       ;; past every repair, and marks the phase refused rather than ok: that
       ;; amendment is a complete answer to the round, held nowhere else.
-      ;; :stale is the untouched subjects the amender said the accepted findings
-      ;; made false — put back to the next judge, and recorded nowhere else.
+      ;; :stale is the subjects no finding named that the amender said the accepted findings
+      ;; made false, and :stale-because its reason for each — put back to the next judge as its
+      ;; question, and recorded nowhere else. :swept is what its sweep of each accepted finding
+      ;; reported, by the finding's number: a sibling it passed over is visible only here.
       ;; :delta is the subjects the appended amendment added, changed and dropped, by id: what the
       ;; next judge is asked about again, which otherwise takes diffing two ledger entries.
       ;; :out-of-reach is each line the amender said only a record it may not write repairs, with
@@ -794,6 +796,8 @@
                 (:amend-error ctx) (assoc :amend-error (:amend-error ctx))
                 (seq (:amend-refusals ctx)) (assoc :refusals (vec (:amend-refusals ctx)))
                 (seq (:stale ctx)) (assoc :stale (vec (:stale ctx)))
+                (seq (:stale-because ctx)) (assoc :stale-because (into (sorted-map) (:stale-because ctx)))
+                (seq (:swept ctx)) (assoc :swept (vec (:swept ctx)))
                 (:amend-delta ctx) (assoc :delta (:amend-delta ctx))
                 (seq (:out-of-reach ctx)) (assoc :out-of-reach (vec (:out-of-reach ctx)))
                 (:amend-tree ctx) (assoc :tree (:amend-tree ctx))

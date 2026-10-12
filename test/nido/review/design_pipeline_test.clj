@@ -886,15 +886,61 @@
     (is (= (get-in once [:supersedes :why]) (get-in twice [:supersedes :why])))
     (is (= 6 (get-in twice [:supersedes :seq])))))
 
-(deftest a-citation-of-no-design-is-replaced-and-the-authors-reason-kept
+(deftest a-citation-of-no-design-is-replaced-and-the-loop-says-why
+  ;; An amender's :why credited a person with a change a judge asked for, and the next judge read
+  ;; the :why as provenance. What the amendment answered is the round's to say.
   (let [[_ appended]
         (with-redefs [ws/entry-at-seq (fn [_ _ n] (when (= 20 n) {:format :design-decision :seq 20}))]
           (with-amend {:prev (assoc a-design :seq 21)
                        :writes (fn [p] (spit p (pr-str {:record (assoc a-design :supersedes
-                                                                         {:seq 20 :why "goal-served narrowed"})})))}
+                                                                         {:seq 20 :why "the person narrowed goal-served"})})))}
                       (ctx :findings [(check :relation-honest :broken)]
-                           :record (decision :amend))))]
-    (is (= {:seq 21 :why "goal-served narrowed"} (:supersedes (read-string appended))))))
+                           :record (decision :amend))))
+        cited (:supersedes (read-string appended))]
+    (is (= 21 (:seq cited)))
+    (is (str/starts-with? (:why cited) "corrected against the code after round 1 of run r1, answering [relation-honest]")
+        "the :why names the round and the line it answered")
+    (is (not (str/includes? (:why cited) "the person"))
+        "and an amender's own account of the change is not what the ledger keeps")))
+
+(deftest the-design-amender-is-held-to-the-intent-the-strata-and-what-was-read
+  ;; Each was missing from the design amender and each cost rounds: a narrowing to an `accepted
+  ;; limit` a done-when rules out, a stratum added at the end of :strata, an element extended into
+  ;; code the baseline never read, and the instance repaired while its siblings stayed false.
+  (let [p (record/design-amend-prompt
+           {:design (assoc a-design :strata ["floor" "top"] :model {:elements [] :claims []})
+            :baseline {:format :baseline :bounded-by "the store namespaces only"}
+            :intent {:goal "every page renders without furniture" :done-when ["no page has a sidebar"]}
+            :recommend :amend :raised [] :out-path "/x"})]
+    (is (str/includes? p "every page renders without furniture"))
+    (is (str/includes? p "- no page has a sidebar"))
+    (is (str/includes? p "is a scope decision, not a repair: it goes under :out-of-reach")
+        "a residual a done-when names is the person's, not the record's")
+    (is (str/includes? p "STRATA ARE LISTED FLOOR FIRST"))
+    (is (str/includes? p "the store namespaces only"))
+    (is (str/includes? p "baseline is not this record to widen")
+        "a design amender answers bounded-out code by narrowing or asking, never by widening the baseline")
+    (is (str/includes? p "AND WHEN YOU CORRECT SOMETHING, REPLACE IT"))
+    (is (str/includes? p "SWEEP THE RECORD FOR EVERY FINDING YOU ACCEPT"))
+    (is (str/includes? p "or name it under :open")
+        "a design parks an unchecked universal where a design keeps open questions")
+    (is (str/includes? p "OMIT :supersedes")))
+  (let [p (record/design-amend-prompt {:design a-design :recommend :amend :raised [] :out-path "/x"})]
+    (is (not (str/includes? p "WHAT THE TASK IS FOR")) "no intent cited, none invented")
+    (is (not (str/includes? p "STRATA ARE LISTED FLOOR FIRST")) "a design naming no strata is told nothing of them")))
+
+(deftest the-design-amender-is-shown-what-its-subjects-were-refuted-with-before
+  (let [p (record/design-amend-prompt
+           {:design a-design :recommend :amend :out-path "/x"
+            :raised [{:check :goal-served :status :broken :claim-ids ["c1"] :note "n"}]
+            :findings [{:claim-id "c1" :claim "the rollout races" :cites ["src/a.clj:1"]}]
+            :refuted-with {"c1" [{:seq 40 :claim "listings overlap during deploy" :cites ["src/b.clj:9"]}
+                                 {:seq 44 :claim "the rollout races" :cites ["src/a.clj:1"]}]}})]
+    (is (str/includes? p "entry 40: listings overlap during deploy")
+        "an earlier counterexample a rewrite could bring back")
+    (is (not (str/includes? p "entry 44: the rollout races"))
+        "this round's finding is already in front of it, and is not shown twice")
+    (is (str/includes? p "A rewrite must not bring one back"))))
 
 (deftest a-refused-design-amendment-is-named-and-its-objections-kept
   ;; A round that ended on a refusal read `continued`, named no file, and dropped
@@ -921,7 +967,7 @@
         "and what a moved boundary names there, which is what the judge calls :revisit")
     (is (str/includes? p "carries a :stratified/level reading"))
     (is (str/includes? p "bb nido:review:amend:check :file /x") "the check it can run first")
-    (is (str/includes? p "LEAVE :supersedes :seq TO THE LOOP. It sets it to entry 21"))
+    (is (str/includes? p "OMIT :supersedes. The loop sets it to entry 21"))
     (is (str/includes? p "a number you guess names someone else's")
         "a follow-up ref it cannot file, it must not mint")))
 

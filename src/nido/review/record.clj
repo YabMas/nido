@@ -232,6 +232,22 @@
                  (when (seq (:evidence finding)) (str "\n  evidence: " (str/join ", " (:evidence finding)))))))
          "\n")))
 
+(defn- stale-block
+  "What the last amender said of the subjects it named :stale, put to the judge as the question to
+   rule on, or nil with none. `stale` is `{id reason}`, a reason nil where none was given.
+
+   The id alone only unsettles the subject, and a judge re-reading it cold confirmed a claim the
+   amender had said, with a reason, was false — the suspected defect never ruled on."
+  [stale]
+  (when (seq stale)
+    (str "\nQUESTIONED BY THE LAST AMENDMENT — the amender that wrote this record accepted a\n"
+         "finding it says made these subjects false, and repaired them or could not. Rule on\n"
+         "each against exactly that: confirm one only when what you read answers the\n"
+         "question, and cite what answers it in that id's evidence.\n\n"
+         (str/join "\n" (for [[id because] (sort-by key stale)]
+                          (str "- [" id "] " (or because "no reason given"))))
+         "\n")))
+
 (defn ^{:malli/schema [:=> [:cat] :string]}
   lens-block
   "The perspectives in play, with their verdicts and where each comes from.
@@ -324,12 +340,14 @@
          (str "\nELEMENTS — what the claims below are about, by the ids the declared design gives\n"
               "them. A module is what it HIDES; its interface is what is depended on from outside:\n"
               (str/join "\n"
-                        (map (fn [{:keys [id sort hides interface plays readings]}]
+                        (map (fn [{:keys [id sort hides interface plays readings read-at]}]
                                (str "- [" id "] (" (name sort) ")"
                                     (when (seq plays) (str "\n    played by: " (str/join ", " plays)))
                                     (when hides (str "\n    hides:     " hides))
                                     (when interface (str "\n    interface: " interface))
-                                    (readings-lines readings "    ")))
+                                    (readings-lines readings "    ")
+                                    (when (seq read-at)
+                                      (str "\n    read from: " (str/join ", " read-at)))))
                              elements))
               "\n"))
        (when (seq claims)
@@ -607,7 +625,7 @@
    whether the four derivations can still be made — against what `moved` names, the difference
    from the last verified record (`moved-block`). That is the one prompt told what changed: with no
    subject to judge there is no delta to read a subject through, and the delta is the question."
-  [{:keys [baseline disputes settled stance prior moved]}]
+  [{:keys [baseline disputes settled stance prior moved stale]}]
   (let [full     (judged-alone baseline)
         baseline (checks-of full (set (keys settled)))
         owed     (owed-rulings full settled)
@@ -803,6 +821,8 @@
       "the round is asked again, and a sufficient verdict over it does not stand."))
    (when-not derive?
      (prior-findings-block (apply dissoc prior (keys settled))))
+   (when-not derive?
+     (stale-block (apply dissoc stale (keys settled))))
    (disputes-block disputes)
    ;; Last thing in the window before the judge starts work. The level is stated
    ;; near the top, thousands of tokens back by the time the record has been
@@ -1272,7 +1292,7 @@
 
    `:relation-prior` is `relation-prior`'s: the last decision's rulings, shown beside the ids to rule
    on with whether the record moved under each since."
-  [{:keys [design baseline stance intent disputes settled levels prior answers relation-prior]}]
+  [{:keys [design baseline stance intent disputes settled levels prior answers relation-prior stale]}]
   (let [owes?        (report/owes-a-person? design)
         design       (judged-alone design)
         baseline     (judged-alone baseline)
@@ -1486,6 +1506,7 @@
    "still changing. Name a correction in asks only when the question depends on it.\n"
    (answered-block owes? (:seq design) (:open design) answers)
    (prior-findings-block (apply dissoc prior (keys settled)))
+   (stale-block (apply dissoc stale (keys settled)))
    (disputes-block disputes)
    (level-reminder :commitment))))
 
@@ -2662,7 +2683,7 @@
    hold (`moved-since`). A record reading as that one in all but its provenance launches no judge,
    and is answered by the verdict that one reached (`carried-review`)."
   [{:keys [cwd code-cwd run-id label disputes baseline settled listing subject-identities
-           reviewer prior] :as opts}]
+           reviewer prior stale] :as opts}]
   (if-let [[project ws-id] (ledger-of opts)]
     (if-let [baseline (or baseline (ws/latest-entry project ws-id :baseline))]
       (if (baseline-round-worth-running? baseline)
@@ -2684,6 +2705,7 @@
                                                                               :disputes disputes
                                                                               :settled settled
                                                                               :prior prior
+                                                                              :stale stale
                                                                               :moved (some->> (:baseline verified)
                                                                                               (moved-since baseline))
                                                                               :stance (stages/read-stance project)})})
@@ -2906,7 +2928,7 @@
    {:outcome :code-moved :answer <the decision>}. Either way a round whose tree moved carries
    `:tree-moved` (`tree-moved`), for the report; the caller takes it off before appending."
   [{:keys [cwd code-cwd run-id label disputes design settled listing subject-identities
-           reviewer prior] :as opts}]
+           reviewer prior stale] :as opts}]
   (if-let [[project ws-id :as ledger] (ledger-of opts)]
     (if-let [design (or design (ws/latest-entry project ws-id :design))]
       (or (unverified-premise project ws-id design)
@@ -2934,6 +2956,7 @@
                           :disputes disputes
                           :settled  settled
                           :prior    prior
+                          :stale    stale
                           :levels   levels
                           :answers  (answered project ws-id design)
                           :relation-prior prior-rs}
@@ -3684,8 +3707,11 @@
   parse-amend-answer
   "What an amender may hand back: an amended record, objections to what it was
    asked to amend for, or both — and, with the record, the reason for each claim it
-   removed on purpose (:withdrawn). With either, :stale: the ids of subjects it was
-   told to leave alone and believes the findings it accepted have made false.
+   removed on purpose (:withdrawn). With either, :stale: the ids of subjects no finding
+   named that it believes the findings it accepted have made false, whether it repaired them or
+   not; :stale-because, `{id reason}` for those it gave a reason for — an entry may be a bare id,
+   as every answer was before reasons were asked for; and :swept, what its sweep of each accepted
+   finding reported, as `[{:finding n :amended :stale :unaffected}]` keyed by the finding's number.
 
    A bare record — no wrapper — is still accepted, because that is what the
    answer was before there was anything to say back, and a shape change is not a
@@ -3703,6 +3729,7 @@
   [raw findings base-key]
   (when (map? raw)
     (let [record   (if (:format raw) raw (:record raw))
+          stale    (when-not (:format raw) (let [s (:stale raw)] (when (sequential? s) s)))
           numbered (fn [entries]
                      (vec (keep (fn [{:keys [finding because evidence]}]
                                   (let [i (dec (long (or finding 0)))
@@ -3730,9 +3757,22 @@
                         (when-not (:format raw)
                           (let [w (:withdrawn raw)] (when (sequential? w) (filter map? w)))))
        ;; Not checked against the record here: an id no subject carries unsettles nothing.
-       :stale (into #{} (comp (map #(str/trim (str %))) (remove str/blank?))
-                    (when-not (:format raw)
-                      (let [s (:stale raw)] (when (sequential? s) s))))})))
+       :stale (into #{} (comp (map #(str/trim (str (if (map? %) (:id %) %)))) (remove str/blank?))
+                    stale)
+       :stale-because (into {} (keep (fn [e]
+                                       (when (and (map? e) (not (str/blank? (str (:id e))))
+                                                  (not (str/blank? (str (:because e)))))
+                                         [(str/trim (str (:id e))) (str (:because e))])))
+                            stale)
+       :swept (vec (keep (fn [{:keys [finding] :as e}]
+                           (when (and (int? finding) (<= 1 finding (count findings)))
+                             (into {:finding finding}
+                                   (for [k [:amended :stale :unaffected]
+                                         :let [ids (get e k)]
+                                         :when (sequential? ids)]
+                                     [k (mapv str ids)]))))
+                         (when-not (:format raw)
+                           (let [w (:swept raw)] (when (sequential? w) (filter map? w))))))})))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   disputes-for-judge
@@ -3857,26 +3897,53 @@
   "What makes an amender's rewrite of a refuted claim true beyond the one counterexample it was
    handed. Every clause answers a way a rewrite has read as a repair and been the next round's
    finding: the cited site repaired while its siblings stayed false, an `only` exchanged for a new
-   closed list false over code the amender had just read, a :falsified-by the record itself
-   satisfies, and — for a design, which `baseline?` says is shown one — a widened quantifier that
-   crosses a property the baseline already holds of the code."
-  [baseline?]
+   closed list false over code the amender had just read, a clause or promise no finding asked
+   for, a universal lifted from the judge's own counterexample text, a :falsified-by the record
+   itself satisfies, and — for a design, which `baseline?` says is shown one — a widened quantifier
+   that crosses a property the baseline already holds of the code. `kind` names where a universal
+   nobody checked may be parked instead of asserted: a baseline's :unknowns, a design's :open."
+  [kind baseline?]
   (str "REPAIR THE CLASS, NOT THE INSTANCE. A counterexample is one member of the\n"
        "failure it exhibits. Name that class — not the launcher the judge cited but\n"
        "every process that can create the resource; not the writer it found but every\n"
        "writer of the table — find its other members, and restate the claim so it is\n"
        "true of all of them. A claim repaired at the cited site alone is refuted next\n"
-       "round by the member beside it.\n\n"
+       "round by the member beside it. A list or `every` claim is re-derived whole —\n"
+       "every public fn and its outside callers, every clause of the statement — never\n"
+       "patched by appending the member the judge named. A universal over what a\n"
+       "component reads or calls has members in what it calls in turn: follow them, or\n"
+       "bound the claim to the files you surveyed. A refuted summary — :shape, a\n"
+       "composition — is re-derived from the elements and claims it summarises, and may\n"
+       "cite them by id rather than restate them, so an exception refutes the sibling\n"
+       "once instead of the summary every round.\n\n"
        "NO UNIVERSAL YOU HAVE NOT CHECKED. `only`, `alone`, `none`, `no other`,\n"
        "`every`, `exactly when`, and any closed list of members are claims about\n"
-       "everything the code does, and one missing member refutes them. Write one only\n"
-       "after the search that establishes it, and name that search in :read-at beside\n"
-       "the sites it found — the grep over every writer, every caller, every public fn\n"
-       "of the namespaces surveyed — so the next reader can run it again. When a missing\n"
-       "member refuted a closed list, do not write a new list: state the promise the\n"
-       "list stood for, or check every member of the surveyed namespaces against the\n"
-       "new one first. A universal the code you just read contradicts is not a\n"
-       "correction.\n\n"
+       "everything the code does, and one missing member refutes them. So is every\n"
+       "behavioural assertion — `always`, `before`, `on its failure path` — and every\n"
+       "element's :interface, which is the closed list of what is depended on from\n"
+       "outside. This holds of every clause you add or rewrite, and of wording you take\n"
+       "from a finding: a judge's counterexample is one reading of one site, not a\n"
+       "search. Write one only after the search that establishes it, and\n"
+       "name that search in :read-at beside the sites it found — on the claim, or on\n"
+       "the element whose :interface or :hides it establishes — the grep over every\n"
+       "writer, every caller, every public fn of the namespaces surveyed, so the next\n"
+       "reader can run it again. Resolve each file's :require aliases before you\n"
+       "attribute a qualified call. Where operations differ, state them separately:\n"
+       "every conjunct holds of each operation it quantifies over.\n"
+       "When a missing member refuted a closed list, do not write a new list: state\n"
+       "the promise the list stood for, or check every member of the surveyed\n"
+       "namespaces against the new one first — and audit every other closed list and\n"
+       "universal in the same subject while you are there. A universal the code you\n"
+       "just read contradicts is not a correction.\n\n"
+       "NARROW TO THE FINDING, NOT PAST IT. Repair a refuted clause by narrowing it to\n"
+       "what the finding showed. Every clause no finding asked for is new surface the\n"
+       "next round has to check, and has been the next round's finding: prefer the\n"
+       "smallest rewrite, and a general statement over an enumeration unless the finding\n"
+       "asked for the enumeration. Where a finding cites a carve-out, state only the\n"
+       "boundary the claim needs, not the mechanism it excludes. A promise you newly\n"
+       "state carries its condition, or evidence for its unconditional form. A universal\n"
+       "the finding did not test is not asserted — leave it out, or name it under "
+       (if (= :design kind) ":open" ":unknowns") ".\n\n"
        ":falsified-by COVERS EVERY UNIVERSAL THE STATEMENT MAKES. A statement with two\n"
        "exclusivities needs a counterexample for each; a statement widened while its\n"
        ":falsified-by is narrowed leaves the new clause unfalsifiable. And check it\n"
@@ -3893,6 +3960,95 @@
          ".\n")
        "Where this prompt has a list headed WHAT YOUR REWRITE MUST STAY TRUE BESIDE,\n"
        "check against it, not against what you remember of the record.\n\n"))
+
+(defn- replace-rule
+  "HOW an amender corrects what it may touch, for either record. Its absence is what ran a loop out:
+   over six rounds on one baseline the composition went 405 characters to 4091 and the shape 271 to
+   2671, because every correction was appended as an exception to the sentence that was wrong rather
+   than replacing it, and each appended clause was the next round's finding — one field refuted
+   three rounds running for three DIFFERENT reasons, each about what the previous amendment added."
+  [noun]
+  (str "AND WHEN YOU CORRECT SOMETHING, REPLACE IT. Re-state the claim so that it is\n"
+       "simply true. Do not keep the sentence that was wrong and hang an exception\n"
+       "off it, and do not add a paragraph explaining the case the judge found.\n\n"
+       "A record that grows every round cannot converge, and not because anyone is\n"
+       "sloppy: every clause you add is another statement the next round has to\n"
+       "check, so a correction made by appending REPLACES one finding with several.\n"
+       "If a claim needs a page of qualification to stay true, it was the wrong\n"
+       "claim — say the simpler true thing instead, even if it says less. Expect a\n"
+       "corrected record to be about the length it was.\n\n"
+       "That rule is what lets this end. A sharper claim is a bigger target: a " noun "\n"
+       "saying `publishes ten vars` or `folds five event types` invites the next round\n"
+       "to count, and counting is always available. Rounds have gone by watching one\n"
+       "claim get sharper while another, freshly sharpened, became the next finding.\n"))
+
+(defn- refutations
+  "Every counterexample `reviews` — judgements of one record's lineage, oldest first — refuted a
+   subject with, as `{id [{:seq :claim :cites}]}`, oldest first and distinct by what was found. A
+   gap, an unsettled subject and a person's question refute nothing, and are left out. What the
+   amender is shown so a rewrite answering this round cannot bring back what an earlier one
+   refuted: it is shown only this round's findings otherwise, and a clause refuted in round one has
+   come back in round five and been refuted again with the same counterexample."
+  [reviews]
+  (reduce (fn [acc {n :seq :keys [findings]}]
+            (reduce (fn [acc {:keys [claim-id claim cites]}]
+                      (let [id (str claim-id)]
+                        (if (some #(= claim (:claim %)) (get acc id))
+                          acc
+                          (update acc id (fnil conj []) {:seq n :claim claim :cites (vec cites)}))))
+                    acc
+                    (filter #(and (:claim-id %) (:claim %)
+                                  (not (or (:blocks %) (:unsettled %) (:for-person %))))
+                            findings)))
+          {} reviews))
+
+(def ^:private refutations-shown
+  "How many of one subject's earlier refutations an amender is shown, newest kept: enough to see a
+   subject circling, and bounded because a lineage across runs has no end."
+  6)
+
+(defn- refutations-block
+  "What `refuted-with` (`refutations`) holds against `ids`, less what `findings` — this round's —
+   already put in front of the amender, or nil when nothing is left to show."
+  [refuted-with ids findings]
+  (let [now  (into #{} (keep :claim) findings)
+        rows (for [id (distinct (keep #(some-> % str not-empty) ids))
+                   :let [rs (take-last refutations-shown (remove #(now (:claim %)) (get refuted-with id)))]
+                   :when (seq rs)]
+               [id rs])]
+    (when (seq rows)
+      (str "WHAT THESE SUBJECTS HAVE BEEN REFUTED WITH BEFORE — each counterexample a judge\n"
+           "of this record's lineage, earlier in this run or before it, found against a\n"
+           "subject this round touches. A rewrite must not bring one back: wording one of\n"
+           "these falsifies is not a repair, it is that finding again, and it is found\n"
+           "again. Check what you write against every one of them.\n\n"
+           (str/join
+            "\n"
+            (for [[id rs] rows]
+              (str "- [" id "]\n"
+                   (str/join "\n"
+                             (for [{n :seq :keys [claim cites]} rs]
+                               (str "    " (if n (str "entry " n) "this run") ": " claim
+                                    (when (seq cites) (str "\n      citing: " (str/join "; " cites)))))))))
+           "\n\n"))))
+
+(defn- bounded-block
+  "What an amender is told about `bounded-by`, the :bounded-by of the baseline it answers to, or nil
+   with none. A repair that reaches into code the record says it never read is a clause with no
+   reading behind it, and each such repair has seeded the next refutation. `kind` is the record the
+   amender writes: only a baseline's amender may move the boundary."
+  [kind bounded-by]
+  (when-not (str/blank? (str bounded-by))
+    (str "WHAT THE BASELINE DID NOT READ. Its :bounded-by draws the boundary of what was\n"
+         "read, and what it leaves out was not:\n\n  " bounded-by "\n\n"
+         "A counterexample in code that boundary leaves out is answered by narrowing or\n"
+         "retracting the clause it refutes"
+         (if (= :design kind)
+           (str ", or by naming the gap under :out-of-reach, since\n"
+                "the baseline is not this record to widen.")
+           ", or by widening :bounded-by and reading what\nit then takes in.")
+         " Never by extending an element or claim into\n"
+         "code the record says it did not read.\n\n")))
 
 (defn- cited-files
   "The files `citations` point at: every `path:line` citation's path, and every token naming a path
@@ -4227,19 +4383,30 @@
     (:amend-tree written)  (assoc :amend-tree (:amend-tree written))))
 
 (def ^:private stale-rule
-  "What an amender does with a claim it was told to leave alone and now believes false. Without a
-   channel it can only keep the claim or break the rule, and a claim kept word for word stays
-   settled on a confirmation made before the finding it contradicts — the judge is never asked
-   again. Naming it changes no text, so the rule it answers to still holds."
-  (str "IF A FINDING YOU ACCEPT MAKES A CLAIM NOBODY CHALLENGED FALSE, NAME IT.\n"
-       "Leave its text exactly as it stands — the rule above still holds — and list its\n"
-       "id under :stale. It will not be treated as settled next round: the judge is\n"
-       "asked to check it. Name only a claim a finding you accepted contradicts, never\n"
-       "one you would merely word differently.\n\n"))
+  "What an amender does with every subject a finding it accepted bears on beyond the one it names.
+   A refuted fact is rarely stated once, and an amender told to change only what was named fixed
+   the instance and left its siblings stating the same fact — each re-found by a later round, one
+   per round. Made a reported sweep, so a sibling passed over is a visible omission; and a sibling
+   found false is repaired in the same amendment, since it is re-judged next round either way.
+   :stale with its reason is what puts it to that judge as a question rather than a cold re-read."
+  (str "SWEEP THE RECORD FOR EVERY FINDING YOU ACCEPT. A refuted fact is rarely stated\n"
+       "once. For each finding you accept, go through every subject of the record —\n"
+       "claim, element (its :hides and :interface), stratum reading, health observation —\n"
+       "and the prose beside them (:shape, a relation's :note), and find each whose\n"
+       "statement or :about rests on the fact it refuted. Report each under :swept as\n"
+       "amended, stale or unaffected.\n"
+       "A subject no finding named that the accepted finding makes FALSE is the one\n"
+       "exception to changing only what was refuted: repair it in this amendment, and\n"
+       "list it under :stale with :because — which finding it rests on, and what in it\n"
+       "was false. The next judge is asked exactly that. List there, too, a subject you\n"
+       "believe false and cannot repair here, and say why. Never name one you would\n"
+       "merely word differently.\n\n"))
 
 (def ^:private stale-field
-  "The answer-file line for `stale-rule`."
-  "Add :stale [\"id\" ...] only for a claim you left unchanged and believe false.\n")
+  "The answer-file lines for `stale-rule`."
+  (str "Add :stale [{:id \"id\" :because \"...\"}] for each subject no finding named that a\n"
+       "finding you accepted makes false, repaired or not, and :swept [{:finding 1\n"
+       ":amended [\"id\"] :stale [\"id\"] :unaffected [\"id\"]}] for each finding you accepted.\n"))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   amend-prompt
@@ -4267,8 +4434,11 @@
    A finding carrying :unsettled is neither: no reading could rule on its subject
    (`unsettled-findings`), and the amender is asked to rule on it instead, with removal of
    a claim on offer the same way. A round that found nothing else was judged sufficient,
-   which the opening says rather than calling it a refutation. `by-hand` is `withdrawal-block`'s."
-  [{:keys [baseline findings out-path stance declared? check-cmd settled refuted-running by-hand]}]
+   which the opening says rather than calling it a refutation. `by-hand` is `withdrawal-block`'s.
+   `refuted-with` is `refutations` over the baseline's lineage, shown for every subject the round
+   touches (`refutations-block`)."
+  [{:keys [baseline findings out-path stance declared? check-cmd settled refuted-running by-hand
+           refuted-with]}]
   (let [gaps?    (boolean (and (some :blocks findings)
                                 (every? #(or (:blocks %) (:unsettled %)) findings)))
         mixed?   (boolean (and (not gaps?) (some :blocks findings)))
@@ -4346,33 +4516,15 @@
           "unchanged — not restated, not sharpened, not made more precise.\n\n")
      (str (if unruled? "CHANGE ONLY WHAT IS NAMED BELOW." "CHANGE ONLY WHAT WAS REFUTED.")
           " A claim nobody challenged this round must come\n"
-          "back unchanged — not restated, not sharpened, not made more precise.\n\n"))
+          "back unchanged — not restated, not sharpened, not made more precise — unless\n"
+          "the sweep below finds a finding you accepted makes it false.\n\n"))
    stale-rule
-   ;; The rule above says WHICH statements to touch. This one says HOW, and its
-   ;; absence is what actually ran this loop out. Measured over six rounds on
-   ;; one baseline: the composition went 405 characters to 4091 and the shape 271
-   ;; to 2671, because every correction was appended as an exception to the
-   ;; sentence that was wrong rather than replacing it. Each appended clause was
-   ;; then the next round's finding — the same field was refuted three rounds
-   ;; running, for three DIFFERENT reasons, each one about something the
-   ;; previous amendment had added.
-   "AND WHEN YOU CORRECT SOMETHING, REPLACE IT. Re-state the claim so that it is\n"
-   "simply true. Do not keep the sentence that was wrong and hang an exception\n"
-   "off it, and do not add a paragraph explaining the case the judge found.\n\n"
-   "A record that grows every round cannot converge, and not because anyone is\n"
-   "sloppy: every clause you add is another statement the next round has to\n"
-   "check, so a correction made by appending REPLACES one finding with several.\n"
-   "If a claim needs a page of qualification to stay true, it was the wrong\n"
-   "claim — say the simpler true thing instead, even if it says less. Expect a\n"
-   "corrected record to be about the length it was.\n\n"
-   "That rule is what lets this end. A sharper claim is a bigger target: a baseline\n"
-   "saying `publishes ten vars` or `folds five event types` invites the next round\n"
-   "to count, and counting is always available. Rounds have gone by watching one\n"
-   "claim get sharper while another, freshly sharpened, became the next finding.\n"
+   (replace-rule "baseline")
    (if gaps?
      "Answer what was asked; leave the rest exactly as it stands.\n\n"
      "Fix what was refuted; leave the rest exactly as it stands.\n\n")
-   (sound-rewrite-rules false)
+   (sound-rewrite-rules :baseline false)
+   (bounded-block :baseline (:bounded-by baseline))
    "Read the cited code before you change a word of the record.\n\n"
    amender-reading
    "Do NOT edit any source file. This pass writes one file and nothing else.\n\n"
@@ -4416,8 +4568,13 @@
      findings))
    (withdrawal-block spent by-hand)
    (unsettled-block findings)
-   (some->> (bearing-block (bearing-subjects {:record baseline :findings findings :settled settled}))
-            (str "\n\n") str/trimr)
+   (let [bearing (bearing-subjects {:record baseline :findings findings :settled settled})]
+     (str (some->> (bearing-block bearing) (str "\n\n") str/trimr)
+          (some->> (refutations-block refuted-with
+                                      (concat (mapcat #(cons (:claim-id %) (:claim-ids %)) findings)
+                                              (map :id bearing))
+                                      findings)
+                   (str "\n\n") str/trimr)))
    (if gaps?
      "\n\nIF A DERIVATION CAN BE MADE ALREADY, SAY SO INSTEAD OF ADDING FOR IT.\n"
      "\n\nIF A FINDING IS WRONG ABOUT THE CODE, SAY SO INSTEAD OF AMENDING FOR IT.\n")
@@ -4459,7 +4616,8 @@
    ;; correct default only fires when the amender supplied nothing, deferring to
    ;; the guess. Say the field is not the amender's, and the loop now sets it.
    "OMIT :supersedes. The loop sets it to the record you were asked to repair,\n"
-   "which is what you want in every ordinary round. Your record is handed to you\n"
+   "which is what you want in every ordinary round, and writes its :why from the\n"
+   "findings you accepted. Your record is handed to you\n"
    "unstamped — :seq is the ledger's to give — so a number you write there is a\n"
    "guess, and it is checked: the usual guess is the entry the findings came\n"
    "from, which is the REVIEW, and a baseline may only supersede a baseline.\n"
@@ -4505,25 +4663,48 @@
    purpose. One `resolve` cannot find stands too — an unreadable ledger is not evidence the author
    was wrong.
 
-   The author's :why survives a replaced :seq; a :why merely copied off `prev` does not, and in its
-   place goes one naming this round, carrying `prev`'s own authored :why. `prev` with no :seq —
-   a record from outside this ledger — leaves `record` as it is. The last argument names the round
-   (`iter`, `run-id`) and how to read the ledger (`resolve`, a :seq to its entry or nil)."
-  [kind prev record {:keys [iter run-id resolve]}]
+   Where the loop sets the citation it writes the :why too, whatever the author put there: one
+   naming this round and what it answered — `answered`, a line per finding the amender accepted
+   (`answered-line`) — carrying `prev`'s own authored :why. What an amendment answered is the round's
+   to say: an amender's :why has credited a person with a change a judge asked for, and the next
+   judge reads it as provenance. `prev` with no :seq — a record from outside this ledger — leaves
+   `record` as it is. The last argument names the round (`iter`, `run-id`, `answered`) and how to
+   read the ledger (`resolve`, a :seq to its entry or nil)."
+  [kind prev record {:keys [iter run-id resolve answered]}]
   (let [cited     (get-in record [:supersedes :seq])
         resolved  (when cited (resolve cited))
         stale?    (and cited (= cited (get-in prev [:supersedes :seq])))
-        misnamed? (and resolved (not= kind (:format resolved)))
-        why       (get-in record [:supersedes :why])
-        own-why   (when (not= why (get-in prev [:supersedes :why])) why)]
+        misnamed? (and resolved (not= kind (:format resolved)))]
     (if (and (:seq prev) (or (nil? cited) misnamed? stale?))
       (assoc record :supersedes
              {:seq (:seq prev)
-              :why (or own-why
-                       (str loop-why-prefix iter " of run " run-id
-                            (some->> (authored-why (get-in prev [:supersedes :why]))
-                                     (str carried-marker))))})
+              :why (str loop-why-prefix iter " of run " run-id
+                        (when (seq answered) (str ", answering " (str/join "; " answered)))
+                        (some->> (authored-why (get-in prev [:supersedes :why]))
+                                 (str carried-marker)))})
       record)))
+
+(def ^:private answered-length
+  "How much of one finding's text an `answered-line` keeps: a :why names what was answered, and the
+   finding itself is on the ledger in full."
+  140)
+
+(defn- answered-line
+  "Finding `f` as one clause of a loop-written :why: the subject or check it names, and what it found,
+   cut to `answered-length`."
+  [f]
+  (let [id   (or (:claim-id f) (some-> (:check f) name) (some-> (:blocks f) name))
+        text (str/replace (str (or (:claim f) (:note f) (:needs f) "")) #"\s+" " ")
+        text (if (> (count text) answered-length) (str (subs text 0 answered-length) "…") text)]
+    (str (when id (str "[" id "] ")) text)))
+
+(defn- accepted
+  "The `findings` an amender's `answer` did not object to — nor, for a design, say lay out of its
+   reach: what its amendment answered."
+  [findings answer base-key]
+  (let [disputed (into #{} (map :key) (:disputes answer))
+        away     (into #{} (map (comp base-key :finding)) (:out-of-reach answer))]
+    (remove #(let [k (base-key %)] (or (disputed k) (away k))) findings)))
 
 (defn- humanized-lines
   "The humanized explain `h`, one line per error, each prefixed by where in the record it is."
@@ -4931,6 +5112,12 @@
      :detail  (str "this run's ledger " (name project) "/" ws-id
                    " stopped resolving from its cwd mid-run — re-run it once the session is back up")}))
 
+(defn- stale-questions
+  "The subjects the last amender named :stale, from `ctx`'s carry, as `stale-block` takes them."
+  [ctx]
+  (let [because (get-in ctx [:carry :stale-because])]
+    (into {} (map (fn [id] [id (get because id)])) (get-in ctx [:carry :stale]))))
+
 (defn- run-judge-stage
   [ctx]
   (let [{:keys [cwd code-cwd run-id reviewer]} (:config ctx)
@@ -4967,6 +5154,7 @@
                     :baseline subject
                     :settled settled
                     :prior prior
+                    :stale (stale-questions ctx)
                     :listing listing
                     :code-identity (:code-identity reading)
                     :subject-identities (:subject-identities reading)
@@ -4999,8 +5187,9 @@
                     (seq awaiting)  (assoc :spent-awaiting awaiting))
         ;; An amender's :stale speaks for the one round after it.
         ctx    (merge (-> (assoc ctx :settled settled :refuted-running running
+                                 :refuted-with (refutations (into lineage mine))
                                  :spent spent-now :spent-awaiting awaiting)
-                          (update :carry dissoc :stale)
+                          (update :carry dissoc :stale :stale-because)
                           (cond-> ledger (assoc-in [:carry :ledger] ledger)))
                       (when (:seq subject) {:judged-seq (:seq subject)})
                       (when-let [m (:tree-moved judged)] {:tree-moved m})
@@ -5095,6 +5284,7 @@
                    :check-cmd check
                    :settled   (:settled ctx)
                    :refuted-running (:refuted-running ctx)
+                   :refuted-with (:refuted-with ctx)
                    :by-hand   (when (and project (:seq prev) (:supersedes prev)
                                          (not (contains? (ws/amended-seqs project ws-id) (:seq prev))))
                                 (:seq prev))
@@ -5128,11 +5318,13 @@
               raw      (when (fs/exists? out-path)
                          (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
               answer   (parse-amend-answer raw (:findings ctx) baseline-finding-base-key)
-              ctx      (cond-> (assoc ctx :stale (vec (sort (:stale answer))) :amend-launch launch)
+              ctx      (cond-> (assoc ctx :stale (vec (sort (:stale answer))) :amend-launch launch
+                                :stale-because (:stale-because answer) :swept (:swept answer))
                          (amend-tree trespass out-path answer)
                          (assoc :amend-tree (amend-tree trespass out-path answer))
                          (seq (:stale answer))
-                         (assoc-in [:carry :stale] (:stale answer)))]
+                         (update :carry assoc :stale (:stale answer)
+                                 :stale-because (:stale-because answer)))]
           (cond
             (seq (:attributed trespass))
             (trespass-stop ctx trespass out-path answer)
@@ -5178,6 +5370,9 @@
                 ;; the recency the ledger's citations exist to refuse.
                 (let [cite    #(cite-corrected :baseline prev %
                                                {:iter (:iter ctx) :run-id run-id
+                                                :answered (map answered-line
+                                                               (accepted (:findings ctx) answer
+                                                                         baseline-finding-base-key))
                                                 :resolve (fn [n] (ws/entry-at-seq project ws-id n))})
                       written (append-amendment!
                                ctx {:kind :baseline
@@ -5919,9 +6114,12 @@
    a line refutes that it counts at `withdrawable-after` or more is handed over as spent, and may not
    be reworded at the same strength again. `:resurvey-outcome` (`resurvey-outcome`) is what a
    :resurvey's nested loop did to the premise: only a :corrected one may be called corrected, and
-   only it moves the citation."
+   only it moves the citation. `:intent` is `discover-intent`'s, the goal the judge derived
+   goal-served against: an amender not shown it narrowed a claim to an `accepted limit` a done-when
+   rules out, and rounds went on re-deriving the ask. `:refuted-with` is `refutations` over the
+   design's lineage (`refutations-block`)."
   [{:keys [design baseline recommend reason asks raised findings rulings out-path declared? check-cmd
-           settled refuted-running resurvey-outcome]}]
+           settled refuted-running resurvey-outcome intent refuted-with]}]
   (str
    "A read-only judge derived what could be derived about this DESIGN record,\n"
    "before any code is written, and it did not come out clean.\n\n"
@@ -5979,6 +6177,13 @@
    "making anything truer; every one of those is measured and reported to the\n"
    "human this decision escalates to.\n\n"
    "WHY: " reason "\n\n"
+   (when intent
+     (str "WHAT THE TASK IS FOR — the intent this design cites, which no amendment of it\n"
+          "may edit:\n" (:goal intent) "\n"
+          (when-let [d (seq (:done-when intent))]
+            (str "Done when:\n" (bullets d) "\n"))
+          "A repair that leaves something a done-when names unserved — an `accepted limit`,\n"
+          "a narrowed scope — is a scope decision, not a repair: it goes under :out-of-reach.\n\n"))
    "THE CURRENT DESIGN:\n\n" (pr-str (ws/unstamp design))
    (when baseline
      (str "\n\nTHE BASELINE IT CITES:\n\n" (pr-str (ws/unstamp baseline))))
@@ -6006,9 +6211,15 @@
                        (when (seq (:evidence f))
                          (str "\n  evidence: " (str/join ", " (:evidence f))))))
                 findings))))
-   (some->> (bearing-block (bearing-subjects {:record design :baseline baseline :settled settled
-                                              :findings (concat raised findings)}))
-            str/trimr (str "\n\n"))
+   (let [bearing (bearing-subjects {:record design :baseline baseline :settled settled
+                                    :findings (concat raised findings)})]
+     (str (some->> (bearing-block bearing) str/trimr (str "\n\n"))
+          (some->> (refutations-block refuted-with
+                                      (concat (mapcat #(cons (:claim-id %) (:claim-ids %))
+                                                      (concat raised findings))
+                                              (map :id bearing))
+                                      findings)
+                   str/trimr (str "\n\n"))))
    (when-let [ids (seq (relation-yardstick design baseline))]
      (str "\n\nTHE BASELINE'S IDS, which relation-honest is ruled on one by one"
           (if (seq rulings) ", as the judge ruled them" " — the judge ruled on none")
@@ -6031,9 +6242,20 @@
    "record each round, so a part nobody challenged that you restate anyway is a\n"
    "fresh chance for a check that held to stop holding. Rounds have gone by\n"
    "watching one derivation get answered while a rewritten neighbour became the\n"
-   "next one to fail. Fix what failed; leave the rest exactly as it stands.\n\n"
-   (str/trimr stale-rule) "\n"
-   "\n" (str/trimr (sound-rewrite-rules (some? baseline))) "\n"
+   "next one to fail. Fix what failed; leave the rest exactly as it stands — but\n"
+   "for what the sweep below finds a finding you accepted makes false.\n\n"
+   (str/trimr
+    (str stale-rule
+         (replace-rule "design")
+         "\n"
+         (sound-rewrite-rules :design (some? baseline))
+         (when (seq (:strata design))
+           (str "STRATA ARE LISTED FLOOR FIRST. :strata names the lowest level first — the one\n"
+                "every other is written in — and each after it is written in those before it.\n"
+                "A stratum you add goes in its place in that order, never at the end because it\n"
+                "is new.\n\n"))
+         (bounded-block :design (:bounded-by baseline))))
+   "\n"
    (when-not (str/blank? (str asks))
      (str "\n\nWHAT THE JUDGE LEFT FOR A PERSON — not yours to answer:\n  " asks "\n"))
    "\n\nIF A NUMBERED LINE IS WRONG ABOUT THE CODE, SAY SO INSTEAD OF AMENDING FOR IT,\n"
@@ -6069,11 +6291,12 @@
    ;; The record above is printed unstamped, so an amender asked for this field
    ;; guesses — the entry it read the findings from, or the citation already on
    ;; the record — and either guess loses the amendment or forks the lineage.
-   "LEAVE :supersedes :seq TO THE LOOP. It sets it to "
+   "OMIT :supersedes. The loop sets it to "
    (if-let [n (:seq design)] (str "entry " n ", ") "")
    "the design shown above,\n"
-   "which is what you are replacing. Give :supersedes {:why \"...\"} only to say why\n"
-   "in words of your own; that is kept.\n"
+   "which is what you are replacing, and writes its :why from the numbered lines you\n"
+   "answered: what this amendment answers is the round's to say, and a :why the\n"
+   "next judge reads as provenance must not credit a person with what a judge asked.\n"
    (level-reminder :commitment)))
 
 (defn- run-design-judge-stage
@@ -6102,6 +6325,7 @@
                   (design-decision!
                    {:cwd cwd :ledger ledger :code-cwd code-cwd :run-id run-id :reviewer reviewer
                     :design design :settled settled :prior prior :listing listing
+                    :stale (stale-questions ctx)
                     :code-identity (:code-identity reading)
                     :subject-identities (:subject-identities reading)
                     :label (str "design-decision-round-" (:iter ctx))
@@ -6131,8 +6355,9 @@
                  (seq spent-now) (assoc :spent spent-now)
                  (seq awaiting)  (assoc :spent-awaiting awaiting))
         ctx    (merge (-> (assoc ctx :settled settled :refuted-running running
+                                 :refuted-with (refutations (into lineage (when-not reused [record])))
                                  :spent spent-now :spent-awaiting awaiting)
-                          (update :carry dissoc :stale)
+                          (update :carry dissoc :stale :stale-because)
                           (cond-> ledger (assoc-in [:carry :ledger] ledger)))
                       (when (:seq design) {:judged-seq (:seq design)})
                       (when-let [m (:tree-moved judged)] {:tree-moved m})
@@ -6455,7 +6680,7 @@
   "What the design amender is told to repair `prev` for this round's `recommend`, shown `baseline`
    beside it and answering into `out-path`."
   [ctx prev recommend baseline out-path declared?]
-  (let [[project ws-id] (ledger-of (:config ctx))]
+  (let [[project ws-id :as ledger] (ledger-of (:config ctx))]
     (design-amend-prompt
      {:design prev
       :baseline baseline
@@ -6471,6 +6696,8 @@
       :check-cmd (when (and project ws-id) (amend-check-cmd project ws-id :design out-path))
       :settled (:settled ctx)
       :refuted-running (:refuted-running ctx)
+      :refuted-with (:refuted-with ctx)
+      :intent (discover-intent ledger prev)
       :resurvey-outcome (:resurvey-outcome ctx)
       :declared? declared?})))
 
@@ -6508,11 +6735,13 @@
           raw      (when (fs/exists? out-path)
                      (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
           answer   (parse-amend-answer raw (:findings ctx) design-finding-base-key)
-          ctx      (cond-> (assoc ctx :stale (vec (sort (:stale answer))) :amend-launch launch)
+          ctx      (cond-> (assoc ctx :stale (vec (sort (:stale answer))) :amend-launch launch
+                                :stale-because (:stale-because answer) :swept (:swept answer))
                      (amend-tree trespass out-path answer)
                      (assoc :amend-tree (amend-tree trespass out-path answer))
                      (seq (:stale answer))
-                     (assoc-in [:carry :stale] (:stale answer)))]
+                     (update :carry assoc :stale (:stale answer)
+                             :stale-because (:stale-because answer)))]
       (cond
         (seq (:attributed trespass))
         (trespass-stop ctx trespass out-path answer)
@@ -6552,6 +6781,9 @@
                 :else
                 (let [cite    #(cite-corrected :design prev %
                                                {:iter (:iter ctx) :run-id run-id
+                                                :answered (map answered-line
+                                                               (accepted (:findings ctx) answer
+                                                                         design-finding-base-key))
                                                 :resolve (fn [n] (ws/entry-at-seq project ws-id n))})
                       written (append-amendment!
                                ctx {:kind :design
