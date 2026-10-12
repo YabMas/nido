@@ -622,7 +622,8 @@
       ;; editing the live worktree can be told from an agent the loop launched.
       ;; :detail and :answer are what an outcome carries in place of a review, and
       ;; the ledger holds neither: :detail says why there is no verdict, :answer is
-      ;; a judgment that was made and refused (`:code-moved`), findings and all.
+      ;; a judgment that was made and refused (`:code-moved`, or an :unusable-answer
+      ;; whose :refused names the rule it broke), findings and all.
       ;; The report is the only place either can be read, so a fold that drops
       ;; them loses them.
       ;; A design decision carries no :verdict; what it decided is :recommend, with :asks for a
@@ -740,6 +741,8 @@
                 (seq (:refuted-running ctx))            (assoc :refuted-running (into (sorted-map) (:refuted-running ctx)))
                 (and (get-in ctx [:record :outcome]) (get-in ctx [:record :detail]))
                 (assoc :detail (get-in ctx [:record :detail]))
+                (get-in ctx [:record :refused])
+                (assoc :refused (name (get-in ctx [:record :refused])))
                 (get-in ctx [:record :answer])
                 (assoc :answer (get-in ctx [:record :answer]))
                 (and (get-in ctx [:record :outcome]) (nil? (get-in ctx [:record :verdict]))

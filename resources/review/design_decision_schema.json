@@ -210,7 +210,7 @@
     },
     "asks": {
       "type": "string",
-      "description": "The question the human still has to answer, with everything derived taken off the table. Required whatever you recommend. Never answer it yourself."
+      "description": "The question the human still has to answer, with everything derived taken off the table. Required on ask; on any other recommendation empty when nothing is left for a person to decide. Never answer it yourself."
     },
     "asks_about": {
       "type": "array",

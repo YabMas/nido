@@ -2746,10 +2746,12 @@
    Which is why it never decides. Asked 'should we?', a model returns yes-with-
    suggestions forever, so the question is split by who can answer it: everything
    derivable is derived into :checks, and :asks carries the irreducible judgement
-   — worth doing, now, at this cost — to a human. :asks is required on every
-   branch, :recommend included: this round prepares an approval, it does not
-   grant one. A person reads it only where one is stopped: a :proceed on a design
-   that `owes-a-person?`, or an :ask. A :proceed on a design owing nobody clears it
+   — worth doing, now, at this cost — to a human. :asks is required, and never
+   blank, only on an :ask, which stops for it. On any other branch it is absent
+   when nothing is left for a person — a grant or an answer already covers it —
+   and otherwise the question a person is asked once the decision has been acted
+   on. A person reads it only where one is stopped: a :proceed on a design that
+   `owes-a-person?`, or an :ask. A :proceed on a design owing nobody clears it
    (`DesignCleared`) and its :asks is recorded for nobody in particular, which the
    judge is told before it answers.
 
@@ -2766,7 +2768,6 @@
                 [:design-seq int?]
                 [:reason     string?]
                 [:checks     [:vector {:min 1} DerivedCheck]]
-                [:asks       string?]
                 ;; Optional because a round can still be run once, by hand, and
                 ;; a one-shot round has no trajectory to report — not because
                 ;; a looped one may omit it.
@@ -2838,15 +2839,18 @@
                 [:judged-by          {:optional true} JudgedBy]
                 [:tree               {:optional true} JudgedTree]]
         common (into common Ruling)
+        ;; Never blank where present: a blank asks is the judge saying nothing is left for a person,
+        ;; and stored it reads as a question nobody can answer.
+        asks   [:asks {:optional true} [:re #"\S"]]
         shape  (fn [recommend & extra]
                  (into [:map {:closed true}]
                        (concat common [[:recommend [:= recommend]]] extra)))]
     [:multi {:dispatch :recommend}
-     [:proceed  (shape :proceed)]
-     [:amend    (shape :amend    [:findings [:vector {:min 1} RecordFinding]])]
-     [:recut    (shape :recut    [:findings [:vector {:min 1} RecordFinding]])]
-     [:resurvey (shape :resurvey [:findings [:vector {:min 1} RecordFinding]])]
-     [:ask      (shape :ask      [:findings {:optional true} [:vector RecordFinding]])]]))
+     [:proceed  (shape :proceed  asks)]
+     [:amend    (shape :amend    asks [:findings [:vector {:min 1} RecordFinding]])]
+     [:recut    (shape :recut    asks [:findings [:vector {:min 1} RecordFinding]])]
+     [:resurvey (shape :resurvey asks [:findings [:vector {:min 1} RecordFinding]])]
+     [:ask      (shape :ask      [:asks [:re #"\S"]] [:findings {:optional true} [:vector RecordFinding]])]]))
 
 (def DesignDecisionPreUnderivable
   "READ SHAPE for :design-decision — the same record with two-outcome checks.
@@ -3251,8 +3255,7 @@
    or :resurvey and the decision does not proceed anyway — or nil when :asks is a question a person
    can answer now.
 
-   :asks is written on every branch, and on a repair it is posed over the record as it will be once
-   repaired. Shown as a question open now, it asks a person to grant scope over corrections nobody
+   On a repair :asks, when present, is posed over the record as it will be once repaired. Shown as a question open now, it asks a person to grant scope over corrections nobody
    has made, and a run the cap ended at its judgement makes none. A surface showing :asks labels it
    as conditional when this is non-nil."
   [decision]

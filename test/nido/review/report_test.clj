@@ -623,6 +623,16 @@
               (report/apply-event {:event :run-finalized :status :asked :ctx {} :at "t3"} nil))]
     [(first (:rounds r)) (first (:phases (first (:rounds r))))]))
 
+(deftest a-refused-design-answer-says-which-rule-and-what-it-found
+  ;; Seen live: a refused answer's phase read findings [] beside a generic detail, so a judge whose
+  ;; three findings were thrown away looked like one that found nothing.
+  (let [[_ ph] (design-judge-phase {:outcome :unusable-answer :refused :asks-blank
+                                    :detail  "the answer was refused (asks-blank): it recommended ask and left asks empty"
+                                    :answer  {:recommend :ask :findings [{:claim "c1 misses it" :cites ["a.clj:1"]}]}})]
+    (is (= "asks-blank" (:refused ph)) "the rule is a field a reader can count, not only prose")
+    (is (= ["c1 misses it"] (mapv :claim (get-in ph [:answer :findings]))))
+    (is (= "unjudged" (:status ph)) "and nothing was judged, whatever the answer said")))
+
 (deftest a-design-judge-phase-keeps-its-relation-rulings-and-inconsistencies
   ;; A ruling reversed between rounds was findable only in the raw decision output; the report is
   ;; where a reader compares one round with the next.

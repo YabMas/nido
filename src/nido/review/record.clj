@@ -1458,10 +1458,12 @@
    "as outside this round's checks. Each one ends up confirmed, named by a finding,\n"
    "or in unchecked with why it cannot be checked here. A claim left without a\n"
    "ruling is asked again, and a proceed over it does not stand.\n\n"
-   "asks is REQUIRED whatever you recommend: state what the human still has to\n"
-   "answer, with everything you derived already taken off the table — and with it\n"
-   "what the record's open notes state is decided and what a grant or a person's\n"
-   "answer already covers.\n"
+   "asks states what the human still has to answer, with everything you derived\n"
+   "already taken off the table — and with it what the record's open notes state is\n"
+   "decided and what a grant or a person's answer already covers.\n"
+   "On ask it is REQUIRED: the question is what the ask stops for. On any other\n"
+   "recommendation leave it EMPTY when nothing is left for a person to decide. An\n"
+   "empty asks is how you say so; a sentence saying so is read as a question.\n"
    "ONE question per decision they must make, each in one or two sentences, worded\n"
    "as what changes for the users or the operator — never as a claim id or the\n"
    "mechanism. A person who must learn the record's vocabulary to follow a question\n"
@@ -1892,11 +1894,35 @@
   "The checks that rule on the decomposition — what a :recut asks to redo."
   #{:decomposable :stratified :routing-coherent})
 
+(def ^:private refusal-rules
+  "Each rule `parse-design-decision` refuses a decision for: :broke, what the refused answer did,
+   for the round's :detail; :keep, what the judge is told when it is asked again (`reask-refused!`).
+   :parse-error has no :keep, because an answer that is not JSON names no rule to re-ask about."
+  {:bad-recommend          {:broke "recommend is none of proceed, ask, amend, recut, resurvey"
+                            :keep  "recommend is exactly one of: proceed, ask, amend, recut, resurvey."}
+   :no-asked-checks        {:broke "it ruled on none of the checks this round defines"
+                            :keep  "Rule on every check this round defines, under the name it is given above."}
+   :asks-blank             {:broke "it recommended ask and left asks empty"
+                            :keep  (str "An ask stops for a person, and asks is the question they read: write it.\n"
+                                        "If no question is left for a person, recommend what your findings support.")}
+   :amend-without-findings {:broke "it recommended a repair and filed no finding saying what to repair"
+                            :keep  (str "A repair is carried out from its findings: file each defect, citing what\n"
+                                        "it falsifies. If nothing derivable blocks the design, recommend proceed.")}
+   :parse-error            {:broke "it is not the JSON a decision is returned as"}})
+
 (defn ^{:malli/schema [:=> [:cat :string :any [:set :keyword] [:? [:maybe [:set :string]]] [:? :any]
                            [:? [:maybe [:set :string]]]]
                      :map]}
   parse-design-decision
-  "Codex JSON -> a :design-decision ledger record, or nil when unusable.
+  "Codex JSON -> a :design-decision ledger record, or {:refused <rule> :answer <what it said>} when
+   the answer breaks a rule a decision must keep — the rule one of `refusal-rules`' keys. :answer is
+   the refused decision's recommend, reason, checks, findings and asks, which nothing appends: the
+   report is the only place a refused judgement's findings can still be read. An answer that is not
+   JSON at all is refused as :parse-error, with no :answer and the exception's :message.
+
+   :asks is required only of an :ask, the one recommendation that stops for its question. On any
+   other a blank asks says nothing is left for a person — a grant or an answer already covers it —
+   and the record carries no :asks.
 
    `asked` is the checks the round's prompt defined (`report/derivations-of` its design). A
    check outside it is one the judge was never asked: it is dropped from :checks and named under
@@ -1946,19 +1972,29 @@
                      :amend
                      said)
           rulings  (parse-rulings (:relation_rulings m))
-          asks     (str (:asks m))]
-      ;; An :ask needs no finding: what it hands on is the question, and a doubt the build must not
-      ;; start without is one whether or not it breaks a check.
-      (when (and (#{:proceed :amend :recut :resurvey :ask} r)
-                 (seq checks)
-                 (not (str/blank? asks))
-                 (or (#{:proceed :ask} r) (seq findings)))
-        (cond-> (with-ruling {:format :design-decision
-                              :recommend r
-                              :design-seq design-seq
-                              :reason (str (:reason m))
-                              :checks checks
-                              :asks asks}
+          asks     (str/trim (str (:asks m)))
+          ;; An :ask needs no finding: what it hands on is the question, and a doubt the build must
+          ;; not start without is one whether or not it breaks a check.
+          refused  (cond
+                     (not (#{:proceed :amend :recut :resurvey :ask} r)) :bad-recommend
+                     (empty? checks)                                   :no-asked-checks
+                     (and (= :ask r) (str/blank? asks))                :asks-blank
+                     (and (not (#{:proceed :ask} r)) (empty? findings)) :amend-without-findings)]
+      (if refused
+        {:refused refused
+         :answer  (cond-> {:recommend (or (#{:proceed :amend :recut :resurvey :ask} r) (str (:recommend m)))
+                           :reason    (str (:reason m))
+                           :checks    checks}
+                    (seq findings)          (assoc :findings findings)
+                    (not (str/blank? asks)) (assoc :asks asks))}
+        (cond-> (with-ruling (cond-> {:format :design-decision
+                                      :recommend r
+                                      :design-seq design-seq
+                                      :reason (str (:reason m))
+                                      :checks checks}
+                               ;; Blank on anything but an :ask is the judge saying nothing is left
+                               ;; for a person, and is stored as no question rather than an empty one.
+                               (not (str/blank? asks)) (assoc :asks asks))
                              m)
           ;; Only an ask has a question for a finding to be the person's: on any other
           ;; recommendation every finding is the amender's, whatever the judge marked.
@@ -1972,7 +2008,7 @@
           (seq rulings)                          (assoc :relation-rulings rulings)
           (seq unasked)                          (assoc :unasked-checks unasked)
           (not= said r)                          (assoc :judge-recommended said))))
-    (catch Exception _ nil)))
+    (catch Exception e {:refused :parse-error :message (or (ex-message e) (str (class e)))})))
 
 (defn- mismatched
   "The ids of `ids` whose ruling in `ruled` (by id) disagrees with `breaks`, the slugs :breaks lists:
@@ -2214,17 +2250,28 @@
    unusable, which is a different fact from the judge never speaking.
 
    A judgement — a parse carrying :format — keeps who answered as :judged-by, so a stand-in's
-   ruling is appended and reported as the stand-in's."
+   ruling is appended and reported as the stand-in's.
+
+   A parse that refused the answer by name (`parse-design-decision`'s :refused) is still
+   :unusable-answer, carrying the rule as :refused and in :detail, and the refused judgement as
+   :answer."
   [result parse]
   (if-let [json (:ok result)]
     (if-let [parsed (parse json)]
+      (if-let [rule (:refused parsed)]
+        (cond-> {:outcome :unusable-answer
+                 :refused rule
+                 :detail  (str "the answer was refused (" (name rule) "): "
+                               (get-in refusal-rules [rule :broke])
+                               (when (:message parsed) (str " — " (:message parsed))))}
+          (:answer parsed) (assoc :answer (:answer parsed)))
       (let [{:keys [reviewer instead-of because]} (:judged-by result)]
         ;; Only the shape the ledger's closed schema admits: an append it refuses is lost whole.
         (cond-> parsed
           (and (:format parsed) (keyword? reviewer))
           (assoc :judged-by (cond-> {:reviewer reviewer}
                               (keyword? instead-of) (assoc :instead-of instead-of)
-                              (string? because)     (assoc :because because)))))
+                              (string? because)     (assoc :because because))))))
       {:outcome :unusable-answer
        :detail "the answer did not satisfy what a round must return"})
     result))
@@ -2345,6 +2392,29 @@
                                              :prompt (str prompt (self-contradiction-block decision ids))))
                           parse)]
         (assoc (if (:format again) again decision) :self-contradicted ids)))))
+
+(defn- reask-refused!
+  "`result`, or the judge's second answer when its first was refused by a rule a decision must keep
+   (`judged`'s :refused, other than :parse-error) — asked once more with the rule named, under the
+   same prompt and parse. `round` is `run-round!`'s options for the decision round.
+
+   A refusal is the judge saying something nido will not record, not the judge failing to answer, so
+   it costs one ask rather than the round. One more ask, not a loop: a second answer that is refused
+   or fails leaves the first refusal, whose :answer is what the judge said."
+  [result round prompt parse]
+  (let [rule (:refused result)]
+    (if (or (nil? rule) (= :parse-error rule))
+      result
+      (let [again (judged (run-round! (assoc round
+                                             :label  (str (or (:label round) "design-decision") "-refused")
+                                             :prompt (str prompt "\nYOUR LAST ANSWER WAS REFUSED, AND NOTHING IN IT WAS RECORDED: "
+                                                          (get-in refusal-rules [rule :broke]) ".\n"
+                                                          (get-in refusal-rules [rule :keep])
+                                                          "\nAnswer the whole decision again.\n")))
+                          parse)]
+        (if (:format again)
+          again
+          (update result :detail str "; asked again, and the second answer was not usable either"))))))
 
 (defn ^{:malli/schema [:=> [:cat :map :DeclaredElements] [:vector :string]]}
   unresolved-subjects
@@ -2875,6 +2945,7 @@
                                                  (into #{} (keep :id) (model/claims design)))
                 result   (-> (run-round! (assoc round :prompt prompt))
                              (judged parse)
+                             (reask-refused! round prompt parse)
                              (reask-self-contradicted! round prompt parse)
                              (rule-unruled-relations! relation round asking)
                              (held-to-prior prior-rs)

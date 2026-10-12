@@ -2255,6 +2255,40 @@
       (is (= :amend (:recommend out)) "a re-ask that fails leaves the first answer standing")
       (is (= ["c1"] (:self-contradicted out))))))
 
+(deftest a-refused-decision-is-asked-again-naming-the-rule
+  ;; Seen live: sixteen design runs ended :unusable-answer on one broken rule, each discarding a
+  ;; complete judgement, and the driver re-ran the whole round against the same prompt.
+  (let [calls    (atom [])
+        refused  {:recommend "amend" :reason "r" :asks ""
+                  :checks [{:check "goal_served" :status "broken" :note "n"}]
+                  :findings [] :unchecked [] :relation_rulings []}
+        repaired (assoc refused :findings [{:claim-id "c1" :check "goal_served" :cites ["x"] :claim "c1 misses it"}])
+        run      (fn [answers]
+                   (reset! calls [])
+                   (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                                 ws/latest-entry (fn [_ _ k] (when (= :design k) (assoc a-design :seq 5)))
+                                 standing/of-design (constantly {:decidable? true})
+                                 stages/cited-baseline (fn [_ _] {:format :baseline :seq 1})
+                                 stages/read-stance (constantly nil)
+                                 record/discover-intent (constantly nil)
+                                 record/run-round! (fn [opts]
+                                                     (let [n (count (swap! calls conj opts))]
+                                                       (answers (dec n))))]
+                     (record/design-decision! {:cwd "/w" :run-id "r1" :label "l"})))
+        out      (run [{:ok (json/generate-string refused)} {:ok (json/generate-string repaired)}])]
+    (is (= 2 (count @calls)) "a refusal costs one more ask, not the round")
+    (is (str/includes? (:prompt (second @calls)) "filed no finding saying what to repair")
+        "the judge is told which rule its answer broke, or it repeats the answer")
+    (is (= :amend (:recommend out)))
+    (is (report/validate-event :design-decision out) "and the second answer reaches the ledger")
+    (let [out (run [{:ok (json/generate-string refused)} {:ok (json/generate-string refused)}])]
+      (is (= 2 (count @calls)) "one more ask, not a loop")
+      (is (= :unusable-answer (:outcome out)))
+      (is (= :amend-without-findings (:refused out)) "the run ends naming the rule, for the report")
+      (is (= :amend (get-in out [:answer :recommend])) "and what the judge said is kept beside it"))
+    (run [{:ok "not json"}])
+    (is (= 1 (count @calls)) "an answer that is not JSON names no rule to re-ask about")))
+
 (deftest a-run-judges-the-ledger-it-pinned-at-start
   ;; Seen live: round 1 appended its decision, the session restarted, and round 2 re-resolved
   ;; the workstream from cwd, found none and ended the run :no-workstream — on a workstream the

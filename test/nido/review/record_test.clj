@@ -508,31 +508,79 @@
     (is (str/includes? (:asks r) "worth doing now"))
     (is (= r (report/validate-event :design-decision r)))))
 
-(deftest a-decision-without-asks-is-a-non-answer
-  (is (nil? (record/parse-design-decision
+(deftest an-ask-without-a-question-is-refused
+  (is (= :asks-blank
+         (:refused (record/parse-design-decision
+                    (json/generate-string
+                     {:recommend "ask" :reason "scope"
+                      :checks [{:check "relation_honest" :status "held" :note "ok"}]
+                      :findings [] :asks "  "})
+                    4 any-era)))
+      "an ask stops for a person, and the question is the whole of what it hands them"))
+
+(deftest a-blank-asks-on-anything-but-an-ask-is-nothing-left-for-a-person
+  ;; Seen live: sixteen design runs whose grants covered every decision answered asks "" as the
+  ;; prompt told them, and every one was discarded whole as :unusable-answer.
+  (doseq [[recommend findings] [["proceed" []]
+                                ["amend" [{:claim-id "c1" :cites ["a.clj:1"] :claim "c1 misses it"}]]]]
+    (let [r (record/parse-design-decision
              (json/generate-string
-              {:recommend "proceed" :reason "fine"
+              {:recommend recommend :reason "the grant covers it"
                :checks [{:check "relation_honest" :status "held" :note "ok"}]
-               :findings [] :asks ""})
-             4 any-era))
-      "the round prepares an approval; one that asks nothing has granted it"))
+               :findings findings :asks ""})
+             4 any-era)]
+      (is (= (keyword recommend) (:recommend r)) "a judgement with nothing left to ask is still a judgement")
+      (is (not (contains? r :asks))
+          "stored blank, it reads to every later round as a question somebody still owes")
+      (is (= r (report/validate-event :design-decision r)) "and the ledger takes it"))))
+
+(deftest the-ledger-takes-no-blank-asks
+  (let [d {:format :design-decision :recommend :proceed :design-seq 4 :reason "r"
+           :checks [{:check :relation-honest :status :held :note "n"}]}]
+    (is (report/validate-event :design-decision d))
+    (is (thrown? Exception (report/validate-event :design-decision (assoc d :asks " ")))
+        "a blank asks is a question nobody can answer, read as one somebody owes")
+    (is (thrown? Exception (report/validate-event :design-decision (assoc d :recommend :ask)))
+        "an ask with no question stops a person for nothing")))
 
 (deftest a-decision-that-derived-nothing-is-a-non-answer
-  (is (nil? (record/parse-design-decision
-             (json/generate-string
-              {:recommend "proceed" :reason "looks good to me"
-               :checks [] :findings [] :asks "ship it?"})
-             4 any-era))
+  (is (= :no-asked-checks
+         (:refused (record/parse-design-decision
+                    (json/generate-string
+                     {:recommend "proceed" :reason "looks good to me"
+                      :checks [] :findings [] :asks "ship it?"})
+                    4 any-era)))
       "handing a human an unreduced question is the rubber stamp with garnish"))
 
 (deftest a-non-proceed-recommendation-must-carry-findings
-  (is (nil? (record/parse-design-decision
-             (json/generate-string
-              {:recommend "recut" :reason "feels wrong"
-               :checks [{:check "decomposable" :status "broken" :note "cannot state layers"}]
-               :findings [] :asks "recut?"})
-             4 any-era))
-      "saying the design is wrong without citing anything is the same theatre"))
+  (let [r (record/parse-design-decision
+           (json/generate-string
+            {:recommend "recut" :reason "feels wrong"
+             :checks [{:check "decomposable" :status "broken" :note "cannot state layers"}]
+             :findings [] :asks "recut?"})
+           4 any-era)]
+    (is (= :amend-without-findings (:refused r))
+        "saying the design is wrong without citing anything is the same theatre")
+    (is (nil? (:format r)) "and nothing in it is a record the ledger could take")))
+
+(deftest a-refusal-names-the-rule-and-keeps-what-was-said
+  ;; Seen live: every refusal read "the answer did not satisfy what a round must return", and the
+  ;; refused judgement's findings were readable only in the raw answer file.
+  (let [parse  #(record/parse-design-decision % 4 any-era)
+        result (#'record/judged {:ok (json/generate-string
+                                       {:recommend "ask" :reason "scope" :asks ""
+                                        :checks [{:check "goal_served" :status "broken" :note "n"}]
+                                        :findings [{:claim-id "c1" :cites ["a.clj:1"] :claim "c1 misses it"}]})}
+                                parse)]
+    (is (= :unusable-answer (:outcome result)))
+    (is (= :asks-blank (:refused result)))
+    (is (str/includes? (:detail result) "asks-blank") "the report says which rule, not that one was broken")
+    (is (= ["c1"] (mapv :claim-id (get-in result [:answer :findings])))
+        "a refused judgement's findings are kept for the report, which is the only place they survive")
+    (is (= :bad-recommend (:refused (parse (json/generate-string
+                                            {:recommend "maybe" :reason "r" :asks "a"
+                                             :checks [{:check "goal_served" :status "held" :note "n"}]})))))
+    (is (= :parse-error (:refused (#'record/judged {:ok "not json"} parse))))))
 
 (deftest a-design-with-no-cited-intent-says-so-and-asks-for-underivable
   (let [p (record/design-prompt {:design design})]
@@ -1258,11 +1306,12 @@
         "a blocking defect filed under a phantom check must not be waived as the advisory cut")
     (is (= r (report/validate-event :design-decision r)) "the ledger takes the note"))
   (testing "a decision whose every check was unasked derived nothing"
-    (is (nil? (record/parse-design-decision
-               (json/generate-string {:recommend "proceed" :reason "r" :asks "a"
-                                      :checks [{:check "decomposable" :status "held" :note "n"}]
-                                      :findings []})
-               12 (set report/strata-derivations))))))
+    (is (= :no-asked-checks
+           (:refused (record/parse-design-decision
+                      (json/generate-string {:recommend "proceed" :reason "r" :asks "a"
+                                             :checks [{:check "decomposable" :status "held" :note "n"}]
+                                             :findings []})
+                      12 (set report/strata-derivations)))))))
 
 (deftest the-strata-a-record-names-resolve-against-the-declaration
   (let [listing {:status :listed
