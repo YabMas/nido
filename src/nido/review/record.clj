@@ -5900,8 +5900,11 @@
                           ;; given for any other drop does not make it a withdrawal.
                           offered  (merge (unsettled-claims prev (:findings ctx))
                                           (withdrawable prev (:findings ctx) (:refuted-running ctx)))
+                          ;; A health observation's reason passes too: it withdraws no claim, and
+                          ;; is what a dropped observation is reported with.
                           retreats (retreat/baseline-retreats
-                                    prev record (select-keys (:withdrawn answer) (keys offered))
+                                    prev record (select-keys (:withdrawn answer)
+                                                             (concat (keys offered) (keep :id (:health prev))))
                                     (:findings ctx))
                           ;; Stamped, not as the amender wrote it. The judge
                           ;; labels its verdict with the :seq of the record it
@@ -5915,6 +5918,8 @@
                                       :disputes disputes
                                       :amend-refusals (:refusals written)
                                       :amend-delta (subject-delta prev record)
+                                      :growth (retreat/growth (or (get-in ctx [:carry :as-authored]) prev) record)
+                                      :record-size (count (pr-str (ws/unstamp record)))
                                       :history (conj (vec (:history ctx)) (entry retreats true)))]
                       ;; :as-authored is set once and never overwritten — it is
                       ;; the record the RUN started from, which is what growth
@@ -5923,7 +5928,7 @@
                       ;; `prev` on the first round is exactly it.
                       (-> (assoc ctx' :amended? true)
                           (update :carry #(-> (or % {})
-                                              (assoc :under-repair stamped)
+                                              (assoc :under-repair stamped :growth (:growth ctx'))
                                               (update :as-authored (fn [x] (or x prev)))))
                           (cond-> (not (baseline-round-worth-running? record))
                             (assoc :control :stop :status :retreated))))))))))))))
@@ -6060,7 +6065,7 @@
             (seq findings) (assoc :found (mapv design-finding-label findings))
             (seq asked) (assoc :asked (mapv design-finding-label asked))
             (some? amended?) (assoc :amended (boolean amended?))
-            (seq retreats) (assoc :weakened (mapv #(str (name (:what %)) " — " (:detail %)) retreats))
+            (seq retreats) (assoc :weakened (mapv retreat/line retreats))
             (seq disputes) (assoc :disputed (mapv :claim disputes))))
         history)))
 
@@ -7423,14 +7428,23 @@
                       record  (:record written)]
                   (if (:status written)
                     (refused-stop ctx written disputes)
-                    (let [retreats (retreat/design-retreats prev record)]
-                      (assoc ctx
-                             :amended? true
-                             :retreats retreats
-                             :disputes disputes
-                             :amend-refusals (:refusals written)
-                             :amend-delta (subject-delta prev record)
-                             :history (conj (vec (:history ctx)) (entry retreats true)))))))]
+                    (let [retreats (retreat/design-retreats prev record (:findings ctx))
+                          growth   (retreat/growth (or (get-in ctx [:carry :as-authored]) prev) record)]
+                      ;; :as-authored is the design the run's first amendment read, set once:
+                      ;; what growth is measured against, as on the baseline loop. :growth rides
+                      ;; :carry as well, for the terminal report of a run that ends on a judgement.
+                      (-> (assoc ctx
+                                 :amended? true
+                                 :retreats retreats
+                                 :disputes disputes
+                                 :amend-refusals (:refusals written)
+                                 :amend-delta (subject-delta prev record)
+                                 :growth growth
+                                 :record-size (count (pr-str (ws/unstamp record)))
+                                 :history (conj (vec (:history ctx)) (entry retreats true)))
+                          (update :carry #(-> (or % {})
+                                              (assoc :growth growth)
+                                              (update :as-authored (fn [x] (or x prev))))))))))]
           (cond-> out
             ;; A line the amender says only a record it may not write repairs is the person's, and
             ;; the decision already on the ledger holds their question. Asked now, with the line

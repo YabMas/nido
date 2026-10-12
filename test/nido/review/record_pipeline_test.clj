@@ -2035,6 +2035,19 @@
             "still the record the run began with, not the previous round's")
         (is (= second-amend (:under-repair (:carry out2))))))))
 
+(deftest each-amendment-reports-growth-since-the-record-as-authored
+  ;; Seen live: a record grew 2.4× across a lineage of amends, each round reporting retreats [] and
+  ;; nothing else, so the arc could not be read off the report at all.
+  (let [grown (assoc a-baseline :composition (apply str (repeat 50 "and one more clause ")))]
+    (with-redefs [ws/entry-at-seq (fn [_ _ _] nil)]
+      (let [[out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record grown})))}
+                                (ctx :findings [a-finding]))]
+        (is (= [:composition] (map :field (:growth out)))
+            "measured against the record the run began with")
+        (is (= (:growth out) (:growth (:carry out)))
+            "and carried, so a run that ends on a later judgement still reports it")
+        (is (pos-int? (:record-size out)) "and the record's size after the amendment is kept")))))
+
 ;; ── Naming what a correction corrects ───────────────────────────────────────
 
 (deftest a-corrected-baseline-names-the-baseline-it-corrects

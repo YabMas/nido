@@ -18,6 +18,7 @@
    [nido.review.pass :as pass]
    [nido.review.record :as record]
    [nido.review.report :as rreport]
+   [nido.review.retreat :as retreat]
    [nido.review.stages :as stages]
    [nido.review.verdict :as verdict]
    [nido.session.lifecycle :as lifecycle]
@@ -1617,7 +1618,7 @@
         final-rec (assoc authored :composition (apply str (repeat 4000 "x")))]
     (with-redefs [rloop/run-loop
                   (fn [_] {:status :unfixable
-                           :carry {:as-authored authored :under-repair final-rec}})]
+                           :carry {:growth (retreat/growth authored final-rec)}})]
       (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
         (is (str/includes? out "Grown past checking"))
         (is (str/includes? out "composition"))
@@ -1627,7 +1628,7 @@
   (let [r {:format :baseline :composition "short and true" :shape "one boundary"}]
     (with-redefs [rloop/run-loop
                   (fn [_] {:status :sufficient
-                           :carry {:as-authored r :under-repair r}})]
+                           :carry {:growth (retreat/growth r r)}})]
       (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
         (is (not (str/includes? out "Grown past checking")))))))
 

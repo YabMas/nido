@@ -784,6 +784,9 @@
       ;; reported, by the finding's number: a sibling it passed over is visible only here.
       ;; :delta is the subjects the appended amendment added, changed and dropped, by id: what the
       ;; next judge is asked about again, which otherwise takes diffing two ledger entries.
+      ;; :record-size is the characters of the record this round's amendment appended, and
+      ;; :growth each prose field and subject grown past checking since the record as authored (`nido.review.retreat/growth`): read down the rounds, the arc of a record
+      ;; growing, which no single amendment's retreats show.
       ;; :out-of-reach is each line the amender said only a record it may not write repairs, with
       ;; the line itself — what the run then stopped to ask the person, and held nowhere else.
       ;; :launch is how the amender's agent ended — exit code, turns, transcript, and `:failed`
@@ -800,6 +803,8 @@
                 (seq (:stale-because ctx)) (assoc :stale-because (into (sorted-map) (:stale-because ctx)))
                 (seq (:swept ctx)) (assoc :swept (vec (:swept ctx)))
                 (:amend-delta ctx) (assoc :delta (:amend-delta ctx))
+                (:record-size ctx) (assoc :record-size (:record-size ctx))
+                (seq (:growth ctx)) (assoc :growth (vec (:growth ctx)))
                 (seq (:out-of-reach ctx)) (assoc :out-of-reach (vec (:out-of-reach ctx)))
                 (:amend-tree ctx) (assoc :tree (:amend-tree ctx))
                 (:amend-launch ctx) (assoc :launch (:amend-launch ctx))

@@ -2049,6 +2049,7 @@
       :amended          (count (filter :amended? history))
       :unappended       (:amend-unappended final)
       :weakened         (count (mapcat :retreats history))
+      :unasked          (count (retreat/unasked (mapcat :retreats history)))
       :disputed         (count (mapcat :disputes history))
       :record-seq       (or (:design-seq rec) (:baseline-seq rec))
       ;; A claim refuted with no check broken is as broken at the end as a check is, and is the
@@ -2185,9 +2186,7 @@
     ;; section cannot report: it answers "did the record claim LESS", and a
     ;; record talked out of checkability claims more. A run reported that it had
     ;; given nothing up while its composition went from four sentences to a page.
-    (when-let [g (retreat/growth-summary
-                  (retreat/growth (get-in final [:carry :as-authored])
-                                  (get-in final [:carry :under-repair])))]
+    (when-let [g (retreat/growth-summary (get-in final [:carry :growth]))]
       (println "  Grown past checking — a claim this long is one nobody can check:")
       (println g))
     ;; The pipeline's own remedies first, then the ones every record loop shares.

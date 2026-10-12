@@ -63,14 +63,15 @@
                                {:id "k2" :about ["canvas.x/m"] :statement "two" :falsified-by "f"
                                 :evidence {:by :round}}]}}
         rs (retreat/design-retreats d (update-in d [:model :claims] pop))]
-    (is (= #{:invariants-fewer :claim-dropped} (whats rs)))
+    (is (= #{:claim-dropped} (whats rs))
+        "the dropped id is the whole fall, so the count would report the same loss twice")
     (is (some #(= "claim k2 is no longer made" (:detail %)) rs))))
 
 (deftest a-dropped-property-is-a-retreat-and-names-the-evidence-nothing-cites
   (let [curr (update base-baseline :load-bearing pop)
         rs   (retreat/baseline-retreats base-baseline curr)]
-    (is (= #{:load-bearing-fewer :evidence-dropped :claim-dropped} (whats rs))
-        "counted, named by id, and its orphaned evidence named too")
+    (is (= #{:evidence-dropped :claim-dropped} (whats rs))
+        "named by id, and its orphaned evidence named too — not counted again as a fall")
     (is (some #(= {:claim-id "c5" :places ["src/b.clj:2"]} (select-keys % [:claim-id :places])) rs))))
 
 (deftest a-claim-withdrawn-with-a-reason-is-reported-once-with-that-reason
@@ -90,7 +91,7 @@
   (testing "a second claim dropped beside a withdrawn one is still a plain drop"
     (let [curr (assoc base-baseline :load-bearing [])
           rs   (retreat/baseline-retreats base-baseline curr {"c5" "gone"})]
-      (is (= #{:claim-withdrawn :load-bearing-fewer :claim-dropped :evidence-dropped} (whats rs)))
+      (is (= #{:claim-withdrawn :claim-dropped :evidence-dropped} (whats rs)))
       (is (some #(= "claim c4 is no longer made" (:detail %)) rs)
           "the reason given for one removal does not excuse another")
       (is (some #(= {:claim-id "c4" :places ["src/a.clj:1"]} (select-keys % [:claim-id :places])) rs))
@@ -345,15 +346,15 @@
                          {:id "mod-invoice" :module "invoice" :hides "layout" :interface "renders a total"}))]
     (is (= [] (retreat/baseline-retreats modular-baseline curr)))))
 
-(deftest a-rename-that-hides-a-real-drop-is-still-caught-by-the-count
+(deftest a-rename-that-hides-a-real-drop-is-still-caught-by-id
+  ;; Seen live: one dropped module reported as module-dropped AND modules-fewer 13 → 12, one
+  ;; decision counted as two weakenings.
   (let [curr (-> modular-baseline
                  (update :modules pop)
                  (assoc-in [:modules 0 :module] "calc — reworded"))
         rs   (retreat/baseline-retreats modular-baseline curr)]
-    (is (contains? (whats rs) :modules-fewer)
-        "the count is the reliable signal")
-    (is (contains? (whats rs) :module-dropped)
-        "and once it fires, the names are the best detail available")))
+    (is (= #{:module-dropped} (whats rs))
+        "the id names the drop whatever the rename did, and the count adds nothing to it")))
 
 (deftest dropping-a-reading-is-dropping-analysis
   ;; A reading is where the analysis lives, so losing one loses analysis whatever
@@ -467,3 +468,172 @@
            details))
     (is (empty? (filter #(= :emptied (:what %))
                         (retreat/design-retreats prev prev))))))
+
+;; ── A multi-file citation is several files ──────────────────────────────────
+
+(deftest every-file-in-a-citation-anchors-its-own-lines
+  ;; Seen live: `google.clj:2534, login_code.clj:219,664,786, …` reported as google.clj:219,
+  ;; google.clj:616 … — places nobody cited — while the ones really dropped went unreported.
+  (let [cite "google.clj:2534, login_code.clj:219,664,786, email.clj:616,638, result_boundary.clj:163"
+        prev (with-evidence "src/a.clj:1" cite)
+        curr (with-evidence "src/a.clj:1")
+        [r]  (retreat/baseline-retreats prev curr)]
+    (is (= ["google.clj:2534" "login_code.clj:219" "login_code.clj:664" "login_code.clj:786"
+            "email.clj:616" "email.clj:638" "result_boundary.clj:163"]
+           (:places r))
+        "each bare line belongs to the nearest file before it")))
+
+(deftest a-citation-widened-across-files-is-not-a-drop
+  ;; Seen live: `(content/ingest.clj:105, 178-179)` widened to cite execute.clj as well was read as
+  ;; one file, execute.clj, and both ingest.clj places reported dropped.
+  (let [prev (with-evidence "(content/ingest.clj:105, 178-179)" "content/ingest.clj:161")
+        curr (with-evidence "the job (execute.clj:1426-1427), and content/ingest.clj (content/ingest.clj:103-113, 160-226)")]
+    (is (= [] (retreat/baseline-retreats prev curr))
+        "every place the old citation named is inside a range the new one names")))
+
+(deftest a-judge-citing-the-full-path-re-points-the-short-one
+  (let [prev  (with-evidence "content/ingest.clj:166" "content/ingest.clj:300")
+        curr  (with-evidence "content/ingest.clj:159")
+        found [{:claim-id "c7" :evidence ["src/main/brian/content/ingest.clj:159"]}]]
+    (is (= [["content/ingest.clj:300"]]
+           (map :places (retreat/baseline-retreats prev curr nil found)))
+        "the judge's path and the record's name one file, so the move answers for :166")))
+
+;; ── Narrowing in place, by id ────────────────────────────────────────────────
+
+(def ^:private model-design
+  {:format :design :strata [] :effort :M :standing {:relation :conforms}
+   :baseline {:seq 1 :relation :extends}
+   :shape "Every passage is read whole. Page breaks are marked inline."
+   :model {:elements [{:id "canvas.x/store" :sort :module :hides "how rows are keyed and stored"}]
+           :claims   [{:id "one-analysis" :about ["canvas.x/store"] :evidence {:by :round}
+                       :statement "at most one analysis of a blob runs at a time"
+                       :falsified-by "two analyses of one blob in flight at once"}
+                      {:id "no-furniture" :about ["canvas.x/store"] :evidence {:by :round}
+                       :statement "no page furniture reaches a passage"
+                       :falsified-by "furniture text in a block or in a passage"}]}})
+
+(defn- narrowed [rs] (filter (comp #{:narrowed} :what) rs))
+
+(deftest an-exception-added-to-a-kept-claim-is-a-narrowing
+  ;; Seen live, run after run: a claim kept its id while its :falsified-by gained 'other than after
+  ;; the first job's lease lapsed', and the headline said 0 weakenings.
+  (let [curr (assoc-in model-design [:model :claims 0 :falsified-by]
+                       "two analyses of one blob in flight at once other than after the first job's lease lapsed")
+        [r]  (narrowed (retreat/design-retreats model-design curr))]
+    (is (= "one-analysis" (:id r)))
+    (is (= [:exception-added] (:signals r)))
+    (is (re-find #"claim one-analysis's falsified-by gained an exception" (:detail r)))
+    (is (= [r] (retreat/unasked [r])) "nothing asked for it, so it is an unasked weakening")))
+
+(deftest a-lost-disjunct-is-a-narrowing
+  (let [curr (assoc-in model-design [:model :claims 1 :falsified-by] "furniture text in a passage")]
+    (is (= [[:disjunct-lost]] (map :signals (narrowed (retreat/design-retreats model-design curr)))))))
+
+(deftest a-narrowing-the-round-asked-for-is-linked-to-its-finding
+  ;; The narrowing is still reported — the record claims less — but a reader can see the judge
+  ;; asked for it, and the unasked count, which is the one to act on, leaves it out.
+  (let [curr     (assoc-in model-design [:model :claims 1 :falsified-by]
+                           "furniture text outside table and figure spans")
+        findings [{:claim-ids ["no-furniture"] :check :goal-served :cites ["x"]
+                   :claim "the guarantee is too broad: tables legitimately carry headers"}]
+        [r]      (narrowed (retreat/design-retreats model-design curr findings))]
+    (is (:ordered r))
+    (is (= ["the guarantee is too broad: tables legitimately carry headers"] (:finding r)))
+    (is (= [] (retreat/unasked [r])))
+    (is (re-find #"\[asked for\]$" (retreat/line r)))))
+
+(deftest a-rewording-that-claims-no-less-is-not-a-narrowing
+  (let [curr (assoc-in model-design [:model :claims 0 :statement]
+                       "no two analyses of one blob ever run at the same time")]
+    (is (= [] (retreat/design-retreats model-design curr)))))
+
+(deftest a-hides-that-concedes-a-decision-is-a-narrowing
+  (let [curr (assoc-in model-design [:model :elements 0 :hides]
+                       "how rows are keyed; the storage is not hidden here")]
+    (is (= [["element" :hides]]
+           (map (juxt #(re-find #"^element" (:detail %)) :field)
+                (narrowed (retreat/design-retreats model-design curr)))))))
+
+(deftest a-shape-commitment-moved-into-open-is-relocated-not-lost
+  ;; Seen live: a sentence dropped from a record was restated as something it does not know.
+  ;; Declared, not dropped — and indistinguishable from deleted unless the detector looks.
+  (let [moved   (-> model-design
+                    (assoc :shape "Every passage is read whole.")
+                    (assoc :open ["whether page breaks are marked inline in every passage"]))
+        deleted (assoc model-design :shape "Every passage is read whole.")
+        rm      (first (narrowed (retreat/design-retreats model-design moved)))
+        rd      (first (narrowed (retreat/design-retreats model-design deleted)))]
+    (is (= [:clause-lost] (:signals rm) (:signals rd)))
+    (is (:relocated rm) "the clause reappears in :open")
+    (is (not (:relocated rd)) "the clause is nowhere")
+    (is (= [rd] (retreat/unasked [rm rd])))))
+
+(deftest a-baseline-claim-narrowed-in-place-is-reported
+  ;; Seen live: a refuted claim's :falsified-by dropped 'reads' from what it forbade, and the
+  ;; headline said 0 weakenings.
+  (let [curr (assoc-in model-baseline [:model :claims 0 :falsified-by] "f1 except where locked")
+        rs   (retreat/baseline-retreats model-baseline curr nil [{:claim-id "k1" :claim "k1 is too broad"
+                                                                   :needs "say which writes"}])
+        [r]  (narrowed rs)]
+    (is (= "k1" (:id r)))
+    (is (:ordered r))
+    (is (= ["say which writes"] (:answering r)))))
+
+;; ── What the round asked for ─────────────────────────────────────────────────
+
+(deftest a-relation-the-broken-check-corrected-is-ordered
+  ;; Seen live: relation-honest broke and said the relation needed correcting; the amender did, and
+  ;; the headline counted it as the run's one weakening.
+  (let [prev (assoc-in base-design [:baseline :relation] :extends)
+        curr (assoc-in base-design [:baseline :relation] :within)
+        rs   (retreat/design-retreats prev curr [{:check :relation-honest :cites ["x"]
+                                                  :claim "the relation label needs correction"}])]
+    (is (= [:baseline-relation-softened] (map :what rs)))
+    (is (= [:relation-honest] (:checks (first rs))))
+    (is (= [] (retreat/unasked rs)))
+    (testing "a broken check that judges something else orders nothing"
+      (is (= 1 (count (retreat/unasked (retreat/design-retreats prev curr [{:check :routing-coherent
+                                                                             :cites ["x"] :claim "c"}]))))))))
+
+(deftest a-deferred-route-carries-its-reason-and-ref
+  (let [curr (assoc base-design :routes [{:health-id "h1" :to :spin-out :why "a different story" :ref "FU-353"}
+                                         {:health-id "h2" :to :spin-out :why "w" :ref "FU-1"}])
+        [r]  (retreat/design-retreats base-design curr)]
+    (is (= "FU-353" (:ref r)))
+    (is (re-find #"FU-353.*a different story" (:detail r)))))
+
+(deftest a-health-observation-the-judge-refuted-is-dropped-at-its-request
+  (let [curr (update base-baseline :health (comp vec rest))
+        [r]  (retreat/baseline-retreats base-baseline curr {"h1" "the function is absent"}
+                                        [{:claim-id "h1" :claim "h1 is false"}])]
+    (is (= :health-dropped (:what r)))
+    (is (re-find #"the function is absent" (:detail r)) "the amender's reason travels with it")
+    (is (:ordered r))))
+
+(deftest a-citation-still-made-elsewhere-is-relocated
+  (let [prev  (with-evidence "src/a.clj:1" "src/sse_adapter.clj:293")
+        moved (update (with-evidence "src/a.clj:1") :health conj
+                      {:id "h9" :axis :design :observation "o" :evidence ["src/sse_adapter.clj:293"]})
+        rs    (filter (comp #{:evidence-dropped} :what) (retreat/baseline-retreats prev moved))]
+    (is (every? :relocated rs))
+    (is (= [] (retreat/unasked rs)))))
+
+(deftest a-drop-at-a-refuted-claim-is-ordered
+  (let [prev (with-evidence "src/a.clj:1" "src/out.clj:40")
+        curr (with-evidence "src/a.clj:1")
+        rs   (retreat/baseline-retreats prev curr nil [{:claim-id "c7" :claim "the writer list is wrong"}])]
+    (is (:ordered (first rs)))
+    (is (= ["the writer list is wrong"] (:finding (first rs))))
+    (is (= [] (retreat/unasked rs)))))
+
+;; ── Growth, by id ────────────────────────────────────────────────────────────
+
+(deftest a-claim-that-grew-past-checking-is-named
+  ;; Seen live: a claim's statement went from 171 characters to 959 across four rounds while the
+  ;; record-wide fields stayed put, and nothing reported growth.
+  (let [long (apply str (repeat 60 "and also this "))
+        curr (assoc-in model-design [:model :claims 0 :statement] long)
+        g    (retreat/growth model-design curr)]
+    (is (= [{:field :statement :id "one-analysis" :from 45 :to (count long)}] g))
+    (is (re-find #"one-analysis's statement" (retreat/growth-summary g)))))

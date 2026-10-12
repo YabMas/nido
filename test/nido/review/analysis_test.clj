@@ -488,6 +488,12 @@
         "without :project the command answers that no ledger names the run, for any project but nido")
     (is (not (contains? p :fix-attempts)) "a record run dispatches no repairs to count")))
 
+(deftest a-record-runs-headline-says-how-many-weakenings-nobody-asked-for
+  ;; Seen live: '4 weakenings' sent a reader looking for an amender that gave ground, and every one
+  ;; answered that round's finding at the same claim.
+  (is (str/includes? (:headline (analysis/payload (assoc a-design-run :unasked 0)))
+                     "3 weakenings (0 unasked) · 0 disputed")))
+
 (deftest a-record-run-whose-decision-reached-no-ledger-says-so
   ;; The figures command in the headline counts from the ledger, so an unrecorded decision makes
   ;; it disagree with the run; the headline is the analysis session's whole briefing.

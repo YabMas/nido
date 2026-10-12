@@ -363,19 +363,28 @@
      each with its reason; one the new record no longer makes is reported once, as a withdrawal
      carrying that reason, and not again as the count and evidence that left with it. `:findings`
      are the round's judge findings: a citation re-pointed onto a finding's evidence is not evidence
-     lost, and one given up names its claim and that claim's finding's `:needs`, so a narrowing
-     the judge asked for reads apart from one nobody asked for."
+     lost, and a retreat at a claim a finding named is marked as asked for and linked to it, so a
+     narrowing the judge asked for reads apart from one nobody asked for. A claim, module or shape
+     kept by id that commits to less in place is reported as narrowed."
     {:signature [:=> [:catn [:prev :map] [:curr :map]
                             [:withdrawn [:? [:maybe [:map-of :string :string]]]]
                             [:findings [:? [:maybe [:sequential :map]]]]] :any]})
   (Operation claim-ids "The ids of a baseline's claims as the retreats read them."
     {:signature [:=> [:catn [:b :map]] [:set :string]]})
-  (Operation design-retreats "What a superseding design no longer claims."
-    {:signature [:=> [:catn [:prev :map] [:curr :map]] :any]})
-  (Operation growth "The prose fields that grew rather than shrank."
+  (Operation design-retreats
+    "What a superseding design no longer claims, including a claim, element or shape kept by id
+     that commits to less in place. `:findings` are the decision round's: a retreat at an id one
+     named, or on a field a broken check judges, is marked as asked for."
+    {:signature [:=> [:catn [:prev :map] [:curr :map]
+                            [:findings [:? [:maybe [:sequential :map]]]]] :any]})
+  (Operation growth "The prose fields, claims and elements that grew past checking since the record as authored."
     {:signature [:=> [:catn [:as-authored :map] [:curr :map]] :any]})
   (Operation growth-summary "The growth, in a line."
     {:signature [:=> [:catn [:growth :any]] :string]})
+  (Operation unasked "The retreats no finding asked for and whose content stands nowhere else in the record."
+    {:signature [:=> [:catn [:retreats [:maybe [:sequential :map]]]] [:vector :map]]})
+  (Operation line "One retreat as a line, marked when it was asked for or relocated."
+    {:signature [:=> [:catn [:r :map]] :string]})
   (Operation summary "One line per retreat."
     {:signature [:=> [:catn [:retreats :any]] :string]}))
 

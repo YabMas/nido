@@ -37,11 +37,13 @@
   {:what what :detail detail})
 
 (defn- fewer
-  "A count that fell, as one retreat, or nil."
-  [what label prev curr]
-  (let [p (count prev) c (count curr)]
-    (when (< c p)
-      (retreat what (str label " " p " → " c)))))
+  "A count that fell further than `named` — how many of the dropped are already reported by id —
+   as one retreat, or nil. A fall the named drops account for is those drops counted a second time."
+  ([what label prev curr] (fewer what label prev curr 0))
+  ([what label prev curr named]
+   (let [p (count prev) c (count curr)]
+     (when (> (- p c) named)
+       (retreat what (str label " " p " → " c))))))
 
 (defn- rank-drop
   "A move DOWN an ordinal, as one retreat, or nil. `order` is cheapest-first, so
@@ -53,10 +55,149 @@
     (when (and p c (< c p))
       (retreat what (str prev " → " curr)))))
 
+;; ── What the round asked for ────────────────────────────────────────────────
+
+(defn- asks
+  "What `findings` — the round's judge findings the amendment answers — asked of the record:
+   `:at`, each subject id a finding named mapped to the finding's `:claim` texts; `:needs`, each
+   id to the repairs its findings asked for; and `:checks`, every check a finding was filed under,
+   which a finding is only when that check broke."
+  [findings]
+  (let [texts (fn [v] (keep #(when-not (str/blank? (str %)) (str %)) (if (sequential? v) v [v])))
+        add   (fn [m ids vs] (reduce #(update %1 %2 (fnil (comp vec distinct into) []) vs) m ids))]
+    (reduce (fn [a f]
+              (let [ids (into [] (comp (keep #(not-empty (str %))) (distinct))
+                              (cons (:claim-id f) (:claim-ids f)))]
+                (cond-> (-> a
+                            (update :at add ids (texts (:claim f)))
+                            (update :needs add ids (texts (:needs f))))
+                  (:check f) (update :checks conj (:check f)))))
+            {:at {} :needs {} :checks #{}}
+            findings)))
+
+(def ^:private check-orders
+  "Which retreats a broken check asks for, by the field each check judges. relation-honest rules on
+   the declared relation and the shape that needs it; goal-served on whether a strictly smaller
+   design would do; routing-coherent on where the health goes; decomposable and stratified on the
+   plan the change lands by."
+  {:relation-honest  #{:baseline-relation-softened :shape}
+   :goal-served      #{:effort-lowered :rejected-fewer}
+   :routing-coherent #{:route-deferred}
+   :decomposable     #{:phases-dropped}
+   :stratified       #{:phases-dropped}})
+
+(defn- answered
+  "`r` marked `:ordered` when the round asked for it — a finding at `id`, or a broken check that
+   judges `field` — with the finding's claim as `:finding` and its stated repair as `:answering`.
+
+   An ordered retreat is still reported, because a narrowing is a narrowing however sanctioned; it
+   is left out of the unasked count (`unasked`), which is the one a reader is meant to act on.
+   Linking it is what lets a reader tell the honest repair from the silent one without re-deriving
+   the run."
+  [r {:keys [at needs checks]} id field]
+  (let [found  (some-> id at)
+        broken (filter #(contains? (check-orders %) field) checks)]
+    (cond-> r
+      (or found (seq broken)) (assoc :ordered true)
+      (seq found)             (assoc :finding found)
+      (seq broken)            (assoc :checks (vec (sort broken)))
+      (seq (some-> id needs)) (update :answering #(or % (needs id))))))
+
+;; ── Narrowing in place ──────────────────────────────────────────────────────
+
+(def ^:private exception-re
+  #"(?i)\b(?:other than|except|excepting|unless|excluding|apart from|aside from|save for|but not|outside|only (?:when|if|where)|does not cover|not covered|not hidden|does not hide|accepted as)\b")
+
+(def ^:private hedge-re
+  #"(?i)\b(?:can|could|may|might|typically|usually|generally|where possible)\b(?!['’]t|\s*not)")
+
+(def ^:private disjunct-re
+  #"(?i)\bor\b")
+
+(defn- clauses
+  "`s` cut at sentence and semicolon boundaries — the commitments a statement makes one by one."
+  [s]
+  (into [] (comp (map str/trim) (remove str/blank?)) (str/split (str s) #"(?<=[.!?;])\s+")))
+
+(defn- words
+  [s]
+  (set (re-seq #"[a-z][a-z0-9_-]{3,}" (str/lower-case (str s)))))
+
+(defn- relocated?
+  "Whether every clause of `before` that `after` no longer states is in `parked` — the record's
+   :unknowns or :open — by most of its words. A commitment moved into what the record declares it
+   does not know is declared, not dropped; the amender usually rewords it on the way."
+  [before after parked]
+  (let [now  (str/lower-case (str after))
+        gone (remove #(str/includes? now (str/lower-case %)) (clauses before))
+        have (words parked)]
+    (boolean
+     (and (seq gone)
+          (every? (fn [c] (let [w (words c)]
+                            (and (seq w) (>= (count (filter have w)) (* 0.6 (count w))))))
+                  gone)))))
+
+(defn- narrowing
+  "How `after` commits to less than `before`, as the signals that say so, or nil.
+
+   Read off the text because a claim's identity is its id and nothing else about it survives an
+   amender: the wording changes whether the claim was corrected or quietly given up. Four signals,
+   each one a way the counterexample set shrinks without the claim going away — a disjunct lost
+   (`a read or a write` → `a write`), an exception added (`… other than after a lease lapsed`), a
+   clause lost, a hedge added (`applies` → `can apply`). A rewording that moves none of them is not
+   reported, and a narrowing worded so it moves none of them is missed: this measures, it does
+   not read."
+  [before after]
+  (let [before (str before) after (str after)
+        n      (fn [re s] (count (re-seq re s)))]
+    (when (and (not (str/blank? before)) (not (str/blank? after)) (not= before after))
+      (not-empty
+       (cond-> []
+         (< (n disjunct-re after) (n disjunct-re before))    (conj :disjunct-lost)
+         (> (n exception-re after) (n exception-re before))  (conj :exception-added)
+         (< (count (clauses after)) (count (clauses before))) (conj :clause-lost)
+         (> (n hedge-re after) (n hedge-re before))          (conj :hedged))))))
+
+(def ^:private signal-words
+  {:disjunct-lost "lost a disjunct" :exception-added "gained an exception"
+   :clause-lost "lost a clause" :hedged "was hedged"})
+
+(defn- clip
+  [s]
+  (let [s (str/replace (str s) #"\s+" " ")]
+    (if (> (count s) 140) (str (subs s 0 140) "…") s)))
+
+(defn- narrowings
+  "One `:narrowed` per field of a subject both records hold, by id, that commits to less (`narrowing`)
+   — `subjects` reads `[[label id field text] ...]` off a record, `parked` the text it declares
+   unknown, `asked` what the round asked for (`asks`). A narrowing whose only loss is clauses that
+   reappear in `parked` is `:relocated`; one the round asked for is `:ordered` (`answered`)."
+  [subjects prev curr parked asked]
+  (let [now (into {} (map (fn [[label id field text]] [[label id field] text])) (subjects curr))]
+    (for [[label id field before] (subjects prev)
+          :let [after   (get now [label id field])
+                signals (narrowing before after)]
+          :when signals]
+      (cond-> (answered {:what    :narrowed
+                         :detail  (str label (when id (str " " id "'s")) " " (name field) " "
+                                       (str/join ", " (map signal-words signals))
+                                       ": \"" (clip before) "\" → \"" (clip after) "\"")
+                         :field   field
+                         :signals signals
+                         :from    before
+                         :to      after}
+                        asked id field)
+        id (assoc :id id)
+        (and (= [:clause-lost] signals) (relocated? before after parked))
+        (assoc :relocated true)))))
+
 ;; ── Baseline ────────────────────────────────────────────────────────────────
 
-(def ^:private ref-re
-  #"([^\s:]+\.[A-Za-z]+):(\d+)(?:-(\d+))?")
+(def ^:private cite-re
+  "A file and its lines (groups 1–3); a bare `:N`, the lines of the nearest file before it (4–5); and
+   `, N` straight after a citation, more lines of that file (6–7). The file starts at a word
+   character, so the `(` of `(foo.clj:68)` is not part of its name."
+  #"([A-Za-z0-9_][\w./-]*\.[A-Za-z]+):(\d+)(?:-(\d+))?|(?<![\w.]):(\d+)(?:-(\d+))?|,[ \t]*(\d+)(?:-(\d+))?(?![ \t]*[A-Za-z])")
 
 (defn- locations
   "Every PLACE an evidence string points at — [file first-line last-line].
@@ -65,7 +206,12 @@
    refers to further lines in it bare: `foo.clj:732 (ladder inlined) joined to
    :746 at :760-765` points at three places in foo.clj, and reading only the
    first would call the other two lost the moment they stopped being written out
-   in full.
+   in full. A bare line belongs to the NEAREST file named before it, and every
+   `file:line` names a file afresh: `a.clj:1, b.clj:2,9` is a.clj:1, b.clj:2 and
+   b.clj:9. Bound to the first file instead, a widened multi-file citation read as
+   places nobody cited, and the places it really dropped went unreported. A `, N`
+   counts only straight after a citation and before no word, so `a.clj:5, 3 callers` is
+   one place.
 
    Compared by place rather than by text because the text is not stable and is
    not meant to be: an amender that keeps a citation and explains it turns
@@ -75,16 +221,27 @@
    improvements a loss in one round, which is this detector inverted — a human
    reading eight non-events is a human who will miss the ninth."
   [s]
-  (let [s (str s)]
-    (when-let [[m file _ _] (re-find ref-re s)]
-      (let [tail (subs s (+ (.indexOf s ^String m) (count file)))]
-        (distinct
-         (for [[_ a b] (re-seq #":(\d+)(?:-(\d+))?" tail)]
-           [file (parse-long a) (parse-long (or b a))]))))))
+  (let [m (re-matcher cite-re (str s))
+        place (fn [file a b] [file (parse-long a) (parse-long (or b a))])]
+    (loop [file nil end -1 out []]
+      (if-not (.find m)
+        (distinct out)
+        (let [g #(.group m (int %))]
+          (cond
+            (g 1)                              (recur (g 1) (.end m) (conj out (place (g 1) (g 2) (g 3))))
+            (and file (g 4))                   (recur file (.end m) (conj out (place file (g 4) (g 5))))
+            (and file (g 6) (= end (.start m))) (recur file (.end m) (conj out (place file (g 6) (g 7))))
+            :else                              (recur file end out)))))))
+
+(defn- same-file?
+  "Whether two cited paths name one file: equal, or one a path suffix of the other. A judge cites
+   `src/main/brian/content/ingest.clj` where the record says `content/ingest.clj`."
+  [a b]
+  (or (= a b) (str/ends-with? a (str "/" b)) (str/ends-with? b (str "/" a))))
 
 (defn- covers?
   [[file start end] [f s _]]
-  (and (= file f) (<= start s end)))
+  (and (same-file? file f) (<= start s end)))
 
 (defn- baseline-evidence
   [b]
@@ -92,7 +249,7 @@
 
 (defn- overlaps?
   [[file a b] [f c d]]
-  (and (= file f) (<= a d) (<= c b)))
+  (and (same-file? file f) (<= a d) (<= c b)))
 
 (defn- claim-places
   [claim]
@@ -121,7 +278,7 @@
                           now)]
         (reduce (fn [lost [f s _]]
                   (if-let [near (->> lost
-                                     (filter #(= f (first %)))
+                                     (filter #(same-file? f (first %)))
                                      (sort-by #(abs (- s (second %))))
                                      first)]
                     (vec (remove #{near} lost))
@@ -175,15 +332,16 @@
    that tells a narrowing the judge asked for from one nobody asked for, which otherwise read
    alike in the headline.
 
-   `needs` is `{claim-id [needs]}`, the `:needs` of every finding at that claim this round; a
-   retreat with one carries them as `:answering`. `found` is every claim id a finding this round
-   named, needs or none: a drop at one of them answers an objection, and only a drop at a claim
-   nobody found against is one nobody asked for. `elsewhere` is every place the new record cites
-   anywhere at all, health and prose included: a place still in it was moved out of the claim,
-   not removed. A place in none of it, at a claim whose finding asked for evidence to be
-   relocated, is `:relocation-dropped?` — the amender deleted what it was told to move."
-  [{:keys [claim-id citation places]} needs found elsewhere]
-  (let [asked     (get needs claim-id)
+   `asked` is what the round asked for (`asks`). A retreat at a claim with stated repairs carries
+   them as `:answering`; a drop at any claim a finding this round named answers an objection and
+   is `:ordered`, and only a drop at a claim nobody found against is one nobody asked for.
+   `elsewhere` is every place the new record cites anywhere at all, health and prose included: a
+   place still in it was moved out of the claim, not removed, and is `:relocated`. A place in none
+   of it, at a claim whose finding asked for evidence to be relocated, is `:relocation-dropped?` —
+   the amender deleted what it was told to move, which no finding asked for."
+  [{:keys [claim-id citation places]} {:keys [at needs]} elsewhere]
+  (let [found?    (contains? at claim-id)
+        asked     (get needs claim-id)
         removed?  (not-every? (fn [loc] (some #(covers? % loc) elsewhere)) places)
         relocate? (and removed? (some #(re-find relocation-asked %) asked))
         where     (str/join ", " (map place-str places))
@@ -204,7 +362,7 @@
                     (str "claim " claim-id " no longer cites " where
                          " — narrowed at its finding's request: " (str/join " / " asked))
 
-                    (found claim-id)
+                    found?
                     (str "claim " claim-id " no longer cites " where
                          ", and a finding at it this round objected to the claim")
 
@@ -213,9 +371,12 @@
                          ", and no finding at it this round asked it to"))]
     (cond-> (assoc (retreat :evidence-dropped detail)
                    :citation citation :places (mapv place-str places))
-      claim-id    (assoc :claim-id claim-id)
-      (seq asked) (assoc :answering (vec asked))
-      relocate?   (assoc :relocation-dropped? true))))
+      claim-id               (assoc :claim-id claim-id)
+      (seq asked)            (assoc :answering (vec asked))
+      (seq (get at claim-id)) (assoc :finding (get at claim-id))
+      relocate?              (assoc :relocation-dropped? true)
+      (not removed?)         (assoc :relocated true)
+      (and removed? (not relocate?) (or found? (seq asked))) (assoc :ordered true))))
 
 (defn- blanked
   "The fields of `p` that said something and say nothing in `c`.
@@ -241,10 +402,11 @@
    counted: the schema types them `string?`, so \"\" validates, the ledger
    accepts it, and the round that follows has nothing left to refute.
 
-   Only blank-from-non-blank. Shortening is not measured and must not be — an
+   Only blank-from-non-blank. Length is not measured and must not be — an
    amender tightening a claim is doing the job, and a length threshold would
-   report the good version of the edit alongside the bad one. Blank is the
-   unambiguous case and the only one worth naming."
+   report the good version of the edit alongside the bad one. What a shorter
+   field gave up is read off its wording, by `narrowings`; blank is the one case
+   that needs no reading."
   [prev curr]
   (let [gone blanked
         by-id (fn [xs] (into {} (keep #(when (:id %) [(:id %) %])) xs))
@@ -283,6 +445,18 @@
         (dissoc :model))
     b))
 
+(defn- survey-subjects
+  "What a baseline in survey shape commits to, as `narrowings` reads it: its shape, each module's
+   :hides and each claim's statement and :falsified-by, under their ids."
+  [b]
+  (concat
+   [["the baseline's" nil :shape (:shape b)]]
+   (for [m (:modules b) :when (:id m)]
+     ["module" (:id m) :hides (:hides m)])
+   (for [c (:load-bearing b) :when (:id c)
+         [field k] [[:statement :property] [:falsified-by :falsified-by]]]
+     ["claim" (:id c) field (get c k)])))
+
 (defn ^{:malli/schema [:=> [:cat :map] [:set :string]]}
   claim-ids
   "The ids of baseline `b`'s claims as `baseline-retreats` reads them — the only ids a withdrawal
@@ -307,10 +481,11 @@
 
    Health observations are compared by :id, which is stable by schema — that is
    what :id is for, and what lets a dropped observation be named rather than
-   counted. Load-bearing properties have no id, so they are compared two ways
-   that survive rewording: how many there are, and which file:line references
-   nothing cites any more and no claim re-pointed. A property genuinely corrected keeps pointing at the
-   code that corrected it; one quietly dropped takes its evidence with it.
+   counted. Load-bearing properties are compared by id where they carry one, and
+   by what survives rewording either way: how many there are, and which file:line
+   references nothing cites any more and no claim re-pointed. A property genuinely
+   corrected keeps pointing at the code that corrected it; one quietly dropped
+   takes its evidence with it.
 
    `withdrawn`, `{claim-id reason}`, names claims removed on purpose: ones the
    caller let the amender take out, with the reason it gave. Each one the new record
@@ -319,10 +494,14 @@
    withdrawal, and reporting them again would call a stated removal an unexplained
    weakening four times over.
 
+   A health observation dropped with a reason in `withdrawn` carries it. A claim, module or the shape both records hold, by id, is read for narrowing in place
+   (`narrowings`): the retreat that keeps every id and claims less.
+
    `findings` are the round's judge findings the amendment answers, each read for its `:claim-id`,
-   `:evidence` and `:needs`. The evidence is where the judge pointed — the sites an amender
-   re-points a citation onto, which `evidence-lost` does not count as dropped — and the needs are
-   what each dropped citation is read against, so a narrowing that answers a finding says so."
+   `:claim`, `:evidence` and `:needs`. The evidence is where the judge pointed — the sites an
+   amender re-points a citation onto, which `evidence-lost` does not count as dropped — and the
+   rest is what each retreat is read against (`answered`), so one that answers a finding says so
+   and leaves the unasked count."
   ([prev curr] (baseline-retreats prev curr nil nil))
   ([prev curr withdrawn] (baseline-retreats prev curr withdrawn nil))
   ([prev curr withdrawn findings]
@@ -336,8 +515,7 @@
                                   (update id (fnil (comp vec distinct into) []) vs))))
                             {} findings))
          judged    (by-claim :evidence)
-         needs     (by-claim :needs)
-         found     (into #{} (keep #(not-empty (str (:claim-id %)))) findings)
+         asked     (asks findings)
          elsewhere (into [] (comp (filter string?) (mapcat locations))
                          (tree-seq coll? seq curr))
          prev (as-survey prev)
@@ -368,14 +546,17 @@
                         :when (and c (:invisibly-incomplete? p)
                                    (not (:invisibly-incomplete? c)))]
                     id)
-         ev-gone (evidence-lost prev curr judged)]
+         ev-gone (evidence-lost prev curr judged)
+         claims-gone (let [cids (set (keep :id (:load-bearing curr)))]
+                       (sort (remove cids (keep :id (:load-bearing prev)))))]
      (vec
       (concat
        (for [[id why] taken]
          (retreat :claim-withdrawn (str "claim " id " was removed: " why)))
        (keep identity
-             [(fewer :load-bearing-fewer "load-bearing" (:load-bearing prev) (:load-bearing curr))
-              (fewer :modules-fewer "modules" (:modules prev) (:modules curr))
+             [(fewer :load-bearing-fewer "load-bearing" (:load-bearing prev) (:load-bearing curr)
+                     (count claims-gone))
+              (fewer :modules-fewer "modules" (:modules prev) (:modules curr) (count mods-gone))
               (fewer :read-narrowed "read" (:read prev) (:read curr))])
        ;; Named only when the count also fell. A module's identity is its own
        ;; descriptive name, which the amender rewrites like everything else —
@@ -385,15 +566,15 @@
        ;; the names are the best detail available once it fires, and offering
        ;; them when it has not is asserting a loss the data does not support.
        ;; With ids the count gate is no longer needed to suppress renames — a
-       ;; dropped id is a dropped module whatever else changed.
+       ;; dropped id is a dropped module whatever else changed, and the count
+       ;; reports only a fall the ids do not account for.
        (for [m (sort mods-gone)]
-         (retreat :module-dropped
-                  (str "module " m " is no longer part of the decomposition")))
-       (let [pids (set (keep :id (:load-bearing prev)))
-             cids (set (keep :id (:load-bearing curr)))]
-         (for [c (sort (remove cids pids))]
-           (retreat :claim-dropped
-                    (str "claim " c " is no longer made"))))
+         (answered (retreat :module-dropped
+                            (str "module " m " is no longer part of the decomposition"))
+                   asked m :module-dropped))
+       (for [c claims-gone]
+         (answered (retreat :claim-dropped (str "claim " c " is no longer made"))
+                   asked c :claim-dropped))
        (keep identity
              [(fewer :readings-fewer "readings" (readings prev) (readings curr))])
        (for [l (sort (remove clenses plenses))]
@@ -401,7 +582,10 @@
                   (str "nothing is read through " (namespace l) "/" (name l)
                        " any more; a perspective dropped is analysis dropped")))
        (for [id (sort gone)]
-         (retreat :health-dropped (str "observation " id " is no longer recorded")))
+         (answered (retreat :health-dropped
+                            (str "observation " id " is no longer recorded"
+                                 (when-let [why (get withdrawn id)] (str ": " why))))
+                   asked id :health-dropped))
        ;; The veto is the whole reason :invisibly-incomplete? exists — an
        ;; observation carrying it can never be spun out. Clearing the flag is
        ;; therefore not a baseline correction with a side effect; it is the one
@@ -409,7 +593,8 @@
        (for [id (sort unveiled)]
          (retreat :veto-lifted
                   (str "observation " id " was invisibly-incomplete? and no longer is")))
-       (map #(dropped-evidence % needs found elsewhere) ev-gone)
+       (map #(dropped-evidence % asked elsewhere) ev-gone)
+       (narrowings survey-subjects prev curr (str/join " " (:unknowns curr)) asked)
        (emptied prev curr))))))
 
 ;; ── Design ──────────────────────────────────────────────────────────────────
@@ -418,7 +603,19 @@
 (def baseline-order [:within :extends :revisit])
 (def standing-order [:conforms :extends :challenges])
 
-(defn ^{:malli/schema [:=> [:cat :map :map] :any]}
+(defn- design-subjects
+  "What a design commits to, as `narrowings` reads it: its shape, each element's :hides and each
+   claim's statement and :falsified-by, under their ids."
+  [d]
+  (concat
+   [["the design's" nil :shape (:shape d)]]
+   (for [e (model/elements d) :when (:id e)]
+     ["element" (:id e) :hides (:hides e)])
+   (for [c (model/claims d) :when (:id c)
+         field [:statement :falsified-by]]
+     ["claim" (:id c) field (get c field)])))
+
+(defn ^{:malli/schema [:=> [:cat :map :map [:? [:maybe [:sequential :map]]]] :any]}
   design-retreats
   "Everything the superseding design commits to less strongly than the one
    before it.
@@ -432,40 +629,57 @@
    destination — it says you are doing the work — so moving TO it is not a
    retreat, and moving AWAY from it to any form of not-doing-it is. Promising
    MORE work is not something this can call a retreat without lying about which
-   way the doctrine points."
-  [prev curr]
-  (let [proutes (into {} (map (juxt :health-id :to)) (:routes prev))
-        croutes (into {} (map (juxt :health-id :to)) (:routes curr))]
-    (vec
-     (concat
-      (keep identity
-            [(rank-drop :effort-lowered effort-order (:effort prev) (:effort curr))
-             (rank-drop :baseline-relation-softened baseline-order
-                        (get-in prev [:baseline :relation]) (get-in curr [:baseline :relation]))
-             (rank-drop :standing-softened standing-order
-                        (get-in prev [:standing :relation]) (get-in curr [:standing :relation]))
-             (fewer :invariants-fewer "invariants" (model/claims prev) (model/claims curr))
-             (fewer :rejected-fewer "rejected alternatives" (:rejected prev) (:rejected curr))
-             (when (and (seq (:phases prev)) (empty? (:phases curr)))
-               (retreat :phases-dropped
-                        (str (count (:phases prev)) " phases → none; the change now claims one landing")))])
-      ;; By id, where claims have one: a claim reworded keeps its id and is not a loss, and a
-      ;; claim dropped is named. An invariant with no id can only be counted, above.
-      (let [ids #(into #{} (keep :id) (model/claims %))]
-        (for [c (sort (remove (ids curr) (ids prev)))]
-          (retreat :claim-dropped (str "claim " c " is no longer made"))))
-      (for [[hid to] (sort-by key croutes)
-            :let [was (proutes hid)]
-            :when (and was (= :fix-here was) (not= :fix-here to))]
-        (retreat :route-deferred (str hid ": :fix-here → " to)))
-      ;; Same hole the baseline had: these are typed `string?`, so a record whose
-      ;; shape and summary say nothing at all is a record the ledger accepts and
-      ;; nothing here counted. It does not quiet the round — the gate reads the
-      ;; relations — so it is pure loss, which is the clearest case there is.
-      (blanked "the design's" prev curr [:summary :shape])
-      (blanked "the design's standing" (:standing prev) (:standing curr) [:note])
-      (blanked "the design's baseline relation"
-               (:baseline prev) (:baseline curr) [:note])))))
+   way the doctrine points. A deferral carries the route's own :why and :ref.
+
+   A claim, element or the shape both designs hold, by id, is read for narrowing
+   in place (`narrowings`): a claim reworded keeps its id and is no loss, and one
+   that kept its id and lost a disjunct or gained an exception claims less.
+
+   `findings` are the decision round's findings the amendment answers. A retreat
+   at an id a finding named, or on a field a broken check judges
+   (`check-orders`), is the one the round asked for (`answered`)."
+  ([prev curr] (design-retreats prev curr nil))
+  ([prev curr findings]
+   (let [asked   (asks findings)
+         proutes (into {} (map (juxt :health-id :to)) (:routes prev))
+         croutes (into {} (map (juxt :health-id identity)) (:routes curr))
+         ids     #(into #{} (keep :id) (model/claims %))
+         gone    (sort (remove (ids curr) (ids prev)))
+         order   (fn [r] (when r (answered r asked nil (:what r))))]
+     (vec
+      (concat
+       (keep order
+             [(rank-drop :effort-lowered effort-order (:effort prev) (:effort curr))
+              (rank-drop :baseline-relation-softened baseline-order
+                         (get-in prev [:baseline :relation]) (get-in curr [:baseline :relation]))
+              (rank-drop :standing-softened standing-order
+                         (get-in prev [:standing :relation]) (get-in curr [:standing :relation]))
+              (fewer :invariants-fewer "invariants" (model/claims prev) (model/claims curr) (count gone))
+              (fewer :rejected-fewer "rejected alternatives" (:rejected prev) (:rejected curr))
+              (when (and (seq (:phases prev)) (empty? (:phases curr)))
+                (retreat :phases-dropped
+                         (str (count (:phases prev)) " phases → none; the change now claims one landing")))])
+       ;; By id, where claims have one; an invariant with no id can only be counted, above.
+       (for [c gone]
+         (answered (retreat :claim-dropped (str "claim " c " is no longer made")) asked c :claim-dropped))
+       (for [[hid {:keys [to why ref]}] (sort-by key croutes)
+             :let [was (proutes hid)]
+             :when (and was (= :fix-here was) (not= :fix-here to))]
+         (order (cond-> (retreat :route-deferred
+                                 (str hid ": :fix-here → " to
+                                      (when ref (str " (" ref ")"))
+                                      (when-not (str/blank? (str why)) (str " — " why))))
+                  ref (assoc :ref ref)
+                  (not (str/blank? (str why))) (assoc :why why))))
+       (narrowings design-subjects prev curr (str/join " " (:open curr)) asked)
+       ;; Same hole the baseline had: these are typed `string?`, so a record whose
+       ;; shape and summary say nothing at all is a record the ledger accepts and
+       ;; nothing here counted. It does not quiet the round — the gate reads the
+       ;; relations — so it is pure loss, which is the clearest case there is.
+       (blanked "the design's" prev curr [:summary :shape])
+       (blanked "the design's standing" (:standing prev) (:standing curr) [:note])
+       (blanked "the design's baseline relation"
+                (:baseline prev) (:baseline curr) [:note]))))))
 
 (def ^:private grew-by
   "How much longer a field has to get before it is worth reporting.
@@ -491,28 +705,61 @@
    Compared against the record AS AUTHORED rather than against last round.
    Growth is a property of the run: 400 characters to 800 is a correction, and
    six of those in a row is a claim nobody can check. Per-round comparison sees
-   only the corrections."
+   only the corrections.
+
+   The record's prose fields, and each claim's statement and :falsified-by and
+   each element's :hides and :interface under its id: a claim that tripled is
+   the same failure as a composition that did, and the one a record-wide reading
+   cannot see. A subject the as-authored record did not have has no start to
+   measure from. A row for a subject carries its `:id`."
   [as-authored curr]
-  (vec
-   (for [f [:shape :composition :bounded-by]
-         :let [a (count (str (get as-authored f)))
-               c (count (str (get curr f)))]
-         :when (and (pos? a)
-                    (>= (- c a) (:floor grew-by))
-                    (>= (/ (double c) a) (:factor grew-by)))]
-     {:field f :from a :to c})))
+  (let [fields (fn [r]
+                 (concat
+                  (for [f [:shape :composition :bounded-by]] [[nil f] (get r f)])
+                  ;; An older baseline's composition reads back as a claim too; it is measured once.
+                  (for [c (model/claims r) :when (and (:id c) (not= "composition" (:id c)))
+                        f [:statement :falsified-by]]
+                    [[(:id c) f] (get c f)])
+                  (for [e (model/elements r) :when (:id e) f [:hides :interface]]
+                    [[(:id e) f] (get e f)])))
+        now    (into {} (fields curr))]
+    (vec
+     (for [[[id f :as k] text] (fields as-authored)
+           :let [a (count (str text))
+                 c (count (str (get now k)))]
+           :when (and (pos? a)
+                      (>= (- c a) (:floor grew-by))
+                      (>= (/ (double c) a) (:factor grew-by)))]
+       (cond-> {:field f :from a :to c} id (assoc :id id))))))
 
 (defn ^{:malli/schema [:=> [:cat :any] :string]}
   growth-summary
   [growth]
   (when (seq growth)
     (str/join "\n"
-              (map (fn [{:keys [field from to]}]
-                     (format "  ↑ %s — %d characters at the start, %d now (×%.1f)"
-                             (name field) from to (/ (double to) from)))
+              (map (fn [{:keys [id field from to]}]
+                     (format "  ↑ %s%s — %d characters at the start, %d now (×%.1f)"
+                             (if id (str id "'s ") "") (name field) from to (/ (double to) from)))
                    growth))))
 
 ;; ── Reporting ───────────────────────────────────────────────────────────────
+
+(defn ^{:malli/schema [:=> [:cat [:maybe [:sequential :map]]] [:vector :map]]}
+  unasked
+  "The retreats nothing accounts for: no finding asked for them (`:ordered`) and what they gave up
+   still stands elsewhere in the record (`:relocated`). The count a headline leads with — the others
+   are reported, but a reader looking for an amender that gave ground unasked should not have to
+   read past them to learn there was none."
+  [retreats]
+  (vec (remove #(or (:ordered %) (:relocated %)) retreats)))
+
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  line
+  "One retreat as a line: what, the detail, and why it is not unasked when it is not."
+  [r]
+  (str (name (:what r)) " — " (:detail r)
+       (cond (:ordered r)   " [asked for]"
+             (:relocated r) " [relocated]")))
 
 (defn ^{:malli/schema [:=> [:cat :any] :string]}
   summary
@@ -521,4 +768,4 @@
    worth saying once, by the caller, not implied by a blank section."
   [retreats]
   (when (seq retreats)
-    (str/join "\n" (map #(str "  ! " (name (:what %)) " — " (:detail %)) retreats))))
+    (str/join "\n" (map #(str "  ! " (line %)) retreats))))

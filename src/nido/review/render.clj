@@ -2,7 +2,8 @@
   "Pure projection of a review report to terminal text. No I/O, no ANSI cursor
    control (that lives in the frontend) — just the rendered block as a string."
   (:require
-   [clojure.string :as str])
+   [clojure.string :as str]
+   [nido.review.retreat :as retreat])
   (:import
    [java.time Instant Duration]))
 
@@ -511,11 +512,13 @@
    on a judge that never ran."
   [ph]
   (let [n (count (:retreats ph))
+        u (count (retreat/unasked (:retreats ph)))
         d (count (:disputes ph))
         parts (cond-> []
                 (:resurveyed ph) (conj (str "re-surveyed " (:resurveyed ph)))
                 (:amended? ph)   (conj "amended")
-                (pos? n)         (conj (str n " weakening" (when (not= 1 n) "s")))
+                (pos? n)         (conj (str n " weakening" (when (not= 1 n) "s")
+                                            (when (< u n) (str " (" u " unasked)"))))
                 (pos? d)         (conj (str d " objection" (when (not= 1 d) "s")))
                 (:unappended ph) (conj (str "refused by the ledger, not appended: " (:unappended ph)))
                 (get-in ph [:launch :failed]) (conj (str "amender " (get-in ph [:launch :failed]))))]
@@ -578,7 +581,7 @@
                        {:title title})
          "\n\n  Weakened:\n"
          (cond
-           (seq rs)   (str/join "\n" (map #(str "    ! " (name (:what %)) " — " (:detail %)) rs))
+           (seq rs)   (str/join "\n" (map #(str "    ! " (retreat/line %)) rs))
            ;; The distinction this section exists to preserve, applied to itself:
            ;; a run that never reached an amendment did not decline to weaken the
            ;; record, it never got as far as touching it.

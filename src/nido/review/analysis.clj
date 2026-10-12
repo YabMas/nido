@@ -359,7 +359,7 @@
    reach the headline, since each asks something of a person that the run's rounds do not say: a
    newer entry superseding the one judged was skipped, and a judged baseline the standing design
    does not cite — its premise has moved, and its re-citation or re-survey is owed."
-  [{:keys [loop run-id report-path status rounds launched judged amended unappended weakened disputed
+  [{:keys [loop run-id report-path status rounds launched judged amended unappended weakened unasked disputed
            record-seq still-broken still-asked asks stood-in reviewed-project reviewed-session reviewed-ws-id
            machinery unrecorded spent spent-awaiting cap amend-prompt unreadable stale-at-start repair repaired?
            amender continued subject]
@@ -386,7 +386,12 @@
                                  (str " (" (- launched (or judged 0)) " launched, no verdict)"))
                                " · " (or amended 0) " amended · "
                                (when unappended "1 refused by the ledger · ")
-                               (or weakened 0) " weakenings · " (or disputed 0) " disputed\n"
+                               (or weakened 0) " weakenings"
+                               ;; How many of them nothing asked for (`retreat/unasked`): the rest
+                               ;; answer a finding or moved within the record, and a reader looking
+                               ;; for an amender that gave ground reads this figure, not the total.
+                               (when (and unasked (pos? (or weakened 0))) (str " (" unasked " unasked)"))
+                               " · " (or disputed 0) " disputed\n"
                                (when unappended (str "Refused amendment, not appended: " unappended "\n"))
                                "Record: the " kind (when record-seq (str " at entry " record-seq))
                                (when broken (str " · broken at the end: " (str/join ", " broken)))
