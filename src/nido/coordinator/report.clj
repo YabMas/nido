@@ -2578,9 +2578,12 @@
    else joins the two. :contradicts-read-once is the other answer to such a confirmation: per id
    this judgement refuted, the single confirmation it denies. Derived by the round, as :splits
    is, but naming the entry, which :splits does not.
-   :spent is each subject this judgement refuted that its lineage has now refuted that many readings
-   running (`nido.review.record/spent`) — reworded and refuted again, recorded where a hand amender
-   reads before writing the next rewording. Derived by the round."
+   :spent is each subject its lineage has refuted that many readings running, counting this
+   judgement, among those an amender is offered a weakening or withdrawal for
+   (`nido.review.record/spent`) — reworded and refuted again, recorded where a hand amender reads
+   before writing the next rewording. :spent-awaiting is those of them this judgement held only as
+   a person's question: their count stopped when it was asked and is owed an answer, not a
+   rewording. Derived by the round."
   [[:checked-at {:optional true} [:map-of string? [:vector {:min 1} string?]]]
    [:unchecked  {:optional true} [:vector [:map {:closed true} [:id string?] [:reason string?]]]]
    [:unruled    {:optional true} [:vector string?]]
@@ -2601,7 +2604,8 @@
                                             [:run-id {:optional true} string?]]]]
    [:contradicts-read-once {:optional true} [:vector [:map {:closed true}
                                                       [:id string?] [:seq int?] [:ws-id string?]]]]
-   [:spent      {:optional true} [:map-of string? pos-int?]]])
+   [:spent      {:optional true} [:map-of string? pos-int?]]
+   [:spent-awaiting {:optional true} [:vector string?]]])
 
 (def BaselineReview
   "The verification round over a baseline: is this true, and is it ENOUGH?

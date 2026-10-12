@@ -119,11 +119,14 @@
     {:signature [:=> [:catn [:subject [:maybe :map]] [:reviews [:sequential :map]]] [:map-of :string :int]]})
   (Operation spent
     "The subjects a refutation run has reached the count at which rewording is no longer a repair —
-     reworded once and refuted again. What every surface a hand amender or a capped run reads names."
-    {:signature [:=> [:catn [:running [:maybe [:map-of :string :int]]]] [:map-of :string :int]]})
+     reworded once and refuted again — among those an amender is offered a weakening or withdrawal
+     for. A derivation check or a whole-record field is never spent: nothing can be offered for it.
+     What every surface a hand amender or a capped run reads names."
+    {:signature [:=> [:catn [:running [:maybe [:map-of :string :int]]] [:offerable? :any]]
+                 [:map-of :string :int]]})
   (Operation spent-at-cap
     "What a record run reaching its cap ends :unfixable on instead of :max-iters: the spent subjects
-     of a round that still owes an amendment."
+     of a round that still owes an amendment, less those held only as a person's question."
     {:signature [:=> [:catn [:ctx :map]] [:maybe [:sequential :string]]]})
   (Operation owed-reading
     "What a round sent on to its second reading read once — the record, the ids, whether it was an
@@ -154,11 +157,21 @@
     "How many times the run has objected to one finding: disputes under its identity whose disputed
      finding pointed at the same code — an objection to one counterexample does not answer another."
     {:signature [:=> [:catn [:history :any] [:base-key :any] [:f :map]] :int]})
+  (Operation record-round-veto
+    "Whether a record round repeating the last round's findings is still moving, with what decided
+     it: the last round amended; every repeated identity moved — its code, the subject's anchor
+     sites out, disjoint from last round's, or its quotes of the record new — and no repeated spent
+     subject has been refuted past the readings its withdrawal is offered at. Reported on the judge
+     phase, so a stop says which leg failed."
+    {:signature [:=> [:catn [:base-key :any] [:ctx :map] [:prior :any]] [:maybe :map]]})
   (Operation record-round-changed?
-    "Whether a record round repeating the last round's findings is still moving: the last round
-     amended, every repeated identity now points at disjoint code, and no repeated claim has been
-     refuted past the readings its withdrawal is offered at. The record loops' :changed? veto."
+    "The record loops' :changed? veto: record-round-veto's answer alone."
     {:signature [:=> [:catn [:base-key :any] [:ctx :map] [:prior :any]] :boolean]})
+  (Operation attempt-key
+    "A record loop's attempt identity: the finding's identity and the round its defect was first
+     raised in, so the give-up counter counts the rounds one defect survived rather than the
+     counterexamples one claim has had."
+    {:signature [:=> [:catn [:finding-key :any]] :any]})
   (Operation baseline-round-changed? "record-round-changed? over baseline finding identity."
     {:signature [:=> [:catn [:ctx :map] [:prior :any]] :boolean]})
   (Operation design-round-changed? "record-round-changed? over design finding identity."

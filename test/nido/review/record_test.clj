@@ -1671,16 +1671,29 @@
 ;; ── A claim spent across runs ───────────────────────────────────────────────
 
 (deftest a-subject-is-spent-once-a-rewording-was-itself-refuted
-  (is (= {"writers-order" 2 "readers" 11} (record/spent {"writers-order" 2 "readers" 11 "fresh" 1}))
+  (is (= {"writers-order" 2 "readers" 11}
+         (record/spent {"writers-order" 2 "readers" 11 "fresh" 1} (constantly true)))
       "one refutation is a defect to repair; a second after the rewording is the circle")
-  (is (= {} (record/spent nil))))
+  (is (= {} (record/spent nil (constantly true)))))
+
+(deftest only-a-subject-an-amender-is-offered-a-repair-for-is-spent
+  ;; Watched: runs ended :unfixable on `shape` and on `:goal-served`, and the headline told a person
+  ;; to weaken or withdraw them, though no amender had been offered either — a check cannot be
+  ;; weakened, and `shape` pools four different repaired defects under one id.
+  (is (= {"writers-order" 3}
+         (record/spent {"writers-order" 3 "shape" 4 ":goal-served" 2} #{"writers-order"}))
+      "a subject outside the offer is never spent, however often it was refuted"))
 
 (deftest a-cap-ends-on-a-spent-subject-only-while-a-repair-is-owed
   (is (= ["writers-order"]
          (record/spent-at-cap {:findings [{:claim-id "writers-order"}]
-                               :refuted-running {"writers-order" 3 "fresh" 1}})))
-  (is (nil? (record/spent-at-cap {:findings [] :refuted-running {"writers-order" 3}}))
-      "a round owing no amendment has nothing a cap would leave half-done"))
+                               :spent {"writers-order" 3}})))
+  (is (nil? (record/spent-at-cap {:findings [] :spent {"writers-order" 3}}))
+      "a round owing no amendment has nothing a cap would leave half-done")
+  (is (nil? (record/spent-at-cap {:findings [{:claim-id "readers" :for-person true}]
+                                  :spent {"readers" 3} :spent-awaiting ["readers"]}))
+      "a subject held only as a person's question is owed an answer, not an amendment — the cap
+       ends on that as an ask, never as a rewording that failed"))
 
 (deftest the-figures-name-what-the-run-ended-spent
   ;; The figures printed {:broken 1 :alone 0 :at-end true} for a claim refuted for the eleventh

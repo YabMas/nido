@@ -522,6 +522,17 @@
     (is (str/includes? h "weaken, withdraw or decide, not reword again")))
   (is (not (str/includes? (:headline (analysis/payload a-design-run)) "Spent:"))))
 
+(deftest a-spent-subject-held-as-a-question-awaits-a-person
+  ;; Watched: a run that neither refuted nor reworded a subject, only asked a person about it, was
+  ;; headlined "refuted 3 readings running — not reword again" off a count frozen since the question.
+  (let [h (:headline (analysis/payload (assoc a-design-run :status :asked
+                                              :spent {"seed-and-embed" 3 "writers-order" 4}
+                                              :spent-awaiting ["seed-and-embed"])))]
+    (is (str/includes? h "Awaiting a person: seed-and-embed refuted 3 readings running before it was asked"))
+    (is (str/includes? h "Spent: writers-order refuted 4 readings running — rewording has not settled it"))
+    (is (not (str/includes? h "Spent: seed-and-embed"))
+        "the weaken-or-withdraw advice is kept for what the last reading actually refuted")))
+
 (deftest a-cleared-design-run-carries-its-ask-into-the-headline
   ;; A cleared run stops nobody, and its headline read as five counters — an all-clear — while its
   ;; decision held a live product question.

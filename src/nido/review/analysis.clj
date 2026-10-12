@@ -344,6 +344,8 @@
    refuted, rewording after rewording, counted across runs. Named in the headline because it is the
    one figure no single run's counts show — a capped run reports `1 round, 0 amended` over a claim
    refuted for the eleventh time, and the hand amender reads this before writing the twelfth.
+   `spent-awaiting` is those of them the last judgement held only as a person's question: their count
+   stopped when it was asked, so they are named as awaiting a person, never as a rewording to stop.
 
    `repair` is `nido.coordinator.report/repair-before-asking` of that judgement, and `repaired?`
    whether the run amended after it: `asks` on a repair is conditional on it, and is never shown as
@@ -359,7 +361,7 @@
    does not cite — its premise has moved, and its re-citation or re-survey is owed."
   [{:keys [loop run-id report-path status rounds launched judged amended unappended weakened disputed
            record-seq still-broken still-asked asks stood-in reviewed-project reviewed-session reviewed-ws-id
-           machinery unrecorded spent cap amend-prompt unreadable stale-at-start repair repaired?
+           machinery unrecorded spent spent-awaiting cap amend-prompt unreadable stale-at-start repair repaired?
            amender continued subject]
     :as run}]
   (let [kind   (name loop)
@@ -439,13 +441,23 @@
                                       (str/join ", " (for [{:keys [id] n :seq} denied]
                                                        (str id " (entry " n ")")))
                                       " — one reading each way at one tree\n"))
-                               (when (seq spent)
-                                 (str "Spent: "
-                                      (str/join ", " (for [[id n] (sort spent)]
-                                                       (str id " refuted " n " readings running")))
-                                      " — rewording has not settled "
-                                      (if (= 1 (count spent)) "it" "them")
-                                      "; weaken, withdraw or decide, not reword again\n"))
+                               (let [asked   (set spent-awaiting)
+                                     refuted (remove (comp asked key) (sort spent))]
+                                 (str
+                                  (when (seq refuted)
+                                    (str "Spent: "
+                                         (str/join ", " (for [[id n] refuted]
+                                                          (str id " refuted " n " readings running")))
+                                         " — rewording has not settled "
+                                         (if (= 1 (count refuted)) "it" "them")
+                                         "; weaken, withdraw or decide, not reword again\n"))
+                                  (when-let [waiting (seq (filter (comp asked key) (sort spent)))]
+                                    (str "Awaiting a person: "
+                                         (str/join ", " (for [[id n] waiting]
+                                                          (str id " refuted " n " readings running"
+                                                               " before it was asked")))
+                                         " — since then held only as a question for you; answer it,"
+                                         " rewording is not what is owed\n"))))
                                ;; The figures count from the ledger, which this decision never reached —
                                ;; said here, or a reader takes the run for its would-be status.
                                (when unrecorded

@@ -161,7 +161,7 @@
                 record/append! (fn [_ _] nil)]
     (let [out (run record/judge-stage (ctx))]
       (is (nil? (:status out)))
-      (is (= [(assoc a-finding :disputed-n 0)] (:findings out))
+      (is (= [(assoc a-finding :disputed-n 0 :raised-since 1)] (:findings out))
           "each finding carries how many times it has been objected to"))))
 
 (deftest a-round-that-could-not-run-keeps-its-own-name
@@ -848,7 +848,7 @@
 (defn- after-an-amend [& {:keys [amended? now running] :or {amended? true}}]
   (record/baseline-round-changed?
    (cond-> {:iter 2 :findings [(refuting "shape" now)]}
-     running (assoc :refuted-running running))
+     running (assoc :spent running))
    [{:iter 1 :amended? amended? :findings [(refuting "shape" ["src/rec.clj:1512"])]}]))
 
 (deftest a-new-counterexample-to-an-amended-claim-is-movement
@@ -868,6 +868,66 @@
   (is (true? (after-an-amend :now ["src/rec.clj:1153"] :running {"shape" 2}))
       "the round that first offers the withdrawal still runs, or the offer is never made")
   (is (false? (after-an-amend :now ["src/rec.clj:1153"] :running {"shape" 3}))))
+
+(defn- refuted-at [iter evidence & {:keys [cites amended?] :or {cites ["the claim"] amended? true}}]
+  {:iter iter :amended? amended?
+   :findings [{:claim-id "chat-door" :cites cites :claim "a counterexample" :evidence evidence}]})
+
+(deftest a-line-every-counterexample-cites-is-the-subject-not-the-defect
+  ;; Watched five runs running: R5 and R6 found different true defects in one claim, sharing only
+  ;; door.clj:16 — the door itself, which R3 cited too — and the run stopped :no-progress one
+  ;; narrowing short; a hand amend 23 s later did it and the next run was sufficient.
+  (let [prior [(refuted-at 3 ["door.clj:16" "dialogue.clj:378"])
+               (refuted-at 5 ["door.clj:16" "chat/core.clj:395"])]
+        now   (:findings (refuted-at 6 ["door.clj:16" "connection.clj:146"]))
+        veto  (record/record-round-veto record/baseline-finding-base-key
+                                        {:iter 6 :findings now} prior)]
+    (is (true? (:changed? veto))
+        "with the anchor out the two counterexamples share nothing, and the run goes on narrowing")
+    (is (= ["door.clj:16"] (:anchors (first (:repeats veto))))
+        "the anchor taken out is on the veto, so a reader can see why it held"))
+  (testing "two rounds sharing a line are not enough to call it an anchor"
+    (let [veto (record/record-round-veto
+                record/baseline-finding-base-key
+                {:iter 2 :findings (:findings (refuted-at 2 ["door.clj:16" "connection.clj:146"]))}
+                [(refuted-at 1 ["door.clj:16" "chat/core.clj:395"])])]
+      (is (false? (:changed? veto)))
+      (is (= ["door.clj:16"] (:overlap (first (:repeats veto))))
+          "the shared site is named, which is the input a :no-progress stop was decided on")))
+  (testing "a defect citing nothing but the anchor is no evidence of movement"
+    (is (false? (record/baseline-round-changed?
+                 {:iter 6 :findings (:findings (refuted-at 6 ["door.clj:16"]))}
+                 [(refuted-at 3 ["door.clj:16" "a.clj:1"]) (refuted-at 5 ["door.clj:16" "b.clj:2"])])))))
+
+(deftest a-repeat-quoting-text-the-last-finding-did-not-is-movement
+  ;; Watched: an amend added a universal about the function R2 cited, R3 refuted exactly that new
+  ;; clause, and the sites overlapped because both were about the same function — read as a stall.
+  (let [prior [(refuted-at 2 ["course.clj:570" "model.clj:858"] :cites ["commands persist through Persistence"])]
+        now   (fn [cites] (:findings (refuted-at 3 ["course.clj:581" "model.clj:858"] :cites cites)))]
+    (is (true? (record/baseline-round-changed?
+                {:iter 3 :findings (now ["its timeframe access goes through the namespaces above"])}
+                prior))
+        "the finding reads the amend's new clause, which is the amend being read, not ignored")
+    (is (false? (record/baseline-round-changed?
+                 {:iter 3 :findings (now ["Commands persist through   persistence"])} prior))
+        "the same text quoted again, at overlapping code, is the old defect standing")))
+
+(deftest an-attempt-is-counted-on-the-defect-not-the-claim
+  ;; Watched: four different defects in `shape`, each repaired the round after and none recurring,
+  ;; were counted as four failed repairs of one, and the run stopped one phrase short of sufficient.
+  (let [stamp   #'record/raised-since
+        key-of  (record/attempt-key record/baseline-finding-key)
+        finding (fn [evidence] {:claim-id "shape" :cites ["s"] :claim "c" :evidence evidence :disputed-n 0})
+        r1      (stamp record/baseline-finding-base-key 1 [] [(finding ["rag.clj:467"])])
+        r2      (stamp record/baseline-finding-base-key 2 [{:iter 1 :findings r1}]
+                       [(finding ["session.clj:159"])])
+        r3      (stamp record/baseline-finding-base-key 3 [{:iter 1 :findings r1} {:iter 2 :findings r2}]
+                       [(finding ["session.clj:159" "session.clj:170"])])]
+    (is (= [1 2 2] (map (comp :raised-since first) [r1 r2 r3]))
+        "a counterexample at new code is a new defect; one at the same code is the old one again")
+    (is (not= (key-of (first r1)) (key-of (first r2)))
+        "so `unfixable` never counts two different repaired defects as one repair failing twice")
+    (is (= (key-of (first r2)) (key-of (first r3))))))
 
 (deftest an-objection-counts-against-the-defect-it-answered
   ;; Keyed on the claim alone, an objection to a false finding was inherited by a later, correct
@@ -2309,15 +2369,16 @@
     (is (= {} (record/refuted-running nil [(review :refuted ["c1"]) once (review :confirmed ["c1"])]))
         "the paired confirmation is the one that ends it")))
 
-(deftest a-broken-check-yields-the-stall-veto-on-its-own-run
+(deftest a-broken-check-never-yields-the-stall-veto
+  ;; Watched: a check broken by two different, each-repaired claim refutations and then held open by
+  ;; a person's question ended a run :unfixable — the right end was :asked. A check is never spent
+  ;; (`spent`), so what bounds one is `unfixable` on the defect, not the yield.
   (let [broken  (fn [ev] {:check :goal-served :status :broken :note "n" :claim-ids ["c1"]
                           :cites ["x"] :claim "q" :evidence ev})
-        changed (fn [running]
+        changed (fn [spent]
                   (record/design-round-changed?
-                   {:iter 2 :findings [(broken ["src/a.clj:2"])] :refuted-running running}
+                   {:iter 2 :findings [(broken ["src/a.clj:2"])] :spent spent}
                    [{:iter 1 :amended? true :findings [(broken ["src/a.clj:1"])]}]))]
-    (is (false? (changed {":goal-served" 3}))
-        "a check no amendment has repaired three readings running wants a person, not a fourth")
     (is (true? (changed {"c1" 3}))
         "the claim the check was anchored to was not what kept breaking")))
 
@@ -2358,6 +2419,16 @@
                                   :findings [(assoc a-finding :claim-id "invoice-resums")]
                                   :out-path "/x" :refuted-running {"invoice-resums" 3}})]
       (is (not (str/includes? p "A CLAIM NO REWORDING HAS SETTLED"))))))
+
+(deftest a-rewording-made-by-hand-is-not-charged-to-the-amender
+  ;; Watched: the amender was told a claim had been refuted twice "each time after a rewording of
+  ;; it", but the last rewording was a person's edit that introduced the contradiction; an amender
+  ;; obeying the block would have weakened a claim the code supports.
+  (let [offer #(record/amend-prompt {:baseline a-baseline :findings [a-claim-finding] :out-path "/x"
+                                     :refuted-running {"c1" 2} :by-hand %})]
+    (is (str/includes? (offer 20) "entry 20 was written by\nhand")
+        "the amender is told a precise restatement has not been tried by one")
+    (is (not (str/includes? (offer nil) "written by\nhand")))))
 
 (deftest the-judge-counts-this-round-once-beside-the-ledgers-readings
   (with-redefs [record/baseline-review! (fn [_] (review :refuted ["c1"]))
@@ -2531,7 +2602,7 @@
                 design-check/design-of (fn [_ _] nil)
                 stages/read-stance (fn [_] nil)]
     (let [final {:status :unfixable :iter 2 :findings [(assoc a-finding :claim-id "c1")]
-                 :refuted-running {"c1" 3}
+                 :spent {"c1" 3}
                  :record {:format :baseline-review :verdict :falsified}
                  :config {:cwd "/w" :run-id "r-cap"}}
           path  (record/write-owed-amend-prompt! final)]
@@ -2540,5 +2611,5 @@
           "the prompt carries the findings the round would have handed its amender")
       (is (nil? (record/write-owed-amend-prompt! (assoc final :amended? true)))
           "a round that amended owes no prompt")
-      (is (nil? (record/write-owed-amend-prompt! (assoc final :refuted-running {"c1" 1})))
+      (is (nil? (record/write-owed-amend-prompt! (assoc final :spent {})))
           "an ordinary :unfixable was amended round after round and owes none"))))

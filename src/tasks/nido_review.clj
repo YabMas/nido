@@ -2064,7 +2064,8 @@
       ;; The repair that :asks waits on, and whether this run made it after the decision that asks.
       :repair           (when (= :design-decision (:format rec)) (creport/repair-before-asking rec))
       :repaired?        (boolean (some #(and (= (:iter final) (:iter %)) (:amended? %)) history))
-      :spent            (record/spent (:refuted-running final))
+      :spent            (:spent final)
+      :spent-awaiting   (:spent-awaiting final)
       :cap              (record/cap-account final)
       :unreadable       (record/unreadable-rounds report)
       :continued        (record/continued report)
@@ -2112,6 +2113,7 @@
                                  ;; nothing has shown the same cost there.
                                  :judged-after :judge
                                  :finding-key finding-key
+                                 :attempt-key (record/attempt-key finding-key)
                                  :spent record/spent-at-cap
                                  :owes-reading record/owed-reading
                                  :repair-at-cap? true}
@@ -2143,7 +2145,7 @@
     (when (= :amend-touched-code status)
       (println (str "  to append its answer as written and judge it: bb nido:review:amend:append :run "
                     run-id)))
-    (let [spent (record/spent (:refuted-running final))]
+    (let [spent (:spent final)]
       (doseq [k (:unfixable final)]
         (println (str "  ↯ " (finding-name k)
                       (if-let [n (get spent k)]

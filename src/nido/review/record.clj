@@ -3227,6 +3227,48 @@
   [a b]
   (or (empty? a) (empty? b) (boolean (some a b))))
 
+(defn- subject-sites
+  "The `sites` of the findings `base-key` files under `k`, one set per round of `rounds` (history
+   entries, this round's last) that filed any, oldest first."
+  [base-key k rounds]
+  (keep (fn [r] (let [fs (filter #(= k (base-key %)) (:findings r))]
+                  (when (seq fs) (into #{} (mapcat sites) fs))))
+        rounds))
+
+(defn- anchors
+  "The sites every refutation of one subject this run has cited — `site-sets` from `subject-sites`
+   — once there are three or more: what the subject is ABOUT, its own function or the chokepoint
+   every counterexample to it passes through, which two different counterexamples cite as surely
+   as one surviving its rewrite. Empty under three, where a site two rounds share is as likely
+   the defect surviving as the subject's anchor and nothing tells the two apart."
+  [site-sets]
+  (if (>= (count site-sets) 3)
+    (reduce (fn [a b] (into #{} (filter b) a)) site-sets)
+    #{}))
+
+(defn- defect-sites
+  "`fs`'s sites with the subject's `anchors` taken out — what tells one counterexample to it from
+   another."
+  [fs anchor]
+  (into #{} (comp (mapcat sites) (remove anchor)) fs))
+
+(defn- quotes-overlap?
+  "Whether two :cites quotes are one span of record text: either holds the other, case and
+   whitespace aside. Containment rather than equality, because a judge re-quoting a clause rarely
+   cuts it at the same words."
+  [a b]
+  (let [norm #(-> (str %) str/lower-case (str/replace #"\s+" " ") str/trim)
+        a (norm a) b (norm b)]
+    (and (seq a) (seq b) (or (str/includes? a b) (str/includes? b a)))))
+
+(defn- fresh-cites?
+  "Whether every quote in `now` is record text no quote in `was` held — the repeat is a reading of
+   text the earlier finding did not hold against: text the amend between them wrote, or a clause
+   that finding never pointed at. False when either quotes nothing, which says nothing."
+  [was now]
+  (boolean (and (seq was) (seq now)
+                (not-any? (fn [q] (some #(quotes-overlap? q %) was)) now))))
+
 (defn ^{:malli/schema [:=> [:cat :any :any :map] :int]}
   disputed-n
   "How many times this run has objected to `f` itself: disputes under its identity (`base-key`)
@@ -3247,25 +3289,43 @@
    and was itself the next finding."
   2)
 
-(defn ^{:malli/schema [:=> [:cat [:maybe [:map-of :string :int]]] [:map-of :string :int]]}
+(defn ^{:malli/schema [:=> [:cat [:maybe [:map-of :string :int]] :any] [:map-of :string :int]]}
   spent
-  "The subjects `refuted-running` counts at `withdrawable-after` or more, as a sorted `{id n}`: each
-   reworded at least once and refuted again, so a rewording at the same strength is no longer a
-   repair. Named on the judgement (:spent), the run's figures and the analysis headline, because
-   the count runs ACROSS runs and the amender's withdrawal offer reaches none of them when a capped
-   run never reaches its amend stage and the record is amended by hand between runs."
-  [running]
-  (into (sorted-map) (filter #(>= (val %) withdrawable-after)) running))
+  "The subjects `refuted-running` counts at `withdrawable-after` or more that `offerable?` admits,
+   as a sorted `{id n}`: each reworded at least once and refuted again, so a rewording at the same
+   strength is no longer a repair. Named on the judgement (:spent), the run's figures and the
+   analysis headline, because the count runs ACROSS runs and the amender's withdrawal offer reaches
+   none of them when a capped run never reaches its amend stage and the record is amended by hand
+   between runs.
+
+   `offerable?` is the subjects an amender is offered a repair for once spent — a baseline's claims
+   (`withdrawable`), a design's claims and elements (`design-spent`) — and nothing else is spent. A
+   derivation check cannot be weakened or withdrawn, and a whole-record field (`shape`) or a module
+   pools every refutation of every sentence in it: counted here, they end runs on, and tell a
+   person to weaken, a subject no amender was ever offered that for."
+  [running offerable?]
+  (into (sorted-map) (filter #(and (offerable? (key %)) (>= (val %) withdrawable-after))) running))
+
+(declare refuted-ids check-statuses claim-finding? run-keys)
+
+(defn- awaiting-person
+  "The ids of `spent` that `findings` hold only as a person's question: asked about under a
+   :for-person finding and refuted by none (`run-keys`). Such a subject's count stopped when the
+   question was asked and stands until someone answers it, so it says nothing about rewording."
+  [spent statuses findings]
+  (let [asked   (into #{} (comp (filter :for-person) (mapcat refuted-ids)) findings)
+        refuted (into #{} (mapcat #(run-keys statuses %)) findings)]
+    (filterv #(and (asked %) (not (refuted %))) (keys spent))))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe [:sequential :string]]]}
   spent-at-cap
-  "A record run's `run-loop` :spent: the `spent` subjects of a round that still owes an amendment,
-   which a capped run ends :unfixable on instead of :max-iters. nil for a round that owes none."
+  "A record run's `run-loop` :spent: the round's :spent subjects (`spent`, off the judge stage)
+   when the round still owes an amendment, which a capped run ends :unfixable on instead of
+   :max-iters — less those awaiting a person (`awaiting-person`), which no amendment is owed for.
+   nil for a round that owes none."
   [ctx]
   (when (seq (:findings ctx))
-    (seq (keys (spent (:refuted-running ctx))))))
-
-(declare refuted-ids check-statuses claim-finding?)
+    (seq (remove (set (:spent-awaiting ctx)) (keys (:spent ctx))))))
 
 (defn- run-keys
   "What one finding of a judgement counts against in `refuted-running`. A finding under a check the
@@ -3349,8 +3409,12 @@
           (distinct (keep :claim-id (remove #(or (:blocks %) (:unsettled %) (:for-person %)) findings))))))
 
 (defn- withdrawal-block
-  "What an amender is told about the claims in `spent` (`withdrawable`), or nil when there are none."
-  [spent]
+  "What an amender is told about the claims in `spent` (`withdrawable`), or nil when there are none.
+   `by-hand` is the :seq of the record under repair when a person wrote it, superseding another,
+   else nil: the last rewording the count charges to the claim was then theirs, and a precise
+   restatement by an amender has not been tried — an amender told otherwise weakens a claim the
+   code supports."
+  [spent by-hand]
   (when (seq spent)
     (str "\n\nA CLAIM NO REWORDING HAS SETTLED. "
          (str/join ", " (for [[id n] spent] (str "[" id "] has been refuted " n " readings running")))
@@ -3362,7 +3426,11 @@
          "  - REMOVE it, when no other claim, element or derivation in the record rests on\n"
          "    it, and give the reason under :withdrawn. That removal is the repair, not a\n"
          "    retreat from one: it is reported to a human as a withdrawal carrying your\n"
-         "    reason. A removal without a reason is reported as a claim dropped.")))
+         "    reason. A removal without a reason is reported as a claim dropped."
+         (when by-hand
+           (str "\n\nOne caveat. The last rewording was not this loop's: entry " by-hand " was written by\n"
+                "hand. If the finding is about what that edit introduced, a precise restatement\n"
+                "of what the code does has not been tried, and is a third honest repair.")))))
 
 (defn- design-spent
   "The subjects a design round's `raised` lines refute that `refuted-running` counts at
@@ -3512,38 +3580,97 @@
          "human as a withdrawal carrying your reason. Removed without one, it is reported as a\n"
          "claim dropped.")))
 
-(defn ^{:malli/schema [:=> [:cat :any :map :any] :boolean]}
-  record-round-changed?
-  "Whether a record round that repeats the last round's findings, by `base-key`, is still moving —
-   the engine's `:changed?`, which vetoes `nido.review.loop/no-progress?`.
+(defn ^{:malli/schema [:=> [:cat :any :map :any] [:maybe :map]]}
+  record-round-veto
+  "Whether a record round that repeats the last round's findings, by `base-key`, is still moving,
+   with what decided it — nil when no round came before this one. `:changed?` on it is the
+   engine's `:changed?` (`record-round-changed?`), which vetoes `nido.review.loop/no-progress?`;
+   the rest rides on the judge phase, so a run that stopped says which leg failed.
 
    A record finding is keyed on the claim it refutes, so a claim amended for one counterexample and
    refuted by another keys the same both times; without this, one repeat of a claim id ends the
-   run, after one amendment. True when the round before this one amended the record and every
-   repeated identity points at code disjoint from what it pointed at last round (`sites`) — a new
-   counterexample to a rewritten claim, not the old one surviving its rewrite. An identity whose
-   sites overlap, or that either round points at nothing for, is no evidence of movement.
+   run, after one amendment. Changed when the round before this one amended the record and every
+   repeated identity has `:moved?`, by either of two legs:
+   - its sites, the subject's `anchors` taken out, are disjoint from last round's — a new
+     counterexample, not the old one surviving its rewrite. Without the anchors a single line every
+     counterexample to the subject passes through reads two different defects as one. An identity
+     that either round points at nothing for, anchors aside, is no evidence of movement.
+   - its :cites quote only record text last round's did not (`fresh-cites?`). Its sites overlap
+     whenever the amend wrote a new clause about the code the last finding cited, which is the
+     amend being read, not ignored. This leg also passes the old defect surviving a rewording, and
+     does not try to tell the two apart: `unfixable` and the yield below are what bound that.
 
-   Bounded twice. `unfixable` still gives up on a claim raised in four consecutive rounds, which
-   this does not touch. And the veto YIELDS once a repeated claim has been refuted more than
-   `withdrawable-after` readings running (`:refuted-running` on the round's ctx): its amender has
-   then reworded it twice and been refuted each time — after being offered its withdrawal on a
-   baseline, its weakening on a design — and a claim no rewording settles wants a person or a drop, not a third rewording."
+   Bounded twice. `unfixable` still gives up on a defect raised in four consecutive rounds, which
+   this does not touch. And the veto YIELDS once a repeated subject is `:spent` past
+   `withdrawable-after` readings running (off the round's ctx, the judge stage's `spent`): its
+   amender has then reworded it twice and been refuted each time — after being offered its
+   withdrawal on a baseline, its weakening on a design — and a claim no rewording settles wants a
+   person or a drop, not a third rewording. Only a subject the amender was offered that for can
+   yield it (`spent`); `:spent` on the answer is the subjects that did.
+
+   `:repeats` has one row per repeated identity: `:key`, `:moved?`, and when present `:anchors`,
+   `:overlap` (the shared sites, anchors out) and `:fresh-cites`."
   [base-key ctx prior]
-  (let [prev    (last (filter #(= (dec (:iter ctx)) (:iter %)) prior))
-        was     (group-by base-key (:findings prev))
-        now     (group-by base-key (:findings ctx))
-        site-of #(into #{} (mapcat sites) %)
-        moved?  (fn [[k fs]]
-                  (let [a (site-of (get was k)) b (site-of fs)]
-                    (and (seq a) (seq b) (not-any? a b))))
-        spent?  (fn [id] (> (get (:refuted-running ctx) id 0) withdrawable-after))
-        ;; A design round's broken check is carried as the check itself, its :status on it.
-        statuses (into {} (keep #(when (:status %) [(:check %) (:status %)])) (:findings ctx))]
-    (boolean (and (:amended? prev)
-                  (every? moved? (filter (comp was key) now))
-                  (not-any? spent? (into #{} (comp (filter (comp was base-key)) (mapcat #(run-keys statuses %)))
-                                         (:findings ctx)))))))
+  (when-let [prev (last (filter #(= (dec (:iter ctx)) (:iter %)) prior))]
+    (let [was     (group-by base-key (:findings prev))
+          now     (group-by base-key (:findings ctx))
+          rounds  (conj (vec prior) {:findings (:findings ctx)})
+          repeat  (fn [[k fs]]
+                    (let [anchor (anchors (subject-sites base-key k rounds))
+                          a      (defect-sites (get was k) anchor)
+                          b      (defect-sites fs anchor)
+                          shared (into (sorted-set) (filter a) b)
+                          fresh? (fresh-cites? (mapcat :cites (get was k)) (mapcat :cites fs))]
+                      (cond-> {:key k :moved? (or (and (seq a) (seq b) (empty? shared)) fresh?)}
+                        (seq anchor) (assoc :anchors (vec (sort anchor)))
+                        (seq shared) (assoc :overlap (vec shared))
+                        fresh?       (assoc :fresh-cites true))))
+          repeats (mapv repeat (filter (comp was key) now))
+          ;; A design round's broken check is carried as the check itself, its :status on it.
+          statuses (into {} (keep #(when (:status %) [(:check %) (:status %)])) (:findings ctx))
+          yields  (into (sorted-map)
+                        (keep (fn [id] (let [n (get (:spent ctx) id 0)]
+                                         (when (> n withdrawable-after) [id n]))))
+                        (into #{} (comp (filter (comp was base-key)) (mapcat #(run-keys statuses %)))
+                              (:findings ctx)))]
+      (cond-> {:changed? (boolean (and (:amended? prev) (every? :moved? repeats) (empty? yields)))
+               :amended? (boolean (:amended? prev))
+               :repeats  repeats}
+        (seq yields) (assoc :spent yields)))))
+
+(defn ^{:malli/schema [:=> [:cat :any :map :any] :boolean]}
+  record-round-changed?
+  "`record-round-veto`'s `:changed?`: false when no round came before this one."
+  [base-key ctx prior]
+  (boolean (:changed? (record-round-veto base-key ctx prior))))
+
+(defn- raised-since
+  "`findings` (this round's) each stamped `:raised-since`: the iter of the round its defect was first
+   raised in. Inherited from a finding under the same identity (`base-key`) in the newest of
+   `prior` whose sites, the subject's `anchors` out, overlap this one's (`same-defect?`); this round's
+   iter otherwise. What `unfixable` counts attempts on (`attempt-key`), since an identity is a
+   claim and four repaired counterexamples to one claim are not one repair failing four times."
+  [base-key iter prior findings]
+  (let [prev   (last prior)
+        rounds (conj (vec prior) {:findings findings})]
+    (mapv (fn [f]
+            (let [k      (base-key f)
+                  anchor (anchors (subject-sites base-key k rounds))
+                  mine   (defect-sites [f] anchor)
+                  from   (some #(when (and (= k (base-key %))
+                                           (same-defect? (defect-sites [%] anchor) mine))
+                                  (:raised-since %))
+                               (:findings prev))]
+              (assoc f :raised-since (or from iter))))
+          findings)))
+
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  attempt-key
+  "A record loop's `run-loop` :attempt-key over its `finding-key`: the identity and the round the
+   defect was first raised in (`raised-since`), so `unfixable` counts the rounds one defect survived
+   and a new counterexample to the same claim restarts the count."
+  [finding-key]
+  (fn [f] [(finding-key f) (:raised-since f)]))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :boolean]}
   baseline-round-changed?
@@ -4140,8 +4267,8 @@
    A finding carrying :unsettled is neither: no reading could rule on its subject
    (`unsettled-findings`), and the amender is asked to rule on it instead, with removal of
    a claim on offer the same way. A round that found nothing else was judged sufficient,
-   which the opening says rather than calling it a refutation."
-  [{:keys [baseline findings out-path stance declared? check-cmd settled refuted-running]}]
+   which the opening says rather than calling it a refutation. `by-hand` is `withdrawal-block`'s."
+  [{:keys [baseline findings out-path stance declared? check-cmd settled refuted-running by-hand]}]
   (let [gaps?    (boolean (and (some :blocks findings)
                                 (every? #(or (:blocks %) (:unsettled %)) findings)))
         mixed?   (boolean (and (not gaps?) (some :blocks findings)))
@@ -4287,7 +4414,7 @@
             (when-let [n (and (not (:blocks f)) (not (:unsettled f)) (get spent (:claim-id f)))]
               (str "\n   running: refuted " n " readings in a row — see A CLAIM NO REWORDING HAS SETTLED"))))
      findings))
-   (withdrawal-block spent)
+   (withdrawal-block spent by-hand)
    (unsettled-block findings)
    (some->> (bearing-block (bearing-subjects {:record baseline :findings findings :settled settled}))
             (str "\n\n") str/trimr)
@@ -4865,9 +4992,14 @@
                     [])
         running   (when reviews (refuted-running subject (into lineage mine)))
         unsettled (if reviews (unsettled-findings record (unchecked-running reviews)) [])
-        record    (cond-> record (seq (spent running)) (assoc :spent (spent running)))
+        spent-now (spent running (retreat/claim-ids subject))
+        awaiting  (awaiting-person spent-now (check-statuses record) (:findings record))
+        record    (cond-> record
+                    (seq spent-now) (assoc :spent spent-now)
+                    (seq awaiting)  (assoc :spent-awaiting awaiting))
         ;; An amender's :stale speaks for the one round after it.
-        ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
+        ctx    (merge (-> (assoc ctx :settled settled :refuted-running running
+                                 :spent spent-now :spent-awaiting awaiting)
                           (update :carry dissoc :stale)
                           (cond-> ledger (assoc-in [:carry :ledger] ledger)))
                       (when (:seq subject) {:judged-seq (:seq subject)})
@@ -4894,9 +5026,10 @@
         (assoc ctx :record record :findings [] :control :stop :status :sufficient)
 
         :else
-        (let [findings (mapv #(assoc % :disputed-n
-                                     (disputed-n (:history ctx) baseline-finding-base-key %))
-                             (into (vec (:findings record)) unsettled))]
+        (let [findings (->> (into (vec (:findings record)) unsettled)
+                            (mapv #(assoc % :disputed-n
+                                          (disputed-n (:history ctx) baseline-finding-base-key %)))
+                            (raised-since baseline-finding-base-key (:iter ctx) (:history ctx)))]
           ;; Twice objected to and stated a third time. Neither side is giving
           ;; way and neither can settle it: the judge cannot be overruled by the
           ;; pass it is judging, and that pass may not amend a record it believes
@@ -4906,6 +5039,17 @@
                    :control :escalate :status :disputed)
             (assoc ctx :record record :findings findings))))
        answer))))
+
+(defn- with-veto
+  "`run` (a judge stage's :run), its ctx carrying `record-round-veto` over the findings it hands on
+   — what the engine's :changed? reads off the same ctx and prior — as :veto, for the judge phase
+   to report."
+  [base-key run]
+  (fn [ctx]
+    (let [c (run ctx)]
+      (if-let [v (and (seq (:findings c)) (record-round-veto base-key c (:history ctx)))]
+        (assoc c :veto v)
+        c))))
 
 (def judge-stage
   "The same read-only pass the one-shot round ran, with its verdict appended to
@@ -4927,7 +5071,7 @@
    (`unsettled-findings`): that one is the amender's to rule on, whatever the verdict."
   {:name :judge
    :run
-   run-judge-stage})
+   (with-veto baseline-finding-base-key run-judge-stage)})
 
 (defn- under-repair
   "The baseline a round's amendment repairs: the one this run last amended, else the one it was
@@ -4951,6 +5095,9 @@
                    :check-cmd check
                    :settled   (:settled ctx)
                    :refuted-running (:refuted-running ctx)
+                   :by-hand   (when (and project (:seq prev) (:supersedes prev)
+                                         (not (contains? (ws/amended-seqs project ws-id) (:seq prev))))
+                                (:seq prev))
                    :stance    (stages/read-stance project)
                    :declared? (some? (design-check/design-of project (or code-cwd cwd)))})))
 
@@ -5977,8 +6124,14 @@
                   (refuted-running design (into lineage (when-not reused [record]))))
         ;; Every append below writes `record`; a reused one is on the ledger already.
         put!    (fn [ledger record] (if reused (reused-answer reused) (append! ledger record)))
-        record (cond-> record (seq (spent running)) (assoc :spent (spent running)))
-        ctx    (merge (-> (assoc ctx :settled settled :refuted-running running)
+        ;; A derivation check is never spent: no amender can weaken one (`spent`).
+        spent-now (spent running (complement (into #{} (map str) (report/derivations-of design))))
+        awaiting  (awaiting-person spent-now (check-statuses record) (:findings record))
+        record (cond-> record
+                 (seq spent-now) (assoc :spent spent-now)
+                 (seq awaiting)  (assoc :spent-awaiting awaiting))
+        ctx    (merge (-> (assoc ctx :settled settled :refuted-running running
+                                 :spent spent-now :spent-awaiting awaiting)
                           (update :carry dissoc :stale)
                           (cond-> ledger (assoc-in [:carry :ledger] ledger)))
                       (when (:seq design) {:judged-seq (:seq design)})
@@ -6081,12 +6234,14 @@
                                                                                  [(:claim-id %)])))
                                                           (:check %) (assoc :filed-under (:check %))))))
                                  (:findings record))
-            findings  (into (vec (for [c (broken-checks record)
-                                       [person? fs] (halves c)]
-                                   (handle (cond-> (assoc c :claim-ids (claims-of fs))
-                                             (seq (evidence-of fs)) (assoc :evidence (evidence-of fs))
-                                             person?                (assoc :for-person true)))))
-                            claim-findings)
+            findings  (raised-since
+                       design-finding-base-key (:iter ctx) (:history ctx)
+                       (into (vec (for [c (broken-checks record)
+                                        [person? fs] (halves c)]
+                                    (handle (cond-> (assoc c :claim-ids (claims-of fs))
+                                              (seq (evidence-of fs)) (assoc :evidence (evidence-of fs))
+                                              person?                (assoc :for-person true)))))
+                             claim-findings))
             disputed?   #(>= (:disputed-n %) 2)]
         (cond
           ;; The judge's own stop for a person. What reaches the amender first is only what the
@@ -6180,7 +6335,7 @@
    recommendations that mean repair the record, the checks say nothing."
   {:name :judge
    :run
-   run-design-judge-stage})
+   (with-veto design-finding-base-key run-design-judge-stage)})
 
 (defn- resurvey-refutations
   "What the design round in `ctx` found against `cited`'s own claims, as `settled/prior-findings`
@@ -6264,6 +6419,7 @@
                                   :pipeline    baseline-pipeline
                                   :judged-after :judge
                                   :finding-key baseline-finding-key
+                                  :attempt-key (attempt-key baseline-finding-key)
                                   :changed?    baseline-round-changed?}))
         out (if survey-cwd
               (survey survey-cwd)

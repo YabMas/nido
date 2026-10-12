@@ -673,6 +673,11 @@
       ;; earlier run appended that this round took as its judgement, launching no judge: everything
       ;; else on the phase is that entry's, not this run's.
       ;; A finding row standing for a broken check carries :filed — see `with-filed`.
+      ;; :veto is what the stall check was handed for a round repeating the last one's findings
+      ;; (`nido.review.record/record-round-veto`): per repeated identity whether it moved, the sites
+      ;; both rounds share and the anchors taken out first, and which spent subjects made it yield.
+      ;; A :no-progress round is otherwise one whose veto failed for a reason nobody can recompute.
+      ;; :spent-awaiting is the spent subjects the judgement held only as a person's question.
       ;; :status is "unjudged" when the round has an outcome and neither a verdict nor a
       ;; recommendation: no judgement was parsed, whether or not a judge was launched, and an "ok"
       ;; beside a codex failure reads as a round that judged.
@@ -746,6 +751,8 @@
                 (:identity-unreadable ctx)              (assoc :identity-unreadable (:identity-unreadable ctx))
                 (:tree-moved ctx)                       (merge (:tree-moved ctx))
                 (seq (:refuted-running ctx))            (assoc :refuted-running (into (sorted-map) (:refuted-running ctx)))
+                (:veto ctx)                             (assoc :veto (:veto ctx))
+                (seq (:spent-awaiting ctx))             (assoc :spent-awaiting (:spent-awaiting ctx))
                 (and (get-in ctx [:record :outcome]) (get-in ctx [:record :detail]))
                 (assoc :detail (get-in ctx [:record :detail]))
                 (get-in ctx [:record :refused])
