@@ -114,43 +114,57 @@
         (println (str "nido coordinator: reconcile could not settle the session of "
                       (:id run) " — " (ex-message e)))))))
 
-(defn- release-improvement-hold!
-  "Close the improvement workstream a Run this start orphaned was working, as
-   :orphaned, so the sweep it holds is released.
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  release-improvement-hold!
+  "Close the improvement workstream a resolved Run was working, as :orphaned,
+   when the Run ended without closing it — so the sweep it holds is released.
 
    The sweep is released by a close and by nothing weaker, so a second agent
-   never starts on a branch the first abandoned mid-edit. A Run failed here as
-   orphaned-from-restart is proven dead — the daemon that ran it is gone — and
-   no session of it will ever write that close, so without this the sweep waits
-   on a workstream nothing is working (twice: 09-23 for six days, 09-29 within
-   the hour). Each claim gets its own workspace, so releasing it puts no second
-   agent on the dead one's branch.
+   never starts on a branch the first abandoned mid-edit. A claim that lands
+   is closed by `discharge-claim!` before its Run exits, and one that stops
+   untrue or vetoed is closed by its session, so a resolved Run whose claim is
+   still open died before either: a restart (09-23, 09-29), a turn ended early
+   (09-11), a usage-limit kill (10-08). No session of it will write the close,
+   and the sweep would wait on a workstream nothing is working. Each claim gets
+   its own workspace, so releasing it puts no second agent on the dead one's
+   branch.
 
-   Only a workstream carrying the :improvement adapter, and only while open: a
-   claim that closed itself before the restart is left as it closed. Never
-   throws, like settle-session!."
+   Left open: a workstream without the :improvement adapter, one already
+   closed, and one carrying an unanswered :blocker — a halt is the skill
+   holding the slot for a person on purpose. Never throws: one Run's claim must
+   not keep the rest from being settled."
   [{:keys [project workstream-id id]}]
   (try
     (when-let [w (when workstream-id (cws/read-ws project workstream-id))]
-      (when (and (nil? (:closed w))
-                 (some #(= proposal/improvement-adapter (:adapter %)) (:external-refs w)))
-        (cws/close! project workstream-id :orphaned)))
+      (let [answered (into #{} (keep :blocker-seq)
+                           (cws/entries-of project workstream-id :blocker-answered))
+            halted?  (some #(and (= :blocker (:kind %)) (not (answered (:seq %))))
+                           (:entries w))]
+        (when (and (nil? (:closed w))
+                   (not halted?)
+                   (some #(= proposal/improvement-adapter (:adapter %)) (:external-refs w)))
+          (cws/close! project workstream-id :orphaned))))
     (catch Throwable e
       (binding [*out* *err*]
-        (println (str "nido coordinator: reconcile could not release the improvement hold of "
+        (println (str "nido coordinator: could not release the improvement hold of "
                       id " — " (ex-message e)))))))
 
 (defn- reconcile-one!
   "Read run.edn, decide a terminal/parked state if non-terminal, write it back,
-   then settle the Run's session for the state it ends at. A Run already
-   resolved has its session settled too: a restart between a Run's state and
+   then settle the Run's session and claim for the state it ends at. A Run
+   already resolved has them settled too: a restart between a Run's state and
    its session leaves nothing else that would ever reach it.
    :queued runs are pending work — they are left intact for re-submission, and a
    Run caught before its agent launched rejoins them (see requeue?)."
   [run-id]
   (when-let [run (runs/read-run run-id)]
     (when (resolved-states (:state run))
-      (settle-session! run (:state run) false))
+      (settle-session! run (:state run) false)
+      ;; Gated on the payload: this branch reads every Run on disk, and only a
+      ;; claim's Run can hold the sweep. It is what clears a hold a Run left
+      ;; before the executor released holds at all.
+      (when (= proposal/improvement-adapter (-> run :event-payload :adapter))
+        (release-improvement-hold! run)))
     (when (and (contains? non-terminal-states (:state run))
                (not= :queued (:state run)))
       ;; Back-fill the resumable id onto the session regardless of state change,
@@ -201,7 +215,7 @@
               ;; Keep the ticket record honest: an orphaned triage Run clears a stale :investigating.
               (tickets/on-run-terminal! updated state)
               (settle-session! updated state (= :awaiting-review state))
-              (when (= :orphaned-from-restart (:reason error))
+              (when (resolved-states state)
                 (release-improvement-hold! updated)))))))))
 
 (defn ^{:malli/schema [:=> [:cat] :any]}

@@ -900,7 +900,10 @@
     ;; the same leak applies to it for as long as nobody answers — so its
     ;; services are stopped, and a reply or an open brings them back.
     (when (contains? #{:done :failed :halted} next-state)
-      (runs/teardown-session-for-run! run))
+      (runs/teardown-session-for-run! run)
+      ;; A claim Run that ends with its claim still open died before landing or
+      ;; giving it up, and the sweep stays held until something closes it.
+      (reconcile/release-improvement-hold! run))
     (when (= :awaiting-review next-state)
       (runs/stop-session-for-parked-run! run))))
 

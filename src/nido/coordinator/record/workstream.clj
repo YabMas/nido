@@ -58,12 +58,13 @@
    ;; and are grouped again. Folding the two would make one decline bury every
    ;; proposal that happened to be claimed beside it.
    ;;
-   ;; :orphaned is the improvement sweep's too: a daemon restart killed the Run
-   ;; working the claim, and startup reconciliation closed the workstream for
-   ;; it, because a close is the only thing that releases the sweep and a dead
-   ;; Run writes none. Read like :vetoed — nothing was tried to a conclusion, so
-   ;; the claim's addresses return to the owed set — and kept apart from it so a
-   ;; reader can tell a decline from a restart.
+   ;; :orphaned is the improvement sweep's too: the Run working the claim ended
+   ;; without closing it (a restart, a usage-limit kill, a turn ended early), and
+   ;; the coordinator closed the workstream for it, because a close is the only
+   ;; thing that releases the sweep and a dead Run writes none. Read like
+   ;; :vetoed — nothing was tried to a conclusion, so the claim's addresses
+   ;; return to the owed set — and kept apart from it so a reader can tell a
+   ;; decline from a death.
    ;;
    ;; :between-phases is a landing of a phase that is not the plan's last. Closed,
    ;; because nothing is in flight until a person has watched the running system;

@@ -7,6 +7,7 @@
             [canvas.coordinator.record.runs :as runs]
             [canvas.coordinator.record.session :as session]
             [canvas.coordinator.record.state :as state :refer [Path]]
+            [canvas.coordinator.record.workstream :as ws]
             [fukan.common.typing.malli]))
 
 (Module daemon-heartbeat
@@ -92,7 +93,13 @@
     {:signature [:=> [:catn] :any]
      :delegates [runs/read-run runs/write-run! state/runs-dir session/read-session
                  runs/owns-session? runs/teardown-session-for-run!
-                 runs/stop-session-for-parked-run!]}))
+                 runs/stop-session-for-parked-run!]})
+  (Operation release-improvement-hold!
+    "Close, as :orphaned, the open improvement claim a resolved Run leaves behind, unless an
+     unanswered blocker holds it for a person — the close is the only thing that releases the
+     sweep, and a dead Run writes none."
+    {:signature [:=> [:catn [:run :map]] :any]
+     :delegates [ws/read-ws ws/entries-of ws/close!]}))
 
 (Module daemon-notify
   "Best-effort outbound notification on a Run's lifecycle events.

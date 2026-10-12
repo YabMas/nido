@@ -479,7 +479,9 @@
         (is (= :queued (:state (runs/read-run (:id run)))))
         (is (nil? (:closed (ws/read-ws :test (:id w)))))))))
 
-(deftest a-claim-that-finished-is-not-closed-as-orphaned
+(deftest a-claim-run-that-finished-without-closing-its-claim-releases-the-sweep
+  ;; The 09-11 shape: the agent ended its turn early and the Run reads :done,
+  ;; but nothing landed or gave the claim up, so nothing else will ever close it.
   (with-tmp
     (fn [_]
       (let [w   (improvement-ws! :test "ws-p/1#0")
@@ -488,7 +490,36 @@
         (io/write-edn! (cstate/run-status-path (:id run)) {:phase :complete})
         (reconcile/reconcile!)
         (is (= :done (:state (runs/read-run (:id run)))))
-        (is (nil? (:closed (ws/read-ws :test (:id w)))))))))
+        (is (= :orphaned (get-in (ws/read-ws :test (:id w)) [:closed :outcome]))
+            "a claim left open by a finished Run holds the sweep forever")))))
+
+(deftest a-claim-run-already-failed-releases-the-sweep-at-the-next-start
+  ;; The 10-08 shape: a usage-limit kill failed the Run while the daemon ran,
+  ;; before the executor released holds — the next start must clear it.
+  (with-tmp
+    (fn [_]
+      (let [w   (improvement-ws! :test "ws-p/1#0")
+            run (assoc (claim-run w) :state :failed
+                       :error {:reason :usage-limited})]
+        (seed-run! run)
+        (reconcile/reconcile!)
+        (is (= :orphaned (get-in (ws/read-ws :test (:id w)) [:closed :outcome]))
+            "a hold left by an already-resolved Run is cleared by a restart")))))
+
+(deftest a-halted-claim-keeps-its-hold
+  ;; A halt writes a :blocker and leaves the claim open on purpose: the slot is
+  ;; held until a person answers it.
+  (with-tmp
+    (fn [_]
+      (let [w   (improvement-ws! :test "ws-p/1#0")
+            run (claim-run w)]
+        (ws/append-entry! :test (:id w) {:kind :blocker}
+                          (pr-str {:format :blocker :summary "s" :needs "n"}))
+        (seed-run! run)
+        (agent-started! (:id run))
+        (reconcile/reconcile!)
+        (is (nil? (:closed (ws/read-ws :test (:id w))))
+            "releasing a halted claim would discard the question it parked for a person")))))
 
 (deftest an-orphan-on-a-workstream-that-is-not-the-sweeps-is-left-open
   (with-tmp
