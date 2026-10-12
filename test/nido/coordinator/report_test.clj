@@ -2122,8 +2122,11 @@
         "the first reading of an amendment is one reading too")
     (is (= "Design decision: proceed" (report/report-title (dissoc once :read-once)))
         "a second reading that proceeds is the clearing decision, titled as before")
-    (is (= "Design decision: ask" (report/report-title (assoc once :recommend :ask)))
-        "a read-once :ask never read as a clearance, so it gains no qualifier")))
+    (is (= "Design decision: ask on one reading — second reading owed"
+           (report/report-title (assoc once :recommend :ask)))
+        "a read-once :ask is read again before it reaches anyone; titled plain, the next round
+         called it 'entry 38 remains unanswered'")
+    (is (= "Design decision: ask" (report/report-title (-> once (assoc :recommend :ask) (dissoc :read-once)))))))
 
 (deftest a-decisions-asks-waits-on-the-repair-it-recommends
   ;; A capped run's :amend decision asked "after the corrections, do you grant…", and every surface

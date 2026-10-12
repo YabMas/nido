@@ -1521,9 +1521,9 @@
     (is (= ask (report/validate-event :design-decision ask)) "the ledger takes the mark")
     (is (not-any? :for-person (:findings amend)))))
 
-(deftest an-ask-marks-the-findings-only-a-person-can-repair-whatever-the-judge-said
+(deftest an-ask-marks-the-findings-only-a-person-can-repair-where-the-judge-gave-no-mark
   ;; Twice a judge asked the person a question and handed the amender, as derivable, the finding
-  ;; the question was about; once it marked derivable a finding quoting the task's done-when, whose
+  ;; the question was about; once it left unmarked a finding quoting the task's done-when, whose
   ;; only repair was editing the intent. Each cost a round to reach the ask it already held.
   (let [intent {:goal "Merge duplicate courses into one row per content"
                 :done-when ["after the migration there are zero groups larger than one"]}
@@ -1534,12 +1534,12 @@
                     :asks_about ["[tika-arm]"]
                     :checks [{:check "goal_served" :status "broken" :note "n"}]
                     :findings [{:claim-id "tika-arm" :check "goal_served" :cites ["src/q.clj:4"]
-                                :claim "quiz import extracts locally" :evidence [] :for_person false}
+                                :claim "quiz import extracts locally" :evidence []}
                                {:claim-id "one-row" :check "goal_served"
                                 :cites ["Task done condition: after the migration ... there are zero groups larger than one"]
-                                :claim "reconcile runs later" :evidence [] :for_person false}
+                                :claim "reconcile runs later" :evidence []}
                                {:claim-id "breaks" :check "" :cites ["src/a.clj:1"]
-                                :claim "breaks omitted" :evidence [] :for_person false}]})
+                                :claim "breaks omitted" :evidence []}]})
                   4 any-era nil intent))
         ask    (answer "ask")]
     (is (= [true true nil] (mapv :for-person (:findings ask)))
@@ -1547,6 +1547,69 @@
     (is (= ask (report/validate-event :design-decision ask)))
     (is (not-any? :for-person (:findings (answer "amend")))
         "only an ask has a question for a finding to belong to")))
+
+(deftest a-judges-explicit-no-to-the-person-stands-and-is-kept
+  ;; A goal-served finding cites the goal by construction, and a claim carries a person's question
+  ;; and a derivable defect at once: the overlay handed every such finding to the person, so a
+  ;; defect the judge called derivable — "the record can independently correct the wording" — was
+  ;; asked three rounds running and never amended, and the report read it as the person's.
+  (let [intent {:goal "block a rejected push before it reaches the remote"}
+        ask    (record/parse-design-decision
+                (json/generate-string
+                 {:recommend "ask" :reason "the push range omission is derivable" :asks "keep Gemini?"
+                  :asks_about ["rejected-push-is-blocked"]
+                  :checks [{:check "goal_served" :status "broken" :note "n"}]
+                  :findings [{:claim-id "rejected-push-is-blocked" :check "goal_served"
+                              :cites ["The goal requires: block a rejected push before it reaches the remote"]
+                              :claim "the push range omits remotes" :evidence [] :for_person false}
+                             {:claim-id "other" :check "" :cites ["src/a.clj:1"]
+                              :claim "unrelated" :evidence [] :for_person false}]})
+                4 any-era nil intent)
+        [named plain] (:findings ask)]
+    (is (nil? (:for-person named)) "the judge said derivable, so the amender repairs it")
+    (is (false? (:judge-marked named))
+        "where asks_about or a goal quote would have taken it, the judge's no is kept on the record")
+    (is (not (contains? plain :judge-marked)) "a no nothing disagreed with is not recorded")
+    (is (= ask (report/validate-event :design-decision ask)) "the ledger takes the kept mark")
+    (is (not-any? #(contains? % :judge-marked)
+                  (:findings (record/parse-design-decision
+                              (json/generate-string
+                               {:recommend "amend" :reason "r"
+                                :checks [{:check "goal_served" :status "broken" :note "n"}]
+                                :findings [{:claim-id "x" :check "goal_served" :cites ["c"]
+                                            :claim "c" :evidence [] :for_person false}]})
+                              4 any-era)))
+        "off an ask there is no question to disagree about")))
+
+(deftest a-persons-finding-no-question-reaches-is-owed
+  ;; On an ask about heading priority, a finding that the read code does not yet return the
+  ;; committed shape was filed for the person: the figures read the claim as asked at the end, and
+  ;; the person was handed a code-owed defect as their question.
+  (let [ask (record/parse-design-decision
+             (json/generate-string
+              {:recommend "ask" :reason "r" :asks "should headings outrank passages?"
+               :asks_about ["section-titles-keyword-hits"]
+               :checks [{:check "goal_served" :status "broken" :note "n"}]
+               :findings [{:claim-id "tools-do-not-overlap" :check "" :cites ["src/read.clj:40"]
+                           :claim "the read response still carries scores"
+                           :evidence ["src/read.clj:44"] :for_person true}
+                          {:claim-id "section-titles-keyword-hits" :check "goal_served" :cites ["c"]
+                           :claim "heading priority is undecided" :evidence [] :for_person true}]})
+             4 any-era nil {:goal "reading returns passage text and nothing else"})]
+    (is (= ["section-titles-keyword-hits"] (mapv :claim-id (:findings ask)))
+        "the asked claim stays the person's question")
+    (is (= ["tools-do-not-overlap"] (:owed ask)) "a commitment the code does not meet yet is the build's")
+    (is (= {"tools-do-not-overlap" ["src/read.clj:44"]} (:owed-at ask)) "with the evidence it was found on")
+    (is (= ask (report/validate-event :design-decision ask)))))
+
+(deftest a-question-for-a-person-is-no-ruling-on-a-claim
+  ;; A for-person question whose cite named a confirmed claim was paired to it, counted as the
+  ;; claim refuted after its settlement, and re-asked the judge as a self-contradiction.
+  (is (= "" (str (:claim-id (#'record/cite-paired ["settled-rule-unchanged"]
+                                                  {:for-person true :claim "q"
+                                                   :cites ["The design leaves the settled rule unchanged"]})))))
+  (is (= [] (#'record/self-contradicted-ids {:confirmed ["retry-op"]
+                                             :findings [{:claim-id "retry-op" :for-person true}]}))))
 
 (deftest the-judge-is-told-when-nobody-will-read-its-ask
   ;; A design declaring :conforms/:within clears on a proceed, and its required ask reached no
@@ -1775,8 +1838,10 @@
     (is (str/includes? p "granted: LTI context is in scope.\n      now:     LTI context is excluded."))
     (is (not (str/includes? p "granted: Every read goes through a door."))
         "a clause the grant already covered is not put back in front of the judge as new")
-    (is (str/includes? p "the change since entry 37 is the one your note ordered")
-        "a supersession doing only what the grant note ordered is said to be that, not asked afresh")))
+    (is (not (str/includes? p "is the one your note ordered"))
+        "no sentence crediting the person with the change is handed to the judge to repeat")
+    (is (str/includes? p "only by quoting the words of the\nnote that order it")
+        "a change the note ordered is said to be that only on the note's own words")))
 
 (deftest every-grant-up-the-chain-reaches-the-judge
   ;; A newer, narrower grant hid the older one that settled the scope, and four rounds re-asked the
@@ -1792,6 +1857,134 @@
     (is (= [{:seq 70 :note "per-enrolment stats are Engagement"}] (get-in a [:grant :earlier])))
     (is (str/includes? p "entry 70 — \"per-enrolment stats are Engagement\"")
         "the scope an older grant decided is still decided under a newer one that does not mention it")))
+
+;; ── What a grant answered, and against which premise ───────────────────────
+
+(deftest a-grant-carries-the-questions-it-answered
+  ;; A grant given with no note left the next run's judge only "approved", and it re-posed the
+  ;; re-analysis cost the person had been asked about and had granted.
+  (let [ledger {30 (assoc design :seq 30)
+                31 {:format :design-decision :seq 31 :design-seq 30 :recommend :proceed
+                    :asks "Do you accept a paid re-analysis of each old document?"}
+                32 {:format :design-decision :seq 32 :design-seq 30 :recommend :proceed
+                    :asks "Do you accept a paid re-analysis of each old document?"}
+                33 {:format :design-approved :seq 33 :design {:seq 30} :at-seq 32}
+                35 {:format :design-decision :seq 35 :design-seq 30 :recommend :proceed :asks "later"}
+                36 (assoc design :seq 36 :supersedes {:seq 30 :why "corrected against the code after round 1 of run r"})}
+        a      (answered-over ledger 36 :amended #{36})
+        p      (record/design-prompt {:design (get ledger 36) :answers a})]
+    (is (= [{:seq 31 :asks "Do you accept a paid re-analysis of each old document?"}]
+           (get-in a [:grant :answered]))
+        "one entry per question asked before the approval, and nothing asked after it")
+    (is (str/includes? p "The grant answered what was asked before it:\n  entry 31: Do you accept a paid re-analysis"))))
+
+(deftest a-grants-delta-names-moved-fields-and-relation
+  ;; A supersession changing only :shape and the baseline relation was described to the judge as
+  ;; "none of those claims has changed", and the move from :extends to :revisit was never posed.
+  (let [granted (assoc design :seq 52 :shape "one path" :baseline {:seq 49 :relation :extends :at "x"})
+        current (assoc design :seq 54 :shape "fast model first, frontier retry"
+                       :baseline {:seq 49 :relation :revisit :breaks ["pages-are-the-unit"]}
+                       :supersedes {:seq 52 :why "corrected against the code after round 1 of run r"})
+        ledger  {52 granted
+                 53 {:format :design-approved :seq 53 :design {:seq 52} :at-seq 52}
+                 54 current}
+        a       (answered-over ledger 54 :amended #{54})
+        p       (record/design-prompt {:design current :answers a})]
+    (is (= [:shape] (get-in a [:grant :delta :fields])))
+    (is (= {:granted {:relation :extends :at "x"} :now {:relation :revisit :breaks ["pages-are-the-unit"]}}
+           (get-in a [:grant :delta :relation])))
+    (is (str/includes? p "fields changed: shape"))
+    (is (str/includes? p "relation to the baseline, now:     revisit, breaking pages-are-the-unit"))
+    (is (not (str/includes? p "what changed since it: none")))))
+
+(deftest a-grant-does-not-carry-across-a-changed-premise
+  ;; A revisit granted for a change against intent 1 and baseline 8 was read as granting the next
+  ;; change, against intent 42 and baseline 49, which breaks two properties no grant ever named.
+  (let [ledger {30 (assoc design :seq 30 :intent {:seq 1} :baseline {:seq 8 :relation :revisit :breaks ["a"]})
+                31 {:format :design-approved :seq 31 :design {:seq 30} :at-seq 30 :note "revisit granted"}
+                52 (assoc design :seq 52 :intent {:seq 42} :baseline {:seq 49 :relation :revisit :breaks ["a" "b"]}
+                          :supersedes {:seq 30 :why "corrected against the code after round 1 of run r"})}]
+    (is (nil? (:grant (answered-over ledger 52 :amended #{52})))
+        "a grant decided one change against one premise")
+    (is (nil? (:grant (answered-over (assoc-in ledger [52 :intent :seq] 1) 52 :amended #{52})))
+        "a changed baseline alone ends the chain")
+    (is (= 30 (get-in (answered-over (-> ledger (assoc-in [52 :intent :seq] 1) (assoc-in [52 :baseline :seq] 8))
+                                     52 :amended #{52})
+                      [:grant :seq]))
+        "on the same intent and baseline the grant still reaches the amendment")))
+
+(deftest a-reply-stays-an-answer-under-a-later-decision
+  ;; Decision 107's asks read "No further decision remains…", which made it the newest ask and
+  ;; emptied ANSWERED SINCE, and three rounds re-asked what the person's rewrite at 106 had chosen.
+  (let [ledger (assoc asked-ledger
+                      28 {:format :design-decision :seq 28 :design-seq 27 :recommend :proceed
+                          :asks "No further decision remains."})
+        a      (answered-over ledger 27)]
+    (is (= 26 (get-in a [:answered-since :seq])) "the reply answers the ask before it")
+    (is (= [27] (map :seq (get-in a [:answered-since :by]))))
+    (is (str/includes? (record/design-prompt {:design (get ledger 27) :answers a})
+                       "names the entry above and the words of the answer it\ncontradicts"))))
+
+(deftest a-runs-own-first-reading-is-no-standing-ask
+  ;; Round 2 was told "ASKED BEFORE, AND NO GRANT WRITTEN SINCE — at entry 34" of the ask its own
+  ;; round 1 had appended on a first reading, and cited it as an unanswered question.
+  (let [ledger {33 (assoc design :seq 33)
+                34 {:format :design-decision :seq 34 :design-seq 33 :recommend :ask :run-id "r1"
+                    :read-once ["bars-as-on-main"] :asks "Which ticket?"
+                    :findings [{:claim-id "bars-as-on-main" :for-person true}]}}
+        of     (fn [run-id]
+                 (with-redefs [ws/amended-seqs (constantly #{})
+                               ws/entry-at-seq (fn [_ _ n] (get ledger n))
+                               ws/entries-of   (fn [_ _ k] (filterv #(= k (:format %)) (vals ledger)))
+                               record/lineage-of (fn [& _] [(get ledger 34)])]
+                   (record/answered :nido "ws-1" (get ledger 33) run-id)))]
+    (is (nil? (:asked (of "r1"))) "the reading under test is not a question put to anyone")
+    (is (nil? (:asked-of (of "r1"))))
+    (is (= 34 (get-in (of "r2") [:asked :seq])) "another run's ask still stands")))
+
+(deftest a-reask-of-the-standing-question-names-its-first-entry
+  ;; Three rounds posed one retention question about one unchanged claim, and the ledger and the
+  ;; gate counted three open questions.
+  (let [claims   {:claims [{:id "seed" :statement "s" :about ["m"]}]}
+        ledger   {26 (assoc design :seq 26 :model claims)
+                  27 {:format :design-decision :seq 27 :design-seq 26 :recommend :ask :asks "Keep both?"
+                      :findings [{:claim-id "seed" :for-person true}]}
+                  29 {:format :design-decision :seq 29 :design-seq 26 :recommend :ask :asks "Keep both, now?"
+                      :reasks 27 :findings [{:claim-id "seed" :for-person true}]}
+                  28 (assoc design :seq 28 :model claims)}
+        reasked  (fn [asked decision]
+                   (with-redefs [ws/entry-at-seq (fn [_ _ n] (get ledger n))]
+                     (#'record/reasked [:nido "ws-1"] (get ledger 28) decision asked)))
+        decision {:recommend :ask :asks "Do you want both kept?" :findings [{:claim-id "seed" :for-person true}]}]
+    (is (= 27 (reasked {:seq 27} decision)) "same claims at the same text are the same question")
+    (is (= 27 (reasked {:seq 29} decision)) "a re-ask of a re-ask names the first")
+    (is (= 27 (reasked {:seq 27} {:recommend :ask :asks "Keep both?"})) "same words are the same question")
+    (is (nil? (reasked {:seq 27} (assoc decision :findings [{:claim-id "other" :for-person true}]))))
+    (is (nil? (reasked {:seq 27} (assoc decision :recommend :amend))))
+    (is (= "Design decision: ask — as asked at entry 27"
+           (report/report-title {:format :design-decision :recommend :ask :reasks 27})))))
+
+(deftest a-carried-self-grant-is-written-rather-than-parked
+  ;; A person's "ok" written into the design as :supersedes :granted parked the proceed for a
+  ;; second approval, which the person gave four seconds later in the same words.
+  (let [d        (assoc design :seq 61 :standing {:relation :challenges :note "n"}
+                        :supersedes {:seq 58 :why "narrow depth" :granted "ok (keep the relaxation)"})
+        ledger   {58 (assoc design :seq 58) 61 d}
+        written  (atom [])
+        status   (fn [design-entry]
+                   (with-redefs [ws/amended-seqs      (constantly #{})
+                                 ws/entry-at-seq      (fn [_ _ n] (get (assoc ledger 61 design-entry) n))
+                                 ws/entries-of        (fn [_ _ _] [])
+                                 ws/append-entry!     (fn [_ _ _ body] (swap! written conj (read-string body)) "0063.edn")
+                                 nido.coordinator.record.standing/of-design (constantly {:decidable? true})]
+                     (#'record/proceeding-status [:nido "ws-1"] {:design-seq 61} {:seq 62})))]
+    (is (= :cleared (status d)))
+    (is (= [{:format :design-approved :design {:seq 61} :at-seq 62 :note "ok (keep the relaxation)" :carried true}]
+           @written))
+    (is (= (first @written) (report/validate-event :design-approved (first @written))))
+    (reset! written [])
+    (is (= :proceed (status (update d :supersedes dissoc :granted))) "no grant carried, the person is asked")
+    (is (empty? @written))))
 
 ;; ── A claim spent across runs ───────────────────────────────────────────────
 

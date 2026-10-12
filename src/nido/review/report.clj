@@ -590,11 +590,12 @@
    proceed waived; \"for-person\" when it is the person's to answer; \"derivable\" when it is an
    amender's to repair. The phase's :findings hold only what the round handed on, which on an :ask
    is the derivable part and on a proceed is nothing, so this is the one place a report shows what
-   a round asked over or waived."
+   a round asked over or waived. :judge-marked false is kept where the judge's no to the person
+   overrode what the question would have taken (`nido.review.record/person-marked`)."
   [decision]
   (let [advisory? (creport/proceeds? (dissoc decision :read-once :amendment-read-once))]
     (mapv (fn [f]
-            (assoc (select-keys f [:check :claim-id :claim :cites :evidence])
+            (assoc (select-keys f [:check :claim-id :claim :cites :evidence :judge-marked])
                    :as (cond advisory?        "advisory"
                              (:for-person f) "for-person"
                              :else           "derivable")))

@@ -92,10 +92,13 @@
      :delegates [standing/of-design]})
   (Operation answered
     "What a person has already answered about a design, for its judge's ask: the nearest grant up
-     its supersedes chain with the claims changed since, a reply they wrote into the record since
-     the last ask, what they asked for in findings, and a question put to a person that neither a
-     grant nor a reply has answered. A record the loop's amender wrote answers and grants nothing."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design :map]] :map]
+     its supersedes chain against the same intent and baseline, with what changed since and the
+     questions it answered, the newest reply they wrote into the record and the ask it answered,
+     what they asked for in findings, and a question put to a person that neither a grant nor a
+     reply has answered. A record the loop's amender wrote answers and grants nothing; a decision
+     the judging run appended on a first reading asks nobody."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design :map]
+                      [:run-id [:? [:maybe :string]]]] :map]
      :delegates [workstream/amended-seqs]})
   (Operation design-decision! "Run the decision round over a design."
     {:signature [:=> [:catn [:opts :map]] :map]

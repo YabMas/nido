@@ -2452,6 +2452,9 @@
 
    :for-person, on an :ask's finding, marks one whose only repair is the question in :asks.
    Absent, the finding is a derivable defect, which the round repairs before the person is asked.
+   :judge-marked false is the judge's own for_person false on an :ask's finding that the question
+   would otherwise have taken — its claim named for :asks, or a cite quoting the intent. The judge's
+   mark stands and the finding stays derivable; this keeps the disagreement readable.
 
    :claim-paired marks a :claim-id the judge did not give: nido paired the finding with the one
    claim its prose names. Read it as nido's attribution, not the judge's.
@@ -2467,7 +2470,8 @@
    [:claim      string?]
    [:evidence   {:optional true} [:vector string?]]
    [:needs      {:optional true} string?]
-   [:for-person {:optional true} [:= true]]])
+   [:for-person {:optional true} [:= true]]
+   [:judge-marked {:optional true} [:= false]]])
 
 (def derivations
   "What a baseline exists to let the decision round work out. A baseline is
@@ -2892,6 +2896,11 @@
                 ;; Each id the judge's first answer both confirmed and filed a finding against. It
                 ;; was asked again, and this decision is the second answer when that one was usable.
                 [:self-contradicted     {:optional true} [:vector string?]]
+                ;; On an :ask, the entry whose question this one poses again: the standing unanswered
+                ;; ask, put over the same claims at the same text, or in the same words. The first
+                ;; entry of the chain, so every re-ask of one question names the same seq and the
+                ;; ledger reads one open question rather than a count of rounds.
+                [:reasks                {:optional true} int?]
                 ;; As on a baseline review.
                 [:judged-by          {:optional true} JudgedBy]
                 [:tree               {:optional true} JudgedTree]]
@@ -3198,12 +3207,18 @@
    is refused naming what moved rather than appended.
 
    :design names what was approved, by number. Not `the latest design`, for the
-   same reason no other citation in this ledger is."
+   same reason no other citation in this ledger is.
+
+   :carried marks a grant the design round wrote rather than a gate: the design
+   was written by a person carrying their grant (`:supersedes :granted`), a round
+   found nothing that stops it, and :note is that carried grant word for word.
+   Parking it for a second approval of the same words asked the person nothing."
   [:map {:closed true}
    [:format  [:= :design-approved]]
    [:design  [:map {:closed true} [:seq int?]]]
    [:at-seq  int?]
-   [:note    {:optional true} string?]])
+   [:note    {:optional true} string?]
+   [:carried {:optional true} [:= true]]])
 
 (def DesignCleared
   "A decision round found this design implementable without a person: it
@@ -4339,6 +4354,15 @@
   (boolean (and (or (seq (:read-once decision)) (:amendment-read-once decision))
                 (proceeds? (dissoc decision :read-once :amendment-read-once)))))
 
+(defn- asks-once?
+  "Whether a design decision is an :ask resting on a first reading — of a claim it confirmed
+   (:read-once) or of an amendment its own run made (:amendment-read-once). Such an ask is read
+   again before it reaches anyone, as a held proceed is (`proceeds-once?`), and a surface titling it
+   a plain ask shows a person a question nobody has put to them yet."
+  [decision]
+  (boolean (and (= :ask (:recommend decision))
+                (or (seq (:read-once decision)) (:amendment-read-once decision)))))
+
 (def verdict-invalidates
   "The design verdicts that put the design itself in question rather than its
    execution — the two a human has to answer rather than read.
@@ -4718,7 +4742,8 @@
     :baseline-review          (str "Baseline review: " (name (:verdict report))
                                    (when (held-once? report) held-once-words))
     :design-decision          (str "Design decision: " (name (:recommend report))
-                                   (when (proceeds-once? report) held-once-words))
+                                   (when (or (proceeds-once? report) (asks-once? report)) held-once-words)
+                                   (when-let [n (:reasks report)] (str " — as asked at entry " n)))
     :design-verdict           (str "Design verdict: " (name (:verdict report)))
     :findings                 (str "Findings round " (:round report)
                                    " (" (count (:items report)) " items)")

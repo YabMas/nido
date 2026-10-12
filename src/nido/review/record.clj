@@ -1153,6 +1153,28 @@
                                             (map (fn [id] [id (clause-delta (was id) (is id))]))
                                             changed))))))
 
+(def ^:private grant-fields
+  "The whole-record fields of a design a grant decided along with its claims: what was built and
+   how, what was turned down, what was left open, at what cost. A grant of a design whose :shape
+   or :rejected has moved since is a grant of something else, though no claim changed."
+  [:shape :standing :rejected :open :effort :seams :strata :routes :phases :holds])
+
+(defn- grant-delta
+  "What `design` changes against `granted`, the design a person granted: `claim-delta`'s :added
+   :changed :dropped :clauses (absent when either lists claims with no ids), plus :fields, the
+   `grant-fields` whose value differs, and :relation {:granted :now}, the baseline citation's
+   :relation :breaks :at on each side, when those differ. A move of the declared relation — an
+   :extends become a :revisit breaking more — is the move a person was asked to grant. nil when
+   there is nothing to compare by and nothing moved."
+  [granted design]
+  (let [relation #(select-keys (:baseline %) [:relation :breaks :at])
+        fields   (filterv #(not= (get granted %) (get design %)) grant-fields)]
+    (not-empty
+     (cond-> (or (claim-delta granted design) {})
+       (seq fields)                                     (assoc :fields fields)
+       (not= (relation granted) (relation design))      (assoc :relation {:granted (relation granted)
+                                                                          :now     (relation design)})))))
+
 (defn- subject-delta
   "Which subjects (`settled/subjects`) an amendment `record` adds, changes and drops against `prev`,
    the record it repairs, by id — only the non-empty of the three, and nil when it moves none. A
@@ -1187,22 +1209,45 @@
   (and (not (amended (:seq d)))
        (not (some-> (get-in d [:supersedes :why]) (str/starts-with? loop-why-prefix)))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
+(defn- grant-answered
+  "What the grant of design `g` answered, as [{:seq :asks}] oldest first, one per distinct question:
+   the asks of the `decisions` that put a question about `g` before it was granted. Granted by
+   `approval`, that is every decision on `g` written before the approval; carried — a design a
+   person wrote with its :supersedes :granted, and no approval — every decision on the design it
+   replaced, written before it. A grant given with no note names nothing else it answered, and a
+   judge shown only the grant re-poses the question it settled."
+  [g approval decisions]
+  (let [on    (if approval (:seq g) (get-in g [:supersedes :seq]))
+        until (long (or (:seq approval) (:seq g) 0))]
+    (reduce (fn [acc d]
+              (if (and on (= on (:design-seq d))
+                       (not (str/blank? (:asks d)))
+                       (< (long (or (:seq d) 0)) until)
+                       (not-any? #(= (:asks d) (:asks %)) acc))
+                (conj acc (select-keys d [:seq :asks]))
+                acc))
+            []
+            decisions)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map [:? [:maybe :string]]] :map]}
   answered
   "What a person has already answered about `design`, read off the ledger for its judge's `asks`:
 
      :grant  the nearest design in its :supersedes chain a person granted, itself included —
-             {:seq :self? :note :delta :carried? :earlier} — or absent when nobody has granted any
-             of them. A :design-approved grants the design it names; a design a person wrote grants
-             itself with its :supersedes :granted, and is then :carried? :earlier is every grant
-             further up the chain, nearest first, as {:seq :note :carried?}: a newer grant is often
-             narrower, and does not withdraw the scope an older one decided
+             {:seq :self? :note :delta :carried? :answered :earlier} — or absent when nobody has
+             granted any of them. A :design-approved grants the design it names; a design a person
+             wrote grants itself with its :supersedes :granted, and is then :carried?. :delta is
+             `grant-delta` against the granted design. :answered is what the grant answered, as
+             [{:seq :asks}] (`grant-answered`). :earlier is every grant further up the chain,
+             nearest first, as {:seq :note :carried? :answered}: a newer grant is often narrower,
+             and does not withdraw the scope an older one decided
      :asked  {:seq :of :asks}, the newest decision on this workstream — at :seq, of the design at
              :of — when it asked and neither a grant nor a reply has been written since; a question
              put to a person and not yet answered
-     :answered-since  {:seq :asks :by [{:seq :kind :why}]}, when the newest decision asked and a
-             person replied after it by writing the record rather than a grant: a design in the
-             chain they wrote, or the intent the design cites, each by its :supersedes :why
+     :answered-since  {:seq :asks :by [{:seq :kind :why}]}, the newest reply a person wrote, by
+             writing the record rather than a grant — a design in the chain they wrote, or the intent
+             the design cites, each by its :supersedes :why — with the ask it answered, the newest
+             asking decision before it; :by is every reply since that ask
      :rewritten  {:seq :why :supersedes :approved?}, the nearest design in the chain a person
              wrote, by its :supersedes :why, when that is not already a reply above — and whether
              the design it replaced was approved
@@ -1213,81 +1258,102 @@
              :answered {:seq :why}}]}, :granted the first approval written after that ask and
              :answered, when there is none, the first reply
 
+   The grant chain stops at the first record citing another intent or baseline than `design` does:
+   a grant decided a change against one premise, and a change against the next is not the one it
+   granted. A reply stays the answer to the ask before it whatever is decided after, until a newer
+   reply replaces it — an asking decision written after a reply does not unmake it.
+
+   `run-id`, when given, is the run judging `design`: a decision it appended on a first reading
+   (:read-once, :amendment-read-once) is the reading under test, not a question put to anyone, and
+   is not read as one.
+
    Only what bears on the ask. The judge still derives every check over the whole record, and is
    told so beside this: a grant or a reply is evidence that a person decided, never that a claim
    holds."
-  [project ws-id design]
-  (let [amended   (ws/amended-seqs project ws-id)
-        person?   #(written-by-person? amended %)
-        chain     (loop [d design, seen #{}, acc []]
-                    (if (or (nil? d) (seen (:seq d)))
-                      acc
-                      (recur (some->> (get-in d [:supersedes :seq]) (ws/entry-at-seq project ws-id))
-                             (conj seen (:seq d)) (conj acc d))))
-        approvals (ws/entries-of project ws-id :design-approved)
-        approved  (into {} (map (juxt #(get-in % [:design :seq]) identity)) approvals)
-        grants    (filterv #(or (approved (:seq %))
-                                    (and (person? %) (get-in % [:supersedes :granted])))
-                           chain)
-        granted   (first grants)
-        note-of   #(if-let [a (approved (:seq %))]
-                     (:note a)
-                     (get-in % [:supersedes :granted]))
-        note      (note-of granted)
-        earlier   (mapv #(cond-> {:seq (:seq %)}
-                           (note-of %) (assoc :note (note-of %))
-                           (not (approved (:seq %))) (assoc :carried? true))
-                        (rest grants))
-        ;; The intent is no amender's to write: a review loop amends baselines and designs.
-        intent    (some->> (get-in design [:intent :seq]) (ws/entry-at-seq project ws-id))
-        reply     (fn [kind r] {:seq (:seq r) :kind kind :why (get-in r [:supersedes :why])})
-        written   (filterv #(and (:seq %) (person? %) (get-in % [:supersedes :why])) chain)
-        replies   (sort-by :seq (cond-> (mapv #(reply :design %) written)
-                                  (and (:seq intent) (get-in intent [:supersedes :why]))
-                                  (conj (reply :intent intent))))
-        after     (fn [n] (filterv #(> (long (:seq %)) (long (or n 0))) replies))
-        last-ask  (last (ws/entries-of project ws-id :design-decision))
-        asking?   (and last-ask (not (str/blank? (:asks last-ask))))
-        since-ask (when asking? (after (:seq last-ask)))
-        approved? (some #(> (long (or (:seq %) 0)) (long (or (:seq last-ask) 0))) approvals)
-        rewrite   (first written)
-        asked-for (let [from (long (or (:seq granted) (:seq (peek chain)) 0))]
-                    (into [] (comp (filter #(> (long (or (:seq %) 0)) from))
-                                   (map #(select-keys % [:seq :round :note :items])))
-                          (ws/entries-of project ws-id :findings)))
-        carried   (set (keys (settled/subjects design)))
-        asked-of  (reduce (fn [acc {n :seq :as d}]
-                            (let [grant (some #(when (> (long (or (:seq %) 0)) (long n)) %) approvals)
-                                  reply (when-not grant (first (after n)))
-                                  ask   (cond-> {:seq n :asks (str (:asks d))}
-                                          grant (assoc :granted (select-keys grant [:seq :note]))
-                                          reply (assoc :answered (select-keys reply [:seq :why])))]
-                              (reduce #(update %1 %2 (fnil conj []) ask) acc
-                                      (into (sorted-set)
-                                            (comp (keep #(not-empty (str (:claim-id %)))) (filter carried))
-                                            (:findings d)))))
-                          (sorted-map)
-                          (filter #(and (= :ask (:recommend %)) (:seq %))
-                                  (lineage-of project ws-id :design-decision :design-seq design)))]
-    (cond-> {}
-      (seq asked-of) (assoc :asked-of asked-of)
-      granted (assoc :grant (cond-> {:seq (:seq granted) :self? (= (:seq granted) (:seq design))}
-                              note (assoc :note note)
-                              (not (approved (:seq granted))) (assoc :carried? true)
-                              (claim-delta granted design)
-                              (assoc :delta (claim-delta granted design))
-                              (seq earlier) (assoc :earlier earlier)))
-      (seq since-ask)
-      (assoc :answered-since {:seq (:seq last-ask) :asks (:asks last-ask) :by since-ask})
-      (and asking? (not approved?) (empty? since-ask))
-      (assoc :asked (cond-> {:seq (:seq last-ask) :asks (:asks last-ask)}
-                      (:design-seq last-ask) (assoc :of (:design-seq last-ask))))
-      (and rewrite (not-any? #(= (:seq rewrite) (:seq %)) since-ask))
-      (assoc :rewritten {:seq        (:seq rewrite)
-                         :why        (get-in rewrite [:supersedes :why])
-                         :supersedes (get-in rewrite [:supersedes :seq])
-                         :approved?  (boolean (approved (get-in rewrite [:supersedes :seq])))})
-      (seq asked-for) (assoc :asked-for asked-for))))
+  ([project ws-id design] (answered project ws-id design nil))
+  ([project ws-id design run-id]
+   (let [amended   (ws/amended-seqs project ws-id)
+         person?   #(written-by-person? amended %)
+         chain     (loop [d design, seen #{}, acc []]
+                     (if (or (nil? d) (seen (:seq d)))
+                       acc
+                       (recur (some->> (get-in d [:supersedes :seq]) (ws/entry-at-seq project ws-id))
+                              (conj seen (:seq d)) (conj acc d))))
+         premise   (juxt #(get-in % [:intent :seq]) #(get-in % [:baseline :seq]))
+         approvals (ws/entries-of project ws-id :design-approved)
+         approved  (into {} (map (juxt #(get-in % [:design :seq]) identity)) approvals)
+         grants    (filterv #(or (approved (:seq %))
+                                 (and (person? %) (get-in % [:supersedes :granted])))
+                            (take-while #(= (premise design) (premise %)) chain))
+         granted   (first grants)
+         note-of   #(if-let [a (approved (:seq %))]
+                      (:note a)
+                      (get-in % [:supersedes :granted]))
+         note      (note-of granted)
+         own-read? #(and run-id (= run-id (:run-id %))
+                         (or (seq (:read-once %)) (:amendment-read-once %)))
+         decisions (into [] (remove own-read?) (ws/entries-of project ws-id :design-decision))
+         asks?     #(not (str/blank? (:asks %)))
+         answers   (fn [g] (grant-answered g (approved (:seq g)) decisions))
+         earlier   (mapv #(cond-> {:seq (:seq %)}
+                            (note-of %) (assoc :note (note-of %))
+                            (not (approved (:seq %))) (assoc :carried? true)
+                            (seq (answers %)) (assoc :answered (answers %)))
+                         (rest grants))
+         ;; The intent is no amender's to write: a review loop amends baselines and designs.
+         intent    (some->> (get-in design [:intent :seq]) (ws/entry-at-seq project ws-id))
+         reply     (fn [kind r] {:seq (:seq r) :kind kind :why (get-in r [:supersedes :why])})
+         written   (filterv #(and (:seq %) (person? %) (get-in % [:supersedes :why])) chain)
+         replies   (sort-by :seq (cond-> (mapv #(reply :design %) written)
+                                   (and (:seq intent) (get-in intent [:supersedes :why]))
+                                   (conj (reply :intent intent))))
+         after     (fn [n] (filterv #(> (long (:seq %)) (long (or n 0))) replies))
+         last-ask  (peek decisions)
+         asking?   (and last-ask (asks? last-ask))
+         replied   (when-let [r (peek (vec replies))]
+                     (last (filter #(and (asks? %) (< (long (or (:seq %) 0)) (long (:seq r))))
+                                   decisions)))
+         since-ask (when replied (after (:seq replied)))
+         approved? (some #(> (long (or (:seq %) 0)) (long (or (:seq last-ask) 0))) approvals)
+         rewrite   (first written)
+         asked-for (let [from (long (or (:seq granted) (:seq (peek chain)) 0))]
+                     (into [] (comp (filter #(> (long (or (:seq %) 0)) from))
+                                    (map #(select-keys % [:seq :round :note :items])))
+                           (ws/entries-of project ws-id :findings)))
+         carried   (set (keys (settled/subjects design)))
+         asked-of  (reduce (fn [acc {n :seq :as d}]
+                             (let [grant (some #(when (> (long (or (:seq %) 0)) (long n)) %) approvals)
+                                   reply (when-not grant (first (after n)))
+                                   ask   (cond-> {:seq n :asks (str (:asks d))}
+                                           grant (assoc :granted (select-keys grant [:seq :note]))
+                                           reply (assoc :answered (select-keys reply [:seq :why])))]
+                               (reduce #(update %1 %2 (fnil conj []) ask) acc
+                                       (into (sorted-set)
+                                             (comp (keep #(not-empty (str (:claim-id %)))) (filter carried))
+                                             (:findings d)))))
+                           (sorted-map)
+                           (filter #(and (= :ask (:recommend %)) (:seq %) (not (own-read? %)))
+                                   (lineage-of project ws-id :design-decision :design-seq design)))]
+     (cond-> {}
+       (seq asked-of) (assoc :asked-of asked-of)
+       granted (assoc :grant (cond-> {:seq (:seq granted) :self? (= (:seq granted) (:seq design))}
+                               note (assoc :note note)
+                               (not (approved (:seq granted))) (assoc :carried? true)
+                               (grant-delta granted design)
+                               (assoc :delta (grant-delta granted design))
+                               (seq (answers granted)) (assoc :answered (answers granted))
+                               (seq earlier) (assoc :earlier earlier)))
+       (seq since-ask)
+       (assoc :answered-since {:seq (:seq replied) :asks (:asks replied) :by since-ask})
+       (and asking? (not approved?) (empty? (after (:seq last-ask))))
+       (assoc :asked (cond-> {:seq (:seq last-ask) :asks (:asks last-ask)}
+                       (:design-seq last-ask) (assoc :of (:design-seq last-ask))))
+       (and rewrite (not-any? #(= (:seq rewrite) (:seq %)) since-ask))
+       (assoc :rewritten {:seq        (:seq rewrite)
+                          :why        (get-in rewrite [:supersedes :why])
+                          :supersedes (get-in rewrite [:supersedes :seq])
+                          :approved?  (boolean (approved (get-in rewrite [:supersedes :seq])))})
+       (seq asked-for) (assoc :asked-for asked-for)))))
 
 (defn- answered-block
   "Who reads `asks`, and what is already off the table for it: the design's :open notes, a grant a
@@ -1323,10 +1389,10 @@
           "whole record as if it were new. What it does answer is a finding whose substance\n"
           "is the decision it made — that a person has not chosen this scope, this cost or\n"
           "this move. It bears on asks, which poses only what the grant does not already cover"
-          (if-let [{:keys [added changed dropped clauses]} (:delta grant)]
-            (str " — the claims changed since it:"
-                 (when (seq added) (str "\n  added: " (str/join ", " added)))
-                 (when (seq changed) (str "\n  changed: " (str/join ", " changed)))
+          (if-let [{:keys [added changed dropped clauses fields relation]} (:delta grant)]
+            (str " — what changed since it:"
+                 (when (seq added) (str "\n  claims added: " (str/join ", " added)))
+                 (when (seq changed) (str "\n  claims changed: " (str/join ", " changed)))
                  (str/join (for [[id {g :granted n :now about :about}] clauses]
                              (str "\n    [" id "]"
                                   (str/join (for [c g] (str "\n      granted: " c)))
@@ -1334,28 +1400,41 @@
                                   (when about
                                     (str "\n      about, granted: " (str/join ", " (:granted about))
                                          "\n      about, now:     " (str/join ", " (:now about)))))))
-                 (when (seq dropped) (str "\n  dropped: " (str/join ", " dropped)))
-                 (when-not (or (seq added) (seq changed) (seq dropped)) " none")
+                 (when (seq dropped) (str "\n  claims dropped: " (str/join ", " dropped)))
+                 (when (seq fields)
+                   (str "\n  fields changed: " (str/join ", " (map name fields))))
+                 (when relation
+                   (let [line (fn [{r :relation b :breaks at :at}]
+                                (str (some-> r name) (when (seq b) (str ", breaking " (str/join "; " b)))
+                                     (when at (str ", at " at))))]
+                     (str "\n  relation to the baseline, granted: " (line (:granted relation))
+                          "\n  relation to the baseline, now:     " (line (:now relation)))))
+                 (when-not (or (seq added) (seq changed) (seq dropped) (seq fields) relation) " none")
                  "\n"
                  (when (seq clauses)
                    (str "A changed claim's text not shown under it reads as it did when granted:\n"
                         "asks does not reopen it, and calls no claim \"revised\" without naming the\n"
                         "clause that changed.\n"))
-                 (when (or (seq added) (seq changed))
-                   (str "A question raised by an added or changed claim names that claim by what it\n"
-                        "commits to, never by its id, so the\n"
-                        "person can tell the change raised it and their grant was complete when given.\n"
-                        "When the change since the grant is the one its note ordered, asks says so —\n"
-                        "\"the change since entry " (:seq grant) " is the one your note ordered\" — and\n"
-                        "poses nothing further about it.\n")))
+                 (when (or (seq added) (seq changed) (seq fields) relation)
+                   (str "A question raised by an added or changed claim, a changed field or a moved\n"
+                        "relation names it by what it commits to, never by its id, so the person can\n"
+                        "tell the change raised it and their grant was complete when given. A change\n"
+                        "the grant's note ordered is said to be that only by quoting the words of the\n"
+                        "note that order it; a change the note does not name is posed, not attributed.\n")))
             ".\n")
+          (when-let [answered (seq (:answered grant))]
+            (str "The grant answered what was asked before it:\n"
+                 (str/join (for [{n :seq q :asks} answered] (str "  entry " n ": " q "\n")))
+                 "asks poses only what lies outside those answers.\n"))
           (when-let [earlier (seq (:earlier grant))]
             (str "Earlier grants up the same chain, nearest first. A newer grant is often\n"
                  "narrower and withdraws nothing an older one decided — a scope one of these\n"
                  "settled is still settled unless this record retracts it:\n"
-                 (str/join (for [{n :seq :keys [note carried?]} earlier]
+                 (str/join (for [{n :seq :keys [note carried? answered]} earlier]
                              (str "  entry " n (when carried? " (written by a person, carrying a grant)")
-                                  (when note (str " — \"" note "\"")) "\n")))))))
+                                  (when note (str " — \"" note "\"")) "\n"
+                                  (str/join (for [{a :seq q :asks} answered]
+                                              (str "    answering entry " a ": " q "\n"))))))))))
    (when answered-since
      (str "\nANSWERED SINCE. A person was asked at entry " (:seq answered-since) ":\n  "
           (:asks answered-since) "\n"
@@ -1363,6 +1442,8 @@
           (str/join (for [{n :seq kind :kind why :why} (:by answered-since)]
                       (str "  entry " n " (" (name kind) "): " why "\n")))
           "Do not pose that question again; asks poses only what the answer leaves open.\n"
+          "An ask that poses it anyway names the entry above and the words of the answer it\n"
+          "contradicts — a decision written since does not unmake the answer.\n"
           "The answer is evidence that a person decided, never that a claim holds. A record\n"
           "still inconsistent with it — a claim, an open note or a field written before it —\n"
           "is a defect the amender repairs by carrying the answer in: amend, not ask. A\n"
@@ -1592,6 +1673,15 @@
    "that shows one of the four broken names it in check; one that bears on none\n"
    "of them leaves check empty — a record contradicting itself or a claim it\n"
    "rests on is a defect under no derivation, and it is repaired like any other.\n\n"
+   ;; Twice a record and then a judge credited a person with a change nobody had asked for —
+   ;; "as the person directed", "the one your note ordered" — and the next round read it as authority.
+   "A sentence crediting a PERSON with a decision — \"as the person directed\", \"the\n"
+   "user asked for\", \"your note ordered\" — is a claim about the ledger, and holds\n"
+   "only citing the entry a person wrote that says so: a grant's note, a record they\n"
+   "wrote, the findings they filed. In the record, one that cites no such entry is a\n"
+   "finding — under relation-honest when it argues the declared relation, goal-served\n"
+   "otherwise. In your own reason and asks, attribute nothing to a person except by\n"
+   "naming that entry and quoting it.\n\n"
    ;; A host fact read off a man page or a package page describes SOME host, not this one; one
    ;; such finding broke goal-served on a tool that was installed, and cost a round to withdraw.
    "A finding that a tool or command is MISSING on this host, or BEHAVES differently\n"
@@ -2033,7 +2123,10 @@
                           (seq (:evidence f))
                           (assoc :evidence (mapv str (:evidence f)))
                           (true? (:for_person f))
-                          (assoc :for-person true))))))
+                          (assoc :for-person true)
+                          ;; The judge's explicit no, which `person-marked` lets stand.
+                          (false? (:for_person f))
+                          (assoc :judge-marked false))))))
          raw)))
 
 (defn ^{:malli/schema [:=> [:cat :string :any] :map]}
@@ -2120,9 +2213,10 @@
    :unruled, and the figures count it against \"the record\". Only claims are paired, never elements
    or :shape — prose names a module beside the claim it breaks, and the word `shape` is in every
    sentence about one. A finding naming none of them, or more than one, is left as the judge gave
-   it: which of two it refutes is the judge's to say."
+   it: which of two it refutes is the judge's to say. A finding the judge marked :for-person is
+   left too: a question for a person rules on no claim, and paired it would count as one refuted."
   [ids finding]
-  (if (or (seq (str (:claim-id finding))) (empty? ids))
+  (if (or (seq (str (:claim-id finding))) (empty? ids) (:for-person finding))
     finding
     (let [texts (cons (:claim finding) (:cites finding))
           named (filterv (fn [id] (some #(re-find (id-pattern id) (str %)) texts)) ids)]
@@ -2165,22 +2259,54 @@
 
 (defn- person-marked
   "On an :ask, `findings` with every one only a person can repair marked :for-person — beside the
-   judge's own marks, never instead of them.
+   judge's own marks, never against them.
 
-   Two cases need no judgement, and the judge marked both derivable often enough to cost a round
-   each: a finding on a claim the person's answer decides (`about`, the ids the judge named for
-   :asks), which an amender would settle by deciding the question; and one citing the `intent`'s
-   goal or a done-when (`quotes?`), whose remainder is an edit of a record no amender may write. The
-   second also takes a derivable finding that quotes the goal to show the design under-serves it —
-   on an :ask, a person is being asked already, and the next run re-derives anything they leave."
+   Two cases are marked where the judge gave no mark: a finding on a claim the person's answer
+   decides (`about`, the ids the judge named for :asks), which an amender would settle by deciding
+   the question; and one citing the `intent`'s goal or a done-when (`quotes?`), whose remainder is an
+   edit of a record no amender may write. A judge's explicit for_person false wins over both: one
+   claim can carry a person's question and a derivable defect at once, and the judge tells them
+   apart per finding where an id shared with asks_about cannot — and a goal-served finding cites the
+   goal by construction. Such a finding stays derivable and keeps :judge-marked false only where a
+   case would have marked it, so the disagreement is on the record rather than resolved."
   [findings about intent]
   (let [passages (into [] (remove str/blank?) (cons (:goal intent) (:done-when intent)))]
     (mapv (fn [f]
-            (cond-> f
-              (or (contains? about (:claim-id f))
-                  (some (fn [c] (some #(quotes? c %) passages)) (:cites f)))
-              (assoc :for-person true)))
+            (let [person? (or (contains? about (:claim-id f))
+                              (some (fn [c] (some #(quotes? c %) passages)) (:cites f)))]
+              (cond
+                (:for-person f)                f
+                (false? (:judge-marked f))     (cond-> f (not person?) (dissoc :judge-marked))
+                person?                        (assoc f :for-person true)
+                :else                          f)))
           findings)))
+
+(defn- owed-not-asked
+  "`decision`, an :ask, with each :for-person finding that carries no question moved to :owed: one
+   on a claim (`:claim-id`), under no check, whose id is not in `about` (asks_about) and whose cites
+   quote no `intent` passage (`quotes?`). What it says is that the code does not yet meet a claim the
+   person is asked nothing about — a sound commitment the build owes, which asked would read as the
+   person's question and settle nothing. Its evidence, or its cites when it has none, becomes the
+   claim's :owed-at. A claim the decision confirmed keeps the confirmation and the finding."
+  [decision about intent]
+  (let [passages (into [] (remove str/blank?) (cons (:goal intent) (:done-when intent)))
+        confirmed (set (:confirmed decision))
+        owed?    (fn [{id :claim-id :as f}]
+                   (and (:for-person f) (nil? (:check f)) (not (str/blank? (str id)))
+                        (not (contains? about id)) (not (confirmed id))
+                        (not-any? (fn [c] (some #(quotes? c %) passages)) (:cites f))))
+        moved    (filterv owed? (:findings decision))]
+    (if (empty? moved)
+      decision
+      (let [kept (filterv (complement owed?) (:findings decision))]
+        (cond-> (reduce (fn [d {id :claim-id :keys [evidence cites]}]
+                          (-> d
+                              (update :owed #(vec (distinct (conj (vec %) id))))
+                              (update-in [:owed-at id] #(or % (vec (or (not-empty evidence) cites))))))
+                        decision
+                        moved)
+          (seq kept)  (assoc :findings kept)
+          (empty? kept) (dissoc :findings))))))
 
 (def ^:private decomposition-checks
   "The checks that rule on the decomposition — what a :recut asks to redo."
@@ -2229,7 +2355,8 @@
    only the goal broke redraws the strata to repair what a record edit would.
 
    `intent` is the intent the round's prompt stated. On an :ask it and the answer's `asks_about`
-   mark findings for the person whatever the judge marked (`person-marked`).
+   mark findings for the person where the judge did not mark them derivable (`person-marked`), and
+   a person's finding that none of them reaches is the build's, :owed (`owed-not-asked`).
 
    `claims` is the ids of the design's claims; a finding the judge keyed to none is paired with the
    one its prose names (`cite-paired`) before routing reads it, so a route cited beside that claim
@@ -2265,6 +2392,7 @@
                      said)
           rulings  (parse-rulings (:relation_rulings m))
           asks     (str/trim (str (:asks m)))
+          about    (into #{} (comp (map slug) (remove str/blank?)) (:asks_about m))
           ;; An :ask needs no finding: what it hands on is the question, and a doubt the build must
           ;; not start without is one whether or not it breaks a check.
           refused  (cond
@@ -2292,11 +2420,9 @@
           ;; recommendation every finding is the amender's, whatever the judge marked.
           (and (not= :proceed r) (seq findings))
           (assoc :findings (if (= :ask r)
-                             (person-marked findings
-                                            (into #{} (comp (map slug) (remove str/blank?))
-                                                  (:asks_about m))
-                                            intent)
-                             (mapv #(dissoc % :for-person) findings)))
+                             (person-marked findings about intent)
+                             (mapv #(dissoc % :for-person :judge-marked) findings)))
+          (= :ask r)                             (owed-not-asked about intent)
           (seq rulings)                          (assoc :relation-rulings rulings)
           (seq unasked)                          (assoc :unasked-checks unasked)
           (not= said r)                          (assoc :judge-recommended said))))
@@ -2656,9 +2782,11 @@
                           (held-to-prior prior)))))))
 
 (defn- self-contradicted-ids
-  "The ids `decision` both lists as confirmed and names in a finding's claim-id, in confirmed order."
+  "The ids `decision` both lists as confirmed and names in a finding's claim-id, in confirmed order.
+   A :for-person finding names a claim the person is asked about and refutes nothing (`run-keys`),
+   so confirming the claim beside it is no contradiction."
   [decision]
-  (let [found (into #{} (keep :claim-id) (:findings decision))]
+  (let [found (into #{} (keep #(when-not (:for-person %) (:claim-id %))) (:findings decision))]
     (filterv found (:confirmed decision))))
 
 (defn- self-contradiction-block
@@ -3166,6 +3294,24 @@
   (let [subjects (settled/subjects design)]
     (into #{} (filter #(some :about (subjects %))) (keys (apply dissoc subjects (keys settled))))))
 
+(defn- reasked
+  "The entry `decision`, an :ask on `design`, poses again, or nil: `asked` (`answered`'s :asked), the
+   standing ask no grant or reply has answered, when the two are one question — the same words, or
+   the same claims asked about (its :for-person findings' ids) at the same text in both designs. The
+   chain's first entry when `asked` was itself a re-ask, so every round posing one question names
+   one seq."
+  [[project ws-id] design decision asked]
+  (when (and project asked (= :ask (:recommend decision)))
+    (when-let [earlier (ws/entry-at-seq project ws-id (:seq asked))]
+      (let [ids          #(into (sorted-set) (comp (filter :for-person) (keep :claim-id)) (:findings %))
+            then         (some->> (:design-seq earlier) (ws/entry-at-seq project ws-id))
+            same-claims? (and (seq (ids decision)) (= (ids decision) (ids earlier)) then
+                              (= (select-keys (settled/subjects then) (ids decision))
+                                 (select-keys (settled/subjects design) (ids decision))))]
+        (when (or (= (str/trim (str (:asks decision))) (str/trim (str (:asks earlier))))
+                  same-claims?)
+          (or (:reasks earlier) (:seq earlier)))))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   design-decision!
   "Run the decision round over this workstream's latest design record. Returns
@@ -3239,7 +3385,7 @@
                           :prior    prior
                           :stale    stale
                           :levels   levels
-                          :answers  (answered project ws-id design)
+                          :answers  (answered project ws-id design run-id)
                           :relation-prior prior-rs}
                 round    {:cwd code-cwd :run-id run-id :kind :design-decision
                           :label label :reviewer reviewer
@@ -3274,14 +3420,16 @@
 
               :else
               (let [kept  (select-keys subject-identities rests-on)
-                    moved (tree-moved before after)]
+                    moved (tree-moved before after)
+                    again (reasked ledger design result (get-in asking [:answers :asked]))]
                 (cond-> (-> (rule result checks asked breaks)
                             (held-to-answer (clauses-owed design asked))
                             (relation-held relation breaks))
                   (seq levels)              (assoc :strata-read (mapv :reading levels))
                   one-tree                  (assoc :code-identity one-tree)
                   (and one-tree (seq kept)) (assoc :subject-identities kept)
-                  moved                     (assoc :tree-moved moved))))))
+                  moved                     (assoc :tree-moved moved)
+                  again                     (assoc :reasks again))))))
       {:outcome :no-record :detail "this workstream has no :design entry"})
     {:outcome :no-workstream :detail (str "cwd resolves to no nido session: " cwd)}))
 
@@ -3400,12 +3548,36 @@
   [judgement]
   {:seq (:seq judgement) :reused true})
 
+(defn- grant-carried!
+  "Write the grant `design` carries as its :design-approved, at `at-seq`, the proceeding decision's
+   entry; true when it was written.
+
+   Only a grant of this very design (`answered`'s :grant :self? and :carried?): a person wrote the
+   design and stated in its :supersedes :granted that they grant it, so there is nothing changed
+   since for them to read, and parking the proceed asked them to approve their own words again. It
+   is written with :carried, the note word for word, and only while the design stands
+   (`standing/of-design` :decidable?), the premise an Approve would be refused on. A grant carried
+   from a design this one replaces is not this design's: the person is still asked."
+  [project ws-id design at-seq]
+  (try
+    (let [g (:grant (answered project ws-id design))]
+      (when (and at-seq (:self? g) (:carried? g) (not (str/blank? (:note g)))
+                 (:decidable? (standing/of-design project ws-id design)))
+        (some? (ws/append-entry! project ws-id {:kind :design-approved}
+                                 (pr-str {:format  :design-approved
+                                          :design  {:seq (:seq design)}
+                                          :at-seq  at-seq
+                                          :note    (:note g)
+                                          :carried true})))))
+    (catch Exception _ false)))
+
 (defn- proceeding-status
   "The status a decision that `report/proceeds?` ends on, once the clearance it
    may imply has been asked for; `answer` is shaped as `append!`'s, whose `:contended` says it was
    asked for and could not be written.
 
-     :cleared              a clearance names the design
+     :cleared              a clearance names the design, or the grant it carried was written
+                           (`grant-carried!`)
      :proceed              a person is owed the grant — the round's ask
      :clearance-contended  it owes nobody and the clearance is still unwritten
      standing's reason     it owes nobody, but no longer stands
@@ -3421,7 +3593,10 @@
     (cond
       (cleared? ledger n)                               :cleared
       (:contended answer)                               :clearance-contended
-      (or (nil? design) (report/owes-a-person? design)) :proceed
+      (nil? design)                                     :proceed
+      (report/owes-a-person? design)                    (if (grant-carried! project ws-id design (:seq answer))
+                                                          :cleared
+                                                          :proceed)
       :else (let [st (standing/of-design project ws-id design)]
               (if (:decidable? st)
                 :clearance-contended
@@ -6691,6 +6866,8 @@
    "\n"
    (when-not (str/blank? (str asks))
      (str "\n\nWHAT THE JUDGE LEFT FOR A PERSON — not yours to answer:\n  " asks "\n"))
+   "\n\nNothing you write credits a person with a decision — \"as the person directed\",\n"
+   "\"the user asked for\" — unless it cites the entry a person wrote that says so.\n"
    "\n\nIF A NUMBERED LINE IS WRONG ABOUT THE CODE, SAY SO INSTEAD OF AMENDING FOR IT,\n"
    "under :disputes. The judge is asked again with your objection in front of it.\n\n"
    "IF A NUMBERED LINE'S REPAIR — or what is left of it once you have repaired what\n"
