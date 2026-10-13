@@ -107,6 +107,16 @@
           (pause! 500)
           (recur (inc n))))))
 
+(defn- running-through
+  "Run `f`, which follows the start of process `id` and precedes any confirmation that it stopped:
+   whatever escapes `f` names `id` as :left-running. Where a process is left running is derived
+   from this scope, never from a failure's reason."
+  [id f]
+  (try (f)
+       (catch Exception e
+         (throw (ex-info (or (ex-message e) "failed with a process left running")
+                         (assoc (ex-data e) :left-running id) e)))))
+
 (defn- trust-refusal? [s] (str/includes? (str s) "Workspace not trusted"))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
@@ -120,7 +130,11 @@
    Throws, naming the cause, below `min-version` (:reason :claude-too-old) and in a directory
    Claude Code does not trust (:reason :workspace-untrusted) — nothing is started then. Throws
    :reason :session-unlisted, with the :bg-id, when the session started but the listing never
-   named its full id: the session runs, and no stand-in id is answered for it."
+   named its full id: the session runs, and no stand-in id is answered for it.
+
+   Every failure here, and in wake!, that leaves a process running names it as :left-running in
+   its ex-data — any failure between a process starting and its stop being confirmed, a listing
+   that cannot be read included; one without that key started nothing that still runs."
   [{:keys [cwd prompt name model system-prompt mcp-config add-dirs claude-bin]
     :or {claude-bin "claude"} :as opts}]
   (let [v (version-check opts)]
@@ -144,10 +158,12 @@
                       {:reason :dispatch-failed :exit exit :out out :err err}))
       :else
       (let [id (background-id out)]
-        (if-let [sid (listed-session-id id opts)]
-          {:bg-id id :session-id sid}
-          (throw (ex-info (str "claude --bg started " id " but the listing never named its session")
-                          {:reason :session-unlisted :bg-id id})))))))
+        (running-through
+         id
+         #(if-let [sid (listed-session-id id opts)]
+            {:bg-id id :session-id sid}
+            (throw (ex-info (str "claude --bg started " id " but the listing never named its session")
+                            {:reason :session-unlisted :bg-id id}))))))))
 
 (defn- socket-path
   "Where a live session's inbox is: Claude Code binds `<pid>.sock` in its per-user socket
@@ -191,38 +207,52 @@
 (defn ^{:malli/schema [:=> [:cat :string :string :map] :map]}
   wake!
   "Continue the session `session-id`, which has no live process, in the background under its own
-   id with `text` as its next prompt. Answers {:woke? true} or, when Claude Code started a copy
+   id with `text` as its next prompt, run from `opts`'s :cwd — the directory the listing shows it
+   in, where Claude Code finds its conversation and the session loads that directory's settings.
+   Answers {:woke? true} or, when Claude Code started a copy
    instead — it does when the session turned out to be running — {:woke? false :copy <id>}, the
    copy stopped and removed again so nothing runs beside the session. Throws :reason
-   :copy-cleanup-failed, naming the copy and the commands Claude Code refused, when it was not."
-  [session-id text {:keys [claude-bin] :or {claude-bin "claude"}}]
-  (let [{:keys [exit out err]} (claude! [claude-bin "--resume" session-id "--bg" "--" text])]
+   :copy-cleanup-failed, naming the copy and the command Claude Code refused, when it was not —
+   with the copy as :left-running only while its stop is unconfirmed."
+  [session-id text {:keys [claude-bin cwd] :or {claude-bin "claude"}}]
+  (let [{:keys [exit out err]} (claude! [claude-bin "--resume" session-id "--bg" "--" text] {:dir cwd})]
     (if-let [copy (copy-note (str out err))]
-      (let [failed (into {}
-                         (keep (fn [verb]
-                                 (let [r (claude! [claude-bin verb copy])]
-                                   (when-not (zero? (:exit r)) [(keyword verb) r]))))
-                         ["stop" "rm"])]
-        (when (seq failed)
-          (throw (ex-info (str "claude --resume started a copy " copy " that could not be removed")
-                          {:reason :copy-cleanup-failed :copy copy :failed failed})))
+      (let [cleanup! (fn [verb]
+                       (let [r (claude! [claude-bin verb copy])]
+                         (when-not (zero? (:exit r))
+                           (throw (ex-info (str "claude --resume started a copy " copy " that could not be removed")
+                                           {:reason :copy-cleanup-failed :copy copy :failed {(keyword verb) r}})))))]
+        (running-through copy #(cleanup! "stop"))
+        (cleanup! "rm")
         {:woke? false :copy copy})
       (if (zero? exit)
         {:woke? true}
         (throw (ex-info "claude --resume --bg failed"
                         {:reason :wake-failed :exit exit :out out :err err}))))))
 
+(defn- confirmed!
+  "Answer true when Claude Code accepted command `verb` on session `id`, and throw naming the
+   refusal when it did not — so no caller can take a refused stop or restart for a done one."
+  [verb id {:keys [exit out err]}]
+  (if (zero? exit)
+    true
+    (throw (ex-info (str "claude " verb " " id " was refused")
+                    {:reason (keyword (str verb "-refused")) :id id :exit exit :out out :err err}))))
+
 (defn ^{:malli/schema [:=> [:cat :string :map] :boolean]}
   stop!
-  "Stop a session's process; its conversation is kept. Answers whether Claude Code said so."
+  "Stop a session's process; its conversation is kept. Answers true once Claude Code said so;
+   throws :reason :stop-refused when it did not."
   [id {:keys [claude-bin] :or {claude-bin "claude"}}]
-  (zero? (:exit (claude! [claude-bin "stop" id]))))
+  (confirmed! "stop" id (claude! [claude-bin "stop" id])))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :boolean]}
   respawn!
-  "Restart a session from its saved conversation. Answers whether Claude Code said so."
-  [id {:keys [claude-bin] :or {claude-bin "claude"}}]
-  (zero? (:exit (claude! [claude-bin "respawn" id]))))
+  "Restart a session from its saved conversation, run from `opts`'s :cwd when given — the
+   directory the listing shows it in. Answers true once Claude Code said so; throws :reason
+   :respawn-refused when it did not."
+  [id {:keys [claude-bin cwd] :or {claude-bin "claude"}}]
+  (confirmed! "respawn" id (claude! [claude-bin "respawn" id] {:dir cwd})))
 
 (defn- claude-config-path []
   (str (fs/path (or (System/getenv "CLAUDE_CONFIG_DIR") (System/getProperty "user.home"))
