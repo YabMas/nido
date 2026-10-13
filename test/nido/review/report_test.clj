@@ -1976,6 +1976,30 @@
     (is (nil? (get-in r [:rounds 0 :phases 0 :error]))
         "the reap's own consequences are not findings about the branch")))
 
+(deftest a-run-stopped-mid-amend-keeps-what-its-amendment-moved
+  ;; An amender stopped after the ledger took its amendment never finishes its phase, and the
+  ;; phase's delta was written only on finishing — so the report said the round moved nothing
+  ;; while the next run judged exactly what it moved.
+  (let [judged (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+                   (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+                   (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                        :ctx {:record {:format :baseline-review :verdict :falsified}
+                                              :findings [] :judged-seq 16 :appended-seq 17}} nil))
+        amending (report/apply-event judged {:event :phase-started :iter 1 :phase :amend :at "t3"} nil)
+        stopped  (report/apply-event amending {:event :run-interrupted :at "t4"
+                                               :amend-delta {:changed ["c1"]}} nil)
+        amend    (last (get-in stopped [:rounds 0 :phases]))]
+    (is (nil? (report/amend-judged-seq judged))
+        "between phases nothing is being amended, so there is no amendment to look for")
+    (is (= 16 (report/amend-judged-seq amending))
+        "the entry an amendment in flight supersedes is the one its round's judge read")
+    (is (= ["interrupted" {:changed ["c1"]}] [(:status amend) (:delta amend)])
+        "the phase still reads as stopped, and says what its appended amendment moved")
+    (is (nil? (:delta (last (get-in (report/apply-event judged {:event :run-interrupted :at "t4"
+                                                                :amend-delta {:changed ["c1"]}} nil)
+                                    [:rounds 0 :phases]))))
+        "a delta is never pinned on a judge phase: only an amend in flight appended anything")))
+
 (deftest a-run-stopped-mid-repair-is-left-for-the-reconciler
   ;; The one thing a stopped run leaves behind that the next run has to be told
   ;; about, and a report still saying `running` is the only channel that tells

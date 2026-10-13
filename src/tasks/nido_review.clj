@@ -2321,6 +2321,10 @@
                    #(frontend/recording-interruption
                      emit clock
                      (fn []
+                       (some->> (report/amend-judged-seq @report-atom)
+                                (record/appended-amendment-delta ledger run-id)
+                                (hash-map :amend-delta)))
+                     (fn []
                        (rloop/run-loop
                         (cond-> {:cwd cwd :code-cwd code-cwd
                                  :ledger ledger

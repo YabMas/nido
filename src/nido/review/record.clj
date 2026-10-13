@@ -1332,6 +1332,28 @@
             :fields       (into (sorted-map) (map (fn [id] [id (field-changes (was id) (is id))])) changed)
             :also-changed also}))))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe [:sequential :any]] :any [:maybe :int]] [:maybe :map]]}
+  appended-amendment-delta
+  "The `subject-delta` of the amendment run `run-id`'s amender appended superseding the entry at
+   `judged-seq` — the newest, when it appended more than one — against that entry; nil when it
+   appended none, or the ledger cannot be read.
+
+   For a run stopped in its amend phase, which may have appended before it was stopped: the
+   phase's own account of the amendment is written only when it finishes. Read off the index's
+   :amended-by stamp, so an amendment another run or a person wrote is never counted as this
+   run's."
+  [[project ws-id] run-id judged-seq]
+  (when (and project ws-id judged-seq)
+    (when-let [w (ws/read-ws project ws-id)]
+      (let [prev (ws/entry-at-seq project ws-id judged-seq)]
+        (some->> (:entries w)
+                 (filter #(= (str run-id) (:amended-by %)))
+                 (sort-by :seq >)
+                 (keep #(ws/entry-at-seq project ws-id (:seq %)))
+                 (filter #(= judged-seq (get-in % [:supersedes :seq])))
+                 first
+                 (subject-delta prev))))))
+
 (declare lineage-of loop-why-prefix)
 
 (defn- written-by-person?

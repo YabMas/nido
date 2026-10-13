@@ -48,7 +48,8 @@
             (when-let [line (render/plain-line r event)]
               (println line))))))))
 
-(defn ^{:malli/schema [:=> [:cat :any :any [:=> [:cat] :any]] :any]}
+(defn ^{:malli/schema [:function [:=> [:cat :any :any [:=> [:cat] :any]] :any]
+                         [:=> [:cat :any :any [:maybe [:=> [:cat] [:maybe :map]]] [:=> [:cat] :any]] :any]]}
   recording-interruption
   "Run `f` with this run recorded as `interrupted` if the JVM is stopped while it
    is still going.
@@ -67,11 +68,16 @@
    stamps one stopped mid-repair — see `report/stamp-interrupt` — so the
    bracket does not have to be tight.
 
-   `emit` and `clock` are this run's; `f` is the run."
-  [emit clock f]
-  (nprocess/with-exit-note
-   #(emit {:event :run-interrupted :at (str (clock))})
-   f))
+   `emit` and `clock` are this run's; `f` is the run. `note`, when given, is
+   called on the hook's thread and returns keys merged into the event — what the
+   stopped run left outside the report, read while the process can still read
+   it. A note that throws is dropped, never the interrupt."
+  ([emit clock f] (recording-interruption emit clock nil f))
+  ([emit clock note f]
+   (nprocess/with-exit-note
+    #(emit (merge (when note (try (note) (catch Exception _ nil)))
+                  {:event :run-interrupted :at (str (clock))}))
+    f)))
 
 ;; Terminal geometry -------------------------------------------------------
 ;;

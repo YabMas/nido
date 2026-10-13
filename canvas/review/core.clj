@@ -229,6 +229,12 @@
      stop instead and left open, and `settled` seals it."
     {:signature [:=> [:catn [:report ReviewReport] [:at :string]] [:maybe ReviewReport]]
      :delegates [in-flight]})
+  (Operation amend-judged-seq
+    "The ledger entry the round's judge read, while the run is in its amend phase — the entry an
+     amendment the run may already have appended supersedes, which a stop leaves the phase
+     unable to say. nil when no amend is in flight."
+    {:signature [:=> [:catn [:report ReviewReport]] [:maybe :int]]
+     :delegates [in-flight]})
   (Operation settled
     "The report forced terminal by whoever settles a run that never wrote an ending:
      `interrupted`, at the moment its own hook stamped, when a person stopped it mid-repair, and
@@ -438,8 +444,12 @@
 
      A loop unwinds through a `finally` when it throws and through nothing at all when it is
      stopped — which is what SIGINT does, and what a person pressing Ctrl-C does. The report is
-     the whole of what such a run leaves behind, so it is written from the shutdown hook."
-    {:signature [:=> [:catn [:emit :any] [:clock :any] [:f [:=> [:catn] :any]]] :any]})
+     the whole of what such a run leaves behind, so it is written from the shutdown hook — with
+     what a note reads, on the way out, of what the run left outside the report."
+    {:signature [:function
+                 [:=> [:catn [:emit :any] [:clock :any] [:f [:=> [:catn] :any]]] :any]
+                 [:=> [:catn [:emit :any] [:clock :any] [:note [:maybe [:=> [:catn] [:maybe :map]]]]
+                             [:f [:=> [:catn] :any]]] :any]]})
   (Operation with-live-display "Run a body under the live display, or plainly."
     {:signature [:=> [:catn [:opts :map]] :any]
      :delegates [plain? emit-fn with-live-frame recording-interruption]}))

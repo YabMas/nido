@@ -3160,3 +3160,42 @@
           "a round that amended owes no prompt")
       (is (nil? (record/write-owed-amend-prompt! (assoc final :spent {})))
           "an ordinary :unfixable was amended round after round and owes none"))))
+
+;; ── A run stopped mid-amend ─────────────────────────────────────────────────
+
+(defn- amendment-of [seq-n]
+  (-> a-baseline
+      (assoc-in [:load-bearing 0 :property] "the aggregate sums; the invoice reads it")
+      (assoc :supersedes {:seq seq-n :why "round 7 of run r1"})))
+
+(defn- with-ledger
+  "Run `f` over a ledger holding `rows` — index rows, `{:seq :kind :amended-by?}` — whose entries
+   are `by-seq`."
+  [rows by-seq f]
+  (with-redefs [ws/read-ws      (fn [_ _] {:entries rows})
+                ws/entry-at-seq (fn [_ _ n] (some-> (by-seq n) (assoc :seq n)))]
+    (f)))
+
+(deftest a-stopped-amend-reports-the-amendment-it-had-already-appended
+  ;; The phase writes its delta only when it finishes, so a run stopped after its amendment was
+  ;; on the ledger read as an amend that moved nothing — while the next run judged what it moved.
+  (let [ledger [:nido "ws-1"]
+        judged {:seq 1 :kind :baseline}]
+    (with-ledger [judged] {1 a-baseline}
+      #(is (nil? (record/appended-amendment-delta ledger "r1" 1))
+           "before the amender appends, there is nothing to report"))
+    (with-ledger [judged {:seq 2 :kind :baseline :amended-by "r1"}]
+                 {1 a-baseline 2 (amendment-of 1)}
+      (fn []
+        (is (= ["c1"] (:changed (record/appended-amendment-delta ledger "r1" 1)))
+            "the appended amendment's delta is read back against the entry it supersedes")
+        (is (nil? (record/appended-amendment-delta ledger "r2" 1))
+            "another run's amendment is not this run's: a run that appended nothing reports nothing")
+        (is (nil? (record/appended-amendment-delta ledger "r1" 3))
+            "nor is an amendment of a different entry than the one this round judged")))
+    (with-ledger [judged {:seq 2 :kind :baseline :amended-by "r1"} {:seq 3 :kind :baseline :amended-by "r1"}]
+                 {1 a-baseline 2 (amendment-of 1)
+                  3 (-> (amendment-of 1) (update :health conj {:id "new-obs" :axis :design
+                                                                :observation "o" :evidence ["src/x.clj:1"]}))}
+      #(is (= ["new-obs"] (:added (record/appended-amendment-delta ledger "r1" 1)))
+           "of two amendments of one entry, the one appended last is what the stopped round left"))))

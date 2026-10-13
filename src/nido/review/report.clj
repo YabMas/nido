@@ -1488,6 +1488,25 @@
 
 (defn- phase-named [round n] (last (filter #(= n (:phase %)) (:phases round))))
 
+(def ^:private amend-phase "amend")
+
+(defn ^{:malli/schema [:=> [:cat :ReviewReport] [:maybe :int]]}
+  amend-judged-seq
+  "The ledger entry the round's judge read, when this report's run is still in its amend phase —
+   the entry an amendment the stopped amender may already have appended supersedes. nil when no
+   amend is in flight, or its round's judge read no ledger entry."
+  [report]
+  (when (= amend-phase (:phase (in-flight report)))
+    (:judged-seq (phase-named (last (:rounds report)) "judge"))))
+
+(defn- with-interrupted-delta
+  "`report` with `delta` on the amend phase in flight, for a run stopped after its amender's
+   amendment was appended: the phase never finished, so nothing else would record what it moved."
+  [report delta]
+  (if (and delta (= amend-phase (:phase (in-flight report))))
+    (update-current-phase report amend-phase #(assoc % :delta delta))
+    report))
+
 (defn- round-as-ctx
   "One folded round as the loop's ctx held it: the findings the warden ruled,
    with the ruling on each, and the repairs its fix phase landed.
@@ -1665,7 +1684,8 @@
       ;; nil for a run that must be left to the reconciler, which is stamped
       ;; rather than sealed — unsealed, still `running`, and saying who stopped it.
       :run-interrupted
-      (or (interrupted report (:at ev)) (stamp-interrupt report (:at ev)))
+      (let [report (with-interrupted-delta report (:amend-delta ev))]
+        (or (interrupted report (:at ev)) (stamp-interrupt report (:at ev))))
 
       report)))
 

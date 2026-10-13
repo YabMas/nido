@@ -261,6 +261,12 @@
     "An amendment citing the record it corrects under :supersedes — the loop's to set, not the
      amender's — keeping a :why its author wrote and carrying the corrected record's own."
     {:signature [:=> [:catn [:kind :keyword] [:prev [:maybe :map]] [:record :map] [:at :map]] :map]})
+  (Operation appended-amendment-delta
+    "What the amendment a run's amender appended superseding a judged entry moved, read back off the
+     ledger — for a run stopped in its amend phase, whose phase never finished to say so. nil when
+     that run appended none."
+    {:signature [:=> [:catn [:ledger [:maybe [:sequential :any]]] [:run-id :any] [:judged-seq [:maybe :int]]]
+                 [:maybe :map]]})
   (Operation append-stopped-answer!
     "Append the amendment a stopped run left unappended, as its amender wrote it, through the loop's
      own citation and ledger checks; the record stamped and what it weakened, or why nothing was
