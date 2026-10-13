@@ -11,9 +11,13 @@
    decided on.
 
    The base is the fork point of the worktree's @ with main, the same commit a diff review
-   measures the branch from. When the worktree does not differ from what a round wants, the
-   worktree IS that tree and nothing is produced; otherwise a jj workspace is added at the fork
-   point for the length of the round and removed after it."
+   measures the branch from. A baseline reads it from a jj workspace added at the fork point for
+   the length of the round and removed after it, even when the worktree holds that very tree: the
+   worktree is live, and a session writing its fix there while the round reads would move the
+   tree the round's identity is taken over, unbanking confirmations of a revision that never
+   moved. A design whose worktree differs from its reading only in what it declares reads the
+   worktree in place, because its amender writes the declaration there and the next round must
+   read that edit; otherwise it too reads a produced workspace."
   (:require
    [babashka.fs :as fs]
    [babashka.process :as p]
@@ -46,14 +50,15 @@
   reading
   "Where a `kind` round in `worktree` reads when it is given no tree:
 
-     {:dir <worktree>}                            the worktree is already that tree
+     {:dir <worktree>}                            a design whose worktree is already that tree
      {:dir <worktree> :unresolved <why>}           no fork point could be found; the worktree is
                                                    all there is, and the round says so
      {:rev <commit> :overlay [dir …] :ahead n}     the fork point, with those of the worktree's
                                                    spec dirs laid over it; n paths of the
                                                    worktree differ from what the round reads, or
                                                    :unknown when jj would not diff them — a known
-                                                   fork point is read even then
+                                                   fork point is read even then, and a baseline's
+                                                   at n = 0 too
 
    `:overlay` is empty for a baseline, and the project's configured spec dirs for a design —
    whether or not the worktree's still hold a declaration, since emptying them is a change the
@@ -70,9 +75,9 @@
         (cond
           ;; The fork point is known, so a diff jj refuses cannot pick another tree: read the
           ;; fork point, as a worktree that differs from it would be.
-          (nil? ahead)  {:rev rev :overlay overlay :ahead :unknown}
-          (zero? ahead) {:dir worktree}
-          :else         {:rev rev :overlay overlay :ahead ahead})))))
+          (nil? ahead)                         {:rev rev :overlay overlay :ahead :unknown}
+          (and (zero? ahead) (= :design kind)) {:dir worktree}
+          :else                                {:rev rev :overlay overlay :ahead ahead})))))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :string]]}
   line

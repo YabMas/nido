@@ -1598,7 +1598,12 @@
                                                                :entries {:design [design]
                                                                          :design-decision [proceeded]}))
                                     [:ctx :rejudged :because]))
-            "the first reason that applies is the one stamped")))))
+            "the first reason that applies is the one stamped")
+        (is (= "unidentified" (get-in (judged-over-ledger
+                                       (assoc-in base [:entries :design-decision]
+                                                 [(dissoc proceeded :code-identity)]))
+                                      [:ctx :rejudged :because]))
+            "a judgement read at no identity is said to be one, not a base that moved since it")))))
 
 (deftest nothing-is-settled-at-a-tree-no-review-read
   (let [[seen _] (judged-at "tree-b")]

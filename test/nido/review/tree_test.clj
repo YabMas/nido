@@ -5,6 +5,7 @@
    [clojure.test :refer [deftest is testing]]
    [nido.design.check :as design]
    [nido.review.layers :as layers]
+   [nido.review.settled :as settled]
    [nido.review.tree :as tree]
    [nido.vsdd.jj :as jj]))
 
@@ -36,13 +37,34 @@
 (defn- workspaces [home]
   (:out (jj/jj! home "workspace" "list")))
 
-(deftest a-worktree-that-wrote-nothing-is-read-in-place
+(deftest a-design-whose-worktree-wrote-nothing-is-read-in-place
   (let [{:keys [root work]} (repo!)]
     (try
       (with-spec-dirs
-        (is (= {:dir work} (tree/reading :baseline :nido work)))
         (is (= {:dir work} (tree/reading :design :nido work)))
         (is (nil? (tree/line {:dir work})) "nothing to say about the tree it would read anyway"))
+      (finally (fs/delete-tree root)))))
+
+(deftest a-baseline-reads-its-fork-point-even-where-the-worktree-holds-it
+  ;; A baseline run started while the reviewed session's worktree still held main's tree; the
+  ;; session then wrote its fix there, and every round the judge read was unbanked as a moved tree
+  ;; although the revision the baseline is about never moved.
+  (let [{:keys [root work base]} (repo!)
+        dir (str (fs/path root "produced"))]
+    (try
+      (let [reading (tree/reading :baseline :nido work)
+            at-start (settled/code-identity work)]
+        (is (= {:rev base :overlay [] :ahead 0} reading)
+            "a worktree matching the fork point now can stop matching it while the round reads")
+        (tree/with-reading!
+          work reading "round-1" dir
+          (fn [d]
+            (let [before (settled/code-identity d)]
+              (spit (str (fs/path work "src" "a.clj")) "the fix, written mid-round\n")
+              (is (= before (settled/code-identity d))
+                  "an edit to the live worktree does not move the tree the round's identity is over")
+              (is (= at-start before)
+                  "and that identity is the tree's, so judgements already banked at it still match")))))
       (finally (fs/delete-tree root)))))
 
 (deftest a-worktree-carrying-the-change-is-not-what-a-baseline-reads

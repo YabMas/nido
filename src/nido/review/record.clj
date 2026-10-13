@@ -5398,6 +5398,8 @@
 
      :not-round-1   the run is past round 1, or repairing what it refuted
      :no-identity   the tree has no identity, so no reading of it can be matched
+     :unidentified  `j` carries no identity — the tree moved while it was read, or could not be
+                    read — so it banks nothing at any tree; not a base that moved since
      :tree-moved    `j` was read at another tree
      :carried       `j` restated an earlier verdict with no judge launched
      :unruled       `j` left a check, or a baseline id, without a ruling
@@ -5413,6 +5415,7 @@
     (cond
       (or (not= 1 (:iter ctx)) (get-in ctx [:carry :under-repair])) :not-round-1
       (nil? (:code-identity reading))                                :no-identity
+      (nil? (:code-identity j))                                      :unidentified
       (not= (:code-identity reading) (:code-identity j))             :tree-moved
       (:carried-from j)                                              :carried
       (or (seq (:unruled j)) (seq (:relation-unruled j)))            :unruled
