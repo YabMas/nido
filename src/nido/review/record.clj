@@ -5496,17 +5496,27 @@
    it launches a judge:
    :standing, every subject whose latest judgement at the key confirmed it; :single, the ids of it
    confirmed once only (`settled/single-readings`); :settled, the part of it the judge is not
-   asked — those confirmed twice running, less the ids the last amender called `stale`; and
-   :prior, what earlier runs found against its subjects and nothing has answered since.
-   `effective` as `settled/settled` takes it."
+   asked — those confirmed twice running, less the ids the last amender called `stale`;
+   :knock-ons, the subjects asked again only because an amendment moved what sits around them
+   (`settled/knock-ons`); and :prior, what earlier runs found against its subjects and nothing has
+   answered since. `effective` as `settled/settled` takes it."
   [project ws-id kind subject reading effective run-id stale]
   (let [ls       (when (and project subject) (settled/ledgers project ws-id subject))
         standing (if (and project subject) (settled/settled ls subject reading effective) {})
         single   (if (and project subject) (settled/single-readings ls subject reading effective) #{})]
-    {:standing standing
-     :single   single
-     :settled  (apply dissoc standing (concat single stale))
-     :prior    (when subject (settled/prior-findings ls kind subject run-id))}))
+    {:standing  standing
+     :single    single
+     :settled   (apply dissoc standing (concat single stale))
+     :knock-ons (if (and project subject) (settled/knock-ons ls subject reading effective) {})
+     :prior     (when subject (settled/prior-findings ls kind subject run-id))}))
+
+(defn- knock-on-rows
+  "`knock-ons` (`settled/knock-ons`) of the ids `asked`, as the judge phase carries them:
+   `[{:id :seq :ws-id :moved}]`, sorted by id."
+  [knock-ons asked]
+  (vec (for [[id {:keys [ws-id moved] n :seq}] (sort-by key knock-ons)
+             :when (contains? (set asked) id)]
+         {:id id :seq n :ws-id ws-id :moved moved})))
 
 (defn- newest-judgement
   "The newest `judged` entry on the ledger naming `subject` under `seq-key`, or nil."
@@ -5857,7 +5867,7 @@
         ;; read: never settled, so no round can answer it without a judge, and shown that judge as
         ;; what a confirmation would overturn. Once amended, the record is not the one it refuted.
         refuted (when-not (get-in ctx [:carry :under-repair]) (:refuted (:config ctx)))
-        {:keys [standing single settled prior]}
+        {:keys [standing single settled knock-ons prior]}
         (-> (judge-inputs project ws-id :baseline subject reading subject run-id
                           (concat (get-in ctx [:carry :stale]) (keys refuted)))
             (update :prior merge refuted))
@@ -5917,6 +5927,7 @@
                       (when again {:rejudged again})
                       (when-let [c (seq (continues run-id (:iter ctx) standing running lineage))]
                         {:continues (vec c)})
+                      (when-let [k (seq (knock-on-rows knock-ons asked))] {:knock-ons (vec k)})
                       (when subject (banking asked reading record)))]
     (let [answer (if reused (reused-answer reused) (append! ledger record))]
       (with-appended
@@ -7260,7 +7271,7 @@
         [project ws-id :as ledger] (ledger-of (:config ctx))
         design  (when project (ws/latest-entry project ws-id :design))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) design)
-        {:keys [standing single settled prior]}
+        {:keys [standing single settled knock-ons prior]}
         (judge-inputs project ws-id :design design reading (when design (effective-design ledger design)) run-id
                       (get-in ctx [:carry :stale]))
         ;; A decision that would not proceed, standing at this tree: the round points at it rather
@@ -7326,6 +7337,7 @@
                       (when again {:rejudged again})
                       (when-let [c (seq (continues run-id (:iter ctx) standing running lineage))]
                         {:continues (vec c)})
+                      (when-let [k (seq (knock-on-rows knock-ons asked))] {:knock-ons (vec k)})
                       (when design (banking asked reading record)))
         traj   (trajectory (:history ctx))
         ;; The status a run ends on is a claim that the ledger holds this decision: an :asked

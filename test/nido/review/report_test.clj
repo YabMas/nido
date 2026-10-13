@@ -2190,6 +2190,7 @@
                                                    :contradicts-read-once [{:id "c2" :seq 34 :ws-id "ws-1"}]
                                                    :contradicts-held-clause [{:clause "c3#2" :seq 33}]}
                                           :continues [{:run-id "baseline-loop-dead" :status "interrupted"}]
+                                          :knock-ons [{:id "c2" :seq 34 :ws-id "ws-1" :moved ["c4"]}]
                                           :findings []}} nil))
         ph (first (:phases (first (:rounds r))))]
     (is (= [{:id "c1" :seq 34 :ws-id "ws-1" :run-id "baseline-loop-dead"}] (:paired-with ph))
@@ -2198,9 +2199,11 @@
     (is (= [{:clause "c3#2" :seq 33}] (:contradicts-held-clause ph))
         "a clause held earlier in the run and ruled false here is a confirmation withdrawn, said where it happened")
     (is (= [{:run-id "baseline-loop-dead" :status "interrupted"}] (:continues ph))
-        "a run picking up where another died says so, with how that one ended"))
+        "a run picking up where another died says so, with how that one ended")
+    (is (= [{:id "c2" :seq 34 :ws-id "ws-1" :moved ["c4"]}] (:knock-ons ph))
+        "a refutation of a subject reopened by its sibling's amendment reads as that knock-on, not as the judge contradicting entry 34"))
   (let [[_ ph] (design-judge-phase {:format :design-decision :recommend :proceed :confirmed ["c1"]})]
-    (is (not-any? #(contains? ph %) [:paired-with :contradicts-read-once :contradicts-held-clause :continues])
+    (is (not-any? #(contains? ph %) [:paired-with :contradicts-read-once :contradicts-held-clause :continues :knock-ons])
         "absent when the run continued nothing")))
 
 (deftest the-target-names-what-a-record-run-was-pointed-at

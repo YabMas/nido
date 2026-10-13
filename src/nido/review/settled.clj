@@ -347,16 +347,43 @@
         plays (mapcat :plays (filter (comp ids :id) (get-in record [:model :elements])))]
     (into ids plays)))
 
+(defn- hub?
+  "Whether `claim` is about at least half of `record`'s model elements — a claim every other subject
+   of the record sits beside."
+  [record claim]
+  (let [elements (into #{} (map :id) (get-in record [:model :elements]))]
+    (and (seq elements)
+         (>= (* 2 (count (filter elements (set (:about claim))))) (count elements)))))
+
 (defn- context
   "What `record` says around its subject `id` that a judgement of it was made beside: the record's
    own entries for the elements in `ids`, and every other claim of its own about one of them. Both
    are the record's words and not the tree's, so no identity of the code moves when an amendment
-   rewrites them."
+   rewrites them.
+
+   A hub claim (`hub?`) is left out of every subject's siblings but another hub's. Most subjects
+   share an element with a hub, so with it in, one amendment to the hub unsettled nearly the whole
+   record and two readings of each subject banked nothing. Leaving it out loses no check: the hub keeps
+   every sibling in its own context, so an amendment on either side re-reads the hub beside the
+   other, and a contradiction between them is found there — under the hub's id, or the sibling's
+   when the finding quotes it (`names?`)."
   [record id ids]
-  {:elements (into (sorted-map) (keep #(when (ids (:id %)) [(:id %) %]))
-                   (get-in record [:model :elements]))
-   :siblings (into #{} (filter #(and (not= id (:id %)) (some ids (:about %))))
-                   (get-in record [:model :claims]))})
+  (let [claims (get-in record [:model :claims])
+        hub    (some #(and (= id (:id %)) (hub? record %)) claims)]
+    {:elements (into (sorted-map) (keep #(when (ids (:id %)) [(:id %) %]))
+                     (get-in record [:model :elements]))
+     :siblings (into #{} (filter #(and (not= id (:id %)) (some ids (:about %))
+                                       (or hub (not (hub? record %)))))
+                     claims)}))
+
+(defn- moved-around
+  "The ids whose entry differs between two `context`s of one subject — an element entry or a sibling
+   claim added, dropped or reworded — sorted."
+  [was now]
+  (let [sibs  #(into {} (map (juxt :id identity)) (:siblings %))
+        moved (fn [a b] (filter #(not= (get a %) (get b %)) (into (set (keys a)) (keys b))))]
+    (vec (sort (distinct (concat (moved (:elements was) (:elements now))
+                                 (moved (sibs was) (sibs now))))))))
 
 (defn- cites-as?
   "Whether `judged` cites the intent and the baseline `record` cites, wherever `record` cites one. A
@@ -446,6 +473,17 @@
 
 (defn- chronological [ms] (sort-by (fn [{j :judgement}] [(str (:at j)) (or (:seq j) 0)]) ms))
 
+(defn- bearing
+  "`m`, one of `judged`, as it bears on subject `id` whose content is `content`: marked :breaks? when
+   it found against it, declared it unchecked or ruled it :owed, as it is when it banked a
+   confirmation over a record nobody retracted, else nil. A judgement doing both found."
+  [id content {j :judgement :as m}]
+  (cond
+    (some #(names? % id) (:findings j))  (assoc m :breaks? true)
+    (some #(= id (:id %)) (:unchecked j)) (assoc m :breaks? true)
+    (some #{id} (:owed j))                (assoc m :breaks? true)
+    (and (not (:retracted? m)) (banked? j id content)) m))
+
 (defn- bearings
   "Per subject id of `record`, oldest first, every judgement at its content, context, cited
    yardstick and key (`reading`) that bears on it — a finding naming it (`names?`), a declaration
@@ -471,16 +509,45 @@
                                             (= around (context (:record %) id ids))
                                             (cites-as? record (:record %))
                                             (at-key? reading needed (:judgement %))))
-                              ;; A judgement doing both found.
-                              (keep (fn [{j :judgement :as m}]
-                                      (cond
-                                        (some #(names? % id) (:findings j))  (assoc m :breaks? true)
-                                        (some #(= id (:id %)) (:unchecked j)) (assoc m :breaks? true)
-                                        (some #{id} (:owed j))                (assoc m :breaks? true)
-                                        (and (not (:retracted? m)) (banked? j id content)) m)))
+                              (keep #(bearing id content %))
                               chronological
                               vec)])))
             (subjects record)))))
+
+(defn ^{:malli/schema [:function
+                       [:=> [:cat [:maybe [:vector :map]] :map :map] :map]
+                       [:=> [:cat [:maybe [:vector :map]] :map :map :map] :map]]}
+  knock-ons
+  "The subjects of `record` read again only because what sits around them moved, as `{id {:ws-id
+   :seq :moved}}`: the newest judgement bearing on the subject at its content, cited yardstick and
+   key at `reading`, in any context, confirmed it — but beside another `context` than the record's
+   now. :seq names that confirmation and :moved the element entries and sibling claims whose words
+   differ (`moved-around`), the amendment that reopened it.
+
+   A refutation of one of these is an amendment's knock-on, not a judge disagreeing with a reading of
+   the same words at the same tree; without it the two look alike. `effective` as `settled` takes it."
+  ([ledgers record reading] (knock-ons ledgers record reading record))
+  ([ledgers record reading effective]
+   (if (or (nil? ledgers) (and (nil? (:code-identity reading)) (nil? (:subject-identities reading))))
+     {}
+     (let [js (judged ledgers)]
+       (into {}
+             (keep (fn [[id content]]
+                     (let [needed (rests-on record effective content)
+                           ids    (about record content)
+                           around (context record id ids)
+                           latest (->> js
+                                       (filter #(and (= content (get (:subjects %) id))
+                                                     (cites-as? record (:record %))
+                                                     (at-key? reading needed (:judgement %))))
+                                       (keep #(bearing id content %))
+                                       chronological
+                                       last)
+                           then   (some-> latest :record (context id ids))]
+                       (when (and latest (not (:breaks? latest)) (not= then around))
+                         [id {:ws-id (:ws-id latest) :seq (get-in latest [:judgement :seq])
+                              :moved (moved-around then around)}]))))
+             (subjects record))))))
 
 (defn ^{:malli/schema [:function
                        [:=> [:cat [:maybe [:vector :map]] :map :map] :map]

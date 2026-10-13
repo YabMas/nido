@@ -688,6 +688,10 @@
       ;; reading is often another run's and a 1-round run that stopped is otherwise unexplained.
       ;; :contradicts-held-clause is each clause this run had held, in the same words, that this
       ;; judgement ruled false — the earlier holding withdrawn where the subject's id shows nothing.
+      ;; :knock-ons is each id asked again only because an amendment moved what sits around it — the
+      ;; confirmation of the same words at the same tree it was asked past, and the sibling claims and
+      ;; element entries that moved (`nido.review.settled/knock-ons`) — so its refutation reads as the
+      ;; amendment's knock-on rather than a judge disagreeing with that confirmation.
       ;; :continues is every earlier run whose judgements round 1 read — paired with, inherited a
       ;; refutation count from — with the status each ended in, so a run that picked up where an
       ;; interrupted one died says so instead of leaving the join to the ledger's :run-id stamps.
@@ -773,6 +777,7 @@
                 (seq (get-in ctx [:record :contradicts-held-clause]))
                 (assoc :contradicts-held-clause (vec (get-in ctx [:record :contradicts-held-clause])))
                 (seq (:continues ctx))                  (assoc :continues (vec (:continues ctx)))
+                (seq (:knock-ons ctx))                  (assoc :knock-ons (vec (:knock-ons ctx)))
                 (seq (get-in ctx [:record :unchecked])) (assoc :unchecked (get-in ctx [:record :unchecked]))
                 (seq (get-in ctx [:record :relation-rulings]))
                 (assoc :relation-rulings (get-in ctx [:record :relation-rulings]))

@@ -114,6 +114,15 @@
                  [:=> [:catn [:ledgers [:maybe [:vector :map]]] [:record :map] [:reading :map]
                        [:effective :map]] [:set :string]]]
      :delegates [subjects]})
+  (Operation knock-ons
+    "The subjects a round asks again only because an amendment moved what sits around them: the
+     newest judgement at their content and key confirmed them beside another context — naming that
+     confirmation and the sibling claims and element entries that moved. Pure."
+    {:signature [:function
+                 [:=> [:catn [:ledgers [:maybe [:vector :map]]] [:record :map] [:reading :map]] :map]
+                 [:=> [:catn [:ledgers [:maybe [:vector :map]]] [:record :map] [:reading :map]
+                       [:effective :map]] :map]]
+     :delegates [subjects]})
   (Operation independent?
     "Whether a second reading was asked of another reviewer than the one that answered the first —
      a second sample, not one judge asked twice. False when either judge is unknown. Pure."

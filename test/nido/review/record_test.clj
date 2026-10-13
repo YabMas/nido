@@ -2338,6 +2338,16 @@
       (is (nil? (#'record/continues "baseline-loop-me" 2 standing {"citation-helpers" 2} lineage))
           "past round 1 the run reads its own amendments, which no earlier run judged"))))
 
+(deftest a-round-names-the-subjects-it-asks-again-only-for-their-context
+  ;; Watched: a claim confirmed and then refuted at one tree on the same words read as a bare
+  ;; refutation, with nothing naming the sibling amendment that reopened it.
+  (let [knock-ons {"strata-placement" {:ws-id "ws-1" :seq 19 :moved ["parse-artifacts"]}
+                   "settled-anyway"   {:ws-id "ws-1" :seq 19 :moved ["parse-artifacts"]}}]
+    (is (= [{:id "strata-placement" :seq 19 :ws-id "ws-1" :moved ["parse-artifacts"]}]
+           (#'record/knock-on-rows knock-ons #{"strata-placement" "parse-artifacts"}))
+        "only what the round asks: a knock-on it did not put to the judge was read by nobody")
+    (is (= [] (#'record/knock-on-rows {} #{"strata-placement"})))))
+
 (deftest a-report-says-what-the-run-continued
   (let [report {:rounds [{:round 1 :phases [{:phase "judge"
                                              :paired-with [{:id "a" :seq 34 :ws-id "w"} {:id "b" :seq 34 :ws-id "w"}]

@@ -413,6 +413,65 @@
         amended (assoc-in (model-baseline 3 one-path) [:model :elements 0 :interface] "a total and a tax")]
     (is (= {} (settled/settled l amended at-agg-1)))))
 
+;; Four elements; `hub` is about three of them, `on-a` and `on-b` about one each.
+(def ^:private four-elements
+  (mapv (fn [k] {:id (str "canvas.a/" k) :sort :module :hides (str k " order")}) ["a" "b" "c" "d"]))
+(def ^:private hub {:id "hub" :about ["canvas.a/a" "canvas.a/b" "canvas.a/c"] :statement "three strata"
+                    :falsified-by "a fourth" :evidence {:by :round}})
+(def ^:private on-a {:id "on-a" :about ["canvas.a/a"] :statement "a writes once"
+                     :falsified-by "a second write" :evidence {:by :round}})
+(def ^:private on-b {:id "on-b" :about ["canvas.a/b"] :statement "b reads whole"
+                     :falsified-by "a partial read" :evidence {:by :round}})
+
+(defn- hub-baseline [seq-n & claims]
+  {:format :baseline :strata [] :seq seq-n :model {:elements four-elements :claims (vec claims)}})
+
+(def ^:private all-four ["hub" "on-a" "on-b" "canvas.a/a" "canvas.a/b" "canvas.a/c" "canvas.a/d"])
+
+(deftest amending-a-hub-claim-leaves-its-siblings-settled
+  ;; Watched: amending one claim about 7 of 10 elements, then one about all 10, reset every subject
+  ;; that shared an element with it, so the 14 readings round 2 paired banked nothing and the next
+  ;; amendment reset them again. A record with a hub could not converge.
+  (let [l       [(ledger :baselines [(hub-baseline 1 hub on-a on-b)]
+                         :reviews [(review 2 1 :confirmed all-four)])]
+        amended (hub-baseline 3 (assoc hub :statement "three strata, one shared") on-a on-b)]
+    (is (= #{"on-a" "on-b" "canvas.a/a" "canvas.a/b" "canvas.a/c" "canvas.a/d"}
+           (set (keys (settled/settled l amended tree-a))))
+        "a hub amended re-reads the hub alone; what sits under it is still confirmed")
+    (is (= #{"on-b" "canvas.a/b" "canvas.a/c" "canvas.a/d"}
+           (set (keys (settled/settled l (hub-baseline 3 hub (assoc on-a :statement "a writes twice") on-b)
+                                       tree-a))))
+        "a claim that is no hub amended re-reads the hub, where the two are read side by side, and its own element")
+    (let [other (assoc hub :id "hub-2" :statement "two layers")
+          l     [(ledger :baselines [(hub-baseline 1 hub other on-a)]
+                         :reviews [(review 2 1 :confirmed ["hub" "hub-2" "on-a"])])]]
+      (is (= #{"on-a"} (set (keys (settled/settled l (hub-baseline 3 hub (assoc other :statement "three layers") on-a)
+                                                   tree-a))))
+          "a hub amended re-reads every other hub sharing an element, or two hubs could contradict unread"))))
+
+(deftest a-subject-reopened-by-its-context-is-a-knock-on
+  ;; Watched: a claim confirmed in round 1 and refuted in round 2, both at one tree and on the same
+  ;; words, read as the judge disagreeing with itself — nothing said a sibling's amendment reopened it.
+  (let [on-a-2  (assoc on-a :id "on-a-2" :statement "a is written by one job")
+        l       [(ledger :baselines [(hub-baseline 1 hub on-a on-a-2 on-b)]
+                         :reviews [(review 2 1 :confirmed ["hub" "on-a" "on-a-2" "on-b"])])]
+        amended (hub-baseline 3 hub on-a (assoc on-a-2 :statement "a is written by two jobs") on-b)]
+    (is (= {"on-a" {:ws-id "ws-1" :seq 2 :moved ["on-a-2"]}
+            "hub"  {:ws-id "ws-1" :seq 2 :moved ["on-a-2"]}}
+           (settled/knock-ons l amended tree-a))
+        "each names the confirmation it is asked past and the sibling whose amendment reopened it")
+    (is (not (contains? (settled/knock-ons l amended tree-a) "on-a-2"))
+        "the amended claim is read again for its own words, which is no knock-on")
+    (is (not (contains? (settled/knock-ons l amended tree-a) "on-b"))
+        "a subject still settled is not read again at all")
+    (is (= {} (settled/knock-ons l amended {:code-identity "tree-b"}))
+        "at another tree a subject is read again because the code moved")
+    (let [l [(ledger :baselines [(hub-baseline 1 hub on-a on-a-2 on-b)]
+                     :reviews [(review 2 1 :confirmed ["hub" "on-a" "on-a-2" "on-b"])
+                               (review 3 1 :verdict :falsified :findings [{:claim-id "on-a"}])])]]
+      (is (not (contains? (settled/knock-ons l amended tree-a) "on-a"))
+          "a subject whose last reading found against it is owed a reading anyway"))))
+
 (deftest a-changed-yardstick-unsettles-what-was-judged-against-the-old-one
   ;; A design resting on a re-surveyed baseline, or written for a goal that moved, is judged against
   ;; a different yardstick however identical its claims are.
