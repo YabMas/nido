@@ -85,6 +85,10 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:text :string]
                       [:basis :string]] Workstream]
      :delegates [read-ws write!]})
+  (Operation clear-title!
+    "Remove a workstream's generated display title."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Workstream]
+     :delegates [read-ws write!]})
   (Operation close!
     "Settle a workstream terminally — done, dropped or dismissed — and append the close as a
      :closed entry in the same write."

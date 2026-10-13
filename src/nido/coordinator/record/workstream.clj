@@ -237,6 +237,17 @@
                       {:project project :ws-id ws-id})))
     (write! (assoc w :title {:text text :basis basis}))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Workstream]}
+  clear-title!
+  "Remove a workstream's generated :title. Throws if the workstream is absent.
+   Returns the updated record."
+  [project ws-id]
+  (let [w (read-ws project ws-id)]
+    (when-not w
+      (throw (ex-info "Cannot clear title on absent workstream"
+                      {:project project :ws-id ws-id})))
+    (write! (dissoc w :title))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :Workstream]}
   close!
   "Settle a workstream. `outcome` is :done, :dropped, :dismissed, :between-phases

@@ -42,6 +42,16 @@
           (is (nil? (:title (ws/read-ws :brian (:id w)))))))
       (finally (fs/delete-tree tmp)))))
 
+(deftest refresh-clears-a-title-whose-workstream-lost-its-basis
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+          (ws/set-title! :brian (:id w) "Invented title" "review-analysis-x-4caea003-9378-4ffa")
+          (is (= 1 (titles/refresh-project! :brian (constantly "unused"))))
+          (is (nil? (:title (ws/read-ws :brian (:id w)))))))
+      (finally (fs/delete-tree tmp)))))
+
 (deftest clean-rejects-what-is-not-a-title
   (is (= "Drift in the session index" (#'titles/clean "\"Drift in the session index.\"\n")))
   (is (nil? (#'titles/clean "")))

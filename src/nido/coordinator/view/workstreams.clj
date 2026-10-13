@@ -105,12 +105,18 @@
   [ws-id]
   (last (str/split (str ws-id) #"-")))
 
+(defn- machine-name? [s]
+  (boolean (some->> s (re-find #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}"))))
+
 (defn ^{:malli/schema [:=> [:cat :Workstream :any] [:maybe :string]]}
   title-basis
   "The text a generated title summarises, or nil when there is nothing better
    than an id: the newest intent's goal — what the work is FOR, once anyone has
    said — else the source's own title (Notion page, Slack message, GitHub issue),
-   else the newest ledger entry's :title, else a session name.
+   else the newest ledger entry's :title, else a session name a person chose.
+
+   A session name carrying a UUID is a machine's (review-analysis-design-loop-<uuid>):
+   it names a run, not the work, and a title generated from it is invented.
 
    A ticket id is never part of it. The board shows the id beside the title, so
    a title that repeated it would say it twice."
@@ -118,7 +124,7 @@
   (or (workstream/newest-goal ws)
       (some (comp not-empty :title) [(notion-ref ws) (slack-ref ws) (github-ref ws)])
       (not-empty (some-> ws workstream/newest-record :title))
-      (some (comp not-empty :name) sessions)))
+      (some (comp not-empty :name) (remove #(machine-name? (:name %)) sessions))))
 
 (defn ^{:malli/schema [:=> [:cat :Workstream :any] :string]}
   label

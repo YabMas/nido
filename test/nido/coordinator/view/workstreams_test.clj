@@ -57,6 +57,12 @@
   (let [ws {:id "ws-20260601-aaaaaa" :external-refs [] :entries []}]
     (is (= "rag-raptor-index" (wsv/title-basis ws [{:name "rag-raptor-index"}])))))
 
+(deftest title-basis-ignores-a-machine-session-name
+  ;; review-analysis-design-loop-<uuid> names a run, not the work.
+  (let [ws {:id "ws-20260601-aaaaaa" :external-refs [] :entries []}]
+    (is (nil? (wsv/title-basis
+               ws [{:name "review-analysis-design-loop-4caea003-9378-4ffa-92fc-design-l"}])))))
+
 (deftest title-basis-is-nil-with-nothing-to-summarise
   (let [ws {:id "ws-20260601-aaaaaa" :external-refs [] :entries []}]
     (is (nil? (wsv/title-basis ws [])))))

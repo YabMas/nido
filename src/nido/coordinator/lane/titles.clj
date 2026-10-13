@@ -52,9 +52,11 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName [:? [:=> [:cat :string] [:maybe :string]]]] :int]}
   refresh-project!
   "Generate a title for every open workstream in `project` whose basis differs from
-   the one its stored title was generated from. Returns how many titles were
-   written. `gen` is the generator (default `generate`); a nil from it skips that
-   workstream until the next sweep."
+   the one its stored title was generated from, and clear the title of one that no
+   longer has a basis — its stored title describes nothing it can still be checked
+   against. Returns how many titles were written or cleared. `gen` is the
+   generator (default `generate`); a nil from it skips that workstream until the
+   next sweep."
   ([project] (refresh-project! project generate))
   ([project gen]
    (->> (ws/list-ids project)
@@ -62,7 +64,11 @@
         (remove :closed)
         (keep (fn [w]
                 (let [basis (wsv/title-basis w (session/list-sessions project (:id w)))]
-                  (when (and basis (not= basis (get-in w [:title :basis])))
+                  (cond
+                    (and (nil? basis) (:title w))
+                    (ws/clear-title! project (:id w))
+
+                    (and basis (not= basis (get-in w [:title :basis])))
                     (when-let [text (gen basis)]
                       (ws/set-title! project (:id w) text basis))))))
         count)))
