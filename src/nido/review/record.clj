@@ -4658,9 +4658,11 @@
    finding: the cited site repaired while its siblings stayed false, an `only` exchanged for a new
    closed list false over code the amender had just read, a clause or promise no finding asked
    for, a universal lifted from the judge's own counterexample text, a :falsified-by the record
-   itself satisfies, and — for a design, which `baseline?` says is shown one — a widened quantifier
-   that crosses a property the baseline already holds of the code. `kind` names where a universal
-   nobody checked may be parked instead of asserted: a baseline's :unknowns, a design's :open."
+   itself satisfies, a summary restating a claim and so refuted beside it on the same
+   counterexample — a subject `spent` never counts, so nothing but the cap bounded it — and, for
+   a design, which `baseline?` says is shown one, a widened quantifier that crosses a property the
+   baseline already holds of the code. `kind` names where a universal nobody checked may be parked
+   instead of asserted: a baseline's :unknowns, a design's :open."
   [kind baseline?]
   (str "REPAIR THE CLASS, NOT THE INSTANCE. A counterexample is one member of the\n"
        "failure it exhibits. Name that class — not the launcher the judge cited but\n"
@@ -4671,10 +4673,17 @@
        "every public fn and its outside callers, every clause of the statement — never\n"
        "patched by appending the member the judge named. A universal over what a\n"
        "component reads or calls has members in what it calls in turn: follow them, or\n"
-       "bound the claim to the files you surveyed. A refuted summary — :shape, a\n"
-       "composition — is re-derived from the elements and claims it summarises, and may\n"
-       "cite them by id rather than restate them, so an exception refutes the sibling\n"
-       "once instead of the summary every round.\n\n"
+       "bound the claim to the files you surveyed.\n\n"
+       "A SUMMARY NAMES WHAT IT SUMMARISES; IT NEVER RESTATES IT. :shape and a\n"
+       "composition say how the claims and elements fit together, and name each by its\n"
+       "bracketed id — `[poller-owns-its-thread]` — rather than repeating the clause that\n"
+       "claim states. A clause stated twice is refuted twice whenever it is false, and\n"
+       "the summary, which is never offered withdrawal, carries every such refutation\n"
+       "into the next run. So whenever you amend a claim or element the summary\n"
+       "restates, replace the restatement with the id in this same amendment, whether\n"
+       "or not the summary was refuted, and report the summary under :swept as amended.\n"
+       "A refuted summary is re-derived from what it summarises, by id. Never copy a\n"
+       "finding's detail into the summary: it belongs on the claim the finding is about.\n\n"
        "NO UNIVERSAL YOU HAVE NOT CHECKED. `only`, `alone`, `none`, `no other`,\n"
        "`every`, `exactly when`, and any closed list of members are claims about\n"
        "everything the code does, and one missing member refutes them. So is every\n"

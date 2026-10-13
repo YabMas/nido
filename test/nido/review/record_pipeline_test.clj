@@ -2655,6 +2655,21 @@
     (is (not (str/includes? p "a quantifier you widen must not"))
         "a baseline amender has no baseline beneath it to cross")))
 
+(deftest an-amender-holds-a-summary-to-naming-the-claims-it-summarises
+  ;; Seen live: [shape] restated clauses of load-bearing claims, so each refutation of such a claim
+  ;; was found again on [shape] in the same round on the same counterexample. Shape is never offered
+  ;; withdrawal, so its count climbed across runs with only the cap acting on it; an amender told it
+  ;; MAY cite by id still copied a finding's detail into the shape.
+  (let [p (record/amend-prompt {:baseline a-baseline :findings [a-finding] :out-path "/x"})]
+    (is (str/includes? p "A SUMMARY NAMES WHAT IT SUMMARISES; IT NEVER RESTATES IT")
+        "a summary citing a claim by id is refuted once, on the claim, instead of twice")
+    (is (str/includes? p "replace the restatement with the id in this same amendment, whether\nor not the summary was refuted")
+        "a restatement left standing when its owning claim is amended is next round's duplicate finding")
+    (is (str/includes? p "Never copy a\nfinding's detail into the summary")
+        "a finding's detail copied into the summary is how the duplicate was made")
+    (is (not (str/includes? p "and may\ncite them by id"))
+        "a permissive rule is what the run it was written for ignored")))
+
 ;; ── A claim no rewording settles ────────────────────────────────────────────
 
 (defn- review [& {:keys [confirmed refuted gaps]}]

@@ -2411,6 +2411,16 @@
     (is (str/includes? p "a quantifier you widen must not\ncross a property the baseline holds"))
     (is (str/includes? p "REPAIR THE CLASS, NOT THE INSTANCE"))))
 
+(deftest the-design-amender-holds-its-shape-to-naming-the-claims-it-summarises
+  ;; The design's :shape is never offered withdrawal either, so a claim it restates is refuted on
+  ;; both, and only the claim's count can ever end it.
+  (let [p (record/design-amend-prompt
+           {:design a-model-design :recommend :amend :reason "r"
+            :findings [{:claim-id "rounded-once" :cites ["[rounded-once]"] :claim "twice"}]
+            :out-path "/run/a.edn"})]
+    (is (str/includes? p "A SUMMARY NAMES WHAT IT SUMMARISES; IT NEVER RESTATES IT")
+        "a design shape citing its claims by id is refuted once, on the claim, instead of twice")))
+
 (deftest a-decision-confirming-what-it-refutes-is-sent-back-once
   ;; Seen live: a judge confirmed a claim with four citations and filed its only finding against the
   ;; same claim. `rule` let the finding win silently, so the claim read refuted at end.
