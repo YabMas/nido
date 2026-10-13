@@ -2598,8 +2598,9 @@
    were counted carries none.
 
    :confirmed is only what held AND names where it was read: `:checked-at` gives, per confirmed id,
-   the file:line references the judge read to confirm it. A confirmation citing nothing is the
-   judge's word, and is counted as no ruling at all.
+   the file:line references the judge read to confirm it, and for a subject stating an :interface
+   the search that enumerated it, after `nido.review.settled/enumeration-mark`. A confirmation
+   citing nothing is the judge's word, and is counted as no ruling at all.
    :unchecked is what the judge declared it could not check here, and why — evidence that is not
    in the code (production data, a deploy history), say. A ruling, visibly not a confirmation.
    :tool-failure on one marks a tool the judge needed failing (a sandbox denial, say), which a
@@ -2632,7 +2633,7 @@
    this judgement refuted, the single confirmation it denies. Derived by the round, as :splits
    is, but naming the entry, which :splits does not.
    :spent is each subject its lineage has refuted that many readings running, counting this
-   judgement, among those an amender is offered a weakening or withdrawal for
+   judgement, among those an amender is offered a weakening, withdrawal or restatement for
    (`nido.review.record/spent`) — reworded and refuted again, recorded where a hand amender reads
    before writing the next rewording. :spent-awaiting is those of them this judgement held only as
    a person's question: their count stopped when it was asked and is owed an answer, not a

@@ -592,7 +592,9 @@
    property, observation or [shape]/[composition] text; each counterexample its :falsified-by
    names; the sentences of what a module hides and of its interface; each reading. :search? marks
    a clause only a search of the whole tree can hold: every counterexample (held means it exists
-   nowhere), and every clause asserting exclusivity or universality (`search-words`)."
+   nowhere), every sentence of an :interface (a closed list of what is depended on from outside,
+   which one outside caller of an unlisted var refutes, however it is worded), and every clause
+   asserting exclusivity or universality (`search-words`)."
   [content]
   (into []
         (comp (mapcat (fn [part]
@@ -610,7 +612,8 @@
               (map (fn [[field text]]
                      {:field   field
                       :text    text
-                      :search? (or (= :refuted-by field) (boolean (re-find search-words text)))})))
+                      :search? (or (contains? #{:refuted-by :interface} field)
+                                   (boolean (re-find search-words text)))})))
         content))
 
 (defn- keyed
@@ -682,7 +685,9 @@
        "wrong and at every one missing that something outside depends on. Name every\n"
        "one in the one finding: an interface ruled incomplete names each var missing\n"
        "from it that the namespace's requirers across the tree depend on, not the\n"
-       "first ones you reached. A clause stating an exact count is ruled by the\n"
+       "first ones you reached. An interface clause owes a search whatever its words:\n"
+       "held, its search enumerates the namespace's public vars and every requirer of\n"
+       "it across the tree. A clause stating an exact count is ruled by the\n"
        "structure it stands for; an off-by-one whose structure holds is not a finding.\n\n"
        "REFUTE THE CLASS, NOT THE INSTANCE. When you find a subject false on a ground\n"
        "that is a class — a conformance over every caller, an omission, a count — hold\n"
@@ -2043,6 +2048,10 @@
    :incomplete-clauses names, per subject, the keys that made it so; a phase's open clauses are
    named there and nowhere else, since no id confirms or refutes a phase.
 
+   A confirmation that stands carries, on its :checked-at, the search each held :interface clause
+   named (`settled/enumeration-mark`): the clause rulings are not kept on the ledger, and that
+   search is what lets the confirmation count toward settling an inventory (`settled/banked?`).
+
    A subject only :unchecked owes no clause: it was ruled as out of the code's reach."
   [result owed]
   (let [rulings  (:clause-rulings result)
@@ -2061,14 +2070,23 @@
                        owed)
         subjects (into #{} (comp (map key) (remove (comp phase? owed))) gaps)
         kept     (fn [xs] (not-empty (filterv (complement subjects) xs)))
-        put      (fn [r k v] (if v (assoc r k v) (dissoc r k)))]
-    (cond-> (dissoc result :clause-rulings)
-      (seq subjects) (-> (put :confirmed (kept (:confirmed result)))
-                         (put :owed (kept (:owed result)))
-                         (put :checked-at (not-empty (apply dissoc (:checked-at result) subjects)))
-                         (put :owed-at (not-empty (apply dissoc (:owed-at result) subjects)))
-                         (assoc :unruled (vec (sort (into (set (:unruled result)) subjects)))))
-      (seq gaps)     (assoc :incomplete-clauses gaps))))
+        put      (fn [r k v] (if v (assoc r k v) (dissoc r k)))
+        searched (fn [id] (into [] (comp (filter #(= :interface (:field %)))
+                                         (keep #(not-empty (:search (get rulings (:key %)))))
+                                         (distinct)
+                                         (map #(str settled/enumeration-mark %)))
+                                (get owed id)))
+        enumerate (fn [r] (reduce (fn [r id] (let [ss (searched id)]
+                                               (cond-> r (seq ss) (update-in [:checked-at id] into ss))))
+                                  r (:confirmed r)))]
+    (enumerate
+     (cond-> (dissoc result :clause-rulings)
+       (seq subjects) (-> (put :confirmed (kept (:confirmed result)))
+                          (put :owed (kept (:owed result)))
+                          (put :checked-at (not-empty (apply dissoc (:checked-at result) subjects)))
+                          (put :owed-at (not-empty (apply dissoc (:owed-at result) subjects)))
+                          (assoc :unruled (vec (sort (into (set (:unruled result)) subjects)))))
+       (seq gaps)     (assoc :incomplete-clauses gaps)))))
 
 (def ^:private site-pattern
   "A file:line reference, a range or a comma list of lines after it (`a.clj:12`, `a.clj:12-30`,
@@ -3825,14 +3843,15 @@
    between runs.
 
    `offerable?` is the subjects an amender is offered a repair for once spent — a baseline's claims
-   (`withdrawable`), a design's claims and elements (`design-spent`) — and nothing else is spent. A
-   derivation check cannot be weakened or withdrawn, and a whole-record field (`shape`) or a module
-   pools every refutation of every sentence in it: counted here, they end runs on, and tell a
-   person to weaken, a subject no amender was ever offered that for."
+   (`withdrawable`) and elements stating an :interface (`interface-spent`), a design's claims and
+   elements (`design-spent`) — and nothing else is spent. A derivation check cannot be weakened or
+   withdrawn, and a whole-record field (`shape`) or a module stating no :interface pools every
+   refutation of every sentence in it: counted here, they end runs on, and tell a person to
+   weaken, a subject no amender was ever offered that for."
   [running offerable?]
   (into (sorted-map) (filter #(and (offerable? (key %)) (>= (val %) withdrawable-after))) running))
 
-(declare refuted-ids check-statuses claim-finding? run-keys)
+(declare refuted-ids check-statuses claim-finding? run-keys enumerated-ids)
 
 (defn- awaiting-person
   "The ids of `spent` that `findings` hold only as a person's question: asked about under a
@@ -3883,22 +3902,38 @@
    - a confirmation on a first reading (:read-once) ends nothing until a second reading agrees,
      since a refutation of that second reading is the run going on;
    - an :owed ruling of an id `subject` lists under `:baseline :breaks` ends nothing, since what it
-     held is the code the design says it stops being true (`rule`).
+     held is the code the design says it stops being true (`rule`);
+   - an element of `subject` stating an :interface (`enumerated-ids`) whose run a confirmation ended
+     takes it up again where it stood when the next reading refutes it as a split of that
+     confirmation (:splits, :contradicts-read-once): the confirmation was a sample that missed the
+     member the next judge found, and an inventory refuted member by member would otherwise never
+     count past one.
    A check's run is ended by the check ruled :held. A gap (:blocks), an :unsettled subject and a
    :for-person question refute nothing (`run-keys`)."
   [subject reviews]
-  (let [broken (into #{} (map slug) (get-in subject [:baseline :breaks]))
-        runs   (reduce (fn [runs {:keys [confirmed owed read-once findings relation-rulings] :as r}]
-                         (let [statuses (check-statuses r)
-                               refuted  (into #{} (mapcat #(run-keys statuses %)) findings)
-                               ended    (concat (remove (set read-once) confirmed)
-                                                (remove broken owed)
-                                                (map :id relation-rulings)
-                                                (keep (fn [[c s]] (when (= :held s) (str c))) statuses))]
-                           (as-> runs rs
-                             (apply dissoc rs (remove refuted ended))
-                             (reduce #(update %1 %2 (fnil inc 0)) rs refuted))))
-                       {} reviews)]
+  (let [broken     (into #{} (map slug) (get-in subject [:baseline :breaks]))
+        enumerated (if subject (enumerated-ids nil subject) #{})
+        step       (fn [{:keys [runs held]} {:keys [confirmed owed read-once findings relation-rulings] :as r}]
+                     (let [statuses (check-statuses r)
+                           refuted  (into #{} (mapcat #(run-keys statuses %)) findings)
+                           ended    (remove refuted
+                                            (concat (remove (set read-once) confirmed)
+                                                    (remove broken owed)
+                                                    (map :id relation-rulings)
+                                                    (keep (fn [[c s]] (when (= :held s) (str c))) statuses)))
+                           split    (into #{} (map :id) (concat (:splits r) (:contradicts-read-once r)))
+                           ;; What a confirmation ended, kept until the next reading says whether
+                           ;; it held: a second confirmation drops it, a split restores it.
+                           held     (reduce (fn [h id] (if-let [n (and (enumerated id) (get runs id))]
+                                                         (assoc h id n)
+                                                         (dissoc h id)))
+                                            held ended)
+                           runs     (apply dissoc runs ended)]
+                       {:runs (reduce (fn [rs id]
+                                        (assoc rs id (inc (or (get rs id) (when (split id) (get held id)) 0))))
+                                      runs refuted)
+                        :held (apply dissoc held refuted)}))
+        runs       (:runs (reduce step {:runs {} :held {}} reviews))]
     (if subject
       (select-keys runs (concat (keys (settled/subjects subject))
                                 (map str (report/derivations-of subject))))
@@ -3934,29 +3969,69 @@
                            (when (and (claims id) (>= n withdrawable-after)) [id n]))))
           (distinct (keep :claim-id (remove #(or (:blocks %) (:unsettled %) (:for-person %)) findings))))))
 
+(defn- enumerated-ids
+  "The ids of elements carrying an :interface, in `design`'s model or the `baseline` it cites — the
+   design may restate an element by id alone and leave its interface where the baseline wrote it.
+   nil `design` for a baseline's own."
+  [design baseline]
+  (into #{}
+        (comp (filter #(seq (str (:interface %)))) (keep :id))
+        (concat (get-in design [:model :elements])
+                (get-in baseline [:model :elements])
+                (:modules baseline))))
+
+(defn- interface-spent
+  "The elements of `baseline` stating an :interface that `findings` refute and `refuted-running`
+   counts at `withdrawable-after` or more, as a sorted `{id n}` — inventories refuted member by
+   member, which its amender is offered a restatement by category for (`interface-block`), never a
+   removal: an element is no claim, and its removal is measured as what it is."
+  [baseline findings refuted-running]
+  (let [enumerated (enumerated-ids nil baseline)]
+    (into (sorted-map)
+          (keep (fn [id] (let [n (get refuted-running id 0)]
+                           (when (and (enumerated id) (>= n withdrawable-after)) [id n]))))
+          (distinct (keep :claim-id (remove #(or (:blocks %) (:unsettled %) (:for-person %)) findings))))))
+
+(defn- interface-block
+  "What an amender — of a baseline or a design — is told about the elements in `interfaces`, `{id
+   n}`, each an :interface refuted `n` readings running, or nil when there are none."
+  [interfaces]
+  (when (seq interfaces)
+    (str "\n\nAN INTERFACE NO ENUMERATION HAS SETTLED. "
+         (str/join ", " (for [[id n] interfaces] (str "[" id "] has been refuted " n " readings running")))
+         ",\neach time by a member its :interface did not list. Do NOT add the member this\n"
+         "round found: the enumeration is what keeps being refuted, and the next round finds\n"
+         "the next member. Restate the :interface by category — what kind of var it\n"
+         "publishes and which callers compose it — so a member the code adds is already\n"
+         "described. Where no category holds them, ask instead: dispute the numbered line,\n"
+         "naming why.")))
+
 (defn- withdrawal-block
-  "What an amender is told about the claims in `spent` (`withdrawable`), or nil when there are none.
-   `by-hand` is the :seq of the record under repair when a person wrote it, superseding another,
-   else nil: the last rewording the count charges to the claim was then theirs, and a precise
-   restatement by an amender has not been tried — an amender told otherwise weakens a claim the
-   code supports."
-  [spent by-hand]
-  (when (seq spent)
-    (str "\n\nA CLAIM NO REWORDING HAS SETTLED. "
-         (str/join ", " (for [[id n] spent] (str "[" id "] has been refuted " n " readings running")))
-         ",\neach time after a rewording of it. Restating it at the same strength is off the\n"
-         "table: that has been tried, and it was the next finding. Two honest repairs are\n"
-         "left, and you choose between them:\n\n"
-         "  - WEAKEN it to what the cited code guarantees, including on its failure path —\n"
-         "    what the code tries, not what it achieves when every call succeeds.\n"
-         "  - REMOVE it, when no other claim, element or derivation in the record rests on\n"
-         "    it, and give the reason under :withdrawn. That removal is the repair, not a\n"
-         "    retreat from one: it is reported to a human as a withdrawal carrying your\n"
-         "    reason. A removal without a reason is reported as a claim dropped."
-         (when by-hand
-           (str "\n\nOne caveat. The last rewording was not this loop's: entry " by-hand " was written by\n"
-                "hand. If the finding is about what that edit introduced, a precise restatement\n"
-                "of what the code does has not been tried, and is a third honest repair.")))))
+  "What an amender is told about the claims in `spent` (`withdrawable`) and the elements in
+   `interfaces` (`interface-spent`), or nil when there are none. `by-hand` is the :seq of the record
+   under repair when a person wrote it, superseding another, else nil: the last rewording the count
+   charges to the claim was then theirs, and a precise restatement by an amender has not been tried
+   — an amender told otherwise weakens a claim the code supports."
+  [spent interfaces by-hand]
+  (not-empty
+   (str
+    (when (seq spent)
+     (str "\n\nA CLAIM NO REWORDING HAS SETTLED. "
+          (str/join ", " (for [[id n] spent] (str "[" id "] has been refuted " n " readings running")))
+          ",\neach time after a rewording of it. Restating it at the same strength is off the\n"
+          "table: that has been tried, and it was the next finding. Two honest repairs are\n"
+          "left, and you choose between them:\n\n"
+          "  - WEAKEN it to what the cited code guarantees, including on its failure path —\n"
+          "    what the code tries, not what it achieves when every call succeeds.\n"
+          "  - REMOVE it, when no other claim, element or derivation in the record rests on\n"
+          "    it, and give the reason under :withdrawn. That removal is the repair, not a\n"
+          "    retreat from one: it is reported to a human as a withdrawal carrying your\n"
+          "    reason. A removal without a reason is reported as a claim dropped."
+          (when by-hand
+            (str "\n\nOne caveat. The last rewording was not this loop's: entry " by-hand " was written by\n"
+                 "hand. If the finding is about what that edit introduced, a precise restatement\n"
+                 "of what the code does has not been tried, and is a third honest repair."))))
+    (interface-block interfaces))))
 
 (defn- design-spent
   "The subjects a design round's `raised` lines refute that `refuted-running` counts at
@@ -3968,16 +4043,6 @@
         (keep (fn [id] (let [n (get refuted-running id 0)]
                          (when (>= n withdrawable-after) [id n]))))
         (distinct (mapcat refuted-ids (remove :for-person raised)))))
-
-(defn- enumerated-ids
-  "The ids of elements carrying an :interface, in `design`'s model or the `baseline` it cites — the
-   design may restate an element by id alone and leave its interface where the baseline wrote it."
-  [design baseline]
-  (into #{}
-        (comp (filter #(seq (str (:interface %)))) (keep :id))
-        (concat (get-in design [:model :elements])
-                (get-in baseline [:model :elements])
-                (:modules baseline))))
 
 (defn- design-withdrawal-block
   "What a design amender is told about the subjects in `spent` (`design-spent`), or nil when there
@@ -4008,14 +4073,7 @@
             "  - ASK, when whether that class is acceptable is the intent's question and not\n"
             "    yours: dispute the numbered line as one only a person can answer, naming the\n"
             "    class. The judge is asked again with it, and may stop for the person."))
-     (when (seq interfaces)
-       (str "\n\nAN INTERFACE NO ENUMERATION HAS SETTLED. " (running interfaces)
-            ",\neach time by a member its :interface did not list. Do NOT add the member this\n"
-            "round found: the enumeration is what keeps being refuted, and the next round finds\n"
-            "the next member. Restate the :interface by category — what kind of var it\n"
-            "publishes and which callers compose it — so a member the code adds is already\n"
-            "described. Where no category holds them, ask instead: dispute the numbered line,\n"
-            "naming why.")))))
+     (interface-block interfaces))))
 
 (defn- refuted-ids
   "The claims a record finding refutes: a design finding's :claim-ids, a baseline refutation's
@@ -4954,7 +5012,9 @@
    `refuted-running` is what `refuted-running` counts over the baseline's own
    lineage of reviews, this round's included. A refuted claim it counts at `withdrawable-after` or more has already
    been reworded and refuted again, so its amender is told that a restatement is
-   off the table and offered removal with a reason (`withdrawable`).
+   off the table and offered removal with a reason (`withdrawable`); an element's
+   :interface counted as often is offered a restatement by category instead
+   (`interface-spent`).
 
    A finding carrying :unsettled is neither: no reading could rule on its subject
    (`unsettled-findings`), and the amender is asked to rule on it instead, with removal of
@@ -4969,6 +5029,7 @@
         mixed?   (boolean (and (not gaps?) (some :blocks findings)))
         unruled? (and (seq findings) (every? :unsettled findings))
         spent    (withdrawable baseline findings refuted-running)
+        spent-if (interface-spent baseline findings refuted-running)
         offered  (merge (unsettled-claims baseline findings) spent)]
    (str
    (cond
@@ -5088,10 +5149,13 @@
                    (when-let [n (:needs f)] (str "\n   needs:   " n))))
             (when (seq (:evidence f))
               (str "\n   evidence: " (str/join ", " (:evidence f))))
-            (when-let [n (and (not (:blocks f)) (not (:unsettled f)) (get spent (:claim-id f)))]
-              (str "\n   running: refuted " n " readings in a row — see A CLAIM NO REWORDING HAS SETTLED"))))
+            (when-not (or (:blocks f) (:unsettled f))
+              (if-let [n (get spent (:claim-id f))]
+                (str "\n   running: refuted " n " readings in a row — see A CLAIM NO REWORDING HAS SETTLED")
+                (when-let [n (get spent-if (:claim-id f))]
+                  (str "\n   running: refuted " n " readings in a row — see AN INTERFACE NO ENUMERATION HAS SETTLED"))))))
      findings))
-   (withdrawal-block spent by-hand)
+   (withdrawal-block spent spent-if by-hand)
    (unsettled-block :baseline findings)
    (let [bearing (bearing-subjects {:record baseline :findings findings :settled settled})]
      (str (some->> (bearing-block bearing) (str "\n\n") str/trimr)
@@ -5256,19 +5320,64 @@
          (when explain
            (str " — " (str/join "; " (humanized-lines (me/humanize explain) [])))))))
 
+(def ^:private search-entry
+  "A :read-at entry naming a search someone ran, rather than a site they read: the invocation of a
+   search tool."
+  #"\b(?:rg|grep|ag|ack|find|clj-kondo)\b")
+
+(defn- interface-refusal
+  "Why an amended baseline `record` may not replace `prev`, or nil: an element whose id `refuted`
+   holds has its :interface rewritten with no :read-at entry naming a search (`search-entry`) that
+   `prev`'s did not already carry. The judge's counterexample is the members it reached, and a
+   list repaired at them is refuted next round by the member beside them — so a rewrite stands on a
+   search over the module's whole public surface, or is not taken. An :interface removed, or one
+   whose element was not refuted, is not this refusal's to judge."
+  [prev record refuted]
+  (let [by-id  #(into {} (map (juxt :id identity)) (model/elements %))
+        before (by-id prev)
+        after  (by-id record)
+        ids    (sort (for [id (set refuted)
+                           :let [b (get before id) a (get after id)]
+                           :when (and (not (str/blank? (str (:interface b))))
+                                      (not (str/blank? (str (:interface a))))
+                                      (not= (:interface b) (:interface a))
+                                      (not-any? #(re-find search-entry (str %))
+                                                (remove (set (:read-at b)) (:read-at a))))]
+                       id))]
+    (when (seq ids)
+      (str "the :interface of " (str/join ", " (map #(str "[" % "]") ids))
+           " was refuted and rewritten, but its :read-at names no new search over the module's"
+           " public surface. Run the search that enumerates every public var of the namespace and"
+           " every requirer of it across the tree, name it in the element's :read-at, and write the"
+           " :interface from what it found — or restate it by category; never by appending the"
+           " members the judge named."))))
+
+(defn- refuted-by-review
+  "The subjects the newest :baseline-review on `ws-id` refutes, when it judged `baseline` — the
+   findings `baseline`'s amender is answering. Empty when the newest review judged another record."
+  [project ws-id baseline]
+  (let [review (ws/latest-entry project ws-id :baseline-review)]
+    (if (and (:seq baseline) (= (:seq baseline) (:baseline-seq review)))
+      (into #{} (mapcat refuted-ids) (:findings review))
+      #{})))
+
 (defn ^{:malli/schema [:=> [:cat :keyword :string :keyword :map] [:maybe :string]]}
   amendment-refusal
   "What the ledger would refuse of `record` appended now as a `kind` amendment, citing what the
    loop would have it cite — or nil when it would be taken. Writes nothing. For an amender to check
    its answer before handing it over; see `nido.coordinator.record.workstream/check-entry` for how
-   far \"now\" holds."
+   far \"now\" holds. A baseline is also held to what the loop's append holds it to beyond the
+   ledger (`interface-refusal`), against the newest review's findings."
   [project ws-id kind record]
-  (let [record (cite-corrected kind (ws/latest-entry project ws-id kind) record
+  (let [prev   (ws/latest-entry project ws-id kind)
+        record (cite-corrected kind prev record
                                {:iter "n" :run-id "(dry run)"
                                 :resolve #(ws/entry-at-seq project ws-id %)})]
-    (try (ws/check-entry project ws-id {:kind kind} (pr-str (ws/unstamp record)))
-         nil
-         (catch Exception e (ledger-refusal e)))))
+    (or (when (= :baseline kind)
+          (interface-refusal prev record (refuted-by-review project ws-id prev)))
+        (try (ws/check-entry project ws-id {:kind kind} (pr-str (ws/unstamp record)))
+             nil
+             (catch Exception e (ledger-refusal e))))))
 
 (defn- appended
   "The record as a READER will find it: what was just written, stamped with the
@@ -5744,7 +5853,7 @@
                     [])
         running   (when reviews (refuted-running subject (into lineage mine)))
         unsettled (if reviews (unsettled-findings record (unchecked-running reviews)) [])
-        spent-now (spent running (retreat/claim-ids subject))
+        spent-now (spent running (into (retreat/claim-ids subject) (enumerated-ids nil subject)))
         awaiting  (awaiting-person spent-now (check-statuses record) (:findings record))
         record    (cond-> record
                     (seq spent-now) (assoc :spent spent-now)
@@ -5967,12 +6076,15 @@
                                     :check-cmd check-cmd
                                     :append (fn [record]
                                               (let [record (cite record)]
-                                                (try {:record record
-                                                      :path (ws/append-entry!
-                                                             project ws-id {:kind :baseline :amended-by (str run-id)}
-                                                             (pr-str (ws/unstamp record)))}
-                                                     (catch Exception e
-                                                       {:record record :err (ledger-refusal e)}))))})
+                                                (if-let [why (interface-refusal
+                                                              prev record (mapcat refuted-ids (:findings ctx)))]
+                                                  {:record record :err why}
+                                                  (try {:record record
+                                                        :path (ws/append-entry!
+                                                               project ws-id {:kind :baseline :amended-by (str run-id)}
+                                                               (pr-str (ws/unstamp record)))}
+                                                       (catch Exception e
+                                                         {:record record :err (ledger-refusal e)})))))})
                       record  (:record written)]
                   (if (:status written)
                     (refused-stop ctx written disputes)

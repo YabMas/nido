@@ -23,10 +23,15 @@
    :modules [{:id "m1" :module "aggregate" :hides "summing order" :interface "a total"}]
    :load-bearing (vec claims)})
 
+(def ^:private enumerated
+  "What a judge's :checked-at carries for an :interface it held: the search that enumerated it."
+  (str settled/enumeration-mark "rg -n '^\\(defn [^-]' src/a.clj; rg -l 'a\\.aggregate' src test"))
+
 (defn- read-at
-  "Where a judge says it read each of `ids` — the evidence a confirmation settles by."
+  "Where a judge says it read each of `ids` — the evidence a confirmation settles by, with the
+   enumeration an :interface owes."
   [ids]
-  (zipmap ids (repeat ["src/a.clj:1"])))
+  (zipmap ids (repeat ["src/a.clj:1" enumerated])))
 
 (defn- review
   "A review; each id it confirms is confirmed with evidence unless `over` says where it was read."
@@ -145,6 +150,25 @@
            (settled/settled [l] (baseline 3 c1) tree-a)))
     (is (= {"composition" (by 2) "m1" (by 2)}
            (settled/settled [l] (assoc (baseline 3 c1) :shape "reshaped") tree-a)))))
+
+(deftest an-interface-settles-only-on-a-confirmation-naming-its-enumeration
+  ;; Two independent readings each confirmed an inventory at the sites it cites, and it settled
+  ;; while still missing a member at the same tree: the sites a list names cannot show it complete.
+  (let [sampled (review 2 1 :confirmed ["m1" "c1"] :checked-at {"m1" ["src/a.clj:1"] "c1" ["src/a.clj:1"]})
+        l       (ledger :baselines [(baseline 1 c1)] :reviews [sampled])]
+    (is (= {"c1" (by 2)} (settled/settled [l] (baseline 3 c1) tree-a))
+        "a module stating an :interface is not settled by a confirmation that names no enumeration")
+    (testing "the same confirmation naming the search that enumerated it counts"
+      (is (= {"c1" (by 2) "m1" (by 2)}
+             (settled/settled [(ledger :baselines [(baseline 1 c1)]
+                                       :reviews [(assoc-in sampled [:checked-at "m1"]
+                                                           ["src/a.clj:1" enumerated])])]
+                              (baseline 3 c1) tree-a))))
+    (testing "a module stating no :interface owes none"
+      (is (= {"c1" (by 2) "m1" (by 2)}
+             (settled/settled [(ledger :baselines [(update-in (baseline 1 c1) [:modules 0] dissoc :interface)]
+                                       :reviews [sampled])]
+                              (update-in (baseline 3 c1) [:modules 0] dissoc :interface) tree-a))))))
 
 (deftest two-subjects-sharing-an-id-settle-only-together
   (let [claim-m1 {:id "m1" :property "p" :falsified-by "f"}

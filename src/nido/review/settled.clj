@@ -35,7 +35,9 @@
    A confirmation counts from a baseline review or a design decision, on the workstream's own
    ledger, on the parent ledger its :fork entry cites, and on the child ledger a merged design's
    :merges cites — and only where the judgement says what it read to confirm it (`:checked-at`). A
-   bare id is the judge's word, and a word settles nothing."
+   bare id is the judge's word, and a word settles nothing. A subject stating an :interface is a
+   closed list, which the sites it cites cannot show complete: its confirmation counts only where
+   :checked-at also names the search that enumerated it (`enumeration-mark`)."
   (:require
    [babashka.fs :as fs]
    [babashka.process :as p]
@@ -386,6 +388,22 @@
   (and (some #{id} (:confirmed judgement))
        (seq (get-in judgement [:checked-at id]))))
 
+(def enumeration-mark
+  "What opens a :checked-at entry naming the search a judge ran to hold an :interface clause, as
+   the round writes it there (`nido.review.record/held-to-clauses`) — the rest of the entry is the
+   search, never a site."
+  "enumerated by: ")
+
+(defn- banked?
+  "Whether `judgement`'s confirmation of `id`, whose content is `content`, counts toward settling
+   it: it is `checked?`, and where `content` states an :interface, its :checked-at names the
+   search that enumerated it. Two readings that each sampled an inventory at its own cited sites
+   have settled inventories still missing a member at an unchanged tree."
+  [judgement id content]
+  (and (checked? judgement id)
+       (or (not-any? #(and (map? %) (not (str/blank? (str (:interface %))))) content)
+           (some #(str/starts-with? (str %) enumeration-mark) (get-in judgement [:checked-at id])))))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe :map] [:maybe :map]] :boolean]}
   independent?
   "Whether a reading by `later` — a judgement's :judged-by, `{:reviewer :instead-of}` — is a second
@@ -432,7 +450,7 @@
   "Per subject id of `record`, oldest first, every judgement at its content, context, cited
    yardstick and key (`reading`) that bears on it — a finding naming it (`names?`), a declaration
    that it could not be checked or a ruling it is :owed, over any record (`:breaks? true`), or a
-   checked confirmation over one nobody retracted. Empty when nothing can be keyed.
+   confirmation over one nobody retracted that counts (`banked?`). Empty when nothing can be keyed.
 
    An unchecked or owed reading breaks like a finding: it is not a confirmation, so the
    confirmations either side of it are not two consecutive ones. A subject the judge says it cannot
@@ -459,7 +477,7 @@
                                         (some #(names? % id) (:findings j))  (assoc m :breaks? true)
                                         (some #(= id (:id %)) (:unchecked j)) (assoc m :breaks? true)
                                         (some #{id} (:owed j))                (assoc m :breaks? true)
-                                        (and (not (:retracted? m)) (checked? j id)) m)))
+                                        (and (not (:retracted? m)) (banked? j id content)) m)))
                               chronological
                               vec)])))
             (subjects record)))))

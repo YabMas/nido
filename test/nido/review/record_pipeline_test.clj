@@ -1738,6 +1738,28 @@
     (is (nil? (:confirmed r)) "held on the cited sites alone confirms the sites, not the exclusivity")
     (is (= {"shape" ["shape#1"]} (:incomplete-clauses r)))))
 
+(deftest an-interface-is-held-only-on-the-search-that-enumerated-it
+  ;; Watched: an element's :interface held three rounds running with no search, citing only its own
+  ;; definitions, then refuted for vars used outside it — the closed list was never searched.
+  (let [owed       (get (#'record/clauses-owed a-baseline ["mod-the-order-aggregate"]) "mod-the-order-aggregate")
+        iface      (some #(when (= :interface (:field %)) %) owed)
+        unsearched (mapv #(cond-> % (= (:key iface) (:clause %)) (assoc :search ""))
+                         (held "mod-the-order-aggregate"))
+        r          (reviewed {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
+                              :confirmed [(read-at "mod-the-order-aggregate")]
+                              :clause_rulings unsearched})]
+    (is (:search? iface) "an :interface owes a search whatever its words: it is a closed list")
+    (is (nil? (:confirmed r)) "held at its own definitions, the list is sampled, not enumerated")
+    (is (= {"mod-the-order-aggregate" [(:key iface)]} (:incomplete-clauses r)))
+    (testing "held on a search, the confirmation carries it where settlement reads it"
+      (let [r (reviewed {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
+                         :confirmed [(read-at "mod-the-order-aggregate")]
+                         :clause_rulings (held "mod-the-order-aggregate")})]
+        (is (= ["src/order/aggregate.clj:12" (str settled/enumeration-mark "rg -n sum .")]
+               (get-in r [:checked-at "mod-the-order-aggregate"]))
+            "the clause rulings are not kept, so the enumeration travels on :checked-at or is lost")
+        (is (m/validate ledger-report/BaselineReview (dissoc r :tree-moved)))))))
+
 (deftest a-confirmation-with-a-clause-ruled-false-is-not-counted
   (let [r (reviewed {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
                      :confirmed [(read-at "mod-the-order-aggregate")]
@@ -2615,6 +2637,91 @@
                                   :findings [(assoc a-finding :claim-id "invoice-resums")]
                                   :out-path "/x" :refuted-running {"invoice-resums" 3}})]
       (is (not (str/includes? p "A CLAIM NO REWORDING HAS SETTLED"))))))
+
+(deftest an-interface-refuted-member-by-member-is-offered-a-restatement-by-category
+  ;; Watched: a baseline element refuted twice for different missing members, appended to each time;
+  ;; the restatement a design amender is offered for exactly this never reached the baseline's.
+  (let [f (assoc a-finding :claim-id "mod-the-order-aggregate")
+        p (record/amend-prompt {:baseline a-baseline :findings [f] :out-path "/x"
+                                :refuted-running {"mod-the-order-aggregate" 2}})]
+    (is (str/includes? p "AN INTERFACE NO ENUMERATION HAS SETTLED. [mod-the-order-aggregate] has been refuted 2 readings running"))
+    (is (str/includes? p "Restate the :interface by category"))
+    (is (str/includes? p "running: refuted 2 readings in a row — see AN INTERFACE NO ENUMERATION HAS SETTLED")
+        "the finding says which block answers it")
+    (is (not (str/includes? p "A CLAIM NO REWORDING HAS SETTLED")))
+    (is (not (str/includes? p ":withdrawn"))
+        "an element is no claim: its removal would be reported as a retreat, never a withdrawal"))
+  (testing "one refutation is an ordinary round"
+    (is (not (str/includes? (record/amend-prompt {:baseline a-baseline :out-path "/x"
+                                                  :findings [(assoc a-finding :claim-id "mod-the-order-aggregate")]
+                                                  :refuted-running {"mod-the-order-aggregate" 1}})
+                            "NO ENUMERATION HAS SETTLED")))))
+
+(deftest an-interface-count-survives-a-confirmation-a-later-reading-split
+  ;; Watched: an inventory read C,C,F,C,F — the round-4 confirmation reset the count, the round-5
+  ;; judge refuted it again on another member, and the run never saw the inventory as spent.
+  (let [refute  {:findings [{:claim-id "mod-the-order-aggregate"}]}
+        confirm {:confirmed ["mod-the-order-aggregate"]}
+        split   (assoc refute :splits [{:id "mod-the-order-aggregate" :was :holds}])]
+    (is (= {"mod-the-order-aggregate" 2} (record/refuted-running a-baseline [refute confirm split]))
+        "a confirmation the next reading split was a sample that missed a member, not a reading that held")
+    (is (= {"mod-the-order-aggregate" 2}
+           (record/refuted-running a-baseline [refute confirm
+                                               (assoc refute :contradicts-read-once
+                                                      [{:id "mod-the-order-aggregate" :seq 4 :ws-id "w"}])])))
+    (is (= {"mod-the-order-aggregate" 1} (record/refuted-running a-baseline [refute confirm refute]))
+        "a refutation that splits nothing starts a new run")
+    (is (= {"mod-the-order-aggregate" 1} (record/refuted-running a-baseline [refute confirm confirm split]))
+        "two confirmations running did end it")
+    (is (= {"c1" 1} (record/refuted-running a-baseline [{:findings [{:claim-id "c1"}]} {:confirmed ["c1"]}
+                                                        {:findings [{:claim-id "c1"}]
+                                                         :splits [{:id "c1" :was :holds}]}]))
+        "a claim is not an enumeration, and its run is ended by a confirmation as before")))
+
+(def ^:private model-a-baseline
+  {:format :baseline :seq 5
+   :model {:elements [{:id "order.aggregate" :sort :module :hides "summing order"
+                       :interface "total, line-sum" :read-at ["src/order/aggregate.clj:1-40"]}
+                      {:id "order.invoice" :sort :module :interface "render"}]
+           :claims []}})
+
+(deftest a-refuted-interface-is-rewritten-only-on-a-new-search
+  ;; Watched: refuted for two missing vars, the amender added exactly those two after one sed of the
+  ;; cited ranges; the next run refuted the same list for two more.
+  (let [appended (assoc-in model-a-baseline [:model :elements 0 :interface] "total, line-sum, rounding")
+        refusal  #(#'record/interface-refusal model-a-baseline % ["order.aggregate"])]
+    (is (str/includes? (str (refusal appended)) "[order.aggregate]")
+        "a list patched at the members the judge named is refused")
+    (is (str/includes? (str (refusal (update-in appended [:model :elements 0 :read-at] conj
+                                                "src/order/aggregate.clj:41")))
+                       "no new search")
+        "a further site read is not a search")
+    (is (nil? (refusal (update-in appended [:model :elements 0 :read-at] conj
+                                  "rg -n '^\\(defn [^-]' src/order/aggregate.clj; rg -l 'order\\.aggregate' src test")))
+        "taken once the element names the search its list was written from")
+    (is (nil? (#'record/interface-refusal model-a-baseline appended ["order.invoice"]))
+        "an :interface no finding refuted is not this refusal's to judge")
+    (is (nil? (refusal (update-in model-a-baseline [:model :elements 0] dissoc :interface)))
+        "nor one removed, which is measured as what it is")))
+
+(deftest the-amend-check-holds-a-baseline-to-the-same-refusal
+  (let [appended (assoc-in model-a-baseline [:model :elements 0 :interface] "total, line-sum, rounding")]
+    (with-redefs [ws/latest-entry (fn [_ _ kind]
+                                    (case kind
+                                      :baseline        model-a-baseline
+                                      :baseline-review {:seq 6 :baseline-seq 5
+                                                        :findings [{:claim-id "order.aggregate"}]}))
+                  ws/check-entry  (fn [& _] nil)]
+      (is (str/includes? (str (record/amendment-refusal :nido "ws-1" :baseline appended)) "[order.aggregate]")
+          "an amender told `ok` by the check would be refused by the append it was checking for"))
+    (with-redefs [ws/latest-entry (fn [_ _ kind]
+                                    (case kind
+                                      :baseline        model-a-baseline
+                                      :baseline-review {:seq 4 :baseline-seq 3
+                                                        :findings [{:claim-id "order.aggregate"}]}))
+                  ws/check-entry  (fn [& _] nil)]
+      (is (nil? (record/amendment-refusal :nido "ws-1" :baseline appended))
+          "a review of an older record says nothing about what this amendment answers"))))
 
 (deftest a-rewording-made-by-hand-is-not-charged-to-the-amender
   ;; Watched: the amender was told a claim had been refuted twice "each time after a rewording of
