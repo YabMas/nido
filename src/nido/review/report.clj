@@ -684,7 +684,8 @@
       ;; different counterexample is one no rewording is settling, and nothing else in a round says so.
       ;; :overrides-settled is each subject the judge was shown as settled and found against anyway —
       ;; a confirmation settlement was shielding, caught. :splits and :unpaired are where it disagreed
-      ;; with the reading before it at the same tree, which is otherwise only the later ruling.
+      ;; with the reading before it at the same tree, which is otherwise only the later ruling;
+      ;; :unpaired-recommend is where it recommended otherwise than an :ask that reading made.
       ;; :paired-with is each single confirmation on the ledger this round's confirmation completed,
       ;; and :contradicts-read-once each it denied — the entry and (paired) the run, since the first
       ;; reading is often another run's and a 1-round run that stopped is otherwise unexplained.
@@ -774,6 +775,8 @@
                 (assoc :overrides-settled (get-in ctx [:record :overrides-settled]))
                 (seq (get-in ctx [:record :splits]))   (assoc :splits (get-in ctx [:record :splits]))
                 (seq (get-in ctx [:record :unpaired])) (assoc :unpaired (get-in ctx [:record :unpaired]))
+                (get-in ctx [:record :unpaired-recommend])
+                (assoc :unpaired-recommend (get-in ctx [:record :unpaired-recommend]))
                 (seq (get-in ctx [:record :paired-with]))
                 (assoc :paired-with (vec (get-in ctx [:record :paired-with])))
                 (seq (get-in ctx [:record :contradicts-read-once]))

@@ -2106,6 +2106,86 @@
              (is (= :asked (:status r2)) "the second reading agreeing is what stops for the person")
              (is (= :escalate (:control r2))))))))))
 
+(def ^:private asks-the-person
+  "An :ask over nothing derivable: the person's question filed against `pool-in-scope`, and a claim
+   confirmed once beside it, so the round is read again before the person is asked."
+  (assoc (decision :ask :checks [(check :goal-served :broken)]
+                   :findings [{:cites ["c"] :claim "over-serves the goal"
+                               :check :goal-served :claim-id "pool-in-scope"
+                               :for-person true}])
+         :asks "is a week's delay before tutors see it acceptable?"
+         :confirmed ["rounded-once"] :checked-at {"rounded-once" ["src/a.clj:1"]}))
+
+;; Watched (ws-20261012-6f68ad): codex asked whether a week's delay was acceptable, claude's second
+;; reading of the same record proceeded with no :asks, and per-claim pairing agreed — so the proceed
+;; stood, nothing recorded the split, and the question never reached the person.
+(deftest a-proceed-after-an-ask-carries-the-ask-to-the-person
+  (let [appended (atom [])
+        proceed  (-> (decision :proceed :checks [(check :goal-served :held)])
+                     (dissoc :asks)
+                     (assoc :confirmed ["rounded-once"] :checked-at {"rounded-once" ["src/a.clj:2"]}))
+        answers  (atom [asks-the-person proceed])]
+    (judging-a-model-design
+     asks-the-person appended
+     (fn []
+       (with-redefs [record/design-decision! (fn [opts] (let [a (first @answers)] (swap! answers rest) (named-by a opts)))
+                     record/append! (fn [_ r] {:seq (count (swap! appended conj r))})]
+         (let [r1 (run record/design-judge-stage (ctx))
+               r2 (run record/design-judge-stage (ctx :carry (:carry r1)))
+               d2 (second @appended)]
+           (is (= :next-round (:control r1)))
+           (is (= {:was :ask :seq 1 :asks (:asks asks-the-person)} (:unpaired-recommend d2))
+               "the later reading must not replace the ask with nothing to show there was one")
+           (is (= (:asks asks-the-person) (:asks d2))
+               "a judge never shown the question has not answered it, so the proceed carries it")
+           (is (= :proceed (:status r2)) "the proceed parks for the person, who reads the question")
+           (is (= :escalate (:control r2)))
+           (is (report/validate-event :design-decision d2) "and the ledger takes it")))))))
+
+(deftest a-proceed-over-a-standing-ask-writes-no-clearance
+  ;; A design owing nobody is cleared by its proceeding decision's append, which would answer the
+  ;; carried question for nobody.
+  (let [cleared (atom 0)]
+    (with-redefs [ws/append-entry! (fn [& _] "/l/7.edn")
+                  ws/seq-of-path (constantly 7)
+                  record/clear-if-owed-nobody! (fn [& _] (swap! cleared inc) nil)]
+      (record/append! [:nido "ws-1"] {:format :design-decision :recommend :proceed :design-seq 4
+                                      :checks [(check :goal-served :held)] :asks "a"
+                                      :unpaired-recommend {:was :ask :seq 3 :asks "a"}})
+      (is (zero? @cleared) "the person's question stands until a person answers it")
+      (record/append! [:nido "ws-1"] {:format :design-decision :recommend :proceed :design-seq 4
+                                      :checks [(check :goal-served :held)]})
+      (is (= 1 @cleared) "a proceed carrying no standing ask still clears"))))
+
+;; Watched (ws-20261012-8c5fb7): the first reading of an amendment asked over four claims it filed
+;; for the person, the second held those four :owed and proceeded, and their being read once bought
+;; a third round that re-asked the same question — no reading of them could change that the run
+;; stopped for the person.
+(deftest a-claim-the-standing-ask-is-about-is-not-read-once
+  (let [appended (atom [])
+        amended  [{:iter 1 :amended? true}]
+        ask      (assoc (decision :ask :checks [(check :goal-served :broken)]
+                                  :findings [{:cites ["c"] :claim "is the cutoff the person's to set?"
+                                              :check :goal-served :claim-id "rounded-once"
+                                              :for-person true}])
+                        :asks "which cutoff does the person want?")
+        proceed  (-> (decision :proceed :checks [(check :goal-served :held)])
+                     (dissoc :asks)
+                     (assoc :owed ["rounded-once"]))
+        answers  (atom [ask proceed])]
+    (judging-a-model-design
+     ask appended
+     (fn []
+       (with-redefs [record/design-decision! (fn [opts] (let [a (first @answers)] (swap! answers rest) (named-by a opts)))
+                     record/append! (fn [_ r] {:seq (count (swap! appended conj r))})]
+         (let [r1 (run record/design-judge-stage (ctx :iter 2 :history amended))
+               r2 (run record/design-judge-stage (ctx :iter 3 :history amended :carry (:carry r1)))]
+           (is (= :next-round (:control r1)) "an amendment's first reading is read again")
+           (is (nil? (:read-once (second @appended)))
+               "the person's answer settles a claim they are asked about; another judge cannot")
+           (is (= :proceed (:status r2)) "so this reading ends the run, at the person")
+           (is (= (:asks ask) (:asks (second @appended))) "holding the question it was asked")))))))
+
 ;; Watched: a 'carries no X' claim, X not yet built, alternated holds and owed for two rounds — both
 ;; meaning sound — while pairing read them as disagreement. From two judges they pair; the flip is
 ;; still kept, so the later ruling does not overwrite the earlier one unseen.

@@ -3750,7 +3750,8 @@
 
    A decision that proceeds (`report/proceeds?`) may also CLEAR the design, and
    that happens here rather than in either loop so that no round can append a
-   decision and forget the clearance it implies.
+   decision and forget the clearance it implies — unless it proceeds over an ask the reading
+   before it made (:unpaired-recommend), whose question a clearance would answer for nobody.
 
    Returns `{:seq n}`, the :seq the ledger gave the record — the only answer to which entry this
    round wrote, since the newest entry once the lock is released may be another writer's — plus
@@ -3765,6 +3766,7 @@
           (cond-> {:seq n}
             (and (= :design-decision (:format record))
                  (report/proceeds? record)
+                 (not (:unpaired-recommend record))
                  (= :contended (clear-if-owed-nobody! project ws-id (:design-seq record))))
             (assoc :contended true)))))
     (catch Exception _ nil)))
@@ -3815,7 +3817,9 @@
 
      :cleared              a clearance names the design, or the grant it carried was written
                            (`grant-carried!`)
-     :proceed              a person is owed the grant — the round's ask
+     :proceed              a person is owed the grant — the round's ask — or the question of an
+                           :ask the reading before made, which this one carries
+                           (:unpaired-recommend)
      :clearance-contended  it owes nobody and the clearance is still unwritten
      standing's reason     it owes nobody, but no longer stands
 
@@ -3830,6 +3834,7 @@
     (cond
       (cleared? ledger n)                               :cleared
       (:contended answer)                               :clearance-contended
+      (:unpaired-recommend record)                      :proceed
       (nil? design)                                     :proceed
       (report/owes-a-person? design)                    (if (grant-carried! project ws-id design (:seq answer))
                                                           :cleared
@@ -3849,8 +3854,10 @@
    one thing left open is the write. Its subject is the design the latest
    proceeding decision names, and only while that is the newest design — a
    design appended since has had no round, and clearing it would clear work
-   nobody judged. Anything else answers :nothing-to-clear: the ledger moved on
-   after the stage was fired, and the next reading of it says where."
+   nobody judged — and that decision carries no ask the reading before it made
+   (:unpaired-recommend), which is a person's to answer. Anything else answers
+   :nothing-to-clear: the ledger moved on after the stage was fired, and the next
+   reading of it says where."
   [cwd]
   (if-let [[project ws-id :as ledger] (stages/project+ws-from-cwd cwd)]
     (let [design   (ws/latest-entry project ws-id :design)
@@ -3860,6 +3867,7 @@
       (cond
         (or (nil? design)
             (not (report/proceeds? decision))
+            (:unpaired-recommend decision)
             (report/owes-a-person? design)) :nothing-to-clear
         (cleared? ledger (:seq design))     :cleared
         :else (proceeding-status ledger decision
@@ -5843,6 +5851,15 @@
   (let [q (get-in ctx [:carry :quiet])]
     (when (= (:seq subject) (:seq q)) (:read q))))
 
+(defn- carried-ask
+  "The :ask an earlier quiet round of this run made of `subject`, the same record, as
+   `{:seq :asks :about}` — the entry, its question, and the ids it filed :for-person — or nil. A
+   second reading pairs per claim, so without this its recommendation replaces the ask's with
+   nothing to show the person was owed a question."
+  [ctx subject]
+  (let [q (get-in ctx [:carry :quiet])]
+    (when (= (:seq subject) (:seq q)) (:ask q))))
+
 (defn- reading-judge
   "Who reads this round: `reviewer`, the run's own, on a run's first judgement, and after that the
    reviewer that did not answer the judgement before it (`codex/other-reviewer` of the carried
@@ -5944,8 +5961,15 @@
    this reading ruled false that the run last ruled held in the same words (`held`, `held-clauses`
    of the run's earlier judgements), naming the entry that held it. A subject is confirmed only
    when every clause held, so a held clause beside a false one confirms nothing by id, and without
-   this its holding is overtaken in silence."
-  [record holds? {:keys [standing single settled carried prior asked unread-amendment? held]}]
+   this its holding is overtaken in silence.
+
+   `ask` is the standing ask the reading before made of this record (`carried-ask`). A reading
+   that recommends anything else is kept with :unpaired-recommend `{:was :ask :seq :asks}`, and
+   carries the ask's question in its own :asks — the claims agreeing does not answer it, and a
+   judge never shown the question cannot have. And an id the ask filed :for-person is never
+   :read-once: the person's answer settles it, and no further reading can change that the run
+   stops for them."
+  [record holds? {:keys [standing single settled carried prior asked unread-amendment? held ask]}]
   (if-not (:format record)
     record
     (let [ruled     (rulings record)
@@ -5982,15 +6006,22 @@
           firsts    (vec (sort (filter (set asked)
                                        (concat (remove seconds (keys ruled))
                                                (filter unchecked (keys before))))))
-          once      (when holds firsts)
+          once      (when holds (vec (remove (set (:about ask)) firsts)))
           overturns (vec (for [[id {:keys [ws-id restated?] n :seq}] (sort-by key prior)
                                :when (ruled id)]
                            {:id id :seq n :ws-id ws-id :restated? (boolean restated?)}))
           withdrawn (vec (for [[k {:keys [ruling text]}] (sort-by key (:clause-readings record))
                                :let  [n (get held [k text])]
                                :when (and n (= :false ruling))]
-                           {:clause k :seq n}))]
+                           {:clause k :seq n}))
+          was-ask   (when (and ask (not= :ask (:recommend record)))
+                      (cond-> {:was :ask :asks (:asks ask)} (:seq ask) (assoc :seq (:seq ask))))
+          own-asks  (str/trim (str (:asks record)))]
       (cond-> record
+        was-ask                          (assoc :unpaired-recommend was-ask
+                                                :asks (if (or (str/blank? own-asks) (= own-asks (:asks ask)))
+                                                        (:asks ask)
+                                                        (str own-asks "\n\n" (:asks ask))))
         (seq once)                       (assoc :read-once once)
         (seq firsts)                     (assoc :first-reading firsts)
         (and holds unread-amendment?)    (assoc :amendment-read-once true)
@@ -6069,8 +6100,11 @@
    The round goes into :history as `:quiet`, at its :iter: what the person reads of the run
    (`trajectory`) would otherwise skip it, and a proceed a second reading overturned would vanish
    from the account of how the decision was arrived at. Nothing that counts attempts or stalls
-   reads a quiet entry (`raised-since`, `record-round-veto`, the engine's `unfixable`)."
-  [ctx subject record]
+   reads a quiet entry (`raised-since`, `record-round-veto`, the engine's `unfixable`).
+
+   An :ask is carried too, with `at`, the entry it was appended as (`carried-ask`) — and kept
+   through a later quiet round of the same record that did not ask, since nothing has answered it."
+  [ctx subject record & [at]]
   (-> ctx
       (update :history (fnil conj [])
               (cond-> {:iter (:iter ctx) :findings [] :retreats [] :disputes [] :quiet true}
@@ -6081,12 +6115,20 @@
                              (seq (:read-once record))      (assoc :read-once (vec (:read-once record)))
                              (:amendment-read-once record)  (assoc :amendment true)))
       (assoc-in [:carry :quiet]
-                {:seq       (:seq subject)
-                 :iter      (:iter ctx)
-                 :read      (merge (apply dissoc (carried-readings ctx subject)
-                                          (map :id (:unchecked record)))
-                                   (into {} (map (fn [[id r]] [id {:ruling r :judged-by (:judged-by record)}]))
-                                         (rulings record)))})))
+                (let [ask (if (= :ask (:recommend record))
+                            (cond-> {:asks  (:asks record)
+                                     :about (into [] (comp (filter :for-person) (keep :claim-id)
+                                                           (map str) (distinct))
+                                                  (:findings record))}
+                              at (assoc :seq at))
+                            (carried-ask ctx subject))]
+                  (cond-> {:seq       (:seq subject)
+                           :iter      (:iter ctx)
+                           :read      (merge (apply dissoc (carried-readings ctx subject)
+                                                    (map :id (:unchecked record)))
+                                             (into {} (map (fn [[id r]] [id {:ruling r :judged-by (:judged-by record)}]))
+                                                   (rulings record)))}
+                    ask (assoc :ask ask))))))
 
 (defn- ledger-lost
   "The outcome a round answers in place of a judgement when its run's ledger resolved to nothing
@@ -7565,6 +7607,7 @@
                        (with-readings #(or (report/proceeds? %) (asks-only? %))
                                       {:standing standing :single single :settled settled :prior prior
                                        :carried (carried-readings ctx design)
+                                       :ask (carried-ask ctx design)
                                        :held (run-held-clauses project ws-id :design-decision run-id)
                                        :asked asked
                                        :unread-amendment? (unread-amendment? ctx)})))
@@ -7631,7 +7674,7 @@
       (let [answer (put! ledger record)]
         (with-appended (second-reading (assoc ctx :record record :findings []
                                               :underivable (underivable-checks record))
-                                       design record)
+                                       design record (:seq answer))
                        answer))
 
       ;; The judge's own recommendation, or — whatever it recommended — a round

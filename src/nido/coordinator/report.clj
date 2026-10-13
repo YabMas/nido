@@ -2964,6 +2964,15 @@
                 ;; entry of the chain, so every re-ask of one question names the same seq and the
                 ;; ledger reads one open question rather than a count of rounds.
                 [:reasks                {:optional true} int?]
+                ;; The :ask the reading before this one made of the same record, when this one
+                ;; recommends otherwise: which entry, and its question — carried in :asks too, so
+                ;; the recommendation that stops the run still shows what the person is owed. The
+                ;; two readings agreeing claim by claim does not answer it.
+                [:unpaired-recommend    {:optional true}
+                 [:map {:closed true}
+                  [:was  [:= :ask]]
+                  [:seq  {:optional true} int?]
+                  [:asks [:re #"\S"]]]]
                 ;; As on a baseline review.
                 [:judged-by          {:optional true} JudgedBy]
                 [:tree               {:optional true} JudgedTree]]
