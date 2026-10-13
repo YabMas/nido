@@ -100,6 +100,13 @@
       (is (some #(= ["claude" "rm" "074ff0e1"] (first %)) @calls)
           "nothing is left running beside the session"))))
 
+(deftest wake-runs-in-the-session-s-own-directory
+  (let [calls (atom [])]
+    (stubbing [#'sub/claude! (fake-claude calls {"--resume" {:exit 0 :out "backgrounded · a56cda8b\n"}})]
+      (sub/wake! "a56cda8b-3390" "go" {:cwd "/wt"}))
+    (is (= {:dir "/wt"} (second (first @calls)))
+        "where Claude Code finds the conversation and the directory's settings")))
+
 (deftest trust-is-read-for-exactly-the-directory
   (let [dir (fs/create-temp-dir)
         cfg (fs/path dir "claude.json")
@@ -146,9 +153,26 @@
                                                  {"--bg"   {:exit 0 :out "backgrounded · a56cda8b\n"}
                                                   "agents" {:exit 0 :out "[]"}}))
                #'sub/pause! (constantly nil)]
-      (is (= {:reason :session-unlisted :bg-id "a56cda8b"}
+      (is (= {:reason :session-unlisted :bg-id "a56cda8b" :left-running "a56cda8b"}
              (ex-data (try (sub/dispatch! {:cwd "/wt" :prompt "p"}) (catch Exception e e))))
-          "the short id is never answered as the session id"))))
+          "the short id is never answered as the session id")))
+  (testing "a listing that cannot be read after the launch"
+    (stubbing [#'sub/claude! (fake-claude (atom [])
+                                          (merge new-enough
+                                                 {"--bg"   {:exit 0 :out "backgrounded · a56cda8b\n"}
+                                                  "agents" {:exit 1 :out "" :err "boom"}}))
+               #'sub/pause! (constantly nil)]
+      (is (= "a56cda8b" (:left-running (ex-data (try (sub/dispatch! {:cwd "/wt" :prompt "p"}) (catch Exception e e)))))
+          "every failure after a launch names what it left running"))))
+
+(deftest a-refused-stop-or-restart-throws
+  (stubbing [#'sub/claude! (fake-claude (atom []) {"stop" {:exit 1 :out "" :err "no"}
+                                                   "respawn" {:exit 1 :out "" :err "no"}})]
+    (is (= :stop-refused (:reason (ex-data (try (sub/stop! "b" {}) (catch Exception e e))))))
+    (is (= :respawn-refused (:reason (ex-data (try (sub/respawn! "b" {}) (catch Exception e e)))))))
+  (stubbing [#'sub/claude! (fake-claude (atom []) {})]
+    (is (true? (sub/stop! "b" {})))
+    (is (true? (sub/respawn! "b" {})))))
 
 (deftest wake-surfaces-a-copy-it-could-not-remove
   (stubbing [#'sub/claude! (fake-claude (atom []) {"--resume" {:exit 0 :out "note: session a56cda8b is already running in the background, so this started a copy as 074ff0e1.\n"}
@@ -156,4 +180,10 @@
     (let [data (ex-data (try (sub/wake! "a56cda8b-3390" "go" {}) (catch Exception e e)))]
       (is (= :copy-cleanup-failed (:reason data)))
       (is (= "074ff0e1" (:copy data)))
-      (is (= #{:rm} (set (keys (:failed data))))))))
+      (is (nil? (:left-running data)) "stopped, so not left running — only its removal failed")
+      (is (= #{:rm} (set (keys (:failed data)))))))
+  (stubbing [#'sub/claude! (fake-claude (atom []) {"--resume" {:exit 0 :out "note: session a56cda8b is already running in the background, so this started a copy as 074ff0e1.\n"}
+                                                   "stop"     {:exit 1 :out "" :err "no"}})]
+    (let [data (ex-data (try (sub/wake! "a56cda8b-3390" "go" {}) (catch Exception e e)))]
+      (is (= "074ff0e1" (:left-running data)) "its stop unconfirmed, it is named as left running")
+      (is (= #{:stop} (set (keys (:failed data))))))))

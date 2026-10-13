@@ -65,6 +65,10 @@
    [:driving-since [:maybe string?]]
    ;; The current entry into blocked has been announced; cleared when the session leaves it.
    [:announced-blocked? boolean?]
+   ;; What nido has seen of the session idle since it last began driving it or gave it anything:
+   ;; nil, :stopped by a recorded Stop, or :listed done by the listing since that Stop. Only a
+   ;; turn after such an idle can be one nido did not give.
+   [:idle-seen {:optional true} [:maybe [:enum :stopped :listed]]]
    ;; The host boot recover! last restarted this session in, so it restarts it at most once.
    [:recovered-boot [:maybe string?]]])
 
