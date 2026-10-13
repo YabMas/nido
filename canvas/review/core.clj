@@ -388,10 +388,17 @@
     {:signature [:=> [:catn [:b :map]] [:set :string]]})
   (Operation design-retreats
     "What a superseding design no longer claims, including a claim, element or shape kept by id
-     that commits to less in place. `:findings` are the decision round's: a retreat at an id one
-     named, or on a field a broken check judges, is marked as asked for."
+     that commits to less in place, and an id taken off its baseline citation's :breaks. `:findings`
+     are the decision round's: a retreat at an id one named, or on a field a broken check judges, is
+     marked as asked for."
     {:signature [:=> [:catn [:prev :map] [:curr :map]
                             [:findings [:? [:maybe [:sequential :map]]]]] :any]})
+  (Operation widened-spent
+    "The spent claims — offered weakening, splitting or withdrawal — that a superseding baseline or
+     design states more broadly instead: none of what was offered, and no retreat."
+    {:signature [:=> [:catn [:kind [:enum :baseline :design]] [:prev :map] [:curr :map]
+                            [:ids [:maybe [:sequential :string]]]]
+                 [:vector :map]]})
   (Operation growth "The prose fields, claims and elements that grew past checking since the record as authored."
     {:signature [:=> [:catn [:as-authored :map] [:curr :map]] :any]})
   (Operation growth-summary "The growth, in a line."

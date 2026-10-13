@@ -6440,7 +6440,8 @@
               raw      (when (fs/exists? out-path)
                          (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
               answer   (parse-amend-answer raw (:findings ctx) baseline-finding-base-key)
-              ctx      (cond-> (assoc ctx :stale (vec (sort (:stale answer))) :amend-launch launch
+              ctx      (cond-> (assoc (dissoc ctx :widened-spent)
+                                :stale (vec (sort (:stale answer))) :amend-launch launch
                                 :stale-because (:stale-because answer) :swept (:swept answer))
                          (amend-tree trespass out-path answer)
                          (assoc :amend-tree (amend-tree trespass out-path answer))
@@ -6535,6 +6536,9 @@
                           stamped  (appended project ws-id (:path written) record)
                           ctx' (assoc ctx
                                       :retreats retreats
+                                      :widened-spent (retreat/widened-spent
+                                                      :baseline prev record
+                                                      (keys (withdrawable prev (:findings ctx) (:refuted-running ctx))))
                                       :disputes disputes
                                       :amend-refusals (:refusals written)
                                       :amend-delta (subject-delta prev record)
@@ -8118,7 +8122,8 @@
           raw      (when (fs/exists? out-path)
                      (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
           answer   (parse-amend-answer raw (:findings ctx) design-finding-base-key)
-          ctx      (cond-> (assoc ctx :stale (vec (sort (:stale answer))) :amend-launch launch
+          ctx      (cond-> (assoc (dissoc ctx :widened-spent)
+                                :stale (vec (sort (:stale answer))) :amend-launch launch
                                 :stale-because (:stale-because answer) :swept (:swept answer)
                                 :standing-ask (:standing-ask answer))
                      (amend-tree trespass out-path answer)
@@ -8204,6 +8209,9 @@
                       (-> (assoc ctx
                                  :amended? true
                                  :retreats retreats
+                                 :widened-spent (retreat/widened-spent
+                                                 :design prev record
+                                                 (keys (design-spent (:findings ctx) (:refuted-running ctx))))
                                  :disputes disputes
                                  :amend-refusals (:refusals written)
                                  :amend-delta (subject-delta prev record)

@@ -114,10 +114,46 @@
 (def ^:private disjunct-re
   #"(?i)\bor\b")
 
+(def ^:private scope-re
+  "A condition a commitment is restricted by — `a read whose scope holds no summaries`. Not after
+   `only`, which `exception-re` already counts."
+  #"(?i)(?<!only )\b(?:whose|when|whenever|wherever|while|if|once|provided|as long as|so long as|in which|for which|under which)\b")
+
+(def ^:private absolute-re
+  #"(?i)\b(?:every|all|always|exactly|each|never|none|nothing|any|whatever|whichever)\b")
+
 (defn- clauses
   "`s` cut at sentence and semicolon boundaries — the commitments a statement makes one by one."
   [s]
   (into [] (comp (map str/trim) (remove str/blank?)) (str/split (str s) #"(?<=[.!?;])\s+")))
+
+(defn- items
+  "`s` cut at every list boundary — punctuation and `or` — lowercased: the counterexamples a
+   falsifier lists, one by one, whichever way the list is joined."
+  [s]
+  (into [] (comp (map (comp str/lower-case str/trim)) (remove str/blank?))
+        (str/split (str s) #"(?i)[,;.!?]|\bor\b")))
+
+(defn- opens-with?
+  [re s]
+  (.lookingAt (re-matcher re s)))
+
+(defn- qualifying
+  "The part of falsifier `after` a qualifier in it can narrow what `before` listed.
+
+   A falsifier's polarity is the statement's inverted: what it lists are counterexamples, so one it
+   gains makes the claim stronger. When every item of `before` is still listed, each new item is a
+   new counterexample, and an exception or a scope inside it qualifies that counterexample alone —
+   `…, or a stored node field other than blob` refutes MORE than before. Such an item is left out.
+   An item that OPENS with a qualifier (`…, unless the lease lapsed`) is a condition on the list,
+   and stays. Where an item of `before` was reworded or dropped, all of `after`."
+  [before after]
+  (let [was (set (items before))
+        now (items after)]
+    (if (every? (set now) was)
+      (str/join ", " (filter #(or (was %) (some (fn [re] (opens-with? re %)) [exception-re scope-re hedge-re]))
+                             now))
+      after)))
 
 (defn- words
   [s]
@@ -125,8 +161,9 @@
 
 (defn- relocated?
   "Whether every clause of `before` that `after` no longer states is in `parked` — the record's
-   :unknowns or :open — by most of its words. A commitment moved into what the record declares it
-   does not know is declared, not dropped; the amender usually rewords it on the way."
+   :unknowns or :open, or the claims `after` newly cites — by most of its words. A commitment moved
+   into what the record declares it does not know is declared, not dropped, and one moved into a
+   claim cited by id is still made; the amender usually rewords it on the way."
   [before after parked]
   (let [now  (str/lower-case (str after))
         gone (remove #(str/includes? now (str/lower-case %)) (clauses before))
@@ -138,46 +175,69 @@
                   gone)))))
 
 (defn- narrowing
-  "How `after` commits to less than `before`, as the signals that say so, or nil.
+  "How `after` commits to less than `before` as `field`, as the signals that say so, or nil.
 
    Read off the text because a claim's identity is its id and nothing else about it survives an
-   amender: the wording changes whether the claim was corrected or quietly given up. Four signals,
+   amender: the wording changes whether the claim was corrected or quietly given up. Six signals,
    each one a way the counterexample set shrinks without the claim going away — a disjunct lost
    (`a read or a write` → `a write`), an exception added (`… other than after a lease lapsed`), a
-   clause lost, a hedge added (`applies` → `can apply`). A rewording that moves none of them is not
+   clause lost, a hedge added (`applies` → `can apply`), a scope condition put on an absolute
+   commitment (`gets exactly today's answers` → `a read whose scope holds none answers exactly as
+   today`), an absolute quantifier lost (`every` → `a`). On :falsified-by a qualifier counts only
+   where it can narrow the list (`qualifying`). A rewording that moves none of them is not
    reported, and a narrowing worded so it moves none of them is missed: this measures, it does
    not read."
-  [before after]
+  [field before after]
   (let [before (str before) after (str after)
-        n      (fn [re s] (count (re-seq re s)))]
+        n      (fn [re s] (count (re-seq re s)))
+        q      (if (= :falsified-by field) (qualifying before after) after)]
     (when (and (not (str/blank? before)) (not (str/blank? after)) (not= before after))
       (not-empty
        (cond-> []
          (< (n disjunct-re after) (n disjunct-re before))    (conj :disjunct-lost)
-         (> (n exception-re after) (n exception-re before))  (conj :exception-added)
+         (> (n exception-re q) (n exception-re before))      (conj :exception-added)
          (< (count (clauses after)) (count (clauses before))) (conj :clause-lost)
-         (> (n hedge-re after) (n hedge-re before))          (conj :hedged))))))
+         (> (n hedge-re q) (n hedge-re before))              (conj :hedged)
+         (and (pos? (n absolute-re before))
+              (> (n scope-re q) (n scope-re before)))        (conj :scope-restricted)
+         (< (n absolute-re after) (n absolute-re before))    (conj :quantifier-lost))))))
 
 (def ^:private signal-words
   {:disjunct-lost "lost a disjunct" :exception-added "gained an exception"
-   :clause-lost "lost a clause" :hedged "was hedged"})
+   :clause-lost "lost a clause" :hedged "was hedged"
+   :scope-restricted "was restricted in scope" :quantifier-lost "lost an absolute quantifier"})
 
 (defn- clip
   [s]
   (let [s (str/replace (str s) #"\s+" " ")]
     (if (> (count s) 140) (str (subs s 0 140) "…") s)))
 
+(defn- cites?
+  [s id]
+  (boolean (re-find (re-pattern (str "(?i)(?<![\\w-])" (java.util.regex.Pattern/quote id) "(?![\\w-])")) (str s))))
+
 (defn- narrowings
   "One `:narrowed` per field of a subject both records hold, by id, that commits to less (`narrowing`)
    — `subjects` reads `[[label id field text] ...]` off a record, `parked` the text it declares
    unknown, `asked` what the round asked for (`asks`). A narrowing whose only loss is clauses that
-   reappear in `parked` is `:relocated`; one the round asked for is `:ordered` (`answered`)."
+   reappear in `parked` is `:relocated`; one the round asked for is `:ordered` (`answered`).
+
+   One whose only losses are clauses and disjuncts that reappear in subjects of `curr` it newly
+   cites by id (`… (see one-covering-rule)`) is not reported at all: the record still makes the
+   commitment, under the id it now points at, and is judged there."
   [subjects prev curr parked asked]
-  (let [now (into {} (map (fn [[label id field text]] [[label id field] text])) (subjects curr))]
+  (let [now   (into {} (map (fn [[label id field text]] [[label id field] text])) (subjects curr))
+        texts (reduce (fn [m [_ id _ text]] (cond-> m id (update id str " " text))) {} (subjects curr))
+        moved (fn [id before after]
+                (str/join " " (for [[cid t] texts
+                                    :when (and (not= cid id) (cites? after cid) (not (cites? before cid)))]
+                                t)))]
     (for [[label id field before] (subjects prev)
           :let [after   (get now [label id field])
-                signals (narrowing before after)]
-          :when signals]
+                signals (narrowing field before after)]
+          :when (and signals
+                     (not (and (every? #{:disjunct-lost :clause-lost} signals)
+                               (relocated? before after (moved id before after)))))]
       (cond-> (answered {:what    :narrowed
                          :detail  (str label (when id (str " " id "'s")) " " (name field) " "
                                        (str/join ", " (map signal-words signals))
@@ -671,6 +731,19 @@
                                       (when-not (str/blank? (str why)) (str " — " why))))
                   ref (assoc :ref ref)
                   (not (str/blank? (str why))) (assoc :why why))))
+       ;; :breaks lists what the design stops being true. An id leaving it is the design newly
+       ;; claiming that property holds, which quiets relation-honest exactly as softening the
+       ;; relation does — and the judge re-rules it only because its membership moved. Under a
+       ;; softened relation the softening is that retreat, and each id it emptied would repeat it.
+       (let [listed #(map (fn [b] (str/replace (str/trim (str b)) #"[\[\]]" "")) (get-in % [:baseline :breaks]))
+             soft?  (rank-drop :softened baseline-order
+                               (get-in prev [:baseline :relation]) (get-in curr [:baseline :relation]))]
+         (for [id (sort (remove (set (listed curr)) (distinct (listed prev))))
+               :when (not soft?)]
+           (assoc (answered (retreat :breaks-dropped
+                                     (str id " is no longer under :baseline :breaks; the design now claims it holds"))
+                            asked id :breaks-dropped)
+                  :id id)))
        (narrowings design-subjects prev curr (str/join " " (:open curr)) asked)
        ;; Same hole the baseline had: these are typed `string?`, so a record whose
        ;; shape and summary say nothing at all is a record the ledger accepts and
@@ -741,6 +814,46 @@
                      (format "  ↑ %s%s — %d characters at the start, %d now (×%.1f)"
                              (if id (str id "'s ") "") (name field) from to (/ (double to) from)))
                    growth))))
+
+(def ^:private widenings
+  "Each `narrowing` signal read backwards, as what it says of the later text, and its words."
+  {:disjunct-lost    [:disjunct-gained "gained a disjunct"]
+   :exception-added  [:exception-lost "lost an exception"]
+   :clause-lost      [:clause-gained "gained a clause"]
+   :hedged           [:hedge-lost "lost a hedge"]
+   :scope-restricted [:scope-lost "lost a scope condition"]
+   :quantifier-lost  [:quantifier-gained "gained an absolute quantifier"]})
+
+(defn ^{:malli/schema [:=> [:cat [:enum :baseline :design] :map :map [:maybe [:sequential :string]]]
+                      [:vector :map]]}
+  widened-spent
+  "The claims of `ids` that `curr` states more broadly than `prev` does, one `{:id :field :signals
+   :detail}` per field: `narrowing` read backwards, with `:signals` naming what `curr` gained
+   (`widenings`).
+
+   `ids` are the spent claims, the ones its amender was offered weakening, splitting or withdrawal
+   for because a rewording at the same strength had already been refuted twice. A broader claim is
+   none of those three, and nothing else reports it: it is no retreat, and the amender may well
+   call it a weakening. `kind` is :baseline or :design."
+  [kind prev curr ids]
+  (let [subjects (case kind :baseline (comp survey-subjects as-survey) :design design-subjects)
+        claims   (fn [r] (into {} (keep (fn [[label id field text]]
+                                          (when (= "claim" label) [[id field] text])))
+                               (subjects r)))
+        now      (claims curr)
+        ids      (set ids)]
+    (vec
+     (for [[[id field :as k] before] (sort-by key (claims prev))
+           :when (ids id)
+           :let [after   (get now k)
+                 signals (map widenings (narrowing field after before))]
+           :when (seq signals)]
+       {:id      id
+        :field   field
+        :signals (mapv first signals)
+        :detail  (str "spent claim " id "'s " (name field) " "
+                      (str/join ", " (map second signals))
+                      ": \"" (clip before) "\" → \"" (clip after) "\"")}))))
 
 ;; ── Reporting ───────────────────────────────────────────────────────────────
 

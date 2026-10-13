@@ -514,11 +514,13 @@
   (let [n (count (:retreats ph))
         u (count (retreat/unasked (:retreats ph)))
         d (count (:disputes ph))
+        w (count (distinct (map :id (:widened-spent ph))))
         parts (cond-> []
                 (:resurveyed ph) (conj (str "re-surveyed " (:resurveyed ph)))
                 (:amended? ph)   (conj "amended")
                 (pos? n)         (conj (str n " weakening" (when (not= 1 n) "s")
                                             (when (< u n) (str " (" u " unasked)"))))
+                (pos? w)         (conj (str w " spent claim" (when (not= 1 w) "s") " widened"))
                 (pos? d)         (conj (str d " objection" (when (not= 1 d) "s")))
                 (:unappended ph) (conj (str "refused by the ledger, not appended: " (:unappended ph)))
                 (get-in ph [:launch :failed]) (conj (str "amender " (get-in ph [:launch :failed]))))]

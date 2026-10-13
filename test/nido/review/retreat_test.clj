@@ -1,6 +1,7 @@
 ;; test/nido/review/retreat_test.clj
 (ns nido.review.retreat-test
   (:require
+   [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.review.retreat :as retreat]))
 
@@ -579,6 +580,94 @@
     (is (= "k1" (:id r)))
     (is (:ordered r))
     (is (= ["say which writes"] (:answering r)))))
+
+;; ── Polarity, scope and moved commitments ────────────────────────────────────
+
+(deftest a-counterexample-added-to-a-falsifier-is-no-narrowing
+  ;; Seen live twice (design-loop-f2435022, baseline-loop-4a3055b1): a falsifier gained a
+  ;; counterexample — a stronger claim — and was reported a weakening, because 'other than' inside
+  ;; the new counterexample read as an exception to the old ones.
+  (doseq [[id before after]
+          [["summaries-match-their-tree"
+            "A set whose node summary was produced from a tree with different ordinals, titles or passages than the set's own."
+            "A set whose node summary was produced from a tree with different ordinals, titles or passages than the set's own, or a build or summary job that composes a parse, facts and a chunker into a tree other than through document-tree."]
+           ["kb-two-node-kinds"
+            "a node kind other than section or passage, a section titled by anything other than the heading or slide title that opened it, a passage whose blocks belong to two sections, or a section whose descendants are not a contiguous ordinal run"
+            "a node kind other than section or passage, a section titled by anything other than the heading or slide title that opened it, a passage whose blocks belong to two sections, a section whose descendants are not a contiguous ordinal run, or a stored node field other than blob, recipe, ordinal, parent, kind, title, level, page range and blocks"]]]
+    (let [prev (assoc-in model-design [:model :claims 0] {:id id :about ["canvas.x/store"] :evidence {:by :round}
+                                                          :statement "s" :falsified-by before})
+          curr (assoc-in prev [:model :claims 0 :falsified-by] after)]
+      (is (= [] (retreat/design-retreats prev curr))
+          (str id ": every old counterexample still refutes it, and one more does")))))
+
+(deftest a-condition-on-a-falsifiers-whole-list-is-still-a-narrowing
+  (let [curr (assoc-in model-design [:model :claims 0 :falsified-by]
+                       "two analyses of one blob in flight at once, unless the first job's lease lapsed")]
+    (is (= [[:exception-added]] (map :signals (narrowed (retreat/design-retreats model-design curr))))
+        "an appended item that opens with the exception qualifies every counterexample, not itself")))
+
+(deftest a-scope-put-on-an-absolute-commitment-is-a-narrowing
+  ;; Seen live (design-loop-f2435022 round 4): 'gets exactly today's tool answers' became 'a search,
+  ;; outline or read whose scope holds no summaries answers exactly as today', and no signal moved.
+  (let [before "A degraded tree built under the current recipe is summarised like any other. Content without summaries — served from a set of an earlier recipe (a legacy set among them), a build before its summaries exist, a failed summary job — gets exactly today's tool answers and no overview, and no chat turn waits on a summary."
+        after  "A degraded tree built under the current recipe is summarised like any other. Content without summaries — served from a set of an earlier recipe (a legacy set among them), a build before its summaries exist, a failed summary job — has its nodes presented as today, with no summary and no place in the overview, and no chat turn waits on a summary. A search, outline or read whose scope holds no summaries answers exactly as today; a semantic search whose scope also spans content with summaries ranks this content's passages against those summary rows (collapsed-semantic-search)."
+        prev   (assoc-in model-design [:model :claims 0 :statement] before)
+        curr   (assoc-in model-design [:model :claims 0 :statement] after)]
+    (is (= [[:scope-restricted]] (map :signals (narrowed (retreat/design-retreats prev curr)))))))
+
+(deftest an-absolute-quantifier-lost-is-a-narrowing
+  (let [curr (assoc-in model-design [:model :claims 1 :statement] "page furniture rarely reaches a passage")
+        prev (assoc-in model-design [:model :claims 1 :statement] "no page furniture ever reaches any passage")]
+    (is (= [[:quantifier-lost]] (map :signals (narrowed (retreat/design-retreats prev curr)))))))
+
+(deftest a-commitment-moved-into-a-claim-it-now-cites-is-not-lost
+  ;; Seen live (design-loop-347d19cc): the shape replaced the scoring rule it restated with '(see
+  ;; one-covering-rule)', and was reported as losing a disjunct and a clause it still makes there.
+  (let [kept   "Resolution turns each region into a word extent in page text."
+        rule   "A cell is covered when the delivered text covers at least the coverage threshold of its words, or when the agent was delivered a proxy for a unit whose pages contain the cell."
+        cited  {:id "one-covering-rule" :about ["canvas.x/store"] :evidence {:by :round}
+                :statement "Every region is scored by one rule. A cell is covered when the verbatim text delivered covers at least the coverage threshold of its words, or when a delivered proxy's pages contain all of it."
+                :falsified-by "a met-ness that depends on anything but the deliveries"}
+        prev   (-> model-design (assoc :shape (str kept " " rule)) (update-in [:model :claims] conj cited))
+        moved  (assoc prev :shape (str kept " Scoring has one rule (see one-covering-rule)."))
+        cut    (assoc prev :shape (str kept " Scoring has one rule."))]
+    (is (= [] (narrowed (retreat/design-retreats prev moved)))
+        "the record still makes the commitment, under the id the shape now points at")
+    (is (seq (narrowed (retreat/design-retreats prev cut)))
+        "the same cut with no citation is a loss")))
+
+(deftest an-id-taken-off-breaks-is-a-retreat
+  ;; Seen live (design-loop-cb1a5ed5 round 3): s-facts left :breaks while the design restated it to
+  ;; include the selection that breaks it; nothing counted it, and the next round re-found it.
+  (let [prev (assoc model-design :baseline {:seq 1 :relation :revisit :breaks ["content-keyed" "s-facts"]})
+        curr (assoc-in prev [:baseline :breaks] ["content-keyed" "fact-producers"])
+        rs   (retreat/design-retreats prev curr)]
+    (is (= [[:breaks-dropped "s-facts"]] (map (juxt :what :id) rs))
+        "the design newly claims s-facts holds, which quiets relation-honest as softening would")
+    (is (= [] (retreat/design-retreats curr (update-in curr [:baseline :breaks] conj "s-facts")))
+        "adding to :breaks claims more")
+    (is (:ordered (first (retreat/design-retreats prev curr [{:claim-id "s-facts" :check :relation-honest
+                                                              :claim "s-facts holds"}])))
+        "a removal the judge ruled for is the repair it asked")))
+
+(deftest a-spent-claim-stated-more-broadly-is-widened
+  ;; Seen live (baseline-loop-1bb66448 round 4): a claim refuted twice was offered weakening,
+  ;; splitting or withdrawal; the amender said it weakened it, widened it instead, and round 5
+  ;; refuted exactly the clause it added.
+  (let [before "The no-text verdict is an ex-info {:type ::document-intelligence/no-extractable-text :page-count n}, declared to be produced by throw-no-extractable-text!; at extraction it is raised only when a non-empty page vector is all blank."
+        after  "The no-text verdict is an ex-info whose :type is ::document-intelligence/no-extractable-text. Extraction raises it only through throw-no-extractable-text!, for a text view it finds blank (a page vector, fresh or cached, whose every page is blank, or a blank cached joined-text derivative)."
+        prev   (assoc-in model-baseline [:model :claims 0 :statement] before)
+        curr   (assoc-in model-baseline [:model :claims 0 :statement] after)
+        [w :as ws] (retreat/widened-spent :baseline prev curr ["k1"])]
+    (is (= 1 (count ws)))
+    (is (= ["k1" :statement] [(:id w) (:field w)]))
+    (is (some #{:disjunct-gained} (:signals w)) "it gained 'or a blank cached joined-text derivative'")
+    (is (= [] (retreat/widened-spent :baseline prev curr ["k2"])) "only a spent claim is held to its offer")
+    (is (= [] (retreat/widened-spent :baseline curr
+                                     (assoc-in curr [:model :claims 0 :statement]
+                                               (str/replace after ", or a blank cached joined-text derivative" ""))
+                                     ["k1"]))
+        "narrowing a spent claim is what it was offered")))
 
 ;; ── What the round asked for ─────────────────────────────────────────────────
 
