@@ -773,6 +773,63 @@
     (is (= ["t"] (mapv :title (verdict/open-across-run final))))
     (is (empty? (verdict/kept-across-run final)))))
 
+(deftest a-repair-keeps-its-fate-beside-a-later-deviation-on-a-lower-layer
+  ;; review-042c88e7: round 2 repaired 3daf2b4d at readers-state-what-is-there
+  ;; and round 3 did not raise it again. Round 4 ruled a broken intermediate at
+  ;; availability-from-set `same_as` it, and the run published the confirmed
+  ;; repair as a kept defect.
+  (let [final {:status :clean
+               :history [{:iter 1 :findings []}
+                         {:iter 2 :fixes [{:layer "readers-state-what-is-there" :commit "a0879919"
+                                           :handed ["3daf2b4d"]}]
+                          :findings [{:id "3daf2b4d" :handle "3daf2b4d" :title "any set is settled"
+                                      :owner-layer "readers-state-what-is-there" :disposition :fix}]}
+                         {:iter 3 :findings []}
+                         {:iter 4 :findings [{:id "80da808d" :handle "3daf2b4d" :same-as "3daf2b4d"
+                                              :title "any set is settled, at the lower head"
+                                              :kind :broken-intermediate
+                                              :owner-layer "availability-from-set"
+                                              :disposition :deviation :of "settled-stays-linked"}]}]
+               :findings []}]
+    (is (= ["any set is settled"] (mapv :title (verdict/settled-by-fixing final)))
+        "a repair the next round read and passed is a defect the run removed; a
+         later reading of a lower layer does not put it back on the branch")
+    (is (= [["availability-from-set" :deviation]]
+           (mapv (juxt :owner-layer :disposition) (verdict/kept-across-run final)))
+        "the lower layer's tip still holds the defect by the stack's cut, so its
+         claim is still qualified and must still be stamped")
+    (is (empty? (verdict/open-across-run final)))))
+
+(deftest a-deviation-on-the-layer-that-holds-the-repair-closes-as-its-duplicate
+  ;; review-7e485452: 2e5ba023 was repaired at job-claim-log, and a later
+  ;; finding `same_as` it was ruled a deviation owned by job-claim-log — whose
+  ;; head carries the repair. The claim was stamped false on a layer where it
+  ;; holds.
+  (let [final {:status :clean
+               :history [{:iter 1 :fixes [{:layer "job-claim-log" :commit "717ba8ab"
+                                           :handed ["2e5ba023"]}]
+                          :findings [{:id "2e5ba023" :handle "2e5ba023" :title "unlogged claim"
+                                      :owner-layer "job-claim-log" :disposition :fix}]}
+                         {:iter 2 :findings [{:id "74be3751" :handle "2e5ba023" :same-as "2e5ba023"
+                                              :title "unlogged claim, read again"
+                                              :owner-layer "job-claim-log" :disposition :deviation
+                                              :of "every handler run is preceded by its claim log"}]}
+                         {:iter 3 :findings []}]
+               :findings []}]
+    (is (= ["unlogged claim"] (mapv :title (verdict/settled-by-fixing final))))
+    (is (empty? (verdict/kept-across-run final))
+        "nothing is left to stamp: the claim holds at the head the repair landed on")
+    (is (= [["74be3751" :closed "duplicate" "2e5ba023"]]
+           (mapv (juxt :id :disposition :authority :duplicate-of)
+                 (#'verdict/closed-across-run final)))
+        "the close is still on record, naming the repair it repeats")
+    (testing "a defect re-raised after the repair is not repaired, whatever came between"
+      (let [again (update final :history conj
+                          {:iter 4 :findings [{:id "x" :handle "2e5ba023" :title "unlogged claim"
+                                               :owner-layer "job-claim-log" :disposition :fix}]})]
+        (is (empty? (verdict/settled-by-fixing again)))
+        (is (= ["x"] (mapv :id (verdict/open-across-run again))))))))
+
 ;; ── The standing verdict ───────────────────────────────────────────────────
 
 (def ^:private standing

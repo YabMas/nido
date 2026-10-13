@@ -826,6 +826,33 @@
   [fixes]
   (into #{} (comp (mapcat stages/repaired-ids) (remove nil?)) fixes))
 
+(def ^:private beside-a-repair
+  "The rulings that do not re-raise a finding as a defect of the code it was
+   read at: a close says it was never this branch's, and a deviation says a
+   layer's claim is overstated. Neither says a repair failed to take, so either
+   one landing on a repaired handle sits beside the repair rather than undoing
+   it."
+  #{:closed :deviation})
+
+(defn- beside
+  "The later ruling `f` as it stands beside `fix`, the repair of the same handle.
+
+   A deviation on the layer that OWNS the repair is closed as a duplicate of it:
+   that layer's head carries the fix, so the claim the deviation qualifies holds
+   there, and stamping it would publish a false `Deviation:` line. A deviation
+   on any other layer — an intermediate below the owner, whose tip still holds
+   the defect by the stack's cut — is true of the branch, and stays as ruled."
+  [fix f]
+  (if (and (= :deviation (:disposition f)) (= (:owner-layer fix) (:owner-layer f)))
+    (assoc f :disposition :closed :authority "duplicate" :of nil
+           :duplicate-of (finding-identity fix)
+           :because (str "a repair of " (finding-identity fix) " landed at "
+                         (or (:owner-layer f) "the branch") "'s head and no later round"
+                         " raised it again, so the claim this qualified holds there"
+                         (when-not (str/blank? (str (:because f)))
+                           (str " — the warden said: " (:because f)))))
+    f))
+
 (defn- fold-rulings
   "Every finding the run raised, folded over all its rounds to one entry each
    carrying the ruling that stuck, ordered by the round that ruling landed in,
@@ -840,8 +867,9 @@
    record two. What a park IS, is a thing no round will raise again — so the
    last round is exactly where it cannot be found.
 
-   Per identity, the LATEST ruling wins: a cut parked in round 3 and closed in
-   round 7 is closed, and only its final disposition is asked about.
+   Per identity, the LATEST ruling is what `:standing` holds: a cut parked in
+   round 3 and closed in round 7 is closed, and only its final disposition is
+   asked about.
 
    A `:fix` from an earlier round is `:repaired` only where a repair for it
    actually landed in that round. Then the round after it is the check — if the
@@ -855,7 +883,14 @@
    That last condition is exactly the evidence a defect was removed, which is
    why the two halves come out of one fold rather than two: `:standing` is what
    the run is still holding and `:repaired` is what it settled, and a finding
-   double-counted or dropped between them would make the pair not add up.
+   dropped between them would make the pair not add up.
+
+   The latest ruling that is NOT `beside-a-repair` is the one a repair is judged
+   by. A close or a deviation ruled on a repaired handle afterwards re-raises no
+   defect, so the handle stays `:repaired` and that later ruling goes into
+   `:standing` beside it, as `beside` leaves it — the one way a handle sits in
+   both halves. Taken in place of the fix, a deviation about an intermediate
+   layer counted a confirmed repair as a defect the branch kept.
 
    A final round whose review ABORTED (`:review-aborted?`) is no round after
    anything: the reviewer that would have re-reported a repair that did not
@@ -869,10 +904,11 @@
         ;; The last round that READ the branch, which is what a repair has to be
         ;; before to have been checked.
         last-idx  (cond-> (dec (count rounds)) review-aborted? dec)
-        latest    (reduce (fn [acc [idx round-findings]]
+        ;; Per identity, every ruling in round order.
+        rulings   (reduce (fn [acc [idx round-findings]]
                             (reduce (fn [a f]
-                                      (assoc a (finding-identity f)
-                                             (assoc f ::round idx)))
+                                      (update a (finding-identity f) (fnil conj [])
+                                              (assoc f ::round idx)))
                                     acc round-findings))
                           {}
                           (map-indexed vector rounds))
@@ -880,12 +916,19 @@
                                (< (::round f) last-idx)
                                (contains? (get repaired (::round f) #{})
                                           (or (:handle f) (:id f)))))
-        ordered   (fn [fs] (->> fs
-                                (sort-by (juxt ::round #(str (:id %))))
-                                (mapv #(dissoc % ::round))))
-        by-fate   (group-by (comp boolean repaired?) (vals latest))]
-    {:standing (ordered (get by-fate false))
-     :repaired (ordered (get by-fate true))}))
+        fates     (map (fn [rs]
+                         (let [latest (peek rs)
+                               defect (last (remove #(beside-a-repair (:disposition %)) rs))]
+                           (cond
+                             (not (and defect (repaired? defect))) {:standing latest}
+                             (identical? defect latest)          {:repaired defect}
+                             :else {:repaired defect :standing (beside defect latest)})))
+                       (vals rulings))
+        ordered   (fn [k] (->> (keep k fates)
+                               (sort-by (juxt ::round #(str (:id %))))
+                               (mapv #(dissoc % ::round))))]
+    {:standing (ordered :standing)
+     :repaired (ordered :repaired)}))
 
 (defn- final-rulings
   "The run's last word on every finding it raised. See `fold-rulings`."
