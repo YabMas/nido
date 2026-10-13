@@ -47,6 +47,9 @@
                     ;; which would read/probe/delete from the developer's actual
                     ;; ~/.nido/state/sessions.edn — stub it out so this test stays hermetic.
                     work/prune-dead-registry! (constantly [])
+                    ;; and maybe-refresh-titles!, whose sweep runs on a future that can
+                    ;; outlive these redefs and call a real model over the real ~/.nido.
+                    core/maybe-refresh-titles! (constantly nil)
                     ;; stub project listing — real shape is {project-name {...}}
                     project/list-projects    (constantly {"brian" {:directory "/tmp"}})
                     ;; stub session spawn — write a minimal session-home tree so

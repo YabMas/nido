@@ -80,6 +80,11 @@
     "Overwrite a workstream's classification facets."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:facets :map]] Workstream]
      :delegates [read-ws write!]})
+  (Operation set-title!
+    "Overwrite a workstream's generated display title, with the basis it was generated from."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:text :string]
+                      [:basis :string]] Workstream]
+     :delegates [read-ws write!]})
   (Operation close!
     "Settle a workstream terminally — done, dropped or dismissed — and append the close as a
      :closed entry in the same write."
@@ -103,6 +108,10 @@
     "The index row of the newest entry that records the work rather than a status decision —
      what every reader asking `what happened last` means."
     {:signature [:=> [:catn [:w Workstream]] [:maybe :map]]})
+  (Operation newest-goal
+    "The goal the newest :intent entry states, or nil — what the work is for, once anyone has
+     said."
+    {:signature [:=> [:catn [:w Workstream]] [:maybe :string]]})
   (Operation rebuilt-index
     "The index the entries directory implies: each entry's row as kept beside it, else the row the
      given record's index holds, else the row its file name implies — a kept or held row only when it names that file. The

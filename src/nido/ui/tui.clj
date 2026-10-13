@@ -202,9 +202,11 @@
    ;; A row waiting on its gate says what the gate is, where the eye already
    ;; reads a row's second line; the gate is asserted from the dashboard or
    ;; `bb nido:phase:advance`.
-   :description (or (when (= :awaiting-gate (:stage r))
-                      (some->> (get-in r [:phase :exit :criterion]) (str "gate: ")))
-                    (:last-activity r) "")
+   ;; The ticket id leads it: the label is a generated title and never carries one.
+   :description (str (some-> (:br-id r) (str "  "))
+                     (or (when (= :awaiting-gate (:stage r))
+                           (some->> (get-in r [:phase :exit :criterion]) (str "gate: ")))
+                         (:last-activity r) ""))
    :data        r})
 
 (defn- filter-origin

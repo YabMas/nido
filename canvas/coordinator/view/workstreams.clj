@@ -43,9 +43,14 @@
   (Operation ws-source
     "Which source bucket a workstream came from, from its refs."
     {:signature [:=> [:catn [:ws Workstream]] :keyword]})
+  (Operation title-basis
+    "The text a generated title summarises — the newest goal, else the source's title, else a
+     session name — or nil when there is nothing better than an id."
+    {:signature [:=> [:catn [:ws Workstream] [:sessions :any]] [:maybe :string]]
+     :delegates [workstream/newest-goal workstream/newest-record]})
   (Operation label
-    "A workstream's display label, resolved by fallback — the ticket title if there is one, then
-     the ref, then the id."
+    "A workstream's display label, resolved by fallback — its generated title, then the source's
+     title, then an id. Never prefixed with a ticket id; the row carries that separately."
     {:signature [:=> [:catn [:ws Workstream] [:sessions :any]] :string]})
   (Operation last-activity
     "The latest timestamp across the workstream and its sessions."

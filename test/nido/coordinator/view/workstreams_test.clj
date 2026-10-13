@@ -44,14 +44,42 @@
    :error nil})
 
 ;; ---------------------------------------------------------------------------
-;; Label fallback chain
+;; Title basis
 ;; ---------------------------------------------------------------------------
 
-(deftest label-prefers-notion-ref
+(deftest title-basis-prefers-ref-title-over-session-name
   (let [ws {:id "ws-20260601-aaaaaa"
             :external-refs [{:adapter :notion :id "BR-1421" :title "Fix drift"}]
             :entries []}]
-    (is (= "BR-1421 · Fix drift" (wsv/label ws [])))))
+    (is (= "Fix drift" (wsv/title-basis ws [{:name "drift-fix"}])))))
+
+(deftest title-basis-falls-back-to-session-name
+  (let [ws {:id "ws-20260601-aaaaaa" :external-refs [] :entries []}]
+    (is (= "rag-raptor-index" (wsv/title-basis ws [{:name "rag-raptor-index"}])))))
+
+(deftest title-basis-is-nil-with-nothing-to-summarise
+  (let [ws {:id "ws-20260601-aaaaaa" :external-refs [] :entries []}]
+    (is (nil? (wsv/title-basis ws [])))))
+
+;; ---------------------------------------------------------------------------
+;; Label fallback chain
+;; ---------------------------------------------------------------------------
+
+(deftest label-prefers-generated-title
+  ;; The generated title wins over every source, so rows from Notion, Slack and
+  ;; scratch sessions read in one voice.
+  (let [ws {:id "ws-20260601-aaaaaa"
+            :external-refs [{:adapter :notion :id "BR-1421" :title "Fix drift"}]
+            :title {:text "Drift in the session index" :basis "Fix drift"}
+            :entries []}]
+    (is (= "Drift in the session index" (wsv/label ws [{:name "drift-fix"}])))))
+
+(deftest label-uses-notion-title-without-id-prefix
+  ;; The ticket id is the row's :br-id, shown beside the label, not inside it.
+  (let [ws {:id "ws-20260601-aaaaaa"
+            :external-refs [{:adapter :notion :id "BR-1421" :title "Fix drift"}]
+            :entries []}]
+    (is (= "Fix drift" (wsv/label ws [])))))
 
 (deftest label-notion-ref-without-title-uses-id
   (let [ws {:id "ws-20260601-aaaaaa"
@@ -143,8 +171,8 @@
       (let [rows (wsv/workstream-rows :brian)
             by-label (into {} (map (juxt :label identity)) rows)]
         (is (= 2 (count rows)))
-        (is (= :active (:engagement (by-label "BR-1 · Active one"))))
-        (is (= 1 (:session-count (by-label "BR-1 · Active one"))))
+        (is (= :active (:engagement (by-label "Active one"))))
+        (is (= 1 (:session-count (by-label "Active one"))))
         (is (some #(= :idle (:engagement %)) rows))
         (is (every? :ws-id rows))
         (is (every? #(= :brian (:project %)) rows))))))

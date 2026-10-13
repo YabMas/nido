@@ -79,6 +79,12 @@
    [:entries       [:vector [:map-of keyword? any?]]]
    [:intake        {:optional true} [:maybe IntakePayload]]
    [:facets        {:optional true} [:map-of keyword? any?]]
+   ;; The board's display name for the work, generated rather than authored.
+   ;; :basis is the text it was generated FROM, so a reader can tell a title
+   ;; that still describes the work from one whose source has since moved.
+   [:title         {:optional true} [:map {:closed true}
+                                     [:text  string?]
+                                     [:basis string?]]]
    [:findings      {:optional true} [:maybe [:map-of keyword? any?]]]])
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] :Workstream]}
@@ -219,6 +225,17 @@
       (throw (ex-info "Cannot set facets on absent workstream"
                       {:project project :ws-id ws-id})))
     (write! (if (seq facets) (assoc w :facets facets) (dissoc w :facets)))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string :string] :Workstream]}
+  set-title!
+  "Overwrite a workstream's generated :title with `text`, generated from `basis`.
+   Throws if the workstream is absent. Returns the updated record."
+  [project ws-id text basis]
+  (let [w (read-ws project ws-id)]
+    (when-not w
+      (throw (ex-info "Cannot set title on absent workstream"
+                      {:project project :ws-id ws-id})))
+    (write! (assoc w :title {:text text :basis basis}))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :Workstream]}
   close!
@@ -1919,6 +1936,14 @@
   [project ws-id seq-n]
   (when-let [w (read-ws project ws-id)]
     (read-entry-at w seq-n)))
+
+(defn ^{:malli/schema [:=> [:cat :Workstream] [:maybe :string]]}
+  newest-goal
+  "The :goal of the newest :intent entry on the record `w`, or nil when it states
+   none or that entry cannot be parsed."
+  [w]
+  (some->> (:entries w) (filter #(= :intent (:kind %))) last :seq
+           (read-entry-at w) :goal not-empty))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:set :int]]}
   amended-seqs

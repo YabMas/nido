@@ -1886,7 +1886,7 @@
   "One selectable list row. Its link carries the view-state (scope + selection),
    so selecting a workstream lands on the SAME list. `sel-id` highlights the
    open row (threaded from the screen so a poll preserves it)."
-  [screen sel-id project {:keys [ws-id origin label needs-you open-findings position phase stage]
+  [screen sel-id project {:keys [ws-id origin label br-id needs-you open-findings position phase stage]
                           :as row}]
   [:a {:class (str "gate-card" (when (= sel-id ws-id) " sel"))
        :href  (str "/workstreams" (screen-query screen {:sel (str project ":" ws-id)}))}
@@ -1894,7 +1894,7 @@
     (when needs-you [:span.needs {:title "needs you"}])
     (when (pos? (or open-findings 0))
       [:span.badge-findings (str "⚑ " open-findings " open findings")])]
-   [:div.gate-sub [:span project] (position-chip position) (status-chip (:status row))
+   [:div.gate-sub [:span project] (when br-id [:span.tid br-id]) (position-chip position) (status-chip (:status row))
     ;; Where a workstream STANDS is the position chip; this is what is happening
     ;; in it right now, which is a different question and often has no answer.
     ;; A :shipping row reads its merge phase from HERE — the projection folds

@@ -42,6 +42,7 @@
    [nido.coordinator.lane.notion-sync :as notion-sync]
    [nido.coordinator.lane.intake :as intake]
    [nido.coordinator.lane.ship :as ship]
+   [nido.coordinator.lane.titles :as titles]
    [nido.github.config :as gh-config]
    [nido.notion.client :as client]
    [nido.notion.views :as views]
@@ -80,6 +81,9 @@
    ;; since the throttle clock starts at 0).
    :inbox-expiry-ms         (* 3 24 60 60 1000)  ; 3 days
    :inbox-sweep-interval-ms (* 30 60 1000)        ; sweep at most every 30 min
+   ;; Generated workstream titles (lane.titles). Each sweep calls a model once per
+   ;; workstream whose title basis moved, so it runs off the tick thread.
+   :titles-interval-ms (* 5 60 1000)   ; every 5 min
    :system-prompt       "You are running inside a nido auto-triggered session. The user is not present yet."
    ;; Pre-orientation burst for a promoted ticket (the /continue-ticket leg).
    ;; Unlike triage, the human WILL own this exact session — they'll resume this
@@ -154,6 +158,12 @@
 ;; Last wall-clock ms an inbox-expiry sweep ran. Starts at 0 so the first tick
 ;; after a (re)start sweeps immediately, then throttles to the interval.
 (defonce ^:private !last-inbox-sweep-ms (atom 0))
+
+;; Last wall-clock ms a title sweep started, and the sweep in flight (a future)
+;; or nil. A sweep makes one model call per stale title — minutes on a first
+;; backfill — so it runs on its own thread and a tick never starts a second.
+(defonce ^:private !last-titles-ms (atom 0))
+(defonce ^:private !titles-sweep (atom nil))
 
 ;; Per-project last GitHub-merge poll wall-clock ms. Starts empty so the first
 ;; tick after (re)start polls each configured project immediately, then throttles
@@ -408,6 +418,24 @@
         (binding [*err* *err*]
           (.println ^java.io.PrintWriter *err*
                     (str "WARN: github-issue poll threw for " project " — " (ex-message t))))))))
+
+(defn- maybe-refresh-titles!
+  "Throttled: at most once per :titles-interval-ms, and never while the previous
+   sweep is still running, regenerate stale workstream titles for every registered
+   project on a background thread. Never throws into the tick loop."
+  [now-ms]
+  (when (and (>= (- now-ms @!last-titles-ms) (:titles-interval-ms defaults))
+             (let [f @!titles-sweep] (or (nil? f) (realized? f))))
+    (reset! !last-titles-ms now-ms)
+    (reset! !titles-sweep
+            (future
+              (doseq [project (registered-projects)]
+                (try
+                  (titles/refresh-project! project)
+                  (catch Throwable t
+                    (binding [*err* *err*]
+                      (.println ^java.io.PrintWriter *err*
+                                (str "WARN: title sweep threw for " project " — " (ex-message t)))))))))))
 
 (defn- maybe-poll-notion-sync!
   "Throttled Notion→workstream reconcile, per project with a notion-sync.edn. At
@@ -1148,7 +1176,8 @@
           (maybe-expire-inbox! now-ms)
           (maybe-poll-github-merges! now-ms)
           (maybe-poll-github-issues! now-ms)
-          (maybe-poll-notion-sync! now-ms))
+          (maybe-poll-notion-sync! now-ms)
+          (maybe-refresh-titles! now-ms))
         ;; After draining + polling, check anomaly thresholds.
         (when-let [trip (anomaly/check @!detector anomaly-thresholds)]
           (halt/halt! {:source  :auto

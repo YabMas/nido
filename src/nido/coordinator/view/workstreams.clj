@@ -105,20 +105,36 @@
   [ws-id]
   (last (str/split (str ws-id) #"-")))
 
+(defn ^{:malli/schema [:=> [:cat :Workstream :any] [:maybe :string]]}
+  title-basis
+  "The text a generated title summarises, or nil when there is nothing better
+   than an id: the newest intent's goal — what the work is FOR, once anyone has
+   said — else the source's own title (Notion page, Slack message, GitHub issue),
+   else the newest ledger entry's :title, else a session name.
+
+   A ticket id is never part of it. The board shows the id beside the title, so
+   a title that repeated it would say it twice."
+  [ws sessions]
+  (or (workstream/newest-goal ws)
+      (some (comp not-empty :title) [(notion-ref ws) (slack-ref ws) (github-ref ws)])
+      (not-empty (some-> ws workstream/newest-record :title))
+      (some (comp not-empty :name) sessions)))
+
 (defn ^{:malli/schema [:=> [:cat :Workstream :any] :string]}
   label
   "Display label for a workstream, resolved by fallback:
-   1. Notion external-ref → \"BR-#### · <title>\" (or just BR-#### with no/blank title)
-   1b. Slack external-ref → the message text (its :title); the slack-<channel>-<ts>
-       id is too noisy to show, and the title IS the report body
-   1c. GitHub-issue external-ref → the issue title (falling back to repo#number,
-       its :id — both read far better than the raw ws-id)
-   2. the newest ledger entry recording the work's :title (when present and non-blank) — a
+   1. the generated :title (see nido.coordinator.lane.titles) — one voice for every
+      row, whatever its source; it may lag its basis until the next sweep
+   2. the source's own title — Notion page, Slack message text, GitHub issue
+      (the slack-<channel>-<ts> id is too noisy to show)
+   3. the newest ledger entry recording the work's :title (when present and non-blank) — a
       close or a stage move is not what the work is
-   3. originating trigger (from a session's autonomy) + short ws-id suffix
-   4. a session name (human one-offs have no ref/entry/trigger — the name reads
+   4. a ticket id — Notion BR-####, GitHub repo#number
+   5. originating trigger (from a session's autonomy) + short ws-id suffix
+   6. a session name (human one-offs have no ref/entry/trigger — the name reads
       far better than the raw ws-id)
-   5. raw ws-id."
+   7. raw ws-id.
+   A ticket id is never prefixed: the row carries it as :br-id."
   [ws sessions]
   (let [nref        (notion-ref ws)
         sref        (slack-ref ws)
@@ -126,16 +142,14 @@
         entry-title (not-empty (some-> ws workstream/newest-record :title))
         trigger     (some #(get-in % [:autonomy :trigger]) sessions)
         sname       (some (comp not-empty :name) sessions)]
-    (cond
-      nref        (if-let [t (not-empty (:title nref))]
-                    (str (:id nref) " · " t)
-                    (:id nref))
-      sref        (or (not-empty (:title sref)) entry-title (:id ws))
-      gref        (or (not-empty (:title gref)) entry-title (:id gref) (:id ws))
-      entry-title entry-title
-      trigger     (str (name trigger) " · " (short-suffix (:id ws)))
-      sname       sname
-      :else       (:id ws))))
+    (or (not-empty (get-in ws [:title :text]))
+        (some (comp not-empty :title) [nref sref gref])
+        entry-title
+        (:id nref)
+        (:id gref)
+        (when trigger (str (name trigger) " · " (short-suffix (:id ws))))
+        sname
+        (:id ws))))
 
 (defn- timestamps [ws sessions]
   (concat
