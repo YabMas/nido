@@ -2613,6 +2613,9 @@
    reading. Derived by the round, and it stops the judgement holding too — one clean reading of a record is a sample, and the round
    reads it again. Only asked ids, because the reading after it pairs them: an id it is not asked
    about is not :unruled when it goes unconfirmed, so its silence would clear it unread.
+   :first-reading is the same set on every judgement, whatever its verdict: a first reading is a
+   sample in a round with findings as surely as in a clean one, so it ends no refutation run
+   (`nido.review.record/refuted-running`), and :read-once, which stops a holding only, cannot say so.
    :amendment-read-once marks the first judgement of a record its own run amended, whatever it
    confirmed: an amendment can change what the checks read without moving any subject, so
    settlement alone would let one clean reading of it hold. It stops the judgement holding, and
@@ -2665,6 +2668,7 @@
                                            [:tool-failure {:optional true} [:= true]]]]]
    [:unruled    {:optional true} [:vector string?]]
    [:read-once  {:optional true} [:vector string?]]
+   [:first-reading {:optional true} [:vector string?]]
    [:amendment-read-once {:optional true} [:= true]]
    [:overturns  {:optional true} [:vector [:map {:closed true}
                                            [:id string?] [:seq int?] [:ws-id string?]

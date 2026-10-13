@@ -252,6 +252,28 @@
         "holding a refuted claim sound reverses the refutation, and the ledger has to say so")
     (is (= ["writers-state-order"] (:read-once r)))))
 
+;; Watched (9e0979): artifact-read-whole was reworded and confirmed, refuted, reworded and confirmed,
+;; refuted — four refutations across eight rounds, each confirmation the first reading of new words in
+;; a round with findings elsewhere. None was :read-once, since that marks a round that would hold, so
+;; each ended the run, the count never passed 1 and the cap ended :max-iters instead of :unfixable.
+(deftest a-first-reading-ends-no-refutation-run-whatever-the-verdict
+  (let [confirm (#'record/with-readings {:format :baseline-review :confirmed ["artifact-read-whole"]
+                                         :checked-at {"artifact-read-whole" ["a.clj:1"]}
+                                         :findings [{:claim-id "other" :cites ["b.clj:2"] :claim "no"}]}
+                                        (constantly false)
+                                        {:asked ["artifact-read-whole" "other"]})
+        refute  {:format :baseline-review :findings [{:claim-id "artifact-read-whole" :cites ["c.clj:3"] :claim "no"}]}]
+    (is (nil? (:read-once confirm)) "a round that does not hold owes no second reading of itself")
+    (is (= ["artifact-read-whole"] (:first-reading confirm))
+        "but its confirmation of new words is still one reading of them, and the record has to say so")
+    (is (report/validate-event :baseline-review (assoc confirm :verdict :falsified :reason "r" :baseline-seq 1))
+        "and the ledger takes it")
+    (is (= 2 (get (record/refuted-running nil [refute confirm refute]) "artifact-read-whole"))
+        "a claim alternating confirmed and refuted is spent by the refutations, not reset by each first reading")
+    (is (nil? (get (record/refuted-running nil [refute confirm (assoc confirm :first-reading [])])
+                   "artifact-read-whole"))
+        "a second confirmation is the pair, and ends the run")))
+
 (deftest an-overturn-says-whether-the-claim-was-restated-since
   ;; Watched: R1 of a run :overturns'd two claims whose earlier wording an earlier run had refuted
   ;; and a hand amendment had restated — and the figures counted the confirmed repairs as the

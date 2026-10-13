@@ -3980,8 +3980,9 @@
    A reading of a claim is a judgement that ruled on it: confirmed it, held it :owed, ruled it in a
    relation ruling, or filed a refutation under it. One that did none — the claim was settled, or
    left unruled — neither breaks nor extends a run; any of the others ends one, except that
-   - a confirmation on a first reading (:read-once) ends nothing until a second reading agrees,
-     since a refutation of that second reading is the run going on;
+   - a confirmation on a first reading (:first-reading, or :read-once on a record written before
+     it) ends nothing until a second reading agrees, whatever the round's verdict, since a
+     refutation of that second reading is the run going on;
    - an :owed ruling of an id `subject` lists under `:baseline :breaks` ends nothing, since what it
      held is the code the design says it stops being true (`rule`);
    - an element of `subject` stating an :interface (`enumerated-ids`) whose run a confirmation ended
@@ -3994,11 +3995,11 @@
   [subject reviews]
   (let [broken     (into #{} (map slug) (get-in subject [:baseline :breaks]))
         enumerated (if subject (enumerated-ids nil subject) #{})
-        step       (fn [{:keys [runs held]} {:keys [confirmed owed read-once findings relation-rulings] :as r}]
+        step       (fn [{:keys [runs held]} {:keys [confirmed owed read-once first-reading findings relation-rulings] :as r}]
                      (let [statuses (check-statuses r)
                            refuted  (into #{} (mapcat #(run-keys statuses %)) findings)
                            ended    (remove refuted
-                                            (concat (remove (set read-once) confirmed)
+                                            (concat (remove (into (set read-once) first-reading) confirmed)
                                                     (remove broken owed)
                                                     (map :id relation-rulings)
                                                     (keep (fn [[c s]] (when (= :held s) (str c))) statuses)))
@@ -5748,7 +5749,9 @@
    settled (`settled`) each id it was shown as outside its checks and refuted anyway; :splits and
    :unpaired, where it and the reading before it disagree; and, when `holds?` says it would end
    the run, :read-once, what of `asked` it read on a first reading, and :amendment-read-once when
-   `unread-amendment?`.
+   `unread-amendment?`. :first-reading is that first-reading set whatever `holds?` says: a round
+   with findings elsewhere reads a reworded claim once as surely as a clean one, and
+   `refuted-running` must not let that one reading end the claim's run.
 
    An id is read when it is confirmed (:holds) or held :owed. An owed ruling is a judge's word that
    the claim is sound, and a run resting on one such word is resting on a sample however the code
@@ -5822,10 +5825,10 @@
                            {:id id :was was}))
           unchecked (into #{} (comp (remove :tool-failure) (map :id)) (:unchecked record))
           holds     (holds? record)
-          once      (when holds
-                      (vec (sort (filter (set asked)
-                                         (concat (remove seconds (keys ruled))
-                                                 (filter unchecked (keys before)))))))
+          firsts    (vec (sort (filter (set asked)
+                                       (concat (remove seconds (keys ruled))
+                                               (filter unchecked (keys before))))))
+          once      (when holds firsts)
           overturns (vec (for [[id {:keys [ws-id restated?] n :seq}] (sort-by key prior)
                                :when (ruled id)]
                            {:id id :seq n :ws-id ws-id :restated? (boolean restated?)}))
@@ -5835,6 +5838,7 @@
                            {:clause k :seq n}))]
       (cond-> record
         (seq once)                       (assoc :read-once once)
+        (seq firsts)                     (assoc :first-reading firsts)
         (and holds unread-amendment?)    (assoc :amendment-read-once true)
         (seq overturns)                  (assoc :overturns overturns)
         (seq overrides)                  (assoc :overrides-settled overrides)
