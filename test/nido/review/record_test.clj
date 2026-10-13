@@ -93,6 +93,36 @@
     (is (str/includes? p "whether the CSV importer bypasses the aggregate")
         "a declared unknown is honesty already recorded, not a finding to make")))
 
+(deftest the-baseline-judge-states-what-a-narrowing-excludes-not-its-wording
+  ;; Watched: a judge's :needs dictated the replacement statement, the amender adopted it verbatim,
+  ;; and the next round refuted exactly that statement.
+  (let [p (record/baseline-prompt {:baseline baseline})]
+    (is (str/includes? p "narrowing must EXCLUDE")
+        "wording a judge supplies is written in unread, and is the next reading's finding")
+    (is (not (str/includes? p "REFUTED READING AFTER READING"))
+        "a record with no refutation run tells the judge nothing about one"))
+  (is (str/includes? (get-in (json/parse-string (#'record/baseline-review-schema #{}) true)
+                             [:properties :findings :items :properties :needs :description])
+                     "never replacement wording")
+      "the schema's field description is what the judge reads as it writes :needs")
+  (let [p (record/baseline-prompt {:baseline baseline
+                                   :running {"c1" 2 "invoice-resums" 3 "mod-the-order-aggregate" 4}})]
+    (is (str/includes? p "[c1] refuted 2 readings running"))
+    (is (str/includes? p "narrows it to the paths you read")
+        "a claim reworded and refuted again is narrowed or withdrawn, never extended")
+    (is (str/includes? p "Never ask it to cover more"))
+    (is (not (str/includes? p "[invoice-resums] refuted"))
+        "an observation is offered no withdrawal, so the judge is not told to propose one")
+    (is (not (str/includes? p "[mod-the-order-aggregate] refuted"))
+        "an element's enumeration has its own repair, restatement by category"))
+  (testing "one refutation is an ordinary reading"
+    (is (not (str/includes? (record/baseline-prompt {:baseline baseline :running {"c1" 1}})
+                            "REFUTED READING AFTER READING"))))
+  (testing "a settled claim is no check, and nothing is asked of its :needs"
+    (is (not (str/includes? (record/baseline-prompt {:baseline baseline :running {"c1" 2}
+                                                     :settled {"c1" {:seq 4}}})
+                            "REFUTED READING AFTER READING")))))
+
 (deftest the-baseline-prompt-refuses-the-plane-that-never-converges
   ;; The failure this is aimed at: asked to check a baseline against a large
   ;; subsystem, a judge finds true things about it forever. An implementation

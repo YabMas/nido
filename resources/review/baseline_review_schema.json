@@ -116,7 +116,7 @@
           },
           "needs": {
             "type": "string",
-            "description": "On an INSUFFICIENT finding: what the survey would have to say for the blocked derivation to be makeable — the specific missing claim, not 'more detail'. On a FALSIFIED finding: what the claim would have to say to be true, or an empty string."
+            "description": "On an INSUFFICIENT finding: what the survey would have to say for the blocked derivation to be makeable — the specific missing claim, not 'more detail'. On a FALSIFIED finding: what a narrowing of the claim must exclude to be true — the cases your counterexample shows it does not cover, named by where they are — never replacement wording, and never a broader claim; or an empty string."
           },
           "evidence": {
             "type": "array",

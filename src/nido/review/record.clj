@@ -232,6 +232,24 @@
                  (when (seq (:evidence finding)) (str "\n  evidence: " (str/join ", " (:evidence finding)))))))
          "\n")))
 
+(declare withdrawable-after)
+
+(defn- spent-needs-block
+  "What the judge is told about the claims of `running` — `refuted-running` over the lineage before
+   this round, `{id n}` — counted at `withdrawable-after` or more, or nil with none.
+
+   Claims only, since only a claim can be withdrawn (`withdrawable`). A judge's :needs is what the
+   amender writes, and one asked what a spent claim 'would have to say' prescribes the stronger
+   universal that answers its own counterexample — which the next reading refutes, extending the
+   run instead of ending it."
+  [running]
+  (when-let [spent (seq (filter #(>= (val %) withdrawable-after) running))]
+    (str "\nREFUTED READING AFTER READING — each rewording of these was refuted in turn:\n"
+         (bullets (for [[id n] (sort-by key spent)] (str "[" id "] refuted " n " readings running")))
+         "\nIf you find one false again, its `needs` narrows it to the paths you read —\n"
+         "name them — or proposes its withdrawal. Never ask it to cover more: a\n"
+         "quantifier extended to answer your counterexample is the next reading's finding.\n")))
+
 (defn- stale-block
   "What the last amender said of the subjects it named :stale, put to the judge as the question to
    rule on, or nil with none. `stale` is `{id reason}`, a reason nil where none was given.
@@ -774,8 +792,11 @@
    A round over a record whose every subject is settled owes no ruling at all, and is asked only
    whether the four derivations can still be made — against what `moved` names, the difference
    from the last verified record (`moved-block`). That is the one prompt told what changed: with no
-   subject to judge there is no delta to read a subject through, and the delta is the question."
-  [{:keys [baseline disputes settled stance prior moved stale]}]
+   subject to judge there is no delta to read a subject through, and the delta is the question.
+
+   `running` is `refuted-running` over the lineage before this round; what a judge asks of a claim
+   it counts as spent is held to narrowing (`spent-needs-block`). nil names none."
+  [{:keys [baseline disputes settled stance prior moved stale running]}]
   (let [full     (judged-alone baseline)
         baseline (checks-of full (set (keys settled)))
         owed     (owed-rulings full settled)
@@ -930,7 +951,10 @@
       "   decision something outside depends on; the `essential` fact is derivable\n"
       "   from something else the system holds; the `derived` value is also stored\n"
       "   and edited independently; the composition does not produce the behaviour\n"
-      "   claimed. Show the counterexample, with where it is.\n"
+      "   claimed. Show the counterexample, with where it is. Its `needs` says what a\n"
+      "   narrowing must EXCLUDE — the cases your counterexample shows the claim does\n"
+      "   not cover, by where they are — and supplies no wording: the amender writes\n"
+      "   wording you supply as it stands, and nobody reads it before the next round.\n"
       "2. INSUFFICIENT — one of the four derivations cannot be made against this\n"
       "   baseline. Say WHICH (`blocks`) and what the baseline would have to say for it\n"
       "   to be makeable (`needs`) — the specific missing claim, not `more detail`.\n"
@@ -971,6 +995,8 @@
       "the round is asked again, and a sufficient verdict over it does not stand."))
    (when-not derive?
      (prior-findings-block (apply dissoc prior (keys settled))))
+   (when-not derive?
+     (spent-needs-block (select-keys running (filter (retreat/claim-ids full) owed))))
    (when-not derive?
      (stale-block (apply dissoc stale (keys settled))))
    (disputes-block disputes)
@@ -3213,7 +3239,8 @@
    are shown and are not checks; the review's ruling is held to its checks by `rule`, so a check the
    judge left without one is named under :unruled — on a sufficient verdict, after the clauses it left
    open were asked once more (`rule-open-clauses!`). `:prior` is what earlier runs found against
-   the subjects it checks (`prior-findings-block`). A round whose tree moved is still appended,
+   the subjects it checks (`prior-findings-block`), and `:running` the refutation runs before it
+   (`spent-needs-block`). A round whose tree moved is still appended,
    settled subjects or not: its findings and its rulings on its own checks are a judgment of
    code, and only banking them forward needs the one tree it lacks — which the missing
    `:code-identity` already withholds. Such a round's review carries `:tree-moved` (`tree-moved`),
@@ -3229,7 +3256,7 @@
    hold (`moved-since`). A record reading as that one in all but its provenance launches no judge,
    and is answered by the verdict that one reached (`carried-review`)."
   [{:keys [cwd code-cwd run-id label disputes baseline settled listing subject-identities
-           reviewer prior stale] :as opts}]
+           reviewer prior stale running] :as opts}]
   (if-let [[project ws-id] (ledger-of opts)]
     (if-let [baseline (or baseline (ws/latest-entry project ws-id :baseline))]
       (if (baseline-round-worth-running? baseline)
@@ -3255,6 +3282,7 @@
                                                  :settled settled
                                                  :prior prior
                                                  :stale stale
+                                                 :running running
                                                  :moved (some->> (:baseline verified)
                                                                  (moved-since baseline))
                                                  :stance (stages/read-stance project)})
@@ -4101,10 +4129,16 @@
      (str "\n\nA CLAIM NO REWORDING HAS SETTLED. "
           (str/join ", " (for [[id n] spent] (str "[" id "] has been refuted " n " readings running")))
           ",\neach time after a rewording of it. Restating it at the same strength is off the\n"
-          "table: that has been tried, and it was the next finding. Two honest repairs are\n"
-          "left, and you choose between them:\n\n"
+          "table: that has been tried, and it was the next finding — and so is adding a\n"
+          "conditional for this round's counterexample, which leaves the next one standing.\n"
+          "Three honest repairs are left, and you choose between them:\n\n"
           "  - WEAKEN it to what the cited code guarantees, including on its failure path —\n"
           "    what the code tries, not what it achieves when every call succeeds.\n"
+          "  - SPLIT it. Keep under its id the core no reading has refuted — what every\n"
+          "    refutation of it left standing — and either drop the remainder or state it\n"
+          "    as a new claim, with a new id, listing the paths it covers, each one you\n"
+          "    read. State both at the granularity the code supports: one claim per\n"
+          "    mechanism the code has, never one universal over paths nobody listed.\n"
           "  - REMOVE it, when no other claim, element or derivation in the record rests on\n"
           "    it, and give the reason under :withdrawn. That removal is the repair, not a\n"
           "    retreat from one: it is reported to a human as a withdrawal carrying your\n"
@@ -4112,7 +4146,7 @@
           (when by-hand
             (str "\n\nOne caveat. The last rewording was not this loop's: entry " by-hand " was written by\n"
                  "hand. If the finding is about what that edit introduced, a precise restatement\n"
-                 "of what the code does has not been tried, and is a third honest repair."))))
+                 "of what the code does has not been tried, and is a fourth honest repair."))))
     (interface-block interfaces))))
 
 (defn- design-spent
@@ -5190,7 +5224,11 @@
    (replace-rule "baseline")
    (if gaps?
      "Answer what was asked; leave the rest exactly as it stands.\n\n"
-     "Fix what was refuted; leave the rest exactly as it stands.\n\n")
+     (str "Fix what was refuted; leave the rest exactly as it stands.\n\n"
+          "WHERE A REFUTATION CARRIES `needs`, WRITE WHAT IT ASKS FOR AND NOTHING STRONGER\n"
+          "on that subject. A clause beyond it — a further universal, an `only`, an `every`\n"
+          "— is one no reading has checked: it is what the next reading refutes, and that\n"
+          "refutation counts against a subject already refuted once.\n\n"))
    (sound-rewrite-rules :baseline false)
    (bounded-block :baseline (:bounded-by baseline))
    "Read the cited code before you change a word of the record.\n\n"
@@ -5982,6 +6020,9 @@
         again   (rejudged ctx ledger subject reading
                           (newest-judgement ledger :baseline-review :baseline-seq subject) stands?)
         asked   (cond reused #{} subject (owed-rulings subject settled))
+        lineage (if (and project subject)
+                  (lineage-of project ws-id :baseline-review :baseline-seq subject)
+                  [])
         judged  (when-not (or lost reused)
                   (baseline-review!
                    {:cwd cwd :ledger ledger :code-cwd code-cwd :run-id run-id
@@ -5990,6 +6031,7 @@
                     :settled settled
                     :prior prior
                     :stale (stale-questions ctx)
+                    :running (refuted-running subject lineage)
                     :listing listing
                     :code-identity (:code-identity reading)
                     :subject-identities (:subject-identities reading)
@@ -6011,9 +6053,6 @@
         mine      (when-not reused [record])
         reviews   (when (:format record)
                     (into (if project (vec (ws/entries-of project ws-id :baseline-review)) []) mine))
-        lineage   (if (and project subject)
-                    (lineage-of project ws-id :baseline-review :baseline-seq subject)
-                    [])
         running   (when reviews (refuted-running subject (into lineage mine)))
         unsettled (if reviews (unsettled-findings record (unchecked-running reviews)) [])
         spent-now (spent running (into (retreat/claim-ids subject) (enumerated-ids nil subject)))

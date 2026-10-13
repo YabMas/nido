@@ -2754,6 +2754,50 @@
                                   :out-path "/x" :refuted-running {"invoice-resums" 3}})]
       (is (not (str/includes? p "A CLAIM NO REWORDING HAS SETTLED"))))))
 
+(deftest a-spent-claim-is-offered-a-split-at-the-granularity-the-code-supports
+  ;; Watched: a claim that gained one conditional per counterexample across four refutations, and
+  ;; a universal over readers refuted by a new reader each round while its core never was.
+  (let [p (record/amend-prompt {:baseline a-baseline :findings [a-claim-finding] :out-path "/x"
+                                :refuted-running {"c1" 2}})]
+    (is (str/includes? p "SPLIT it. Keep under its id the core no reading has refuted")
+        "the part every refutation left standing is a claim the code supports; withdrawing it with the rest loses it")
+    (is (str/includes? p "listing the paths it covers, each one you\n    read")
+        "a remainder restated as another universal is the next reading's finding")
+    (is (str/includes? p "adding a\nconditional for this round's counterexample")
+        "a conditional per counterexample is a rewording at the same strength")))
+
+(deftest a-refutation-is-repaired-to-what-its-needs-asks-and-no-further
+  ;; Watched: :needs asked that the first registered derivative is served; the amender also wrote
+  ;; that only the first is kept, and the next reading refuted exactly that clause — counted
+  ;; toward spending a claim whose asked-for repair had held.
+  (let [p (record/amend-prompt {:baseline a-baseline :out-path "/x"
+                                :findings [(assoc a-claim-finding :needs "say the first one is served")]})]
+    (is (str/includes? p "   needs:   say the first one is served"))
+    (is (str/includes? p "WRITE WHAT IT ASKS FOR AND NOTHING STRONGER")
+        "a clause beyond :needs is checked by no reading, and its refutation counts against the claim"))
+  (testing "a gap's :needs is an addition the amender is asked to make, not a bound on a repair"
+    (let [p (record/amend-prompt {:baseline a-baseline :out-path "/x"
+                                  :findings [(assoc a-finding :blocks :stratified :needs "name the strata")]})]
+      (is (not (str/includes? p "NOTHING STRONGER"))))))
+
+(deftest a-judge-of-a-spent-claim-is-held-to-narrowing-it
+  ;; Watched: on a claim refuted twice running, the judge's :needs prescribed a stronger universal;
+  ;; the amender wrote it in and the next reading refuted exactly the added clause.
+  (let [seen (atom nil)
+        reviews [{:seq 2 :baseline-seq 1 :verdict :falsified :findings [a-claim-finding]}
+                 {:seq 4 :baseline-seq 3 :verdict :falsified :findings [a-claim-finding]}]
+        subject (assoc a-baseline :seq 3 :supersedes {:seq 1})]
+    (with-redefs [record/baseline-review! (fn [opts] (reset! seen (:running opts))
+                                            {:outcome :no-record :detail "d"})
+                  record/append!          (fn [_ _] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry         (fn [_ _ _] subject)
+                  ws/entries-of           (fn [_ _ kind] (if (= kind :baseline-review) reviews []))
+                  ws/entry-at-seq         (fn [_ _ n] (when (= 1 n) (assoc a-baseline :seq 1)))]
+      (run record/judge-stage (ctx))
+      (is (= 2 (get @seen "c1"))
+          "the judge is handed the refutation run its own ruling extends, read before it rules"))))
+
 (deftest an-interface-refuted-member-by-member-is-offered-a-restatement-by-category
   ;; Watched: a baseline element refuted twice for different missing members, appended to each time;
   ;; the restatement a design amender is offered for exactly this never reached the baseline's.
