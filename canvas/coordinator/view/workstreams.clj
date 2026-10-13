@@ -90,8 +90,11 @@
     "Scratch rows grouped by whether anything is live on them."
     {:signature [:=> [:catn [:rows [:vector WorkstreamRow]]] :map]})
   (Operation session-rows
-    "Display rows for one workstream's sessions."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:vector :map]]
+    "Display rows for one workstream's sessions, in the state the substrate's listing reports.
+     The listing is an argument: View may not reach Agent, so a composition root reads it through
+     the substrate adapter's listing and hands it down to whoever asks for rows."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
+                            [:listing [:sequential :map]]] [:vector :map]]
      :delegates [session/list-sessions]})
   (Operation engagement-substatus
     "The short liveness tag shown beside a label."

@@ -42,6 +42,18 @@
   (Operation kickoff-prompt
     "A spawned child agent's first turn: whom it answers to, when to write, then the brief."
     {:signature [:=> [:catn [:opts :map]] :string]})
+  (Operation attach
+    "Attach this terminal to a background session through the substrate adapter."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation adopt
+    "Make nido the driver of a background session started in a session's home or worktree."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation release
+    "Stop nido driving a session's background session; the session keeps running."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation hand-back
+    "Let nido drive a session's background session again after a person's prompt held it."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation spawn
     "Bring a child session up through `up`, record it and the session spawning it as each other's
      :session link, stage a kickoff that starts its agent on a brief addressed back to the parent's

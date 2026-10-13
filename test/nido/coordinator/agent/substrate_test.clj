@@ -135,7 +135,7 @@
 (deftest dispatch-answers-only-the-id-the-listing-reports
   (testing "a session the listing shows only on a later read"
     (let [reads (atom 0)]
-      (stubbing [#'sub/claude! (fn ([cmd] (sub/claude! cmd {}))
+      (stubbing [#'sub/claude! (fn self ([cmd] (self cmd {}))
                                  ([cmd _]
                                   (case (second cmd)
                                     "--version" (get new-enough "--version")
@@ -187,3 +187,9 @@
     (let [data (ex-data (try (sub/wake! "a56cda8b-3390" "go" {}) (catch Exception e e)))]
       (is (= "074ff0e1" (:left-running data)) "its stop unconfirmed, it is named as left running")
       (is (= #{:stop} (set (keys (:failed data))))))))
+
+(deftest attach-refuses-a-session-the-listing-does-not-show
+  (stubbing [#'sub/claude! (fake-claude (atom []) {"agents" {:exit 0 :out (json/generate-string
+                                                                             [{:sessionId "s-1" :kind "interactive" :id "x"}])}})]
+    (is (= :not-listed (:reason (ex-data (try (sub/attach! "s-1" {}) (catch Exception e e)))))
+        "an interactive session is not one to attach to")))

@@ -768,6 +768,12 @@
   [pos]
   (update pos :history? not))
 
+(defn- denial-line
+  "One auto-mode denial a session nido drives recorded: when, in which session, which tool."
+  [{:keys [session at tool-name tool-input]}]
+  [:li [:span.meta at] " · " session " · " [:code (or tool-name "?")]
+   (when tool-input [:span.meta " " tool-input])])
+
 (defn- gate-card
   "One inbox row; links to the gate pane. `sel?` highlights the open gate. `href`
    carries the view-state so selecting a gate preserves scope + selection. A
@@ -777,7 +783,7 @@
    `:doing` renders the same activity badge the workstream list shows: waiting on
    a person and having something underway are separate facts, and a gate can hold
    both at once."
-  [{:keys [project origin stage label report session resume-error pending? error-msg doing]} sel? href]
+  [{:keys [project origin stage label report session resume-error pending? error-msg doing denials]} sel? href]
   [:a {:class (str "gate-card" (when sel? " sel"))
        :href  href}
    [:div.gate-top (origin-badge origin) [:span.lbl label] [:span.needs {:title "needs you"}]]
@@ -794,7 +800,10 @@
    (when resume-error
      [:div.gate-err "⚠ resume failed: " (or (:message resume-error)
                                             (name (:reason resume-error)))])
-   (when error-msg [:div.gate-err "⚠ " error-msg])])
+   (when error-msg [:div.gate-err "⚠ " error-msg])
+   (when (seq denials)
+     [:div.gate-err "⚠ " (count denials) " permission denial" (when (< 1 (count denials)) "s")
+      " — latest: " (or (:tool-name (peek denials)) "?")])])
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   needs-fragment
@@ -1703,8 +1712,10 @@
    A `:pending?` gate (its agent is running after Apply/Reply) shows 'working…'
    and no action buttons — deriving action availability from the agent's live
    phase, so a poll can't flip it back to a fresh Apply button. `:error-msg` (a
-   failed action) renders above the buttons, which stay clickable to retry."
-  [{:keys [ws-id project origin label links report actions session pending? error-msg doing]
+   failed action) renders above the buttons, which stay clickable to retry. `:denials` —
+   auto-mode denials in a session nido drives — render above the report."
+  [{:keys [ws-id project origin label links report actions session pending? error-msg doing
+           denials]
     :as gate}]
   (str
    (h/html
@@ -1717,6 +1728,11 @@
        ;; agent stopped and this is the one line on the pane that says what is
        ;; happening at the moment it is being read.
        (when-let [d (wsv/doing-label doing)] [:p.doing-line "● " d])
+       ;; Every auto-mode denial recorded while nido drives the session, whether or not
+       ;; anything else here waits on a person.
+       (when (seq denials)
+         [:div.denials [:p.meta "Permission denials while nido drives it:"]
+          (into [:ul] (map denial-line) denials)])
        (when report [:div.meta (some-> report :format name) " · " (:at report)])
        (report-body report)
        (if pending?

@@ -134,9 +134,14 @@
   (Operation new! "Birth a scratch workstream and bring its session up."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
      :delegates [lanes/birth! lifecycle/up!]})
+  (Operation workstream-listing
+    "The substrate's rows for one workstream: the background sessions its records name and every
+     session started in its homes or the worktrees they link to."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:sequential :map]]
+     :delegates [session/list-sessions]})
   (Operation open-target "Where opening a workstream lands."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
-     :delegates [session/list-sessions]})
+     :delegates [session/list-sessions workstream-listing view/session-rows]})
   (Operation reclaimed? "Whether a session's substrate was reclaimed under it."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session :any]] :boolean]})
   (Operation ensure-open! "Make a session landable, re-provisioning it if it was reclaimed."

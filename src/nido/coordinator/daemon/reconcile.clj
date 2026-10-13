@@ -91,6 +91,21 @@
         {:state :awaiting-review :error nil}
         {:state :failed :error {:reason :orphaned-from-restart}}))))
 
+(defn- live-owned?
+  "Whether `run` owns its session and that session's record is still :live."
+  [{:keys [project workstream-id session-name] :as run}]
+  (let [s (when workstream-id (session/read-session project workstream-id session-name))]
+    ;; :live first: owns-session? reads every Run record, and only a handful
+    ;; of sessions are still live at any start.
+    (boolean (and s (session/live? s) (runs/owns-session? run)))))
+
+(defn- teardown-due?
+  "Whether reconcile tears down the session `run` ran in when it settles the Run at `state`:
+   resolved, a session it owns still :live, and one its end reclaims (runs/reclaims-session?).
+   The teardown retires the session's background conversation itself, first."
+  [run state]
+  (boolean (and (resolved-states state) (runs/reclaims-session? run) (live-owned? run))))
+
 (defn- settle-session!
   "Leave the session `run` owns as the executor would have left it at `state`:
    torn down once the Run is resolved, its services stopped when this start has
@@ -101,14 +116,9 @@
    Never throws: one Run's session must not keep the rest from being settled."
   [run state parked-now?]
   (try
-    (let [{:keys [project workstream-id session-name]} run
-          s (when workstream-id (session/read-session project workstream-id session-name))]
-      ;; :live first: owns-session? reads every Run record, and only a handful
-      ;; of sessions are still live at any start.
-      (when (and s (session/live? s) (runs/owns-session? run))
-        (cond
-          (resolved-states state) (runs/teardown-session-for-run! run)
-          parked-now?             (runs/stop-session-for-parked-run! run))))
+    (cond
+      (teardown-due? run state)              (runs/teardown-session-for-run! run)
+      (and parked-now? (live-owned? run))    (runs/stop-session-for-parked-run! run))
     (catch Throwable e
       (binding [*out* *err*]
         (println (str "nido coordinator: reconcile could not settle the session of "
@@ -149,15 +159,31 @@
         (println (str "nido coordinator: could not release the improvement hold of "
                       id " — " (ex-message e)))))))
 
+(defn- on-substrate?
+  "Whether a Run's session record carries a :claude facet, or a :dispatching note — a start in
+   flight that Claude Code has not named yet, which is already a background session and never a
+   legacy Run."
+  [run]
+  (boolean
+   (and run (:workstream-id run) (:session-name run)
+        (when-let [s (session/read-session (:project run) (:workstream-id run) (:session-name run))]
+          (or (session/claude-facet s) (:dispatching s))))))
+
 (defn- reconcile-one!
   "Read run.edn, decide a terminal/parked state if non-terminal, write it back,
    then settle the Run's session and claim for the state it ends at. A Run
    already resolved has them settled too: a restart between a Run's state and
    its session leaves nothing else that would ever reach it.
    :queued runs are pending work — they are left intact for re-submission, and a
-   Run caught before its agent launched rejoins them (see requeue?)."
+   Run caught before its agent launched rejoins them (see requeue?).
+
+   A Run whose conversation is a background session and that is not yet resolved
+   is left exactly as it is: the session outlived the daemon, and its own Stop
+   settles the Run when the turn ends. Nothing here reads what an exited process
+   left behind for it. One already resolved is settled like any other."
   [run-id]
-  (when-let [run (runs/read-run run-id)]
+  (when-let [run (let [r (runs/read-run run-id)]
+                   (when-not (and (not (resolved-states (:state r))) (on-substrate? r)) r))]
     (when (resolved-states (:state run))
       (settle-session! run (:state run) false)
       ;; Gated on the payload: this branch reads every Run on disk, and only a

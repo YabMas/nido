@@ -37,6 +37,9 @@
   (Operation faceted-sessions
     "Every session record carrying a :claude facet, across the registered projects."
     {:signature [:=> [:catn [:opts :map]] [:sequential :map]]})
+  (Operation dispatching-sessions
+    "Every session record with a start in flight — a :dispatching note — across the projects."
+    {:signature [:=> [:catn [:opts :map]] [:sequential :map]]})
   (Operation start!
     "Start a conversation for a session record as a background session nido drives, its first
      prompt's token recorded before the session starts, refused naming the hold while one stands;

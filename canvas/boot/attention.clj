@@ -11,8 +11,11 @@
    when its key appears, and again only after it has left the set, so a gate sitting for a day is
    one banner, and a session that resumes and parks again is a new one."
   (Operation items
-    "Every gate, halt and auto-tripped breaker as {key notification}."
+    "Every gate, halt, auto-tripped breaker and newly recorded denial as {key notification}."
     {:signature [:=> [:catn [:inputs :map]] [:map-of :any :map]]})
+  (Operation blocked-notifications
+    "One notification per session that has just entered blocked — never folded, never summarised."
+    {:signature [:=> [:catn [:blocked [:sequential :map]]] [:vector :map]]})
   (Operation arrivals
     "The notifications for keys absent last time. The first look posts one summary instead, so a
      daemon restart never replays every open gate."

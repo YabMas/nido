@@ -15,6 +15,8 @@
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
+   [nido.coordinator.record.session-events :as session-events]
+   [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.source.state]
    [nido.coordinator.lane.spawn]
    [nido.coordinator.record.state :as cstate]
@@ -471,6 +473,65 @@
         (session/create! :brian (:id w) {:name "live" :weight :light :autonomy nil})
         (is (= {:project :brian :session "live"} (work/open-target :brian (:id w)))
             "open lands in the live session, not the archived one")))))
+
+(deftest open-target-never-picks-a-listed-session-no-record-names
+  ;; A person's own background session in the workstream is a row of the list, newest of all,
+  ;; but it is not a nido session: open lands in the recorded one.
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w) {:name "old" :weight :light :autonomy nil})
+        (session/archive! :brian (:id w) "old")
+        (with-redefs [work/workstream-listing (constantly [{:sessionId "s-own" :kind "background"
+                                                            :state "done" :name "mine"
+                                                            :startedAt 4102444800000
+                                                            :baseline-shown? true}])]
+          (is (= {:project :brian :session "old"} (work/open-target :brian (:id w)))))))))
+
+(deftest a-listed-session-shows-the-baseline-only-by-conducts-check
+  ;; The session list lists a person's own session only on the evidence conduct demands: the
+  ;; latest start recorded from where it runs, and auto mode on its LATEST event.
+  (with-tmp
+    (fn [_]
+      (let [w    (workstream/create! :brian {:stage :triaging :external-refs []})
+            _    (session/create! :brian (:id w) {:name "s" :weight :light :autonomy nil})
+            home (str (fs/canonicalize (doto (fs/path (nido.session.state/session-home-dir "brian" "s"))
+                                         fs/create-dirs)))]
+        (doseq [[sid evs] {"s-ok"   [{:event :session-start :cwd home} {:event :prompt :permission-mode "auto"}]
+                           "s-late" [{:event :session-start :cwd home} {:event :prompt :permission-mode "auto"}
+                                     {:event :prompt :permission-mode "default"}]
+                           "s-none" [{:event :session-start :cwd home} {:event :prompt :permission-mode "auto"}
+                                     {:event :stop}]}
+                ev evs]
+          (session-events/append! sid ev))
+        (with-redefs [conduct/live-states
+                      (constantly (into {} (for [sid ["s-ok" "s-late" "s-none"]]
+                                             [sid {:sessionId sid :kind "background" :cwd home}])))]
+          (is (= {"s-ok" true "s-late" false "s-none" false}
+                 (into {} (map (juxt :sessionId :baseline-shown?))
+                       (work/workstream-listing :brian (:id w))))))))))
+
+(deftest a-denial-in-a-session-nido-drives-is-shown-in-the-gate-inbox
+  ;; Nothing else waits on a person here: the denial alone puts the workstream in the inbox.
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w) {:name "s" :weight :light :autonomy nil})
+        (session/update-claude! :brian (:id w) "s"
+                                (constantly {:session-id "s-den" :bg-id "s-den" :origin :nido :driver :nido
+                                             :hold nil :pending nil :queued nil :own-work? false
+                                             :policy {:auto-respawn? false} :cursor 0
+                                             :driving-since "2026-01-01T00:00:00Z"
+                                             :announced-blocked? false :recovered-boot nil}))
+        (session-events/append! "s-den" {:event :permission-denied :at "2025-12-31T00:00:00Z"
+                                         :tool-name "Old"})
+        (session-events/append! "s-den" {:event :permission-denied :at "2026-01-02T00:00:00Z"
+                                         :tool-name "Bash" :tool-input "{\"command\":\"rm\"}"})
+        (let [g (first (filter #(= (:id w) (:ws-id %)) (work/gates :brian)))]
+          (is (some? g) "the workstream is in the inbox")
+          (is (= [{:session "s" :at "2026-01-02T00:00:00Z" :tool-name "Bash" :tool-input "{\"command\":\"rm\"}"}]
+                 (:denials g))
+              "with the denial recorded since nido began driving it"))))))
 
 (deftest open-target-nil-when-no-sessions
   (with-tmp

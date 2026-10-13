@@ -7,34 +7,68 @@
    The shim reads run-link/run.edn at invocation time to discover the
    claude session-id, so typing `claude` from the session-home resumes
    the autonomous conversation. Falls through to a normal `claude` if
-   the id is absent. Resumes with --dangerously-skip-permissions to match
-   how the coordinator launched the autonomous run (so a human picking up the
-   parked session to apply/skip isn't prompted on every tool call).
+   the id is absent. Which way it continues is read off the run's session
+   record: one with a :claude facet is a background session, attached to — the
+   session keeps running when the person detaches. Only one whose record has no
+   facet is a conversation from before the substrate, resumed with
+   --dangerously-skip-permissions to match how the coordinator launched it (so
+   a human picking up the parked session to apply/skip isn't prompted on every
+   tool call).
 
-   This covers promote → :full impl sessions too: the coordinator launches
-   /continue-ticket headlessly at provision time under the pre-generated
-   session-id (so the session is oriented + clear work underway before the human
-   arrives), and the human's first `claude` here just `--resume`s that same
-   conversation. See spec §Agent launch / Resume from the session-home."
+   This covers promote → :full impl sessions too: the coordinator starts
+   /continue-ticket as a background session at provision time (so the session is
+   oriented and clear work is underway before the human arrives), and the
+   human's first `claude` here attaches to that same session."
   (:require
    [babashka.fs :as fs]))
 
 (def ^:private shim-script
-  ;; `bb -e EXPR` prints the result with pr-str semantics, so a string
-  ;; value gets surrounded by literal " characters. Use (print …) so the
-  ;; bare session-id ends up in SESSION_ID; bb suppresses the nil return.
+  ;; The run's session record decides how its conversation is continued: one with a :claude
+  ;; facet is a background session, attached to through `bb nido:session:attach`; only one positively read WITHOUT a facet is a
+  ;; conversation from before the substrate, resumed with the permission skip it was launched
+  ;; with. A record that cannot be read, or a listing that cannot show the session, ends here
+  ;; naming why rather than guessing. With no conversation it is a plain `claude`, the person's.
   "#!/usr/bin/env bash
 set -euo pipefail
 HOME_DIR=\"$(dirname \"$0\")/..\"
 RUN_EDN=\"$HOME_DIR/run-link/run.edn\"
 SESSION_ID=\"\"
+KIND=\"\"
 if [ -f \"$RUN_EDN\" ]; then
-  SESSION_ID=$(bb -e \"(print (or (-> (slurp \\\"$RUN_EDN\\\") clojure.edn/read-string :claude-session-id) \\\"\\\"))\" 2>/dev/null || true)
+  # run-link points at <nido root>/runs/<run-id>; the run's session record lives under that root.
+  ROOT=$(cd -P \"$HOME_DIR/run-link\" 2>/dev/null && cd ../.. && pwd || true)
+  read -r SESSION_ID KIND < <(RUN_EDN=\"$RUN_EDN\" ROOT=\"$ROOT\" bb -e \"$(cat <<'CLJ'
+(let [run (clojure.edn/read-string (slurp (System/getenv \"RUN_EDN\")))
+      k   (-> (str (:session-name run))
+              (clojure.string/replace \"%\" \"%25\")
+              (clojure.string/replace \"/\" \"%2F\")
+              (clojure.string/replace \"\\\\\" \"%5C\"))
+      p   (str (System/getenv \"ROOT\") \"/projects/\" (name (:project run)) \"/workstreams/\"
+               (:workstream-id run) \"/sessions/\" k \"/session.edn\")
+      rec (try (clojure.edn/read-string (slurp p)) (catch Exception _ nil))]
+  (println (or (:claude-session-id run) \"-\")
+           (cond (nil? rec) \"unknown\" (:claude rec) \"facet\" :else \"legacy\")))
+CLJ
+)\" 2>/dev/null || true)
+  [ \"$SESSION_ID\" = \"-\" ] && SESSION_ID=\"\"
 fi
 if [ -n \"$SESSION_ID\" ]; then
-  exec command claude --resume \"$SESSION_ID\" --dangerously-skip-permissions \"$@\"
+  case \"$KIND\" in
+    facet)
+      # Through nido's substrate adapter, the one place that talks to Claude Code about a
+      # background session; it says so when the session is not listed.
+      exec bb --config \"$HOME_DIR/bb.edn\" nido:session:attach :session-id \"$SESSION_ID\"
+      ;;
+    legacy)
+      exec claude --resume \"$SESSION_ID\" --dangerously-skip-permissions \"$@\"
+      ;;
+    *)
+      echo \"nido: this run's session record could not be read, so how to resume its conversation is unknown\" >&2
+      exit 1
+      ;;
+  esac
 fi
-exec command claude --dangerously-skip-permissions \"$@\"
+exec claude \"$@\"
 ")
 
 (defn ^{:malli/schema [:=> [:cat :Path :Path] :any]}

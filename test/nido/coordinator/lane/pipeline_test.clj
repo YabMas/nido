@@ -13,6 +13,7 @@
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as sess]
    [nido.coordinator.lane.reentry :as reentry]
+   [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.pipeline :as p]))
 
 (defn- with-tmp [f]
@@ -1414,7 +1415,17 @@
         (testing "a person's session is live when its ports answer"
           (sess/create! :brian id {:name "human-1" :weight :light :autonomy nil})
           (is (false? (:live (p/status :brian id))))
-          (is (true? (:live (p/status :brian id #{"human-1"})))))))))
+          (is (true? (:live (p/status :brian id #{"human-1"})))))
+        (testing "a background session is live while listed with a process, named by Claude Code yet or not"
+          (sess/create! :brian id {:name "bg-1" :weight :light :autonomy {:skill :x :first-message "x" :agent :claude
+                                                                         :claude-session-id nil :trigger :t
+                                                                         :limits {} :priority 0 :uncapped? false
+                                                                         :on-promote nil :phase :running
+                                                                         :phase-history [] :error nil}})
+          (sess/update-substrate! :brian id "bg-1"
+                                  (constantly {:claude nil :dispatching {:token "T" :at "t" :bg-id "b1"}}))
+          (with-redefs [conduct/live-states (constantly {"s-b1" {:sessionId "s-b1" :id "b1" :pid 9}})]
+            (is (true? (:live (p/status :brian id))) "a start in flight, by the :bg-id its note keeps")))))))
 
 (deftest an-unanswered-blocker-outranks-open-findings
   (is (= :blocked (#'p/place {:ks #{:intent} :findings-open? true :blocker-seq 7})))

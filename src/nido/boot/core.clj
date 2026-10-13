@@ -8,7 +8,6 @@
    [clojure.set :as set]
    [clojure.string :as str]
    [nido.boot.attention :as attention]
-   [nido.coordinator.agent :as agent]
    [nido.coordinator.daemon.anomaly :as anomaly]
    [nido.coordinator.daemon.breakers :as breakers]
    [nido.coordinator.lane.brief :as brief]
@@ -20,6 +19,8 @@
    [nido.coordinator.daemon.pid :as pid]
    [nido.coordinator.source.queue :as queue]
    [nido.coordinator.daemon.reconcile :as reconcile]
+   [nido.coordinator.agent :as agent]
+   [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.resume :as resume]
    [nido.coordinator.lane.review :as review]
    [nido.coordinator.record.runs :as runs]
@@ -261,6 +262,168 @@
         (.println ^java.io.PrintWriter *err*
                   (str "WARN: review settle sweep threw — " (ex-message t)))))))
 
+(defonce ^:private !conduct
+  ;; What the last conduct pass left for the rest of the tick: how many capped units are
+  ;; working in background sessions, and the denials recorded since attention last looked.
+  (atom {:working 0 :denials []}))
+
+(declare registered-projects settle-run!)
+
+(defn- run-for-instruction
+  "The Run that owns the instruction given to a session at `given-at`: of the session's Runs, the
+   one that most recently entered :running at or before then — a Run queues its instruction only
+   once it runs, so one queued behind an earlier turn is not that turn's. nil when none had."
+  [project ws-id session given-at]
+  (let [t (java.time.Instant/parse given-at)]
+    (->> (runs/list-run-ids)
+         (keep runs/read-run)
+         (filter #(and (= (name (:project %)) (name project))
+                       (= (:workstream-id %) ws-id)
+                       (= (:session-name %) session)))
+         (keep (fn [r]
+                 (when-let [at (->> (:state-history r)
+                                    (filter #(= :running (:state %)))
+                                    (map #(java.time.Instant/parse (:at %)))
+                                    (remove #(.isAfter ^java.time.Instant % t))
+                                    sort last)]
+                   [at r])))
+         (sort-by first)
+         last
+         second)))
+
+(defn- settle-turn-ends!
+  "Settle the Run whose instruction each ended turn followed: a Run still :running moves to the
+   state its turn's outcome calls for; a parked Run whose reply turn ended is parked again for the
+   person. Only a turn conduct attributes to an instruction nido gave — the :instruction whose
+   token a recorded prompt carried — settles anything: a person's turn settles no Run."
+  [{:keys [turn-ends]}]
+  (doseq [{:keys [project ws-id session event instruction]} turn-ends
+          :when (:at instruction)]
+    (try
+      (when-let [run (run-for-instruction project ws-id session (:at instruction))]
+        (case (:state run)
+          :running
+          (if (= :merge (:mode run))
+            (ship/settle-drive-home! (:id run) {})
+            (settle-run! (:id run) run (#{:plan-bug :plan-github-issue} (:skill run))
+                         {:exit-code 0 :result-text (:last-message event)}))
+          :awaiting-review
+          (let [s (session/read-session project ws-id session)]
+            (when (session/autonomous? s)
+              (session/set-error! project ws-id session nil)
+              (session/set-phase! project ws-id session :parked)))
+          nil))
+      (catch Throwable t
+        (binding [*err* *err*]
+          (.println ^java.io.PrintWriter *err*
+                    (str "nido conduct: settling " session " failed — " (ex-message t))))))))
+
+(defn- enforce-budgets!
+  "Stop, and fail as timed out, each Run whose outstanding instruction has been running longer
+   than its wall-clock budget. On the substrate nothing kills a turn by itself, so this is the
+   brake launch!'s timer was; a Run without a readable budget is not stopped here."
+  [now-ms faceted]
+  (doseq [{:keys [project ws-id session-name facet]} faceted
+          :let [at (get-in facet [:pending :at])]
+          :when (and at (= :nido (:driver facet)))]
+    (try
+      (when-let [run (run-for-instruction project ws-id session-name at)]
+        (when (= :running (:state run))
+          (let [budget-ms (agent/parse-budget-ms (-> run :limits :budget))]
+            (when (> (- now-ms (.toEpochMilli (java.time.Instant/parse at))) budget-ms)
+              (conduct/retire! project ws-id session-name {})
+              (if (= :merge (:mode run))
+                (ship/settle-drive-home! (:id run) {:timed-out? true})
+                (settle-run! (:id run) run (#{:plan-bug :plan-github-issue} (:skill run))
+                             {:timed-out? true}))))))
+      (catch Throwable _ nil))))
+
+(defn- surface-refusals!
+  "Put on each session's record why conduct kept its queued instruction back, so the person sees
+   the session is waiting on its launch baseline rather than on nido, and take it off once an
+   instruction is delivered. Written only when it changes. Best-effort."
+  [{:keys [refused delivered]}]
+  (doseq [{:keys [project ws-id session because]} refused]
+    (try
+      (let [msg (str "nido is holding the queued instruction back: the session's recorded events "
+                     "no longer show the launch baseline (" (name because) ")")]
+        (when-not (= msg (get-in (session/read-session project ws-id session) [:autonomy :error :message]))
+          (session/set-error! project ws-id session
+                              {:at (clock/now-iso) :reason :baseline-not-shown :message msg})))
+      (catch Throwable _ nil)))
+  (doseq [{:keys [project ws-id session]} delivered]
+    (try
+      (when (= :baseline-not-shown
+               (get-in (session/read-session project ws-id session) [:autonomy :error :reason]))
+        (session/set-error! project ws-id session nil))
+      (catch Throwable _ nil))))
+
+(defn- surface-left-running!
+  "Put on each session's record that a wake left a copy of it running — its instruction stays
+   outstanding, so nothing is given it again until a person releases or hands it back — and take
+   it off once the listing no longer shows that copy. Best-effort: a session with no autonomy
+   facet has no error to carry it."
+  [{:keys [left-running]} faceted]
+  (doseq [{:keys [project ws-id session running]} left-running]
+    (try
+      (session/set-error! project ws-id session
+                          {:at      (clock/now-iso)
+                           :reason  :copy-left-running
+                           :running running
+                           :message (str "A wake left a copy of this session running (" running
+                                         ") — nido gives it nothing more until it is released or "
+                                         "handed back; stop the copy with `claude stop " running "`")})
+      (catch Throwable _ nil)))
+  (let [listed (delay (set (keep :id (vals (conduct/live-states {})))))]
+    (doseq [{:keys [project ws-id session-name]} faceted]
+      (try
+        (let [err (get-in (session/read-session project ws-id session-name) [:autonomy :error])]
+          ;; The listing read here may be two seconds old, so a copy left this moment is given
+          ;; longer than that to appear in it before its absence is taken as gone.
+          (when (and (= :copy-left-running (:reason err))
+                     (< 5000 (- (System/currentTimeMillis)
+                                (.toEpochMilli (java.time.Instant/parse (:at err)))))
+                     (not (@listed (:running err))))
+            (session/set-error! project ws-id session-name nil)))
+        (catch Throwable _ nil)))))
+
+(defn- outstanding
+  "Each faceted session's outstanding instruction, by {:project :ws-id :session}."
+  [faceted]
+  (into {} (map (fn [{:keys [project ws-id session-name facet]}]
+                  [{:project project :ws-id ws-id :session session-name} (:pending facet)]))
+        faceted))
+
+(defn- conduct-pass!
+  "One conduct pass over the background sessions: hold sends while the account is at its usage
+   limit, settle the Runs whose turns ended, enforce budgets, say on its record why a session's
+   instruction is held back or that a wake left a copy of it running, announce sessions newly
+   blocked, and keep what the rest of the tick reads."
+  [now-ms]
+  (let [projects (registered-projects)
+        r        (conduct/conduct! {:projects projects :hold-sends? (usage-held? now-ms)})]
+    (when-not (:skipped r)
+      (settle-turn-ends! r)
+      (let [faceted (conduct/faceted-sessions {:projects projects})
+            pending (outstanding faceted)]
+        (enforce-budgets! now-ms faceted)
+        (surface-refusals! r)
+        (surface-left-running! r faceted)
+        (when-let [notify! @!notify-fn]
+          (let [ns (attention/blocked-notifications (:blocked r))]
+            (when (seq ns) (future (doseq [n ns] (notify! n))))))
+        (swap! !conduct
+               (fn [c]
+                 {:working (count (remove (fn [{:keys [project ws-id session] :as who}]
+                                            ;; The Run whose instruction the session is working on
+                                            ;; holds the slot, not whichever Run is newest.
+                                            (:uncapped? (if-let [at (:at (pending (select-keys who [:project :ws-id :session])))]
+                                                          (run-for-instruction project ws-id session at)
+                                                          (runs/find-for-session project ws-id session))))
+                                          (:working r)))
+                  :denials (into (:denials c) (:denials r))}))))
+    r))
+
 (defn- maybe-notify-attention!
   "Throttled: post a desktop notification for each gate, halt or auto-tripped
    breaker that appeared since the last look. A no-op until run! arms the
@@ -271,9 +434,13 @@
     (when (>= (- now-ms @!last-attention-ms) (:attention-interval-ms defaults))
       (reset! !last-attention-ms now-ms)
       (try
-        (let [current (attention/items {:gates    (work/all-gates)
+        (let [denials (:denials @!conduct)
+              current (attention/items {:gates    (work/all-gates)
                                         :halt     halt-info
-                                        :breakers (breakers/auto-tripped-triggers)})]
+                                        :breakers (breakers/auto-tripped-triggers)
+                                        :denials  denials})]
+          ;; Each denial is posted on the look it first appears in, then dropped.
+          (swap! !conduct update :denials #(vec (drop (count denials) %)))
           ;; Off the loop's thread: a sender waiting on a permission prompt
           ;; holds its call for up to a minute, and the tick must not wait.
           (let [ns (attention/coalesce (attention/arrivals @!attention-seen current))]
@@ -576,7 +743,7 @@
    bounces the board back to :ready, SILENTLY hiding the failure (the canonical
    case: a shared-PG Flyway checksum mismatch blocks the session app boot, so the
    promote appears to undo itself minutes later). Parking mirrors the merge lane's
-   :blocked handling (ship/drive-home-blocking!): the ticket stays :planning (board
+   :blocked handling (ship/settle-drive-home!): the ticket stays :planning (board
    stays :in-progress), the session parks, and set-error! carries the blocker into
    the gate inbox. Scoped to provision-only runs so the triage path's breaker-
    engaging :failed handling (the '36 sessions' no-op guard) is untouched."
@@ -662,6 +829,31 @@
                               (:session-name r) " — " (ex-message e)))))))
     r))
 
+(defn- project-source
+  "The checkout a project's sessions are made from — what vouches for trusting a worktree
+   made from it."
+  [run]
+  (get-in (project/list-projects) [(name (:project run)) :directory]))
+
+(defn- start-conversation!
+  "Start a Run's conversation as a background session nido drives, on its session's record, and
+   record the session's id on the Run once Claude Code has given it one. Returns at once; the
+   Run settles when the session's own Stop ends its turn."
+  [run lc first-message system-prompt]
+  (let [facet (conduct/start! {:project       (:project run)
+                               :ws-id         (:workstream-id run)
+                               :session-name  (:session-name run)
+                               :name          (:session-name run)
+                               :cwd           (:cwd lc)
+                               :source        (project-source run)
+                               :prompt        first-message
+                               :system-prompt system-prompt
+                               :mcp-config    (:mcp-config lc)
+                               :add-dirs      (:add-dirs lc)
+                               :policy        {:auto-respawn? true}})]
+    (persist-claude-session-id! (runs/read-run (:id run)) (:session-id facet))
+    {:started true}))
+
 (defn- run-blocking!
   "Drive a single :queued Run to terminal/awaiting-review state.
    Called inside an executor-spawned future (one per slot). The name
@@ -684,23 +876,16 @@
     (when-not (or (contains? restored run-id)
                   (runs/recovery? (runs/read-run run-id)))
       (swap! !detector anomaly/record-spawn (clock/now-iso))))
-  (let [;; Generate the claude session id up front and persist it to run.edn
-        ;; BEFORE launch, so a restart mid-session (or any interruption) never
-        ;; strands the Run without a resumable id — the resume shim reads this.
-        ;; Passed to claude as --session-id so the transcript uses it.
-        ;; :plan-bug is the "promote" leg: promote brings up the :full session,
-        ;; flips Notion → "In progress", then launches /continue-ticket headlessly
-        ;; so the session is already oriented (triage findings picked up, clear
-        ;; low-risk work underway) and parked by the time the human arrives. The
-        ;; human enters the session and the shim `--resume`s this same conversation.
-        ;; The session-id is generated + persisted up front so the headless launch
-        ;; uses `--session-id` and later entries `--resume` the same conversation.
-        ;; plan-bug bypasses only the skill-resolvable? gate (/continue-ticket is a
-        ;; harness-injected skill, always present regardless of checkout).
-        ;; (`:plan-bug` is the internal trigger id; the command is /continue-ticket.)
+  (let [;; :plan-bug is the "promote" leg: promote brings up the :full session,
+        ;; flips Notion → "In progress", then starts /continue-ticket so the
+        ;; session is already oriented (triage findings picked up, clear low-risk
+        ;; work underway) and parked by the time the human arrives — who attaches
+        ;; to the same background session. plan-bug bypasses only the
+        ;; skill-resolvable? gate (/continue-ticket is a harness-injected skill,
+        ;; always present regardless of checkout). (`:plan-bug` is the internal
+        ;; trigger id; the command is /continue-ticket.)
         provision-only? (#{:plan-bug :plan-github-issue} (:skill (runs/read-run run-id)))
-        session-id   (str (java.util.UUID/randomUUID))
-        run          (persist-claude-session-id! (runs/read-run run-id) session-id)
+        run          (runs/read-run run-id)
         ;; Spawn the session + launch claude. If EITHER throws (e.g. session
         ;; build / worktree creation fails), don't let it escape — that would
         ;; leave the Run stuck :running forever (a zombie that permanently
@@ -771,18 +956,12 @@
                                base-sp (if github?
                                          (:plan-issue-system-prompt defaults)
                                          (:plan-system-prompt defaults))]
-                           (agent/launch! {:run-id            run-id
-                                           :cwd               (:cwd lc)
-                                           :first-message     (if github?
-                                                                (issue-impl-brief (:event-payload run))
-                                                                "/continue-ticket")
-                                           :system-prompt     (str base-sp "\n\n" (:briefing lc)
-                                                                   "\n\n" (:run-paths lc))
-                                           :mcp-config        (:mcp-config lc)
-                                           :add-dirs          (:add-dirs lc)
-                                           :settings          (:settings lc)
-                                           :budget            (-> run :limits :budget)
-                                           :claude-session-id session-id}))
+                           (start-conversation! run lc
+                                                (if github?
+                                                  (issue-impl-brief (:event-payload run))
+                                                  "/continue-ticket")
+                                                (str base-sp "\n\n" (:briefing lc)
+                                                     "\n\n" (:run-paths lc))))
                          (catch Throwable t
                            (cond-> {:spawn-error true :detail (.getMessage t)}
                              (kept-failure-id t) (assoc :failure-id (kept-failure-id t)))))
@@ -794,20 +973,37 @@
                        (try
                          (runs/spawn-session-for-run! run)
                          (let [lc (runs/launch-context run)]
-                           (agent/launch! {:run-id            run-id
-                                           :cwd               (:cwd lc)
-                                           :first-message     (:first-message run)
-                                           :system-prompt     (str (:system-prompt defaults) "\n\n"
-                                                                   (:briefing lc) "\n\n" (:run-paths lc))
-                                           :mcp-config        (:mcp-config lc)
-                                           :add-dirs          (:add-dirs lc)
-                                           :settings          (:settings lc)
-                                           :budget            (-> run :limits :budget)
-                                           :claude-session-id session-id}))
+                           (start-conversation! run lc (:first-message run)
+                                                (str (:system-prompt defaults) "\n\n"
+                                                     (:briefing lc) "\n\n" (:run-paths lc))))
                          (catch Throwable t
                            (cond-> {:spawn-error true :detail (.getMessage t)}
-                             (kept-failure-id t) (assoc :failure-id (kept-failure-id t))))))
-        derived    (cond
+                             (kept-failure-id t) (assoc :failure-id (kept-failure-id t))))))]
+    ;; A conversation that started is still running: its run settles when the
+    ;; session's own Stop says the turn ended (settle-turn-ends!), not here.
+    (when-not (:started result)
+      (settle-run! run-id run provision-only? result))))
+
+(defn- retire-run-session!
+  "What every teardown of a Run's session does first: retire the background conversation running
+   in it, so no workspace is removed under a session still working there. A stop the substrate
+   refuses throws, and teardown keeps the session whole. A session without a :claude facet has
+   nothing to retire."
+  [{:keys [project workstream-id session-name]}]
+  (when (and workstream-id session-name)
+    (conduct/retire! project workstream-id session-name {})))
+
+;; Installed when the composition root loads, before anything here can tear a session down:
+;; settle-run!, the reconcile pass and the review sweep all reach teardown-session-for-run!.
+(runs/set-before-teardown! retire-run-session!)
+
+(defn- settle-run!
+  "Move a Run to the state its turn's outcome calls for, and do what that state
+   asks of the brakes, the ticket and the session. `result` is how the turn
+   ended: a failure to start it, or — for a conversation on the substrate — the
+   turn's end as its Stop reported it."
+  [run-id run provision-only? result]
+  (let [derived    (cond
                      ;; Provision-only failures park a BLOCKED gate instead of
                      ;; :failed — a :failed here reverts the ticket :planning→:triaged
                      ;; (bounces the board back to :ready) and hides the blocker.
@@ -842,7 +1038,6 @@
                           (contains? #{:done :awaiting-review} derived)
                           (not (runs/diagnosed-while-running? (runs/read-run run-id))))
         next-state (if undiagnosed? :failed derived)]
-    ;; (session-id was already persisted up front, above)
     (runs/transition! run-id next-state)
     (when (= :failed next-state)
       (let [r (runs/read-run run-id)]
@@ -937,6 +1132,8 @@
     ;; the same leak applies to it for as long as nobody answers — so its
     ;; services are stopped, and a reply or an open brings them back.
     (when (contains? #{:done :failed :halted} next-state)
+      ;; Teardown retires the session's background conversation first (see
+      ;; retire-run-session!), and keeps the session whole when it cannot.
       (runs/teardown-session-for-run! run)
       ;; A claim Run that ends with its claim still open died before landing or
       ;; giving it up, and the sweep stays held until something closes it.
@@ -1068,7 +1265,7 @@
    Deliberately an EXECUTION selector and not a position. Where a workstream
    stands is nido.coordinator.lane.pipeline's question, derived on read; this is a fact about one
    Run, written when it is minted."
-  {:merge (fn [rid] (ship/drive-home-blocking! rid))
+  {:merge (fn [rid] (ship/drive-home! rid))
    ;; The driven stage. Its body runs the stage in-process inside the slot the
    ;; executor gave it, submits nothing and waits on nothing — which is what
    ;; keeps a driven chain from wedging against another at a cap of two.
@@ -1132,7 +1329,7 @@
         (doseq [env (queue/drain!)]
           (dispatch-envelope! env triggers-by-project))
         ;; Reap finished executor futures and promote waiting Runs into
-        ;; free slots. on-spawn dispatches :merge Runs to drive-home-blocking!
+        ;; free slots. on-spawn dispatches :merge Runs to drive-home!
         ;; and everything else to run-blocking!.
         (review/sweep-resolved!)
         ;; Advance the workstreams on the driver's allow-list. Empty by default,
@@ -1154,6 +1351,13 @@
                (binding [*err* *err*]
                  (.println ^java.io.PrintWriter *err*
                            (str "nido drive: tick failed — " (ex-message t))))))
+        ;; The background sessions, before anything is promoted: a turn that ended
+        ;; frees its slot in the same tick, and the working count is current.
+        (try (conduct-pass! (System/currentTimeMillis))
+             (catch Throwable t
+               (binding [*err* *err*]
+                 (.println ^java.io.PrintWriter *err*
+                           (str "nido conduct: pass failed — " (ex-message t))))))
         (let [on-spawn (fn [rid] (execute! rid))
               ;; :merge Runs reuse an existing session whose autonomy :trigger is
               ;; NOT :merge, so session-based gating can't see them — count :merge
@@ -1165,7 +1369,7 @@
           ;; starts only to be rejected. Reaping is skipped with it, which is
           ;; harmless — a finished future is reaped on the first tick after.
           (when-not (usage-held? (System/currentTimeMillis))
-            (executor/tick! on-spawn in-flight)))
+            (executor/tick! on-spawn in-flight (:working @!conduct))))
         ;; Then poll due sources. Their emissions land in the queue and
         ;; will be picked up next tick.
         (let [now-ms (System/currentTimeMillis)]
@@ -1241,6 +1445,12 @@
   (cstate/ensure-dirs!)
   (println "nido coordinator: starting (poll" poll-ms "ms)")
   (reconcile/reconcile!)
+  ;; Background sessions survive the daemon; a host reboot does not keep them running.
+  (try (let [{:keys [first-start? restarted]} (conduct/recover! {:projects (registered-projects)})]
+         (when (and first-start? (seq restarted))
+           (println "nido coordinator: restarted" (count restarted) "background session(s) after a reboot")))
+       (catch Throwable t
+         (println "nido coordinator: recovering background sessions failed —" (ex-message t))))
   (resubmit-queued! (load-all-triggers))
   (reset! !dashboard-lifecycle dashboard)
   (let [{:keys [enabled? port]} (dashboard-config opts)

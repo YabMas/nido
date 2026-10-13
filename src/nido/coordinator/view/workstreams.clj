@@ -506,24 +506,54 @@
     {:active (by-newest (filter live? rows))
      :idle   (by-newest (remove live? rows))}))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:vector :map]]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:sequential :map]] [:vector :map]]}
   session-rows
-  "Display rows for one workstream's coordinator-sessions, ordered most-recently-
-   active first. :phase is nil for human (non-autonomous) sessions."
-  [project ws-id]
-  (->> (session/list-sessions project ws-id)
-       (mapv (fn [s]
-               {:name          (:name s)
-                :project       project
-                :phase         (get-in s [:autonomy :phase])
-                :weight        (:weight s)
-                :substrate     (:substrate s)
-                :last-activity (or (some-> s :autonomy :phase-history last :at)
-                                   (some-> s :substrate-history last :at)
-                                   (:created-at s))}))
-       ;; newest-active first; nil :last-activity sorts last. Lexical = chronological.
-       (sort-by #(or (:last-activity %) "") #(compare %2 %1))
-       vec))
+  "Display rows for one workstream's sessions, ordered most-recently-active first, in the state
+   the substrate's listing reports and with who drives each in one vocabulary whoever started it:
+   :driver is what a session's :claude facet records, :nobody without one; :state is the
+   listing's, nil for a session it does not list. :phase is nil for human sessions.
+
+   `listing` is the substrate's rows for this workstream's directories — View may not reach the
+   substrate, so its caller reads them and hands them down, each marked :baseline-shown? by the
+   check conduct makes. A listed background session no record names gets a row of its own when it
+   is so marked: a person's own session in the workstream's home or worktree, which nido could
+   adopt. :recorded? says which:
+   only a recorded row's :name is a nido session to open."
+  [project ws-id listing]
+  (let [by-id     (into {} (map (juxt :sessionId identity)) listing)
+        sessions  (session/list-sessions project ws-id)
+        on-record (set (keep #(get-in % [:claude :session-id]) sessions))
+        recorded  (mapv (fn [s]
+                          (let [row (get by-id (get-in s [:claude :session-id]))]
+                            {:name          (:name s)
+                             :project       project
+                             :recorded?     true
+                             :phase         (get-in s [:autonomy :phase])
+                             :weight        (:weight s)
+                             :substrate     (:substrate s)
+                             :state         (:state row)
+                             :driver        (or (get-in s [:claude :driver]) :nobody)
+                             :held?         (some? (get-in s [:claude :hold]))
+                             :last-activity (or (some-> s :autonomy :phase-history last :at)
+                                                (some-> s :substrate-history last :at)
+                                                (:created-at s))}))
+                        sessions)
+        unrecorded (for [row listing
+                         :when (and (= "background" (:kind row))
+                                    (not (on-record (:sessionId row)))
+                                    (:baseline-shown? row))]
+                     {:name          (or (:name row) (:id row))
+                      :project       project
+                      :recorded?     false
+                      :session-id    (:sessionId row)
+                      :state         (:state row)
+                      :driver        :nobody
+                      :held?         false
+                      :last-activity (some-> (:startedAt row) java.time.Instant/ofEpochMilli str)})]
+    (->> (concat recorded unrecorded)
+         ;; newest-active first; nil :last-activity sorts last. Lexical = chronological.
+         (sort-by #(or (:last-activity %) "") #(compare %2 %1))
+         vec)))
 
 (def ^:private title-max 52)
 

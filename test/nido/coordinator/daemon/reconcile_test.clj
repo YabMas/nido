@@ -542,3 +542,48 @@
         (agent-started! (:id run))
         (reconcile/reconcile!)
         (is (= :done (get-in (ws/read-ws :test (:id w)) [:closed :outcome])))))))
+
+(deftest reconcile!-leaves-a-run-whose-conversation-is-a-background-session
+  ;; The session outlived the daemon; its own Stop settles the run. Nothing an exited process
+  ;; left behind is read for it.
+  (with-tmp
+    (fn [_]
+      (let [run (assoc base-run :workstream-id "ws-1")]
+        (seed-run! run)
+        (agent-started! (:id run))
+        (session/create! :test "ws-1" {:name (:session-name run) :weight :light :autonomy nil})
+        (session/update-claude! :test "ws-1" (:session-name run)
+                                (constantly {:session-id "bg-1" :bg-id "bg-1" :origin :nido :driver :nido
+                                             :hold nil :pending nil :queued nil :own-work? false
+                                             :policy {:auto-respawn? true} :cursor 0 :driving-since "t"
+                                             :announced-blocked? false :recovered-boot nil}))
+        (reconcile/reconcile!)
+        (is (= :running (:state (runs/read-run (:id run)))) "left running, not failed as orphaned")))))
+
+(deftest a-resolved-run-whose-conversation-is-a-background-session-is-still-settled
+  ;; Only a Run still awaiting its Stop is left to it; one written :failed just before the
+  ;; daemon died still has its session settled, or nothing ever would.
+  (with-tmp
+    (fn [_]
+      (let [run (with-session! (assoc base-run :state :failed
+                                      :state-history [{:at "T1" :state :queued}
+                                                      {:at "T2" :state :failed}]))]
+        (session/update-claude! :test (:workstream-id run) (:session-name run)
+                                (constantly {:session-id "bg-1" :bg-id "bg-1" :origin :nido :driver :nido
+                                             :hold nil :pending nil :queued nil :own-work? false
+                                             :policy {:auto-respawn? true} :cursor 0 :driving-since "t"
+                                             :announced-blocked? false :recovered-boot nil}))
+        (is (= [(:id run)] (:torn (settling))))))))
+
+(deftest reconcile!-leaves-a-run-whose-background-session-has-no-id-yet
+  ;; start! writes its dispatching note before dispatch; a daemon that dies before Claude Code
+  ;; names the session left a background session, not a legacy Run — not requeued, not failed.
+  (with-tmp
+    (fn [_]
+      (let [run (assoc base-run :workstream-id "ws-1")]
+        (seed-run! run)
+        (session/create! :test "ws-1" {:name (:session-name run) :weight :light :autonomy nil})
+        (session/update-substrate! :test "ws-1" (:session-name run)
+                                   (constantly {:claude nil :dispatching {:token "T" :at "t"}}))
+        (reconcile/reconcile!)
+        (is (= :running (:state (runs/read-run (:id run)))) "left to its own Stop")))))

@@ -293,3 +293,16 @@
       (do (p/shell {:dir dir :in "" :out :string :err :string :continue true}
                    "python3" "-I" "-c" accept-trust-script claude-bin)
           (trusted? dir))))
+
+(defn ^{:malli/schema [:=> [:cat :string :map] :any]}
+  attach!
+  "Put the person in front of the background session `session-id`, in this terminal: this
+   process becomes `claude attach`, and the session keeps running when they detach. Throws,
+   starting nothing, when the listing shows no background session by that id."
+  [session-id {:keys [claude-bin] :or {claude-bin "claude"} :as opts}]
+  (let [row (first (filter #(and (= session-id (:sessionId %)) (= "background" (:kind %)))
+                           (listing opts)))]
+    (when-not row
+      (throw (ex-info (str "Claude Code lists no background session " session-id " — see `claude agents`")
+                      {:reason :not-listed :session-id session-id})))
+    (p/exec [claude-bin "attach" (:id row)])))

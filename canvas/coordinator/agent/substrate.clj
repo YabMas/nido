@@ -54,6 +54,11 @@
   (Operation respawn!
     "Restart a session from its saved conversation."
     {:signature [:=> [:catn [:id :string] [:opts :map]] :boolean]})
+  (Operation attach!
+    "Put the person in front of a background session in this terminal, refused when the listing
+     shows none by that id; the session keeps running when they detach."
+    {:signature [:=> [:catn [:session-id :string] [:opts :map]] :any]
+     :delegates [listing]})
   (Operation trusted?
     "Whether Claude Code has recorded trust for exactly this directory."
     {:signature [:=> [:catn [:dir :string]] :boolean]})

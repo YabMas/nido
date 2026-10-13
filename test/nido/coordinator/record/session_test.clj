@@ -548,3 +548,28 @@
   (with-tmp
     (fn [_]
       (is (thrown? Exception (sess/update-claude! :brian "ws-1" "nope" (constantly a-facet)))))))
+
+(deftest update-substrate-writes-the-facet-and-clears-the-note-as-one-step
+  (with-tmp
+    (fn [_]
+      (sess/write! human-session)
+      (let [{:keys [project workstream-id name]} human-session]
+        (sess/update-substrate! project workstream-id name
+                                (constantly {:claude nil :dispatching {:token "T" :at "t0"}}))
+        (is (= {:token "T" :at "t0"} (:dispatching (sess/read-session project workstream-id name))))
+        (sess/update-substrate! project workstream-id name
+                                (fn [{:keys [dispatching]}]
+                                  {:claude (assoc a-facet :pending {:token (:token dispatching) :at "t0"
+                                                                    :via :dispatch :seen? false})
+                                   :dispatching nil}))
+        (let [s (sess/read-session project workstream-id name)]
+          (is (nil? (:dispatching s)))
+          (is (= "T" (get-in s [:claude :pending :token]))))))))
+
+(deftest a-facet-always-names-its-session
+  (with-tmp
+    (fn [_]
+      (sess/write! human-session)
+      (let [{:keys [project workstream-id name]} human-session]
+        (is (thrown? Exception (sess/update-claude! project workstream-id name
+                                                    (constantly (assoc a-facet :session-id nil)))))))))

@@ -7,7 +7,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
-   [nido.coordinator.agent :as agent]
+   [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.record.runs :as runs]
@@ -15,6 +15,7 @@
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.status-file :as status-file]
    [nido.coordinator.record.workstream :as ws]
+   [nido.platform.project :as project]
    [nido.session.state :as session-state])
   (:import [java.util UUID]))
 
@@ -34,7 +35,7 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] :Run]}
   create-merge-run!
   "Build + persist a :queued :merge Run reusing the existing session-home.
-   No new worktree/session is created — drive-home-blocking! launches into the
+   No new worktree/session is created — drive-home! gives /drive-home to the
    session named `session-name`."
   [project ws-id session-name]
   (let [w      (ws/read-ws project ws-id)
@@ -182,38 +183,18 @@
         :complete :awaiting-merge
         :blocked))))
 
-(defn ^{:malli/schema [:=> [:cat :RunId] :any]}
-  drive-home-blocking!
-  "Executor on-spawn body for a :merge Run. Runs /drive-home headless in the
-   EXISTING session-home (cwd = session-home, where bb nido:run + composed
-   .claude/skills resolve), then classifies the outcome:
+(defn ^{:malli/schema [:=> [:cat :RunId :map] :keyword]}
+  settle-drive-home!
+  "Settle a :merge Run from how its `/drive-home` turn ended — `result` is a failure to give it,
+   or {} when the session's Stop ended the turn — by classify-outcome:
      :awaiting-merge → :done   (PR on GitHub's queue; lane slot freed)
-     :blocked        → :awaiting-review (session parked + :error; gate inbox)
-   Never tears down the session — the human owns it."
-  [run-id]
-  (runs/transition! run-id :running)                     ; mirrors session phase → :running
-  (let [run0 (runs/read-run run-id)
-        sid  (str (UUID/randomUUID))
-        run  (runs/write-run! (assoc run0 :claude-session-id sid))   ; persist before launch; not mirrored to session
+     :blocked        → :awaiting-review (session parked + :error; gate inbox)"
+  [run-id result]
+  (let [run          (runs/read-run run-id)
         project      (:project run)
         ws-id        (:workstream-id run)
         session-name (:session-name run)
         br           (some-> run :event-payload :id)
-        home         (session-state/session-home-dir (name project) session-name)
-        result (if-not (fs/exists? home)
-                 {:spawn-error true :detail (str "session-home absent: " home)}
-                 (try
-                   (let [lc (runs/launch-context run)]
-                     (agent/launch! {:run-id            run-id
-                                     :cwd               home          ; session-home, NOT worktree
-                                     :first-message     "/drive-home"
-                                     :system-prompt     (str (:briefing lc) "\n\n" (:run-paths lc))
-                                     :mcp-config        (:mcp-config lc)
-                                     :add-dirs          (:add-dirs lc)
-                                     :settings          (:settings lc)
-                                     :budget            (-> run :limits :budget)
-                                     :claude-session-id sid}))
-                   (catch Throwable t {:spawn-error true :detail (.getMessage t)})))
         outcome (classify-outcome project br run-id result)]
     (case outcome
       :awaiting-merge
@@ -231,3 +212,55 @@
                                 {:at (clock/now-iso) :reason :ship-blocked :message note})
             (catch Throwable _ nil)))))                  ; best-effort (human/non-autonomous session)
     outcome))
+
+(defn- give-drive-home!
+  "Give `/drive-home` to the run's session: queue it for the background session nido drives,
+   adopt the session first when nobody drives it, or start one in the session home when the
+   session has none. Throws, naming why, when a person holds the session or a start for it is
+   still in flight."
+  [run home lc]
+  (let [{:keys [project] ws-id :workstream-id session-name :session-name} run
+        record (session/read-session project ws-id session-name)
+        facet  (:claude record)]
+    (cond
+      (:dispatching record)
+      (throw (ex-info "A session nido is starting here has no id from Claude Code yet — ship again once it does"
+                      {:reason :session-unnamed}))
+
+      (nil? facet)
+      (conduct/start! {:project project :ws-id ws-id :session-name session-name
+                       :name session-name :cwd home :prompt "/drive-home"
+                       :source (get-in (project/list-projects) [(name project) :directory])
+                       :system-prompt (str (:briefing lc) "\n\n" (:run-paths lc))
+                       :mcp-config (:mcp-config lc) :add-dirs (:add-dirs lc)})
+
+      (:hold facet)
+      (throw (ex-info "A person holds this session — hand it back, then ship again"
+                      {:reason :held}))
+
+      :else
+      (do (when (= :nobody (:driver facet))
+            ;; The person's own `nido ship` is the hand-back: they asked nido to drive it.
+            (conduct/adopt! {:project project :ws-id ws-id :session-name session-name
+                             :session-id (:session-id facet)}))
+          (conduct/instruct! project ws-id session-name "/drive-home")))))
+
+(defn ^{:malli/schema [:=> [:cat :RunId] :any]}
+  drive-home!
+  "Executor on-spawn body for a :merge Run: give `/drive-home` to the run's background session
+   in the EXISTING session home (where bb nido:run and the composed .claude/skills resolve). It
+   returns as soon as the instruction is on its way; the Run settles in settle-drive-home! when
+   the session's own Stop ends the turn. Never tears down the session — the person owns it."
+  [run-id]
+  (runs/transition! run-id :running)                     ; mirrors session phase → :running
+  (let [run  (runs/read-run run-id)
+        home (session-state/session-home-dir (name (:project run)) (:session-name run))]
+    (if-not (fs/exists? home)
+      (settle-drive-home! run-id {:spawn-error true :detail (str "session-home absent: " home)})
+      (try
+        (give-drive-home! run home (runs/launch-context run))
+        :started
+        (catch Throwable t
+          (settle-drive-home! run-id {:spawn-error true :detail (.getMessage t)}))))))
+
+

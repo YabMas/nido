@@ -3,7 +3,7 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is use-fixtures]]
    [nido.platform.core :as nido-core]
-   [nido.coordinator.agent :as agent]
+   [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.daemon.breakers :as breakers]
    [nido.boot.core :as core]
    [nido.coordinator.executor :as executor]
@@ -37,10 +37,32 @@
         (recur)))
     (core/tick!)))
 
+(defn- stop-every-running-turn
+  "A conduct/conduct! stand-in: every Run still :running had its turn ended by its session's Stop."
+  [_]
+  {:turn-ends (vec (for [id (runs/list-run-ids)
+                         :let [r (runs/read-run id)]
+                         :when (= :running (:state r))]
+                     {:project (:project r) :ws-id (:workstream-id r) :session (:session-name r)
+                      :event {:event :stop :last-message "done"}
+                      ;; Its own instruction's Stop: given as the turn began, after the Run ran.
+                      :instruction {:token "T" :at (str (java.time.Instant/now)) :seen? true}}))
+   :denials [] :held [] :blocked [] :delivered [] :failed [] :working []})
+
+(defn- every-running-turn-outstanding
+  "A conduct/faceted-sessions stand-in: each Run still :running has its instruction outstanding,
+   given now — after the Run began running, so its Stop is the one that ends it."
+  [_]
+  (vec (for [id (runs/list-run-ids)
+             :let [r (runs/read-run id)]
+             :when (= :running (:state r))]
+         {:project (:project r) :ws-id (:workstream-id r) :session-name (:session-name r)
+          :facet {:driver :nido :pending {:token "T" :at (str (java.time.Instant/now))}}})))
+
 (deftest manual-trigger-end-to-end
   (let [tmp     (fs/create-temp-dir)
         tmp-str (str tmp)
-        sid     (atom nil)]   ; capture the session-id run-blocking! generates + passes to launch!
+        started (atom nil)]   ; what the background session was started with
     (try
       (with-redefs [nido-core/nido-root         (constantly tmp-str)
                     ;; core/tick! reaches maybe-adopt! -> work/prune-dead-registry! for real,
@@ -68,17 +90,18 @@
                     runs/launch-context
                     (fn [_run] {:cwd tmp-str :briefing "" :mcp-config nil
                                 :add-dirs [] :run-paths ""})
-                    ;; stub the agent launcher — write a status file and a fake log line,
-                    ;; return a successful result with a known claude-session-id.
-                    agent/launch!
+                    ;; stub the substrate start — the skill writes its status file during
+                    ;; the turn, and Claude Code names the session it started.
+                    conduct/start!
                     (fn [opts]
-                      (reset! sid (:claude-session-id opts))   ; echo the caller-supplied id, like the real launch!
-                      (io/write-edn! (cstate/run-status-path (:run-id opts))
-                                     {:phase :awaiting-input :note "from fake"})
-                      (spit (cstate/run-agent-log (:run-id opts))
-                            (str "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\""
-                                 (:claude-session-id opts) "\"}\n"))
-                      {:exit-code 0 :claude-session-id (:claude-session-id opts)})]
+                      (reset! started opts)
+                      (let [r (runs/find-for-session (:project opts) (:ws-id opts) (:session-name opts))]
+                        (io/write-edn! (cstate/run-status-path (:id r))
+                                       {:phase :awaiting-input :note "from fake"}))
+                      {:session-id "sess-e2e" :bg-id "sess-e2e"})
+                    ;; the session's Stop, as the next conduct pass reads it
+                    conduct/conduct! stop-every-running-turn
+                    conduct/faceted-sessions every-running-turn-outstanding]
         ;; 1. configure a trigger
         (fs/create-dirs (fs/parent (cstate/triggers-path :brian)))
         (io/write-edn! (cstate/triggers-path :brian)
@@ -100,16 +123,16 @@
           (let [run-id (str (fs/file-name (first run-dirs)))
                 run    (runs/read-run run-id)]
             (is (= :awaiting-review (:state run)))
-            (is (string? @sid) "run-blocking! generated + passed a session-id to launch!")
-            (is (= @sid (:claude-session-id run))
-                "the generated session-id is persisted on the Run (resume-shim resolvable)")
-            (is (= "/investigate-bug url=https://x" (:first-message run)))
-            (is (fs/exists? (cstate/run-agent-log run-id))))))
+            (is (= "/investigate-bug url=https://x" (:prompt @started))
+                "the background session started on the run's first message")
+            (is (= "sess-e2e" (:claude-session-id run))
+                "the session's own id is on the Run (shim and replies resolve it)")
+            (is (= "/investigate-bug url=https://x" (:first-message run))))))
       (finally (fs/delete-tree tmp)))))
 
 (deftest breaker-trips-after-3-failures-on-same-trigger
   (let [tmp         (fs/create-temp-dir)
-        fail-launch (fn [_opts] {:exit-code 1 :claude-session-id nil :timed-out? false})
+        fail-start  (fn [_opts] (throw (ex-info "claude --bg did not start a session" {})))
         no-session  (fn [_run] {})]
     (try
       (with-redefs [nido-core/nido-root            (constantly (str tmp))
@@ -122,7 +145,9 @@
                     runs/launch-context         (fn [_run] {:cwd (str tmp) :briefing ""
                                                             :mcp-config nil :add-dirs []
                                                             :run-paths ""})
-                    agent/launch!               fail-launch]
+                    conduct/start!              fail-start
+                    conduct/conduct!            stop-every-running-turn
+                    conduct/faceted-sessions    every-running-turn-outstanding]
         (fs/create-dirs (fs/parent (cstate/triggers-path :brian)))
         (io/write-edn! (cstate/triggers-path :brian)
                        {:triggers [{:name    :failing
