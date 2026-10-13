@@ -5490,22 +5490,40 @@
   "How every :supersedes :why the loop writes begins — the mark `authored-why` reads it by."
   "corrected against the code after round ")
 
-(def ^:private carried-marker
-  "Where a loop-written :why carries the authored :why of the record it corrects."
+(def ^:private carried-re
+  "A carried :why at the end of a loop-written one: the entry its author wrote it at, and its text
+   in quotes. Quoted with its :seq because a reader otherwise takes it as describing the record that
+   carries it, which an amendment may since have contradicted."
+  #"(?s) — carried, as authored at entry (\d+): \"(.*)\"$")
+
+(def ^:private legacy-carried-marker
+  "How a carried :why was marked before it named the entry it was authored at. Still read, because
+   records on the ledger carry it; its :seq is lost."
   " — carried from the record it corrects: ")
 
 (defn- authored-why
-  "The part of a :supersedes :why that its author wrote, or nil when the loop wrote all of it.
+  "The :supersedes :why of `prev` that a person or amender wrote, as {:seq :text}, or nil when the
+   loop wrote all of it. :seq is the entry it was authored at — nil only for one carried under
+   `legacy-carried-marker`.
 
-   A loop-written :why carries the authored one after `carried-marker`, so the author's reason —
+   A loop-written :why carries the authored one quoted (`carried-re`), so the author's reason —
    often the only record of which base revision the chain was surveyed at — travels down every
    amendment instead of being replaced by the first."
-  [why]
-  (when why
+  [prev]
+  (when-let [why (get-in prev [:supersedes :why])]
     (if (str/starts-with? why loop-why-prefix)
-      (let [i (str/index-of why carried-marker)]
-        (when i (subs why (+ i (count carried-marker)))))
-      why)))
+      (if-let [[_ n text] (re-find carried-re why)]
+        {:seq (parse-long n) :text text}
+        (when-let [i (str/index-of why legacy-carried-marker)]
+          {:seq nil :text (subs why (+ i (count legacy-carried-marker)))}))
+      {:seq (:seq prev) :text why})))
+
+(defn- carried
+  "The tail of a loop-written :why that carries `authored`, an `authored-why`."
+  [{at :seq text :text}]
+  (if at
+    (str " — carried, as authored at entry " at ": \"" text "\"")
+    (str legacy-carried-marker text)))
 
 (defn ^{:malli/schema [:=> [:cat :keyword [:maybe :map] :map :map] :map]}
   cite-corrected
@@ -5522,9 +5540,9 @@
 
    Where the loop sets the citation it writes the :why too, whatever the author put there: one
    naming this round and what it answered — `answered`, a line per finding the amender accepted
-   (`answered-line`) — carrying `prev`'s own authored :why. What an amendment answered is the round's
-   to say: an amender's :why has credited a person with a change a judge asked for, and the next
-   judge reads it as provenance. `prev` with no :seq — a record from outside this ledger — leaves
+   (`answered-line`) — carrying `prev`'s own authored :why, quoted with the entry it was authored
+   at. What an amendment answered is the round's to say: an amender's :why has credited a person
+   with a change a judge asked for, and the next judge reads it as provenance. `prev` with no :seq — a record from outside this ledger — leaves
    `record` as it is. The last argument names the round (`iter`, `run-id`, `answered`) and how to
    read the ledger (`resolve`, a :seq to its entry or nil)."
   [kind prev record {:keys [iter run-id resolve answered]}]
@@ -5537,8 +5555,7 @@
              {:seq (:seq prev)
               :why (str loop-why-prefix iter " of run " run-id
                         (when (seq answered) (str ", answering " (str/join "; " answered)))
-                        (some->> (authored-why (get-in prev [:supersedes :why]))
-                                 (str carried-marker)))})
+                        (some-> (authored-why prev) carried))})
       record)))
 
 (def ^:private answered-length

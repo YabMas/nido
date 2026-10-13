@@ -886,6 +886,24 @@
     (is (= (get-in once [:supersedes :why]) (get-in twice [:supersedes :why])))
     (is (= 6 (get-in twice [:supersedes :seq])))))
 
+(deftest a-carried-reason-is-quoted-with-the-entry-that-wrote-it
+  ;; Seen live: the newest design's carried :why said stored responses keep a size gate the record
+  ;; itself had removed, and read as a description of that record. The entry it was authored at is
+  ;; what tells a reader it is history.
+  (let [at     {:iter 3 :run-id "r" :resolve (constantly nil)}
+        once   (record/cite-corrected :design {:seq 5 :supersedes {:seq 4 :why "keeps the gate"}} {} at)
+        twice  (record/cite-corrected :design (assoc once :seq 6) {} at)
+        legacy (record/cite-corrected :design {:seq 7 :supersedes
+                                               {:seq 6 :why (str "corrected against the code after round 2 of run q"
+                                                                 " — carried from the record it corrects: the pin")}}
+                                      {} at)]
+    (is (str/ends-with? (get-in once [:supersedes :why]) " — carried, as authored at entry 5: \"keeps the gate\"")
+        "the reason is quoted and dated by the design that gave it, not the one carrying it")
+    (is (str/ends-with? (get-in twice [:supersedes :why]) "authored at entry 5: \"keeps the gate\"")
+        "and keeps the entry it was authored at however far it travels")
+    (is (str/ends-with? (get-in legacy [:supersedes :why]) "carried from the record it corrects: the pin")
+        "a reason carried before its entry was recorded still travels, without inventing one")))
+
 (deftest a-citation-of-no-design-is-replaced-and-the-loop-says-why
   ;; An amender's :why credited a person with a change a judge asked for, and the next judge read
   ;; the :why as provenance. What the amendment answered is the round's to say.
