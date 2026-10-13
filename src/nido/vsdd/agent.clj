@@ -93,7 +93,9 @@
            allowed-tools display-name]}]
   (let [base-env (build-base-env env)
         label (or display-name agent-name "agent")
-        cmd (cond-> ["claude" "-p" prompt]
+        ;; Never the local settings source: a nido worktree's settings.local.json holds the
+        ;; launch baseline of the sessions started there, and a one-shot call is not one.
+        cmd (cond-> ["claude" "-p" prompt "--setting-sources" "user,project"]
               ;; Mode 1: project agent
               agent-name
               (into ["--agent" agent-name])
@@ -133,6 +135,7 @@
                          :err :inherit
                          :in ""}
                         "claude" "-p" prompt
+                        "--setting-sources" "user,project"
                         "--model" (or model "haiku")
                         "--tools" ""
                         "--verbose"

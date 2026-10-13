@@ -178,6 +178,13 @@
   session-edn-path [project ws-id session-name]
   (str (fs/path (session-dir project ws-id session-name) "session.edn")))
 
+(defn ^{:malli/schema [:=> [:cat :string] :Path]}
+  session-events-path
+  "One Claude Code session's event log, keyed by its claude session id rather than by any
+   nido record: a hook knows the id before nido has filed the session anywhere."
+  [claude-session-id]
+  (str (fs/path (nido-root) "session-events" (str claude-session-id ".edn"))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
   pre-unification-dir [project]
   (str (fs/path (nido-root) "projects" (name project) "_pre-unification")))

@@ -972,10 +972,73 @@
                        :command (str "cd '" home "' && bb nido:boundary")
                        :timeout boundary-hook-timeout-s}]}))
 
+(def ^:private session-hook-events
+  "The Claude Code hooks nido's session hook records. One list, so the settings it is installed
+   in and the events it understands cannot drift apart."
+  ["SessionStart" "UserPromptSubmit" "Stop" "PermissionDenied" "Notification"])
+
+(def ^:private nido-hook-markers
+  "What identifies a hook entry as nido's own: the bb task each of nido's hooks runs."
+  ["nido:session:hook" "nido:commit:gate" "nido:boundary"])
+
+(defn- without-nido-hooks
+  "`settings` with every hook entry nido installed removed, and any hook event left empty
+   dropped. Applying the baseline to settings that already carry it must not add it twice — the
+   worktree's file is rewritten on every session up, and a home's is composed from a worktree
+   that may already carry it."
+  [settings]
+  (let [nido? (fn [entry]
+                (some (fn [h] (some #(str/includes? (str (:command h)) %) nido-hook-markers))
+                      (:hooks entry)))
+        hooks (into {} (keep (fn [[ev entries]]
+                               (let [kept (vec (remove nido? entries))]
+                                 (when (seq kept) [ev kept])))
+                             (:hooks settings)))]
+    (if (seq hooks) (assoc settings :hooks hooks) (dissoc settings :hooks))))
+
+(defn- baseline-settings
+  "`settings` carrying nido's launch baseline — every Claude Code session started in a nido
+   session home or worktree runs under it, whoever starts it: permission mode auto, Claude
+   Code's own worktree isolation off (nido already isolates each session in its own workspace),
+   messages from other sessions accepted, nido's session hook on every event it records, and the
+   commit gate. Whatever else `settings` declares stays.
+
+   The hook runs from the HOME, where nido's bb.edn is linked, whichever directory the settings
+   file sits in."
+  [settings home]
+  (-> (without-nido-hooks settings)
+      (assoc-in [:permissions :defaultMode] "auto")
+      (assoc-in [:worktree :bgIsolation] "none")
+      (assoc :crossSessionInbound "accept")
+      (as-> s (reduce (fn [s ev]
+                        (update-in s [:hooks (keyword ev)] (fnil conj [])
+                                   {:hooks [{:type    "command"
+                                             :command (str "cd '" home "' && bb nido:session:hook " ev)
+                                             :timeout 10}]}))
+                      s session-hook-events))
+      commit-gate/with-gate))
+
+(defn ^{:malli/schema [:=> [:cat :string :string] :any]}
+  ensure-worktree-baseline!
+  "Write nido's launch baseline into the worktree's `.claude/settings.local.json`, keeping what
+   the file already declares. A session started in the worktree — the cwd nido launches in, and
+   where `nido work` runs — reads that file and not the home's.
+
+   The file may be a person's own: a workstream that runs in its own checkout through a linked
+   worktree writes into that checkout, which is what the person chose. Nothing commits it here
+   only because `**/.claude/settings.local.json` is ignored globally on this machine — a repo
+   that tracked it would show the change."
+  [worktree home]
+  (let [path     (str (fs/path worktree ".claude" "settings.local.json"))
+        existing (try (io/read-json path)
+                      (catch Exception e
+                        (core/log-step (str "warning: unreadable " path ": " (ex-message e)))
+                        nil))]
+    (io/write-json! path (baseline-settings (or existing {}) (str home)))))
+
 (defn- ensure-session-hooks!
-  "Write nido's hooks — the Stop boundary hook and the commit gate's
-   `PreToolUse` hook — into a composed session home's
-   `.claude/settings.local.json`.
+  "Write nido's launch baseline (`baseline-settings`) and the Stop boundary hook
+   into a composed session home's `.claude/settings.local.json`.
 
    That name is free in the usual case, by measurement rather than by hope.
    `compose-claude-dir!` symlinks every top-level entry of the worktree's
@@ -1010,8 +1073,8 @@
                                               (ex-message e)))
                           nil)))]
     (when linked? (fs/delete path))
-    (io/write-json! path (commit-gate/with-gate
-                          (boundary-settings (or checkout {}) (str home))))))
+    (io/write-json! path (boundary-settings (baseline-settings (or checkout {}) (str home))
+                                            (str home)))))
 
 (defn- ensure-bb-edn-symlink!
   "Create or refresh a `bb.edn` symlink inside the session-home pointing
@@ -1113,6 +1176,10 @@
         (ensure-session-hooks! home)
         (catch Exception e
           (core/log-step (str "warning: .claude symlink: " (ex-message e)))))
+      (try
+        (ensure-worktree-baseline! worktree home)
+        (catch Exception e
+          (core/log-step (str "warning: worktree launch baseline: " (ex-message e)))))
       (try
         (ensure-bb-edn-symlink! project-name session-name)
         (catch Exception e

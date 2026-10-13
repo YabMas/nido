@@ -6,7 +6,6 @@
    [babashka.fs :as fs]
    [babashka.process :as p]
    [cheshire.core :as json]
-   [nido.session.commit-gate :as commit-gate]
    [nido.session.launcher :as launcher]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as state]
@@ -52,26 +51,28 @@
   "`:name` sets the agent's display name, the address its peers message it by.
    `:prompt-file` is read now and becomes the first turn. It goes straight after
    the binary because `--add-dir` takes every argument up to the next flag, so a
-   prompt placed last would be read as one more directory. `:permission-mode`
-   and `:model` are claude's own, passed through unchecked. The commit gate
-   goes in as `--settings` because the worktree's own settings are the
-   project's, and the session home's — where the launcher installs it — are
-   not read from here."
+   prompt placed last would be read as one more directory. `:model` is claude's
+   own, passed through unchecked.
+
+   No permission mode and no settings: the launch baseline — auto mode, nido's
+   hooks, the commit gate — is the worktree's `.claude/settings.local.json`,
+   which `work` writes before starting claude. A command line that carried any
+   of it could make a session nido starts and one a person starts differ.
+
+   Returns the session home beside the command, for `work` to write it from."
   [{:keys [project session worktree instance-id]}
-   {:keys [claude-bin name prompt-file permission-mode model] :or {claude-bin "claude"}}]
+   {:keys [claude-bin name prompt-file model] :or {claude-bin "claude"}}]
   (let [briefing (launcher/session-briefing project session instance-id)
         mcp      (state/session-mcp-path instance-id)
         cmd      (cond-> [claude-bin]
                    prompt-file      (conj (slurp (str prompt-file)))
-                   :always          (into ["--append-system-prompt" briefing
-                                           "--settings" (commit-gate/settings-json)])
+                   :always          (into ["--append-system-prompt" briefing])
                    name             (into ["--name" (str name)])
-                   permission-mode  (into ["--permission-mode" (str permission-mode)])
                    model            (into ["--model" (str model)])
                    (fs/exists? mcp) (into ["--mcp-config" mcp])
                    :always          (into (mapcat (fn [d] ["--add-dir" d])
                                                   (launcher/nido-add-dirs))))]
-    {:cmd cmd :dir worktree}))
+    {:cmd cmd :dir worktree :home (str (state/session-home-dir project session))}))
 
 (defn- codex-cmd
   [{:keys [worktree instance-id]} {:keys [codex-bin] :or {codex-bin "codex"}}]
@@ -101,7 +102,10 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   work [& args]
-  (let [[_ opts] (task-args/split-args args #{:name :prompt-file :permission-mode :model})
-        {:keys [cmd dir]} (work-cmd* opts)]
+  (let [[_ opts] (task-args/split-args args #{:name :prompt-file :model})
+        {:keys [cmd dir home]} (work-cmd* opts)]
+    ;; A session up before the baseline existed has no worktree settings yet; writing them here
+    ;; keeps the gate and auto mode from depending on when the session was last brought up.
+    (when home (launcher/ensure-worktree-baseline! dir home))
     ;; Hand off to the interactive agent in the worktree (inherit the terminal).
     (p/exec cmd {:dir dir})))

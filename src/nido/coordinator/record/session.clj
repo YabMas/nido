@@ -33,6 +33,41 @@
    [:phase-history     [:vector [:map [:at string?] [:phase (into [:enum] phases)]]]]
    [:error             [:maybe [:map-of keyword? any?]]]])
 
+(def Claude
+  "The Claude Code background session a record is about, and who may give it its next
+   instruction. Origin is kept for display and decides nothing; driver and hold are what nido
+   reads before it sends. A record without this facet is a conversation from before the
+   substrate, continued — if at all — the old way."
+  [:map {:closed true}
+   ;; Nil only between the facet being written and dispatch returning the session's id — the
+   ;; first prompt's token is recorded before the session exists to carry an id.
+   [:session-id [:maybe string?]]
+   [:bg-id [:maybe string?]]
+   [:origin [:enum :nido :person]]
+   [:driver [:enum :nido :person :nobody]]
+   ;; Set when a turn nido did not give is seen; only a hand-back clears it.
+   [:hold [:maybe [:map {:closed true} [:at string?] [:because keyword?]]]]
+   ;; The instruction given and not yet followed by the session's Stop. Its token is written
+   ;; here BEFORE the instruction is delivered, so a prompt carrying it is known for nido's.
+   [:pending [:maybe [:map {:closed true}
+                      [:token string?] [:at string?] [:via [:enum :dispatch :send :wake]]
+                      ;; The session's own prompt event carried the token: delivered, not yet ended.
+                      [:seen? boolean?]]]]
+   ;; One instruction waiting for the session to be ready for it.
+   [:queued [:maybe string?]]
+   ;; The session's last Stop left work of its own running (background tasks, crons), so the
+   ;; turn that follows is the session's own and not a person's.
+   [:own-work? boolean?]
+   [:policy [:map {:closed true} [:auto-respawn? boolean?]]]
+   ;; How far conduct has read the session's event log (session-events/events-since).
+   [:cursor int?]
+   ;; Since when nido has been driving it: turns recorded before this never hold it.
+   [:driving-since [:maybe string?]]
+   ;; The current entry into blocked has been announced; cleared when the session leaves it.
+   [:announced-blocked? boolean?]
+   ;; The host boot recover! last restarted this session in, so it restarts it at most once.
+   [:recovered-boot [:maybe string?]]])
+
 (def Session
   [:map {:closed true}
    [:name              string?]
@@ -42,6 +77,7 @@
    [:substrate         [:enum :live :archived]]
    [:substrate-history [:vector [:map [:at string?] [:substrate [:enum :live :archived]]]]]
    [:autonomy          [:maybe Autonomy]]
+   [:claude            {:optional true} [:maybe Claude]]
    [:created-at        string?]])
 
 (defn ^{:malli/schema [:=> [:cat :Session] :Session]}
@@ -155,6 +191,24 @@
        (if (autonomous? s)
          (contains? active-phases (get-in s [:autonomy :phase]))
          true)))
+
+(defn ^{:malli/schema [:=> [:cat :Session] [:maybe :map]]}
+  claude-facet [s] (:claude s))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:=> [:cat [:maybe :map]] [:maybe :map]]] :Session]}
+  update-claude!
+  "Replace a session's :claude facet with `(f facet)` — nil to remove it — read and written
+   under the record's lock, so two updaters (a conduct pass and a hand-back) cannot lose each
+   other's write. Throws when the session does not exist or the result is not a valid facet,
+   and writes nothing then."
+  [project ws-id session-name f]
+  (let [path (cstate/session-edn-path project ws-id session-name)]
+    (io/update-edn! path
+                    (fn [s]
+                      (when-not s
+                        (throw (ex-info "Session not found"
+                                        {:project project :ws-id ws-id :session session-name})))
+                      (validate (assoc s :claude (f (:claude s))))))))
 
 (defn- load! [project ws-id session-name]
   (or (read-session project ws-id session-name)
