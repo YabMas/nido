@@ -559,6 +559,14 @@
     (is (str/includes? p "You do not make the decision"))
     (is (str/includes? p "Never answer it yourself"))))
 
+(deftest the-decision-prompt-shows-a-spin-outs-follow-up-ref
+  (let [p (record/design-prompt
+           {:design (assoc design :routes [{:health-id "two-content-verdicts" :to :spin-out
+                                            :why "revealed, not created" :ref "FU-470"}])})]
+    (is (str/includes? p "two-content-verdicts → spin-out (FU-470) — revealed, not created")
+        "routing-coherent checks that a spin-out names its follow-up; a judge shown no ref rules
+         the routing broken and asks a person for a ref the record already holds")))
+
 (deftest the-decision-prompt-asks-a-person-in-their-terms-and-all-at-once
   ;; Each clause answers a run where the person was asked badly: three mechanism-worded questions
   ;; in one, one they said they did not follow; an openly stated deferral left for a second run and

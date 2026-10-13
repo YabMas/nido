@@ -1719,6 +1719,7 @@
    (when-let [rt (seq (:routes design))]
      (str "\nHEALTH OBSERVATIONS ROUTED:\n"
           (bullets (map #(str (:health-id %) " → " (name (:to %))
+                              (when (:ref %) (str " (" (:ref %) ")"))
                               (when (:why %) (str " — " (:why %)))) rt)) "\n"))
    (baseline-block baseline)
    (when stance (str "\nPROJECT STANCE — framing only:\n" stance "\n"))
