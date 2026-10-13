@@ -840,6 +840,9 @@
       ;; growing, which no single amendment's retreats show.
       ;; :out-of-reach is each line the amender said only a record it may not write repairs, with
       ;; the line itself — what the run then stopped to ask the person, and held nowhere else.
+      ;; :standing-ask is the amender saying the person's question still stands, with the asked
+      ;; claim its repair bears on where it named one — kept apart from :out-of-reach, since it
+      ;; leaves every line it repaired answered.
       ;; :launch is how the amender's agent ended — exit code, turns, transcript, and `:failed`
       ;; when it never completed (`nido.review.record/amender-launch`) — and marks the phase failed
       ;; when the round stopped on it: an amender that died and one that declined both leave no
@@ -857,6 +860,7 @@
                 (:record-size ctx) (assoc :record-size (:record-size ctx))
                 (seq (:growth ctx)) (assoc :growth (vec (:growth ctx)))
                 (seq (:out-of-reach ctx)) (assoc :out-of-reach (vec (:out-of-reach ctx)))
+                (seq (:standing-ask ctx)) (assoc :standing-ask (vec (:standing-ask ctx)))
                 (:amend-tree ctx) (assoc :tree (:amend-tree ctx))
                 (:amend-launch ctx) (assoc :launch (:amend-launch ctx))
                 (#{:amend-launch-failed :usage-limited} (:status ctx)) (assoc :status "failed")

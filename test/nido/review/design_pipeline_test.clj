@@ -2451,6 +2451,77 @@
                               (ctx :findings [(check :goal-served :broken)] :record (decision :ask)))]
       (is (= :asked (:status out)) "an answer naming only out-of-reach lines is not a no-op"))))
 
+;; ── The question the amender is told to leave standing ──────────────────────
+
+(def ^:private asked-design
+  (assoc a-design :model {:elements []
+                          :claims [{:id "keyed-on-medium" :statement "resolution is keyed on medium"}
+                                   {:id "sent-upright" :statement "a sent image is upright"}]}))
+
+(defn- restating [design id text]
+  (update-in design [:model :claims]
+             (fn [cs] (mapv #(if (= id (:id %)) (assoc % :statement text) %) cs))))
+
+(deftest the-amender-is-told-which-claims-the-question-is-about
+  ;; Shown only the asks prose, an amender's stale sweep restated the claim the question was about
+  ;; with the fallback the person was being asked to accept — the question answered in the record.
+  (let [p (record/design-amend-prompt {:design asked-design :recommend :amend :reason "r"
+                                       :asks "accept the 512px fallback?" :asks-about ["keyed-on-medium"]
+                                       :raised [(check :goal-served :broken)] :out-path "/o"})]
+    (is (str/includes? p "It is about [keyed-on-medium]. Leave each of them"))
+    (is (str/includes? p ":standing-ask [{:id")
+        "saying the question still stands has a slot that is not a line out of reach")
+    (is (not (str/includes? p "a scope decision, the\nquestion left for a person"))
+        "the standing question is no longer offered as an out-of-reach line"))
+  (is (not (str/includes? (record/design-amend-prompt {:design a-design :recommend :amend :reason "r"
+                                                       :raised [] :out-path "/o"})
+                          ":standing-ask"))
+      "with no question asked there is nothing to say still stands"))
+
+(deftest an-amendment-rewording-an-asked-claim-is-handed-back
+  (let [prompts (atom [])
+        n       (atom 0)
+        fixed   (assoc asked-design :effort :M)
+        [out appended]
+        (with-amend {:prev asked-design :prompts prompts
+                     :writes (fn [p] (spit p (pr-str {:record (if (zero? (dec (swap! n inc)))
+                                                                (restating fixed "keyed-on-medium" "with a 512px fallback")
+                                                                fixed)})))}
+                    (ctx :findings [(assoc (check :relation-honest :broken) :claim-ids ["sent-upright"])]
+                         :record (assoc (decision :ask) :asks-about ["keyed-on-medium"])))]
+    (is (nil? (:status out)))
+    (is (str/includes? (first @prompts) "It is about [keyed-on-medium]")
+        "the amend stage hands the decision's asks_about to the amender")
+    (is (str/includes? (second @prompts) "it changes [keyed-on-medium]")
+        "an amendment that answers the person's question is refused, not appended")
+    (is (= fixed (read-string appended)) "the repair beside it is what lands"))
+  (testing "a claim a numbered line hands the amender is its to repair"
+    (let [fixed (restating asked-design "keyed-on-medium" "narrowed")
+          [out appended]
+          (with-amend {:prev asked-design :writes (fn [p] (spit p (pr-str {:record fixed})))}
+                      (ctx :findings [(assoc (check :goal-served :broken) :claim-ids ["keyed-on-medium"])]
+                           :record (assoc (decision :ask) :asks-about ["keyed-on-medium"])))]
+      (is (empty? (:amend-refusals out)))
+      (is (= fixed (read-string appended))
+          "the judge filed a derivable defect on the asked claim, so its repair settles nothing asked"))))
+
+(deftest a-standing-ask-leaves-the-repaired-line-answered
+  ;; Filed under :out-of-reach against the line it had repaired, 'the question still stands' made
+  ;; the citation drop the repair from what the amendment answered.
+  (let [line    (assoc (check :relation-honest :broken) :claim-ids ["sent-upright"])
+        fixed   (restating asked-design "sent-upright" "a sent image is rotated upright")
+        [out appended]
+        (with-amend {:prev (assoc asked-design :seq 7)
+                     :writes (fn [p] (spit p (pr-str {:record fixed
+                                                      :standing-ask [{:id "[keyed-on-medium]"
+                                                                      :because "the fallback is still the person's"}]})))}
+                    (ctx :findings [line] :record (assoc (decision :ask) :asks-about ["keyed-on-medium"])))]
+    (is (= [{:id "keyed-on-medium" :because "the fallback is still the person's"}] (:standing-ask out)))
+    (is (nil? (:out-of-reach out)))
+    (is (nil? (:status out)) "it stops nothing: the decision's own ask is what stops for the person")
+    (is (str/includes? appended "answering [relation-honest]")
+        "the line it repaired is still cited as answered")))
+
 (deftest the-trajectory-names-what-a-round-left-for-the-person
   (is (= [{:round 1 :found ["relation-honest"] :asked ["goal-served"] :amended true}]
          (record/trajectory [{:findings [(check :relation-honest :broken)]

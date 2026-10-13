@@ -2964,6 +2964,10 @@
                 ;; entry of the chain, so every re-ask of one question names the same seq and the
                 ;; ledger reads one open question rather than a count of rounds.
                 [:reasks                {:optional true} int?]
+                ;; On an :ask, the claim ids the judge named its question to be about (asks_about).
+                ;; An amender of the design leaves them as they stand: rewording one answers the
+                ;; question before the person has.
+                [:asks-about            {:optional true} [:vector string?]]
                 ;; The :ask the reading before this one made of the same record, when this one
                 ;; recommends otherwise: which entry, and its question — carried in :asks too, so
                 ;; the recommendation that stops the run still shows what the person is owed. The

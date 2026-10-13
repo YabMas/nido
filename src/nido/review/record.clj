@@ -2531,7 +2531,8 @@
 
    `intent` is the intent the round's prompt stated. On an :ask it and the answer's `asks_about`
    mark findings for the person where the judge did not mark them derivable (`person-marked`), and
-   a person's finding that none of them reaches is the build's, :owed (`owed-not-asked`).
+   a person's finding that none of them reaches is the build's, :owed (`owed-not-asked`). The ids are
+   kept as :asks-about, which the design amender is held to leaving alone.
 
    `claims` is the ids of the design's claims; a finding the judge keyed to none is paired with the
    one its prose names (`cite-paired`) before routing reads it, so a route cited beside that claim
@@ -2598,6 +2599,7 @@
                              (person-marked findings about intent)
                              (mapv #(dissoc % :for-person :judge-marked) findings)))
           (= :ask r)                             (owed-not-asked about intent)
+          (and (= :ask r) (seq about))           (assoc :asks-about (vec (sort about)))
           (seq rulings)                          (assoc :relation-rulings rulings)
           (seq unasked)                          (assoc :unasked-checks unasked)
           (not= said r)                          (assoc :judge-recommended said))))
@@ -4500,7 +4502,11 @@
 
    :out-of-reach is read the same way: a line whose repair, or what is left of it, lies in no record
    the amender may write. Each carries the line it names as :finding, since what it is handed to
-   is a person rather than a judge holding the round's findings."
+   is a person rather than a judge holding the round's findings.
+
+   :standing-ask is the amender saying the person's question still stands — `[{:id :because}]`, :id
+   the asked claim its repair bears on, when it names one. Keyed to no line, because it is not an
+   answer to one: a line it repaired stays answered."
   [raw findings base-key]
   (when (map? raw)
     (let [record   (if (:format raw) raw (:record raw))
@@ -4524,6 +4530,12 @@
        :disputes (mapv second (numbered (when-not (:format raw) (:disputes raw))))
        :out-of-reach (mapv (fn [[f o]] (assoc (dissoc o :sites :evidence) :finding f))
                            (numbered (when-not (:format raw) (:out-of-reach raw))))
+       :standing-ask (vec (keep (fn [{:keys [id because]}]
+                                  (when-not (str/blank? (str because))
+                                    (cond-> {:because (str because)}
+                                      (not (str/blank? (str id))) (assoc :id (slug id)))))
+                                (when-not (:format raw)
+                                  (let [w (:standing-ask raw)] (when (sequential? w) (filter map? w))))))
        ;; `{id reason}`. Which of these a round honours is its caller's to say; one without a
        ;; reason is not a withdrawal, only a claim dropped.
        :withdrawn (into {} (keep (fn [{:keys [id because]}]
@@ -7382,9 +7394,12 @@
    only it moves the citation. `:intent` is `discover-intent`'s, the goal the judge derived
    goal-served against: an amender not shown it narrowed a claim to an `accepted limit` a done-when
    rules out, and rounds went on re-deriving the ask. `:refuted-with` is `refutations` over the
-   design's lineage (`refutations-block`)."
-  [{:keys [design baseline recommend reason asks raised findings rulings out-path declared? check-cmd
-           settled refuted-running resurvey-outcome intent refuted-with]}]
+   design's lineage (`refutations-block`). `:asks-about` is the claim ids the person's question is
+   about that no numbered line asks to have repaired (`asked-claims`): the amender is told to leave
+   them as they stand, since a sweep that restates one answers the question, and to say under
+   :standing-ask how a repair bears on one."
+  [{:keys [design baseline recommend reason asks asks-about raised findings rulings out-path declared?
+           check-cmd settled refuted-running resurvey-outcome intent refuted-with]}]
   (str
    "A read-only judge derived what could be derived about this DESIGN record,\n"
    "before any code is written, and it did not come out clean.\n\n"
@@ -7524,15 +7539,25 @@
          (bounded-block :design (:bounded-by baseline))))
    "\n"
    (when-not (str/blank? (str asks))
-     (str "\n\nWHAT THE JUDGE LEFT FOR A PERSON — not yours to answer:\n  " asks "\n"))
+     (str "\n\nWHAT THE JUDGE LEFT FOR A PERSON — not yours to answer:\n  " asks "\n"
+          (when (seq asks-about)
+            (str "\nIt is about " (str/join ", " (map #(str "[" % "]") asks-about)) ". Leave each of them\n"
+                 "exactly as it stands — not restated, narrowed or dropped, and not repaired by the\n"
+                 "sweep either, even where a repair you make leaves one stale or false: rewording\n"
+                 "the claim a question is about is answering the question. Name it under\n"
+                 ":standing-ask instead, saying how your repair bears on it. nido refuses an\n"
+                 "amendment that changes one.\n"))
+          "\nTHE QUESTION STILL STANDING IS NOT A LINE OUT OF YOUR REACH. Say so under\n"
+          ":standing-ask, which stops nothing and leaves every line you repaired answered;\n"
+          "filed under :out-of-reach against a line it reads as that line left unrepaired.\n"))
    "\n\nNothing you write credits a person with a decision — \"as the person directed\",\n"
    "\"the user asked for\" — unless it cites the entry a person wrote that says so.\n"
    "\n\nIF A NUMBERED LINE IS WRONG ABOUT THE CODE, SAY SO INSTEAD OF AMENDING FOR IT,\n"
    "under :disputes. The judge is asked again with your objection in front of it.\n\n"
    "IF A NUMBERED LINE'S REPAIR — or what is left of it once you have repaired what\n"
    "this record can — LIES OUTSIDE THIS RECORD, put it under :out-of-reach: an edit\n"
-   "of the intent, a follow-up ref someone has to file, a scope decision, the\n"
-   "question left for a person. Narrowing the scope, dropping what the intent asks\n"
+   "of the intent, a follow-up ref someone has to file, a scope decision. Narrowing\n"
+   "the scope, dropping what the intent asks\n"
    "for, or reversing a decision the record's :open states is answering it, and you\n"
    "do not settle it. nido stops and asks the person with that line attached; no\n"
    "judge round is spent re-deriving what you already said.\n"
@@ -7540,7 +7565,10 @@
    "Write EDN to:\n\n  " out-path "\n\n"
    "  {:record       <the COMPLETE superseding design — every field, not a diff>\n"
    "   :disputes     [{:finding 1 :because \"...\" :evidence [\"src/x.clj:41\"]}]\n"
-   "   :out-of-reach [{:finding 2 :because \"...\"}]}\n\n"
+   "   :out-of-reach [{:finding 2 :because \"...\"}]"
+   (if (str/blank? (str asks))
+     "}\n\n"
+     "\n   :standing-ask [{:id \"<a claim the question is about, if one>\" :because \"...\"}]}\n\n")
    "Omit :record if the design needs no change.\n"
    stale-field "\n"
    "Write it in the shared model — :model {:elements :claims} in place of\n"
@@ -7961,6 +7989,24 @@
             (:amend-tree out)   (assoc :amend-tree (:amend-tree out))
             (:amend-launch out) (assoc :amend-launch (:amend-launch out))))))
 
+(defn- asked-claims
+  "The claim ids the round's :ask is about — the judge's asks_about and every claim a finding left for
+   the person names — less those a numbered line hands the amender to repair: a derivable defect on
+   an asked claim is the judge saying its repair settles nothing of the question. Empty on any
+   decision but an :ask."
+  [ctx]
+  (let [ids      #(cons (:claim-id %) (:claim-ids %))
+        repaired (into #{} (comp (mapcat ids) (map slug)) (:findings ctx))]
+    (into [] (comp (map slug) (remove str/blank?) (remove repaired) (distinct))
+          (sort (concat (get-in ctx [:record :asks-about]) (map str (mapcat ids (:asked-findings ctx))))))))
+
+(defn- asked-claims-moved
+  "Which of `asked` (`asked-claims`) the amendment `record` changes or drops against `prev`."
+  [prev record asked]
+  (let [{:keys [changed dropped]} (subject-delta prev record)
+        moved (into #{} (map slug) (concat changed dropped))]
+    (filterv moved asked)))
+
 (defn- design-amend-message
   "What the design amender is told to repair `prev` for this round's `recommend`, shown `baseline`
    beside it and answering into `out-path`."
@@ -7972,6 +8018,7 @@
       :recommend recommend
       :reason (get-in ctx [:record :reason])
       :asks (get-in ctx [:record :asks])
+      :asks-about (asked-claims ctx)
       :raised (:findings ctx)
       ;; An ask's findings for the person are its question's,
       ;; and the prompt tells the amender that is not its to answer.
@@ -8021,7 +8068,8 @@
                      (try (edn/read-string (slurp out-path)) (catch Exception _ nil)))
           answer   (parse-amend-answer raw (:findings ctx) design-finding-base-key)
           ctx      (cond-> (assoc ctx :stale (vec (sort (:stale answer))) :amend-launch launch
-                                :stale-because (:stale-because answer) :swept (:swept answer))
+                                :stale-because (:stale-because answer) :swept (:swept answer)
+                                :standing-ask (:standing-ask answer))
                      (amend-tree trespass out-path answer)
                      (assoc :amend-tree (amend-tree trespass out-path answer))
                      (seq (:stale answer))
@@ -8036,6 +8084,7 @@
 
         :else
         (let [{:keys [record disputes out-of-reach]} answer
+              asked  (asked-claims ctx)
               entry  (fn [retreats amended?]
                        (cond-> {:iter (:iter ctx) :findings (:findings ctx)
                                 :retreats retreats :disputes disputes :amended? amended?}
@@ -8077,13 +8126,21 @@
                                     :record record
                                     :path out-path
                                     :check-cmd check-cmd
+                                    ;; Refused like a ledger refusal, so the amender is asked to
+                                    ;; put the asked claims back rather than the run stopping.
                                     :append (fn [record]
-                                              (let [record (cite record)]
-                                                (try (ws/append-entry! project ws-id {:kind :design :amended-by (str run-id)}
-                                                                       (pr-str (ws/unstamp record)))
-                                                     {:record record}
-                                                     (catch Exception e
-                                                       {:record record :err (ledger-refusal e)}))))})
+                                              (if-let [moved (seq (asked-claims-moved prev record asked))]
+                                                {:record record
+                                                 :err (str "it changes " (str/join ", " (map #(str "[" % "]") moved))
+                                                           " — what the person's question is about, which is theirs to"
+                                                           " answer. Put each back exactly as it stands in the design you"
+                                                           " were given, and keep the rest of your repair")}
+                                                (let [record (cite record)]
+                                                  (try (ws/append-entry! project ws-id {:kind :design :amended-by (str run-id)}
+                                                                         (pr-str (ws/unstamp record)))
+                                                       {:record record}
+                                                       (catch Exception e
+                                                         {:record record :err (ledger-refusal e)})))))})
                       record  (:record written)]
                   (if (:status written)
                     (refused-stop ctx written disputes)

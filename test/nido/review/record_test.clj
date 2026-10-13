@@ -1769,6 +1769,25 @@
     (is (= {"tools-do-not-overlap" ["src/read.clj:44"]} (:owed-at ask)) "with the evidence it was found on")
     (is (= ask (report/validate-event :design-decision ask)))))
 
+(deftest an-ask-keeps-the-claims-its-question-is-about
+  ;; The decision kept the asks prose and dropped asks_about once it had marked the findings, so the
+  ;; amender run beside the ask could not be told which claims were the person's — and its stale
+  ;; sweep restated one, answering the question before the person was asked it.
+  (let [answer (fn [recommend]
+                 (record/parse-design-decision
+                  (json/generate-string
+                   {:recommend recommend :reason "r" :asks "accept the 512px fallback?"
+                    :asks_about ["[resolution-keyed-on-medium]"]
+                    :checks [{:check "goal_served" :status "broken" :note "n"}]
+                    :findings [{:claim-id "x" :check "goal_served" :cites ["src/a.clj:1"]
+                                :claim "c" :evidence []}]})
+                  4 any-era nil nil))
+        ask    (answer "ask")]
+    (is (= ["resolution-keyed-on-medium"] (:asks-about ask))
+        "the claims the question is about outlive the marking, for the amender to be held to")
+    (is (= ask (report/validate-event :design-decision ask)) "and the ledger takes them")
+    (is (not (contains? (answer "amend") :asks-about)) "off an ask there is no question to be about")))
+
 (deftest a-question-for-a-person-is-no-ruling-on-a-claim
   ;; A for-person question whose cite named a confirmed claim was paired to it, counted as the
   ;; claim refuted after its settlement, and re-asked the judge as a self-contradiction.
