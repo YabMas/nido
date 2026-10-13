@@ -2753,6 +2753,23 @@
              ((juxt :reviewed-project :reviewed-session :reviewed-ws-id) @sent))
           "the analysis names the workstream the run judged, not a fresh reading of a restarting session"))))
 
+(deftest a-record-analysis-carries-what-an-asked-stop-owes-the-person
+  ;; The headline named the superseded entry and only the judge's questions: the amendment's entry
+  ;; and the amender's out-of-reach line were in the terminal ctx and never handed on.
+  (let [sent (atom nil)]
+    (with-redefs [lifecycle/session-from-cwd (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] nil)
+                  nido.review.analysis/enqueue! (fn [run] (reset! sent run))]
+      (#'t/queue-record-analysis! "/w" [:brian "ws-1"] "design"
+                                  {:status :asked :iter 3
+                                   :history [{:iter 2 :amended? true :appended-seq 57}
+                                             {:iter 3 :amended? true :appended-seq 59}]
+                                   :out-of-reach [{:finding {:check :goal-served} :key [:check :goal-served]
+                                                   :claim "goal-served" :because "a scope decision"}]}
+                                  {} "/r.json" {:run-id "r1"})
+      (is (= 59 (:amended-seq @sent)) "the last round's amendment, not an earlier one a judge has read")
+      (is (= [{:claim "goal-served" :because "a scope decision"}] (:out-of-reach @sent))))))
+
 (deftest the-review-entry-keeps-which-content-each-layer-ended-at
   ;; The next run reads its stack against this. Without it a recut or a layer put back between
   ;; runs was visible only by joining two reports with review-cache.edn, and the earlier run dir

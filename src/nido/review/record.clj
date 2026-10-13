@@ -5124,7 +5124,8 @@
    amender to repair — up to `amend-reasks` times — so a refused amendment is repaired rather than
    lost.
 
-   `append` takes a record and returns `{:path p :record r}` when the ledger took it or
+   `append` takes a record and returns `{:record r}`, with where it wrote — `:path`, or `:seq` — when
+   the ledger took it, or
    `{:err refusal :record r}` when it did not, `r` being the record as offered. `stem` names this
    round's answer files. Returns what the accepting `append` returned plus `:refusals`, every
    refusal the round was re-asked over, oldest first; or, when the round ends here, `{:status s}`
@@ -8147,9 +8148,10 @@
                                                            " answer. Put each back exactly as it stands in the design you"
                                                            " were given, and keep the rest of your repair")}
                                                 (let [record (cite record)]
-                                                  (try (ws/append-entry! project ws-id {:kind :design :amended-by (str run-id)}
-                                                                         (pr-str (ws/unstamp record)))
-                                                       {:record record}
+                                                  (try {:record record
+                                                        :seq    (ws/seq-of-path
+                                                                 (ws/append-entry! project ws-id {:kind :design :amended-by (str run-id)}
+                                                                                   (pr-str (ws/unstamp record))))}
                                                        (catch Exception e
                                                          {:record record :err (ledger-refusal e)})))))})
                       record  (:record written)]
@@ -8168,7 +8170,11 @@
                                  :amend-delta (subject-delta prev record)
                                  :growth growth
                                  :record-size (count (pr-str (ws/unstamp record)))
-                                 :history (conj (vec (:history ctx)) (entry retreats true)))
+                                 ;; :appended-seq is the entry the amendment became: the newest
+                                 ;; design, and the one an :asked stop leaves no judge has read.
+                                 :history (conj (vec (:history ctx))
+                                                (cond-> (entry retreats true)
+                                                  (:seq written) (assoc :appended-seq (:seq written)))))
                           (update :carry #(-> (or % {})
                                               (assoc :growth growth)
                                               (update :as-authored (fn [x] (or x prev))))))))))]
@@ -8242,6 +8248,23 @@
        (cond (seq read-once) (str " of " (str/join ", " read-once))
              amendment       " of the amendment this run made")))
 
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
+  owed-split-ask
+  "The :ask by which one reading refuted, as a person's question, a claim the run's terminal ctx
+   `final` ended :owed-second-reading still owing — `carried-ask`'s `{:seq :asks :about}`, :about cut
+   to the owed ids — or nil. The other reading confirmed it, so the two split over a decision only
+   a person can make: another reading answers neither, and the second reading's own :asks, which
+   pairs per claim, does not carry this one's question."
+  [final]
+  (let [owed (set (get-in final [:owed-reading :read-once]))
+        q    (get-in final [:carry :quiet])
+        hit  (filterv owed (get-in q [:ask :about]))]
+    (when (and (= :owed-second-reading (:status final))
+               (= (:seq q) (get-in final [:owed-reading :seq]))
+               (seq hit)
+               (not (str/blank? (str (get-in q [:ask :asks])))))
+      (assoc (:ask q) :about hit))))
+
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :string]]}
   cap-account
   "What the cap ended a record run between, read off its terminal ctx `final`, or nil when the cap
@@ -8257,7 +8280,12 @@
     (case status
       :owed-second-reading
       (str "the cap fell between a reading and its second: " (one-reading (:record final) owed-reading)
-           " — it does not stand until a reading agrees; re-run with no amendment between")
+           " — it does not stand until a reading agrees; "
+           (if-let [{n :seq :keys [about]} (owed-split-ask final)]
+             (str "a reading" (when n (str " (entry " n ")")) " refuted " (str/join ", " about)
+                  " as a question for a person, so the split is a person's decision — a re-run"
+                  " reads it again and settles nothing")
+             "re-run with no amendment between"))
 
       :max-iters
       (str "the cap you passed was reached — this is not convergence"

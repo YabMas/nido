@@ -484,6 +484,33 @@
     (is (not (str/includes? (:headline p) "broken at the end")))
     (is (str/includes? (:title p) "stratified amended, not re-judged"))))
 
+(deftest an-asked-run-names-the-unjudged-amendment-at-the-ledger-head
+  ;; embeding-oom-issue: 'Record: the design at entry 57' while entry 59, superseding it and
+  ;; repairing the very break, was on the ledger with no judge's reading.
+  (let [h (:headline (analysis/payload (assoc a-design-run :status :asked :repaired? true :amended-seq 16)))]
+    (is (str/includes? h "Record: the design at entry 14 · amended since: entry 16, unjudged · amended, not re-judged: stratified")))
+  (is (not (str/includes? (:headline (analysis/payload (assoc a-design-run :amended-seq 16))) "amended since"))
+      "an amendment a later round judged is not the unjudged head"))
+
+(deftest an-asked-run-shows-the-amenders-out-of-reach-question
+  ;; rag-benchmark: the amender's goal-served line stopped the run to ask a person, and the
+  ;; headline listed only the judge's three questions.
+  (let [h (:headline (analysis/payload
+                      (assoc a-design-run :status :asked :asks "Q1?"
+                             :out-of-reach [{:claim "goal-served"
+                                             :because "do empty readings serve 'for every case'?"}])))]
+    (is (str/includes? h "Asked of a person: Q1?"))
+    (is (str/includes? h "Asked of a person, by the amender — no record it may write repairs goal-served: do empty readings serve 'for every case'?"))))
+
+(deftest a-split-over-a-persons-question-is-shown-beside-the-closing-ask
+  ;; rag-raptor-index: the degraded-tree question survived only as a claim id in the Cap line.
+  (let [h (:headline (analysis/payload
+                      (assoc a-design-run :status :owed-second-reading :asks "Fewer summaries?"
+                             :split-ask {:seq 42 :asks "Degraded trees?" :about ["absent-summaries-are-today"]})))]
+    (is (str/includes? h "Asked of a person: Fewer summaries?"))
+    (is (str/includes? h "Split over a person's question: entry 42 refuted absent-summaries-are-today and asked: Degraded trees?"))
+    (is (str/includes? h "a person's decision, not a re-run's"))))
+
 (deftest a-judge-disagreeing-with-itself-is-in-the-headline
   ;; agentic-rag: one split and two flips on an unchanged record, and the headline said
   ;; `0 weakenings · 0 disputed`.

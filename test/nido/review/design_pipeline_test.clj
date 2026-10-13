@@ -2445,7 +2445,9 @@
              :because "the done-when says zero duplicates"}]
            (:out-of-reach out))
         "the person is handed the line itself, not only the amender's words about it")
-    (is (true? (:amended? out)) "what the amender could repair beside it is still appended"))
+    (is (true? (:amended? out)) "what the amender could repair beside it is still appended")
+    (is (= 5 (:appended-seq (peek (:history out))))
+        "the run stops with an unjudged design at the ledger's head, and a reader is told which entry"))
   (testing "and with nothing amended beside it"
     (let [[out _] (with-amend {:writes (fn [p] (spit p (pr-str {:out-of-reach [{:finding 1 :because "a ref to file"}]})))}
                               (ctx :findings [(check :goal-served :broken)] :record (decision :ask)))]

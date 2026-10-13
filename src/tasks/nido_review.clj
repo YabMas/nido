@@ -2231,6 +2231,13 @@
       ;; The repair that :asks waits on, and whether this run made it after the decision that asks.
       :repair           (when (= :design-decision (:format rec)) (creport/repair-before-asking rec))
       :repaired?        (boolean (some #(and (= (:iter final) (:iter %)) (:amended? %)) history))
+      ;; The entry that amendment became — the newest design, which no judge has read.
+      :amended-seq      (some #(when (and (= (:iter final) (:iter %)) (:amended? %)) (:appended-seq %))
+                              history)
+      ;; The amender's lines only a person can repair, which are what an :asked stop on them asks.
+      :out-of-reach     (when (= :asked (:status final))
+                          (not-empty (mapv #(select-keys % [:claim :because]) (:out-of-reach final))))
+      :split-ask        (record/owed-split-ask final)
       :spent            (:spent final)
       :spent-awaiting   (:spent-awaiting final)
       :cap              (record/cap-account final)

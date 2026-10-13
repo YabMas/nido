@@ -3108,6 +3108,25 @@
                                  :owed-reading {:seq 26 :read-once ["cache-keyed-by-course"]}})]
       (is (str/includes? s "entry 26 is sufficient on one reading — second reading owed of cache-keyed-by-course"))
       (is (not (str/includes? s "still open")))))
+  (testing "a split over a person's question is theirs to decide, not a re-run's"
+    ;; rag-raptor-index: entry 42 refuted absent-summaries-are-today for a person, entry 43 confirmed
+    ;; it, and the remedy said re-run — rereading cannot settle what only a person can.
+    (let [final {:status :owed-second-reading
+                 :record {:format :design-decision :recommend :proceed}
+                 :owed-reading {:seq 41 :read-once ["absent-summaries-are-today"]}
+                 :carry {:quiet {:seq 41 :ask {:seq 42 :asks "Do degraded trees get summaries?"
+                                               :about ["absent-summaries-are-today" "other"]}}}}
+          s     (record/cap-account final)]
+      (is (= {:seq 42 :asks "Do degraded trees get summaries?" :about ["absent-summaries-are-today"]}
+             (record/owed-split-ask final))
+          "only the owed claims are the split; the rest of the ask is not what the cap left owed")
+      (is (str/includes? s "a reading (entry 42) refuted absent-summaries-are-today as a question for a person"))
+      (is (str/includes? s "the split is a person's decision"))
+      (is (not (str/includes? s "re-run with no amendment between")))
+      (is (nil? (record/owed-split-ask (assoc-in final [:carry :quiet :seq] 39)))
+          "an ask of another record is not a reading of the one owed")
+      (is (nil? (record/owed-split-ask (assoc-in final [:carry :quiet :ask :about] ["other"])))
+          "an ask about other claims leaves the owed reading a reading")))
   (testing "a second reading that overturned a sufficient verdict says so, with the count"
     (let [s (record/cap-account {:status :max-iters :iter 3 :findings [a-finding a-finding]
                                  :amended? true

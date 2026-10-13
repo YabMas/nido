@@ -136,6 +136,11 @@
      amendment's first reading. The engine counts no round against the cap that only reads this
      again, so a cap never ends a run between a reading and the one it owes."
     {:signature [:=> [:catn [:ctx :map]] [:maybe :map]]})
+  (Operation owed-split-ask
+    "The :ask by which one reading refuted, as a person's question, a claim a capped run still owes
+     its second reading — the entry, its question, the owed ids it was about. The two readings split
+     over a decision, which another reading cannot make."
+    {:signature [:=> [:catn [:final :map]] [:maybe :map]]})
   (Operation cap-account
     "What the cap ended a record run between — an owed second reading, an amendment not yet read, a
      second reading that overturned a sufficient verdict, findings left unamended — read off the

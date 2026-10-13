@@ -404,6 +404,14 @@
    `repaired?` also decides how the last judgement's broken checks are named: a run that amended
    after that judgement handed them to an amender and never read the result, so they are
    `amended, not re-judged` — called broken at the end, a repaired claim reads as still open.
+   `amended-seq` is the entry that amendment became, named beside the judged one: the record entry
+   is the superseded design, and the head of the ledger is one no judge has read.
+
+   `out-of-reach` is each `{:claim :because}` the amender said no record it may write repairs, which
+   is what an :asked stop on them stopped to ask; said under `Asked of a person`, since the judge's
+   `asks` does not hold it. `split-ask` is `nido.review.record/owed-split-ask`: the question a
+   reading refuted an owed claim with, which the reading after it — whose `asks` is the closing
+   one — does not carry.
 
    `variance` is the run's `{:splits n :reading-flips n}` — its judges disagreeing with themselves
    on one record at one tree — said beside weakenings and disputes. `readable-from` is the round
@@ -411,7 +419,7 @@
   [{:keys [loop run-id report-path status rounds launched judged amended unappended weakened unasked disputed
            record-seq still-broken still-asked asks stood-in reviewed-project reviewed-session reviewed-ws-id
            machinery unrecorded spent spent-awaiting cap amend-prompt unreadable stale-at-start repair repaired?
-           amender continued subject variance readable-from]
+           amender continued subject variance readable-from amended-seq out-of-reach split-ask]
     :as run}]
   (let [kind   (name loop)
         broken (seq (map name still-broken))
@@ -450,6 +458,8 @@
                                "\n"
                                (when unappended (str "Refused amendment, not appended: " unappended "\n"))
                                "Record: the " kind (when record-seq (str " at entry " record-seq))
+                               (when (and repaired? amended-seq)
+                                 (str " · amended since: entry " amended-seq ", unjudged"))
                                (when broken (str at-end (str/join ", " broken)))
                                (when (seq still-asked)
                                  (str " · asked at the end: " (str/join ", " still-asked)))
@@ -550,6 +560,17 @@
                                ;; question surfaces outside the ledger.
                                (when-not (str/blank? (str asks))
                                  (str (if repair "Will ask once repaired: " "Asked of a person: ") asks "\n"))
+                               (when (seq out-of-reach)
+                                 (str "Asked of a person, by the amender — no record it may write repairs "
+                                      (str/join "; " (for [{:keys [claim because]} out-of-reach]
+                                                       (str claim ": " because)))
+                                      "\n"))
+                               (when-let [{n :seq :keys [asks about]} split-ask]
+                                 (str "Split over a person's question: "
+                                      (if n (str "entry " n) "a reading") " refuted "
+                                      (str/join ", " about) " and asked: " asks
+                                      " — the other reading confirmed it; which stands is a person's"
+                                      " decision, not a re-run's\n"))
                                (some-> (stood-in-line stood-in) (str "\n"))
                                (reviewed-line run (when reviewed-ws-id (str " (workstream " reviewed-ws-id ")")))
                                (some->> (provenance/warning machinery) (str "\n")))}
