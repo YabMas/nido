@@ -1403,6 +1403,32 @@
     (is (= :sufficient (:status (judged-with (dissoc review :unruled) (ctx))))
         "a verdict that ruled on every check ends the run as it always did")))
 
+(deftest an-omission-after-a-round-that-ruled-everything-is-a-first-one-again
+  ;; Watched: R3 left a subject unruled, R4 ruled every subject, R5 omitted a clause of it again —
+  ;; and the run ended :unruled, the mark from R3 still standing. The judge was never asked twice
+  ;; running.
+  (let [unruled  {:format :baseline-review :verdict :sufficient :reason "ok" :unruled ["shape"]}
+        first    (judged-with unruled (ctx))
+        repaired (judged-with {:format :baseline-review :verdict :falsified :reason "r"
+                               :findings [a-finding]}
+                              (ctx :carry (:carry first)))
+        again    (judged-with unruled (ctx :carry (:carry repaired)))]
+    (is (= :next-round (:control first)))
+    (is (not (get-in repaired [:carry :reasked-unruled]))
+        "a round that left nothing unruled ends the streak")
+    (is (= :next-round (:control again)) "so the next omission is asked again, not the end of the run")
+    (is (nil? (:status again)))))
+
+(deftest a-subject-whose-clauses-were-asked-again-in-the-round-ends-the-run-unruled
+  ;; The round already asked its open clauses alone (`rule-open-clauses!`). A second whole round
+  ;; re-sends the same schema to the same judge, which repeats the omission.
+  (let [out (judged-with {:format :baseline-review :verdict :sufficient :reason "ok"
+                          :unruled ["mod-the-order-aggregate"]
+                          :incomplete-clauses {"mod-the-order-aggregate" ["mod-the-order-aggregate#2"]}}
+                         (ctx))]
+    (is (= :unruled (:status out)) "the targeted ask was the second ask")
+    (is (= :stop (:control out)))))
+
 (deftest the-report-is-told-how-much-was-checked-and-whether-it-banks
   (let [out (judged-with {:format :baseline-review :verdict :sufficient :reason "ok"
                           :confirmed ["c2"] :checked-at {"c2" ["a.clj:1"]}} (ctx))]
@@ -1728,6 +1754,63 @@
     (is (nil? (:clause-rulings r)) "the answer's clause rulings are no ledger field")
     (is (m/validate ledger-report/BaselineReview (dissoc r :tree-moved))
         "the closed ledger schema admits what the round derives — an append it refuses is lost whole")))
+
+(defn- reviewed-twice
+  "What `baseline-review!` appends when the judge answers `answer` and the re-ask of open clauses
+   answers `reask` (nil: that ask fails), and the rounds it ran as `[label schema prompt]`."
+  [answer reask]
+  (let [rounds (atom [])]
+    (with-redefs [record/run-round! (fn [{:keys [label schema prompt]}]
+                                      (swap! rounds conj [label schema prompt])
+                                      (if (str/ends-with? (str label) "-open-clauses")
+                                        (if reask
+                                          {:ok (json/generate-string reask)}
+                                          {:outcome :codex-failed :detail "x"})
+                                        {:ok (json/generate-string answer)}))
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  settled/code-identity (fn [_] "tree-a")]
+      [(record/baseline-review! {:cwd "/w" :run-id "r1" :label "baseline-review-round-3"
+                                 :baseline (assoc a-baseline :seq 3)
+                                 :settled {"c1" 2} :code-identity "tree-a"})
+       @rounds])))
+
+(deftest an-open-clause-of-a-sufficient-review-is-asked-again-alone
+  ;; Watched: a judge skipped clause #2 of one confirmed subject, and the whole round was asked again
+  ;; — the same 35-clause schema to the same judge, which skipped #2 again.
+  (let [checks    ["composition" "invoice-resums" "mod-the-order-aggregate" "shape"]
+        all       (apply held checks)
+        skipped   (some #(when (= "mod-the-order-aggregate#2" (:clause %)) %) all)
+        answer    {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
+                   :confirmed (mapv read-at checks)
+                   :clause_rulings (vec (remove #{skipped} all))}
+        [r rounds] (reviewed-twice answer {:clause_rulings [skipped]})
+        [label schema prompt] (second rounds)]
+    (is (= 2 (count rounds)) "one more ask, within the round")
+    (is (= "baseline-review-round-3-open-clauses" label) "beside the round's own artifacts, not over them")
+    (is (= ["mod-the-order-aggregate#2"]
+           (get-in (json/parse-string schema true) [:properties :clause_rulings :items :properties :clause :enum]))
+        "the schema admits only the open clause, so the omission is the only thing asked")
+    (is (str/includes? prompt "Still to rule on:\n[mod-the-order-aggregate]\n  mod-the-order-aggregate#2"))
+    (is (= checks (sort (:confirmed r)))
+        "ruled on the re-ask, the confirmation counts")
+    (is (nil? (:unruled r)))
+    (is (nil? (:incomplete-clauses r)))
+    (testing "a re-ask that leaves it open leaves it unruled, naming the clause"
+      (let [[r rounds] (reviewed-twice answer nil)]
+        (is (= 2 (count rounds)))
+        (is (= ["mod-the-order-aggregate"] (:unruled r)))
+        (is (= {"mod-the-order-aggregate" ["mod-the-order-aggregate#2"]} (:incomplete-clauses r)))))
+    (testing "the re-ask rules only what it was asked"
+      (let [held-one (assoc (some #(when (= "mod-the-order-aggregate#1" (:clause %)) %) all) :ruling "false")
+            [r _]    (reviewed-twice answer {:clause_rulings [skipped held-one]})]
+        (is (some #{"mod-the-order-aggregate"} (:confirmed r))
+            "a clause the review held is not overturned by an answer to a question it was not asked")))
+    (testing "an insufficient review is not asked again: its findings go to the amender"
+      (let [[_ rounds] (reviewed-twice (assoc answer :verdict "falsified"
+                                              :findings [{:claim-id "shape" :blocks "none" :cites ["h"]
+                                                          :claim "c" :needs "" :evidence ["src/order/invoice.clj:88"]}])
+                                       {:clause_rulings [skipped]})]
+        (is (= 1 (count rounds)))))))
 
 (deftest an-exclusivity-held-without-a-whole-tree-search-is-unruled
   ;; Watched: an `only X reserves room` claim confirmed three times on the sites it cited, while a

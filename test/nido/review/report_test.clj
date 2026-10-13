@@ -710,6 +710,21 @@
         ph (first (:phases (first (:rounds r))))]
     (is (= {"c1" 1 "shape" 3} (:refuted-running ph)))))
 
+(deftest a-judge-phase-names-the-clauses-that-left-a-subject-unruled
+  ;; Watched: two phases said :unruled ["unbounded-concurrency"], and which clause was open could be
+  ;; read only out of each round's out.json.
+  (let [r (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+              (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+              (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                   :ctx {:record {:format :baseline-review :verdict :sufficient
+                                                  :unruled ["unbounded-concurrency"]
+                                                  :incomplete-clauses {"unbounded-concurrency"
+                                                                       ["unbounded-concurrency#2"]}}
+                                         :findings []}} nil))
+        ph (first (:phases (first (:rounds r))))]
+    (is (= ["unbounded-concurrency"] (:unruled ph)))
+    (is (= {"unbounded-concurrency" ["unbounded-concurrency#2"]} (:incomplete-clauses ph)))))
+
 (deftest a-design-judge-phase-keeps-what-the-round-decided
   (let [[_ ph] (design-judge-phase
                 {:format :design-decision :recommend :proceed :asks "worth it now?"

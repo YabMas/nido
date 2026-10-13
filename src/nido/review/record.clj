@@ -646,6 +646,17 @@
                              (when (seq cs) [id (keyed id cs)])))
                          (:phases record))))))
 
+(defn- clause-lines
+  "`owed` (`clauses-owed`, or any part of it) as the prompt lists clauses: each subject's id, then
+   each clause under the key a judge rules it by."
+  [owed]
+  (str/join
+   (for [[id cs] owed]
+     (str "[" id "]\n"
+          (str/join (for [{:keys [key field text search?]} cs]
+                      (str "  " key "  " (str/replace (name field) "-" " ") ": " text
+                           (when search? "  (search owed)") "\n")))))))
+
 (defn- clause-rules
   "What a record judge owes a subject that says several things, as rules a schema field carries
    rather than prose a judge may skim. A judge left to itself stops at the first counterexample it
@@ -711,12 +722,7 @@
          (str "THE CLAUSES — each subject below is ruled one clause at a time, by the key\n"
               "before the clause; a subject not listed here says one thing and is ruled\n"
               "by its id:\n"
-              (str/join
-               (for [[id cs] owed]
-                 (str "[" id "]\n"
-                      (str/join (for [{:keys [key field text search?]} cs]
-                                  (str "  " key "  " (str/replace (name field) "-" " ") ": " text
-                                       (when search? "  (search owed)") "\n"))))))
+              (clause-lines owed)
               "\n")
          "THE CLAUSES — none: every subject here says one thing, and clause_rulings\nstays empty.\n\n")))
 
@@ -1899,6 +1905,17 @@
                                                 (get-in decision [:properties :relation_rulings])
                                                 ids)}})))
 
+(defn- clause-reask-schema
+  "The output schema for re-asking a judge only the clauses of `owed` (`clauses-owed`, narrowed to
+   what it left open): one clause ruling each, in the verification schema's ruling shape."
+  [owed]
+  (let [review (with-clause-keys (json/parse-string (schemas :baseline-review) true) owed)]
+    (json/generate-string
+     {:type                 "object"
+      :additionalProperties false
+      :required             ["clause_rulings"]
+      :properties           {:clause_rulings (get-in review [:properties :clause_rulings])}})))
+
 (def ^:private derivation-keys
   "Every derivation a round may answer about, of either era. What an answer names is kept only if it
    is one of these; which of them a round asks about is the record's era."
@@ -2817,6 +2834,49 @@
         (cond-> decision
           (seq added) (update :relation-rulings (fnil into []) added))))))
 
+(def ^:private open-clauses-pass
+  "Why a re-ask asks, when a sufficient review left clauses of subjects it ruled open."
+  (str "THIS PASS ASKS ONE THING. The review of this baseline is already made, and\n"
+       "it ruled on the subjects below without ruling each of their clauses as the\n"
+       "clause instruction above says: a clause was left with no ruling, held citing\n"
+       "nothing, held with no whole-tree search where one is owed, or ruled false under\n"
+       "a confirmation. Rule on EACH clause below, and answer clause_rulings only;\n"
+       "every other field above is not asked here.\n"
+       "Still to rule on:\n"))
+
+(defn- rule-open-clauses!
+  "`result`, a ruled verification (`rule`) still carrying its :clause-rulings, with every clause
+   `held-to-clauses` would leave open on a subject it ruled asked of a judge once more — only on a
+   sufficient verdict, the one an open clause alone stops. `owed` is `clauses-owed`, `round`
+   `run-round!`'s options for the verification round and `prompt` what it was asked with.
+
+   The open clauses rather than the whole round again: a judge handed the same schema of thirty-odd
+   clauses repeats its omission, and with a single judge nothing the round confirmed settles
+   meanwhile, so a second whole round is the first one over. One more ask, not a loop, as
+   `rule-unruled-relations!`: what it leaves open stays open, and the stage ends the run :unruled on
+   it (`run-judge-stage`). Only the asked keys are taken from the answer, so it rules nothing the
+   review did not leave open; one that fails or answers nothing usable leaves `result` as it was."
+  [result owed round prompt]
+  (let [gaps (when (= :sufficient (:verdict result))
+               (:incomplete-clauses (held-to-clauses result owed)))
+        open (into (sorted-map) (keep (fn [[id ks]]
+                                        (let [ks (set ks)]
+                                          [id (filterv (comp ks :key) (get owed id))])))
+                   gaps)]
+    (if (empty? open)
+      result
+      (let [asked  (into #{} (comp (mapcat val) (map :key)) open)
+            answer (:ok (run-round! (assoc round
+                                           :label  (str (or (:label round) "baseline-review") "-open-clauses")
+                                           :schema (clause-reask-schema open)
+                                           :prompt (str prompt "\n\n" open-clauses-pass (clause-lines open)))))
+            added  (when answer
+                     (try (select-keys (parse-clause-rulings (:clause_rulings (json/parse-string answer true)))
+                                       asked)
+                          (catch Exception _ nil)))]
+        (cond-> result
+          (seq added) (update :clause-rulings merge added))))))
+
 (defn- contradicted-relation-ids
   "The ids of `subjects` whose ruling `decision` contradicts its own relation-honest reading: it
    called the check held, and ruled them so `breaks` does not match (`mismatched`). None unless the
@@ -3151,7 +3211,8 @@
    the tree did not move — they are what a model claim is settled on in a
    project that declares a design, and only those the baseline's subjects rest on. Settled subjects
    are shown and are not checks; the review's ruling is held to its checks by `rule`, so a check the
-   judge left without one is named under :unruled. `:prior` is what earlier runs found against
+   judge left without one is named under :unruled — on a sufficient verdict, after the clauses it left
+   open were asked once more (`rule-open-clauses!`). `:prior` is what earlier runs found against
    the subjects it checks (`prior-findings-block`). A round whose tree moved is still appended,
    settled subjects or not: its findings and its rulings on its own checks are a judgment of
    code, and only banking them forward needs the one tree it lacks — which the missing
@@ -3184,27 +3245,33 @@
                 (let [before   (if (contains? opts :code-identity)
                                  (:code-identity opts)
                                  (settled/code-identity code-cwd))
-                      result   (judged (judge-round! {:cwd code-cwd :run-id run-id :kind :baseline-review
-                                                    :label label :reviewer reviewer
-                                                    :schema (baseline-review-schema (clauses-owed baseline asked))
-                                                    :prompt (baseline-prompt {:baseline baseline
-                                                                              :disputes disputes
-                                                                              :settled settled
-                                                                              :prior prior
-                                                                              :stale stale
-                                                                              :moved (some->> (:baseline verified)
-                                                                                              (moved-since baseline))
-                                                                              :stance (stages/read-stance project)})})
+                      owed     (clauses-owed baseline asked)
+                      checks   (set (keys (apply dissoc (settled/subjects baseline) (keys settled))))
+                      round    {:cwd code-cwd :run-id run-id :kind :baseline-review
+                                :label label :reviewer reviewer
+                                :schema (baseline-review-schema owed)}
+                      prompt   (baseline-prompt {:baseline baseline
+                                                 :disputes disputes
+                                                 :settled settled
+                                                 :prior prior
+                                                 :stale stale
+                                                 :moved (some->> (:baseline verified)
+                                                                 (moved-since baseline))
+                                                 :stance (stages/read-stance project)})
+                      result   (judged (judge-round! (assoc round :prompt prompt))
                                        #(parse-baseline-review % (:seq baseline)))
+                      ;; Asked before the tree is read again, so the identity spans the re-ask too.
+                      result   (cond-> result
+                                 (:format result) (-> (rule checks asked)
+                                                      (rule-open-clauses! owed round prompt)))
                       after    (settled/code-identity code-cwd)
                       one-tree (when (= before after) before)
-                      checks   (set (keys (apply dissoc (settled/subjects baseline) (keys settled))))
                       rests-on (settled/rested-on baseline baseline)]
               (if-not (:format result)
                 result
                 (let [kept  (select-keys subject-identities rests-on)
                       moved (tree-moved before after)]
-                  (cond-> (held-to-answer (rule result checks asked) (clauses-owed baseline asked))
+                  (cond-> (held-to-answer result owed)
                     one-tree                  (assoc :code-identity one-tree)
                     (and one-tree (seq kept)) (assoc :subject-identities kept)
                     moved                     (assoc :tree-moved moved))))))))
@@ -5484,12 +5551,32 @@
 (defn- unruled-stop
   "A round that would have ended the run with checks it never ruled on. The first time, the run goes
    on to another judgement and nothing is amended: what this round did confirm is settled by then,
-   so the next judge is handed only what was left. The second time, the run ends :unruled — the
-   judge was asked and still did not rule, and nothing lets the record hold over that."
-  [ctx]
-  (if (get-in ctx [:carry :reasked-unruled])
-    (assoc ctx :control :stop :status :unruled)
-    (-> ctx (assoc :control :next-round) (assoc-in [:carry :reasked-unruled] true))))
+   so the next judge is handed only what was left. The second time running, or when the round
+   itself already asked again (`asked-again?`), the run ends :unruled — the judge was asked and
+   still did not rule, and nothing lets the record hold over that.
+
+   Running means no round between them ruled on everything it was handed: such a round takes the
+   mark off (`ruled-in-full`), so an omission after it is a first one again."
+  ([ctx] (unruled-stop ctx false))
+  ([ctx asked-again?]
+   (if (or asked-again? (get-in ctx [:carry :reasked-unruled]))
+     (assoc ctx :control :stop :status :unruled)
+     (-> ctx (assoc :control :next-round) (assoc-in [:carry :reasked-unruled] true)))))
+
+(defn- ruled-in-full
+  "`ctx` with `unruled-stop`'s mark taken off when `record` left nothing it was handed unruled —
+   no check, no baseline id's relation."
+  [ctx record]
+  (cond-> ctx
+    (and (empty? (:unruled record)) (empty? (:relation-unruled record)))
+    (update :carry dissoc :reasked-unruled)))
+
+(defn- clauses-asked-again?
+  "Whether a sufficient verification left unruled a subject whose clauses it had already asked
+   again within the round: `baseline-review!` asks every open clause once more on that verdict
+   (`rule-open-clauses!`), so a subject still under :incomplete-clauses is open after two asks."
+  [record]
+  (boolean (some #(contains? (:incomplete-clauses record) %) (:unruled record))))
 
 (defn- judge-inputs
   "What a judge stage reads off the ledgers for `subject`, a `kind` of record, at `reading`, before
@@ -5935,6 +6022,7 @@
                                  :refuted-with (refutations (into lineage mine))
                                  :spent spent-now :spent-awaiting awaiting)
                           (update :carry dissoc :stale :stale-because)
+                          (ruled-in-full record)
                           (judged-by-carry record)
                           (cond-> ledger (assoc-in [:carry :ledger] ledger)))
                       (when (:seq subject) {:judged-seq (:seq subject)})
@@ -5951,7 +6039,7 @@
         (assoc ctx :record record :status (:outcome record))
 
         (and (= :sufficient (:verdict record)) (seq (:unruled record)))
-        (unruled-stop (assoc ctx :record record :findings []))
+        (unruled-stop (assoc ctx :record record :findings []) (clauses-asked-again? record))
 
         ;; A sufficient verdict over a subject no reading can rule on is not one the run may end
         ;; on: it goes to the amender with the rest below, and is read again after.
@@ -6020,7 +6108,9 @@
 
    A sufficient verdict ends the run only over checks it ruled on. One leaving
    some :unruled is judged once more, with no amendment between; still unruled,
-   the run ends :unruled (`unruled-stop`). And only on a second reading: one
+   the run ends :unruled (`unruled-stop`). A subject left unruled by its open
+   clauses was already asked again within the round, by those clauses alone
+   (`rule-open-clauses!`), so it ends the run :unruled there. And only on a second reading: one
    confirming a subject no confirmation at its key preceded, or reading a record
    this run amended for the first time, is appended as :read-once or
    :amendment-read-once, holds nothing, and is judged again (`second-reading`).
@@ -7346,6 +7436,7 @@
                                  :refuted-with (refutations (into lineage (when-not reused [record])))
                                  :spent spent-now :spent-awaiting awaiting)
                           (update :carry dissoc :stale :stale-because)
+                          (ruled-in-full record)
                           (judged-by-carry record)
                           (cond-> ledger (assoc-in [:carry :ledger] ledger)))
                       (when (:seq design) {:judged-seq (:seq design)})

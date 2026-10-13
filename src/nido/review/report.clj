@@ -641,7 +641,9 @@
       ;; skip a reader can check against the ledger, rather than a quiet round that
       ;; looked at less.
       ;; :claims is how many subjects the judge WAS asked about — not :derived, its derivations — :unruled which of them it left
-      ;; without a ruling, :relation-unruled which baseline ids it gave no relation ruling, :read-once which it confirmed on a first reading and
+      ;; without a ruling, :incomplete-clauses per subject the clauses that left it so — the round's
+      ;; out.json is the only other place they can be read —
+      ;; :relation-unruled which baseline ids it gave no relation ruling, :read-once which it confirmed on a first reading and
       ;; :amendment-read-once whether it was the first reading of a record the run amended — why a
       ;; clean round did not end the run — and :unbanked why what it confirmed cannot settle, when it
       ;; confirmed something that cannot — a round whose confirmations bank looks exactly like one
@@ -762,6 +764,8 @@
                                     (:asked-findings ctx)))
                 (:owes-reading ctx)                     (assoc :reads-again (:owes-reading ctx))
                 (seq (get-in ctx [:record :unruled]))   (assoc :unruled (get-in ctx [:record :unruled]))
+                (seq (get-in ctx [:record :incomplete-clauses]))
+                (assoc :incomplete-clauses (get-in ctx [:record :incomplete-clauses]))
                 (seq (get-in ctx [:record :relation-unruled]))
                 (assoc :relation-unruled (get-in ctx [:record :relation-unruled]))
                 (seq (get-in ctx [:record :read-once])) (assoc :read-once (get-in ctx [:record :read-once]))

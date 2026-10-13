@@ -2103,7 +2103,7 @@
    ;; :unfixable reached at a cap rather than by the give-up counter: see `shared-remedy`.
    ::spent    "the cap ended the run owing an amendment to what is named above, and each has been reworded and refuted again across runs — another rewording at the same strength, by hand or by a re-run, is the circle; weaken it to what the code guarantees, withdraw it, or decide it"
    :disputed   "the judge restated a finding the amender objected to twice — neither can settle it, so you do"
-   :unruled    "the judge would have ended the run leaving checks it neither confirmed, refuted nor called uncheckable, or baseline ids with no relation ruling, and asked again it still did not rule — the record does not hold over them; the report's judge phase names them, under :unruled and :relation-unruled"
+   :unruled    "the judge would have ended the run leaving checks it neither confirmed, refuted nor called uncheckable, or baseline ids with no relation ruling, and asked again it still did not rule — the record does not hold over them; the report's judge phase names them, under :unruled and :relation-unruled, and a subject's open clauses under :incomplete-clauses"
    :amend-noop "the amender completed and produced no record — nothing was appended"
    :amend-launch-failed "the amender never completed — it exited or was killed before answering, so the round's findings are still unanswered and nothing was appended; read its transcript, then re-run"
    :usage-limited "the account's usage limit refused the amender — nothing was appended and nothing was decided; re-run after the reset named above"
