@@ -5602,15 +5602,30 @@
     (when (= (:seq subject) (:seq q)) (:read q))))
 
 (defn- reading-judge
-  "Who reads `subject` this round: `reviewer`, the run's own, unless the round is the second reading
-   of a quiet round of the same record (`second-reading`) — then the reviewer that did not answer
-   that one (`codex/other-reviewer`), since a reading pairs only with one by another judge
-   (`settled/independent?`)."
-  [ctx subject reviewer]
-  (let [{:keys [judged-by] :as q} (get-in ctx [:carry :quiet])]
-    (if (and q (= (:seq subject) (:seq q)) (:reviewer judged-by))
-      (codex/other-reviewer (:reviewer judged-by))
-      reviewer)))
+  "Who reads this round: `reviewer`, the run's own, on a run's first judgement, and after that the
+   reviewer that did not answer the judgement before it (`codex/other-reviewer` of the carried
+   :judged-by), every round. A reading pairs only with one by another judge
+   (`settled/independent?`), so a confirmation of a subject an amendment left unchanged settles in
+   the round after it only when that round is the other judge's. Reserved for a quiet round's second
+   reading, the one reading that can settle anything would come last, where the cap stops the run
+   before its amendment is read, and every same-judge confirmation before it would settle nothing.
+
+   Keyed on who ANSWERED, not who was asked: when a stand-in answered for the run's reviewer, the
+   reviewer asked next is the one it stood in for, which `independent?` pairs with it."
+  [ctx reviewer]
+  (if-let [answered (get-in ctx [:carry :judged-by :reviewer])]
+    (codex/other-reviewer answered)
+    reviewer))
+
+(defn- judged-by-carry
+  "`ctx` carrying who answered `record`, for the next round's `reading-judge` — unless no judge
+   answered it (an :outcome in place of a judgement), when the judgement before still stands as
+   the one the next round pairs with. A reused judgement counts as answered: it is the reading the
+   round stands on."
+  [ctx record]
+  (if-let [j (:judged-by record)]
+    (assoc-in ctx [:carry :judged-by] j)
+    ctx))
 
 (defn- rulings
   "`{id :holds|:owed}` for each id `record` read: confirmed with where it read it, or held :owed."
@@ -5797,9 +5812,9 @@
 (defn- second-reading
   "A round that would have ended the run clean on a first reading (`read-once?`). The run goes on to
    another judgement with nothing amended; the subjects it read once are not settled, so the
-   next judge — the other reviewer (`reading-judge`) — is handed them again, cold — it is not told
-   it is a second reading — and a subject it also rules sound is paired, one it leaves without a
-   ruling is :unruled. What this round
+   next judge — the other reviewer, as every round's is (`reading-judge`) — is handed them again,
+   cold — it is not told it is a second reading — and a subject it also rules sound is paired, one
+   it leaves without a ruling is :unruled. What this round
    read is carried, with its ruling, for the pairing the ledger cannot give (`carried-readings`) —
    less what it declared unchecked, which a later reading has nothing to pair with — and the round
    it was read in, so an amendment is read a second time and not a third (`unread-amendment?`).
@@ -5823,7 +5838,6 @@
       (assoc-in [:carry :quiet]
                 {:seq       (:seq subject)
                  :iter      (:iter ctx)
-                 :judged-by (:judged-by record)
                  :read      (merge (apply dissoc (carried-readings ctx subject)
                                           (map :id (:unchecked record)))
                                    (into {} (map (fn [[id r]] [id {:ruling r :judged-by (:judged-by record)}]))
@@ -5880,7 +5894,7 @@
         judged  (when-not (or lost reused)
                   (baseline-review!
                    {:cwd cwd :ledger ledger :code-cwd code-cwd :run-id run-id
-                    :reviewer (reading-judge ctx subject reviewer)
+                    :reviewer (reading-judge ctx reviewer)
                     :baseline subject
                     :settled settled
                     :prior prior
@@ -5921,6 +5935,7 @@
                                  :refuted-with (refutations (into lineage mine))
                                  :spent spent-now :spent-awaiting awaiting)
                           (update :carry dissoc :stale :stale-because)
+                          (judged-by-carry record)
                           (cond-> ledger (assoc-in [:carry :ledger] ledger)))
                       (when (:seq subject) {:judged-seq (:seq subject)})
                       (when-let [m (:tree-moved judged)] {:tree-moved m})
@@ -7286,7 +7301,7 @@
         judged  (when-not (or lost reused)
                   (design-decision!
                    {:cwd cwd :ledger ledger :code-cwd code-cwd :run-id run-id
-                    :reviewer (reading-judge ctx design reviewer)
+                    :reviewer (reading-judge ctx reviewer)
                     :design design :settled settled :prior prior :listing listing
                     :stale (stale-questions ctx)
                     :code-identity (:code-identity reading)
@@ -7331,6 +7346,7 @@
                                  :refuted-with (refutations (into lineage (when-not reused [record])))
                                  :spent spent-now :spent-awaiting awaiting)
                           (update :carry dissoc :stale :stale-because)
+                          (judged-by-carry record)
                           (cond-> ledger (assoc-in [:carry :ledger] ledger)))
                       (when (:seq design) {:judged-seq (:seq design)})
                       (when-let [m (:tree-moved judged)] {:tree-moved m})

@@ -2219,6 +2219,39 @@
       (is (= :sufficient (:status r2)) "the second consecutive clean reading ends the run")
       (is (nil? (:read-once (last @appended)))))))
 
+(deftest every-round-is-read-by-the-judge-that-did-not-answer-the-last
+  ;; Watched: a baseline run judged by codex in rounds 1-4 and by claude only in a fifth, quiet
+  ;; round, which overturned ten of codex's confirmations at the cap — its amendment never read.
+  (let [appended (atom [])
+        seen     (atom nil)
+        refuting (assoc confirming :verdict :falsified :reason "two summing paths"
+                        :findings [a-finding])
+        config   {:cwd "/w" :run-id "r1" :reviewer :codex}
+        r1       (judged-over {:review refuting :appended appended :seen seen} (ctx :config config))
+        _        (is (= :codex (:reviewer @seen)) "the run's own reviewer reads first")
+        r2       (judged-over {:review confirming :appended appended :seen seen
+                               :reviews [(assoc (first @appended) :seq 2)]}
+                              (ctx :config config :iter 2 :carry (:carry r1)))]
+    (is (nil? (get-in r1 [:history 0 :quiet])) "round 1 was no quiet round")
+    (is (= :claude (:reviewer @seen))
+        "a round after one that found something is the other judge's too, or its confirmations pair with nothing")
+    (is (= [{:id "invoice-resums" :seq 2 :ws-id "ws-1" :run-id "r1"}] (:paired-with (second @appended)))
+        "so a confirmation of what the amendment left alone settles in round 2, not at the cap")
+    (judged-over {:review refuting :seen seen} (ctx :config config :iter 3 :carry (:carry r2)))
+    (is (= :codex (:reviewer @seen)) "and the judges keep alternating")))
+
+(deftest a-stand-in-answer-hands-the-next-round-to-the-reviewer-it-stood-in-for
+  ;; Pairing counts who was asked (`settled/independent?`), so the stand-in's claude reading pairs
+  ;; with a codex one — asking claude next would read it with the same judge twice.
+  (let [seen     (atom nil)
+        stood-in (assoc confirming :verdict :falsified :reason "two summing paths"
+                        :findings [a-finding]
+                        :judged-by {:reviewer :claude :instead-of :codex :because "usage limit"})
+        r1       (judged-over {:review stood-in} (ctx))]
+    (judged-over {:review confirming :seen seen} (ctx :iter 2 :carry (:carry r1)))
+    (is (= :codex (:reviewer @seen))
+        "the reading after a stand-in's is asked of the reviewer it stood in for, the one it pairs with")))
+
 (deftest a-tree-with-no-identity-pairs-its-readings-within-the-run
   ;; Nothing banks on the ledger without an identity, so a rule paired only there would read such a
   ;; record for ever.
