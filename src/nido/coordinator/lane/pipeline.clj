@@ -84,9 +84,9 @@
    :baseline-verified
    :baselined
    :intent-stated
-   ;; A triage report nobody has accepted yet: the verdict is written, and taking it — or
-   ;; dismissing it — is a person's. Below every record of the arc, so work that went on past
-   ;; it is read by that work.
+   ;; A triage report or Slack proposal nobody has accepted yet: the verdict is written, and
+   ;; taking it — or dismissing it — is a person's. Below every record of the arc, so work that
+   ;; went on past it is read by that work.
    :triage-awaiting
    :analysed
    :intake
@@ -455,13 +455,19 @@
     (when (and (contains? notion-done (:status seen)) (> (:seq seen) moved))
       seen)))
 
+(def ^:private verdict-kinds
+  "The reports a person accepts or dismisses: a Notion triage and a Slack proposal. Both are
+   answered by the same :triage-accepted, which cites the report's :seq whatever its kind, so
+   the gate is owed by either."
+  #{:triage :proposed-ticket})
+
 (defn- triage-unaccepted?
-  "Whether the newest :triage report is one no :triage-accepted cites."
+  "Whether the newest verdict report is one no :triage-accepted cites."
   [project ws-id w ks]
-  (when (contains? ks :triage)
+  (when (some verdict-kinds ks)
     ;; Off the index: a triage written as markdown before reports were typed parses as nothing,
     ;; and its number is still what an acceptance would have cited.
-    (let [newest (:seq (last (filter #(= :triage (:kind %)) (:entries w))))]
+    (let [newest (:seq (last (filter #(verdict-kinds (:kind %)) (:entries w))))]
       (not-any? #(= newest (:triage-seq %)) (ws/entries-of project ws-id :triage-accepted)))))
 
 (defn- layer-progress

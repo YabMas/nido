@@ -386,7 +386,13 @@
                 {:format :proposed-ticket :title "t" :ticket-type "bug"
                  :source-url "https://slack.test/1" :problem "p"
                  :root-cause "rc" :fix "src/a.clj:1"})
-          (is (= :proposal (:intake (p/of :brian id))))))
+          (is (= :proposal (:intake (p/of :brian id))))
+          (is (= :triage-awaiting (:at (p/of :brian id)))
+              "an unaccepted proposal owes a person the acceptance, as a triage does")
+          (is (= {:stage :accept-triage :mode :human} (:next (p/of :brian id))))
+          (add! :triage-accepted {:format :triage-accepted :triage-seq 1})
+          (is (= :intake (:at (p/of :brian id)))
+              "accepting it clears the gate, and the intent is still owed")))
 
       (testing "the kind rides on the first stage, so one dispatch serves all four"
         (let [[id _] (ledger)
