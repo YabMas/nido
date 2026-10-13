@@ -54,6 +54,27 @@
     (is (= context (get-in final [:target :context]))
         "whether the run reached the ledger, the cache, a design record and a stance is what says the report is worth trusting, and only the caller can answer it")))
 
+(deftest a-record-runs-stamps-survive-the-engine-starting
+  (let [tree    {:rev "71b6968e" :ahead 28}
+        subject {:kind "baseline" :seq 39}
+        launch  {:caller "cli" :max-iters 4}
+        seeded  (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"
+                                  :launch launch})
+                    (report/with-subject subject)
+                    (report/with-judged-tree "/tmp/r/tree" tree))
+        started (report/apply-event seeded
+                                    {:event :run-started :run-id "r" :cwd "/w" :base nil :at "t1"}
+                                    clock)]
+    (is (= tree (get-in started [:target :tree]))
+        "the judged revision outlives the produced directory, and without it no record run's report can say which tree its judges read")
+    (is (= "/tmp/r/tree" (get-in started [:target :code-cwd])))
+    (is (= subject (get-in started [:target :subject]))
+        "what the run was pointed at is where a run that judged past a newer entry is read")
+    (is (= launch (:launch started))
+        "which caller started the run is what tells a duplicate from a re-run somebody wanted")
+    (is (= "t1" (:started-at started))
+        "the engine's own start is the run's start")))
+
 (deftest review-round-records-findings-and-target
   (let [r (drive
            [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}

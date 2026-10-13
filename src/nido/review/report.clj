@@ -1576,15 +1576,19 @@
     (case event
       :run-started
       ;; Constructs the report when nothing seeded it — `report` is nil for a
-      ;; caller that folds from scratch — but must not discard what did. Only the
-      ;; caller can know `:context` and `:machinery`; the loop that emits this
-      ;; event knows neither, so both are read back off the report being replaced.
-      (init {:run-id     (:run-id ev)
-             :cwd        (:cwd ev)
-             :base       (:base ev)
-             :started-at (:at ev)
-             :context    (get-in report [:target :context])
-             :machinery  (:machinery report)})
+      ;; caller that folds from scratch — but must not discard what did. The
+      ;; loop that emits this event knows only what `init` takes from it; the
+      ;; caller's stamps — `:machinery`, `:launch`, and on `:target` the
+      ;; `:context`, `:subject`, `:code-cwd`, `:tree` a record run puts there
+      ;; before its engine starts — survive under init's fields. A key both
+      ;; write is the event's.
+      (let [fresh (init {:run-id     (:run-id ev)
+                         :cwd        (:cwd ev)
+                         :base       (:base ev)
+                         :started-at (:at ev)
+                         :machinery  (:machinery report)})]
+        (assoc (merge report fresh)
+               :target (merge (:target report) (:target fresh))))
 
       :phase-started
       (-> report
