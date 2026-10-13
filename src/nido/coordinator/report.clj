@@ -2649,10 +2649,10 @@
    :incomplete-clauses names, per subject, the clauses its prompt listed to be ruled one by one
    that the judgement left open — no ruling, held citing nothing, held with no whole-tree search
    where the clause owed one — or ruled false under a confirmation. Such a subject is :unruled and
-   none of its confirmation is counted (`nido.review.record/held-to-clauses`); a phase's clauses are
-   named here only. :clause-readings is each listed clause the judgement ruled — false, or held
-   citing what a held ruling owes — with the words it ruled on, which is what a later reading of the
-   same clause is compared against: its key is a position, and an amendment moves what sits there.
+   none of its confirmation is counted (`nido.review.record/held-to-clauses`); the clauses of a
+   phase or an :open note are named here only. :clause-readings is each listed clause the judgement
+   ruled — false, or held citing what a held ruling owes — with the words it ruled on, which is
+   what a later reading of the same clause is compared against: its key is a position, and an amendment moves what sits there.
    :confirmed-over-findings is each confirmation whose evidence reads a site the
    same judgement's own finding against another subject cites — recorded, not ruled, since a
    chokepoint both pass through shares a site as surely as a confirmation denying the finding

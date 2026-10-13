@@ -647,9 +647,11 @@
    search can hold (:search?). A subject of one plain clause is ruled by its id alone.
 
    A phased design adds each phase's :habitable sentences under `phase-<n>`, numbered from 1 in
-   plan order. A phase is no subject — nothing confirms or refutes it by id — so those clauses are
-   ruled for the checks that read them, and their omissions recorded, never counted as an unruled
-   subject."
+   plan order, and a design with :open notes adds each note's sentences under `open-<n>`, the
+   same way. Neither is a subject — nothing confirms or refutes one by id — so those clauses are
+   ruled for what they are held against (`cross-rules`), and their omissions recorded, never
+   counted as an unruled subject. Both are listed whatever `asked` holds: the claim a phase or a
+   note contradicts may be settled, and still be false."
   [record asked]
   (let [subjects (settled/subjects record)]
     (into (sorted-map)
@@ -664,7 +666,18 @@
                                       {:field :habitable :text s
                                        :search? (boolean (re-find search-words s))})]
                              (when (seq cs) [id (keyed id cs)])))
-                         (:phases record))))))
+                         (:phases record))
+           ;; Not :search? whatever its words: a note is held against the record's claims, not
+           ;; the tree, and what it says is left open on purpose.
+           (keep-indexed (fn [i note]
+                           (let [cs (for [s (clauses note)] {:field :open :text s :search? false})]
+                             (when (seq cs) [(str "open-" (inc i)) (keyed (str "open-" (inc i)) cs)])))
+                         (:open record))))))
+
+(def ^:private cross-fields
+  "The fields of a clause that belongs to no subject (`clauses-owed`): it is ruled only by being
+   held against the claims."
+  #{:habitable :open})
 
 (defn- clause-lines
   "`owed` (`clauses-owed`, or any part of it) as the prompt lists clauses: each subject's id, then
@@ -677,6 +690,49 @@
                       (str "  " key "  " (str/replace (name field) "-" " ") ": " text
                            (when search? "  (search owed)") "\n")))))))
 
+(defn- cross-rules
+  "What a phase or an :open note in `owed` is ruled against, or nil when `owed` lists neither.
+   Each is shown beside the claims it can contradict, and a judge reading clause by clause rules
+   it as a sentence on its own: a phase admitting a weaker live state than an always-claim, and an
+   open note stating the exception to a claim covering that path unconditionally, were each ruled
+   held twice on identical text and found by a third reading. So each such clause is ruled only by
+   being held against every claim, and its ruling has to name the claims it was held against —
+   a held ruling citing nothing is open (`open-clauses`)."
+  [owed]
+  (let [kinds (into #{} (comp (mapcat val) (map :field) (filter cross-fields)) owed)]
+    (when (seq kinds)
+      (str "A PHASE OR AN OPEN NOTE IS RULED AGAINST THE CLAIMS, never as a sentence alone.
+"
+           "Hold each one against EVERY claim, not the one it sits beside, and name the claim
+"
+           "keys you held it against in its ruling's evidence — held citing none is unruled.
+"
+           (when (kinds :habitable)
+             (str "A phase-<n> clause states what is live while that phase stands. It is false
+"
+                  "where that live state breaks a clause of any claim NOT marked holds ON
+"
+                  "COMPLETION — such a claim holds at every phase boundary, so a phase admitting
+"
+                  "less is a contradiction, not a plan.
+"))
+           (when (kinds :open)
+             (str "An open-<n> clause is a note the record leaves open. It is false where it
+"
+                  "states an exception — a path, a case, an input — that a claim's statement
+"
+                  "covers unconditionally: the note is what the record says, so the claim
+"
+                  "overstates.
+"))
+           "Either way the contradiction is a PAIR, and both halves are ruled false: the
+"
+           "claim's clause, with a finding against the claim naming this clause's key, and
+"
+           "this clause, naming the claim's key. The finding is the claim's, because the
+"
+           "claim is what the amender repairs.\n\n"))))
+
 (defn- clause-rules
   "What a record judge owes a subject that says several things, as rules a schema field carries
    rather than prose a judge may skim. A judge left to itself stops at the first counterexample it
@@ -687,7 +743,8 @@
    clauses open is no ruling (`held-to-clauses`).
 
    One finding per subject, not one per clause: findings are keyed on the subject, so a second
-   finding against the same id would be the same identity. `decision?` adds what only a decision
+   finding against the same id would be the same identity. A phase or :open note in `owed` adds
+   what it is held against (`cross-rules`). `decision?` adds what only a decision
    round derives: every subject against every check, and a baseline id's clauses under
    relation-honest."
   [owed decision?]
@@ -738,6 +795,7 @@
               "outcome alone, and its reason names the clause most at risk. A fact you cite\n"
               "to break one id, hold against every id whose statement names the same module\n"
               "or decision.\n\n"))
+       (cross-rules owed)
        (if (seq owed)
          (str "THE CLAUSES — each subject below is ruled one clause at a time, by the key\n"
               "before the clause; a subject not listed here says one thing and is ruled\n"
@@ -2091,8 +2149,8 @@
    judgement holding as any unruled check does, and its confirmation is not counted. A
    confirmation with a clause ruled false is incomplete the same way — it confirmed what it read
    false. A finding stays: what it found is found, and the next round is asked for the rest.
-   :incomplete-clauses names, per subject, the keys that made it so; a phase's open clauses are
-   named there and nowhere else, since no id confirms or refutes a phase.
+   :incomplete-clauses names, per subject, the keys that made it so; the open clauses of a phase or
+   an :open note are named there and nowhere else, since no id confirms or refutes either.
 
    A confirmation that stands carries, on its :checked-at, the search each held :interface clause
    named (`settled/enumeration-mark`): the ledger keeps no clause's evidence, and that search is
@@ -2115,7 +2173,7 @@
                          [key {:ruling r :text text}]))
         affirmed (set (concat (:confirmed result) (:owed result)))
         judged   (into affirmed (keep :claim-id) (:findings result))
-        phase?   (fn [cs] (every? #(= :habitable (:field %)) cs))
+        cross?   (fn [cs] (every? (comp cross-fields :field) cs))
         gaps     (into (sorted-map)
                        (keep (fn [[id cs]]
                                (let [open (into #{} (open-clauses cs rulings))
@@ -2123,10 +2181,10 @@
                                             (affirmed id) (into (comp (map :key)
                                                                       (filter #(= :false (get-in rulings [% :ruling]))))
                                                                 cs))]
-                                 (when (and (seq open) (or (phase? cs) (judged id)))
+                                 (when (and (seq open) (or (cross? cs) (judged id)))
                                    [id (filterv open (map :key cs))]))))
                        owed)
-        subjects (into #{} (comp (map key) (remove (comp phase? owed))) gaps)
+        subjects (into #{} (comp (map key) (remove (comp cross? owed))) gaps)
         kept     (fn [xs] (not-empty (filterv (complement subjects) xs)))
         put      (fn [r k v] (if v (assoc r k v) (dissoc r k)))
         searched (fn [id] (into [] (comp (filter #(= :interface (:field %)))

@@ -1091,6 +1091,38 @@
         "a phase's habitable state is ruled sentence by sentence too")
     (is (= ["phase-2#1"] (map :key (owed "phase-2"))))))
 
+(deftest a-phase-and-an-open-note-are-ruled-against-every-claim
+  ;; Watched: a phase admitting a weaker live state than an always-claim, and an open note stating
+  ;; the exception a claim covered unconditionally, were each ruled held by two clause-by-clause
+  ;; readings of identical text and found false only by a third.
+  (let [record {:model {:claims [{:id "c" :about ["e"] :statement "It sums once."}]}
+                :open  ["A large page decodes unpermitted. Nothing else is left open."]}
+        owed   (#'record/clauses-owed record [])]
+    (is (= ["open-1#1" "open-1#2"] (map :key (owed "open-1")))
+        "an open note is owed a ruling sentence by sentence, so the exception it states cannot go unread")
+    (is (every? false? (map :search? (owed "open-1")))
+        "a note is held against the record's claims, not searched for in the tree")
+    (let [r (#'record/held-to-clauses {:clause-rulings {"open-1#1" {:ruling :held :evidence [] :search ""}}}
+                                      owed)]
+      (is (= {"open-1" ["open-1#1" "open-1#2"]} (:incomplete-clauses r))
+          "a note held naming no claim it was held against is not ruled")
+      (is (empty? (:unruled r)) "a note is no subject, so leaving it open unrules none")))
+  (let [d (record/design-prompt {:design (assoc design
+                                                :open ["A large page decodes unpermitted."]
+                                                :phases [{:claim "p" :habitable "Old readers work."
+                                                          :exit {:criterion "x"}}
+                                                         {:claim "q" :habitable "Done." :exit {:criterion "y"}}])})]
+    (is (str/includes? d "A PHASE OR AN OPEN NOTE IS RULED AGAINST THE CLAIMS")
+        "the cross ruling is a rule the judge is given, not a reader's chance")
+    (is (str/includes? d "NOT marked holds ON\nCOMPLETION")
+        "a phase is held against the claims that hold at every boundary, not the on-completion ones")
+    (is (str/includes? d "covers unconditionally")
+        "an open note is held against every claim covering the path it excepts")
+    (is (str/includes? d "open-1#1  open: A large page decodes unpermitted.")
+        "each note sentence is listed under the key its ruling names"))
+  (is (not (str/includes? (record/design-prompt {:design design}) "RULED AGAINST THE CLAIMS"))
+      "a design with no phase and no open note owes no cross ruling"))
+
 (deftest every-judge-prompt-lists-the-clauses-it-owes
   (let [b (record/baseline-prompt {:baseline (assoc baseline :shape "Only the aggregate sums. It hides order.")})
         d (record/design-prompt {:design design})]
