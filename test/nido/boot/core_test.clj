@@ -7,6 +7,7 @@
    [clojure.test :refer [deftest is use-fixtures]]
    [nido.platform.core :as nido-core]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.source.events]
    [nido.coordinator.source.notion]
    [nido.platform.io]
@@ -26,6 +27,7 @@
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.status-file :as status-file]
+   [nido.session.lifecycle]
    [nido.coordinator.record.workstream :as ws]
    [nido.platform.project :as project]
    [nido.session.profiles :as profiles]
@@ -53,6 +55,29 @@
    Runs under. A test about the gate itself overrides this with its own."
   {"brian" {:directory "/tmp/brian"}
    "p"     {:directory "/tmp/p"}})
+
+;; ── a run's conversation, as the daemon now has it ──────────────────────────
+;; run-blocking! starts a background session and returns; the run settles when
+;; the session's Stop ends the turn. run-to-turn-end! stands in for both halves:
+;; whatever a test stubs agent/launch! to answer is what the turn's end reports,
+;; and the options it is handed are the ones the session was started with.
+
+(defn- run-to-turn-end!
+  "Start a run with conduct/start! answered through the test's agent/launch!
+   stub, then — when it is still running — settle it with that outcome, as the
+   session's Stop would."
+  [id]
+  (let [turn (atom nil)]
+    (with-redefs [conduct/start! (fn [opts]
+                                   (reset! turn (agent/launch! {:first-message     (:prompt opts)
+                                                                :cwd               (:cwd opts)
+                                                                :system-prompt     (:system-prompt opts)
+                                                                :claude-session-id "sess-stub"}))
+                                   {:session-id "sess-stub" :bg-id "sess-stub"})]
+      (#'core/run-blocking! id))
+    (let [r (runs/read-run id)]
+      (when (and (= :running (:state r)) @turn)
+        (#'core/settle-run! id r (#{:plan-bug :plan-github-issue} (:skill r)) @turn)))))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
@@ -118,13 +143,10 @@
     (try
       (with-redefs [nido-core/nido-root (constantly (str tmp))
                     project/list-projects (constantly test-projects)
-                    agent/launch!    (fn [_]
-                                       {:exit-code         0
-                                        :claude-session-id "sess-x"
-                                        :timed-out?        false})
+                    conduct/start!   (fn [_] {:session-id "sess-x" :bg-id "sess-x"})
                     runs/spawn-session-for-run! (fn [_] nil)
                     ;; stub launch-context so run-blocking! doesn't call real I/O
-                    ;; (jj/git, config reads) — cwd unused since agent/launch! is stubbed
+                    ;; (jj/git, config reads) — cwd unused since conduct/start! is stubbed
                     runs/launch-context (fn [_] {:cwd (str tmp) :briefing ""
                                                  :mcp-config nil :add-dirs []
                                                  :run-paths ""})
@@ -146,8 +168,16 @@
           (executor/await-idle! 30000)
           ;; second tick: reaps the finished future
           (executor/tick! #'nido.boot.core/run-blocking! {})
-          (is (contains? #{:done :failed :awaiting-review}
-                         (:state (runs/read-run (:id run)))))))
+          (is (= :running (:state (runs/read-run (:id run))))
+              "started on the substrate: the body returned, the turn has not ended")
+          ;; the session's Stop, as the next conduct pass reports it
+          (let [r (runs/read-run (:id run))]
+            (#'core/settle-turn-ends! {:turn-ends [{:project (:project r) :ws-id (:workstream-id r)
+                                                    :session (:session-name r) :event {}
+                                                    :instruction {:token "T" :at (clock/now-iso)
+                                                                  :seen? true}}]}))
+          (is (= :done (:state (runs/read-run (:id run))))
+              "a turn that ended with no status file settles :done")))
       (finally (fs/delete-tree tmp)))))
 
 (deftest defaults-include-executor-shutdown-grace
@@ -393,19 +423,18 @@
                       ;; isolation pattern used in gate-allows-untriaged-ticket.
                       anomaly/record-failure      (fn [det _] det)
                       breakers/record-failure!    (fn [& _] nil)]
-          (#'core/run-blocking! "r7")
+          (run-to-turn-end! "r7")
           (is (nil? (tickets/status :brian "BR-7"))
               "abnormal triage exit clears the stale :investigating status"))))))
 
-(deftest run-blocking-generates-and-persists-session-id-before-launch
-  ;; The session-id is generated up front and written to run.edn BEFORE claude
-  ;; launches, so it survives interruption (a daemon restart mid-session) — the
-  ;; resume shim can always find it. launch! is handed that id.
+(deftest run-blocking-records-the-background-sessions-id-on-the-run
+  ;; Claude Code names a background session when it starts it, so the run carries
+  ;; that id from then on — the one the shim attaches to and a reply reaches. No
+  ;; id is minted ahead of it: an id no session has would point at nothing.
   (gate-with-tmp
     (fn [_]
       (tickets/open! :brian "BR-S" {:notion-page-id "p" :url "u" :title "T"
                                     :opened-by :triage-teacher-bugs :notion-last-edited-at "t"})
-      (tickets/set-status! :brian "BR-S" :awaiting-input)
       (runs/write-run! {:id "rs" :project :brian :trigger :triage-teacher-bugs
                         :source {:type :notion-view} :event-payload {:id "BR-S"}
                         :skill :triage-bug :first-message "x" :agent :claude
@@ -413,24 +442,18 @@
                         :priority 0 :session-profile :lite :uncapped? false
                         :state :queued :state-history [{:at "t" :state :queued}]
                         :artifacts [] :error nil})
-      (let [sid-passed    (atom :unset)
-            sid-at-launch (atom :unset)]
+      (let [id-before (atom :unset)]
         (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
-                      nido.coordinator.agent/launch!
-                      (fn [opts]
-                        (reset! sid-passed (:claude-session-id opts))
-                        (reset! sid-at-launch (:claude-session-id (runs/read-run "rs")))
-                        {:exit-code 0 :timed-out? false :claude-session-id (:claude-session-id opts)})
-                      cstate/run-session-home-link (constantly "/tmp/nope")
-                      status-file/read-status      (fn [_] nil)
-                      anomaly/record-failure       (fn [det _] det)
-                      breakers/record-failure!     (fn [& _] nil)]
+                      conduct/start! (fn [_]
+                                       (reset! id-before (:claude-session-id (runs/read-run "rs")))
+                                       {:session-id "bg-1234" :bg-id "bg-1234"})
+                      cstate/run-session-home-link (constantly "/tmp/nope")]
           (#'core/run-blocking! "rs")
-          (is (string? @sid-passed) "launch! is handed a session-id")
-          (is (= @sid-passed @sid-at-launch)
-              "session-id is persisted to run.edn BEFORE launch (survives interruption)")
-          (is (= @sid-passed (:claude-session-id (runs/read-run "rs")))
-              "and remains in run.edn after"))))))
+          (is (nil? @id-before) "nothing is recorded before the session exists")
+          (is (= "bg-1234" (:claude-session-id (runs/read-run "rs")))
+              "the background session's own id, once it has one")
+          (is (= :running (:state (runs/read-run "rs")))
+              "started, not settled: its Stop settles it"))))))
 
 (deftest run-blocking-fails-cleanly-when-session-spawn-throws
   ;; If spawn-session-for-run! (or launch) throws, run-blocking! must mark the
@@ -448,11 +471,11 @@
                         :state :queued :state-history [{:at "t" :state :queued}]
                         :artifacts [] :error nil})
       (with-redefs [runs/spawn-session-for-run! (fn [_] (throw (ex-info "boom: worktree create failed" {})))
-                    nido.coordinator.agent/launch! (fn [_] {:exit-code 0 :timed-out? false}) ; unreached
+                    agent/launch! (fn [_] {:exit-code 0 :timed-out? false}) ; unreached
                     cstate/run-session-home-link (constantly "/tmp/nope")
                     anomaly/record-failure      (fn [det _] det)
                     breakers/record-failure!    (fn [& _] nil)]
-        (#'core/run-blocking! "rz")
+        (run-to-turn-end! "rz")
         (is (= :failed (:state (runs/read-run "rz")))
             "spawn failure ⇒ run :failed, not stuck :running (no zombie)")
         (is (= :spawn-failed (-> (runs/read-run "rz") :error :reason)))
@@ -479,7 +502,7 @@
                     cstate/run-session-home-link (constantly "/tmp/nope")
                     anomaly/record-failure       (fn [det _] det)
                     breakers/record-failure!     (fn [& _] nil)]
-        (#'core/run-blocking! "rk")
+        (run-to-turn-end! "rk")
         (is (= {:reason :spawn-failed :failure-id "F-42"}
                (select-keys (:error (runs/read-run "rk")) [:reason :failure-id])))))))
 
@@ -502,14 +525,14 @@
                         :state :queued :state-history [{:at "t" :state :queued}]
                         :artifacts [] :error nil})
       (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
-                    nido.coordinator.agent/launch!
+                    agent/launch!
                     (fn [_] {:exit-code 0 :timed-out? false :num-turns 0
                              :result-text "Unknown command: /triage-bug"})
                     cstate/run-session-home-link (constantly "/tmp/nope")
                     status-file/read-status (fn [_] nil)
                     anomaly/record-failure      (fn [det _] det)
                     breakers/record-failure!    (fn [& _] nil)]
-        (#'core/run-blocking! "rno")
+        (run-to-turn-end! "rno")
         (is (= :failed (:state (runs/read-run "rno")))
             "exit-0 but zero turns ⇒ :failed, not :done (cap not silently freed)")
         (is (= :agent-no-op (-> (runs/read-run "rno") :error :reason))
@@ -566,7 +589,7 @@
                       cstate/run-session-home-link (constantly "/tmp/nope")
                       anomaly/record-failure       (fn [det _] det)
                       breakers/record-failure!     (fn [& _] nil)]
-          (#'core/run-blocking! "ru")
+          (run-to-turn-end! "ru")
           (is (= :failed (:state (runs/read-run "ru"))))
           (is (= :skill-unavailable (-> (runs/read-run "ru") :error :reason)))
           (is (false? @spawned) "no session is spawned for an unresolvable skill"))))))
@@ -591,7 +614,7 @@
         (with-redefs [runs/spawn-session-for-run! (fn [_] (reset! spawned true) nil)
                       anomaly/record-failure   (fn [det at] (swap! trips conj at) det)
                       breakers/record-failure! (fn [& args] (swap! failures conj args) nil)]
-          (#'core/run-blocking! "rgp")
+          (run-to-turn-end! "rgp")
           (let [r (runs/read-run "rgp")]
             (is (= :failed (:state r))
                 "a run whose project cannot be resolved has nowhere to go but terminal")
@@ -636,7 +659,7 @@
                             :artifacts [] :error nil})
           (with-redefs [nido.coordinator.agent/launch!
                         (fn [_] {:exit-code 0 :timed-out? false :num-turns 5})]
-            (#'core/run-blocking! "rdone"))
+            (run-to-turn-end! "rdone"))
           (is (= :done (:state (runs/read-run "rdone"))))
           (is (some #{"rdone"} @torn) "a :done run is torn down")
           (is (empty? @stopped) "a :done run is torn down, not merely stopped")
@@ -654,7 +677,7 @@
                             :artifacts [] :error nil})
           (with-redefs [nido.coordinator.agent/launch!
                         (fn [_] {:exit-code 0 :timed-out? false :num-turns 5})]
-            (#'core/run-blocking! "rpark"))
+            (run-to-turn-end! "rpark"))
           (is (= :awaiting-review (:state (runs/read-run "rpark"))))
           (is (empty? @torn) "a parked :awaiting-review run keeps its worktree and record")
           (is (= ["rpark"] @stopped) "and its services are stopped until a reply or an open"))))))
@@ -673,12 +696,12 @@
                         :state :queued :state-history [{:at "t" :state :queued}]
                         :artifacts [] :error nil})
       (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
-                    nido.coordinator.agent/launch! (fn [_] {:exit-code 0 :timed-out? false})
+                    agent/launch! (fn [_] {:exit-code 0 :timed-out? false})
                     cstate/run-session-home-link (constantly "/tmp/nope")
                     status-file/read-status (fn [_] nil)
                     anomaly/record-failure      (fn [det _] det)
                     breakers/record-failure!    (fn [& _] nil)]
-        (#'core/run-blocking! "rp")
+        (run-to-turn-end! "rp")
         (is (= :awaiting-review (:state (runs/read-run "rp")))
             "clean exit + ticket :awaiting-input ⇒ run parks at :awaiting-review, not :done")))))
 
@@ -706,11 +729,11 @@
                           :state :queued :state-history [{:at "t" :state :queued}]
                           :artifacts [] :error nil})
         (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
-                      nido.coordinator.agent/launch! (fn [opts] (reset! launch-of opts) {:exit-code 0})
+                      agent/launch! (fn [opts] (reset! launch-of opts) {:exit-code 0})
                       cstate/run-session-home-link (constantly "/tmp/nope")
                       notify/on-plan-spawn! (fn [run] (reset! notified (:id run)))
                       breakers/record-success! (fn [& _] nil)]
-          (#'core/run-blocking! "rplan")
+          (run-to-turn-end! "rplan")
           (is (= "rplan" @notified) "Notion flip still happens at provision")
           (is (some? @launch-of) "/continue-ticket launches headlessly at provision")
           (is (= "/continue-ticket" (:first-message @launch-of))
@@ -754,7 +777,7 @@
                       notify/on-plan-spawn! (fn [_] nil)              ; unreached (spawn throws first)
                       cstate/run-session-home-link (constantly "/tmp/nope")
                       breakers/record-success! (fn [& _] nil)]
-          (#'core/run-blocking! "rblock")
+          (run-to-turn-end! "rblock")
           (is (= :awaiting-review (:state (runs/read-run "rblock")))
               "spawn failure on a promote ⇒ parked (blocked gate), NOT :failed")
           (is (= :planning (tickets/status :brian "BR-13"))
@@ -959,7 +982,7 @@
                       status-file/read-status     (constantly {:phase :complete})
                       anomaly/record-failure      (fn [det _] det)
                       breakers/record-failure!    (fn [& _] nil)]
-          (#'core/run-blocking! "rrec"))
+          (run-to-turn-end! "rrec"))
         (is (= :failed (:state (runs/read-run "rrec")))
             "a clean exit and a :complete status file are not a diagnosis")
         (is (= :undiagnosed (-> (runs/read-run "rrec") :error :reason)))))))
@@ -979,7 +1002,7 @@
                                                    :remedy "r"}))
                         {:exit-code 0 :num-turns 12})
                       status-file/read-status     (constantly {:phase :complete})]
-          (#'core/run-blocking! "rdiag"))
+          (run-to-turn-end! "rdiag"))
         (is (= :done (:state (runs/read-run "rdiag"))))))))
 
 (deftest a-failed-recovery-charges-no-brake
@@ -994,7 +1017,7 @@
                       agent/launch!               (fn [_] {:exit-code 1 :num-turns 3})
                       anomaly/record-failure      (fn [det at] (swap! window conj at) det)
                       breakers/record-failure!    (fn [& args] (swap! breakers conj args) nil)]
-          (#'core/run-blocking! "rfail"))
+          (run-to-turn-end! "rfail"))
         (is (= :failed (:state (runs/read-run "rfail"))))
         (is (empty? @breakers)
             "a breaker counts a trigger: one cause's failed recoveries would stop every other cause")
@@ -1024,7 +1047,7 @@
                       anomaly/record-spawn        (fn [det at] (swap! spawns conj at) det)
                       anomaly/record-failure      (fn [det _] det)
                       breakers/record-failure!    (fn [& _] nil)]
-          (#'core/run-blocking! "rspawn"))
+          (run-to-turn-end! "rspawn"))
         (is (= 1 (count @spawns)) "starting the Run's session is the spawn")))))
 
 (deftest a-restored-run-starts-without-counting-a-spawn
@@ -1040,7 +1063,7 @@
                       anomaly/record-failure      (fn [det _] det)
                       breakers/record-failure!    (fn [& _] nil)]
           (#'core/dispatch-envelope! {:type :execute-run :run-id "rrest"} {})
-          (#'core/run-blocking! "rrest"))
+          (run-to-turn-end! "rrest"))
         (is (empty? @spawns)
             "a restore brought the session up; running it is a continuation")))))
 
@@ -1063,7 +1086,7 @@
                         anomaly/record-spawn        (fn [det _] det)
                         anomaly/record-failure      (fn [det at] (swap! window conj at) det)
                         breakers/record-failure!    (fn [& args] (swap! breakers conj args) nil)]
-            (#'core/run-blocking! "rlimit"))
+            (run-to-turn-end! "rlimit"))
           (let [r (runs/read-run "rlimit")]
             (is (= :failed (:state r)))
             (is (= :usage-limited (-> r :error :reason)) "the run record says why"))
@@ -1091,7 +1114,7 @@
                       cstate/run-session-home-link (constantly "/tmp/nope")
                       anomaly/record-failure       (fn [det at] (swap! window conj at) det)
                       breakers/record-failure!     (fn [& args] (swap! breakers conj args) nil)]
-          (#'core/run-blocking! "rkept"))
+          (run-to-turn-end! "rkept"))
         (is (= 1 (count @breakers)) "the trigger still backs off a start that keeps failing")
         (is (empty? @window)
             "one environmental cause failing three Runs must not halt the coordinator that recovers it")))))
@@ -1122,3 +1145,158 @@
     (with-redefs [nido.coordinator.lane.resume/resume! (fn [& args] (reset! resumed args))]
       (#'core/dispatch-envelope! {:type :resume-turn :project :brian :ws-id "ws-1" :input "apply it"} {}))
     (is (= [:brian "ws-1" "apply it"] @resumed))))
+
+;; ── settling on the session's own Stop ──────────────────────────────────────
+
+(def ^:private driven-facet
+  {:session-id "bg-1" :bg-id "bg-1" :origin :nido :driver :nido :hold nil :pending nil
+   :queued nil :own-work? false :policy {:auto-respawn? true} :cursor 0 :driving-since "t"
+   :announced-blocked? false :recovered-boot nil})
+
+(defn- running-run! [id ws-id sname skill]
+  (runs/write-run! {:id id :project :brian :trigger :t :source {:type :manual}
+                    :event-payload {} :skill skill :first-message "x" :agent :claude
+                    :session-name sname :workstream-id ws-id :claude-session-id "bg-1"
+                    :limits {:budget "30m"} :priority 0 :session-profile :lite :uncapped? false
+                    :state :running :state-history [{:at "2026-01-01T00:00:00Z" :state :running}]
+                    :artifacts [] :error nil}))
+
+(defn- ended
+  "A turn end on `sname` as conduct reports it: the Stop of the instruction nido gave at `at`."
+  ([sname event] (ended sname event "2026-01-01T00:00:01Z"))
+  ([sname event at] {:project :brian :ws-id "ws-1" :session sname :event event
+                     :instruction {:token "T" :at at :seen? true}}))
+
+(deftest a-turns-end-settles-its-run-from-the-status-file
+  (gate-with-tmp
+    (fn [_]
+      (running-run! "rt" "ws-1" "s-rt" :investigate-bug)
+      (with-redefs [status-file/read-status          (fn [_] {:phase :awaiting-input})
+                    runs/stop-session-for-parked-run! (fn [_] nil)]
+        (#'core/settle-turn-ends! {:turn-ends [(ended "s-rt" {:event :stop :last-message "asked"})]}))
+      (is (= :awaiting-review (:state (runs/read-run "rt")))))))
+
+(deftest a-reply-turns-end-parks-the-session-again
+  (gate-with-tmp
+    (fn [_]
+      (running-run! "rp" "ws-1" "s-rp" :investigate-bug)
+      (runs/transition! "rp" :awaiting-review)
+      (session/create! :brian "ws-1" {:name "s-rp" :weight :light :autonomy autonomy-parked})
+      (session/set-phase! :brian "ws-1" "s-rp" :running)
+      (#'core/settle-turn-ends! {:turn-ends [(ended "s-rp" {} (clock/now-iso))]})
+      (is (= :awaiting-review (:state (runs/read-run "rp"))) "the run was not settled again")
+      (is (= :parked (get-in (session/read-session :brian "ws-1" "s-rp") [:autonomy :phase]))))))
+
+(deftest a-merge-runs-turn-end-is-settled-by-the-ship-lane
+  (gate-with-tmp
+    (fn [_]
+      (running-run! "rm" "ws-1" "s-rm" :drive-home)
+      (runs/write-run! (assoc (runs/read-run "rm") :mode :merge))
+      (let [settled (atom nil)]
+        (with-redefs [ship/settle-drive-home! (fn [id r] (reset! settled [id r]) :awaiting-merge)]
+          (#'core/settle-turn-ends! {:turn-ends [(ended "s-rm" {})]}))
+        (is (= ["rm" {}] @settled))))))
+
+(deftest a-stop-settles-the-run-whose-instruction-it-ended
+  ;; `/drive-home` queued behind an earlier turn: the merge Run is :running and newest, but the
+  ;; earlier turn's Stop ended the earlier Run's instruction, not the merge's.
+  (gate-with-tmp
+    (fn [_]
+      (running-run! "re" "ws-1" "s-q" :investigate-bug)
+      (runs/write-run! (assoc (runs/read-run "re") :state-history [{:at "2026-01-01T00:00:00Z" :state :running}]))
+      (runs/write-run! (-> (runs/read-run "re")
+                           (assoc :id "rq" :mode :merge :skill :drive-home)
+                           (assoc :state-history [{:at "2026-01-01T00:05:00Z" :state :running}])))
+      (let [settled (atom [])]
+        (with-redefs [ship/settle-drive-home! (fn [id r] (swap! settled conj [:merge id r]) :awaiting-merge)
+                      core/settle-run!        (fn [id & _] (swap! settled conj [:run id]))]
+          (#'core/settle-turn-ends! {:turn-ends [(ended "s-q" {} "2026-01-01T00:01:00Z")]})
+          (is (= [[:run "re"]] @settled) "the earlier turn's Stop settles the earlier Run only")
+          (#'core/settle-turn-ends! {:turn-ends [(ended "s-q" {} "2026-01-01T00:06:00Z")]})
+          (is (= [[:run "re"] [:merge "rq" {}]] @settled)
+              "the Stop that ended /drive-home settles the merge Run"))))))
+
+(deftest a-persons-stop-settles-no-run
+  ;; conduct reports a turn nido did not give with no :instruction: it settles nothing, though
+  ;; nido's own instruction is outstanding and its Run is :running.
+  (gate-with-tmp
+    (fn [_]
+      (running-run! "rh" "ws-1" "s-h" :investigate-bug)
+      (with-redefs [core/settle-run! (fn [& _] (throw (ex-info "must not settle" {})))]
+        (#'core/settle-turn-ends! {:turn-ends [{:project :brian :ws-id "ws-1" :session "s-h"
+                                                :event {:event :stop} :instruction nil}]}))
+      (is (= :running (:state (runs/read-run "rh")))))))
+
+(deftest every-teardown-retires-the-background-session-first
+  ;; The composition root installs retirement into teardown itself, so every path that tears a
+  ;; Run's session down — settle-run!, reconcile, the review sweep — retires its conversation
+  ;; first; a provision Run's session is the person's and is neither; a stop the substrate
+  ;; refuses keeps the session whole.
+  (with-tmp
+    (fn []
+      (let [log (atom [])
+            run (fn [id skill] {:id id :project :brian :workstream-id "ws-1" :session-name (str "s-" id)
+                                :skill skill})]
+        (with-redefs [nido.session.lifecycle/destroy! (fn [n _] (swap! log conj [:destroy n]))
+                      conduct/retire!                 (fn [_ _ n _]
+                                                        (when (= n "s-refused")
+                                                          (throw (ex-info "stop refused" {:reason :stop-refused})))
+                                                        (swap! log conj [:retire n]) nil)]
+          (binding [*err* (java.io.PrintWriter. (java.io.StringWriter.))]
+            (runs/teardown-session-for-run! (run "ok" :investigate-bug))
+            (runs/teardown-session-for-run! (run "pv" :plan-github-issue))
+            (runs/teardown-session-for-run! (run "refused" :investigate-bug))))
+        (is (= [[:retire "s-ok"] [:destroy "s-ok"]] @log))))))
+
+(deftest a-wake-that-left-a-copy-running-is-on-the-sessions-record-until-the-copy-is-gone
+  (gate-with-tmp
+    (fn [_]
+      (session/create! :brian "ws-1" {:name "s-c" :weight :light :autonomy autonomy-parked})
+      (let [who {:project :brian :ws-id "ws-1" :session-name "s-c"}
+            err #(get-in (session/read-session :brian "ws-1" "s-c") [:autonomy :error])]
+        (#'core/surface-left-running! {:left-running [{:project :brian :ws-id "ws-1" :session "s-c"
+                                                       :via :wake :running "copy-1"}]}
+                                      [])
+        (is (= :copy-left-running (:reason (err))) "the person is told")
+        (with-redefs [conduct/live-states (constantly {"x" {:id "copy-1"}})]
+          (#'core/surface-left-running! {:left-running []} [who]))
+        (is (some? (err)) "kept while the copy is fresh, or still listed")
+        (session/set-error! :brian "ws-1" "s-c" (assoc (err) :at "2026-01-01T00:00:00Z"))
+        (with-redefs [conduct/live-states (constantly {"x" {:id "copy-1"}})]
+          (#'core/surface-left-running! {:left-running []} [who]))
+        (is (some? (err)) "kept while the listing still shows the copy")
+        (with-redefs [conduct/live-states (constantly {})]
+          (#'core/surface-left-running! {:left-running []} [who]))
+        (is (nil? (err)) "cleared once the copy is gone")))))
+
+(deftest a-turn-past-its-budget-is-stopped-and-failed
+  (gate-with-tmp
+    (fn [_]
+      (running-run! "rb" "ws-1" "s-rb" :investigate-bug)
+      (session/create! :brian "ws-1" {:name "s-rb" :weight :light :autonomy nil})
+      (session/update-claude! :brian "ws-1" "s-rb"
+                              (constantly (assoc driven-facet :pending {:token "T" :at "2026-01-01T00:00:00Z"
+                                                                        :via :send :seen? true})))
+      (let [retired (atom nil)]
+        (with-redefs [conduct/retire!                 (fn [& args] (reset! retired (vec (take 3 args))) nil)
+                      runs/teardown-session-for-run!  (fn [_] nil)
+                      anomaly/record-failure          (fn [det _] det)
+                      breakers/record-failure!        (fn [& _] nil)]
+          (#'core/enforce-budgets! (.toEpochMilli (java.time.Instant/parse "2026-01-01T00:31:00Z"))
+                                   (conduct/faceted-sessions {:projects [:brian]})))
+        (is (= [:brian "ws-1" "s-rb"] @retired) "its session is stopped first")
+        (is (= {:state :failed :reason :timeout}
+               (let [r (runs/read-run "rb")] {:state (:state r) :reason (-> r :error :reason)})))))))
+
+(deftest a-turn-within-its-budget-is-left-running
+  (gate-with-tmp
+    (fn [_]
+      (running-run! "rw" "ws-1" "s-rw" :investigate-bug)
+      (session/create! :brian "ws-1" {:name "s-rw" :weight :light :autonomy nil})
+      (session/update-claude! :brian "ws-1" "s-rw"
+                              (constantly (assoc driven-facet :pending {:token "T" :at "2026-01-01T00:00:00Z"
+                                                                        :via :send :seen? true})))
+      (with-redefs [conduct/retire! (fn [& _] (throw (ex-info "must not" {})))]
+        (#'core/enforce-budgets! (.toEpochMilli (java.time.Instant/parse "2026-01-01T00:29:00Z"))
+                                 (conduct/faceted-sessions {:projects [:brian]})))
+      (is (= :running (:state (runs/read-run "rw")))))))

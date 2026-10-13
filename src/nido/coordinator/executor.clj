@@ -133,13 +133,19 @@
 
    Capped deliberately, and not marked uncapped the way the merge lane is: a
    resume turn is ordinary agent work, and the reason to bound it is the reason
-   to bound any of it."
-  [{:keys [run-id turn priority trigger max-in-flight body]}]
+   to bound any of it.
+
+   It takes no per-trigger limit, and none is passed through: the session a turn
+   resumes is parked, and a parked session already holds its trigger's in-flight
+   slot (record.session/gating-phases), so the in-flight count tick! is handed
+   includes it. Gating the turn on that limit would count the session against
+   itself, and a trigger at its limit could never take a reply."
+  [{:keys [run-id turn priority trigger body]}]
   (submit! {:run-id        (turn-id run-id turn)
             :priority      (or priority 0)
             :uncapped?     false
             :trigger       trigger
-            :max-in-flight max-in-flight
+            :max-in-flight nil
             :body          body}))
 
 (defn- reap-done-map
@@ -173,7 +179,7 @@
   []
   @!driven)
 
-(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+(defn ^{:malli/schema [:function [:=> [:cat :any :any] :any] [:=> [:cat :any :any :int] :any]]}
   tick!
   "Called by the daemon every poll. Reaps finished futures, then:
    - Promotes uncapped Runs bypassing the global cap but still subject to
@@ -187,8 +193,12 @@
    per trigger (from persisted run state). A run is promoted only while its
    trigger's in-flight (the map value plus picks already chosen this tick) is
    below its :max-in-flight. Runs with nil :max-in-flight obey only the global
-   cap (capped) or are always promoted (uncapped)."
-  ([on-spawn in-flight-by-trigger]
+   cap (capped) or are always promoted (uncapped).
+   `working` is how many capped units are working OUTSIDE this executor — a
+   background session's turn runs in its own process long after the body that
+   started it returned — and takes global slots exactly as a future does."
+  ([on-spawn in-flight-by-trigger] (tick! on-spawn in-flight-by-trigger 0))
+  ([on-spawn in-flight-by-trigger working]
    (reset! !driven true)
    (locking lock
      (swap! !state #(-> %
@@ -197,7 +207,7 @@
      (let [{:keys [queue in-flight-capped in-flight-uncapped cap]} @!state
            uncapped (filterv :uncapped? queue)
            capped   (filterv (complement :uncapped?) queue)
-           free     (max 0 (- cap (count in-flight-capped)))
+           free     (max 0 (- cap (count in-flight-capped) working))
            ;; gate helper: walk candidates, picking each while its trigger's
            ;; running count (seeded from in-flight-by-trigger, grown by picks
            ;; chosen this tick) is below :max-in-flight. nil mif → always pick.

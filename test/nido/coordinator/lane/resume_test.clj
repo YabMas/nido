@@ -256,6 +256,7 @@
         (is (true? (:resume? @calls)) "continues the recorded conversation")
         (is (= "do the fix" (:first-message @calls)))
         (is (= "30m" (:budget @calls)) "budget from session :limits")
+        (is (some? (:settings @calls)) "the commit gate reaches the turn although no Run exists")
         (is (= :parked (get-in (first (session/list-sessions :brian (:id w)))
                                [:autonomy :phase]))
             "re-parks after the turn")))))
@@ -335,3 +336,45 @@
           (let [s (first (session/list-sessions :brian (:id w)))]
             (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "x")))
         (is (= ["r1"] @stopped))))))
+
+(deftest a-reply-to-a-session-nido-has-no-id-for-is-refused
+  (with-tmp
+    (fn []
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
+        (session/update-substrate! :brian (:id w) "auto"
+                                   (constantly {:claude nil :dispatching {:token "T" :at "t" :bg-id "bg-1"}}))
+        (is (= :session-unnamed
+               (try (resume/resume! :brian (:id w) "go") nil
+                    (catch clojure.lang.ExceptionInfo e (:reason (ex-data e))))))
+        (let [s (session/read-session :brian (:id w) "auto")]
+          (is (nil? (get-in s [:claude :queued])) "nothing queued where it cannot be delivered")
+          (is (= :parked (get-in s [:autonomy :phase])))
+          (is (= :session-unnamed (get-in s [:autonomy :error :reason]))))))))
+
+(deftest a-reply-to-a-background-session-is-its-next-instruction
+  ;; No --print turn continues a conversation that is a background session: conduct gives the
+  ;; reply when the session is ready, and the session's own Stop re-parks it.
+  (with-tmp
+    (fn []
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
+        (session/update-claude! :brian (:id w) "auto"
+                                (constantly {:session-id "bg-1" :bg-id "bg-1" :origin :nido :driver :nido
+                                             :hold nil :pending nil :queued nil :own-work? false
+                                             :policy {:auto-respawn? true} :cursor 0 :driving-since "t"
+                                             :announced-blocked? false :recovered-boot nil}))
+        (write-run! "r1" (:id w) "auto" "bg-1")
+        (ex/clear!)
+        (ex/configure! {:global-cap 1})
+        (ex/tick! (fn [_]) {} 1)                  ; this process drives one, its one slot taken
+        (with-redefs [resume/run-turn! (fn [& _] (throw (ex-info "no --print turn" {})))]
+          (is (= {:resumed "auto" :queued? true :via :substrate}
+                 (resume/resume! :brian (:id w) "use option B"))))
+        (is (= :running (get-in (session/read-session :brian (:id w) "auto") [:autonomy :phase])))
+        (is (nil? (get-in (session/read-session :brian (:id w) "auto") [:claude :queued]))
+            "not given to conduct while another working session fills the global cap")
+        (ex/tick! (fn [_]) {} 0)                  ; the slot frees
+        (ex/await-idle! 2000)
+        (is (= "use option B" (get-in (session/read-session :brian (:id w) "auto") [:claude :queued]))
+            "queued for conduct once the turn is admitted")))))

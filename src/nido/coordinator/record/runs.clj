@@ -458,6 +458,37 @@
    workspace, so no run lifecycle event may stop or reclaim it."
   #{:plan-bug :plan-github-issue})
 
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  reclaims-session?
+  "Whether a Run's resolved end reclaims the session it ran in: every Run's but a provision-only
+   one's, whose session is handed to the person. teardown-session-for-run! reclaims exactly these."
+  [run]
+  (not (provision-only-skills (:skill run))))
+
+(defonce ^:private !before-teardown
+  ;; Set by the composition root: what must happen to a session before its workspace goes — the
+  ;; background conversation running in it retired. Record cannot reach the substrate itself.
+  (atom nil))
+
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  set-before-teardown!
+  "Install `f`, called with the Run before teardown-session-for-run! removes anything of its
+   session; a throw from `f` leaves the session untouched. nil uninstalls."
+  [f]
+  (reset! !before-teardown f))
+
+(defn- cleared-for-teardown?
+  "Run the installed before-teardown step for `run`; false, logged, when it throws."
+  [run]
+  (try (when-let [f @!before-teardown] (f run))
+       true
+       (catch Throwable t
+         (binding [*err* *err*]
+           (.println ^java.io.PrintWriter *err*
+                     (str "nido coordinator: kept the session of " (:session-name run)
+                          " — it could not be cleared for teardown: " (ex-message t))))
+         false)))
+
 (defn ^{:malli/schema [:=> [:cat :Run] :any]}
   teardown-session-for-run!
   "Reclaim the session a Run spawned, once the Run reaches a resolved-terminal
@@ -481,10 +512,14 @@
    the run; reclaiming it would delete the worktree out from under the person
    working in it. The human brings it down explicitly (bb nido:session:down).
 
+   Every caller's teardown first runs the step set-before-teardown! installed — the
+   background conversation in the session retired — and a session that step cannot
+   clear is left whole: nothing is removed under a session still running in it.
+
    Best-effort: a missing/already-gone session logs and returns nil rather than
    throwing — teardown must never re-fail a run that already reached terminal."
   [run]
-  (when-not (provision-only-skills (:skill run))
+  (when (and (reclaims-session? run) (cleared-for-teardown? run))
    (let [{:keys [project session-name id workstream-id]} run]
     (try
       (session-lifecycle/destroy! session-name {:project project})

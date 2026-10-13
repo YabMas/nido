@@ -44,3 +44,15 @@
   (testing "up to limit+1 passes through untouched"
     (let [ns (mapv #(hash-map :message (str "g" %)) (range 4))]
       (is (= ns (attention/coalesce ns))))))
+
+(deftest a-blocked-session-gets-a-notification-of-its-own
+  (let [ns (attention/blocked-notifications (for [i (range 6)] {:project :brian :ws-id "w" :session (str "s" i)}))]
+    (is (= 6 (count ns)) "never folded into an overflow count, however many at once")
+    (is (every? #(re-find #"blocked" (:message %)) ns))))
+
+(deftest a-denial-is-an-item-of-its-own
+  (let [current (attention/items {:gates [] :halt nil :breakers []
+                                  :denials [{:project :brian :session "kid"
+                                             :event {:at "t1" :tool-name "Bash"}}]})]
+    (is (= [[:denial "brian" "kid" "t1"]] (keys current)))
+    (is (re-find #"Bash" (:message (val (first current)))))))

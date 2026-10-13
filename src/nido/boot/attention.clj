@@ -1,9 +1,11 @@
 (ns nido.boot.attention
   "What wants a person right now, and which of it is NEW since the last look.
 
-   Three things want a person: a gate (a workstream parked on a human — the same
-   rows the gate inbox shows), a halted coordinator, and a trigger whose breaker
-   tripped on its own. Each becomes one keyed notification; `arrivals` is the
+   Four things are items here: a gate (a workstream parked on a human — the same
+   rows the gate inbox shows), a halted coordinator, a trigger whose breaker
+   tripped on its own, and a permission auto mode denied in a session nido
+   drives. A session blocked on a person is announced apart from them, by
+   blocked-notifications. Each becomes one keyed notification; `arrivals` is the
    keys that were absent last time. Edge-triggered on purpose: a gate that sits
    for a day is announced once, and announced again only after it has left the
    set — a resumed session that parks again is a new question.
@@ -37,17 +39,40 @@
                    (:consecutive-failures info 0) " consecutive failures")
     :sound    sound}])
 
+(defn ^{:malli/schema [:=> [:cat [:sequential :map]] [:vector :map]]}
+  blocked-notifications
+  "One notification for each session that has just entered blocked, as the conduct pass reported
+   them. Never folded into an overflow count nor summarised on a first look: the session's own
+   facet marks the entry announced, across restarts, so each entry reaches here exactly once."
+  [blocked]
+  (mapv (fn [{:keys [project session]}]
+          {:title    "nido · a session needs you"
+           :subtitle (name project)
+           :message  (str session " is blocked — answer it in claude agents")
+           :sound    sound})
+        blocked))
+
+(defn- denial-item [{:keys [project session event]}]
+  [[:denial (name project) session (:at event)]
+   {:title    "nido · permission denied"
+    :subtitle (name project)
+    :message  (str session ": auto mode denied " (or (:tool-name event) "a tool call"))
+    :sound    sound}])
+
 (defn ^{:malli/schema [:=> [:cat :map] [:map-of :any :map]]}
   items
   "Everything wanting a person, as {key notification}. `:gates` is
    `work/all-gates`, `:halt` is the halt info or nil, `:breakers` is
    `breakers/auto-tripped-triggers` — a trigger a person paused on purpose is
-   not news to them, so user-disabled breakers are not passed here."
-  [{:keys [gates halt breakers]}]
+   not news to them, so user-disabled breakers are not passed here. `:denials`
+   is the permission denials recorded since the last look, each its own item.
+   A blocked session is not an item: see blocked-notifications."
+  [{:keys [gates halt breakers denials]}]
   (into {}
         (concat (map gate-item gates)
                 (when halt [(halt-item halt)])
-                (map breaker-item breakers))))
+                (map breaker-item breakers)
+                (map denial-item denials))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe [:set :any]] :map] [:vector :map]]}
   arrivals

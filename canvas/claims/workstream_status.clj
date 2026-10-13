@@ -4,6 +4,7 @@
    Each Claim's name is the claim's id, its docstring the statement, and its :about the modules
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
+            [canvas.coordinator.agent.substrate :refer [listing]]
             [canvas.coordinator.lane.drive :refer [ensure-workstream! intake-kind lane-pipeline of status]]
             [canvas.coordinator.lane.github-issue-intake :refer [poll-and-reconcile!]]
             [canvas.coordinator.lane.notion-sync :refer [lane-notion-sync]]
@@ -30,8 +31,8 @@
   {:about [lane-pipeline] :evidence "round"})
 
 (Claim live-is-a-held-lock
-  "Live is true only while a lock held for the life of the working process is held — the activity claim, or a run's lock taken by a wrapper that starts the agent and exits with it — or, for a human session, while its ports answer; no stored phase decides it, and the launcher's death does not release a run lock while its agent runs."
-  {:about [status live? read-live] :evidence "round"})
+  "Live is true only while something that ends with the working process says so: a lock held for the life of that process — the activity claim, or a run's lock taken by a wrapper that starts the agent and exits with it — the substrate's listing showing a session with a :claude facet with a live process, or, for a human session, its ports answering; no stored phase decides it, and the launcher's death does not release a run lock while its agent runs."
+  {:about [status live? read-live listing] :evidence "round"})
 
 (Claim index-is-rebuildable
   "The index splits at this change. Rows for entries written before it are frozen as part of the ledger, because their :at and :amended-by exist nowhere else; every entry written after it carries those facts in its own file. The index is a cache rebuilt from the directory plus the frozen rows: a record that lost it reads the rebuilt one, and deleting it changes no answer."

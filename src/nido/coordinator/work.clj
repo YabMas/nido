@@ -23,11 +23,13 @@
    [nido.coordinator.lane.pickup :as pickup]
    [nido.coordinator.lane.promote :as promote]
    [nido.coordinator.report :as report]
+   [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.resume :as resume]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.activity :as activity]
    [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.record.session :as csession]
+   [nido.coordinator.record.session-events :as session-events]
    [nido.coordinator.lane.spawn :as spawn]
    [nido.coordinator.record.phase :as phase]
    [nido.coordinator.record.proposal :as proposal]
@@ -1464,6 +1466,21 @@
   [project ws-id]
   (boolean (seq (runs/live-runs project ws-id))))
 
+(defn- driven-denials
+  "Every auto-mode denial recorded in a session of the workstream while nido drives it — since it
+   last began driving it, by dispatch, adoption or hand-back — oldest first, each naming its
+   session: {:session :at :tool-name :tool-input}."
+  [project ws-id]
+  (vec (for [s     (csession/list-sessions project ws-id)
+             :let  [{:keys [driver session-id driving-since]} (:claude s)]
+             :when (and (= :nido driver) session-id)
+             ev    (:events (session-events/events-since session-id nil))
+             :when (and (= :permission-denied (:event ev))
+                        (or (nil? driving-since) (nil? (:at ev))
+                            (not (.isBefore (java.time.Instant/parse (:at ev))
+                                            (java.time.Instant/parse driving-since)))))]
+         (assoc (select-keys ev [:at :tool-name :tool-input]) :session (:name s)))))
+
 (defn- ->gate
   "Hydrate one needs-you spine row into a gate. `:project` is canonicalized to a
    STRING (the web routes on it, e.g. /gate/<project>/…; all-machine-rows tags
@@ -1504,13 +1521,16 @@
                                   :gate-criterion (get-in row [:phase :exit :criterion])
                                   :seq           (:seq report)})
      :session      (:name psess)
+     :denials      (driven-denials project (:ws-id row))
      :resume-error (get-in psess [:autonomy :error])
      :working?     (resuming? project (:ws-id row))}))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :Gate]]}
   gates
   "A project's gates: workstreams that want you now (needs-you), each hydrated
-   with its report + follow-actions. A SETTLED (closed) workstream is never a gate,
+   with its report + follow-actions — and every workstream with an auto-mode denial
+   recorded in a session nido drives, carried as :denials, so each is shown in the
+   inbox whether or not anything else waits on a person. A SETTLED (closed) workstream is never a gate,
    even if a stale stage-override still projects :needs-you.
    A DISMISSED row is never a gate either — and the filter is load-bearing, not
    cosmetic: Notion-driven rows ignore nido :closed for engagement, and the parked
@@ -1522,7 +1542,7 @@
   ([project live-names]
    (->> (list-workstreams project live-names)
         (remove #(= :dismissed (:stage %)))
-        (filter :needs-you)
+        (filter #(or (:needs-you %) (seq (driven-denials project (:ws-id %)))))
         ;; Between phases is closed, so it reads :settled — and is still owed a
         ;; person's :assert-gate, which only a gate carries.
         (remove #(and (= :settled (:engagement %))
@@ -2447,13 +2467,37 @@
     (scratch/birth! (keyword (name project)) session-name
                     (lifecycle/session-weight session-name opts))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:sequential :map]]}
+  workstream-listing
+  "The substrate's rows for one workstream: every background session its session records name,
+   and every session started in one of its session homes or the worktrees they link to — what
+   the session list shows beside nido's own — each with :baseline-shown?. Read from a listing at
+   most two seconds old."
+  [project ws-id]
+  (let [sessions (csession/list-sessions project ws-id)
+        named    (set (keep #(get-in % [:claude :session-id]) sessions))
+        real     #(try (str (fs/canonicalize %)) (catch Exception _ nil))
+        dirs     (set (keep real (mapcat (fn [s]
+                                           (let [home (sstate/session-home-dir (name project) (:name s))]
+                                             [home (str (fs/path home "worktree"))]))
+                                         sessions)))]
+    (->> (vals (conduct/live-states {}))
+         (filter #(or (named (:sessionId %)) (dirs (real (:cwd %)))))
+         ;; Whether the session's own events show the launch baseline, by the one check
+         ;; conduct makes before adopting, sending or waking: its latest start recorded by
+         ;; nido's hook from the directory it runs in — one of this workstream's, by the
+         ;; filter above — and auto mode on its latest event.
+         (map #(assoc % :baseline-shown?
+                      (nil? (conduct/baseline-refusal (conduct/baseline-shown (:sessionId %)) %)))))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
   open-target
   "Where `open` lands for a workstream: the most-recently-active LIVE session,
    else the most-recently-active session, else nil. Returns {:project :session}.
-   Ordering reuses wsv/session-rows (newest-active first)."
+   Ordering reuses wsv/session-rows (newest-active first); only rows a nido session
+   record backs are candidates — a listed session no record names is not one to open."
   [project ws-id]
-  (let [rows       (wsv/session-rows project ws-id)
+  (let [rows       (filter :recorded? (wsv/session-rows project ws-id (workstream-listing project ws-id)))
         live-names (->> (csession/list-sessions project ws-id)
                         (filter csession/live?)
                         (map :name)

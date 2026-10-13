@@ -261,3 +261,25 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"still running stuck"
                             (ex/await-idle! 100)))
       (finally (deliver release :go)))))
+
+(deftest work-outside-the-executor-takes-global-slots
+  ;; A background session's turn runs in its own process after the body that started it returned.
+  (let [spawned (atom 0)]
+    (ex/configure! {:global-cap 2})
+    (dotimes [i 3] (ex/submit! (str "w" i) 0))
+    (ex/tick! (fn [_] (swap! spawned inc)) {} 2)
+    (is (= 0 @spawned) "two sessions working: no slot free")
+    (ex/tick! (fn [_] (swap! spawned inc)) {} 1)
+    (ex/await-idle! 5000)
+    (is (= 1 @spawned) "one working: one slot")))
+
+(deftest a-turn-is-not-gated-on-its-trigger-limit
+  ;; The parked session a turn resumes already holds its trigger's in-flight slot, so the
+  ;; count tick! is handed includes it: gating the turn on that limit would count it twice.
+  (ex/clear!)
+  (ex/configure! {:global-cap 4})
+  (let [ran (atom [])]
+    (ex/submit-turn! {:run-id "r1" :turn "a" :trigger :t :max-in-flight 1 :body #(swap! ran conj :a)})
+    (ex/tick! (fn [_]) {:t 1})
+    (Thread/sleep 200)
+    (is (= [:a] @ran) "a trigger at its limit, counting the parked session, still takes the reply")))

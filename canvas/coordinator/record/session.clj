@@ -90,9 +90,13 @@
     "The Claude Code background session a record is about, and who drives it — nil for a
      conversation from before the substrate."
     {:signature [:=> [:catn [:s Session]] [:maybe :map]]})
+  (Operation update-substrate!
+    "Replace a session's :claude facet and :dispatching note together, under the record's lock."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:f [:=> [:cat :map] :map]]] Session]})
   (Operation update-claude!
     "Replace a session's :claude facet with what a function makes of it, under the record's lock."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:f [:=> [:cat [:maybe :map]] [:maybe :map]]]] Session]})
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:f [:=> [:cat [:maybe :map]] [:maybe :map]]]] Session]
+     :delegates [update-substrate!]})
   (Operation set-claude-session-id!
     "Persist the conversation id an autonomous session resumes from."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:id [:maybe :string]]] Session]

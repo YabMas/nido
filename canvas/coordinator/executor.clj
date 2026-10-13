@@ -51,8 +51,11 @@
      daemon from a bare JVM that merely loaded the namespace."
     {:signature [:=> [:catn] :boolean]})
   (Operation tick!
-    "One poll: reap what finished, then promote what the caps allow."
-    {:signature [:=> [:catn [:on-spawn :any] [:in-flight-by-trigger :any]] :any]})
+    "One poll: reap what finished, then promote what the caps allow — counting against the global
+     cap the capped units working outside the executor, as background sessions do."
+    {:signature [:function
+                 [:=> [:catn [:on-spawn :any] [:in-flight-by-trigger :any]] :any]
+                 [:=> [:catn [:on-spawn :any] [:in-flight-by-trigger :any] [:working :int]] :any]]})
   (Operation snapshot
     "A read-only view of the queue for the TUI. Unlocked on purpose — a consistent-enough
      reading now beats a perfectly consistent one that made the scheduler wait for a renderer."

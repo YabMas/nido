@@ -27,6 +27,7 @@
    ask them, so there is one answer to that question in the system and not two."
   (:require
    [clojure.string :as str]
+   [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.reentry :as reentry]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.activity :as activity]
@@ -1240,7 +1241,8 @@
    :owed-by follows the move `of` names, by its mode, and nothing else: a person for a :human
    move, the machine for a :mechanical one, an agent for an authoring or working-copy one,
    nobody when no move is owed. :live is observed, never stored: a held activity claim, a run
-   whose agent holds its lock, or a person's session whose ports answer — `live-names` when the
+   whose agent holds its lock, a background session the substrate lists with a live process,
+   or a person's session whose ports answer — `live-names` when the
    caller observed them, else observed here. :stalled is an agent owing the move with nothing live: the work
    stopped, and no question was recorded to say why."
   ([project ws-id] (status project ws-id nil))
@@ -1255,8 +1257,16 @@
          ;; to ask about: a board passes the set it read once for every row.
          humans   (filter #(nil? (:autonomy %)) sessions)
          up       (when (seq humans) (or live-names (observed-live-names project)))
+         ;; A background session is live while the substrate lists it with a process: a facet's
+         ;; by its full id, and a start still in flight by the :bg-id its note keeps.
+         facets   (keep :claude sessions)
+         notes    (keep :dispatching sessions)
+         states   (when (or (seq facets) (seq notes)) (vals (conduct/live-states {})))
+         listed?  (fn [matches?] (some #(and (:pid %) (matches? %)) states))
          live     (boolean (or (activity/held? project ws-id)
                                (seq (runs/live-runs project ws-id))
+                               (some (fn [f] (listed? #(= (:session-id f) (:sessionId %)))) facets)
+                               (some (fn [n] (and (:bg-id n) (listed? #(= (:bg-id n) (:id %))))) notes)
                                (some #(contains? up (:name %)) humans)))]
      {:position position
       :owed-by  owed-by

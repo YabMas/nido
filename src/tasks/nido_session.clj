@@ -15,6 +15,9 @@
               land in the code instead of the session-home.
      status   per-session liveness + ports
      list     project-wide overview
+     adopt    make nido the driver of a background session started in it
+     release  stop nido driving its background session; the session keeps running
+     hand-back  let nido drive it again after a person's prompt held it
 
    Examples:
      bb nido:session:up      :project brian feat-auth
@@ -31,7 +34,10 @@
      bb nido:session:list    :project brian"
   (:require
    [clojure.string :as str]
+   [nido.coordinator.agent.substrate :as substrate]
+   [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.scratch :as scratch]
+   [nido.coordinator.record.session :as csession]
    [nido.platform.process :as process]
    [nido.platform.task-args :as task-args]
    [nido.session.fleet :as fleet]
@@ -432,3 +438,61 @@
         _project (require-project opts)
         session (require-session-name pos)]
     (lifecycle/share! session opts)))
+
+(defn- session-ws!
+  "The workstream holding `session` in `project`, or a refusal naming the session."
+  [project session]
+  (or (csession/workstream-id-for (keyword project) session)
+      (throw (ex-info (str "No workstream holds session " session)
+                      {:reason :no-workstream :session session}))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  adopt
+  "Make nido the driver of a background session started in this session's home or worktree:
+   :project <p> <session> :session-id <claude session uuid> [:auto-respawn true]. Refused, naming
+   what fails, unless the session's own events show nido's hooks and auto mode."
+  [& args]
+  (let [[pos opts] (task-args/split-args args #{:session-id :auto-respawn})
+        project    (require-project opts)
+        session    (require-session-name pos)
+        sid        (or (some-> (:session-id opts) str)
+                       (throw (ex-info "Missing :session-id <uuid> — `claude agents --json` lists it" {})))]
+    (conduct/adopt! (cond-> {:project (keyword project) :ws-id (session-ws! project session)
+                             :session-name session :session-id sid}
+                      (:auto-respawn opts) (assoc :policy {:auto-respawn? (= "true" (str (:auto-respawn opts)))})))
+    (println (str "nido now drives " session "'s background session " sid))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  release
+  "Stop nido driving a session's background session: :project <p> <session>. The session keeps
+   running, and nothing queued for it is given."
+  [& args]
+  (let [[pos opts] (task-args/split-args args)
+        project    (require-project opts)
+        session    (require-session-name pos)]
+    (conduct/release! (keyword project) (session-ws! project session) session)
+    (println (str "nido no longer drives " session))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  hand-back
+  "Let nido drive a session's background session again after a person's prompt held it:
+   :project <p> <session>. What was typed until now never holds it again."
+  [& args]
+  (let [[pos opts] (task-args/split-args args)
+        project    (require-project opts)
+        session    (require-session-name pos)]
+    (conduct/hand-back! (keyword project) (session-ws! project session) session)
+    (println (str "nido drives " session " again"))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  attach
+  "Attach this terminal to a background session: :session-id <uuid>. What the resume shim runs for
+   a run whose conversation is a background session; the session keeps running on detach."
+  [& args]
+  (let [[_ opts] (task-args/split-args args #{:session-id})
+        sid      (or (some-> (:session-id opts) str)
+                     (throw (ex-info "Missing :session-id <uuid>" {})))]
+    (try (substrate/attach! sid {})
+         (catch clojure.lang.ExceptionInfo e
+           (binding [*out* *err*] (println (str "nido: " (ex-message e))))
+           (System/exit 1)))))

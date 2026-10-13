@@ -1,9 +1,9 @@
 (ns nido.coordinator.lane.ship-test
   (:require
    [babashka.fs :as fs]
-   [clojure.test :refer [deftest is use-fixtures]]
+   [clojure.test :refer [deftest is testing use-fixtures]]
    [nido.platform.core :as core]
-   [nido.coordinator.agent :as agent]
+   [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.executor :as ex]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
@@ -132,44 +132,84 @@
                 status-file/read-status (fn [_] nil)]
     (is (= :blocked (sut/classify-outcome :brian nil "r1" {:exit-code 0 :num-turns 3})))))
 
-(deftest drive-home-success-marks-done-no-teardown
+(defn- impl-session! [ws-id session-name phase]
+  (session/create! :brian ws-id
+                   {:name session-name :weight :heavy
+                    :autonomy {:skill :plan-bug :first-message "x" :agent :claude
+                               :claude-session-id nil :trigger :plan-bug :limits {}
+                               :priority 0 :uncapped? false :on-promote nil
+                               :phase phase :phase-history [] :error nil}}))
+
+(deftest settling-a-finished-drive-home-marks-done-no-teardown
   (let [torn (atom false)
         w (ws/create! :brian {:stage :shipping :external-refs [{:adapter :notion :id "BR-9"}]})]
-    ;; existing autonomous session under the ws (so phase mirroring works)
-    (session/create! :brian (:id w)
-                     {:name "impl-br-9" :weight :heavy
-                      :autonomy {:skill :plan-bug :first-message "x" :agent :claude
-                                 :claude-session-id nil :trigger :plan-bug :limits {}
-                                 :priority 0 :uncapped? false :on-promote nil
-                                 :phase :parked :phase-history [] :error nil}})
+    (impl-session! (:id w) "impl-br-9" :parked)
     (let [run (sut/create-merge-run! :brian (:id w) "impl-br-9")]
-      (with-redefs [runs/launch-context     (fn [_] {:mcp-config nil :add-dirs [] :briefing "" :run-paths ""})
-                    nido.session.state/session-home-dir (fn [_ _] "/tmp")  ; exists
-                    agent/launch!           (fn [_] {:exit-code 0 :num-turns 4})
-                    sut/classify-outcome    (fn [& _] :awaiting-merge)
+      (runs/transition! (:id run) :running)
+      (with-redefs [sut/classify-outcome           (fn [& _] :awaiting-merge)
                     runs/teardown-session-for-run! (fn [_] (reset! torn true))]
-        (sut/drive-home-blocking! (:id run))
+        (is (= :awaiting-merge (sut/settle-drive-home! (:id run) {})))
         (is (= :done (:state (runs/read-run (:id run)))))
         (is (false? @torn))))))
 
-(deftest drive-home-blocker-parks-with-error
+(deftest settling-a-blocked-drive-home-parks-with-error
   (let [w (ws/create! :brian {:stage :shipping :external-refs [{:adapter :notion :id "BR-10"}]})]
-    (session/create! :brian (:id w)
-                     {:name "impl-br-10" :weight :heavy
-                      :autonomy {:skill :plan-bug :first-message "x" :agent :claude
-                                 :claude-session-id nil :trigger :plan-bug :limits {}
-                                 :priority 0 :uncapped? false :on-promote nil
-                                 :phase :running :phase-history [] :error nil}})
+    (impl-session! (:id w) "impl-br-10" :running)
     (let [run (sut/create-merge-run! :brian (:id w) "impl-br-10")]
-      (with-redefs [runs/launch-context  (fn [_] {:mcp-config nil :add-dirs [] :briefing "" :run-paths ""})
-                    nido.session.state/session-home-dir (fn [_ _] "/tmp")
-                    agent/launch!        (fn [_] {:exit-code 0 :num-turns 4})
-                    sut/classify-outcome (fn [& _] :blocked)]
-        (sut/drive-home-blocking! (:id run))
+      (runs/transition! (:id run) :running)
+      (with-redefs [sut/classify-outcome (fn [& _] :blocked)]
+        (sut/settle-drive-home! (:id run) {})
         (is (= :awaiting-review (:state (runs/read-run (:id run)))))
         (let [s (session/read-session :brian (:id w) "impl-br-10")]
           (is (= :parked (get-in s [:autonomy :phase])))   ; mirrored from :awaiting-review
           (is (some?     (get-in s [:autonomy :error]))))))))
+
+(def ^:private facet
+  {:session-id "s" :bg-id "s" :origin :person :driver :nido :hold nil :pending nil :queued nil
+   :own-work? false :policy {:auto-respawn? false} :cursor 0 :driving-since "t"
+   :announced-blocked? false :recovered-boot nil})
+
+(defn- drive-home-with [facet-or-nil]
+  (let [w   (ws/create! :brian {:stage :shipping :external-refs [{:adapter :notion :id "BR-11"}]})
+        nm  (str "impl-" (subs (str (random-uuid)) 0 8))
+        _   (impl-session! (:id w) nm :parked)
+        _   (cond
+              (:dispatching facet-or-nil) (session/update-substrate! :brian (:id w) nm (constantly {:claude nil :dispatching (:dispatching facet-or-nil)}))
+              facet-or-nil (session/update-claude! :brian (:id w) nm (constantly facet-or-nil)))
+        run (sut/create-merge-run! :brian (:id w) nm)
+        did (atom [])]
+    (with-redefs [runs/launch-context (fn [_] {:mcp-config nil :add-dirs [] :briefing "" :run-paths ""})
+                  nido.session.state/session-home-dir (fn [_ _] "/tmp")
+                  conduct/start!      (fn [o] (swap! did conj [:start (:prompt o) (:cwd o)]) {})
+                  conduct/adopt!      (fn [o] (swap! did conj [:adopt (:session-id o)]) {})
+                  conduct/instruct!   (fn [_ _ _ t] (swap! did conj [:instruct t]) {})]
+      {:returned (sut/drive-home! (:id run))
+       :did      @did
+       :run      (runs/read-run (:id run))})))
+
+(deftest drive-home-gives-the-instruction-and-returns
+  (testing "no background session yet: one is started in the home"
+    (let [{:keys [returned did run]} (drive-home-with nil)]
+      (is (= :started returned))
+      (is (= [[:start "/drive-home" "/tmp"]] did))
+      (is (= :running (:state run)) "it settles when the turn's Stop arrives, not now")))
+  (testing "one nido drives: the instruction is queued for it"
+    (is (= [[:instruct "/drive-home"]] (:did (drive-home-with facet)))))
+  (testing "a released one: the person's own ship adopts it first"
+    (is (= [[:adopt "s"] [:instruct "/drive-home"]]
+           (:did (drive-home-with (assoc facet :driver :nobody)))))))
+
+(deftest drive-home-refuses-a-held-session
+  (let [{:keys [did run]} (drive-home-with (assoc facet :hold {:at "t" :because :foreign-prompt}))]
+    (is (= [] did))
+    (is (= :awaiting-review (:state run)) "parked as blocked, with the reason on the session")))
+
+(deftest drive-home-refuses-a-session-nido-started-but-has-no-id-for
+  ;; A start still in flight has no facet to queue on until a listing names its session, so
+  ;; ship says so and parks.
+  (let [{:keys [did run]} (drive-home-with {:dispatching {:token "T" :at "t" :bg-id "bg-x"}})]
+    (is (= [] did))
+    (is (= :awaiting-review (:state run)))))
 
 (deftest merge-lane-summary-counts-by-run-state
   (sut/create-merge-run! :brian "w1" "s1")                       ; :queued

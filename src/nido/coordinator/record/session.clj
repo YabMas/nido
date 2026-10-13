@@ -39,9 +39,7 @@
    reads before it sends. A record without this facet is a conversation from before the
    substrate, continued — if at all — the old way."
   [:map {:closed true}
-   ;; Nil only between the facet being written and dispatch returning the session's id — the
-   ;; first prompt's token is recorded before the session exists to carry an id.
-   [:session-id [:maybe string?]]
+   [:session-id string?]
    [:bg-id [:maybe string?]]
    [:origin [:enum :nido :person]]
    [:driver [:enum :nido :person :nobody]]
@@ -82,6 +80,14 @@
    [:substrate-history [:vector [:map [:at string?] [:substrate [:enum :live :archived]]]]]
    [:autonomy          [:maybe Autonomy]]
    [:claude            {:optional true} [:maybe Claude]]
+   ;; A background session being started for this record and not yet named by Claude Code: the
+   ;; first prompt's token, recorded before the start, and — once a start has launched a process
+   ;; the listing did not name in time — its background id. Never beside a facet for long: the
+   ;; facet is written, and this cleared, once the session's full id is known.
+   [:dispatching       {:optional true} [:maybe [:map {:closed true}
+                                                 [:token string?] [:at string?]
+                                                 [:policy {:optional true} [:maybe [:map-of keyword? any?]]]
+                                                 [:bg-id {:optional true} [:maybe string?]]]]]
    [:created-at        string?]])
 
 (defn ^{:malli/schema [:=> [:cat :Session] :Session]}
@@ -199,12 +205,13 @@
 (defn ^{:malli/schema [:=> [:cat :Session] [:maybe :map]]}
   claude-facet [s] (:claude s))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:=> [:cat [:maybe :map]] [:maybe :map]]] :Session]}
-  update-claude!
-  "Replace a session's :claude facet with `(f facet)` — nil to remove it — read and written
-   under the record's lock, so two updaters (a conduct pass and a hand-back) cannot lose each
-   other's write. Throws when the session does not exist or the result is not a valid facet,
-   and writes nothing then."
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:=> [:cat :map] :map]] :Session]}
+  update-substrate!
+  "Replace a session's :claude facet and :dispatching note together with what `(f {:claude
+   :dispatching})` answers — either nil to remove it — read and written under the record's lock,
+   so a facet written and a note cleared are one step, and two updaters (a conduct pass and a
+   hand-back) cannot lose each other's write. Throws when the session does not exist or the
+   result is not valid, and writes nothing then."
   [project ws-id session-name f]
   (let [path (cstate/session-edn-path project ws-id session-name)]
     (io/update-edn! path
@@ -212,7 +219,16 @@
                       (when-not s
                         (throw (ex-info "Session not found"
                                         {:project project :ws-id ws-id :session session-name})))
-                      (validate (assoc s :claude (f (:claude s))))))))
+                      (let [{:keys [claude dispatching]} (f (select-keys s [:claude :dispatching]))]
+                        (validate (assoc s :claude claude :dispatching dispatching)))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:=> [:cat [:maybe :map]] [:maybe :map]]] :Session]}
+  update-claude!
+  "Replace a session's :claude facet with `(f facet)` — nil to remove it — under the record's
+   lock, as update-substrate! does; the :dispatching note is left as it is."
+  [project ws-id session-name f]
+  (update-substrate! project ws-id session-name
+                     (fn [m] (update m :claude f))))
 
 (defn- load! [project ws-id session-name]
   (or (read-session project ws-id session-name)

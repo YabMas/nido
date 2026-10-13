@@ -276,13 +276,40 @@
         (make-session! :brian (:id w) "run-auto"
                        {:weight :heavy :autonomy autonomy-running})
         (make-session! :brian (:id w) "human-sess" {:autonomy nil})
-        (let [rows  (wsv/session-rows :brian (:id w))
+        (let [rows  (wsv/session-rows :brian (:id w) [])
               by    (into {} (map (juxt :name identity)) rows)]
           (is (= 2 (count rows)))
           (is (= :running (:phase (by "run-auto"))))
           (is (= :heavy   (:weight (by "run-auto"))))
           (is (= :live    (:substrate (by "run-auto"))))
           (is (nil?       (:phase (by "human-sess")))))))))
+
+(deftest session-rows-show-the-substrates-state-and-who-drives
+  (with-tmp
+    (fn [_]
+      (let [w (make-ws! :brian {:stage :triaging})]
+        (make-session! :brian (:id w) "driven" {:autonomy nil})
+        (session/update-claude! :brian (:id w) "driven"
+                                (constantly {:session-id "s-1" :bg-id "s-1" :origin :person :driver :nido
+                                             :hold nil :pending nil :queued nil :own-work? false
+                                             :policy {:auto-respawn? false} :cursor 0 :driving-since "t"
+                                             :announced-blocked? false :recovered-boot nil}))
+        (make-session! :brian (:id w) "plain" {:autonomy nil})
+        (let [listing [{:sessionId "s-1" :kind "background" :state "working"}
+                       {:sessionId "s-own" :kind "background" :state "done" :name "mine"
+                        :baseline-shown? true}
+                       {:sessionId "s-manual" :kind "background" :state "done" :name "not-auto"
+                        :baseline-shown? false}
+                       {:sessionId "s-tty" :kind "interactive"}]
+              by (into {} (map (juxt :name identity)) (wsv/session-rows :brian (:id w) listing))]
+          (is (= {:state "working" :driver :nido} (select-keys (by "driven") [:state :driver])))
+          (is (= {:state nil :driver :nobody} (select-keys (by "plain") [:state :driver]))
+              "a session without a facet: nobody drives it")
+          (is (= {:state "done" :driver :nobody :session-id "s-own"}
+                 (select-keys (by "mine") [:state :driver :session-id]))
+              "a person's own background session in the workstream, adoptable")
+          (is (not (contains? by "not-auto")) "its events do not show the baseline: not listed beside nido's")
+          (is (= 3 (count by)) "an interactive session is not a row of its own"))))))
 
 (deftest format-session-row-human-vs-autonomous
   (is (= "run-auto  ·  running  ·  heavy  ·  live"

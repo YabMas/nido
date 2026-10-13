@@ -108,10 +108,19 @@
     "Re-provision a reclaimed session home so a resume has somewhere to land."
     {:signature [:=> [:catn [:run Run] [:origin [:? :map]]] :any]
      :delegates [home-present? spawn-session-for-run!]})
+  (Operation reclaims-session?
+    "Whether a run's resolved end reclaims the session it ran in: every run's but a
+     provision-only one's, whose session is the person's."
+    {:signature [:=> [:catn [:run :map]] :boolean]})
+  (Operation set-before-teardown!
+    "Install what every teardown does to a session before removing anything of it — set by the
+     composition root, which alone reaches the substrate. A throw from it keeps the session whole."
+    {:signature [:=> [:catn [:f :any]] :any]})
   (Operation teardown-session-for-run!
-    "Reclaim the session a run spawned, once it has reached a resolved state."
+    "Reclaim the session a run spawned, once it has reached a resolved state — after the step
+     set-before-teardown! installed has cleared it, and never one that step could not clear."
     {:signature [:=> [:catn [:run Run]] :any]
-     :delegates [session/archive!]})
+     :delegates [reclaims-session? session/archive!]})
   (Operation owns-session?
     "Did this run spawn the session record now at the path it names? The record must carry the
      run's trigger — a merge or drive run borrows the workstream's session, often the human's own

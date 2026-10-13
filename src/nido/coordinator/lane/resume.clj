@@ -9,10 +9,12 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
+   [nido.session.commit-gate :as commit-gate]
    [nido.session.state :as session-state]))
 
 (defn- parked-session
@@ -83,7 +85,9 @@
                                  :resume?           true
                                  :mcp-config        (:mcp-config lc)
                                  :add-dirs          (:add-dirs lc)
-                                 :settings          (:settings lc)
+                                 ;; The gate comes from the gate, not from the Run: a parked
+                                 ;; conversation whose Run is gone carries it all the same.
+                                 :settings          (commit-gate/settings-json)
                                  :budget            budget})]
       ;; launch! SIGTERM-kills on budget overrun but RETURNS normally with
       ;; :timed-out? — the catch never fires. Surface it as a resume error
@@ -124,7 +128,10 @@
   resume!
   "Re-engage a parked session under `ws-id` with `input`. Flips the session to
    :running synchronously, then hands one turn to the executor, which runs it when
-   a slot frees.
+   a slot frees. A session whose conversation is a background session (a :claude
+   facet) instead takes `input` as its next instruction through conduct, queued
+   when that turn is admitted, and answers :via :substrate; an instruction conduct
+   refuses parks the session again with the refusal as its error.
 
    Returns {:resumed <session-name> :queued? <bool>}, and :unaccounted? true in
    the one case where the turn ran outside the executor because nothing in this
@@ -146,6 +153,42 @@
     (when-not s
       (throw (ex-info "No parked session to resume"
                       {:reason :not-parked :project project :ws-id ws-id})))
+    ;; A conversation that is a background session takes the reply as its next
+    ;; instruction: conduct gives it when the session is ready, and the session's
+    ;; own Stop re-parks it. No --print turn continues it. It is queued through
+    ;; the executor like any turn, so the reply is admitted under the global cap
+    ;; before conduct may give it — its trigger's in-flight slot the parked session
+    ;; already holds (see executor/submit-turn!); once given, the session holds its
+    ;; global slot while the substrate reports it working.
+    (when (:dispatching s)
+      ;; A start in flight: conduct names the session once a listing shows it, and there is
+      ;; no facet for a reply to be queued on before then.
+      (session/set-error! project ws-id (:name s)
+                          {:at      (clock/now-iso)
+                           :reason  :session-unnamed
+                           :message "The session nido started has no id from Claude Code yet — reply again once it does"})
+      (throw (ex-info "The session nido started has no id from Claude Code yet"
+                      {:reason :session-unnamed :project project :ws-id ws-id})))
+    (if (:claude s)
+      (let [run  (runs/find-for-session project ws-id (:name s))
+            body #(try (conduct/instruct! project ws-id (:name s) input)
+                       (catch Throwable t
+                         (session/set-error! project ws-id (:name s)
+                                             {:at      (clock/now-iso)
+                                              :reason  (or (:reason (ex-data t)) :resume-failed)
+                                              :message (ex-message t)})
+                         (session/set-phase! project ws-id (:name s) :parked)))]
+        (session/set-error! project ws-id (:name s) nil)
+        (session/set-phase! project ws-id (:name s) :running)
+        (if (executor/driven?)
+          (do (executor/submit-turn!
+               {:run-id        (or (:id run) (str "session-" (:name s)))
+                :turn          (str (random-uuid))
+                :trigger       (:trigger run)
+                :body          body})
+              {:resumed (:name s) :queued? true :via :substrate})
+          (do (body)
+              {:resumed (:name s) :queued? false :unaccounted? true :via :substrate})))
     (let [run (runs/find-for-session project ws-id (:name s))
           sid (or (get-in s [:autonomy :claude-session-id])
                   (:claude-session-id run))]
@@ -173,7 +216,6 @@
                {:run-id        (or (:id run) (str "session-" (:name s)))
                 :turn          turn
                 :trigger       (:trigger run)
-                :max-in-flight (:max-in-flight run)
                 :body          body})
               {:resumed (:name s) :queued? true})
           ;; Nobody ticks the executor in this process — a standalone `bb nido:ui`
@@ -181,4 +223,4 @@
           ;; say nothing. Run it, and SAY that it was not slot-accounted rather
           ;; than letting the caller assume it was.
           (do (future (body))
-              {:resumed (:name s) :queued? false :unaccounted? true}))))))
+              {:resumed (:name s) :queued? false :unaccounted? true})))))))

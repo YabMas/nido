@@ -93,7 +93,7 @@
     {:signature [:=> [:catn] :any]
      :delegates [runs/read-run runs/write-run! state/runs-dir session/read-session
                  runs/owns-session? runs/teardown-session-for-run!
-                 runs/stop-session-for-parked-run!]})
+                 runs/stop-session-for-parked-run! runs/reclaims-session?]})
   (Operation release-improvement-hold!
     "Close, as :orphaned, the open improvement claim a resolved Run leaves behind, unless an
      unanswered blocker holds it for a person — the close is the only thing that releases the

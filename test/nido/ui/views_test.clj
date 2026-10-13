@@ -1623,3 +1623,17 @@
                                                    a-plan)))]
     (is (str/includes? html "a quiet week"))
     (is (str/includes? html "/workstreams/nido/ws-1/gate/assert-gate"))))
+
+(deftest a-gate-shows-the-permission-denials-on-both-needs-you-surfaces
+  ;; Every auto-mode denial recorded while nido drives a session is shown in the gate inbox: the
+  ;; row says there are some, the pane lists each.
+  (let [g (assoc sample-gate :denials [{:session "auto" :at "2026-06-18T00:01:00Z" :tool-name "Write"}
+                                       {:session "auto" :at "2026-06-18T00:02:00Z" :tool-name "Bash"
+                                        :tool-input "{\"command\":\"rm -rf build\"}"}])]
+    (is (str/includes? (views/needs-fragment {:gates [g] :selection nil :scope "all"})
+                       "2 permission denials")
+        "the inbox row counts them")
+    (let [pane (views/gate-pane g)]
+      (is (str/includes? pane "Write"))
+      (is (str/includes? pane "Bash"))
+      (is (str/includes? pane "rm -rf build") "the pane lists each, with what was denied"))))

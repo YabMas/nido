@@ -690,6 +690,26 @@
    :doc "nido's commit gate — a Claude Code PreToolUse hook on Bash. Reads the hook JSON on stdin; exits 2 (reason on stderr) when a `jj git push` would publish, or a `gh pr create/edit --title` would set, a message the project's own commit-msg hook rejects. 0 otherwise, including on anything it cannot read."
    :task (apply nido-commit-gate/gate-cmd *command-line-args*)}
 
+  nido:session:adopt
+  {:requires ([tasks.nido-session :as nido-session])
+   :doc "Make nido the driver of a background session started in a session's home or worktree: :project <p> <session> :session-id <uuid> [:auto-respawn true]. Refused unless its own events show nido's hooks and auto mode."
+   :task (apply nido-session/adopt *command-line-args*)}
+
+  nido:session:release
+  {:requires ([tasks.nido-session :as nido-session])
+   :doc "Stop nido driving a session's background session: :project <p> <session>. The session keeps running."
+   :task (apply nido-session/release *command-line-args*)}
+
+  nido:session:hand-back
+  {:requires ([tasks.nido-session :as nido-session])
+   :doc "Let nido drive a session's background session again after a person's prompt held it: :project <p> <session>."
+   :task (apply nido-session/hand-back *command-line-args*)}
+
+  nido:session:attach
+  {:requires ([tasks.nido-session :as nido-session])
+   :doc "Attach this terminal to a background session: :session-id <uuid>. The resume shim runs it for a run whose conversation is a background session; the session keeps running on detach."
+   :task (apply nido-session/attach *command-line-args*)}
+
   nido:session:hook
   {:requires ([tasks.nido-session-hook :as nido-session-hook])
    :doc "nido's session hook — installed for SessionStart, UserPromptSubmit, Stop, PermissionDenied and Notification in every nido session home and worktree. Records the event in the session's event log, gives the supervisor briefing as SessionStart context, and always exits 0. <Event>"

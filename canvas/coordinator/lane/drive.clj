@@ -4,7 +4,7 @@
   (:require [fukan.common.vocab.code.kind :refer [Kind]]
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.agent :as agent]
+            [canvas.coordinator.lane.conduct :as conduct]
             [canvas.coordinator.executor :as executor]
             [canvas.coordinator.record.runs :as runs :refer [Run]]
             [canvas.coordinator.record.session :as session :refer [Session]]
@@ -201,9 +201,15 @@
     {:signature [:=> [:catn] :map] :delegates [runs/list-run-ids runs/read-run]})
   (Operation classify-outcome "What a merge run's result means, by declared precedence."
     {:signature [:=> [:catn [:project ProjectName] [:br :any] [:run-id RunId] [:result :any]] :keyword]})
-  (Operation drive-home-blocking! "The executor body for a merge run — runs the merge to a verdict."
+  (Operation settle-drive-home!
+    "Settle a merge run from how its /drive-home turn ended, by classify-outcome."
+    {:signature [:=> [:catn [:run-id RunId] [:result :map]] :keyword]
+     :delegates [runs/read-run classify-outcome]})
+  (Operation drive-home!
+    "The executor body for a merge run: give /drive-home to the run's background session and
+     return; the run settles when the session's Stop ends the turn."
     {:signature [:=> [:catn [:run-id RunId]] :any]
-     :delegates [runs/read-run agent/launch! classify-outcome]}))
+     :delegates [runs/read-run conduct/start! conduct/adopt! conduct/instruct! settle-drive-home!]}))
 
 (Module lane-review
   "Settling runs whose verdict arrived through the ticket rather than through the run."
