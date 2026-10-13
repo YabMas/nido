@@ -1966,7 +1966,8 @@
 (defn- with-ruling
   "`record` carrying the judge's confirmed and unchecked lists from the answer `m`, as the round
    filters them next (`rule`), and its clause rulings as :clause-rulings, which `held-to-clauses`
-   reads and takes off — they are the answer's, kept in its out.json, and no ledger field."
+   reads and takes off — they are the answer's, kept whole in its out.json; the ledger keeps only
+   what each ruled (`held-to-clauses`' :clause-readings)."
   [record m]
   (let [{:keys [confirmed checked-at owed owed-at]} (parse-confirmed (:confirmed m))
         unchecked (parse-unchecked (:unchecked m))
@@ -2038,7 +2039,7 @@
 
 (defn- held-to-clauses
   "A ruled judgement (`rule`) held to the clauses its prompt listed (`clauses-owed`), with the
-   answer's :clause-rulings taken off.
+   answer's :clause-rulings taken off and what they ruled kept as :clause-readings.
 
    A subject the judgement confirmed, held :owed or found against, while a clause of it is open
    (`open-clauses`), is an incomplete judgment: it is named under :unruled, which stops the
@@ -2049,12 +2050,24 @@
    named there and nowhere else, since no id confirms or refutes a phase.
 
    A confirmation that stands carries, on its :checked-at, the search each held :interface clause
-   named (`settled/enumeration-mark`): the clause rulings are not kept on the ledger, and that
-   search is what lets the confirmation count toward settling an inventory (`settled/banked?`).
+   named (`settled/enumeration-mark`): the ledger keeps no clause's evidence, and that search is
+   what lets the confirmation count toward settling an inventory (`settled/banked?`).
+
+   :clause-readings is `{key {:ruling :held|:false :text}}`, each listed clause the judgement ruled
+   false or held with what a held ruling owes (`open-clauses`), with the words it ruled on. The text
+   is what lets a later reading be compared with this one: a key is a clause's position in its
+   subject, so after an amendment the same key can name another sentence.
 
    A subject only :unchecked owes no clause: it was ruled as out of the code's reach."
   [result owed]
   (let [rulings  (:clause-rulings result)
+        open-any (into #{} (mapcat #(open-clauses % rulings)) (vals owed))
+        readings (into (sorted-map)
+                       (for [cs (vals owed)
+                             {:keys [key text]} cs
+                             :let  [r (get-in rulings [key :ruling])]
+                             :when (and r (not (open-any key)))]
+                         [key {:ruling r :text text}]))
         affirmed (set (concat (:confirmed result) (:owed result)))
         judged   (into affirmed (keep :claim-id) (:findings result))
         phase?   (fn [cs] (every? #(= :habitable (:field %)) cs))
@@ -2086,7 +2099,8 @@
                           (put :checked-at (not-empty (apply dissoc (:checked-at result) subjects)))
                           (put :owed-at (not-empty (apply dissoc (:owed-at result) subjects)))
                           (assoc :unruled (vec (sort (into (set (:unruled result)) subjects)))))
-       (seq gaps)     (assoc :incomplete-clauses gaps)))))
+       (seq gaps)     (assoc :incomplete-clauses gaps)
+       (seq readings) (assoc :clause-readings readings)))))
 
 (def ^:private site-pattern
   "A file:line reference, a range or a comma list of lines after it (`a.clj:12`, `a.clj:12-30`,
@@ -5594,9 +5608,31 @@
   (merge (zipmap (:owed record) (repeat :owed))
          (zipmap (settled/checked-confirmations record) (repeat :holds))))
 
+(defn- held-clauses
+  "Per clause of `judgements` — one run's, oldest first — whose latest ruling in them was held, the
+   entry that held it: `{[key text] seq}`. Keyed on the words as well as the key, because a key is a
+   position and an amendment moves what sits there; a clause held, then ruled false, then held
+   again is held by the last entry."
+  [judgements]
+  (reduce (fn [acc {n :seq :keys [clause-readings]}]
+            (reduce-kv (fn [a k {:keys [ruling text]}]
+                         (if (= :held ruling) (assoc a [k text] n) (dissoc a [k text])))
+                       acc clause-readings))
+          {} judgements))
+
+(defn- run-held-clauses
+  "`held-clauses` of the `kind` judgements run `run-id` has appended to `project`/`ws-id` so far —
+   from the ledger, since a quiet round's carry is the only reading a round hands the next, and a
+   clause held three rounds back is denied as surely as one held in the last."
+  [project ws-id kind run-id]
+  (when (and project run-id)
+    (held-clauses (sort-by :seq (filter #(= (str run-id) (:run-id %)) (ws/entries-of project ws-id kind))))))
+
 (defn- with-readings
   "`record` — what the judge returned, before it is appended — carrying :overturns, each earlier
-   run's finding (`prior`) against an id it read; :overrides-settled, the confirmation that
+   run's finding (`prior`) against an id it read, with :restated? saying whether what the finding
+   was against has been restated since — a confirmation of the same words is the judges
+   disagreeing, of new ones a repair confirmed; :overrides-settled, the confirmation that
    settled (`settled`) each id it was shown as outside its checks and refuted anyway; :splits and
    :unpaired, where it and the reading before it disagree; and, when `holds?` says it would end
    the run, :read-once, what of `asked` it read on a first reading, and :amendment-read-once when
@@ -5633,8 +5669,14 @@
    :ws-id}]` names, per id this one refuted, the single confirmation it denies: a :split whose
    earlier reading is on the ledger, said with the entry, because :overturns runs the other way
    only and a refutation of a read-once id is otherwise a bare finding. Both only while `record`
-   read the tree the confirmation is keyed on."
-  [record holds? {:keys [standing single settled carried prior asked unread-amendment?]}]
+   read the tree the confirmation is keyed on.
+
+   :contradicts-held-clause `[{:clause :seq}]` is the same denial a clause at a time: each clause
+   this reading ruled false that the run last ruled held in the same words (`held`, `held-clauses`
+   of the run's earlier judgements), naming the entry that held it. A subject is confirmed only
+   when every clause held, so a held clause beside a false one confirms nothing by id, and without
+   this its holding is overtaken in silence."
+  [record holds? {:keys [standing single settled carried prior asked unread-amendment? held]}]
   (if-not (:format record)
     record
     (let [ruled     (rulings record)
@@ -5672,9 +5714,13 @@
                       (vec (sort (filter (set asked)
                                          (concat (remove seconds (keys ruled))
                                                  (filter unchecked (keys before)))))))
-          overturns (vec (for [[id {:keys [ws-id] n :seq}] (sort-by key prior)
+          overturns (vec (for [[id {:keys [ws-id restated?] n :seq}] (sort-by key prior)
                                :when (ruled id)]
-                           {:id id :seq n :ws-id ws-id}))]
+                           {:id id :seq n :ws-id ws-id :restated? (boolean restated?)}))
+          withdrawn (vec (for [[k {:keys [ruling text]}] (sort-by key (:clause-readings record))
+                               :let  [n (get held [k text])]
+                               :when (and n (= :false ruling))]
+                           {:clause k :seq n}))]
       (cond-> record
         (seq once)                       (assoc :read-once once)
         (and holds unread-amendment?)    (assoc :amendment-read-once true)
@@ -5683,7 +5729,8 @@
         (seq splits)                     (assoc :splits splits)
         (seq unpaired)                   (assoc :unpaired unpaired)
         (seq paired)                     (assoc :paired-with paired)
-        (seq denied)                     (assoc :contradicts-read-once denied)))))
+        (seq denied)                     (assoc :contradicts-read-once denied)
+        (seq withdrawn)                  (assoc :contradicts-held-clause withdrawn)))))
 
 (defn- run-status
   "The status a review run `run-id` ended in, read off its report in the run dir, or nil when there
@@ -5840,6 +5887,7 @@
                        (with-readings report/review-holds?
                                       {:standing standing :single single :settled settled :prior prior
                                        :carried (carried-readings ctx subject)
+                                       :held (run-held-clauses project ws-id :baseline-review run-id)
                                        :asked asked
                                        :unread-amendment? (unread-amendment? ctx)})))
         ;; Read before this round's record is appended, and this round added by hand, so it is
@@ -6644,6 +6692,27 @@
       (seq (:text-splits out))           (assoc :text-splits (into (sorted-map) (:text-splits out)))
       (pos? (get-in out [:flip-rate :pairs])) (assoc :flip-rate (:flip-rate out)))))
 
+(defn- clause-flip-rate
+  "Of every clause ruling in `judgements` — one run's, oldest first — with an earlier ruling of the
+   same clause in the same words at the same tree (`:clause-readings`), how many disagreed with the
+   last one: `{:flips n :pairs m}`, or nil when no clause was ruled twice. The claim series cannot
+   see these: a subject with a false clause is refuted whichever clause it was, so a clause held
+   and then ruled false beside another that went the other way reads as F,F."
+  [judgements]
+  (let [out (reduce (fn [acc {tree :code-identity :keys [clause-readings]}]
+                      (if-not tree
+                        acc
+                        (reduce-kv (fn [a k {:keys [ruling text]}]
+                                     (let [at   [k text tree]
+                                           prev (get-in a [:last at])]
+                                       (cond-> (assoc-in a [:last at] ruling)
+                                         prev                   (update :pairs inc)
+                                         (and prev (not= prev ruling)) (update :flips inc))))
+                                   acc clause-readings)))
+                    {:last {} :flips 0 :pairs 0}
+                    judgements)]
+    (when (pos? (:pairs out)) (select-keys out [:flips :pairs]))))
+
 (defn- claims-named
   "Each claim `decision`'s findings name, whatever check carries them, as `[id check kind]`.
    `check` is the one the finding is filed under — broken, underivable, or held (:filed-under) — or
@@ -6732,7 +6801,11 @@
       :refuted-after      {id [n]}
       :overturned         {id n}
       :text-splits        {id n}
-      :flip-rate          {:flips n :pairs m}}
+      :flip-rate          {:flips n :pairs m}
+      :reversals          {id n}
+      :repairs            {id n}
+      :contradicted-clauses {key n}
+      :clause-flip-rate   {:flips n :pairs m}}
 
    Every check a decision derived has a row, so a run whose checks all held says what it answered
    rather than printing an empty map. :alone and :at-end are over every defect a decision found — a
@@ -6805,6 +6878,14 @@
    `texts`, a fn from a judgement to the subjects of the record it read: the judgements carry the
    seq of what they read, not its words. Each present only when non-empty.
 
+   :reversals and :repairs split the run's `:overturns` — confirmations of an id an earlier run had
+   found against — by the row's :restated?: of the same words, the judges disagreeing; of words
+   restated since, a repair confirmed. A row recorded before it carried :restated? is in neither.
+   :contradicted-clauses counts, per clause key, the judgements that ruled false a clause the run
+   had held in the same words (`:contradicts-held-clause`), and :clause-flip-rate is :flip-rate over
+   clause rulings (`clause-flip-rate`) — beside the claim series, which a held clause turning false
+   inside an already-refuted subject never moves. Each present only when non-empty.
+
    `amended`, when given, is the seqs of the records the run appended. One newer than its last
    decision is an amendment no judge read: a check or claim that decision left broken is then
    :amended-unjudged rather than :at-end — handed to an amender and never re-read, so not known
@@ -6845,6 +6926,11 @@
         splits    (frequencies (mapcat #(map :id (:splits %)) judgements))
         sequences (reading-sequences (sort-by :seq judgements))
         variance  (if texts (reading-variance (sort-by :seq judgements) texts) {})
+        overturns (mapcat :overturns judgements)
+        reversed  (frequencies (map :id (filter #(false? (:restated? %)) overturns)))
+        repaired  (frequencies (map :id (filter #(true? (:restated? %)) overturns)))
+        withdrawn (frequencies (mapcat #(map :clause (:contradicts-held-clause %)) judgements))
+        cflip-rate (clause-flip-rate (sort-by :seq judgements))
         statuses  (mapv check-statuses decisions)
         ;; One round's defects and what it asked about, each tagged by the tally it belongs to: a
         ;; check keyword and a claim id do not compare, and `alone` has to see both.
@@ -6887,6 +6973,10 @@
       (seq spent-end) (assoc :spent (into (sorted-map) spent-end))
       (seq sequences) (assoc :readings sequences)
       (seq variance)  (merge variance)
+      (seq reversed)  (assoc :reversals (into (sorted-map) reversed))
+      (seq repaired)  (assoc :repairs (into (sorted-map) repaired))
+      (seq withdrawn) (assoc :contradicted-clauses (into (sorted-map) withdrawn))
+      cflip-rate      (assoc :clause-flip-rate cflip-rate)
 
       (seq decisions)
       (assoc :decisions (count decisions)
@@ -7199,6 +7289,7 @@
                        (with-readings #(or (report/proceeds? %) (asks-only? %))
                                       {:standing standing :single single :settled settled :prior prior
                                        :carried (carried-readings ctx design)
+                                       :held (run-held-clauses project ws-id :design-decision run-id)
                                        :asked asked
                                        :unread-amendment? (unread-amendment? ctx)})))
         ;; As the baseline round counts it, over the design's own lineage and this decision — which,

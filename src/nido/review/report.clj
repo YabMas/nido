@@ -669,7 +669,8 @@
       ;; what this one read once (`nido.review.record/second-reading`), the record and its ids.
       ;; :confirmed is what the round kept of the judge's confirmations, and :owed each claim it held
       ;; sound but not yet met at this tree — without it a round that read every claim owed reads
-      ;; like one that read none. :overturns is each earlier run's finding this judgement reversed.
+      ;; like one that read none. :overturns is each earlier run's finding this judgement reversed,
+      ;; :restated? when what it found against has been reworded since.
       ;; :rejudged is why round 1 asked a judge again over a judgement of the same record already on
       ;; the ledger (`nido.review.record/why-judged-again`), naming that entry and what it recommended.
       ;; :judged-by is who answered — a stand-in's judgement is not the configured reviewer's,
@@ -685,6 +686,8 @@
       ;; :paired-with is each single confirmation on the ledger this round's confirmation completed,
       ;; and :contradicts-read-once each it denied — the entry and (paired) the run, since the first
       ;; reading is often another run's and a 1-round run that stopped is otherwise unexplained.
+      ;; :contradicts-held-clause is each clause this run had held, in the same words, that this
+      ;; judgement ruled false — the earlier holding withdrawn where the subject's id shows nothing.
       ;; :continues is every earlier run whose judgements round 1 read — paired with, inherited a
       ;; refutation count from — with the status each ended in, so a run that picked up where an
       ;; interrupted one died says so instead of leaving the join to the ledger's :run-id stamps.
@@ -767,6 +770,8 @@
                 (assoc :paired-with (vec (get-in ctx [:record :paired-with])))
                 (seq (get-in ctx [:record :contradicts-read-once]))
                 (assoc :contradicts-read-once (vec (get-in ctx [:record :contradicts-read-once])))
+                (seq (get-in ctx [:record :contradicts-held-clause]))
+                (assoc :contradicts-held-clause (vec (get-in ctx [:record :contradicts-held-clause])))
                 (seq (:continues ctx))                  (assoc :continues (vec (:continues ctx)))
                 (seq (get-in ctx [:record :unchecked])) (assoc :unchecked (get-in ctx [:record :unchecked]))
                 (seq (get-in ctx [:record :relation-rulings]))

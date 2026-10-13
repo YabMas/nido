@@ -2273,11 +2273,14 @@
 
 (defn- flip-rate
   "A run's flip rate as a headline says it — `flip rate 1/7`, the readings that disagreed with the
-   last reading of the same text at the same tree over those that had one — or nil when the run
-   read no text twice at one tree, or its entries cannot be read."
+   last reading of the same text at the same tree over those that had one, then the same over clause
+   rulings as `clause flips 1/40` — or nil when the run read nothing twice at one tree, or its
+   entries cannot be read."
   [ledger run-id]
-  (when-let [{:keys [flips pairs]} (:flip-rate (figures-of-run ledger run-id))]
-    (str "flip rate " flips "/" pairs)))
+  (let [f    (figures-of-run ledger run-id)
+        rate (fn [label {:keys [flips pairs]}] (when pairs (str label " " flips "/" pairs)))]
+    (some->> [(rate "flip rate" (:flip-rate f)) (rate "clause flips" (:clause-flip-rate f))]
+             (remove nil?) seq (str/join " · "))))
 
 (defn- judge-variance
   "How often the run's judges disagreed with themselves on one record at one tree, as the analysis
@@ -2788,7 +2791,9 @@
 
    Per subject, its reading sequence in each run, the runs' joined by ` | `; every refuted-after
    count, concatenated; its overturned confirmations and same-text splits summed. :flip-rate sums
-   both halves across runs, so it is the rate over every comparable reading, not a mean of rates."
+   both halves across runs, so it is the rate over every comparable reading, not a mean of rates.
+   Per subject its reversals and repairs of an earlier run's finding, per clause its contradicted
+   holdings, summed; :clause-flip-rate is summed as :flip-rate is."
   [figures]
   (letfn [(add [acc tallies]
             (reduce-kv (fn [a k {:keys [broken alone at-end asked asked-at-end cleared
@@ -2844,6 +2849,10 @@
      :overturned         (counts :overturned)
      :text-splits        (counts :text-splits)
      :flip-rate          (reduce #(merge-with + %1 %2) {:flips 0 :pairs 0} (keep :flip-rate figures))
+     :reversals          (counts :reversals)
+     :repairs            (counts :repairs)
+     :contradicted-clauses (counts :contradicted-clauses)
+     :clause-flip-rate   (reduce #(merge-with + %1 %2) {:flips 0 :pairs 0} (keep :clause-flip-rate figures))
      :spent       (reduce (fn [acc [id n]]
                             (update acc id #(-> (or % {:runs 0 :max 0})
                                                 (update :runs inc)

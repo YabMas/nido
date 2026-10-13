@@ -2618,7 +2618,9 @@
    settlement alone would let one clean reading of it hold. It stops the judgement holding, and
    the round reads the record again.
    :overturns names each earlier run's finding against an id this judgement confirmed or held :owed: the
-   reversal, recorded where it was made. :overrides-settled is its mirror: each id this judgement
+   reversal, recorded where it was made. :restated? on it says the claim's words (or its settlement
+   key) have changed since that finding: a confirmed repair, not judges disagreeing. Absent on a row
+   recorded before it was carried, which says neither. :overrides-settled is its mirror: each id this judgement
    was shown as settled and found against anyway, naming the confirmation that had settled it —
    a settlement that was shielding a false claim, recorded where it was caught.
    :splits and :unpaired are where this judgement and the reading before it of the same record at
@@ -2631,7 +2633,10 @@
    carries one, since a second reading often comes from a later run than the first and nothing
    else joins the two. :contradicts-read-once is the other answer to such a confirmation: per id
    this judgement refuted, the single confirmation it denies. Derived by the round, as :splits
-   is, but naming the entry, which :splits does not.
+   is, but naming the entry, which :splits does not. :contradicts-held-clause is the same denial a
+   clause at a time: each clause this judgement ruled false that its run last ruled held in the same
+   words, naming the entry that held it — a held clause beside a false one confirms nothing by id,
+   so nothing else withdraws it.
    :spent is each subject its lineage has refuted that many readings running, counting this
    judgement, among those an amender is offered a weakening, withdrawal or restatement for
    (`nido.review.record/spent`) — reworded and refuted again, recorded where a hand amender reads
@@ -2642,12 +2647,18 @@
    that the judgement left open — no ruling, held citing nothing, held with no whole-tree search
    where the clause owed one — or ruled false under a confirmation. Such a subject is :unruled and
    none of its confirmation is counted (`nido.review.record/held-to-clauses`); a phase's clauses are
-   named here only. :confirmed-over-findings is each confirmation whose evidence reads a site the
+   named here only. :clause-readings is each listed clause the judgement ruled — false, or held
+   citing what a held ruling owes — with the words it ruled on, which is what a later reading of the
+   same clause is compared against: its key is a position, and an amendment moves what sits there.
+   :confirmed-over-findings is each confirmation whose evidence reads a site the
    same judgement's own finding against another subject cites — recorded, not ruled, since a
    chokepoint both pass through shares a site as surely as a confirmation denying the finding
-   does. Both derived by the round."
+   does. All three derived by the round."
   [[:checked-at {:optional true} [:map-of string? [:vector {:min 1} string?]]]
    [:incomplete-clauses {:optional true} [:map-of string? [:vector {:min 1} string?]]]
+   [:clause-readings {:optional true} [:map-of string? [:map {:closed true}
+                                                        [:ruling [:enum :held :false]]
+                                                        [:text string?]]]]
    [:confirmed-over-findings {:optional true} [:vector [:map {:closed true}
                                                         [:id string?] [:site string?]]]]
    [:unchecked  {:optional true} [:vector [:map {:closed true} [:id string?] [:reason string?]
@@ -2656,7 +2667,8 @@
    [:read-once  {:optional true} [:vector string?]]
    [:amendment-read-once {:optional true} [:= true]]
    [:overturns  {:optional true} [:vector [:map {:closed true}
-                                           [:id string?] [:seq int?] [:ws-id string?]]]]
+                                           [:id string?] [:seq int?] [:ws-id string?]
+                                           [:restated? {:optional true} boolean?]]]]
    [:overrides-settled {:optional true} [:vector [:map {:closed true}
                                                   [:id string?] [:seq int?] [:ws-id string?]]]]
    [:splits     {:optional true} [:vector [:map {:closed true}
@@ -2670,6 +2682,8 @@
                                             [:run-id {:optional true} string?]]]]
    [:contradicts-read-once {:optional true} [:vector [:map {:closed true}
                                                       [:id string?] [:seq int?] [:ws-id string?]]]]
+   [:contradicts-held-clause {:optional true} [:vector [:map {:closed true}
+                                                        [:clause string?] [:seq int?]]]]
    [:spent      {:optional true} [:map-of string? pos-int?]]
    [:spent-awaiting {:optional true} [:vector string?]]])
 

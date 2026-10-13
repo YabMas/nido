@@ -2533,6 +2533,31 @@
       (is (= "flip rate 1/2" (#'t/flip-rate [:nido "ws-1"] "b1")) "one run's rate, as its terminal line says it")
       (is (nil? (#'t/flip-rate nil "b1")) "a run with no ledger has nothing to say"))))
 
+(deftest clause-flips-and-repairs-sum-across-runs-and-reach-the-headline
+  ;; Watched: a run's terminal line read flip rate 0/23 over a held clause its next round ruled
+  ;; false, because both rounds refuted the subject — on different clauses.
+  (let [r (fn [run n & {:as more}] (merge {:format :baseline-review :run-id run :seq n :baseline-seq 1
+                                           :code-identity "t" :verdict :sufficient} more))
+        cl (fn [ruling] {"a#2" {:ruling ruling :text "one profile."}})
+        entries {:design-decision []
+                 :baseline-review [(r "b1" 1 :clause-readings (cl :held)
+                                      :overturns [{:id "a" :seq 0 :ws-id "w" :restated? true}])
+                                   (r "b1" 2 :clause-readings (cl :false)
+                                      :contradicts-held-clause [{:clause "a#2" :seq 1}])
+                                   (r "b2" 3 :clause-readings (cl :held)
+                                      :overturns [{:id "a" :seq 0 :ws-id "w" :restated? false}])
+                                   (r "b2" 4 :clause-readings (cl :held))]}]
+    (with-redefs [ws/list-ids     (constantly ["ws-1"])
+                  ws/entries-of   (fn [_ _ kind] (get entries kind))
+                  ws/entry-at-seq (fn [_ _ _] {:format :baseline :load-bearing [{:id "a" :property "p"}]})]
+      (let [all (read-string (with-out-str (t/figures-cmd* {:project "nido"})))]
+        (is (= {:flips 1 :pairs 2} (:clause-flip-rate all)) "summed over every run's comparable clause rulings")
+        (is (= {"a#2" 1} (:contradicted-clauses all)))
+        (is (= [{"a" 1} {"a" 1}] [(:reversals all) (:repairs all)])
+            "a repair confirmed and a reversal stay apart when the runs are summed"))
+      (is (= "clause flips 1/1" (#'t/flip-rate [:nido "ws-1"] "b1"))
+          "a run whose only repeated readings were of clauses still says how they went"))))
+
 ;; ---- one remainder, published once ---------------------------------------
 
 (def ^:private owing-run

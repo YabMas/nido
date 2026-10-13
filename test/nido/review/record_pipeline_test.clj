@@ -2255,7 +2255,7 @@
         seen     (atom nil)]
     (judged-over {:review confirming :reviews [refuted] :appended appended :seen seen} (ctx))
     (is (= 2 (get-in @seen [:prior "invoice-resums" :seq])) "the judge is handed the finding")
-    (is (= [{:id "invoice-resums" :seq 2 :ws-id "ws-1"}] (:overturns (first @appended)))
+    (is (= [{:id "invoice-resums" :seq 2 :ws-id "ws-1" :restated? false}] (:overturns (first @appended)))
         "and the confirmation says what it overturns")
     (let [p (record/baseline-prompt {:baseline a-baseline :prior (:prior @seen)})]
       (is (str/includes? p "FOUND AGAINST BEFORE"))

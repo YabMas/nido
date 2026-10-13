@@ -246,11 +246,69 @@
 (deftest an-owed-ruling-against-an-earlier-finding-is-an-overturn
   (let [r (#'record/with-readings {:format :design-decision :owed ["writers-state-order"]}
                                   (constantly true)
-                                  {:prior {"writers-state-order" {:ws-id "ws-1" :seq 55}}
+                                  {:prior {"writers-state-order" {:ws-id "ws-1" :seq 55 :restated? false}}
                                    :asked ["writers-state-order"]})]
-    (is (= [{:id "writers-state-order" :seq 55 :ws-id "ws-1"}] (:overturns r))
+    (is (= [{:id "writers-state-order" :seq 55 :ws-id "ws-1" :restated? false}] (:overturns r))
         "holding a refuted claim sound reverses the refutation, and the ledger has to say so")
     (is (= ["writers-state-order"] (:read-once r)))))
+
+(deftest an-overturn-says-whether-the-claim-was-restated-since
+  ;; Watched: R1 of a run :overturns'd two claims whose earlier wording an earlier run had refuted
+  ;; and a hand amendment had restated — and the figures counted the confirmed repairs as the
+  ;; judges reversing themselves, beside eight real reversals of unchanged text.
+  (let [r (#'record/with-readings {:format :baseline-review :confirmed ["build-job" "sets"]
+                                   :checked-at {"build-job" ["a.clj:1"] "sets" ["a.clj:2"]}}
+                                  (constantly false)
+                                  {:prior {"build-job" {:ws-id "ws-1" :seq 9 :restated? true}
+                                           "sets"      {:ws-id "ws-1" :seq 9 :restated? false}}})]
+    (is (= [{:id "build-job" :seq 9 :ws-id "ws-1" :restated? true}
+            {:id "sets" :seq 9 :ws-id "ws-1" :restated? false}]
+           (:overturns r))
+        "a confirmation of new words is a repair confirmed, of the same words a reversal, and only the row can say which")
+    (is (report/validate-event :baseline-review (assoc r :verdict :sufficient :reason "r" :baseline-seq 1))
+        "and the ledger takes it")))
+
+(deftest a-clause-ruled-false-after-the-run-held-it-is-a-contradicted-confirmation
+  ;; Watched: R1 held phase-1#2, R2 ruled the same promise false; the phase was false both rounds on
+  ;; different clauses, so its readings read F,F and nothing showed R1's holding withdrawn.
+  (let [held (#'record/held-clauses
+              [{:seq 31 :clause-readings {"phase-1#2" {:ruling :held :text "one stored profile."}
+                                          "phase-1#3" {:ruling :false :text "no re-read."}
+                                          "c#1"       {:ruling :held :text "old words."}}}
+               {:seq 33 :clause-readings {"phase-1#3" {:ruling :held :text "no re-read."}}}])
+        r    (#'record/with-readings {:format :baseline-review
+                                      :clause-readings {"phase-1#2" {:ruling :false :text "one stored profile."}
+                                                        "phase-1#3" {:ruling :false :text "no re-read."}
+                                                        "c#1"       {:ruling :false :text "new words."}}}
+                                     (constantly false)
+                                     {:held held})]
+    (is (= [{:clause "phase-1#2" :seq 31} {:clause "phase-1#3" :seq 33}] (:contradicts-held-clause r))
+        "the holding withdrawn is the run's latest of that clause, named by the entry that held it")
+    (is (not-any? #(= "c#1" (:clause %)) (:contradicts-held-clause r))
+        "a key is a position: the same key over new words is another clause, and ruling it false denies nothing")
+    (is (report/validate-event :baseline-review (assoc r :verdict :sufficient :reason "r" :baseline-seq 1))
+        "and the ledger takes it"))
+  (is (= {} (#'record/held-clauses [{:seq 1 :clause-readings {"c#1" {:ruling :held :text "x"}}}
+                                    {:seq 2 :clause-readings {"c#1" {:ruling :false :text "x"}}}]))
+      "a clause the run last ruled false is held by nobody, so ruling it false again withdraws nothing"))
+
+(deftest a-judgement-keeps-what-each-clause-was-ruled-on
+  (let [owed {"c" [{:key "c#1" :text "It reads once." :field :statement :search? false}
+                   {:key "c#2" :text "Nothing else writes it." :field :statement :search? true}
+                   {:key "c#3" :text "It caches." :field :statement :search? false}]}
+        r    (#'record/held-to-clauses
+              {:findings [{:claim-id "c" :cites ["x"] :claim "no"}]
+               :clause-rulings {"c#1" {:ruling :held :evidence ["a.clj:1"] :search ""}
+                                "c#2" {:ruling :held :evidence ["a.clj:2"] :search ""}
+                                "c#3" {:ruling :false :evidence [] :search ""}}}
+              owed)]
+    (is (= {"c#1" {:ruling :held :text "It reads once."}
+            "c#3" {:ruling :false :text "It caches."}}
+           (:clause-readings r))
+        "the words are kept with the ruling, since a later amendment can put other words at the key")
+    (is (not (contains? (:clause-readings r) "c#2"))
+        "a held whole-tree clause naming no search is no holding, and nothing may later be said to deny it")
+    (is (not (contains? r :clause-rulings)) "the answer's own rulings stay in its out.json")))
 
 (def ^:private codex {:reviewer :codex})
 (def ^:private claude {:reviewer :claude})
@@ -362,6 +420,7 @@
     (is (= {"a" 1 "b" 1} (:overturned f)) "a refutation of text the run had confirmed")
     (is (= {"a" 1 "b" 1} (:text-splits f)))
     (is (= {:flips 2 :pairs 3} (:flip-rate f)) "of three readings with one before them, two disagreed")
+    (is (nil? (:clause-flip-rate f)) "no clause was ruled, so no clause flipped")
     (is (nil? (:flip-rate (record/run-figures es nil (fn [j] (when (= 1 (:seq j)) {"a" [:a-text]})))))
         "a judgement whose record cannot be read back is compared with nothing")
     (is (nil? (:refuted-after (record/run-figures (mapv #(assoc % :code-identity (str "t" (:seq %))) es)
@@ -2360,3 +2419,28 @@
     (is (= [{:claim "a" :ended "re-reported"} {:claim "b" :ended "unchecked"} {:claim "c" :ended "withdrawn"}]
            (ended {:findings [{:key "a"}] :record {:unchecked [{:id "b"}]}})))
     (is (nil? (#'record/dispute-endings :key {:iter 2 :history [{:iter 1 :disputes []}]} {})))))
+
+(deftest figures-separate-repairs-from-reversals-and-count-clause-flips
+  ;; Watched: a run's flip-rate read 0/23 while R1 held phase-1#2 and R2 ruled it false, and its
+  ;; :overturns counted confirmed repairs of restated claims with the judges reversing themselves.
+  (let [r  (fn [n & {:as more}] (merge {:format :design-decision :seq n :design-seq 1
+                                        :code-identity "t" :recommend :amend} more))
+        es [(r 1 :overturns [{:id "a" :seq 9 :ws-id "w" :restated? false}
+                             {:id "b" :seq 9 :ws-id "w" :restated? true}
+                             {:id "c" :seq 9 :ws-id "w"}]
+               :clause-readings {"p#2" {:ruling :held :text "one profile."}
+                                 "p#3" {:ruling :false :text "no re-read."}})
+            (r 2 :clause-readings {"p#2" {:ruling :false :text "one profile."}
+                                   "p#3" {:ruling :false :text "no re-read."}}
+               :contradicts-held-clause [{:clause "p#2" :seq 1}])
+            (r 3 :clause-readings {"p#2" {:ruling :held :text "two profiles."}})]
+        f  (record/run-figures es)]
+    (is (= {"a" 1} (:reversals f)) "only a confirmation of the same words is the judges disagreeing")
+    (is (= {"b" 1} (:repairs f)) "a confirmation of restated words is a repair confirmed")
+    (is (not-any? #(contains? (% f) "c") [:reversals :repairs])
+        "a row from before :restated? was carried says neither, and is counted as neither")
+    (is (= {"p#2" 1} (:contradicted-clauses f)))
+    (is (= {:flips 1 :pairs 2} (:clause-flip-rate f))
+        "p#2 held then false flips, p#3 false twice does not, and p#2 over new words pairs with nothing")
+    (is (nil? (:clause-flip-rate (record/run-figures (mapv #(assoc % :code-identity (str "t" (:seq %))) es))))
+        "rulings at different trees are not the same reading repeated")))
