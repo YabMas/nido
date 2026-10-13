@@ -3,8 +3,10 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [nido.coordinator.lane.titles :as titles]
+   [nido.coordinator.record.session :as session]
    [nido.coordinator.record.workstream :as ws]
-   [nido.platform.core :as core]))
+   [nido.platform.core :as core]
+   [nido.session.state :as session-state]))
 
 (defn- notion-ws! [title]
   (ws/create! :brian {:stage :triaging
@@ -56,3 +58,23 @@
   (is (= "Drift in the session index" (#'titles/clean "\"Drift in the session index.\"\n")))
   (is (nil? (#'titles/clean "")))
   (is (nil? (#'titles/clean (apply str (repeat 100 "x"))))))
+
+(deftest tab-titles-names-each-session-home-and-worktree-by-the-board-label
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root              (constantly (str tmp))
+                    core/nido-home              (constantly (str tmp))
+                    session/list-sessions       (fn [_ _] [{:name "rag-raptor-index"}])
+                    session-state/read-registry (constantly {"/wt/rag-raptor-index"
+                                                             {:instance-id "brian--rag-raptor-index"}})]
+        (let [w (notion-ws! "fix the drift")]
+          (ws/set-title! :brian (:id w) "Drift in\tthe index" "fix the drift")
+          (is (= [[(str tmp "/sessions/brian/rag-raptor-index") "Drift in the index"]
+                  ["/wt/rag-raptor-index" "Drift in the index"]]
+                 (titles/tab-titles :brian)))
+          (is (true? (titles/write-tab-titles! [:brian])))
+          (is (false? (titles/write-tab-titles! [:brian])) "unchanged content is not rewritten")
+          (is (= (str tmp "/sessions/brian/rag-raptor-index\tDrift in the index\n"
+                      "/wt/rag-raptor-index\tDrift in the index\n")
+                 (slurp (titles/tab-titles-path))))))
+      (finally (fs/delete-tree tmp)))))

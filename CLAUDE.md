@@ -98,20 +98,46 @@ up. Escape hatch for a deliberate raw-git call: `command git …`.
 
 ### Tab naming (Warp)
 
-Warp's URI can't title the tab, so a shell hook does it from `$PWD` on the new tab's first prompt. Warp ignores shell-set titles unless `WARP_DISABLE_AUTO_TITLE=true`. Add to `~/.zshrc`:
+Warp's URI can't title the tab, so a shell hook does it — by the workstream's **board title**, so a tab reads what the board reads. The coordinator's title sweep writes `~/.nido/tab-titles.tsv` (one `<dir>\t<title>` line per session home and live worktree, rewritten only when it changes); the hook re-reads it when its mtime moves and names the tab at **every** prompt by the longest `<dir>` prefixing `$PWD`. A session not on the board yet falls back to `<project>/<session>`.
+
+Re-asserting at every prompt is what keeps the name: anything that retitled the tab meanwhile is put back. Inside a session the hook also exports the two switches that stop the retitling at its source — `WARP_DISABLE_AUTO_TITLE=true` (Warp ignores shell-set titles without it, and otherwise titles the tab by command) and `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` (Claude Code otherwise titles the tab by its conversation, for as long as it runs, when no prompt fires). Leaving the session unsets both. Add to `~/.zshrc`:
 
 ```zsh
-# Name a Warp tab opened into a nido session-home <project>/<session>.
+# Name a terminal tab in a nido session by its workstream's board title — the
+# coordinator writes ~/.nido/tab-titles.tsv (`<dir>\t<title>`), and the longest
+# <dir> prefixing $PWD wins. Re-asserted at every prompt, so a title anything else
+# set (Warp's auto-title, a CLI) is put back. Inside a session it also switches off
+# the two things that retitle tabs: Warp's auto-title and Claude Code's own.
 autoload -Uz add-zsh-hook
+zmodload -F zsh/stat b:zstat
+typeset -gA _nido_titles
+typeset -g _nido_titles_mtime= _nido_tab_owned=
 _nido_tab_title() {
-  case "$PWD" in
-    "$HOME/.nido/sessions/"*)
-      local rel="${PWD#$HOME/.nido/sessions/}"
-      export WARP_DISABLE_AUTO_TITLE=true
-      printf '\033]0;%s\007' "${rel%/}"
-      ;;
-  esac
-  add-zsh-hook -d precmd _nido_tab_title   # one-shot: only the opening dir names the tab
+  local f=$HOME/.nido/tab-titles.tsv m dir title best=
+  if [[ -r $f ]]; then
+    zstat -A m +mtime -- $f 2>/dev/null
+    if [[ $m != $_nido_titles_mtime ]]; then
+      _nido_titles=()
+      while IFS=$'\t' read -r dir title; do _nido_titles[$dir]=$title; done < $f
+      _nido_titles_mtime=$m
+    fi
+  fi
+  for dir in ${(k)_nido_titles}; do
+    [[ $PWD == $dir || $PWD == $dir/* ]] && (( ${#dir} > ${#best} )) && best=$dir
+  done
+  if [[ -n $best ]]; then
+    title=$_nido_titles[$best]
+  elif [[ $PWD == $HOME/.nido/sessions/* ]]; then
+    title=${${PWD#$HOME/.nido/sessions/}%/}   # not on the board yet: <project>/<session>
+  else
+    # Left the session: hand the tab back to Warp.
+    [[ -n $_nido_tab_owned ]] && unset WARP_DISABLE_AUTO_TITLE CLAUDE_CODE_DISABLE_TERMINAL_TITLE
+    _nido_tab_owned=
+    return
+  fi
+  export WARP_DISABLE_AUTO_TITLE=true CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1
+  _nido_tab_owned=1
+  printf '\033]0;%s\007' "$title"
 }
 add-zsh-hook precmd _nido_tab_title
 ```

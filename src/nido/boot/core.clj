@@ -422,20 +422,29 @@
 (defn- maybe-refresh-titles!
   "Throttled: at most once per :titles-interval-ms, and never while the previous
    sweep is still running, regenerate stale workstream titles for every registered
-   project on a background thread. Never throws into the tick loop."
+   project on a background thread, then rewrite the terminal tab-titles file from
+   them. Never throws into the tick loop."
   [now-ms]
   (when (and (>= (- now-ms @!last-titles-ms) (:titles-interval-ms defaults))
              (let [f @!titles-sweep] (or (nil? f) (realized? f))))
     (reset! !last-titles-ms now-ms)
     (reset! !titles-sweep
             (future
-              (doseq [project (registered-projects)]
+              (let [projects (registered-projects)]
+                (doseq [project projects]
+                  (try
+                    (titles/refresh-project! project)
+                    (catch Throwable t
+                      (binding [*err* *err*]
+                        (.println ^java.io.PrintWriter *err*
+                                  (str "WARN: title sweep threw for " project " — " (ex-message t)))))))
+                ;; After the sweep, so a tab reads the title it just wrote.
                 (try
-                  (titles/refresh-project! project)
+                  (titles/write-tab-titles! projects)
                   (catch Throwable t
                     (binding [*err* *err*]
                       (.println ^java.io.PrintWriter *err*
-                                (str "WARN: title sweep threw for " project " — " (ex-message t)))))))))))
+                                (str "WARN: tab-titles write threw — " (ex-message t)))))))))))
 
 (defn- maybe-poll-notion-sync!
   "Throttled Notion→workstream reconcile, per project with a notion-sync.edn. At
