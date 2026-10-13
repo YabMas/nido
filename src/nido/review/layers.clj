@@ -460,13 +460,24 @@
 
    With no layer this degrades to the flat-branch behaviour it replaces. The
    unbookmarked top layer has no bookmark to move: its fix is simply the new
-   top of it, which is where `stack` reads its tip from next time."
+   top of it, which is where `stack` reads its tip from next time.
+
+   The bare `<session>` bookmark moves too when it sat on the layer's old tip
+   (`@-`), as it does on a branch whose top layer carries both. Left behind,
+   `stack` reads it as a layer of its own holding the unfixed change, and the
+   real layer shrinks to the fix alone. `--from @-` makes the move a no-op
+   anywhere else, so a bare bookmark elsewhere in the stack is never dragged."
   [cwd layer msg]
   (if layer
-    (let [bm (:bookmark layer)]
+    (let [bm      (:bookmark layer)
+          session (when-let [slug (and bm (:slug layer))]
+                    (subs bm 0 (- (count bm) (count slug) (count "--"))))]
       (step! cwd layer (str "describe the fix commit for " (or bm (:slug layer))) "describe" "-m" msg)
       (when bm
         (step! cwd layer (str "move " bm " onto its fix") "bookmark" "set" bm "-r" "@"))
+      (when session
+        (step! cwd layer (str "move " session " onto " bm "'s fix")
+               "bookmark" "move" (str "exact:" session) "--from" "@-" "--to" "@"))
       (:out (step! cwd layer "read the fix commit's id"
                    "log" "-r" "@" "-T" "commit_id" "--no-graph")))
     (do (step! cwd nil "commit the fix" "commit" "-m" msg)

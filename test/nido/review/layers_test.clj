@@ -650,3 +650,43 @@
         "back on the newest commit above it, so a fix landed there is not forked off")
     (is (false? (:ok? (layers/reorder! "/w" "main" top {:bookmark "sess--a"})))
         "a reshape has no bookmark to move it by, and refuses rather than guessing")))
+
+(deftest fixing-a-top-layer-that-carries-the-session-bookmark-keeps-the-stack
+  ;; The top layer's tip also carried the bare session bookmark. Only the layer
+  ;; bookmark moved onto the fix, so the next read found the bare one as a layer
+  ;; of its own holding the unfixed change, and a defect the fix had already
+  ;; closed was reviewed there again and stamped as a deviation.
+  (let [root (fs/create-temp-dir {:prefix "nido-layers-bare"})
+        repo (str (fs/path root "repo"))
+        put! (fn [f] (spit (str (fs/path repo f)) (str f "\n")))]
+    (try
+      (jj/jj! (str root) "git" "init" "repo")
+      (put! "base.txt")
+      (jj/jj! repo "commit" "-m" "base")
+      (jj/jj! repo "bookmark" "create" "main" "-r" "@-")
+      (put! "lower.txt")
+      (jj/jj! repo "commit" "-m" "lower")
+      (jj/jj! repo "bookmark" "create" "sess--lower" "-r" "@-")
+      (put! "upper.txt")
+      (jj/jj! repo "commit" "-m" "upper")
+      (jj/jj! repo "bookmark" "create" "sess--upper" "sess" "-r" "@-")
+      (let [before (layers/stack repo "sess" "main")
+            top    (peek before)]
+        (layers/position-for-fix! repo top)
+        (put! "fix.txt")
+        (layers/land-fix! repo top "fix upper")
+        (let [after (layers/stack repo "sess" "main")]
+          (is (= ["sess--lower" "sess--upper"] (map :bookmark before)))
+          (is (= (map :bookmark before) (map :bookmark after))
+              "a fix adds a commit to its layer, never a layer to the stack")
+          (is (= (map :slug before) (map :slug after)))
+          (is (= (layers/resolve-rev repo "sess--upper") (layers/resolve-rev repo "sess"))
+              "the session bookmark stays on the top layer's tip, fix included")))
+      (finally (fs/delete-tree root)))))
+
+(deftest a-session-bookmark-off-the-fixed-layer-is-not-moved
+  (let [calls (atom [])]
+    (with-redefs [jj/jj! (stub-log "abc" calls)]
+      (layers/land-fix! "/w" {:bookmark "sess--l1" :slug "l1" :tip "c2"} "msg"))
+    (is (some #{["bookmark" "move" "exact:sess" "--from" "@-" "--to" "@"]} @calls)
+        "moved only FROM the layer's old tip, so a bare bookmark anywhere else stays put")))
