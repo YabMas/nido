@@ -515,3 +515,36 @@
           {:shipping? false :notion-status "Not started"
            :has-triage-report? false :sessions []}))
       "triage at rest is not needs-you"))
+
+(def a-facet
+  {:session-id "c-1" :bg-id "c-1" :origin :person :driver :nobody :hold nil :pending nil
+   :policy {:auto-respawn? false} :cursor 0 :driving-since nil :queued nil :own-work? false
+   :announced-blocked? false :recovered-boot nil})
+
+(deftest update-claude-sets-and-replaces-the-facet-whoever-started-the-session
+  (with-tmp
+    (fn [_]
+      (sess/write! human-session)
+      (let [{:keys [project workstream-id name]} human-session
+            set1 (sess/update-claude! project workstream-id name (constantly a-facet))]
+        (is (= a-facet (sess/claude-facet set1)) "a person's session takes a facet too")
+        (is (= :nido (:driver (sess/claude-facet
+                               (sess/update-claude! project workstream-id name
+                                                    #(assoc % :driver :nido :driving-since "t"))))))
+        (is (= :nido (get-in (sess/read-session project workstream-id name) [:claude :driver]))
+            "written, not only returned")))))
+
+(deftest update-claude-writes-nothing-for-an-invalid-facet
+  (with-tmp
+    (fn [_]
+      (sess/write! human-session)
+      (let [{:keys [project workstream-id name]} human-session]
+        (is (thrown? Exception
+                     (sess/update-claude! project workstream-id name
+                                          (constantly (assoc a-facet :driver :somebody)))))
+        (is (nil? (:claude (sess/read-session project workstream-id name))))))))
+
+(deftest update-claude-refuses-a-session-that-does-not-exist
+  (with-tmp
+    (fn [_]
+      (is (thrown? Exception (sess/update-claude! :brian "ws-1" "nope" (constantly a-facet)))))))

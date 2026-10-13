@@ -362,9 +362,10 @@
         (testing "the home holds a real file carrying the checkout's settings and the hook"
           (let [s (json/parse-string (slurp (str composed)) true)]
             (is (not (fs/sym-link? composed)))
-            (is (= (:permissions own) (:permissions s)))
-            (is (= (str "cd '" home "' && bb nido:boundary")
-                   (get-in s [:hooks :Stop 0 :hooks 0 :command]))))))
+            (is (= (get-in own [:permissions :allow]) (get-in s [:permissions :allow]))
+                "the checkout's own permissions stay; the baseline adds its mode beside them")
+            (is (some #{(str "cd '" home "' && bb nido:boundary")}
+                      (map #(get-in % [:hooks 0 :command]) (get-in s [:hooks :Stop])))))))
       (finally (fs/delete-tree tmp)))))
 
 (deftest boundary-hook-gives-a-fresh-home-a-file-of-its-own
@@ -375,8 +376,14 @@
         (@#'launcher/ensure-session-hooks! (str home))
         (let [s (json/parse-string
                  (slurp (str (fs/path home ".claude" "settings.local.json"))) true)]
-          (is (= [:hooks] (keys s)))
-          (is (= 1 (count (get-in s [:hooks :Stop]))))
+          (testing "the home carries the launch baseline"
+            (is (= "auto" (get-in s [:permissions :defaultMode])))
+            (is (= "none" (get-in s [:worktree :bgIsolation])))
+            (is (= "accept" (:crossSessionInbound s))))
+          (is (= [(str "cd '" home "' && bb nido:session:hook Stop")
+                  (str "cd '" home "' && bb nido:boundary")]
+                 (map #(get-in % [:hooks 0 :command]) (get-in s [:hooks :Stop])))
+              "the session hook and the boundary hook, once each")
           (testing "the commit gate runs on every Bash call an agent in the home makes"
             (is (= ["Bash"] (map :matcher (get-in s [:hooks :PreToolUse]))))
             (is (str/includes? (get-in s [:hooks :PreToolUse 0 :hooks 0 :command])
@@ -813,3 +820,36 @@
             (is (str/includes? doc "still refuses the landing")
                 "the danger is that a gate checks what the briefing could not show")))
         (finally (fs/delete-tree wt))))))
+
+(deftest the-worktree-carries-the-launch-baseline-beside-its-own-settings
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [wt   (str (fs/path tmp "wt"))
+            path (str (fs/path wt ".claude" "settings.local.json"))
+            own  {:permissions {:allow ["Bash(ls)"]}
+                  :hooks {:Stop [{:hooks [{:type "command" :command "say done"}]}]}}]
+        (fs/create-dirs (fs/parent path))
+        (spit path (json/generate-string own))
+        (launcher/ensure-worktree-baseline! wt "/home/s")
+        (let [once (json/parse-string (slurp path) true)]
+          (testing "the person's own settings stay"
+            (is (= ["Bash(ls)"] (get-in once [:permissions :allow])))
+            (is (some #{"say done"} (map #(get-in % [:hooks 0 :command]) (get-in once [:hooks :Stop])))))
+          (testing "the baseline is there"
+            (is (= "auto" (get-in once [:permissions :defaultMode])))
+            (is (= "none" (get-in once [:worktree :bgIsolation])))
+            (is (= "accept" (:crossSessionInbound once)))
+            (is (every? #(seq (get-in once [:hooks %]))
+                        [:SessionStart :UserPromptSubmit :Stop :PermissionDenied :Notification :PreToolUse])))
+          (testing "writing it again changes nothing"
+            (launcher/ensure-worktree-baseline! wt "/home/s")
+            (is (= once (json/parse-string (slurp path) true))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest a-worktree-with-no-settings-gets-a-file
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (launcher/ensure-worktree-baseline! (str tmp) "/home/s")
+      (is (= "auto" (get-in (json/parse-string (slurp (str (fs/path tmp ".claude" "settings.local.json"))) true)
+                            [:permissions :defaultMode])))
+      (finally (fs/delete-tree tmp)))))

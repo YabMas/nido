@@ -26,11 +26,11 @@
   {:about [spawn session-links] :evidence "round"})
 
 (Claim child-started-as-nido-work
-  "The kickoff starts the child agent by running nido work in the child's worktree, in the person's terminal and environment, so it gets the same briefing and MCP config a person typing nido work gets; a name, a first prompt, a permission mode and a model are the only additions, and nido work given none of them assembles the command it did before."
+  "The kickoff starts the child agent by running nido work in the child's worktree, in the person's terminal and environment, so the child starts as a person typing nido work there starts; a name, a first prompt and a model are the only additions, and nido work given none of them assembles the command one-launch-baseline states for a session a person starts there."
   {:about [stage-kickoff! work-cmd*] :evidence "round"})
 
 (Claim child-in-parents-permission-class
-  "spawn starts the child agent in the permission mode it is given, bypassPermissions when given none, so a parent and child in one permission class exchange messages with no approval held on either side."
+  "spawn passes the child agent no permission mode, so the child runs in the one its worktree's launch baseline sets."
   {:about [spawn stage-kickoff!] :evidence "round"})
 
 (Claim spawn-asks-no-question

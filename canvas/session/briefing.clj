@@ -40,6 +40,10 @@
     {:signature [:=> [:catn [:project-name ProjectName]] [:maybe :string]]})
   (Operation nido-add-dirs "The directories an agent needs beyond its worktree."
     {:signature [:=> [:catn] [:vector :string]]})
+  (Operation ensure-worktree-baseline!
+    "Write nido's launch baseline into a worktree's .claude/settings.local.json, keeping what the
+     file already declares."
+    {:signature [:=> [:catn [:worktree :string] [:home :string]] :any]})
   (Operation write-artifacts!
     "Write every session-home artifact. Takes the owning Run's directory as its own argument —
      a per-session fact, kept out of the project's shared session.edn."

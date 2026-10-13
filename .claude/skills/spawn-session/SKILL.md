@@ -54,13 +54,12 @@ the one other sessions message you by — `ListAgents` prints it on its first li
 bb nido:session:spawn :project <p> <child-session> \
   :parent-agent <your agent name> :brief-file <path> \
   [:ws-id <child ws-id>] \       # a delta only
-  [:permission-mode <yours>] \   # when you are NOT bypassing permissions
   [:model <id>]                   # the child's model; default is claude's
 ```
 
-The child runs in `bypassPermissions` unless you pass your own mode. It has to
-match yours: a message between sessions in different permission classes waits
-for a person to approve it, so a mismatched child cannot hear you unattended.
+There is no permission mode to pass. The child runs in the one its worktree's
+launch baseline sets — auto, the same as yours — so the two of you are in one
+permission class and a message between you waits for nobody.
 The model need not match yours — a cheaper model for focused child work is
 the usual reason to pass one.
 

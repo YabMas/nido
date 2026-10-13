@@ -8,7 +8,6 @@
                                                 with-gate settings-json]]
             [canvas.session.briefing :refer [session-launcher session-briefing read-project-briefing]]
             [canvas.tasks.nido-work :refer [nido-work]]
-            [canvas.coordinator.record.runs :refer [launch-context]]
             [canvas.coordinator.agent :refer [launch!]]))
 
 (Claim rejected-push-is-blocked
@@ -36,8 +35,8 @@
   {:about [checks verdict] :evidence "test"})
 
 (Claim gate-reaches-every-claude-launch
-  "Every claude nido starts for a session agent carries the gate: the home's settings.local.json has it beside the Stop hook, nido work passes it as --settings, and a Run's launch-context carries it for the lanes to pass to launch! as --settings."
-  {:about [with-gate settings-json session-launcher nido-work launch-context launch!] :evidence "round"})
+  "Every claude nido starts for a session agent carries the gate: a claude started in a nido session home or worktree loads it from that directory's settings.local.json, which holds it as part of the launch baseline, and a lane-resume turn continuing a conversation whose session record carries no :claude facet is passed it as --settings built by the commit gate for that conversation's project, whether or not its Run still exists."
+  {:about [with-gate settings-json session-launcher nido-work launch!] :evidence "round"})
 
 (Claim briefing-defers-subject-form
   "The description doctrine in every briefing defers the subject's form to the project's convention, giving its own form only for a project that states none; brian's project briefing names docs/guidelines/commits.md."

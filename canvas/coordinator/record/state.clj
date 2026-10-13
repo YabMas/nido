@@ -161,6 +161,9 @@
   (Operation session-dir
     "One session's directory within its workstream."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName]] Path]})
+  (Operation session-events-path
+    "One Claude Code session's event log, keyed by its claude session id."
+    {:signature [:=> [:catn [:claude-session-id :string]] Path]})
   (Operation session-edn-path
     "One session's record."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName]] Path]})

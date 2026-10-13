@@ -4,7 +4,6 @@
    [clojure.test :refer [deftest is]]
    [babashka.fs :as fs]
    [nido.session.lifecycle :as lifecycle]
-   [nido.session.commit-gate :as commit-gate]
    [nido.session.launcher :as launcher]
    [nido.session.state :as state]
    [tasks.nido-work :as work]))
@@ -104,21 +103,20 @@
                 (fn [] {:project "nido" :session "kid" :worktree "/wt" :instance-id "nido--kid"})
                 launcher/session-briefing (fn [_ _ _] "B")
                 state/session-mcp-path    (fn [_] "/does/not/exist.json")
-                launcher/nido-add-dirs    (fn [] ["/opt/nido"])
-                commit-gate/settings-json (fn [] "G")]
-    (is (= ["claude" "--append-system-prompt" "B" "--settings" "G" "--add-dir" "/opt/nido"]
+                launcher/nido-add-dirs    (fn [] ["/opt/nido"])]
+    (is (= ["claude" "--append-system-prompt" "B" "--add-dir" "/opt/nido"]
            (:cmd (work/work-cmd* {:claude-bin "claude"})))
-        "the commit gate rides every claude nido work starts")))
+        "no settings ride the command line: the gate is the worktree's launch baseline")))
 
-(deftest a-permission-mode-is-passed-to-claude
+(deftest no-permission-mode-reaches-claude
   (with-redefs [lifecycle/session-from-cwd
                 (fn [] {:project "nido" :session "kid" :worktree "/wt" :instance-id "nido--kid"})
                 launcher/session-briefing (fn [_ _ _] "B")
                 state/session-mcp-path    (fn [_] "/does/not/exist.json")
                 launcher/nido-add-dirs    (fn [] ["/opt/nido"])]
-    (is (= ["--permission-mode" "bypassPermissions"]
-           (->> (:cmd (work/work-cmd* {:claude-bin "claude" :permission-mode "bypassPermissions"}))
-                (drop-while #(not= % "--permission-mode")) (take 2))))))
+    (is (not-any? #{"--permission-mode"}
+                  (:cmd (work/work-cmd* {:claude-bin "claude" :permission-mode "bypassPermissions"})))
+        "the baseline's auto mode cannot be overridden from the command line")))
 
 (deftest a-model-is-passed-to-claude
   (with-redefs [lifecycle/session-from-cwd

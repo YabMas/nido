@@ -138,7 +138,12 @@
                  ;; Stream-json output requires --verbose per claude-code's
                  ;; --print mode validation; without it claude refuses to run.
                  "--verbose"
-                 "--output-format=stream-json"]
+                 "--output-format=stream-json"
+                 ;; Never the local source: a nido session home or worktree holds the launch
+                 ;; baseline in its settings.local.json — nido's session event hook, the
+                 ;; supervisor briefing, permission mode auto — and none of it is this call's.
+                 ;; The gate it needs arrives as --settings, which this does not filter.
+                 "--setting-sources" "user,project"]
                 ;; Under --dangerously-skip-permissions an allow rule restricts
                 ;; nothing, so a confined launch trades it for dontAsk: every
                 ;; call its rules do not match is denied, not asked about.

@@ -213,10 +213,10 @@
     (is (not-any? #(= :tab (first %)) calls))
     (is (str/includes? out "cd /h && zsh k"))))
 
-(deftest spawn-starts-the-child-in-bypass-unless-told-otherwise
-  (let [mode-of (fn [calls] (:permission-mode (last (first (filter #(= :kickoff (first %)) calls)))))]
-    (is (= "bypassPermissions" (mode-of (first (spawn-calls {})))))
-    (is (= "acceptEdits" (mode-of (first (spawn-calls {} ":permission-mode" "acceptEdits")))))))
+(deftest spawn-passes-the-child-no-permission-mode
+  (let [kickoff (last (first (filter #(= :kickoff (first %)) (first (spawn-calls {})))))]
+    (is (not (contains? kickoff :permission-mode))
+        "the child runs in the mode its worktree's launch baseline sets, the parent's own")))
 
 (deftest spawn-never-asks-the-budget-question
   (let [asked (atom 0)]

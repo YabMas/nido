@@ -27,8 +27,16 @@
     (is (= "hi" (last cmd))))
   (is (not (some #{"--settings"} (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"})))))
 
+(deftest build-cmd-never-loads-the-local-settings-source
+  (doseq [opts [{} {:resume? true :claude-session-id "s"} {:settings "{}" :allowed ["Read"]}]]
+    (let [cmd (#'agent/build-cmd (merge {:claude-bin "claude" :first-message "hi"} opts))]
+      (is (= ["--setting-sources" "user,project"]
+             (->> cmd (drop-while #(not= % "--setting-sources")) (take 2)))
+          "the worktree's settings.local.json holds a session's launch baseline, not this call's"))))
+
 (deftest build-cmd-resume-uses-resume-flag
   (is (= ["claude" "--print" "--verbose" "--output-format=stream-json"
+          "--setting-sources" "user,project"
           "--dangerously-skip-permissions" "--disallowedTools" "ScheduleWakeup"
           "--resume" "sid-1" "--" "hi"]
          (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"
@@ -37,6 +45,7 @@
 
 (deftest build-cmd-without-resume-uses-session-id
   (is (= ["claude" "--print" "--verbose" "--output-format=stream-json"
+          "--setting-sources" "user,project"
           "--dangerously-skip-permissions" "--disallowedTools" "ScheduleWakeup"
           "--session-id" "sid-1" "--" "hi"]
          (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"
