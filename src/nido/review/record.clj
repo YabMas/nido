@@ -3529,19 +3529,23 @@
 
 (defn- reasked
   "The entry `decision`, an :ask on `design`, poses again, or nil: `asked` (`answered`'s :asked), the
-   standing ask no grant or reply has answered, when the two are one question — the same words, or
-   the same claims asked about (its :for-person findings' ids) at the same text in both designs. The
-   chain's first entry when `asked` was itself a re-ask, so every round posing one question names
-   one seq."
-  [[project ws-id] design decision asked]
+   standing ask no grant or reply has answered, when the two are one question. Within one run
+   (`run-id`) an :ask over an unanswered :ask always is: an amender settles no person's question,
+   so the question still stands whatever the judge's wording or the claims it files it under, both
+   of which drift round to round. Across runs, only the same words, or the same claims asked about
+   (its :for-person findings' ids) at the same text in both designs. The chain's first entry when
+   `asked` was itself a re-ask, so every round posing one question names one seq."
+  [[project ws-id] design decision asked run-id]
   (when (and project asked (= :ask (:recommend decision)))
     (when-let [earlier (ws/entry-at-seq project ws-id (:seq asked))]
       (let [ids          #(into (sorted-set) (comp (filter :for-person) (keep :claim-id)) (:findings %))
             then         (some->> (:design-seq earlier) (ws/entry-at-seq project ws-id))
+            standing?    (and run-id (= (str run-id) (:run-id earlier)) (= :ask (:recommend earlier)))
             same-claims? (and (seq (ids decision)) (= (ids decision) (ids earlier)) then
                               (= (select-keys (settled/subjects then) (ids decision))
                                  (select-keys (settled/subjects design) (ids decision))))]
-        (when (or (= (str/trim (str (:asks decision))) (str/trim (str (:asks earlier))))
+        (when (or standing?
+                  (= (str/trim (str (:asks decision))) (str/trim (str (:asks earlier))))
                   same-claims?)
           (or (:reasks earlier) (:seq earlier)))))))
 
@@ -3654,7 +3658,7 @@
               :else
               (let [kept  (select-keys subject-identities rests-on)
                     moved (tree-moved before after)
-                    again (reasked ledger design result (get-in asking [:answers :asked]))]
+                    again (reasked ledger design result (get-in asking [:answers :asked]) run-id)]
                 (cond-> (-> (rule result checks asked breaks)
                             (held-to-answer (clauses-owed design asked))
                             (relation-held relation breaks))
@@ -4428,14 +4432,17 @@
 
 (defn- raised-since
   "`findings` (this round's) each stamped `:raised-since`: the iter of the round its defect was first
-   raised in. Inherited from a finding under the same identity (`base-key`) in the newest of
-   `prior` whose sites, the subject's `anchors` out, overlap this one's (`same-defect?`); this round's
+   raised in. Inherited from a finding under the same identity (`base-key`) whose sites, the
+   subject's `anchors` out, overlap this one's (`same-defect?`): in the newest of `prior`'s
+   :findings, or in any of `prior`'s :asked — a person's question held aside while the amender ran
+   stands unanswered across the rounds after it, however many filed it under nothing; this round's
    iter otherwise. What `unfixable` counts attempts on (`attempt-key`), since an identity is a
    claim and four repaired counterexamples to one claim are not one repair failing four times."
   [base-key iter prior findings]
   (let [prior  (remove :quiet prior)
         prev   (last prior)
-        rounds (conj (vec prior) {:findings findings})]
+        rounds (conj (vec prior) {:findings findings})
+        held   (mapcat :asked (reverse prior))]
     (mapv (fn [f]
             (let [k      (base-key f)
                   anchor (anchors (subject-sites base-key k rounds))
@@ -4443,7 +4450,7 @@
                   from   (some #(when (and (= k (base-key %))
                                            (same-defect? (defect-sites [%] anchor) mine))
                                   (:raised-since %))
-                               (:findings prev))]
+                               (concat (:findings prev) held))]
               (assoc f :raised-since (or from iter))))
           findings)))
 

@@ -2121,7 +2121,7 @@
                   28 (assoc design :seq 28 :model claims)}
         reasked  (fn [asked decision]
                    (with-redefs [ws/entry-at-seq (fn [_ _ n] (get ledger n))]
-                     (#'record/reasked [:nido "ws-1"] (get ledger 28) decision asked)))
+                     (#'record/reasked [:nido "ws-1"] (get ledger 28) decision asked "r2")))
         decision {:recommend :ask :asks "Do you want both kept?" :findings [{:claim-id "seed" :for-person true}]}]
     (is (= 27 (reasked {:seq 27} decision)) "same claims at the same text are the same question")
     (is (= 27 (reasked {:seq 29} decision)) "a re-ask of a re-ask names the first")
@@ -2130,6 +2130,28 @@
     (is (nil? (reasked {:seq 27} (assoc decision :recommend :amend))))
     (is (= "Design decision: ask — as asked at entry 27"
            (report/report-title {:format :design-decision :recommend :ask :reasks 27})))))
+
+(deftest an-ask-over-the-standing-ask-of-its-own-run-is-a-reask
+  ;; Watched: one retention question asked in three rounds of one run, each in new words and filed
+  ;; under a different set of claims (one round under none), and none of the three named the first —
+  ;; the gate counted three open questions where a person owed one answer.
+  (let [ledger   {26 (assoc design :seq 26 :model {:claims [{:id "seed" :statement "s" :about ["m"]}]})
+                  27 {:format :design-decision :seq 27 :design-seq 26 :recommend :ask :run-id "r1"
+                      :asks "Entry 25 granted summaries kept per content — still?"
+                      :findings [{:claim-id "seed" :for-person true}]}
+                  28 {:format :design-decision :seq 28 :design-seq 26 :recommend :proceed :run-id "r1"
+                      :asks "Anything else?"}}
+        reasked  (fn [asked decision run-id]
+                   (with-redefs [ws/entry-at-seq (fn [_ _ n] (get ledger n))]
+                     (#'record/reasked [:nido "ws-1"] (get ledger 26) decision asked run-id)))
+        decision {:recommend :ask :asks "You approved keeping summaries; is reuse across contents wanted?"
+                  :findings []}]
+    (is (= 27 (reasked {:seq 27} decision "r1"))
+        "no amendment answers a person, so within the run the standing ask is the question asked again")
+    (is (nil? (reasked {:seq 27} decision "r3"))
+        "another run's ask is one question only on the evidence of its words or its claims")
+    (is (nil? (reasked {:seq 28} decision "r1"))
+        "a proceed's asks stopped nobody, so an :ask after it is a question put for the first time")))
 
 (deftest a-carried-self-grant-is-written-rather-than-parked
   ;; A person's "ok" written into the design as :supersedes :granted parked the proceed for a

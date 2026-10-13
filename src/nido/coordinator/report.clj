@@ -2959,7 +2959,8 @@
                 ;; was asked again, and this decision is the second answer when that one was usable.
                 [:self-contradicted     {:optional true} [:vector string?]]
                 ;; On an :ask, the entry whose question this one poses again: the standing unanswered
-                ;; ask, put over the same claims at the same text, or in the same words. The first
+                ;; ask — any :ask of the same run, or one put over the same claims at the same text,
+                ;; or in the same words. The first
                 ;; entry of the chain, so every re-ask of one question names the same seq and the
                 ;; ledger reads one open question rather than a count of rounds.
                 [:reasks                {:optional true} int?]

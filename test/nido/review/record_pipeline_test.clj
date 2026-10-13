@@ -934,6 +934,24 @@
         "so `unfixable` never counts two different repaired defects as one repair failing twice")
     (is (= (key-of (first r2)) (key-of (first r3))))))
 
+(deftest a-question-held-for-a-person-keeps-the-round-it-was-first-asked
+  ;; Watched: a person's question asked in every round of a run was stamped first raised in the
+  ;; last, because the rounds before held it aside for the amender or read it once, and only the
+  ;; previous round's :findings were searched.
+  (let [stamp    #'record/raised-since
+        question {:check :relation-honest :claim-ids ["ref"] :for-person true :disputed-n 0}
+        r1       (stamp record/design-finding-base-key 1 [] [question])
+        held     {:iter 1 :findings [] :asked r1}
+        quiet    {:iter 2 :findings [] :quiet true}
+        none     {:iter 2 :findings [{:check :goal-served :claim-ids ["other"] :raised-since 2}]}]
+    (is (= 1 (:raised-since (first (stamp record/design-finding-base-key 3 [held quiet] [question]))))
+        "a read-once round between them does not make the question new")
+    (is (= 1 (:raised-since (first (stamp record/design-finding-base-key 3 [held none] [question]))))
+        "nor does a round that filed it under nothing: the person has still not answered it")
+    (is (= 3 (:raised-since (first (stamp record/design-finding-base-key 3 [{:iter 1 :findings []} none]
+                                          [question]))))
+        "a question no earlier round asked is raised in this one")))
+
 (deftest an-objection-counts-against-the-defect-it-answered
   ;; Keyed on the claim alone, an objection to a false finding was inherited by a later, correct
   ;; one about the same claim — which the amender accepted and fixed — so two unrelated objections
