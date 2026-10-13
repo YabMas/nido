@@ -258,9 +258,11 @@
    amender had said, with a reason, was false — the suspected defect never ruled on."
   [stale]
   (when (seq stale)
-    (str "\nQUESTIONED BY THE LAST AMENDMENT — the amender that wrote this record accepted a\n"
-         "finding it says made these subjects false, and repaired them or could not. Rule on\n"
-         "each against exactly that: confirm one only when what you read answers the\n"
+    (str "\nQUESTIONED BY THE LAST AMENDMENT — the amender that wrote this record says a\n"
+         "finding it accepted, or its repair of one, made these subjects false and it\n"
+         "repaired them or could not; or that it added a clause to one it could not\n"
+         "verify against the code, quoted after `unverified:`. Read these first, and rule\n"
+         "on each against exactly that: confirm one only when what you read answers the\n"
          "question, and cite what answers it in that id's evidence.\n\n"
          (str/join "\n" (for [[id because] (sort-by key stale)]
                           (str "- [" id "] " (or because "no reason given"))))
@@ -4406,9 +4408,9 @@
   parse-amend-answer
   "What an amender may hand back: an amended record, objections to what it was
    asked to amend for, or both — and, with the record, the reason for each claim it
-   removed on purpose (:withdrawn). With either, :stale: the ids of subjects no finding
-   named that it believes the findings it accepted have made false, whether it repaired them or
-   not; :stale-because, `{id reason}` for those it gave a reason for — an entry may be a bare id,
+   removed on purpose (:withdrawn). With either, :stale: the ids of subjects it puts in question
+   for the next judge — made false by a finding it accepted or by its repair of one, whether it
+   repaired them or not, or holding a clause it added and could not verify; :stale-because, `{id reason}` for those it gave a reason for — an entry may be a bare id,
    as every answer was before reasons were asked for; and :swept, what its sweep of each accepted
    finding reported, as `[{:finding n :amended :stale :unaffected}]` keyed by the finding's number.
 
@@ -4807,10 +4809,12 @@
   (when (seq rows)
     (str "WHAT YOUR REWRITE MUST STAY TRUE BESIDE. These are the statements that share\n"
          "an element, an id or a cited file with what the round found wrong. They stand\n"
-         "as written — a settled one was confirmed against the code and is not judged\n"
-         "again — so a responsibility you assign, a quantifier you widen or a\n"
-         ":falsified-by you write that one of them contradicts or satisfies is a new\n"
-         "defect, not a repair:\n\n"
+         "as written — a settled one was confirmed against the code — so a\n"
+         "responsibility you assign, a quantifier you widen or a :falsified-by you\n"
+         "write that one of them contradicts or satisfies is a new defect, not a\n"
+         "repair. The exception is a claim :about an element whose :hides or\n"
+         ":interface you change: your change may be what makes it false, and it is\n"
+         "restated or affirmed as HOLD EVERY CLAUSE YOU WRITE says:\n\n"
          (str/join
           "\n"
           (for [{:keys [id from subject settled]} rows
@@ -5101,10 +5105,46 @@
        "believe false and cannot repair here, and say why. Never name one you would\n"
        "merely word differently.\n\n"))
 
+(def ^:private beside-repair-rule
+  "What an amender writes beside the repair, held to the code as the repair is. Each clause answers
+   one way a repair that held was followed by a refutation of something else the same amendment
+   wrote: a new `as today` clause about current code, false; a new code fact true only below the
+   function the record's caller invokes; a mechanism the repair orphaned, kept; an unchanged claim
+   :about a changed element, made false. Each round of these was spent on a subject whose repair
+   was right. A clause that cannot be checked here goes under :stale, because that is the one
+   channel that unsettles its subject and puts the reason to the next judge as its question."
+  (str "HOLD EVERY CLAUSE YOU WRITE TO THE CODE, NOT ONLY THE REPAIR. What you add\n"
+       "beside a repair, and what your repair changes the truth of, is checked by no\n"
+       "one unless you check it, and has been the next round's finding:\n\n"
+       "  - A clause saying what the code does NOW — `as today`, `stays`, `already`,\n"
+       "    `keeps`, `X answers Y`, `directs the model to` — is a claim about the code,\n"
+       "    even in a record about a change. Read the code it describes before you\n"
+       "    write it, and cite that read in the subject's :read-at. One you have not\n"
+       "    verified, leave out, or list its subject under :stale with :because\n"
+       "    \"unverified: <the clause>\" so the next judge reads it first.\n"
+       "  - A new fact about the code is stated of, and cites, the function the\n"
+       "    record's caller actually invokes — not the one beneath it where the fact\n"
+       "    first holds. A store fn answering `:registered?` does not make its caller\n"
+       "    `learns whether its row is stored` unless every function between them\n"
+       "    passes it on: follow the call down from the caller, and state the fact\n"
+       "    where the caller sees it, or not at all.\n"
+       "  - A provision your repair leaves with no caller, no gate and no reader — a\n"
+       "    bypass for a case the repair made impossible, a check on a path that no\n"
+       "    longer carries what it checks — is removed in the same amendment. Kept\n"
+       "    beside the repair that orphaned it, it is a dead branch the next judge\n"
+       "    finds.\n"
+       "  - Every claim whose :about names an element whose :hides or :interface you\n"
+       "    change rests on the old text. Re-read each one against your change,\n"
+       "    whether or not it is listed for you, and either restate it to agree —\n"
+       "    then list it under :stale with :because naming the element — or affirm\n"
+       "    it unchanged. Report each under :swept beneath the finding whose repair\n"
+       "    changed the element: :amended if restated, :unaffected if affirmed.\n\n"))
+
 (def ^:private stale-field
-  "The answer-file lines for `stale-rule`."
+  "The answer-file lines for `stale-rule` and `beside-repair-rule`."
   (str "Add :stale [{:id \"id\" :because \"...\"}] for each subject no finding named that a\n"
-       "finding you accepted makes false, repaired or not, and :swept [{:finding 1\n"
+       "finding you accepted, or your repair of it, makes false — repaired or not — and\n"
+       "for each holding a clause you added and could not verify; and :swept [{:finding 1\n"
        ":amended [\"id\"] :stale [\"id\"] :unaffected [\"id\"]}] for each finding you accepted.\n"))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
@@ -5230,6 +5270,7 @@
           "— is one no reading has checked: it is what the next reading refutes, and that\n"
           "refutation counts against a subject already refuted once.\n\n"))
    (sound-rewrite-rules :baseline false)
+   beside-repair-rule
    (bounded-block :baseline (:bounded-by baseline))
    "Read the cited code before you change a word of the record.\n\n"
    amender-reading
@@ -7357,6 +7398,7 @@
          (replace-rule "design")
          "\n"
          (sound-rewrite-rules :design (some? baseline))
+         beside-repair-rule
          (when (seq (:strata design))
            (str "STRATA ARE LISTED FLOOR FIRST. :strata names the lowest level first — the one\n"
                 "every other is written in — and each after it is written in those before it.\n"

@@ -2619,6 +2619,27 @@
                                                 :out-path "/x"})
                           "WHAT YOUR REWRITE MUST STAY TRUE BESIDE."))))
 
+(deftest the-baseline-amender-holds-what-it-writes-beside-a-repair-to-the-code
+  ;; A rewritten module interface left a sibling claim :about that module stating the old one word
+  ;; for word; the bearing list printed it under "they stand as written", and the next round
+  ;; refuted it.
+  (let [p (record/amend-prompt {:baseline an-audit-baseline :findings [an-audit-finding] :out-path "/x"})]
+    (is (str/includes? p "HOLD EVERY CLAUSE YOU WRITE TO THE CODE, NOT ONLY THE REPAIR"))
+    (is (str/includes? p "\"unverified: <the clause>\""))
+    (is (str/includes? p "is removed in the same amendment"))
+    (is (str/includes? p "WHAT YOUR REWRITE MUST STAY TRUE BESIDE"))
+    (is (str/includes? p "The exception is a claim :about an element whose :hides or\n:interface you change")
+        "a listed sibling the amendment makes false is restated, not held to its old words")
+    (is (str/includes? p ":amended if restated, :unaffected if affirmed")
+        "each sibling of a changed element is reported, so one passed over is visible")))
+
+(deftest the-next-judge-reads-an-unverified-clause-first
+  (let [p (record/baseline-prompt {:baseline a-baseline
+                                   :stale {"c1" "unverified: the poller stays on its own thread"}})]
+    (is (str/includes? p "could not\nverify against the code, quoted after `unverified:`. Read these first")
+        "the judge is told why the subject is in question, so it checks the added clause and not only the old ones")
+    (is (str/includes? p "- [c1] unverified: the poller stays on its own thread"))))
+
 (deftest the-baseline-amender-is-told-how-a-rewrite-stays-true
   ;; Each rule answers a rewrite that was the next round's finding: a cited site repaired while
   ;; its siblings stayed false, an `alone` nobody searched for, a new closed list false over code

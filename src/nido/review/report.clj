@@ -826,9 +826,9 @@
       ;; :unappended is the answer file holding an amendment the ledger refused
       ;; past every repair, and marks the phase refused rather than ok: that
       ;; amendment is a complete answer to the round, held nowhere else.
-      ;; :stale is the subjects no finding named that the amender said the accepted findings
-      ;; made false, and :stale-because its reason for each — put back to the next judge as its
-      ;; question, and recorded nowhere else. :swept is what its sweep of each accepted finding
+      ;; :stale is the subjects the amender put in question — made false by an accepted finding or
+      ;; its repair, or holding a clause it added and could not verify — and :stale-because its
+      ;; reason for each, put back to the next judge as its question and recorded nowhere else. :swept is what its sweep of each accepted finding
       ;; reported, by the finding's number: a sibling it passed over is visible only here.
       ;; :delta is the subjects the appended amendment added, changed and dropped, by id: what the
       ;; next judge is asked about again, which otherwise takes diffing two ledger entries.

@@ -903,6 +903,24 @@
     (is (not (str/includes? (:why cited) "the person"))
         "and an amender's own account of the change is not what the ledger keeps")))
 
+(deftest the-design-amender-holds-what-it-writes-beside-a-repair-to-the-code
+  ;; Each clause was a round spent on a subject whose repair was right: an added `stay as today`
+  ;; refuted the reading after, a new code fact true only beneath the caller's function, a size
+  ;; bypass the repair had orphaned kept in place, and a sibling :about a rewritten element left
+  ;; stating its old interface.
+  (let [p (record/design-amend-prompt {:design a-design :recommend :amend :raised [] :out-path "/x"})]
+    (is (str/includes? p "HOLD EVERY CLAUSE YOU WRITE TO THE CODE, NOT ONLY THE REPAIR"))
+    (is (str/includes? p "\"unverified: <the clause>\"")
+        "a current-code clause the amender could not check reaches the next judge as a question, not a cold read")
+    (is (str/includes? p "the function the\n    record's caller actually invokes")
+        "a fact true only beneath the caller's function reads as confirmed and is refuted rounds later")
+    (is (str/includes? p "is removed in the same amendment")
+        "a provision the repair left with no caller is a dead branch the next judge has to find")
+    (is (str/includes? p "either restate it to agree")
+        "a claim :about a changed element is re-read against the change, not kept word for word")
+    (is (str/includes? p "or your repair of it, makes false")
+        "the answer file names the knock-ons of a repair, not only of a finding")))
+
 (deftest the-design-amender-is-held-to-the-intent-the-strata-and-what-was-read
   ;; Each was missing from the design amender and each cost rounds: a narrowing to an `accepted
   ;; limit` a done-when rules out, a stratum added at the end of :strata, an element extended into
