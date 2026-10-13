@@ -698,6 +698,8 @@
       ;; :continues is every earlier run whose judgements round 1 read — paired with, inherited a
       ;; refutation count from — with the status each ended in, so a run that picked up where an
       ;; interrupted one died says so instead of leaving the join to the ledger's :run-id stamps.
+      ;; :by-hand is round 1's record when none of those runs wrote it, measured against the entry
+      ;; they judged last (`nido.review.record/by-hand`): its retreats are read nowhere else.
       ;; :relation-rulings is the per-id relation-honest ruling :breaks was held to, round by round —
       ;; a reversal between rounds is otherwise readable only in the raw decision output — and
       ;; beside it the judge's inconsistencies the round recorded rather than enforced
@@ -784,6 +786,7 @@
                 (seq (get-in ctx [:record :contradicts-held-clause]))
                 (assoc :contradicts-held-clause (vec (get-in ctx [:record :contradicts-held-clause])))
                 (seq (:continues ctx))                  (assoc :continues (vec (:continues ctx)))
+                (:by-hand ctx)                          (assoc :by-hand (:by-hand ctx))
                 (seq (:knock-ons ctx))                  (assoc :knock-ons (vec (:knock-ons ctx)))
                 (seq (get-in ctx [:record :unchecked])) (assoc :unchecked (get-in ctx [:record :unchecked]))
                 (seq (get-in ctx [:record :relation-rulings]))

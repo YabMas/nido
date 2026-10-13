@@ -28,7 +28,8 @@
    [clojure.string :as str]
    [nido.coordinator.control :as control]
    [nido.coordinator.record.state :as cstate]
-   [nido.review.provenance :as provenance]))
+   [nido.review.provenance :as provenance]
+   [nido.review.retreat :as retreat]))
 
 (def target
   "Where the envelope is aimed. `:nido` is the project whose triggers.edn
@@ -416,7 +417,7 @@
    `variance` is the run's `{:splits n :reading-flips n}` — its judges disagreeing with themselves
    on one record at one tree — said beside weakenings and disputes. `readable-from` is the round
    after the unreadable ones that read a tree identity, which retires their `until then`."
-  [{:keys [loop run-id report-path status rounds launched judged amended unappended weakened unasked disputed
+  [{:keys [loop run-id report-path status rounds launched judged amended unappended weakened unasked retreat-classes disputed
            record-seq still-broken still-asked asks stood-in reviewed-project reviewed-session reviewed-ws-id
            machinery unrecorded spent spent-awaiting cap amend-prompt unreadable stale-at-start repair repaired?
            amender continued subject variance readable-from amended-seq out-of-reach split-ask]
@@ -446,11 +447,11 @@
                                  (str " (" (- launched (or judged 0)) " launched, no verdict)"))
                                " · " (or amended 0) " amended · "
                                (when unappended "1 refused by the ledger · ")
-                               (or weakened 0) " weakenings"
-                               ;; How many of them nothing asked for (`retreat/unasked`): the rest
-                               ;; answer a finding or moved within the record, and a reader looking
-                               ;; for an amender that gave ground reads this figure, not the total.
-                               (when (and unasked (pos? (or weakened 0))) (str " (" unasked " unasked)"))
+                               ;; A run queued before retreats were classed carries only the total
+                               ;; and the unasked count, which is still what `weakenings` names.
+                               (retreat/tally (or retreat-classes
+                                                  {:unasked (or unasked weakened 0)
+                                                   :requested (if unasked (- (or weakened 0) unasked) 0)}))
                                " · " (or disputed 0) " disputed"
                                (when-let [{:keys [splits reading-flips]} variance]
                                  (str " · " splits " split" (when (not= 1 splits) "s")
@@ -503,6 +504,11 @@
                                  (str "Continues: "
                                       (str/join ", " (for [{:keys [run-id status]} runs]
                                                        (str run-id " (" status ")")))
+                                      (when-let [{:keys [record-by after retreats] n :seq} (:by-hand continued)]
+                                        (str " · record-by " (if (= "hand" (name record-by)) ":hand" record-by)
+                                             ": entry " n " was written after entry " after
+                                             ", the last that run judged — "
+                                             (retreat/tally (retreat/classes retreats))))
                                       "\n"))
                                (when-let [paired (seq (:paired continued))]
                                  (str "Paired: "

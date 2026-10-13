@@ -6130,6 +6130,35 @@
            sort
            (mapv (fn [id] {:run-id id :status (or (run-status id) "unknown")}))))))
 
+(defn- by-hand
+  "Who wrote `subject`, the record round 1 judges, when that is not a run it `continued` — the
+   `continues` rows — and the newest of their judgements in `lineage` read an earlier entry:
+   `{:record-by :seq :after :run-id :retreats}`, :record-by the run that amended it or :hand, :after
+   the entry that run judged last. Nil when a continued run judged `subject` or wrote it.
+
+   A record amended between runs reaches round 1 with nothing measured: no amend phase of either
+   run wrote it, so no retreat check read it, and only its :supersedes says it changed. :retreats
+   measures it against :after as an amend phase would, against that judgement's findings, each
+   marked :by-hand. `kind` is :baseline or :design, `seq-key` how a judgement names its entry."
+  [[project ws-id] kind seq-key subject continued lineage]
+  (when (and project ws-id (:seq subject) (seq continued))
+    (let [runs (into #{} (map (comp str :run-id)) continued)
+          newest (->> lineage (filter #(runs (str (:run-id %)))) (sort-by seq-key) last)
+          p      (some-> newest seq-key)]
+      (when (and p (< p (:seq subject)))
+        (let [row (some #(when (= (:seq subject) (:seq %)) %) (:entries (ws/read-ws project ws-id)))
+              by  (some-> (:amended-by row) str)
+              was (ws/entry-at-seq project ws-id p)]
+          (when (and was (not (runs by)))
+            {:record-by (or by :hand)
+             :seq       (:seq subject)
+             :after     p
+             :run-id    (str (:run-id newest))
+             :retreats  (mapv #(assoc % :by-hand true)
+                              (case kind
+                                :baseline (retreat/baseline-retreats was subject nil (:findings newest))
+                                :design   (retreat/design-retreats was subject (:findings newest))))}))))))
+
 (defn- unread-amendment?
   "Is the record this round reads one this run amended, with no quiet round of the run since the
    newest amendment? Settlement is per subject, so an amendment that rewrote only what no subject
@@ -6293,7 +6322,9 @@
                       (when-let [m (:tree-moved judged)] {:tree-moved m})
                       (when again {:rejudged again})
                       (when-let [c (seq (continues run-id (:iter ctx) standing running lineage))]
-                        {:continues (vec c)})
+                        (merge {:continues (vec c)}
+                               (when-let [h (by-hand ledger :baseline :baseline-seq subject c lineage)]
+                                 {:by-hand h})))
                       (when-let [k (seq (knock-on-rows knock-ons asked))] {:knock-ons (vec k)})
                       (when subject (banking asked reading record)))]
     (let [answer (if reused (reused-answer reused) (append! ledger record))]
@@ -6523,10 +6554,11 @@
                                           (withdrawable prev (:findings ctx) (:refuted-running ctx)))
                           ;; A health observation's reason passes too: it withdraws no claim, and
                           ;; is what a dropped observation is reported with.
-                          retreats (retreat/baseline-retreats
-                                    prev record (select-keys (:withdrawn answer)
-                                                             (concat (keys offered) (keep :id (:health prev))))
-                                    (:findings ctx))
+                          retreats (as-> (retreat/baseline-retreats
+                                          prev record (select-keys (:withdrawn answer)
+                                                                   (concat (keys offered) (keep :id (:health prev))))
+                                          (:findings ctx)) rs
+                                     (into rs (retreat/declared (:stale-because answer) rs)))
                           ;; Stamped, not as the amender wrote it. The judge
                           ;; labels its verdict with the :seq of the record it
                           ;; read, and the design loop's re-survey hands this
@@ -6777,7 +6809,8 @@
    phases so a finished run's headline says it as the run did:
    :paired, per entry whose single confirmations this run's readings completed, `{seq [id ...]}`
    over every round; :contradicted, each read-once confirmation a round denied, `[{:id :seq}]`;
-   and :continues, round 1's `[{:run-id :status}]`. Each absent when the run did none of it."
+   :continues, round 1's `[{:run-id :status}]`; and :by-hand, round 1's record when those runs did
+   not write it (`by-hand`). Each absent when the run did none of it."
   [report]
   (let [judges (for [round (:rounds report)
                      ph    (:phases round)
@@ -6787,11 +6820,13 @@
                        (sorted-map)
                        (mapcat :paired-with judges))
         denied (vec (for [{:keys [id] n :seq} (mapcat :contradicts-read-once judges)] {:id id :seq n}))
-        runs   (vec (mapcat :continues judges))]
+        runs   (vec (mapcat :continues judges))
+        hand   (some :by-hand judges)]
     (cond-> {}
       (seq paired) (assoc :paired paired)
       (seq denied) (assoc :contradicted denied)
-      (seq runs)   (assoc :continues runs))))
+      (seq runs)   (assoc :continues runs)
+      hand         (assoc :by-hand hand))))
 
 (defn- supersedes-reaches?
   "Whether `entry`'s :supersedes chain on the ledger reaches the entry at `seq-n`. Every link
@@ -7729,7 +7764,9 @@
                       (when-let [m (:tree-moved judged)] {:tree-moved m})
                       (when again {:rejudged again})
                       (when-let [c (seq (continues run-id (:iter ctx) standing running lineage))]
-                        {:continues (vec c)})
+                        (merge {:continues (vec c)}
+                               (when-let [h (by-hand ledger :design :design-seq design c lineage)]
+                                 {:by-hand h})))
                       (when-let [k (seq (knock-on-rows knock-ons asked))] {:knock-ons (vec k)})
                       (when design (banking asked reading record)))
         traj   (trajectory (:history ctx))
@@ -8201,7 +8238,8 @@
                       record  (:record written)]
                   (if (:status written)
                     (refused-stop ctx written disputes)
-                    (let [retreats (retreat/design-retreats prev record (:findings ctx))
+                    (let [retreats (as-> (retreat/design-retreats prev record (:findings ctx)) rs
+                                     (into rs (retreat/declared (:stale-because answer) rs)))
                           growth   (retreat/growth (or (get-in ctx [:carry :as-authored]) prev) record)]
                       ;; :as-authored is the design the run's first amendment read, set once:
                       ;; what growth is measured against, as on the baseline loop. :growth rides

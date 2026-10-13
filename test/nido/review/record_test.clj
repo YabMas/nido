@@ -2492,6 +2492,33 @@
       (is (nil? (#'record/continues "baseline-loop-me" 2 standing {"citation-helpers" 2} lineage))
           "past round 1 the run reads its own amendments, which no earlier run judged"))))
 
+(deftest round-1-names-a-record-written-by-hand-after-the-run-it-continues
+  ;; Seen live (110ff6): the predecessor's last round judged entry 11 and had no amend phase; entry
+  ;; 12 was appended by hand a minute later and dropped a falsifier R1 then re-found, and nothing
+  ;; measured what it gave up.
+  (let [judged  {:format :baseline :seq 11
+                 :load-bearing [{:id "c1" :property "a blank text view is never served as content"
+                                 :falsified-by "serving a blank text view as content, or a null page"}]}
+        by-hand (assoc-in judged [:load-bearing 0 :falsified-by] "a null page")
+        by-hand (assoc by-hand :seq 12)
+        lineage [{:seq 20 :baseline-seq 11 :run-id "baseline-loop-prev" :findings []}]
+        rows    (atom [{:seq 11} {:seq 12}])]
+    (with-redefs [ws/read-ws      (fn [_ _] {:entries @rows})
+                  ws/entry-at-seq (fn [_ _ n] (when (= 11 n) judged))]
+      (let [h (#'record/by-hand [:nido "ws-1"] :baseline :baseline-seq by-hand
+                                [{:run-id "baseline-loop-prev" :status "max-iters"}] lineage)]
+        (is (= :hand (:record-by h)) "no run's amender stamped the entry")
+        (is (= [12 11 "baseline-loop-prev"] ((juxt :seq :after :run-id) h)))
+        (is (seq (:retreats h)) "the dropped falsifier is measured as an amend phase would have")
+        (is (every? :by-hand (:retreats h))))
+      (reset! rows [{:seq 11} {:seq 12 :amended-by "baseline-loop-prev"}])
+      (is (nil? (#'record/by-hand [:nido "ws-1"] :baseline :baseline-seq by-hand
+                                  [{:run-id "baseline-loop-prev"}] lineage))
+          "an entry the continued run's own amender wrote was measured by its amend phase")
+      (is (nil? (#'record/by-hand [:nido "ws-1"] :baseline :baseline-seq (assoc judged :seq 11)
+                                  [{:run-id "baseline-loop-prev"}] lineage))
+          "the record that run last judged is no amendment at all"))))
+
 (deftest a-round-names-the-subjects-it-asks-again-only-for-their-context
   ;; Watched: a claim confirmed and then refuted at one tree on the same words read as a bare
   ;; refutation, with nothing naming the sibling amendment that reopened it.

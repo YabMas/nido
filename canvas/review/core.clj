@@ -379,7 +379,8 @@
      carrying that reason, and not again as the count and evidence that left with it. `:findings`
      are the round's judge findings: a citation re-pointed onto a finding's evidence is not evidence
      lost, and a retreat at a claim a finding named is marked as asked for and linked to it, so a
-     narrowing the judge asked for reads apart from one nobody asked for. A claim, module or shape
+     narrowing the judge asked for reads apart from one nobody asked for — a dropped citation only
+     when the finding's stated repair asks for less or it names the place dropped. A claim, module or shape
      kept by id that commits to less in place is reported as narrowed."
     {:signature [:=> [:catn [:prev :map] [:curr :map]
                             [:withdrawn [:? [:maybe [:map-of :string :string]]]]
@@ -403,9 +404,23 @@
     {:signature [:=> [:catn [:as-authored :map] [:curr :map]] :any]})
   (Operation growth-summary "The growth, in a line."
     {:signature [:=> [:catn [:growth :any]] :string]})
-  (Operation unasked "The retreats no finding asked for and whose content stands nowhere else in the record."
+  (Operation declared
+    "The narrowings an amender stated only as a reason for a subject it put in question, and no
+     retreat already reports — counted with that reason, so a narrowing the text hides is not lost."
+    {:signature [:=> [:catn [:stale-because [:maybe [:map-of :string :string]]]
+                            [:retreats [:maybe [:sequential :map]]]]
+                 [:vector :map]]})
+  (Operation retreat-class
+    "Which of four a retreat is: relocated, requested by a finding, declared by the amender, or
+     unasked — the only one a headline calls a weakening."
+    {:signature [:=> [:catn [:r :map]] :keyword]})
+  (Operation classes "How many retreats are of each class."
+    {:signature [:=> [:catn [:retreats [:maybe [:sequential :map]]]] [:map-of :keyword :int]]})
+  (Operation unasked "The retreats of the unasked class."
     {:signature [:=> [:catn [:retreats [:maybe [:sequential :map]]]] [:vector :map]]})
-  (Operation line "One retreat as a line, marked when it was asked for or relocated."
+  (Operation tally "The class counts as a headline says them: the unasked as weakenings, then the rest."
+    {:signature [:=> [:catn [:counts [:map-of :keyword :int]]] :string]})
+  (Operation line "One retreat as a line, marked with its class when it is not unasked."
     {:signature [:=> [:catn [:r :map]] :string]})
   (Operation summary "One line per retreat."
     {:signature [:=> [:catn [:retreats :any]] :string]}))

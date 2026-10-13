@@ -2214,8 +2214,10 @@
       :judged           (record/rounds-judged report)
       :amended          (count (filter :amended? history))
       :unappended       (:amend-unappended final)
-      :weakened         (count (mapcat :retreats history))
-      :unasked          (count (retreat/unasked (mapcat :retreats history)))
+      ;; Every retreat by class, a record amended by hand before round 1 included: the headline
+      ;; calls only the unasked weakenings (`retreat/tally`).
+      :retreat-classes  (retreat/classes (concat (mapcat :retreats history)
+                                                 (:retreats (:by-hand (record/continued report)))))
       :disputed         (count (mapcat :disputes history))
       :record-seq       (or (:design-seq rec) (:baseline-seq rec))
       ;; A claim refuted with no check broken is as broken at the end as a check is, and is the

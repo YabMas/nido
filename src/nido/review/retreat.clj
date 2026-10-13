@@ -60,8 +60,9 @@
 (defn- asks
   "What `findings` — the round's judge findings the amendment answers — asked of the record:
    `:at`, each subject id a finding named mapped to the finding's `:claim` texts; `:needs`, each
-   id to the repairs its findings asked for; and `:checks`, every check a finding was filed under,
-   which a finding is only when that check broke."
+   id to the repairs its findings asked for; `:cites`, each id to the places its findings pointed
+   at (`:evidence` and `:cites`); and `:checks`, every check a finding was filed under, which a
+   finding is only when that check broke."
   [findings]
   (let [texts (fn [v] (keep #(when-not (str/blank? (str %)) (str %)) (if (sequential? v) v [v])))
         add   (fn [m ids vs] (reduce #(update %1 %2 (fnil (comp vec distinct into) []) vs) m ids))]
@@ -70,9 +71,10 @@
                               (cons (:claim-id f) (:claim-ids f)))]
                 (cond-> (-> a
                             (update :at add ids (texts (:claim f)))
-                            (update :needs add ids (texts (:needs f))))
+                            (update :needs add ids (texts (:needs f)))
+                            (update :cites add ids (concat (texts (:evidence f)) (texts (:cites f)))))
                   (:check f) (update :checks conj (:check f)))))
-            {:at {} :needs {} :checks #{}}
+            {:at {} :needs {} :cites {} :checks #{}}
             findings)))
 
 (def ^:private check-orders
@@ -383,6 +385,12 @@
    narrowing, never as no request at all."
   #"(?i)relocat|re-?file|\bmov(?:e|ing)\b|\bas (?:bounded|health)|\binto (?:the )?(?:health|bounded)")
 
+(def ^:private narrowing-asked
+  "A finding's `:needs` asking for the claim to say or cite less. Read off the judge's prose, so it
+   can miss; a miss leaves the drop reading as one made while answering the finding, which a reader
+   then checks against the need it quotes — never as a request nobody made."
+  #"(?i)\b(?:narrow|qualif|restrict|weaken|withdraw|drop|remov|delet|exclud|no longer)")
+
 (defn- place-str
   [[file start end]]
   (str file ":" start (when (not= start end) (str "-" end))))
@@ -393,15 +401,22 @@
    alike in the headline.
 
    `asked` is what the round asked for (`asks`). A retreat at a claim with stated repairs carries
-   them as `:answering`; a drop at any claim a finding this round named answers an objection and
-   is `:ordered`, and only a drop at a claim nobody found against is one nobody asked for.
+   them as `:answering`. Those repairs make the drop `:ordered` only when one asks the claim to say
+   less (`narrowing-asked`) or a repair or a place the finding cited names a dropped place: a need
+   asking for an ADDITION requested no removal, and the drop made while answering it is one nobody
+   asked for. A drop at a claim a finding objected to without stating a repair answers that
+   objection and is `:ordered`; one at a claim nobody found against is unasked.
    `elsewhere` is every place the new record cites anywhere at all, health and prose included: a
    place still in it was moved out of the claim, not removed, and is `:relocated`. A place in none
    of it, at a claim whose finding asked for evidence to be relocated, is `:relocation-dropped?` —
    the amender deleted what it was told to move, which no finding asked for."
-  [{:keys [claim-id citation places]} {:keys [at needs]} elsewhere]
+  [{:keys [claim-id citation places]} {:keys [at needs cites]} elsewhere]
   (let [found?    (contains? at claim-id)
         asked     (get needs claim-id)
+        named?    (some (fn [loc] (some #(overlaps? % loc)
+                                        (mapcat locations (concat asked (get cites claim-id)))))
+                        places)
+        requested? (or named? (some #(re-find narrowing-asked %) asked))
         removed?  (not-every? (fn [loc] (some #(covers? % loc) elsewhere)) places)
         relocate? (and removed? (some #(re-find relocation-asked %) asked))
         where     (str/join ", " (map place-str places))
@@ -418,9 +433,13 @@
                          ", which its finding asked to relocate and the record no longer cites anywhere — "
                          (str/join " / " asked))
 
-                    (seq asked)
+                    (and (seq asked) requested?)
                     (str "claim " claim-id " no longer cites " where
                          " — narrowed at its finding's request: " (str/join " / " asked))
+
+                    (seq asked)
+                    (str "claim " claim-id " no longer cites " where
+                         ", dropped while answering a finding that asked for: " (str/join " / " asked))
 
                     found?
                     (str "claim " claim-id " no longer cites " where
@@ -436,7 +455,7 @@
       (seq (get at claim-id)) (assoc :finding (get at claim-id))
       relocate?              (assoc :relocation-dropped? true)
       (not removed?)         (assoc :relocated true)
-      (and removed? (not relocate?) (or found? (seq asked))) (assoc :ordered true))))
+      (and removed? (not relocate?) (if (seq asked) requested? found?)) (assoc :ordered true))))
 
 (defn- blanked
   "The fields of `p` that said something and say nothing in `c`.
@@ -857,22 +876,77 @@
 
 ;; ── Reporting ───────────────────────────────────────────────────────────────
 
+(def ^:private narrowing-declared
+  "An amender's reason for a :stale subject that says it made the subject claim less."
+  #"(?i)\b(?:narrow|weaken|restrict|qualif|no longer (?:claim|state|cover|say)|scoped? (?:down|to))")
+
+(defn ^{:malli/schema [:=> [:cat [:maybe [:map-of :string :string]] [:maybe [:sequential :map]]]
+                      [:vector :map]]}
+  declared
+  "One `:narrowing-declared` per subject of `stale-because` — an amender's `{id reason}` for the
+   subjects it put in question — whose reason says the amendment narrowed it, and that none of
+   `retreats` already reports by id. `narrowings` reads the text and misses a narrowing worded so
+   no signal moves; the amender's own account is then the only record of it, and left under :stale
+   the headline says the record gave nothing up. `:declared`: its reason is said, so it is not
+   unasked, and a finding did not order it, so it is not requested either."
+  [stale-because retreats]
+  (let [reported (into #{} (keep #(or (:id %) (:claim-id %))) retreats)]
+    (vec (for [[id why] (sort-by key stale-because)
+               :when (and (re-find narrowing-declared (str why)) (not (reported id)))]
+           (assoc (retreat :narrowing-declared (str id " — narrowed by the amender's account: " (clip why)))
+                  :id id :declared true :because why)))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :keyword]}
+  retreat-class
+  "Which of four a retreat is: `:relocated`, what it gave up still stands elsewhere in the record;
+   `:requested`, a finding asked for it (`:ordered`); `:declared`, the amender said it narrowed and
+   why (`declared`); or `:unasked`, none of these — a weakening, the one a reader acts on."
+  [r]
+  (cond (:relocated r) :relocated
+        (:declared r)  :declared
+        (:ordered r)   :requested
+        :else          :unasked))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe [:sequential :map]]] [:map-of :keyword :int]]}
+  classes
+  "How many of `retreats` are of each `retreat-class`, every class present, zero or not."
+  [retreats]
+  (merge {:unasked 0 :requested 0 :relocated 0 :declared 0}
+         (frequencies (map retreat-class retreats))))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe [:sequential :map]]] [:vector :map]]}
   unasked
-  "The retreats nothing accounts for: no finding asked for them (`:ordered`) and what they gave up
-   still stands elsewhere in the record (`:relocated`). The count a headline leads with — the others
-   are reported, but a reader looking for an amender that gave ground unasked should not have to
-   read past them to learn there was none."
+  "The retreats nothing accounts for (`retreat-class` `:unasked`). The count a headline leads with —
+   the others are reported, but a reader looking for an amender that gave ground unasked should
+   not have to read past them to learn there was none."
   [retreats]
-  (vec (remove #(or (:ordered %) (:relocated %)) retreats)))
+  (filterv #(= :unasked (retreat-class %)) retreats))
+
+(defn ^{:malli/schema [:=> [:cat [:map-of :keyword :int]] :string]}
+  tally
+  "`classes` as a headline says it: the unasked as `weakenings`, then each other class with any.
+   `weakenings` names the unasked alone because it is the word a reader acts on — read off the
+   total, a round whose every retreat was relocated or asked for sent people looking for an
+   amender that gave ground."
+  [{:keys [unasked requested relocated declared]}]
+  (let [n      (or unasked 0)
+        others (for [[k label] [[requested "requested"] [relocated "relocated"]
+                                [declared (str "narrowing" (when (not= 1 declared) "s") " declared")]]
+                     :when (pos? (or k 0))]
+                 (str k " " label))]
+    (str n " weakening" (when (not= 1 n) "s")
+         (when (seq others) (str " (" (str/join ", " others) ")")))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   line
-  "One retreat as a line: what, the detail, and why it is not unasked when it is not."
+  "One retreat as a line: what, the detail, and its class when it is not unasked."
   [r]
-  (str (name (:what r)) " — " (:detail r)
-       (cond (:ordered r)   " [asked for]"
-             (:relocated r) " [relocated]")))
+  (str (name (:what r)) " — " (when (:by-hand r) "between runs: ") (:detail r)
+       (case (retreat-class r)
+         :requested " [asked for]"
+         :relocated " [relocated]"
+         :declared  " [declared]"
+         nil)))
 
 (defn ^{:malli/schema [:=> [:cat :any] :string]}
   summary

@@ -322,6 +322,55 @@
       (is (not (:relocation-dropped? r)) "a citation the record still makes in its health was moved")
       (is (re-find #"still cites it outside the load-bearing claims" (:detail r))))))
 
+(deftest a-drop-made-while-answering-a-need-for-an-addition-is-not-called-requested
+  ;; Seen live (aa3d15): the finding asked to name the text/rtf alias as another MIME rewrite; the
+  ;; amender added no RTF and deleted the CSV-by-filename citation, and the retreat read 'narrowed
+  ;; at its finding's request'. Every weakening of the run carried that wording, so the one real
+  ;; unrequested erasure was hidden among them.
+  (let [prev  (with-evidence "src/a.clj:1" "file_management.clj:507")
+        curr  (with-evidence "src/a.clj:1")
+        add   [{:claim-id "c7" :evidence ["src/a.clj:1"]
+                :needs "Name the text/rtf → application/rtf alias normalization as another read-time MIME rewrite"}]
+        [r]   (retreat/baseline-retreats prev curr nil add)]
+    (is (not (re-find #"at its finding's request" (:detail r)))
+        "the need asked for more, so the drop is not what it asked for")
+    (is (re-find #"while answering a finding that asked for: Name the text/rtf" (:detail r))
+        "the need is still quoted, so a reader can judge the drop against it")
+    (is (= [r] (retreat/unasked [r])) "and it counts among the weakenings a reader acts on"))
+  (let [prev (with-evidence "src/a.clj:1" "file_management.clj:507")
+        curr (with-evidence "src/a.clj:1")]
+    (is (:ordered (first (retreat/baseline-retreats
+                          prev curr nil [{:claim-id "c7" :evidence ["file_management.clj:505-510"]
+                                          :needs "say what the CSV branch actually checks"}])))
+        "a finding that cited the dropped place asked about it, whatever its need says")
+    (is (:ordered (first (retreat/baseline-retreats
+                          prev curr nil [{:claim-id "c7" :needs "qualify the claim to the upload path"}])))
+        "a need asking the claim to say less asked for the drop")))
+
+(deftest the-headline-count-is-split-by-class
+  ;; Seen live (c12ee6): 7 retreats, 6 of them citations the record still made elsewhere and 1 asked
+  ;; for, and the headline said '7 weakenings'.
+  (let [rs (concat (repeat 6 {:what :evidence-dropped :relocated true})
+                   [{:what :evidence-dropped :ordered true}])]
+    (is (= {:unasked 0 :requested 1 :relocated 6 :declared 0} (retreat/classes rs)))
+    (is (= "0 weakenings (1 requested, 6 relocated)" (retreat/tally (retreat/classes rs)))
+        "'weakenings' names only what nobody accounts for")
+    (is (= "1 weakening" (retreat/tally (retreat/classes [{:what :claim-dropped}]))))))
+
+(deftest a-narrowing-the-amender-declared-under-stale-is-counted-with-its-reason
+  ;; Seen live (965c2b): the amender narrowed a claim and said so only under :stale-because, the
+  ;; text moved no narrowing signal, and the headline said 0 weakenings.
+  (let [why "the migration may re-mark it. Narrowed to the contents the marker named when the migration ran"
+        [r] (retreat/declared {"marked-content-is-built" why "other" "its evidence moved with the fix"} [])]
+    (is (= :narrowing-declared (:what r)))
+    (is (= "marked-content-is-built" (:id r)))
+    (is (str/includes? (:detail r) "Narrowed to the contents") "the reason is what the line says")
+    (is (= {:unasked 0 :requested 0 :relocated 0 :declared 1} (retreat/classes [r])))
+    (is (= "0 weakenings (1 narrowing declared)" (retreat/tally (retreat/classes [r]))))
+    (is (re-find #"\[declared\]$" (retreat/line r))))
+  (is (= [] (retreat/declared {"c1" "narrowed to the write path"} [{:what :narrowed :id "c1"}]))
+      "a narrowing the text already showed is not counted again"))
+
 (deftest evidence-that-names-no-file-is-not-a-place
   (is (= [] (retreat/baseline-retreats (with-evidence "the schema comment")
                                        (with-evidence "the schema comment, reworded")))))

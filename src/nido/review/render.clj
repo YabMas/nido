@@ -512,14 +512,12 @@
    on a judge that never ran."
   [ph]
   (let [n (count (:retreats ph))
-        u (count (retreat/unasked (:retreats ph)))
         d (count (:disputes ph))
         w (count (distinct (map :id (:widened-spent ph))))
         parts (cond-> []
                 (:resurveyed ph) (conj (str "re-surveyed " (:resurveyed ph)))
                 (:amended? ph)   (conj "amended")
-                (pos? n)         (conj (str n " weakening" (when (not= 1 n) "s")
-                                            (when (< u n) (str " (" u " unasked)"))))
+                (pos? n)         (conj (retreat/tally (retreat/classes (:retreats ph))))
                 (pos? w)         (conj (str w " spent claim" (when (not= 1 w) "s") " widened"))
                 (pos? d)         (conj (str d " objection" (when (not= 1 d) "s")))
                 (:unappended ph) (conj (str "refused by the ledger, not appended: " (:unappended ph)))
@@ -559,8 +557,9 @@
   (mapcat :phases (:rounds report)))
 
 (defn- all-retreats
+  "Every phase's retreats, and round 1's measured against a record amended by hand before it."
   [report]
-  (mapcat :retreats (all-phases report)))
+  (mapcat #(concat (get-in % [:by-hand :retreats]) (:retreats %)) (all-phases report)))
 
 (defn- all-disputes
   [report]

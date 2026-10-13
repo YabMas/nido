@@ -543,8 +543,22 @@
 (deftest a-record-runs-headline-says-how-many-weakenings-nobody-asked-for
   ;; Seen live: '4 weakenings' sent a reader looking for an amender that gave ground, and every one
   ;; answered that round's finding at the same claim.
+  (is (str/includes? (:headline (analysis/payload (assoc a-design-run :retreat-classes
+                                                         {:unasked 0 :requested 1 :relocated 6 :declared 0})))
+                     "1 amended · 0 weakenings (1 requested, 6 relocated) · 0 disputed"))
   (is (str/includes? (:headline (analysis/payload (assoc a-design-run :unasked 0)))
-                     "3 weakenings (0 unasked) · 0 disputed")))
+                     "0 weakenings (3 requested) · 0 disputed")
+      "a run queued with only the total and the unasked count still says weakenings of the unasked"))
+
+(deftest a-record-run-headline-says-when-round-1-judged-a-record-written-by-hand
+  ;; Seen live (110ff6): the predecessor ended at entry 11, a person appended entry 12 a minute
+  ;; later dropping a falsifier, and the headline named the predecessor as if it had written it.
+  (let [h (:headline (analysis/payload
+                      (assoc a-design-run :loop :baseline
+                             :continued {:continues [{:run-id "baseline-loop-1bb66448" :status "max-iters"}]
+                                         :by-hand {:record-by :hand :seq 12 :after 11
+                                                   :retreats [{:what :narrowed :by-hand true}]}})))]
+    (is (str/includes? h "Continues: baseline-loop-1bb66448 (max-iters) · record-by :hand: entry 12 was written after entry 11, the last that run judged — 1 weakening"))))
 
 (deftest a-record-run-whose-decision-reached-no-ledger-says-so
   ;; The figures command in the headline counts from the ledger, so an unrecorded decision makes
