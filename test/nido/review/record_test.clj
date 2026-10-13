@@ -1944,6 +1944,27 @@
     (is (str/includes? p "not evidence for any structural check"))
     (is (str/includes? p "a person has not chosen this scope"))))
 
+(deftest a-finding-is-classified-by-its-repair-not-its-claim
+  ;; A judge filed both notes on an asked claim for_person, each carrying a derivable defect it
+  ;; said the amender should repair; person-marked kept them the person's, and the run ended asked
+  ;; with that repair inside the question.
+  (let [p (record/design-prompt {:design design})]
+    (is (str/includes? p "Classify a finding by its REPAIR, never by its claim")
+        "for_person is a property of what repairs a finding, not of which claim it is about")
+    (is (str/includes? p "its own finding with\n             for_person false written out")
+        "only an explicit false keeps a finding on an asks_about claim off the person's question")))
+
+(deftest a-grant-bounds-what-a-derivable-repair-may-settle
+  ;; A judge filed a re-keying of stored summaries as derivable because "the grants already cover
+  ;; the scope and cost decisions", and the amender widened what the person had granted unasked.
+  (let [p (record/design-prompt {:design design :answers {:grant {:seq 4 :self? true}}})]
+    (is (str/includes? p "its scope, its cost, what it\nstores and how that is keyed")
+        "the judge sets a repair against the grant before calling it no new human decision")
+    (is (str/includes? p "changes what the\ngrant covers, the repair is a choice the grant never made — for_person")
+        "a repair that widens a grant is the person's to choose")
+    (is (not (str/includes? (record/design-prompt {:design design}) "A grant also bounds"))
+        "with no grant there is nothing a repair can widen")))
+
 (deftest the-judge-reads-why-a-person-last-rewrote-the-record
   ;; A mid-build amendment said "noticed while building", and the judge, shown none of it, asked
   ;; whether the whole change was worth executing at XL.

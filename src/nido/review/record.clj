@@ -1570,7 +1570,13 @@
                              (str "  entry " n (when carried? " (written by a person, carrying a grant)")
                                   (when note (str " — \"" note "\"")) "\n"
                                   (str/join (for [{a :seq q :asks} answered]
-                                              (str "    answering entry " a ": " q "\n"))))))))))
+                                              (str "    answering entry " a ": " q "\n"))))))))
+          "A grant also bounds what a repair may settle without a person. Before you file\n"
+          "a finding derivable, or write that a repair needs no new human decision, set\n"
+          "what the repair commits to against this grant: its scope, its cost, what it\n"
+          "stores and how that is keyed. When one way of repairing it changes what the\n"
+          "grant covers, the repair is a choice the grant never made — for_person, and\n"
+          "asks poses it. An amender handed it widens the grant by guessing.\n"))
    (when answered-since
      (str "\nANSWERED SINCE. A person was asked at entry " (:seq answered-since) ":\n  "
           (:asks answered-since) "\n"
@@ -1785,10 +1791,15 @@
    "             question repairs. The rest are repaired before the person is\n"
    "             asked, so a derivable defect you leave out is one they are\n"
    "             asked over.\n"
-   "             A finding whose only repair is outside the record is for_person:\n"
-   "             filing or naming a follow-up ref, deciding scope, editing the\n"
-   "             intent. So is one about a claim your asks decides — name every\n"
-   "             such claim id in asks_about.\n"
+   "             Classify a finding by its REPAIR, never by its claim. One whose\n"
+   "             only repair is outside the record is for_person: filing or naming\n"
+   "             a follow-up ref, deciding scope, editing the intent. Name every\n"
+   "             claim id your asks decides in asks_about. A claim named there can\n"
+   "             carry a derivable defect as well — a path it misses, a clause the\n"
+   "             code contradicts — and that defect is its own finding with\n"
+   "             for_person false written out: unmarked, a finding on an asked\n"
+   "             claim is filed as the person's, and the amender never sees it.\n"
+   "             One finding with two repairs is two findings.\n"
    "  amend    — a derivable defect in the record itself, which the record can\n"
    "             repair without anyone deciding anything new.\n"
    "             Which record contradicts a recorded decision decides between the\n"
