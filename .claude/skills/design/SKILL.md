@@ -1035,12 +1035,24 @@ bb nido:design:approve :project <p> :ws-id <id> :design-seq <n> \
 It writes the same `:design-approved` the gate's Approve writes, and answers a
 round that proceeded or asked; it refuses one that sent the record back. Never
 record a go in a superseding design's `:summary` or `:supersedes :why`: nothing
-that reads grants reads them. An answer that is not a go — narrow the scope,
-mean something else by the intent — is an amendment, and goes into the design or
-the intent as one, with the person's answer as its `:supersedes :why`. A round
-reads a design or intent you write after its ask as the reply (ANSWERED SINCE)
-and stops posing the question; the same written by the loop's amender answers
-nothing.
+that reads grants reads them. An answer that is not a go is an amendment, with
+the person's answer in their words, and the entry whose ask it settles, as its
+`:supersedes :why`. What the answer changes decides which record it amends:
+
+- **What the work is for, or when it is done** — a `:done-when` relaxed, an
+  exception made to one, the goal narrowed — supersedes the **intent**. Adopted
+  into the design alone, it leaves the intent saying the opposite, and a judge
+  holds the intent as the person's word and the design as its author's: it asks
+  which one governs, every round and every run after, however plainly the
+  design's `:why` quotes them. The intent append prints the baseline and design
+  the amended goal now owes; the new design cites the new intent, and carries a
+  go-ahead already given as `:granted` (below), because a grant never reaches
+  across a changed premise.
+- **How the design meets an unchanged intent** — supersedes the **design**.
+
+A round reads a design or intent you write after its ask as the reply (ANSWERED
+SINCE) and stops posing the question; the same written by the loop's amender
+answers nothing.
 
 When you amend after the person already granted cost or a `:revisit` in chat,
 carry it in the amendment as `:supersedes {:seq <n> :why "…" :granted "…"}`, in
