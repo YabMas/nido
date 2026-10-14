@@ -395,6 +395,44 @@
 (def ^:private codex {:reviewer :codex})
 (def ^:private claude {:reviewer :claude})
 
+;; Watched (56c59f): the non-PDF scope question came back for_person with claim-id
+;; highlight-from-server-page-ranges in R3 and R5, while both rounds' clause rulings held the
+;; claim. Figures read it F,O,F,O,F with two :splits — the judge alternating, counted as refutations.
+(deftest a-question-keyed-to-a-claim-refutes-nothing
+  (let [asked {:claim-id "hl" :cites ["THE RECORD'S OPEN NOTES: non-PDF originals"] :claim "q"
+               :for-person true}
+        r     (#'record/with-readings {:format :design-decision :findings [asked]
+                                       :confirmed ["hl"] :checked-at {"hl" ["a.clj:1"]}}
+                                      (constantly false)
+                                      {:carried {"hl" {:ruling :holds :judged-by codex}}})]
+    (is (nil? (:splits r))
+        "a question beside a claim held before is no reading denying it, or the judge's turn-taking reads as variance")
+    (is (= [["hl" :confirmed]] (#'record/readings-of r))
+        "the claim reads as what the judge ruled on it, not as falsified by the question about it")
+    (is (= ["hl"] (:confirmed (#'record/rule {:findings [asked] :confirmed ["hl"] :checked-at {"hl" ["a.clj:1"]}}
+                                             #{"hl"} #{"hl"})))
+        "a confirmation beside a question stands: nothing refuted the claim")
+    (is (= ["hl"] (#'record/awaiting-person {"hl" 2} {} [asked]))
+        "the claim is still the one the person is asked about, which a capped run must not hand an amender")))
+
+(deftest a-clause-ruled-false-on-the-record-alone-is-no-reading
+  (let [owed  {"hl" [{:key "hl#1" :text "Rows carry page ranges." :field :statement :search? false}]}
+        noted {"hl#1" {:ruling :false :evidence ["THE RECORD'S OPEN NOTES — no PDF form is unresolved"]
+                       :search ""}}
+        asked {:claim-id "hl" :cites ["x"] :claim "q" :for-person true}]
+    (is (nil? (:clause-readings (#'record/held-to-clauses {:findings [asked] :clause-rulings noted} owed)))
+        "with only an open note and a question behind it, a false ruling has no counterexample to compare a holding with")
+    (is (= {"hl#1" {:ruling :false :text "Rows carry page ranges."}}
+           (:clause-readings (#'record/held-to-clauses
+                              {:findings [asked]
+                               :clause-rulings (assoc-in noted ["hl#1" :evidence] ["src/files.clj:72"])}
+                              owed)))
+        "a false ruling citing code is a reading whatever finding sits beside it")
+    (is (= {"hl#1" {:ruling :false :text "Rows carry page ranges."}}
+           (:clause-readings (#'record/held-to-clauses
+                              {:findings [(dissoc asked :for-person)] :clause-rulings noted} owed)))
+        "and so is one whose counterexample a refutation of its subject carries")))
+
 ;; Watched (da6d82): m-facade, its words unchanged, was confirmed by codex in R1 and by claude in
 ;; R2, but a sibling's amendment had knocked the R1 confirmation off standing, so R2 recorded it as
 ;; another :first-reading and its run stayed at 3 — named :unfixable on a claim nobody touched.

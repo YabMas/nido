@@ -2248,7 +2248,7 @@
       (seq unchecked)  (assoc :unchecked unchecked)
       (seq clause)     (assoc :clause-rulings clause))))
 
-(declare refuted-ids)
+(declare refuted-ids site-spans)
 
 (defn- rule
   "A parsed judgement, its ruling held to what the round asked: `checks` are the subjects put to the
@@ -2324,7 +2324,11 @@
    :clause-readings is `{key {:ruling :held|:false :text}}`, each listed clause the judgement ruled
    false or held with what a held ruling owes (`open-clauses`), with the words it ruled on. The text
    is what lets a later reading be compared with this one: a key is a clause's position in its
-   subject, so after an amendment the same key can name another sentence.
+   subject, so after an amendment the same key can name another sentence. A clause ruled false
+   with no counterexample anywhere — no file:line of its own, and no finding refuting its subject
+   (`refuted-ids`) — is not one: all it can rest on is the record, its open notes or a person's
+   question beside it, and read as a reading it contradicts every holding of the same words
+   (`:contradicts-held-clause`).
 
    A subject only :unchecked owes no clause: it was ruled as out of the code's reach. One whose
    every listed clause the same judgement held, citing what a held ruling owes, was not: the
@@ -2345,11 +2349,14 @@
                                       (update :unruled #(vec (sort (into (set %) held-all))))
                                       (assoc :unchecked-over-held (vec (sort held-all)))))
         result   (cond-> result (nil? (:unchecked result)) (dissoc :unchecked))
+        refuted  (into #{} (mapcat refuted-ids) (:findings result))
         readings (into (sorted-map)
-                       (for [cs (vals owed)
+                       (for [[id cs] owed
                              {:keys [key text]} cs
-                             :let  [r (get-in rulings [key :ruling])]
-                             :when (and r (not (open-any key)))]
+                             :let  [{r :ruling :keys [evidence]} (get rulings key)]
+                             :when (and r (not (open-any key))
+                                        (not (and (= :false r) (empty? (site-spans evidence))
+                                                  (not (refuted id)))))]
                          [key {:ruling r :text text}]))
         affirmed (set (concat (:confirmed result) (:owed result)))
         judged   (into affirmed (keep :claim-id) (:findings result))
@@ -2568,7 +2575,8 @@
    or :shape — prose names a module beside the claim it breaks, and the word `shape` is in every
    sentence about one. A finding naming none of them, or more than one, is left as the judge gave
    it: which of two it refutes is the judge's to say. A finding the judge marked :for-person is
-   left too: a question for a person rules on no claim, and paired it would count as one refuted."
+   left too: it refutes nothing (`refuted-ids`), and which claim a question is about is the judge's
+   to say as well."
   [ids finding]
   (if (or (seq (str (:claim-id finding))) (empty? ids) (:for-person finding))
     finding
@@ -4349,7 +4357,7 @@
   [running offerable?]
   (into (sorted-map) (filter #(and (offerable? (key %)) (>= (val %) withdrawable-after))) running))
 
-(declare refuted-ids check-statuses claim-finding? run-keys enumerated-ids)
+(declare refuted-ids asked-ids check-statuses claim-finding? run-keys enumerated-ids)
 
 (defn- judged-subjects
   "The ids `record`'s findings still hold open: each one counts against (`run-keys`), and each one
@@ -4359,7 +4367,7 @@
    :unfixable telling a person to weaken a claim that holds."
   [record]
   (let [statuses (check-statuses record)]
-    (into #{} (mapcat #(concat (run-keys statuses %) (when (:for-person %) (refuted-ids %))))
+    (into #{} (mapcat #(concat (run-keys statuses %) (asked-ids %)))
           (:findings record))))
 
 (defn- awaiting-person
@@ -4367,7 +4375,7 @@
    :for-person finding and refuted by none (`run-keys`). Such a subject's count stopped when the
    question was asked and stands until someone answers it, so it says nothing about rewording."
   [spent statuses findings]
-  (let [asked   (into #{} (comp (filter :for-person) (mapcat refuted-ids)) findings)
+  (let [asked   (into #{} (mapcat asked-ids) findings)
         refuted (into #{} (mapcat #(run-keys statuses %)) findings)]
     (filterv #(and (asked %) (not (refuted %))) (keys spent))))
 
@@ -4641,14 +4649,26 @@
             "    class. The judge is asked again with it, and may stop for the person."))
      (interface-block interfaces by-hand))))
 
-(defn- refuted-ids
-  "The claims a record finding refutes: a design finding's :claim-ids, a baseline refutation's
-   :claim-id. A gap (:blocks) refutes nothing, and neither does a subject no reading could rule on
-   (:unsettled)."
+(defn- named-ids
+  "The claims a record finding is keyed to: a design finding's :claim-ids, else its :claim-id."
   [f]
-  (if (or (:blocks f) (:unsettled f))
+  (into [] (keep (comp not-empty str)) (or (seq (:claim-ids f)) [(:claim-id f)])))
+
+(defn- refuted-ids
+  "The claims a record finding refutes (`named-ids`). A gap (:blocks) refutes nothing, neither does
+   a subject no reading could rule on (:unsettled), and neither does a :for-person finding: the
+   claim it names is the one its question is about (`asked-ids`). Every reading, split, overturn and
+   refutation run is counted through here, so a question keyed to a claim — by the judge, or by an
+   ask's `person-marked` — would otherwise read as that claim falsified."
+  [f]
+  (if (or (:blocks f) (:unsettled f) (:for-person f))
     []
-    (into [] (keep (comp not-empty str)) (or (seq (:claim-ids f)) [(:claim-id f)]))))
+    (named-ids f)))
+
+(defn- asked-ids
+  "The claims a :for-person finding's question is about (`named-ids`); none for any other finding."
+  [f]
+  (if (:for-person f) (named-ids f) []))
 
 (def ^:private unsettled-after
   "How many readings since its last refutation may come back unchecked before a subject's amender is
