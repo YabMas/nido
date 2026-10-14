@@ -1113,7 +1113,18 @@
     (is (str/includes? p "naming EVERY clause you found false")
         (str kind ": one finding per subject — a second finding on the same id is the same identity"))
     (is (str/includes? p "one the record itself already\nsatisfies is a contradiction")
-        (str kind ": a refuter the record satisfies is a false clause, not a claim"))))
+        (str kind ": a refuter the record satisfies is a false clause, not a claim"))
+    (is (str/includes? p "names the production write that produces it")
+        (str kind ": a row only a test fixture writes refuted a claim and cost an amend to withdraw"))))
+
+(deftest a-baseline-judge-does-not-confirm-on-the-records-own-figures
+  ;; Watched: two judges called a cost claim unverifiable, a third confirmed it on the baseline's
+  ;; own measurements, and a pair then settled it with nothing from the tree behind it.
+  (let [p (record/baseline-prompt {:baseline {:format :baseline}})]
+    (is (str/includes? p "THE RECORD IS NOT ITS OWN EVIDENCE")
+        "a confirmation that repeats the record's number back to it checks nothing, yet settles the claim")
+    (is (str/includes? p "unchecked, cause out-of-code, not confirmed")
+        "the claim is put where an unverifiable one goes, so it is not settled on its own say-so")))
 
 (deftest a-subject-is-cut-into-the-clauses-a-judge-rules
   (let [record {:model {:claims [{:id "c" :about ["e"] :statement "It sums once. Nothing else sums."

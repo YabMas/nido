@@ -819,7 +819,14 @@
        "root it ran from — not the sites the subject cites or the bound the record\n"
        "names. Held with no search is unruled. A counterexample that exists only in\n"
        "code no caller reaches is held only with that site in the ruling's evidence,\n"
-       "marked unreached; never park it in reason, where nothing reads it.\n\n"
+       "marked unreached; never park it in reason, where nothing reads it.\n"
+       ;; The data-state twin of the unreached rule: a judge refuted a claim with a row the schema
+       ;; admits but only a raw-SQL test fixture writes, and it cost an amend and a round to withdraw.
+       "A counterexample that is a STORED STATE — a row, a column value, a file a\n"
+       "record holds — names the production write that produces it. A state the schema\n"
+       "admits but no writer outside test fixtures produces is no counterexample: the\n"
+       "clause is held, with the writers you searched and that absence in the ruling's\n"
+       "evidence.\n\n"
        "AN ENUMERATION IS RULED MEMBER BY MEMBER. A clause listing N things — a set of\n"
        "writes, an inventory, an :interface written as a list — is false at every member\n"
        "that is wrong and at every one missing that the clause's own scope covers. Name\n"
@@ -1086,6 +1093,12 @@
       "each by its id, the bracketed slug without the brackets, drawn only from the\n"
       "ids listed below, with the file:line references you read that show it holds.\n"
       "A confirmation citing nothing you read is not counted.\n\n"
+      ;; Two judges called a cost claim unverifiable, a third confirmed it on the baseline's own
+      ;; measurements, and the pair that followed settled it with nothing from the tree behind it.
+      "THE RECORD IS NOT ITS OWN EVIDENCE. A claim whose only support is figures the\n"
+      "baseline itself supplies — a measurement, a size, a timing it states — is\n"
+      "unchecked, cause out-of-code, not confirmed: repeating the record's number back\n"
+      "to it checks nothing. Confirm it only on what you read in the tree.\n\n"
       "CONFIRMED MEANS EVERY SENTENCE HELD. A clause of a subject that you found\n"
       "false is a finding against that subject's id — a falsification — even when\n"
       "the counterexample the subject states does not name that clause. Leave the id\n"
