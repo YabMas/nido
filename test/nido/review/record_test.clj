@@ -621,6 +621,28 @@
     (is (str/includes? p "You do not make the decision"))
     (is (str/includes? p "Never answer it yourself"))))
 
+(deftest the-decision-prompt-holds-each-done-when-line-to-the-clause-that-discharges-it
+  (let [with-goal (record/design-prompt
+                   {:design design
+                    :intent {:goal "bound the reclaims"
+                             :done-when ["a crash-exhausted job is not returned by any claim"]}})
+        no-lines  (record/design-prompt {:design design :intent {:goal "bound the reclaims"}})]
+    (is (str/includes? with-goal "GOAL COVERAGE")
+        "a judge ruling claim by claim reads each clause against the code, never against the goal,
+         and affirmed a clause contradicting a Done-when line word for word as owed")
+    (is (str/includes? with-goal "never owed and never holds")
+        "owed promises the code will come to agree with the clause; it cannot also agree with a
+         goal line the clause denies")
+    (is (not (str/includes? no-lines "GOAL COVERAGE"))
+        "with no Done-when lines there is nothing to cover, and the pass would ask for a mapping
+         from nothing")))
+
+(deftest the-decision-prompt-reads-a-mixed-claim-as-owed
+  (is (str/includes? (record/design-prompt {:design design})
+                     "`owed` when ANY clause depends on code not yet built")
+      "a claim mixing negative clauses true today with clauses about unbuilt code read owed under
+       one judge and holds under the next, at an unchanged tree"))
+
 (deftest the-decision-prompt-shows-a-spin-outs-follow-up-ref
   (let [p (record/design-prompt
            {:design (assoc design :routes [{:health-id "two-content-verdicts" :to :spin-out

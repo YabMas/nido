@@ -1740,6 +1740,19 @@
 
 (declare decision-asked)
 
+(def ^:private goal-coverage-rule
+  "The pass that holds each Done-when line to the clause meant to discharge it. A judge ruling claim
+   by claim reads each clause against the code and never against the goal, so a clause saying the
+   opposite of a Done-when line word for word was affirmed :owed by two judges — a sound commitment
+   the code does not meet yet — and refuted by a third on unchanged text. Owed says the code will
+   come to agree with the clause; it cannot also come to agree with a goal the clause denies."
+  (str "GOAL COVERAGE — before you rule on any claim, hold each Done-when line above\n"
+       "to the record: name the claim clause, by its key or claim id, that discharges\n"
+       "it, and rule whether that clause's TEXT agrees with the line. A clause whose\n"
+       "text contradicts a Done-when line is false, never owed and never holds,\n"
+       "whatever the code does: report it under goal-served, quoting both. A line no\n"
+       "clause discharges is under-serving, a goal-served finding too.\n"))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   design-prompt
   "The decision prompt. Derives what can be derived; hands the rest over.
@@ -1763,7 +1776,7 @@
      (str "WHAT THE TASK IS FOR — stated before this was designed:\n"
           (:goal intent) "\n"
           (when-let [d (seq (:done-when intent))]
-            (str "Done when:\n" (bullets d) "\n"))
+            (str "Done when:\n" (bullets d) "\n" goal-coverage-rule))
           "\n")
      (str "NO STATED INTENT. This design cites none — it predates the intent\n"
           "record. You cannot derive goal-served against a goal nobody wrote\n"
@@ -1944,6 +1957,12 @@
    "true, `owed` when it is a sound commitment the code you read does not meet yet.\n"
    "A claim about what this change will build is owed until it is built — and the\n"
    "tree you are reading may already hold the change, so look rather than assume.\n"
+   ;; One claim mixing negative clauses already true of the tree with clauses about code not yet
+   ;; written read owed under one judge and holds under the next, at the same tree, for 8 rounds.
+   "A claim is read as its clauses: `holds` only when EVERY clause is already true of\n"
+   "the tree you read, and `owed` when ANY clause depends on code not yet built —\n"
+   "however many of the others, a negative \"never\" or \"nothing\" among them, are\n"
+   "true today.\n"
    "Leave confirmed empty when the design lists invariants with no ids. Ids, not\n"
    "sentences: a confirmation worded differently each round cannot be matched to\n"
    "the claim it is about.\n\n"
