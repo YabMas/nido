@@ -11,7 +11,9 @@
     "relation_rulings",
     "asks",
     "asks_about",
-    "clause_rulings"
+    "clause_rulings",
+    "questions",
+    "settled_questions"
   ],
   "properties": {
     "recommend": {
@@ -228,6 +230,50 @@
         "type": "string"
       },
       "description": "The id of every design claim whose ruling the person's answer to asks decides — the slug shown in brackets, WITHOUT the brackets. Never shown to the person. Empty when asks decides no claim."
+    },
+    "questions": {
+      "type": "array",
+      "description": "Each separate question or alternative asks poses, one entry each, in the order asks poses them. Empty when asks is empty.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "text"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The id of the STILL OPEN question this entry keeps, as shown, when it asks that question again — in its words or new ones. Empty string for a question nothing open asked."
+          },
+          "text": {
+            "type": "string",
+            "description": "The question or alternative, as the person reads it."
+          }
+        }
+      }
+    },
+    "settled_questions": {
+      "type": "array",
+      "description": "Each STILL OPEN question you do not keep in questions, with the record change that settled it. Empty when nothing is shown still open.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "by"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The id of the STILL OPEN question, as shown."
+          },
+          "by": {
+            "type": "string",
+            "description": "The change to the record since it was asked that settles it: the claim or clause, and what it now says."
+          }
+        }
+      }
     },
     "clause_rulings": {
       "type": "array",

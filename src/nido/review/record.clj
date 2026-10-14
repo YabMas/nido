@@ -1488,9 +1488,10 @@
              [{:seq :asks}] (`grant-answered`). :earlier is every grant further up the chain,
              nearest first, as {:seq :note :carried? :answered}: a newer grant is often narrower,
              and does not withdraw the scope an older one decided
-     :asked  {:seq :of :asks}, the newest decision on this workstream — at :seq, of the design at
-             :of — when it asked and neither a grant nor a reply has been written since; a question
-             put to a person and not yet answered
+     :asked  {:seq :of :asks :questions}, the newest decision on this workstream — at :seq, of the
+             design at :of — when it asked and neither a grant nor a reply has been written since; a
+             question put to a person and not yet answered. :questions is its open questions by id
+             (`questions-carried`), absent on an ask appended before asks carried ids
      :answered-since  {:seq :asks :by [{:seq :kind :why}]}, the newest reply a person wrote, by
              writing the record rather than a grant — a design in the chain they wrote, or the intent
              the design cites, each by its :supersedes :why — with the ask it answered, the newest
@@ -1594,7 +1595,8 @@
        (assoc :answered-since {:seq (:seq replied) :asks (:asks replied) :by since-ask})
        (and asking? (not approved?) (empty? (after (:seq last-ask))))
        (assoc :asked (cond-> {:seq (:seq last-ask) :asks (:asks last-ask)}
-                       (:design-seq last-ask) (assoc :of (:design-seq last-ask))))
+                       (:design-seq last-ask)    (assoc :of (:design-seq last-ask))
+                       (seq (:questions last-ask)) (assoc :questions (:questions last-ask))))
        (and rewrite (not-any? #(= (:seq rewrite) (:seq %)) since-ask))
        (assoc :rewritten {:seq        (:seq rewrite)
                           :why        (get-in rewrite [:supersedes :why])
@@ -1729,6 +1731,19 @@
                  (:of asked) ".\nPose only what entry " judged " still leaves open — drop a "
                  "precondition it already\nmeets and any clause it retracted, and never carry "
                  "the question forward word\nfor word.\n"))
+          (when-let [open (seq (:questions asked))]
+            (str "STILL OPEN — its questions, each by id:\n"
+                 (str/join (for [{:keys [id text]} open] (str "  " id ": " text "\n")))
+                 "Account for every one. Keep it — list it in questions under its id, in new\n"
+                 "words where the record moved under it — or, when a change to the record since\n"
+                 "settled it, name the change in settled_questions: the claim or clause and what\n"
+                 "it now says. An alternative it offers stays until a change rules it out; a\n"
+                 "repair that restates the claim it concerns has not ruled it out by restating.\n"
+                 (if (and judged (:of asked) (not= judged (:of asked)))
+                   ""
+                   "This record has not changed since it was asked, so nothing has settled one.\n")
+                 "One you neither keep nor settle still reaches the person, in its old words.\n"
+                 "A question none of these asks gets an empty id.\n"))
           "If what you find can only be repaired by answering this, recommend ask: an\n"
           "amender handed it answers it without the person, and the next round refutes\n"
           "the answer.\n"
@@ -2012,6 +2027,8 @@
    "as what changes for the users or the operator — never as a claim id or the\n"
    "mechanism. A person who must learn the record's vocabulary to follow a question\n"
    "answers one they did not understand.\n"
+   "List each question asks poses, and each alternative it offers, apart in\n"
+   "questions: they are what the next reading is held to, one by one.\n"
    "Gather EVERY goal or scope gap the record raises into this one asks, a deferral\n"
    "it states openly included: a part of the goal the record says it leaves for\n"
    "later is scope a person grants now. A gap you leave out is a second interruption\n"
@@ -2702,7 +2719,9 @@
 
    :asks is required only of an :ask, the one recommendation that stops for its question. On any
    other a blank asks says nothing is left for a person — a grant or an answer already covers it —
-   and the record carries no :asks.
+   and the record carries no :asks. Beside a non-blank asks, :questions is each question it poses
+   and :settled-questions each open one the judge says a change settled, both as the judge gave
+   them: the ids are its claims about the standing ask until `questions-carried` holds them to it.
 
    `asked` is the checks the round's prompt defined (`report/derivations-of` its design). A
    check outside it is one the judge was never asked: it is dropped from :checks and named under
@@ -2755,6 +2774,12 @@
                      said)
           rulings  (parse-rulings (:relation_rulings m))
           asks     (str/trim (str (:asks m)))
+          posed    (into [] (keep (fn [q] (let [t (str/trim (str (:text q)))]
+                                            (when-not (str/blank? t) {:id (slug (:id q)) :text t}))))
+                         (when (sequential? (:questions m)) (:questions m)))
+          settles  (into [] (keep (fn [s] (let [id (slug (:id s)) by (str/trim (str (:by s)))]
+                                            (when-not (or (str/blank? id) (str/blank? by)) {:id id :by by}))))
+                         (when (sequential? (:settled_questions m)) (:settled_questions m)))
           about    (into #{} (comp (map slug) (remove str/blank?)) (:asks_about m))
           ;; An :ask needs no finding: what it hands on is the question, and a doubt the build must
           ;; not start without is one whether or not it breaks a check.
@@ -2779,6 +2804,10 @@
                                ;; for a person, and is stored as no question rather than an empty one.
                                (not (str/blank? asks)) (assoc :asks asks))
                              m)
+          ;; As the judge said them: an id is still its word for which open question it keeps,
+          ;; until `questions-carried` holds it to the standing ask.
+          (and (not (str/blank? asks)) (seq posed))   (assoc :questions posed)
+          (and (not (str/blank? asks)) (seq settles)) (assoc :settled-questions settles)
           ;; Only an ask has a question for a finding to be the person's: on any other
           ;; recommendation every finding is the amender's, whatever the judge marked.
           (and (not= :proceed r) (seq findings))
@@ -3814,6 +3843,73 @@
                   same-claims?)
           (or (:reasks earlier) (:seq earlier)))))))
 
+(defn- question-number
+  [id]
+  (or (some-> (re-matches #"q(\d+)" (str id)) second parse-long) 0))
+
+(defn- numbered
+  "`qs` with every id not in `kept` replaced by the next `q<n>` after `taken`, the ids in use."
+  [qs kept taken]
+  (first (reduce (fn [[acc n] q]
+                   (if (kept (:id q))
+                     [(conj acc q) n]
+                     [(conj acc (assoc q :id (str "q" (inc n)))) (inc n)]))
+                 [[] (transduce (map question-number) max 0 taken)]
+                 qs)))
+
+(defn- questions-carried
+  "`decision` with its questions held to `asked`, the standing ask (`answered`'s :asked) — or
+   untouched when it poses no question. `judged` is the seq of the design this decision is of.
+
+   Every question an ask poses has an id, `q<n>`, kept along one chain of asks: the judge is shown
+   the standing ask's open ones by id and answers, per id, kept (in :questions under it) or settled
+   (in :settled-questions, by what). A settlement stands only over a record that moved since the
+   standing ask: on the same record nothing has changed that could settle a question. An open
+   question neither kept nor settled is carried in the standing ask's words, its id under
+   :carried-questions, and its text appended to :asks — the person reads the union of what is
+   still unsettled, whichever reader dropped it. A question with no open id gets a fresh one, and
+   on a decision that re-poses a standing ask with ids it is named in :widens: the question grew,
+   and a person waiting to answer it has to see that it is not a repeat.
+
+   A standing ask with no :questions — appended before asks carried ids — has nothing to hold the
+   decision to, and its questions are numbered from q1."
+  [decision asked judged]
+  (if (str/blank? (str (:asks decision)))
+    (dissoc decision :questions :settled-questions)
+    (let [open     (vec (:questions asked))
+          open-ids (into #{} (map :id) open)
+          moved?   (and (:of asked) judged (not= judged (:of asked)))
+          said     (or (not-empty (:questions decision)) [{:id "" :text (str/trim (:asks decision))}])
+          said     (mapv (fn [q] (if-let [same (some #(when (= (:text %) (:text q)) %) open)]
+                                   (assoc q :id (:id same))
+                                   q))
+                         said)
+          ;; One entry per open id: a judge that keeps one question twice still keeps one.
+          said     (reduce (fn [acc q]
+                             (if (and (open-ids (:id q)) (some #(= (:id q) (:id %)) acc)) acc (conj acc q)))
+                           [] said)
+          kept     (into #{} (comp (map :id) (filter open-ids)) said)
+          settled  (reduce (fn [acc s]
+                             (if (and moved? (open-ids (:id s)) (not (kept (:id s)))
+                                      (not-any? #(= (:id s) (:id %)) acc))
+                               (conj acc s)
+                               acc))
+                           [] (:settled-questions decision))
+          gone     (into kept (map :id) settled)
+          carried  (filterv #(not (gone (:id %))) open)
+          own      (numbered said open-ids (map :id open))
+          widens   (when (seq open) (filterv (complement open-ids) (map :id own)))]
+      (cond-> (-> decision
+                  (assoc :questions (into own carried))
+                  (dissoc :settled-questions))
+        (seq settled) (assoc :settled-questions settled)
+        (seq carried) (assoc :carried-questions (mapv :id carried)
+                             :asks (str (str/trim (:asks decision)) "\n\n"
+                                        "Still open from entry " (:seq asked)
+                                        " — this reading neither asked it again nor named what settled it:\n"
+                                        (str/join "\n" (map #(str "- " (:text %)) carried))))
+        (seq widens)  (assoc :widens widens)))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   design-decision!
   "Run the decision round over this workstream's latest design record. Returns
@@ -3927,7 +4023,8 @@
                     again (reasked ledger design result (get-in asking [:answers :asked]) run-id)]
                 (cond-> (-> (rule result checks asked breaks)
                             (held-to-answer (clauses-owed design asked))
-                            (relation-held relation breaks (get-in design [:baseline :relation])))
+                            (relation-held relation breaks (get-in design [:baseline :relation]))
+                            (questions-carried (get-in asking [:answers :asked]) (:seq design)))
                   (seq levels)              (assoc :strata-read (mapv :reading levels))
                   one-tree                  (assoc :code-identity one-tree)
                   (and one-tree (seq kept)) (assoc :subject-identities kept)
@@ -6394,9 +6491,34 @@
         (cond-> {:read read}
           (get-in ctx [:carry :quiet :trace]) (assoc :trace (get-in ctx [:carry :quiet :trace])))))))
 
+(defn- with-questions-of
+  "`record` with the questions of `ask`, the reading before's (`carried-ask`), added to its own. Both
+   readings were shown one standing ask and each carries every open id (`questions-carried`), so an
+   id they share is one question — unless both numbered a question of their own to it, when the
+   reading before's is renumbered. One worded alike by both is kept once. What either added to the
+   standing ask stays in :widens."
+  [record ask]
+  (let [fresh   (set (:widens record))
+        before  (set (:widens ask))
+        [qs ws] (reduce (fn [[acc ws] q]
+                          (cond
+                            (some #(= (:text q) (:text %)) acc) [acc ws]
+                            (some #(= (:id q) (:id %)) acc)
+                            (if (fresh (:id q))
+                              (let [id (str "q" (inc (transduce (map (comp question-number :id)) max 0 acc)))]
+                                [(conj acc (assoc q :id id)) (conj ws id)])
+                              [acc ws])
+                            :else [(conj acc q) (cond-> ws (before (:id q)) (conj (:id q)))]))
+                        [(vec (:questions record)) (vec (:widens record))]
+                        (:questions ask))]
+    (cond-> record
+      (seq qs) (assoc :questions qs)
+      (seq ws) (assoc :widens ws))))
+
 (defn- carried-ask
   "The :ask an earlier quiet round of this run made of `subject`, the same record, as
-   `{:seq :asks :about}` — the entry, its question, and the ids it filed :for-person — or nil. A
+   `{:seq :asks :about :questions :widens}` — the entry, its question, the ids it filed :for-person,
+   and its questions by id (`questions-carried`) — or nil. A
    second reading pairs per claim, so without this its recommendation replaces the ask's with
    nothing to show the person was owed a question."
   [ctx subject]
@@ -6526,7 +6648,8 @@
    with :paired-ask `{:seq :asks}`, and its :asks is its own question followed by the ask's, said
    to be the reading before's: no two judges word one question alike, so the two cannot be told
    the same question or two — and one only the reading before raised, dropped, never reaches the
-   person. Where they disagree is left to the person, who reads both. And an id the ask filed
+   person. Where they disagree is left to the person, who reads both. Either way the reading's
+   :questions hold the ask's too (`with-questions-of`). And an id the ask filed
    :for-person is never :read-once: the person's answer settles it, and no further reading can
    change that the run stops for them."
   [record holds? {:keys [standing single settled knock-ons carried prior asked unread-amendment? held ask]}]
@@ -6590,6 +6713,7 @@
                                (not (str/blank? (:asks ask))) (not= own-asks (str/trim (:asks ask))))
                       (cond-> {:asks (:asks ask)} (:seq ask) (assoc :seq (:seq ask))))]
       (cond-> record
+        (or was-ask also-ask)            (with-questions-of ask)
         was-ask                          (assoc :unpaired-recommend was-ask
                                                 :asks (if (or (str/blank? own-asks) (= own-asks (:asks ask)))
                                                         (:asks ask)
@@ -6755,7 +6879,9 @@
                                                                             (map str))
                                                                    (:findings record))
                                                              (:about before)))}
-                                 at (assoc :seq at))
+                                 at                        (assoc :seq at)
+                                 (seq (:questions record)) (assoc :questions (:questions record))
+                                 (seq (:widens record))    (assoc :widens (:widens record)))
                                before)]
                   (cond-> {:seq       (:seq subject)
                            :iter      (:iter ctx)

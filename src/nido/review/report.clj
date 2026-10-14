@@ -690,6 +690,8 @@
       ;; with the reading before it at the same tree, which is otherwise only the later ruling;
       ;; :unpaired-recommend is where it recommended otherwise than an :ask that reading made, and
       ;; :paired-ask where it asked too, in other words, so its :asks holds both questions.
+      ;; :carried-questions is each open question of the standing ask the judge neither kept nor
+      ;; settled, carried into :asks anyway; :widens each question it added to that ask.
       ;; :paired-with is each single confirmation on the ledger this round's confirmation completed,
       ;; and :contradicts-read-once each it denied — the entry and (paired) the run, since the first
       ;; reading is often another run's and a 1-round run that stopped is otherwise unexplained.
@@ -791,6 +793,9 @@
                 (assoc :unpaired-recommend (get-in ctx [:record :unpaired-recommend]))
                 (get-in ctx [:record :paired-ask])
                 (assoc :paired-ask (get-in ctx [:record :paired-ask]))
+                (seq (get-in ctx [:record :carried-questions]))
+                (assoc :carried-questions (get-in ctx [:record :carried-questions]))
+                (seq (get-in ctx [:record :widens])) (assoc :widens (get-in ctx [:record :widens]))
                 (seq (get-in ctx [:record :paired-with]))
                 (assoc :paired-with (vec (get-in ctx [:record :paired-with])))
                 (seq (get-in ctx [:record :contradicts-read-once]))

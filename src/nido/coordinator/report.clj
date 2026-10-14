@@ -3011,6 +3011,20 @@
                  [:map {:closed true}
                   [:seq  {:optional true} int?]
                   [:asks [:re #"\S"]]]]
+                ;; Each question and alternative :asks poses, by an id kept along the chain of asks
+                ;; it re-poses, so the next reading is held to each one (`questions-carried`).
+                [:questions             {:optional true}
+                 [:vector [:map {:closed true} [:id [:re #"^q\d+$"]] [:text [:re #"\S"]]]]]
+                ;; Each open question of the standing ask this reading did not keep, with the change
+                ;; to the record it named as settling it.
+                [:settled-questions     {:optional true}
+                 [:vector [:map {:closed true} [:id [:re #"^q\d+$"]] [:by [:re #"\S"]]]]]
+                ;; Each open question of the standing ask the reading neither kept nor settled: kept
+                ;; on :questions in the standing ask's words, and appended to :asks.
+                [:carried-questions     {:optional true} [:vector [:re #"^q\d+$"]]]
+                ;; Each question this decision added to the standing ask it re-poses: it is not a
+                ;; repeat, and its headline says so.
+                [:widens                {:optional true} [:vector [:re #"^q\d+$"]]]
                 ;; As on a baseline review.
                 [:judged-by          {:optional true} JudgedBy]
                 [:tree               {:optional true} JudgedTree]]
@@ -4612,7 +4626,11 @@
         (cons "\n## Sound commitments the code does not meet yet — owed to the build"
               (for [id owed] (str "- " id))))
       (trajectory->markdown trajectory)
-      ["\n## For you to decide" asks]))))
+      ["\n## For you to decide" asks]
+      (when-let [added (seq (filter (comp (set (:widens decision)) :id) (:questions decision)))]
+        (cons (str "\n## Added to the question already standing"
+                   (when-let [n (:reasks decision)] (str " since entry " n)))
+              (for [{:keys [text]} added] (str "- " text))))))))
 
 (defn- design-verdict->markdown
   [{:keys [verdict round reason invariants-held invariants-broken invariants-unmet
@@ -4872,7 +4890,8 @@
                                    (when (held-once? report) held-once-words))
     :design-decision          (str "Design decision: " (name (:recommend report))
                                    (when (or (proceeds-once? report) (asks-once? report)) held-once-words)
-                                   (when-let [n (:reasks report)] (str " — as asked at entry " n)))
+                                   (when-let [n (:reasks report)]
+                                     (str " — as asked at entry " n (when (seq (:widens report)) ", widened"))))
     :design-verdict           (str "Design verdict: " (name (:verdict report)))
     :findings                 (str "Findings round " (:round report)
                                    " (" (count (:items report)) " items)")

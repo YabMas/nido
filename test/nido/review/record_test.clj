@@ -2359,15 +2359,20 @@
                 34 {:format :design-decision :seq 34 :design-seq 33 :recommend :ask :run-id "r1"
                     :read-once ["bars-as-on-main"] :asks "Which ticket?"
                     :findings [{:claim-id "bars-as-on-main" :for-person true}]}}
-        of     (fn [run-id]
+        over   (fn [ledger run-id]
                  (with-redefs [ws/amended-seqs (constantly #{})
                                ws/entry-at-seq (fn [_ _ n] (get ledger n))
                                ws/entries-of   (fn [_ _ k] (filterv #(= k (:format %)) (vals ledger)))
                                record/lineage-of (fn [& _] [(get ledger 34)])]
-                   (record/answered :nido "ws-1" (get ledger 33) run-id)))]
+                   (record/answered :nido "ws-1" (get ledger 33) run-id)))
+        of     (partial over ledger)]
     (is (nil? (:asked (of "r1"))) "the reading under test is not a question put to anyone")
     (is (nil? (:asked-of (of "r1"))))
-    (is (= 34 (get-in (of "r2") [:asked :seq])) "another run's ask still stands")))
+    (is (= 34 (get-in (of "r2") [:asked :seq])) "another run's ask still stands")
+    (is (= [{:id "q1" :text "Which ticket?"}]
+           (get-in (over (update ledger 34 assoc :questions [{:id "q1" :text "Which ticket?"}]) "r2")
+                   [:asked :questions]))
+        "the standing ask's open questions reach the next reading")))
 
 (deftest a-reask-of-the-standing-question-names-its-first-entry
   ;; Three rounds posed one retention question about one unchanged claim, and the ledger and the
@@ -2412,6 +2417,136 @@
         "another run's ask is one question only on the evidence of its words or its claims")
     (is (nil? (reasked {:seq 28} decision "r1"))
         "a proceed's asks stopped nobody, so an :ask after it is a question put for the first time")))
+
+(deftest an-asks-questions-are-read-apart-by-id
+  (let [answer (fn [m] (json/generate-string (merge {:recommend "ask" :reason "r" :asks "Run alone, or share?"
+                                                      :checks [{:check "goal_served" :status "broken" :note "n"}]
+                                                      :findings []}
+                                                     m)))
+        parse  #(record/parse-design-decision (answer %) 9 #{:goal-served})]
+    (is (= [{:id "q2" :text "Run alone?"} {:id "" :text "Or share?"}]
+           (:questions (parse {:questions [{:id "[q2]" :text " Run alone? "} {:id "" :text "Or share?"}
+                                           {:id "q9" :text " "}]})))
+        "the judge's id is its word for which open question it keeps, and a blank question is none")
+    (is (= [{:id "q1" :by "claim x now says y"}]
+           (:settled-questions (parse {:settled_questions [{:id "q1" :by "claim x now says y"}
+                                                           {:id "q3" :by ""}]})))
+        "a settlement that names no change settles nothing")
+    (is (not (contains? (parse {:recommend "proceed" :asks "" :questions [{:id "" :text "x"}]}) :questions))
+        "a decision that poses no question has no questions")))
+
+(deftest a-standing-asks-open-questions-are-kept-or-settled
+  (let [asked   {:seq 40 :of 30 :asks "q1 text / q2 text"
+                 :questions [{:id "q1" :text "May nido miss a takeover when the hook fails?"}
+                             {:id "q2" :text "Is crash-time notification wanted?"}]}
+        ask     (fn [m] (merge {:recommend :ask :asks "Is crash-time notification wanted?"} m))]
+    (testing "on the record the standing ask was put over"
+      ;; Watched (a392f7, R11 -> R13 at one seq): four questions became two, no amendment between.
+      (let [d (#'record/questions-carried
+               (ask {:questions [{:id "q2" :text "Is crash-time notification wanted?"}]
+                     :settled-questions [{:id "q1" :by "the hook clause now says so"}]})
+               asked 30)]
+        (is (= ["q2" "q1"] (mapv :id (:questions d)))
+            "nothing has changed that could settle a question, so a dropped one still reaches the person")
+        (is (= ["q1"] (:carried-questions d)))
+        (is (nil? (:settled-questions d)))
+        (is (str/includes? (:asks d) "May nido miss a takeover when the hook fails?")
+            "the person reads the union of what is unsettled, in the asks they are shown")
+        (is (str/includes? (:asks d) "entry 40"))
+        (is (nil? (:widens d)) "keeping fewer questions is not asking more")))
+    (testing "across an amendment"
+      ;; Watched (a392f7, R5 -> R6): the takeover question vanished after an amendment that touched
+      ;; nothing it asked about.
+      (let [settled (#'record/questions-carried
+                     (ask {:questions [{:id "q2" :text "Do you want a notice when it crashes?"}]
+                           :settled-questions [{:id "q1" :by "takeover now holds at conduct's first decision"}]})
+                     asked 33)
+            dropped (#'record/questions-carried
+                     (ask {:questions [{:id "q2" :text "Do you want a notice when it crashes?"}]}) asked 33)]
+        (is (= [{:id "q1" :by "takeover now holds at conduct's first decision"}] (:settled-questions settled))
+            "a change to the record since the ask can settle a question, and the record says which")
+        (is (= [{:id "q2" :text "Do you want a notice when it crashes?"}] (:questions settled))
+            "a kept question keeps its id in the new reading's words")
+        (is (= (:asks (ask {})) (:asks settled)) "a settled question is not carried")
+        (is (= ["q1"] (:carried-questions dropped))
+            "a question dropped with no settlement named is carried, whatever changed")))))
+
+(deftest the-next-reading-is-shown-each-open-question-by-id
+  (let [asked  {:seq 18 :of 16 :asks "a / b"
+                :questions [{:id "q1" :text "Run alone?"} {:id "q2" :text "Or share?"}]}
+        prompt #(record/design-prompt {:design (assoc design :seq %) :answers {:asked asked}})]
+    (is (str/includes? (prompt 16) "STILL OPEN — its questions, each by id:\n  q1: Run alone?\n  q2: Or share?\n")
+        "a reader not shown the open questions apart can drop one without noticing")
+    (is (str/includes? (prompt 16) "This record has not changed since it was asked")
+        "on the same record no settlement can stand, and the reader is told so before it tries")
+    (is (not (str/includes? (prompt 20) "This record has not changed since it was asked")))
+    (is (not (str/includes? (record/design-prompt {:design design :answers {:asked (dissoc asked :questions)}})
+                            "STILL OPEN"))
+        "an ask appended before questions had ids has none to show")))
+
+(deftest an-alternative-outlives-a-repair-that-restates-its-claim
+  ;; Watched (b2bbe6, R2 -> R3): 'run alone' was offered for two rounds, then a derivable repair
+  ;; restated the claim, and the third ask offered only the two-reclaims limit.
+  (let [asked {:seq 12 :of 10 :asks "Run alone, or may another crash end it?"
+               :questions [{:id "q1" :text "Should a last-life job run alone on its JVM?"}
+                           {:id "q2" :text "Or may it be ended by another job's crash?"}]}
+        d     (#'record/questions-carried
+               {:recommend :ask :asks "Do you accept a limit of two reclaims?"
+                :questions [{:id "q2" :text "Do you accept a limit of two reclaims?"}]}
+               asked 14)]
+    (is (= ["q2" "q1"] (mapv :id (:questions d))))
+    (is (str/includes? (:asks d) "Should a last-life job run alone on its JVM?")
+        "an alternative a person was offered stays offered until a change to the record rules it out")))
+
+(deftest a-widened-reask-says-it-grew
+  ;; Watched (17cc2c): entry 17 asked a third carve-out the round had just found, and its headline
+  ;; read "as asked at entry 14", a repeat.
+  (let [asked {:seq 16 :of 13 :asks "a / b"
+               :questions [{:id "q1" :text "Tests outside the fixtures?"} {:id "q2" :text "FU-509 JDBC?"}]}
+        d     (-> (#'record/questions-carried
+                   {:format :design-decision :recommend :ask :design-seq 13 :reason "r"
+                    :checks [{:check :goal-served :status :broken :note "n"}]
+                    :asks "Three carve-outs: tests, JDBC, statechart jobs?"
+                    :questions [{:id "q1" :text "Tests outside the fixtures?"}
+                                {:id "" :text "FU-509 JDBC?"}
+                                {:id "" :text "Statechart jobs on the pool captured at mount?"}]}
+                   asked 13)
+                  (assoc :reasks 14))]
+    (is (= ["q1" "q2" "q3"] (mapv :id (:questions d)))
+        "a question worded as an open one is that one, and a new one takes the next id")
+    (is (= ["q3"] (:widens d)))
+    (is (nil? (:carried-questions d)))
+    (is (= d (report/validate-event :design-decision d)) "the ledger takes the decision")
+    (is (= "Design decision: ask — as asked at entry 14, widened" (report/report-title d))
+        "a person waiting to answer sees that the question changed")
+    (is (str/includes? (report/report->markdown d) "- Statechart jobs on the pool captured at mount?")
+        "and reads what was added")
+    (is (= "Design decision: ask — as asked at entry 14"
+           (report/report-title (dissoc d :widens))))))
+
+(deftest a-first-ask-numbers-its-questions
+  (let [d (#'record/questions-carried {:recommend :ask :asks "Keep it?"} nil 5)]
+    (is (= [{:id "q1" :text "Keep it?"}] (:questions d))
+        "an asks the judge did not split is one question, so the next reading still has it to keep")
+    (is (nil? (:widens d)))
+    (is (nil? (:widens (#'record/questions-carried {:recommend :ask :asks "Keep it?"}
+                                                 {:seq 3 :of 2 :asks "older ask, no ids"} 5)))
+        "an ask appended before questions had ids has nothing to widen from")))
+
+(deftest paired-readings-keep-each-others-questions
+  (let [with #'record/with-questions-of
+        own  {:asks "a" :questions [{:id "q1" :text "kept"} {:id "q3" :text "mine"}] :widens ["q3"]}
+        ask  {:asks "b" :questions [{:id "q1" :text "kept, said otherwise"} {:id "q3" :text "theirs"}
+                                    {:id "q2" :text "only theirs kept"}]
+              :widens ["q3"]}
+        d    (with own ask)]
+    (is (= [{:id "q1" :text "kept"} {:id "q3" :text "mine"} {:id "q4" :text "theirs"}
+            {:id "q2" :text "only theirs kept"}]
+           (:questions d))
+        "a question either reading asked reaches the next one, under an id of its own")
+    (is (= ["q3" "q4"] (:widens d)))
+    (is (= (:questions ask) (:questions (with {:recommend :proceed} ask)))
+        "a proceed over the ask carries the ask's questions")))
 
 (deftest a-carried-self-grant-is-written-rather-than-parked
   ;; A person's "ok" written into the design as :supersedes :granted parked the proceed for a
