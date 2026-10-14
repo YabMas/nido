@@ -4748,11 +4748,36 @@
                          (when-not (:format raw)
                            (let [w (:swept raw)] (when (sequential? w) (filter map? w))))))})))
 
-(defn ^{:malli/schema [:=> [:cat :any] :any]}
+(defn- raised-last-round
+  "The disputes the amender of the round before `iter` raised: the newest non-quiet `history` entry
+   at `(dec iter)`. Only those, because the judge that reads them is the one that ends each
+   (`dispute-endings`); a dispute from any earlier round was already ended by the round after it."
+  [history iter]
+  (:disputes (last (filter #(and (= (dec iter) (:iter %)) (not (:quiet %))) history))))
+
+(defn- disputed-claims
+  "The claim ids a dispute's `:key` names — a baseline finding's `[:claim-id id]` or
+   `[:unsettled id]`, a design finding's `:claims` — or nil for a key under no claim (a blocked
+   derivation, a finding told apart only by the code it cites)."
+  [k]
+  (when (vector? k)
+    (case (first k)
+      (:claim-id :unsettled) [(second k)]
+      :check                 (not-empty (get (apply hash-map (drop 2 k)) :claims))
+      nil)))
+
+(defn ^{:malli/schema [:=> [:cat :any :int [:maybe [:set :string]]] :any]}
   disputes-for-judge
-  "Every standing objection, oldest first, for the next judge prompt."
-  [history]
-  (vec (mapcat :disputes history)))
+  "The objections the judge of round `iter` has to answer: those the round before raised
+   (`raised-last-round`), less any keyed on claims none of which the round asks a ruling on
+   (`asked`) — settled, or no longer a subject — since a judge told to withdraw or re-report a
+   finding about a claim it may not rule on can do neither. A dispute under no claim is always
+   kept. nil `asked` restricts nothing."
+  [history iter asked]
+  (vec (remove (fn [{k :key}]
+                 (when-let [ids (and asked (disputed-claims k))]
+                   (not-any? asked ids)))
+               (raised-last-round history iter))))
 
 (defn- element-id-rule
   "The rule for an element's id given to every amender re-stating a record in the shared model. One
@@ -6538,7 +6563,7 @@
                     :code-identity (:code-identity reading)
                     :subject-identities (:subject-identities reading)
                     :label (round-label :baseline-review (:iter ctx))
-                    :disputes (disputes-for-judge (:history ctx))}))
+                    :disputes (disputes-for-judge (:history ctx) (:iter ctx) asked)}))
         record (or lost
                    reused
                    (-> (dissoc judged :tree-moved)
@@ -6621,8 +6646,7 @@
    \"withdrawn\" when it did neither — the judge read the objection and let the finding go. The
    last two look alike from the findings alone, which is all a report otherwise holds."
   [base-key ctx c]
-  (when-let [ds (seq (:disputes (last (filter #(and (= (dec (:iter ctx)) (:iter %)) (not (:quiet %)))
-                                              (:history ctx)))))]
+  (when-let [ds (seq (raised-last-round (:history ctx) (:iter ctx)))]
     (let [now       (into #{} (map base-key) (concat (:findings c) (:asked-findings c)))
           unchecked (into #{} (keep (comp not-empty str :id)) (get-in c [:record :unchecked]))]
       (mapv (fn [{:keys [key claim]}]
@@ -7991,7 +8015,7 @@
                     :code-identity (:code-identity reading)
                     :subject-identities (:subject-identities reading)
                     :label (round-label :design-decision (:iter ctx))
-                    :disputes (disputes-for-judge (:history ctx))}))
+                    :disputes (disputes-for-judge (:history ctx) (:iter ctx) asked)}))
         record (or lost
                    reused
                    (-> (dissoc judged :tree-moved)

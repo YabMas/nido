@@ -2643,6 +2643,26 @@
            (ended {:findings [{:key "a"}] :record {:unchecked [{:id "b"}]}})))
     (is (nil? (#'record/dispute-endings :key {:iter 2 :history [{:iter 1 :disputes []}]} {})))))
 
+(deftest a-judge-answers-only-the-disputes-it-can-still-end
+  ;; Watched: an R1 dispute on a claim R2 ended, and R3 and R4 then settled, was put to every judge
+  ;; through R6, which withdrew it again each time because the claim was no longer its subject.
+  (let [d       (fn [k] {:key k :claim (pr-str k) :because "no"})
+        history [{:iter 1 :disputes [(d [:claim-id "old"])]}
+                 {:iter 2 :disputes [(d [:claim-id "a"]) (d [:claim-id "settled"]) (d [:blocks :goal-served])
+                                     (d [:check :decomposable :claims ["a" "settled"]])
+                                     (d [:check :goal-served :claims ["settled"]])]}
+                 {:iter 2 :disputes [(d [:claim-id "quiet"])] :quiet true}]
+        keys-of #(mapv :key (record/disputes-for-judge history 3 %))]
+    (is (= [[:claim-id "a"] [:blocks :goal-served] [:check :decomposable :claims ["a" "settled"]]]
+           (keys-of #{"a"}))
+        "a dispute the round before raised reaches the judge while any claim it names is asked; one
+         under no claim always does — an earlier round's was ended already, and one about a claim
+         the judge may not rule on is one it can neither withdraw nor re-report")
+    (is (= 5 (count (keys-of nil))) "a round that names no subjects retires nothing")
+    (is (= [] (record/disputes-for-judge [(first history) {:iter 2 :disputes [] :quiet true}] 3 nil))
+        "the round after a quiet one is put none: the quiet round's judge already answered the
+         disputes before it, and a quiet round raises none")))
+
 (deftest figures-separate-repairs-from-reversals-and-count-clause-flips
   ;; Watched: a run's flip-rate read 0/23 while R1 held phase-1#2 and R2 ruled it false, and its
   ;; :overturns counted confirmed repairs of restated claims with the judges reversing themselves.

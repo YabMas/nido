@@ -188,8 +188,10 @@
     {:signature [:=> [:catn [:ctx :map] [:prior :any]] :boolean]})
   (Operation design-round-changed? "record-round-changed? over design finding identity."
     {:signature [:=> [:catn [:ctx :map] [:prior :any]] :boolean]})
-  (Operation disputes-for-judge "Every standing objection, for the judge."
-    {:signature [:=> [:catn [:history :any]] :any]})
+  (Operation disputes-for-judge
+    "The objections the round before raised that the judge can still end: none an earlier round
+     ended, none about only claims this round asks no ruling on."
+    {:signature [:=> [:catn [:history :any] [:iter :int] [:asked [:maybe [:set :string]]]] :any]})
   (Operation amend-prompt "The instruction to repair a baseline."
     {:signature [:=> [:catn [:opts :map]] :string]})
   (Operation refusal-prompt

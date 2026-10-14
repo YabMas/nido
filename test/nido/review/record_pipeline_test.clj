@@ -1197,7 +1197,7 @@
                                             {:format :baseline-review :verdict :sufficient})
                   record/append! (fn [_ _] nil)]
       (run record/judge-stage
-           (ctx :history [{:disputes [{:key [:evidence ["x"]] :claim "c" :because "b"}]}]))
+           (ctx :iter 2 :history [{:iter 1 :disputes [{:key [:evidence ["x"]] :claim "c" :because "b"}]}]))
       (is (= 1 (count (:disputes @seen)))))))
 
 (deftest the-judge-prompt-tells-the-judge-it-may-be-the-one-that-is-wrong
