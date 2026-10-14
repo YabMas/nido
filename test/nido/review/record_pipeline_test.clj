@@ -1936,7 +1936,9 @@
 (deftest a-confirmation-with-a-clause-ruled-false-is-not-counted
   (let [r (reviewed {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
                      :confirmed [(read-at "mod-the-order-aggregate")]
-                     :clause_rulings (assoc-in (held "mod-the-order-aggregate") [1 :ruling] "false")})]
+                     :clause_rulings (mapv #(cond-> % (= "mod-the-order-aggregate#2" (:clause %))
+                                                       (assoc :ruling "false"))
+                                           (held "mod-the-order-aggregate"))})]
     (is (nil? (:confirmed r)) "it confirmed what it read false")
     (is (= {"mod-the-order-aggregate" ["mod-the-order-aggregate#2"]} (:incomplete-clauses r)))))
 

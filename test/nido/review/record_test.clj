@@ -1215,7 +1215,7 @@
                                                 :phases [{:claim "p" :habitable "Old readers work."
                                                           :exit {:criterion "x"}}
                                                          {:claim "q" :habitable "Done." :exit {:criterion "y"}}])})]
-    (is (str/includes? d "A PHASE OR AN OPEN NOTE IS RULED AGAINST THE CLAIMS")
+    (is (str/includes? d "A PHASE, AN OPEN NOTE, THE SHAPE OR AN INTERFACE IS RULED AGAINST THE CLAIMS")
         "the cross ruling is a rule the judge is given, not a reader's chance")
     (is (str/includes? d "NOT marked holds ON\nCOMPLETION")
         "a phase is held against the claims that hold at every boundary, not the on-completion ones")
@@ -1225,6 +1225,40 @@
         "each note sentence is listed under the key its ruling names"))
   (is (not (str/includes? (record/design-prompt {:design design}) "RULED AGAINST THE CLAIMS"))
       "a design with no phase and no open note owes no cross ruling"))
+
+(deftest a-shape-and-an-interface-are-ruled-against-every-claim
+  ;; Watched: a claim that two projections are separate was ruled held by three readings while
+  ;; the shape and an element's interface, settled and never listed, said they were one — a fourth
+  ;; reading found the pair, an amend cycle and two judge rounds late.
+  (let [record {:shape "One dashboard serves both. It reads the series."
+                :model {:elements [{:id "mobile" :sort :module :interface "the dashboard in each entry"}
+                                   {:id "bare" :sort :kind}]
+                        :claims   [{:id "separate" :about ["mobile"] :statement "Projections are separate."}]}}
+        owed   (#'record/clauses-owed record [])]
+    (is (= ["across-shape#1" "across-shape#2"] (map :key (owed "across-shape")))
+        "the shape is owed a ruling against the claims even when it is not asked, since the claim it contradicts may be")
+    (is (= ["across-mobile#1"] (map :key (owed "across-mobile")))
+        "an element's interface is owed a ruling against the claims sentence by sentence")
+    (is (not (contains? owed "across-bare")) "an element offering nothing has nothing to hold against a claim")
+    (is (every? (comp false? :search?) (concat (owed "across-shape") (owed "across-mobile")))
+        "held against the record's claims, not the tree — the subject's own listing owes the search")
+    (let [r (#'record/held-to-clauses {:clause-rulings {"across-shape#1" {:ruling :held :evidence [] :search ""}}}
+                                      owed)]
+      (is (= ["across-shape#1" "across-shape#2"] (get-in r [:incomplete-clauses "across-shape"]))
+          "a shape held naming no claim it was held against is not ruled")
+      (is (empty? (:unruled r)) "a cross listing is no subject, so leaving it open unrules none"))
+    (let [asked (#'record/clauses-owed record ["shape"])]
+      (is (and (contains? asked "shape") (contains? asked "across-shape"))
+          "an asked shape is ruled against the code under its own id and against the claims besides"))
+    (is (empty? (#'record/clauses-owed (dissoc record :model) []))
+        "a record with no claims has nothing to hold its shape against")
+    (let [d (record/design-prompt {:design (merge design record)})]
+      (is (str/includes? d "IS RULED AGAINST THE CLAIMS")
+          "the cross ruling is a rule the judge is given, not a reader's chance")
+      (is (str/includes? d "joins what a claim keeps separate")
+          "a shape or interface is false where it joins what a claim keeps apart")
+      (is (str/includes? d "across-mobile#1  interface: the dashboard in each entry")
+          "each interface sentence is listed under the key its ruling names"))))
 
 (deftest every-judge-prompt-lists-the-clauses-it-owes
   (let [b (record/baseline-prompt {:baseline (assoc baseline :shape "Only the aggregate sums. It hides order.")})
