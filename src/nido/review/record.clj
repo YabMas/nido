@@ -261,7 +261,7 @@
                  (when (seq (:evidence finding)) (str "\n  evidence: " (str/join ", " (:evidence finding)))))))
          "\n")))
 
-(declare withdrawable-after)
+(declare withdrawable-after judge-refutations-block)
 
 (defn- spent-needs-block
   "What the judge is told about the claims of `running` — `refuted-running` over the lineage before
@@ -917,8 +917,10 @@
    subject to judge there is no delta to read a subject through, and the delta is the question.
 
    `running` is `refuted-running` over the lineage before this round; what a judge asks of a claim
-   it counts as spent is held to narrowing (`spent-needs-block`). nil names none."
-  [{:keys [baseline disputes settled stance prior moved stale running executed]}]
+   it counts as spent is held to narrowing (`spent-needs-block`). nil names none. `refuted-with` is
+   `refutations` over the same lineage, shown against every subject the judge reads
+   (`judge-refutations-block`)."
+  [{:keys [baseline disputes settled stance prior moved stale running executed refuted-with]}]
   (let [full     (judged-alone baseline)
         baseline (checks-of full (set (keys settled)))
         owed     (owed-rulings full settled)
@@ -1123,6 +1125,8 @@
       "the round is asked again, and a sufficient verdict over it does not stand."))
    (when-not derive?
      (prior-findings-block (apply dissoc prior (keys settled))))
+   (when-not derive?
+     (judge-refutations-block refuted-with owed (apply dissoc prior (keys settled))))
    (when-not derive?
      (spent-needs-block (select-keys running (filter (retreat/claim-ids full) owed))))
    (when-not derive?
@@ -3442,8 +3446,9 @@
    are shown and are not checks; the review's ruling is held to its checks by `rule`, so a check the
    judge left without one is named under :unruled — on a sufficient verdict, after the clauses it left
    open were asked once more (`rule-open-clauses!`). `:prior` is what earlier runs found against
-   the subjects it checks (`prior-findings-block`), and `:running` the refutation runs before it
-   (`spent-needs-block`). A round whose tree moved is still appended,
+   the subjects it checks (`prior-findings-block`), `:running` the refutation runs before it
+   (`spent-needs-block`), and `:refuted-with` every counterexample they were refuted with
+   (`judge-refutations-block`). A round whose tree moved is still appended,
    settled subjects or not: its findings and its rulings on its own checks are a judgment of
    code, and only banking them forward needs the one tree it lacks — which the missing
    `:code-identity` already withholds. Such a round's review carries `:tree-moved` (`tree-moved`),
@@ -3459,7 +3464,7 @@
    hold (`moved-since`). A record reading as that one in all but its provenance launches no judge,
    and is answered by the verdict that one reached (`carried-review`)."
   [{:keys [cwd code-cwd run-id label disputes baseline settled listing subject-identities
-           reviewer prior stale running executed] :as opts}]
+           reviewer prior stale running refuted-with executed] :as opts}]
   (if-let [[project ws-id] (ledger-of opts)]
     (if-let [baseline (or baseline (ws/latest-entry project ws-id :baseline))]
       (if (baseline-round-worth-running? baseline)
@@ -3486,6 +3491,7 @@
                                                  :prior prior
                                                  :stale stale
                                                  :running running
+                                                 :refuted-with refuted-with
                                                  :executed executed
                                                  :moved (some->> (:baseline verified)
                                                                  (moved-since baseline))
@@ -5089,30 +5095,59 @@
    subject circling, and bounded because a lineage across runs has no end."
   6)
 
-(defn- refutations-block
-  "What `refuted-with` (`refutations`) holds against `ids`, less what `findings` — this round's —
-   already put in front of the amender, or nil when nothing is left to show."
-  [refuted-with ids findings]
-  (let [now  (into #{} (keep :claim) findings)
+(defn- refutation-rows
+  "What `refuted-with` (`refutations`) holds against `ids`, less every counterexample whose claim
+   `shown` — findings already in the prompt — carries, as the bullet list both blocks below print,
+   or nil when nothing is left to show."
+  [refuted-with ids shown]
+  (let [now  (into #{} (keep :claim) shown)
         rows (for [id (distinct (keep #(some-> % str not-empty) ids))
                    :let [rs (take-last refutations-shown (remove #(now (:claim %)) (get refuted-with id)))]
                    :when (seq rs)]
                [id rs])]
     (when (seq rows)
-      (str "WHAT THESE SUBJECTS HAVE BEEN REFUTED WITH BEFORE — each counterexample a judge\n"
-           "of this record's lineage, earlier in this run or before it, found against a\n"
-           "subject this round touches. A rewrite must not bring one back: wording one of\n"
-           "these falsifies is not a repair, it is that finding again, and it is found\n"
-           "again. Check what you write against every one of them.\n\n"
-           (str/join
-            "\n"
-            (for [[id rs] rows]
-              (str "- [" id "]\n"
-                   (str/join "\n"
-                             (for [{n :seq :keys [claim cites]} rs]
-                               (str "    " (if n (str "entry " n) "this run") ": " claim
-                                    (when (seq cites) (str "\n      citing: " (str/join "; " cites)))))))))
-           "\n\n"))))
+      (str/join
+       "\n"
+       (for [[id rs] rows]
+         (str "- [" id "]\n"
+              (str/join "\n"
+                        (for [{n :seq :keys [claim cites]} rs]
+                          (str "    " (if n (str "entry " n) "this run") ": " claim
+                               (when (seq cites) (str "\n      citing: " (str/join "; " cites))))))))))))
+
+(defn- refutations-block
+  "What `refuted-with` (`refutations`) holds against `ids`, less what `findings` — this round's —
+   already put in front of the amender, or nil when nothing is left to show."
+  [refuted-with ids findings]
+  (when-let [rows (refutation-rows refuted-with ids findings)]
+    (str "WHAT THESE SUBJECTS HAVE BEEN REFUTED WITH BEFORE — each counterexample a judge\n"
+         "of this record's lineage, earlier in this run or before it, found against a\n"
+         "subject this round touches. A rewrite must not bring one back: wording one of\n"
+         "these falsifies is not a repair, it is that finding again, and it is found\n"
+         "again. Check what you write against every one of them.\n\n"
+         rows
+         "\n\n")))
+
+(defn- judge-refutations-block
+  "The amender's `refutations-block`, put to the judge: what `refuted-with` holds against the
+   subjects it reads (`ids`), less what `prior` (`prior-findings-block`'s) already shows it, or nil.
+
+   Every counterexample, not only the last one standing. `prior` drops a subject once a judge
+   confirms past it, and a judge reading a rewrite cold has confirmed it at the very text and tree
+   an earlier counterexample still falsified, until some later judge happened to re-find it. Shown
+   as findings to answer, not verdicts: the rewrite may have answered one, and then a confirmation
+   says where."
+  [refuted-with ids prior]
+  (when-let [rows (refutation-rows refuted-with ids (keep :finding (vals prior)))]
+    (str "\nREFUTED BEFORE IN THIS RECORD'S LINEAGE — each counterexample a judge found\n"
+         "against a subject you are checking, in this run or an earlier one, whether or\n"
+         "not a judge confirmed the subject since. The record may have been rewritten to\n"
+         "answer it, or the rewrite may have brought it back. Confirm one of these\n"
+         "subjects only when what you read answers EVERY counterexample listed under it,\n"
+         "and cite what answers each in that id's evidence. If one still holds, report it\n"
+         "again under the same id.\n\n"
+         rows
+         "\n")))
 
 (defn- bounded-block
   "What an amender is told about `bounded-by`, the :bounded-by of the baseline it answers to, or nil
@@ -6645,6 +6680,7 @@
                     :prior prior
                     :stale (stale-questions ctx)
                     :running (refuted-running subject lineage)
+                    :refuted-with (refutations lineage)
                     :listing listing
                     :code-identity (:code-identity reading)
                     :subject-identities (:subject-identities reading)

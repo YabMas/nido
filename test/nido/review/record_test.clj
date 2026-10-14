@@ -123,6 +123,36 @@
                                                      :settled {"c1" {:seq 4}}})
                             "REFUTED READING AFTER READING")))))
 
+(deftest the-baseline-judge-is-shown-every-counterexample-a-read-subject-was-refuted-with
+  ;; Watched: a clause refuted twice in one run was rewritten, confirmed by two judges at the same
+  ;; text and tree, and refuted a third time on the very counterexample the amender had been shown.
+  (let [refuted {"c1"             [{:seq 5 :claim "billing/totals.clj sums lines itself"
+                                    :cites ["src/billing/totals.clj:40"]}
+                                   {:seq 7 :claim "the CSV importer sums lines" :cites []}]
+                 "invoice-resums" [{:seq 7 :claim "the invoice takes the aggregate's total" :cites []}]}
+        p       (record/baseline-prompt {:baseline baseline :refuted-with refuted})]
+    (is (str/includes? p "REFUTED BEFORE IN THIS RECORD'S LINEAGE")
+        "a judge reading a rewrite cold re-confirms what an earlier judge already refuted")
+    (is (str/includes? p "billing/totals.clj sums lines itself")
+        "every counterexample, the oldest included: a confirmation since does not make one false")
+    (is (str/includes? p "citing: src/billing/totals.clj:40")
+        "the citation is what lets the judge go and look rather than take the claim on trust")
+    (is (str/includes? p "answers EVERY counterexample listed under it")
+        "a confirmation that does not answer a known counterexample is the sample that missed it")
+    (testing "a counterexample FOUND AGAINST BEFORE already shows is not shown twice"
+      (let [p (record/baseline-prompt {:baseline baseline :refuted-with refuted
+                                       :prior {"c1" {:seq 7 :finding {:claim "the CSV importer sums lines"}}}})]
+        (is (= 1 (count (re-seq #"the CSV importer sums lines" p))))
+        (is (str/includes? p "billing/totals.clj sums lines itself"))))
+    (testing "a settled subject is no check, and its refutations are not put to the judge"
+      (let [p (record/baseline-prompt {:baseline baseline :refuted-with refuted
+                                       :settled {"c1" {:seq 4}}})]
+        (is (not (str/includes? p "billing/totals.clj sums lines itself")))
+        (is (str/includes? p "the invoice takes the aggregate's total")))))
+  (is (not (str/includes? (record/baseline-prompt {:baseline baseline})
+                          "REFUTED BEFORE IN THIS RECORD'S LINEAGE"))
+      "a lineage that refuted nothing tells the judge nothing"))
+
 (deftest the-baseline-prompt-refuses-the-plane-that-never-converges
   ;; The failure this is aimed at: asked to check a baseline against a large
   ;; subsystem, a judge finds true things about it forever. An implementation
