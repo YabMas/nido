@@ -219,34 +219,13 @@
                          2)))
     0))
 
-(defn- squashed
-  "`s` with every run of whitespace one space. A docstring wraps where a record's statement does
-   not, and where a line breaks says nothing about what the claim is."
-  [s]
-  (str/trim (str/replace (str s) #"\s+" " ")))
-
-(defn- claim-rows
-  [listing]
-  (filter #(= "Claim" (name (:sort %))) (:elements listing)))
-
-(defn- declared-claims
-  "The Claim instances `listing` holds, by id — a Claim's instance name — each as its statement
-   and the set of subjects its `:about` names. Keying by name drops nothing only because the
-   declaration's own law holds a Claim's name unique; a declaration breaking it is refused by the
-   structure check, which a landing always asks beside this one."
-  [listing]
-  (into {}
-        (map (fn [{nm :name doc :doc refs :refs}]
-               [nm {:statement (squashed doc) :about (set (:about refs))}]))
-        (claim-rows listing)))
-
 (defn- judged-claims
-  "The claims `design` states, in the shape `declared-claims` reads them. Empty for a design from
-   before the shared model, which states none."
+  "The claims `design` states, in the shape `design/declared-claims` reads them. Empty for a design
+   from before the shared model, which states none."
   [design]
   (into {}
         (map (fn [{:keys [id statement about]}]
-               [id {:statement (squashed statement) :about (set about)}]))
+               [id {:statement (design/claim-text statement) :about (set about)}]))
         (get-in design [:model :claims])))
 
 (defn- held-to
@@ -354,7 +333,7 @@
                           " — its claims live in its design records alone"))
             0)
 
-        (let [declared (declared-claims head)]
+        (let [declared (design/declared-claims head)]
           (cond
             (and (empty? declared) (empty? judged))
             (do (println "land:check ok · no claim is declared or judged here") 0)
@@ -363,7 +342,7 @@
             (let [base (if (seq declared) (base-listing project worktree) {:status :unmodelled})]
               (if (= :undecidable (:status base))
                 (unreadable-claims (:error base))
-                (let [diffs (claim-differences judged declared (declared-claims base))]
+                (let [diffs (claim-differences judged declared (design/declared-claims base))]
                   (if (empty? diffs)
                     (do (println (str "land:check ok · the declaration carries the "
                                       (count judged) " claim" (when (not= 1 (count judged)) "s")

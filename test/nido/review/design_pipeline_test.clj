@@ -336,6 +336,58 @@
 
 ;; ── The judge stage ─────────────────────────────────────────────────────────
 
+;; ── A claim's declaration ───────────────────────────────────────────────────
+
+(def ^:private a-claimed-design
+  (assoc a-design
+         :seq 4
+         :model {:elements [{:id "canvas.order/aggregate" :sort :module}]
+                 :claims   [{:id "one-summing-path" :about ["canvas.order/aggregate"]
+                             :statement "the aggregate is the only summing path"
+                             :falsified-by "a caller that sums lines itself"
+                             :evidence {:by :round}}
+                            {:id "sums-once" :about ["canvas.order/aggregate"]
+                             :statement "each line is summed once; never twice"
+                             :falsified-by "a line visited twice"
+                             :evidence {:by :round}}]}))
+
+(defn- claim-row [id doc]
+  {:name id :id (str "canvas.claims/" id) :sort :canvas.vocab.claim/Claim :doc doc
+   :refs {:about ["canvas.order/aggregate"]}})
+
+(deftest a-claim-declared-with-another-statement-is-found-before-a-judge-reads-it
+  ;; Seen live: two claims' canvas/ docstrings had drifted from the record before the run began,
+  ;; no amendment touched either, and the drift was found only at the eighth reading — the one
+  ;; that happened to open the declaration. The landing would have refused it all along.
+  (let [listed {:status :listed
+                :elements [(claim-row "one-summing-path" "the aggregate is the only\n   summing path")
+                           (claim-row "sums-once" "each line is summed once")]}]
+    (is (= ["sums-once"] (mapv :claim-id (record/drifted-statements a-claimed-design listed)))
+        "a docstring stating less than the record is drift; one that only wraps differently is not,
+         since the landing compares the two with whitespace squashed")
+    (is (str/includes? (:claim (first (record/drifted-statements a-claimed-design listed)))
+                       "\"each line is summed once\"")
+        "the amender is shown what canvas/ declares, so it can tell which of the two is wrong")
+    (is (= [] (record/drifted-statements a-claimed-design
+                                         {:status :listed :elements [(claim-row "sums-once"
+                                                                                "each line is summed once; never twice")]}))
+        "a claim the declaration does not hold yet is the landing's to refuse, not a round's drift")
+    (is (= [] (record/drifted-statements a-claimed-design {:status :unmodelled}))
+        "a project declaring no design has no docstring to drift from")
+    (testing "a round the judge would proceed on goes to the amender while a statement has drifted"
+      (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                    ws/latest-entry (fn [_ _ k] (when (= :design k) a-claimed-design))
+                    ws/entries-of (constantly [])
+                    record/reading-for (fn [_ _ _] {:listing listed :reading {}})
+                    record/design-decision! (fn [_] (decision :proceed :checks [(check :goal-served :held)]))
+                    record/append! (fn [_ _] nil)]
+        (let [out (run record/design-judge-stage (ctx))]
+          (is (not= :proceed (:status out))
+              "a proceed over a record its declaration contradicts would end the run on a landing
+               that refuses")
+          (is (= [["sums-once"]] (mapv :claim-ids (:findings out)))
+              "handed in the round that could first repair it, under the claim it is about"))))))
+
 (deftest proceed-escalates-because-the-ask-is-the-point
   (with-redefs [record/design-decision! (fn [_] (decision :proceed))
                 record/append! (fn [_ _] nil)]

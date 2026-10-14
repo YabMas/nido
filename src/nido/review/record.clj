@@ -3303,6 +3303,31 @@
                 (map :id))
           (get-in record [:model :elements]))))
 
+(defn ^{:malli/schema [:=> [:cat :map :DeclaredElements] [:vector :map]]}
+  drifted-statements
+  "A finding for each claim of `record` that `listing` declares under the same id with another
+   statement, in the order the model lists them — compared as `bb nido:land:check` compares them
+   (`design-check/claim-text`), so a mismatch the landing would refuse is found in the round that
+   could first repair it. Empty when every declared claim states what the record does.
+
+   A claim lives on in canvas/ as a Claim whose docstring is its statement. The two are authored
+   apart, and a judge reads the record: drift in a claim no amendment touches stays invisible to it
+   until some reading happens to open the declaration. Each finding is the
+   amender's to repair in whichever of the two is wrong — the record's own claim, so it names no
+   check. A claim the listing does not declare is no drift: an amendment may add one before its
+   declaration, and the landing holds that apart."
+  [record listing]
+  (let [declared (design-check/declared-claims listing)]
+    (vec (for [{:keys [id statement]} (get-in record [:model :claims])
+               :let [canvas (get-in declared [id :statement])]
+               :when (and canvas (not= canvas (design-check/claim-text statement)))]
+           {:claim-id id
+            :claim    (str "[" id "] is declared in canvas/ with a docstring that is not its statement"
+                           " here, and a landing refuses the two disagreeing. canvas/ declares: \""
+                           canvas "\"; the record states: \"" (design-check/claim-text statement)
+                           "\". Make them one statement, in whichever of the two is wrong.")
+            :cites    []}))))
+
 (defn- undeclared-subjects
   "Why a round over `record` launches no judge because of what its claims are about, or nil when
    nothing stops it. A claim about something the design does not declare is not one a judge can
@@ -8195,12 +8220,16 @@
                   (refuted-running design (into lineage (when-not reused [record]))))
         ;; As the baseline round hands them over: a subject no reading could rule on is the
         ;; amender's, before a proceed or a second reading can end the run over it unruled.
+        ;; A claim whose declaration states something else is the amender's too, found here
+        ;; rather than by whichever reading opens canvas/ — read off the listing the judge was
+        ;; handed, so it costs nothing a round was not already paying for.
         unsettled (if (and project design (:format record) (not reused))
                     (mapv #(assoc % :claim-ids [(:claim-id %)])
-                          (unsettled-findings record
-                                              (unchecked-running
-                                               (conj (vec (ws/entries-of project ws-id :design-decision))
-                                                     record))))
+                          (concat (unsettled-findings record
+                                                      (unchecked-running
+                                                       (conj (vec (ws/entries-of project ws-id :design-decision))
+                                                             record)))
+                                  (when listing (drifted-statements design listing))))
                     [])
         ;; Every append below writes `record`; a reused one is on the ledger already.
         put!    (fn [ledger record] (if reused (reused-answer reused) (append! ledger record)))

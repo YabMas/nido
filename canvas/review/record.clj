@@ -42,6 +42,13 @@
      judge: a claim about a role binds exactly its players, and a judge checking it against players
      the design does not declare checks something else."
     {:signature [:=> [:catn [:record :map] [:listing DeclaredElements]] [:vector :string]]})
+  (Operation drifted-statements
+    "A finding for each claim of a record that a listing of the declared design holds under the
+     same id with another statement — compared as the landing compares them, so the round that can
+     first repair a mismatch is handed it rather than a later reading that happens to open canvas/.
+     The amender's to repair in whichever of the two is wrong; a claim not declared yet is none."
+    {:signature [:=> [:catn [:record :map] [:listing DeclaredElements]] [:vector :map]]
+     :delegates [design/declared-claims design/claim-text]})
   (Operation settled-block
     "The settled subjects, shown for the record-level derivations and outside the round's checks —
      text, readings and id, without the counterexample or evidence a check carries. Says nothing

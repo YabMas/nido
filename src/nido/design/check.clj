@@ -259,6 +259,29 @@
             {:status :undecidable :error (str "unreadable listing: " (str/trim (str out)))}))))
     {:status :unmodelled}))
 
+(defn ^{:malli/schema [:=> [:cat :any] :string]}
+  claim-text
+  "`s` with every run of whitespace one space — the form a claim's statement is compared in. A
+   docstring wraps where a record's statement does not, and where a line breaks says nothing about
+   what the claim is."
+  [s]
+  (str/trim (str/replace (str s) #"\s+" " ")))
+
+(defn ^{:malli/schema [:=> [:cat :DeclaredElements] [:map-of :string :map]]}
+  declared-claims
+  "The Claim instances `listing` holds, by id — a Claim's instance name — each as its statement
+   (`claim-text` of its docstring) and the set of subjects its `:about` names. Empty for a listing
+   that is not `:listed`.
+
+   Keying by name drops nothing only because the declaration's own law holds a Claim's name
+   unique; a declaration breaking it is refused by the check."
+  [listing]
+  (into {}
+        (keep (fn [{nm :name doc :doc refs :refs s :sort}]
+                (when (= "Claim" (name s))
+                  [nm {:statement (claim-text doc) :about (set (:about refs))}])))
+        (when (= :listed (:status listing)) (:elements listing))))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe [:vector :string]] [:vector :string]] :string]}
   offender-line
   "One offender row as a line, its columns LABELLED by the law's own offender var names.

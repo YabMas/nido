@@ -171,6 +171,16 @@
     {:signature [:=> [:catn [:project-name ProjectName] [:worktree :string] [:base-dir :string]
                             [:scope [:? [:maybe :any]]]] DesignDiff]
      :delegates [describe]})
+  (Operation claim-text
+    "A claim's statement in the form two of them are compared in: whitespace squashed, since where
+     a docstring wraps says nothing about what the claim is."
+    {:signature [:=> [:catn [:s :any]] :string]})
+  (Operation declared-claims
+    "The Claims a listing declares, by id, each as its statement and the subjects it is about — the
+     one reading the landing holds a design's claims to, and the design round compares against
+     before a judge reads the record. Empty for a listing that is not `:listed`."
+    {:signature [:=> [:catn [:listing DeclaredElements]] [:map-of :string :map]]
+     :delegates [claim-text]})
   (Operation elements
     "The declared elements and their code correspondents, as fukan lists them for this worktree.
      A reading, like the rest: an element the declaration holds is listed whether or not its code
