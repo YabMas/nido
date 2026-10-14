@@ -498,6 +498,8 @@
            (when (pos? ru) (str " · " ru " relation unruled"))
            (when (pos? r) (str " · " r " read once"))
            (when (:amendment-read-once ph) " · amendment read once")
+           (when-let [why (get-in ph [:append-refused :message])]
+             (str " · refused by the ledger, not appended: " why))
            (settled-detail (:settled ph))
            (stand-in-text (:judged-by ph))))
     (when-let [o (:outcome ph)]

@@ -585,6 +585,17 @@
     (is (str/includes? h "Refused amendment, not appended: /r/design-amend-round-2.edn")))
   (is (not (str/includes? (:headline (analysis/payload a-design-run)) "refused"))))
 
+(deftest a-record-run-whose-judgement-was-refused-says-so
+  ;; `7 rounds, 7 judged` with no refusal, over a run whose round-2 review never reached the ledger.
+  (let [h (:headline (analysis/payload (assoc a-design-run
+                                              :judge-unappended [{:round 2 :why "stands on a replaced goal"}]
+                                              :unappended "/r/design-amend-round-3.edn")))]
+    (is (str/includes? h "2 refused by the ledger · ")
+        "a refused judgement and a refused amendment are one count of what the ledger did not take")
+    (is (str/includes? h "Refused judgement, not appended: round 2 — stands on a replaced goal")))
+  (is (str/includes? (:headline (analysis/payload (assoc a-design-run :judge-unappended [{:round 1}])))
+                     "round 1 — the ledger's reason was not kept")))
+
 (deftest a-record-run-names-a-claim-spent-across-runs
   ;; A capped run headlined "1 rounds, 0 amended" over a claim refuted for the fifth time running;
   ;; the hand amender between runs saw a new defect and wrote the sixth rewording.

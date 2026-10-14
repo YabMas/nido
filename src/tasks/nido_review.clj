@@ -2112,6 +2112,7 @@
    :amend-touched-code "the amender wrote to the paths named above; whatever it wrote is still there, and its answer was not appended — if the answer is right, append it with the command above rather than re-typing it"
    :dry-run    "nothing was amended"
    :no-workstream "run this from a nido session — its worktree or its session home"
+   :goal-superseded "a later intent replaced the goal this record stands on while the round read it, so the ledger refused the judgement — nothing was banked; survey against the live goal (the judge phase's :append-refused names it) and judge that record"
    :ledger-lost "the workstream this run was judging stopped resolving from its worktree mid-run — the session was restarting under it; nothing is missing, so re-run once the session is back up"
    :codex-failed "the judge did not run — this is NOT a clean result"
    :reviewer-unavailable "the judge's vendor would not run it, retries included — the judge phase's detail quotes why; NOT a clean result"
@@ -2214,6 +2215,7 @@
       :judged           (record/rounds-judged report)
       :amended          (count (filter :amended? history))
       :unappended       (:amend-unappended final)
+      :judge-unappended (when (and project (not dry-run?)) (not-empty (record/judgements-unappended report)))
       ;; Every retreat by class, a record amended by hand before round 1 included: the headline
       ;; calls only the unasked weakenings (`retreat/tally`).
       :retreat-classes  (retreat/classes (concat (mapcat :retreats history)

@@ -283,6 +283,9 @@
       ;; refused the premise before a judge launched, or the judge left no usable
       ;; answer — and its findings are empty because nobody looked.
       (and judge (:outcome judge) (nil? (:verdict judge)))         "unjudged"
+      ;; Before "clean" and "read-once" too: a judgement the ledger refused banked nothing, so the
+      ;; round is not the one its verdict would make it.
+      (and judge (:append-refused judge))                          "judge-refused"
       ;; A record round, whose two stages tell the same story the review's three
       ;; do: nothing left to say, something given up, or another round earned.
       ;; A design round is clean only when it proceeds: one that asked a person, or found a check
@@ -710,7 +713,11 @@
       ;; absent when the round appended none — so a round is joined to the ledger by number rather
       ;; than by filtering the ledger on :run-id and counting. :reused-seq is instead the entry an
       ;; earlier run appended that this round took as its judgement, launching no judge: everything
-      ;; else on the phase is that entry's, not this run's.
+      ;; else on the phase is that entry's, not this run's. :append-refused is what the ledger said
+      ;; when it would not take the judgement (`nido.review.record/refusal`) — a judged round with
+      ;; neither seq and no refusal was never offered to a ledger — and :index-drift the entry files
+      ;; the ledger's index lacked as the round began, with those it indexed before the judge read.
+      ;; A sequence gap in the figures is otherwise unexplained.
       ;; A finding row standing for a broken check carries :filed — see `with-filed`.
       ;; :veto is what the stall check was handed for a round repeating the last one's findings
       ;; (`nido.review.record/record-round-veto`): per repeated identity whether it moved, the sites
@@ -729,6 +736,8 @@
                 (:judged-seq ctx)   (assoc :judged-seq (:judged-seq ctx))
                 (:appended-seq ctx) (assoc :appended-seq (:appended-seq ctx))
                 (:reused-seq ctx)   (assoc :reused-seq (:reused-seq ctx))
+                (:append-refused ctx) (assoc :append-refused (:append-refused ctx) :status "refused")
+                (:index-drift ctx)  (assoc :index-drift (:index-drift ctx))
                 (get-in ctx [:record :recommend])
                 (assoc :recommend (name (get-in ctx [:record :recommend]))
                        :findings (claim-rows (with-filed (:findings ctx) (get-in ctx [:record :findings])))

@@ -213,6 +213,11 @@
     "One line on how an amend phase's amender ended — completed or not, exit code, turns or no
      result event — or nil when no amender was launched."
     {:signature [:=> [:catn [:launch [:maybe :map]]] [:maybe :string]]})
+  (Operation judgements-unappended
+    "Each round of a record run's report whose judge judged and whose judgement is on no ledger
+     entry, with the ledger's refusal when the round kept one, read off the report — what the
+     headline counts as refused beside a refused amendment."
+    {:signature [:=> [:catn [:report [:maybe :map]]] [:vector :map]]})
   (Operation unreadable-rounds
     "Each round of a record run's report whose confirmations could not settle because its tree had
      no identity, with why, read off the report."

@@ -382,6 +382,10 @@
    subjects it asked about (`still-asked` — outstanding, but not broken); the figures
    per check are the ledger's, read by `bb nido:review:figures`, never carried here.
 
+   `judge-unappended` is `nido.review.record/judgements-unappended`: each round whose judgement the
+   ledger did not take, said beside a refused amendment in the one `refused by the ledger` count.
+   Without it the figures count a review fewer than the headline's `judged`, and nothing says why.
+
    `spent` is `nido.review.record/spent` of the run's last judgement, `{id n}`: what it ended still
    refuted, rewording after rewording, counted across runs. Named in the headline because it is the
    one figure no single run's counts show — a capped run reports `1 round, 0 amended` over a claim
@@ -417,7 +421,7 @@
    `variance` is the run's `{:splits n :reading-flips n}` — its judges disagreeing with themselves
    on one record at one tree — said beside weakenings and disputes. `readable-from` is the round
    after the unreadable ones that read a tree identity, which retires their `until then`."
-  [{:keys [loop run-id report-path status rounds launched judged amended unappended weakened unasked retreat-classes disputed
+  [{:keys [loop run-id report-path status rounds launched judged amended unappended judge-unappended weakened unasked retreat-classes disputed
            record-seq still-broken still-asked asks stood-in reviewed-project reviewed-session reviewed-ws-id
            machinery unrecorded spent spent-awaiting cap amend-prompt unreadable stale-at-start repair repaired?
            amender continued subject variance readable-from amended-seq out-of-reach split-ask]
@@ -446,7 +450,8 @@
                                (when (> (or launched 0) (or judged 0))
                                  (str " (" (- launched (or judged 0)) " launched, no verdict)"))
                                " · " (or amended 0) " amended · "
-                               (when unappended "1 refused by the ledger · ")
+                               (let [refused (+ (count judge-unappended) (if unappended 1 0))]
+                                 (when (pos? refused) (str refused " refused by the ledger · ")))
                                ;; A run queued before retreats were classed carries only the total
                                ;; and the unasked count, which is still what `weakenings` names.
                                (retreat/tally (or retreat-classes
@@ -458,6 +463,9 @@
                                       " · " reading-flips " reading flip" (when (not= 1 reading-flips) "s")))
                                "\n"
                                (when unappended (str "Refused amendment, not appended: " unappended "\n"))
+                               (apply str (for [{:keys [round why]} judge-unappended]
+                                            (str "Refused judgement, not appended: round " round
+                                                 " — " (or why "the ledger's reason was not kept") "\n")))
                                "Record: the " kind (when record-seq (str " at entry " record-seq))
                                (when (and repaired? amended-seq)
                                  (str " · amended since: entry " amended-seq ", unjudged"))

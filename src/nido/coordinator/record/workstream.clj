@@ -735,9 +735,12 @@
    refused where authoring errors are refused. The refusal names every record
    still standing on the replaced goal, not only the one refused, and carries
    `goal-amendment`'s reading under :amendment, from which the arc says the
-   whole chain owed. An :intent's own :supersedes is held to the same rule for
-   a different reason: an amendment naming an already-replaced tip forks the
-   chain and leaves the walk two answers to take.
+   whole chain owed. Its ex-data's `:reason :goal-superseded` is standing's word
+   for the same fact, so a writer that cannot stop to re-author — a review round
+   whose goal moved while it read — can tell this refusal from the rest. An
+   :intent's own :supersedes is held to the same rule for a different reason: an
+   amendment naming an already-replaced tip forks the chain and leaves the walk
+   two answers to take.
 
    However many citations away, which is why this walks `goals-reached` rather
    than reading the record's own goal: a design naming the live goal over a
@@ -771,7 +774,8 @@
                                                         (cond-> []
                                                           baseline-stale? (conj (str "the baseline at entry " baseline))
                                                           design-stale?   (conj (str "the design at entry " design)))))))))
-                              (cond-> {:seq n :kind kind :superseded (vec (sort dead))}
+                              (cond-> {:reason :goal-superseded :seq n :kind kind
+                                       :superseded (vec (sort dead))}
                                 owed (assoc :amendment owed)))))))))))
 
 (defn- check-intent-says-its-goal!

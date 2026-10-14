@@ -1552,11 +1552,11 @@
   "The judge stage's ctx, and whether a judge was launched, at `tree`, from `c`, with `entries`
    (`{kind [entry]}`) on the workstream and `subject` as the record judged. `judge` is what
    `judge-fn` returns when one is launched; `stage` and `judge-fn` name the pipeline."
-  [{:keys [tree entries subject stage judge-fn judge c]
-    :or   {stage record/judge-stage judge-fn #'record/baseline-review! c (ctx)}}]
+  [{:keys [tree entries subject stage judge-fn judge c answer]
+    :or   {stage record/judge-stage judge-fn #'record/baseline-review! c (ctx) answer {:seq 99}}}]
   (let [launched (atom 0) appended (atom [])]
     (with-redefs-fn {judge-fn                    (fn [_] (swap! launched inc) judge)
-                     #'record/append!            (fn [_ r] (swap! appended conj r) {:seq 99})
+                     #'record/append!            (fn [_ r] (swap! appended conj r) answer)
                      #'stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                      #'stages/cited-baseline  (fn [_ _] a-baseline)
                      #'ws/latest-entry           (fn [_ _ _] subject)
@@ -3199,3 +3199,125 @@
                                                                 :observation "o" :evidence ["src/x.clj:1"]}))}
       #(is (= ["new-obs"] (:added (record/appended-amendment-delta ledger "r1" 1)))
            "of two amendments of one entry, the one appended last is what the stopped round left"))))
+
+;; ── A judgement the ledger would not take ──────────────────────────────────
+
+(def ^:private a-ledger-baseline
+  "A baseline the ledger takes today, scoped for the intent at entry 1."
+  {:format     :baseline :strata []
+   :intent     {:seq 1}
+   :area       "order totalling"
+   :bounded-by "money amounts on an order"
+   :shape      "The aggregate is the only thing that sums lines."
+   :model      {:elements [{:id "mod-the-order-aggregate" :sort :module
+                            :hides "the order in which lines are summed"
+                            :interface "an order's total"}]
+                :claims   [{:id "c1" :about ["mod-the-order-aggregate"]
+                            :statement "the aggregate is the only summing path"
+                            :falsified-by "a caller outside the aggregate that sums lines"
+                            :evidence {:by :round}}]}
+   :read       ["src/order/aggregate.clj"]})
+
+(def ^:private a-ledger-intent
+  {:format :intent :goal "Totals match the invoice." :done-when ["totals equal invoice sums"]})
+
+(def ^:private a-ledger-review
+  {:format :baseline-review :baseline-seq 2 :verdict :sufficient :reason "c1 holds"})
+
+(defn- surveyed-ledger!
+  "A fresh ledger holding an intent at 1 and the baseline scoped for it at 2."
+  []
+  (let [id (:id (ws/create! :brian {:stage :in-progress :external-refs []}))]
+    (ws/append-entry! :brian id {:kind :intent} (pr-str a-ledger-intent))
+    (ws/append-entry! :brian id {:kind :baseline} (pr-str a-ledger-baseline))
+    [:brian id]))
+
+(defn- interrupting-the-index
+  "Run `f` with the first index write of an append failing after its entry file is on disk —
+   what an append that died between the two leaves."
+  [f]
+  (let [real ws/write! failed? (atom false)]
+    (with-redefs [ws/write! (fn [w]
+                              (if (compare-and-set! failed? false true)
+                                (throw (ex-info "disk full" {}))
+                                (real w)))]
+      (f))))
+
+(deftest a-refused-judgement-says-why-rather-than-vanishing
+  ;; A round's review refused by the ledger left no :appended-seq and no reason anywhere: the figures
+  ;; counted one review fewer than the run judged, and nothing said which or why.
+  (let [[_ id :as ledger] (surveyed-ledger!)]
+    (is (= {:seq 3} (record/append! ledger a-ledger-review)))
+    (let [answer (record/append! ledger (assoc a-ledger-review :verdict :not-a-verdict))]
+      (is (nil? (:seq answer)))
+      (is (= "Invalid event report" (get-in answer [:refused :message]))
+          "the refusal is answered, not swallowed, so the round can keep it")
+      (is (nil? (get-in answer [:refused :data :explain]))
+          "a schema's explanation is the whole schema — the row is read for why, not for that")
+      (is (nil? (get-in answer [:refused :reason]))
+          "a malformed record is not a moved goal: the run may go on and write again"))
+    (ws/append-entry! :brian id {:kind :intent}
+                      (pr-str (assoc a-ledger-intent :goal "a wider goal" :supersedes {:seq 1 :why "moved"})))
+    (let [answer (record/append! ledger a-ledger-review)]
+      (is (= :goal-superseded (get-in answer [:refused :reason]))
+          "a review of a baseline whose goal was replaced mid-round is told apart from other refusals")
+      (is (str/includes? (get-in answer [:refused :message]) "a later intent has replaced")))))
+
+(deftest an-interrupted-append-is-completed-rather-than-lost
+  ;; Watched: a round's review was written to entries/ and never indexed, the throw was swallowed,
+  ;; and the next run started on a lineage missing it.
+  (let [[_ id :as ledger] (surveyed-ledger!)
+        answer (interrupting-the-index #(record/append! ledger a-ledger-review))]
+    (is (= {:seq 3} answer) "the round names the entry it wrote, as if the index had not failed")
+    (is (empty? (ws/index-drift :brian id)) "the file the failed write left is the one indexed")
+    (is (= [3] (map :seq (ws/entries-of :brian id :baseline-review)))
+        "and only once: completing an append never writes a second copy")))
+
+(deftest a-judge-stage-indexes-the-judgement-an-earlier-run-left-unindexed
+  ;; Watched: entry 19, the previous run's last review, sat on disk with its meta row but no index
+  ;; row; every lineage read is off the index, so the run after it counted one refutation too few.
+  (let [[_ id :as ledger] (surveyed-ledger!)]
+    (interrupting-the-index #(try (ws/append-entry! :brian id {:kind :baseline-review} (pr-str a-ledger-review))
+                                  (catch Exception _ nil)))
+    (is (seq (ws/index-drift :brian id)) "the setup leaves the judgement unindexed")
+    (let [drift (binding [*err* (java.io.StringWriter.)]
+                  (#'record/reconcile-drift! ledger :baseline-review))]
+      (is (= ["0003-baseline-review.edn"] (:unindexed drift)) "the round says what the index lacked")
+      (is (= ["0003-baseline-review.edn"] (:indexed drift)))
+      (is (= [3] (map :seq (ws/entries-of :brian id :baseline-review)))
+          "so the judge inputs read after it see the judgement"))
+    (is (nil? (#'record/reconcile-drift! ledger :baseline-review)) "an intact index is no drift")))
+
+(deftest a-round-whose-goal-moved-ends-saying-so
+  ;; A sufficient judgement the ledger refused because its intent was superseded mid-round was
+  ;; reported as the round's verdict, and the run carried on as if it were banked.
+  (let [refused {:refused {:message "Baseline-review stands on the goal at entry 1, which a later intent has replaced"
+                           :reason  :goal-superseded}}
+        base    {:tree "tree-a" :subject (assoc a-baseline :seq 1)
+                 :entries {:baseline [(assoc a-baseline :seq 1)]}
+                 :judge {:format :baseline-review :verdict :sufficient :reason "ok"}}
+        out     (:ctx (judged-over-ledger (assoc base :answer refused)))]
+    (is (= :goal-superseded (:status out))
+        "the run ends where standing would send it, not on a verdict no ledger holds")
+    (is (= (:refused refused) (:append-refused out)) "and the round keeps what the ledger said")
+    (is (nil? (:appended-seq out)))
+    (testing "any other refusal is kept and the round goes on as it would"
+      (let [out (:ctx (judged-over-ledger
+                       (assoc base :answer {:refused {:message "disk full"}}
+                              :judge {:format :baseline-review :verdict :insufficient :reason "no"
+                                      :findings [(assoc a-finding :claim-id "c1")]})))]
+        (is (= {:message "disk full"} (:append-refused out)))
+        (is (nil? (:status out)) "a later round writes again")))))
+
+(deftest a-judged-round-on-no-ledger-entry-is-counted
+  ;; The headline's `refused by the ledger` covered amendments only, so a refused review was
+  ;; invisible in the very summary that counted it as judged.
+  (let [judge  (fn [n & {:as kvs}] {:round n :phases [(merge {:phase "judge" :status "ok" :verdict "sufficient"} kvs)]})
+        report {:rounds [(judge 1 :appended-seq 3)
+                         (judge 2 :append-refused {:message "stands on a replaced goal"})
+                         (judge 3 :reused-seq 3)
+                         (judge 4)
+                         {:round 5 :phases [{:phase "judge" :outcome "codex-failed"}]}]}]
+    (is (= [{:round 2 :why "stands on a replaced goal"} {:round 4}]
+           (record/judgements-unappended report))
+        "a judged round with no entry is counted, with the ledger's reason when the round kept it")))

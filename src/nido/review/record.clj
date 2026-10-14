@@ -44,6 +44,7 @@
    [clojure.edn :as edn]
    [clojure.java.io :as jio]
    [clojure.string :as str]
+   [clojure.walk :as walk]
    [malli.core :as m]
    [malli.error :as me]
    [nido.coordinator.agent :as agent]
@@ -3776,6 +3777,53 @@
               (when (= :stale (:refused res))
                 (recur (inc attempts))))))))))
 
+(defn- plain
+  "`x` with every value JSON and EDN both carry kept as it is and anything else as its string. A
+   refusal's ex-data is the thrower's, and one holding a path or an object would stop the report
+   that keeps it from being written at all."
+  [x]
+  (walk/postwalk #(if (or (nil? %) (string? %) (keyword? %) (symbol? %) (number? %) (boolean? %)
+                          (coll? %))
+                    %
+                    (str %))
+                 x))
+
+(defn- refusal
+  "What the ledger said when it threw `e` over an append: `{:message :data}`, plus `:reason
+   :goal-superseded` when the record stands on a goal a later intent replaced
+   (`ws/check-goal-is-live!`) — the one refusal no later round can write past, since every record
+   it would write cites the same goal. A schema refusal's `:explain` and `:report` are left out:
+   they are the whole schema and the record the round already keeps, and the report row is read
+   for why."
+  [e]
+  (let [data (dissoc (ex-data e) :explain :report)]
+    (cond-> {:message (or (ex-message e) (str (class e)))}
+      (seq data)                          (assoc :data (plain data))
+      (= :goal-superseded (:reason data)) (assoc :reason :goal-superseded))))
+
+(defn- entry-as-read
+  "`record` as a reader of the ledger gets it back once appended as `kind`: through the append's
+   own payload and the read contract, so it compares equal to its entry file and to nothing else."
+  [kind record]
+  (report/parse-event kind (edn/read-string (second (report/entry-payload kind (pr-str record))))))
+
+(defn- write-record!
+  "Append `record` as an entry of its :format, answering the :seq it was given. When the append
+   throws and the ledger's index names fewer files than entries/ holds, the throw may have come
+   after the entry was written: `ws/append-entry-once!` then indexes the file that is this record,
+   after the checks an append makes, or appends it afresh when none is — never a second copy.
+   Throws what the ledger refused."
+  [project ws-id record]
+  (let [kind (:format record)]
+    (try
+      (ws/seq-of-path (ws/append-entry! project ws-id {:kind kind} (pr-str record)))
+      (catch Exception e
+        (if (seq (ws/index-drift project ws-id))
+          (let [mine (entry-as-read kind record)
+                res  (ws/append-entry-once! project ws-id {:kind kind} (pr-str record) #(= mine %))]
+            (ws/seq-of-path (some res [:indexed :appended :existing])))
+          (throw e))))))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe [:tuple :keyword :string]] :map] :any]}
   append!
   "Append a round's record to `ledger`, a `[project ws-id]`. Never throws: a round that produced
@@ -3790,31 +3838,42 @@
 
    Returns `{:seq n}`, the :seq the ledger gave the record — the only answer to which entry this
    round wrote, since the newest entry once the lock is released may be another writer's — plus
-   `:contended true` when a clearance was still owed and could not be written. nil when nothing
-   was appended: an outcome, no ledger, or a write that threw. Nothing this returns means `a
-   person is owed the grant`, so a caller asks the design itself, as `proceeding-status` does."
+   `:contended true` when a clearance was still owed and could not be written, or a clearance that
+   threw. `{:refused (refusal)}` when the ledger refused the record (`write-record!`), which the
+   round keeps (`with-appended`). nil when there was nothing to append: an outcome, or no ledger.
+   Nothing this returns means `a person is owed the grant`, so a caller asks the design itself, as
+   `proceeding-status` does."
   [ledger record]
-  (try
-    (when (:format record)
-      (when-let [[project ws-id] ledger]
-        (let [n (ws/seq-of-path (ws/append-entry! project ws-id {:kind (:format record)} (pr-str record)))]
-          (cond-> {:seq n}
+  (when (:format record)
+    (when-let [[project ws-id] ledger]
+      (let [written (try {:seq (write-record! project ws-id record)}
+                         (catch Exception e {:refused (refusal e)}))]
+        (if-let [n (:seq written)]
+          (cond-> written
             (and (= :design-decision (:format record))
                  (report/proceeds? record)
                  (not (:unpaired-recommend record))
-                 (= :contended (clear-if-owed-nobody! project ws-id (:design-seq record))))
-            (assoc :contended true)))))
-    (catch Exception _ nil)))
+                 (= :contended (try (clear-if-owed-nobody! project ws-id (:design-seq record))
+                                    (catch Exception _ :contended))))
+            (assoc :contended true))
+          written)))))
 
 (defn- with-appended
   "`ctx` naming the entry `append!` answered it wrote, as `:appended-seq` — or, for a judgement the
-   round took from the ledger (`reused-answer`), the entry it took, as `:reused-seq`. Untouched
-   when it wrote none."
+   round took from the ledger (`reused-answer`), the entry it took, as `:reused-seq`; or what the
+   ledger refused, as `:append-refused`. A judgement refused because its goal was replaced while
+   the round read it ends the run `:goal-superseded`, standing's word for a record whose goal moved,
+   whatever the round would have ended or gone on as: every later round would write the same
+   citation to the same refusal, and a status read as banked would be one the ledger does not
+   hold. Untouched when nothing was appended."
   [ctx answer]
   (cond
-    (:reused answer) (assoc ctx :reused-seq (:seq answer))
-    (:seq answer)    (assoc ctx :appended-seq (:seq answer))
-    :else            ctx))
+    (:reused answer)  (assoc ctx :reused-seq (:seq answer))
+    (:seq answer)     (assoc ctx :appended-seq (:seq answer))
+    (:refused answer) (cond-> (assoc ctx :append-refused (:refused answer))
+                        (= :goal-superseded (get-in answer [:refused :reason]))
+                        (assoc :status :goal-superseded))
+    :else             ctx))
 
 (defn- reused-answer
   "What a round answers in place of `append!` for `judgement`, a ledger entry it took as its own
@@ -5804,6 +5863,44 @@
   [record]
   (boolean (some #(contains? (:incomplete-clauses record) %) (:unruled record))))
 
+(defn- reconcile-drift!
+  "Index the `kind` judgements an interrupted append left in `ledger`'s entries/ with no index row,
+   before a judge stage reads the ledger, and say the drift on stderr. Every reading a round makes of
+   its lineage — refutation counts, pairings, settlement, prior findings — is off the index, so an
+   unindexed judgement is one the round is not told about, and the ledger reads as having judged
+   less than it did.
+
+   Completed through `ws/append-entry-once!`, after the checks an append makes, rather than read
+   past the index: `ws/read-ws` leaves such a file unindexed because nothing has checked it. Only
+   `kind`, the judgement the loop itself writes; drift of any other kind is said and left for its
+   writer, whose append may have owed the record a change no completion here would make.
+
+   nil when the index names every file; else `{:unindexed [file …]}`, with `:indexed`, the files it
+   completed, and `:refused`, `{:file :message}` for each the ledger would not take."
+  [[project ws-id] kind]
+  (when-let [drift (when project (seq (ws/index-drift project ws-id)))]
+    (let [dir     (cstate/workstream-dir project ws-id)
+          mine?   #(= (name kind) (second (re-find #"^\d{4}-(.+)\.[a-z]+$" %)))
+          results (for [f (filter mine? drift)]
+                    (try
+                      (let [content (slurp (str (fs/path dir "entries" f)))
+                            entry   (report/parse-event kind (edn/read-string content))]
+                        (ws/append-entry-once! project ws-id {:kind kind} content #(= entry %))
+                        {:indexed f})
+                      (catch Exception e {:refused {:file f :message (or (ex-message e) (str (class e)))}})))
+          indexed (vec (keep :indexed results))
+          refused (vec (keep :refused results))]
+      (binding [*out* *err*]
+        (println (str "ledger " (name project) "/" ws-id ": the index names no row for "
+                      (str/join ", " drift)
+                      (when (seq indexed) (str " — indexed " (str/join ", " indexed)))
+                      (when (seq refused)
+                        (str " — refused " (str/join ", " (map #(str (:file %) " (" (:message %) ")")
+                                                               refused)))))))
+      (cond-> {:unindexed (vec drift)}
+        (seq indexed) (assoc :indexed indexed)
+        (seq refused) (assoc :refused refused)))))
+
 (defn- judge-inputs
   "What a judge stage reads off the ledgers for `subject`, a `kind` of record, at `reading`, before
    it launches a judge:
@@ -6254,6 +6351,7 @@
         ;; keyed on the id alone — and this run's own earlier reviews are on the
         ;; ledger too, at a tree that does not move within a run.
         [project ws-id :as ledger] (ledger-of (:config ctx))
+        drift   (reconcile-drift! ledger :baseline-review)
         subject (or target (when project (ws/latest-entry project ws-id :baseline)))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) subject)
         ;; A re-survey's trigger (`resurvey-refutations`), while the record it refuted is the one
@@ -6321,6 +6419,7 @@
                       (when (:seq subject) {:judged-seq (:seq subject)})
                       (when-let [m (:tree-moved judged)] {:tree-moved m})
                       (when again {:rejudged again})
+                      (when drift {:index-drift drift})
                       (when-let [c (seq (continues run-id (:iter ctx) standing running lineage))]
                         (merge {:continues (vec c)}
                                (when-let [h (by-hand ledger :baseline :baseline-seq subject c lineage)]
@@ -6775,6 +6874,23 @@
                :when (judge-launched? ph)
                :when (or (:verdict ph) (:recommend ph))]
            ph)))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:vector :map]]}
+  judgements-unappended
+  "Each round of a record run's report whose judge JUDGED (`rounds-judged`) and whose judgement is on
+   no ledger entry — neither :appended-seq nor :reused-seq — as `{:round n}`, with `:why`, the
+   ledger's message, when the round kept its refusal (:append-refused). Read only of a run that had
+   a ledger to write to: a dry run's or a ledgerless run's judgements are all unappended, and none
+   was refused."
+  [report]
+  (vec (for [round (:rounds report)
+             ph    (:phases round)
+             :when (= "judge" (some-> (:phase ph) name))
+             :when (judge-launched? ph)
+             :when (or (:verdict ph) (:recommend ph))
+             :when (not (or (:appended-seq ph) (:reused-seq ph)))]
+         (cond-> {:round (:round round)}
+           (get-in ph [:append-refused :message]) (assoc :why (get-in ph [:append-refused :message]))))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:vector :map]]}
   unreadable-rounds
@@ -7694,6 +7810,7 @@
         ;; are the effective model's, as the round resolves them: a role kept from the baseline
         ;; is not restated, and its players are still what a claim about it rests on.
         [project ws-id :as ledger] (ledger-of (:config ctx))
+        drift   (reconcile-drift! ledger :design-decision)
         design  (when project (ws/latest-entry project ws-id :design))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) design)
         {:keys [standing single settled knock-ons prior]}
@@ -7763,6 +7880,7 @@
                       (when (:seq design) {:judged-seq (:seq design)})
                       (when-let [m (:tree-moved judged)] {:tree-moved m})
                       (when again {:rejudged again})
+                      (when drift {:index-drift drift})
                       (when-let [c (seq (continues run-id (:iter ctx) standing running lineage))]
                         (merge {:continues (vec c)}
                                (when-let [h (by-hand ledger :design :design-seq design c lineage)]
@@ -7773,11 +7891,13 @@
         ;; The status a run ends on is a claim that the ledger holds this decision: an :asked
         ;; whose question was never written is a question no grant can answer and no later round
         ;; reads. So an append that wrote nothing ends the run :unrecorded, saying what it would
-        ;; have ended as, rather than as the status the ledger cannot back.
+        ;; have ended as, rather than as the status the ledger cannot back — unless the ledger
+        ;; refused it because its goal moved, which says why and where to go (`with-appended`).
         final! (fn [c]
-                 (let [answer (put! ledger (cond-> record (seq traj) (assoc :trajectory traj)))]
-                   (if (:seq answer)
-                     (with-appended c answer)
+                 (let [answer (put! ledger (cond-> record (seq traj) (assoc :trajectory traj)))
+                       c      (with-appended c answer)]
+                   (if (or (:seq answer) (= :goal-superseded (:status c)))
+                     c
                      (assoc c :status :unrecorded :control :escalate
                             :unrecorded {:would-have-ended (:status c)
                                          :ledger (when project (str (name project) "/" ws-id))}))))]

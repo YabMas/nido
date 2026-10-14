@@ -392,6 +392,15 @@
   (let [s (render/record-frame record-report now-10s {:title "t"})]
     (is (re-find #"✓ judge\s+falsified · 2 findings" s))))
 
+(deftest a-judge-the-ledger-refused-never-renders-like-one-it-banked
+  (let [r (assoc-in record-report [:rounds 0 :phases 0]
+                    {:phase "judge" :status "refused" :started-at "2026-01-01T00:00:00Z"
+                     :ended-at "2026-01-01T00:00:04Z" :verdict "sufficient" :findings []
+                     :append-refused {:message "stands on a replaced goal"}})
+        s (render/record-frame r now-10s {:title "t"})]
+    (is (re-find #"✗ judge\s+sufficient · refused by the ledger, not appended: stands on a replaced goal" s)
+        "a sufficient verdict no entry holds is not a ✓")))
+
 (deftest a-design-judge-shows-what-it-decided-and-who-decided-it
   (let [r (assoc-in record-report [:rounds 0 :phases 0]
                     {:phase "judge" :status "ok" :started-at "2026-01-01T00:00:00Z"
