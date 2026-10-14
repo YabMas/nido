@@ -1999,6 +1999,21 @@
     (is (= ask (report/validate-event :design-decision ask)) "and the ledger takes them")
     (is (not (contains? (answer "amend") :asks-about)) "off an ask there is no question to be about")))
 
+(deftest an-asks-about-clause-key-marks-findings-as-its-claim-does
+  ;; A judge naming the clause its question turns on, so the claim's other clauses stay repairable,
+  ;; must not thereby hand the amender the question's findings on that claim.
+  (let [ask (record/parse-design-decision
+             (json/generate-string
+              {:recommend "ask" :reason "r" :asks "accept the 512px fallback?"
+               :asks_about ["[keyed-on-medium#2]"]
+               :checks [{:check "goal_served" :status "broken" :note "n"}]
+               :findings [{:claim-id "keyed-on-medium" :check "goal_served" :cites ["src/a.clj:1"]
+                           :claim "c" :evidence []}]})
+             4 any-era nil nil)]
+    (is (= ["keyed-on-medium#2"] (:asks-about ask)) "the clause key is kept for the amender to be held to")
+    (is (true? (:for-person (first (:findings ask))))
+        "an unmarked finding on the claim a clause key names is the person's, as with its bare id")))
+
 (deftest a-question-for-a-person-is-no-ruling-on-a-claim
   ;; A for-person question whose cite named a confirmed claim was paired to it, counted as the
   ;; claim refuted after its settlement, and re-asked the judge as a self-contradiction.

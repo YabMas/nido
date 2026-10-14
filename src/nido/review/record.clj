@@ -1949,6 +1949,11 @@
    "             for_person false written out: unmarked, a finding on an asked\n"
    "             claim is filed as the person's, and the amender never sees it.\n"
    "             One finding with two repairs is two findings.\n"
+   "             Where such a claim's clauses are listed by key, name in asks_about\n"
+   "             the keys (<id>#<n>) your question turns on, not the claim id: its\n"
+   "             repair may then change every other clause and never those. A\n"
+   "             claim named whole may be changed only by an amender that says\n"
+   "             how the change bears on your question.\n"
    ;; A terminal ask turned on a claim whose statement scoped it by a query and whose refuted-by
    ;; scoped it by eligibility; the judges split over which reading held, and asked the person.
    "             An ask that turns on which of two readings of a claim holds, where\n"
@@ -2194,6 +2199,14 @@
    bracketed and sometimes not is no identity at all."
   [x]
   (-> (str x) str/trim (str/replace "[" "") (str/replace "]" "")))
+
+(defn- clause-ref
+  "An asks_about entry as `[claim-id n]`: a clause key `<id>#<n>` (`keyed`) names clause n of the
+   claim, from 1; a bare id names the whole claim, n nil."
+  [s]
+  (if-let [[_ id n] (re-matches #"(.+)#(\d+)" (str s))]
+    [id (parse-long n)]
+    [(str s) nil]))
 
 (defn- parse-confirmed
   "A judge's confirmed list as `{:confirmed [id …] :checked-at {id [file:line …]} :owed [id …]
@@ -2738,7 +2751,8 @@
    `intent` is the intent the round's prompt stated. On an :ask it and the answer's `asks_about`
    mark findings for the person where the judge did not mark them derivable (`person-marked`), and
    a person's finding that none of them reaches is the build's, :owed (`owed-not-asked`). The ids are
-   kept as :asks-about, which the design amender is held to leaving alone.
+   kept as :asks-about, which the design amender is held to leaving alone; an id may be a clause key
+   (`clause-ref`), which marks findings as its claim does.
 
    `claims` is the ids of the design's claims; a finding the judge keyed to none is paired with the
    one its prose names (`cite-paired`) before routing reads it, so a route cited beside that claim
@@ -2781,6 +2795,7 @@
                                             (when-not (or (str/blank? id) (str/blank? by)) {:id id :by by}))))
                          (when (sequential? (:settled_questions m)) (:settled_questions m)))
           about    (into #{} (comp (map slug) (remove str/blank?)) (:asks_about m))
+          about-ids (into #{} (map (comp first clause-ref)) about)
           ;; An :ask needs no finding: what it hands on is the question, and a doubt the build must
           ;; not start without is one whether or not it breaks a check.
           refused  (cond
@@ -2812,9 +2827,9 @@
           ;; recommendation every finding is the amender's, whatever the judge marked.
           (and (not= :proceed r) (seq findings))
           (assoc :findings (if (= :ask r)
-                             (person-marked findings about intent)
+                             (person-marked findings about-ids intent)
                              (mapv #(dissoc % :for-person :judge-marked) findings)))
-          (= :ask r)                             (owed-not-asked about intent)
+          (= :ask r)                             (owed-not-asked about-ids intent)
           (and (= :ask r) (seq about))           (assoc :asks-about (vec (sort about)))
           (seq rulings)                          (assoc :relation-rulings rulings)
           (seq unasked)                          (assoc :unasked-checks unasked)
@@ -6515,10 +6530,20 @@
       (seq qs) (assoc :questions qs)
       (seq ws) (assoc :widens ws))))
 
+(defn- asked-about
+  "What a reading's question is about once it holds `ask`, the reading before's (`carried-ask`):
+   `record`'s own :asks-about with the ask's, and the claims the ask filed :for-person — sorted,
+   each once. A reading that departs from the ask, or asks too, carries it, and the amender it
+   hands on to is held to these claims as to its own (`asked-scope`): an :amend over a standing
+   :ask otherwise reaches an amender told the question and not what it is about, which settles it."
+  [record ask]
+  (vec (sort (distinct (concat (:asks-about record) (:asks-about ask) (:about ask))))))
+
 (defn- carried-ask
   "The :ask an earlier quiet round of this run made of `subject`, the same record, as
-   `{:seq :asks :about :questions :widens}` — the entry, its question, the ids it filed :for-person,
-   and its questions by id (`questions-carried`) — or nil. A
+   `{:seq :asks :about :asks-about :questions :widens}` — the entry, its question, the ids it filed
+   :for-person, what it is about (`asked-about`) and its questions by id (`questions-carried`) — or
+   nil. A
    second reading pairs per claim, so without this its recommendation replaces the ask's with
    nothing to show the person was owed a question."
   [ctx subject]
@@ -6714,6 +6739,8 @@
                       (cond-> {:asks (:asks ask)} (:seq ask) (assoc :seq (:seq ask))))]
       (cond-> record
         (or was-ask also-ask)            (with-questions-of ask)
+        (and (or was-ask also-ask) (seq (asked-about record ask)))
+        (assoc :asks-about (asked-about record ask))
         was-ask                          (assoc :unpaired-recommend was-ask
                                                 :asks (if (or (str/blank? own-asks) (= own-asks (:asks ask)))
                                                         (:asks ask)
@@ -6880,6 +6907,8 @@
                                                                    (:findings record))
                                                              (:about before)))}
                                  at                        (assoc :seq at)
+                                 (seq (asked-about record before))
+                                 (assoc :asks-about (asked-about record before))
                                  (seq (:questions record)) (assoc :questions (:questions record))
                                  (seq (:widens record))    (assoc :widens (:widens record)))
                                before)]
@@ -8193,11 +8222,14 @@
    goal-served against: an amender not shown it narrowed a claim to an `accepted limit` a done-when
    rules out, and rounds went on re-deriving the ask. `:refuted-with` is `refutations` over the
    design's lineage (`refutations-block`). `:asks-about` is the claim ids the person's question is
-   about that no numbered line asks to have repaired (`asked-claims`): the amender is told to leave
-   them as they stand, since a sweep that restates one answers the question, and to say under
-   :standing-ask how a repair bears on one. `:by-hand` is the :seq of the design under repair when a
+   about that no numbered line asks to have repaired (`asked-scope` :held): the amender is told to
+   leave them as they stand, since a sweep that restates one answers the question, and to say under
+   :standing-ask how a repair bears on one. `:asks-repaired` is the asked claims a numbered line
+   does hand it, `[{:id :clauses}]`, :clauses the text of each clause the question named when it
+   named clauses: it repairs one without changing those, or — named whole — only beside a
+   :standing-ask on it (`asked-moves`). `:by-hand` is the :seq of the design under repair when a
    person wrote it, superseding another (`interface-block`)."
-  [{:keys [design baseline recommend reason asks asks-about raised findings rulings out-path declared?
+  [{:keys [design baseline recommend reason asks asks-about asks-repaired raised findings rulings out-path declared?
            check-cmd settled refuted-running resurvey-outcome intent refuted-with by-hand]}]
   (str
    "A read-only judge derived what could be derived about this DESIGN record,\n"
@@ -8347,6 +8379,21 @@
                  "the claim a question is about is answering the question. Name it under\n"
                  ":standing-ask instead, saying how your repair bears on it. nido refuses an\n"
                  "amendment that changes one.\n"))
+          (when (seq asks-repaired)
+            (str "\nA numbered line hands you "
+                 (str/join ", " (map #(str "[" (:id %) "]") asks-repaired))
+                 " as well, which the question is also\n"
+                 "about. Repair the defect the line names and nothing the question decides:\n"
+                 (str/join
+                  (for [{:keys [id clauses]} asks-repaired]
+                    (if (seq clauses)
+                      (str "  [" id "] — keep these clauses word for word; every other clause is yours:\n"
+                           (str/join (map #(str "      " % "\n") clauses)))
+                      (str "  [" id "] — the question is about all of it. Change it only with a\n"
+                           "      :standing-ask on it saying how the change bears on the question. If\n"
+                           "      the line can only be repaired by answering the question, leave the\n"
+                           "      claim as it stands and put the line under :out-of-reach.\n"))))
+                 "nido refuses an amendment that does otherwise.\n"))
           "\nTHE QUESTION STILL STANDING IS NOT A LINE OUT OF YOUR REACH. Say so under\n"
           ":standing-ask, which stops nothing and leaves every line you repaired answered;\n"
           "filed under :out-of-reach against a line it reads as that line left unrepaired.\n"))
@@ -8805,23 +8852,83 @@
             (:amend-tree out)   (assoc :amend-tree (:amend-tree out))
             (:amend-launch out) (assoc :amend-launch (:amend-launch out))))))
 
-(defn- asked-claims
-  "The claim ids the round's :ask is about — the judge's asks_about and every claim a finding left for
-   the person names — less those a numbered line hands the amender to repair: a derivable defect on
-   an asked claim is the judge saying its repair settles nothing of the question. Empty on any
-   decision but an :ask."
+(defn- asked-scope
+  "What the round's question is about, as the amender is held to it: the judge's asks_about (on an
+   :ask, or carried from the reading before, `asked-about`) and every claim a finding left for the
+   person names. `{:held [id] :repaired [id] :clauses {id #{n}}}`, ids sorted:
+
+     :held      asked claims no numbered line hands the amender — left exactly as they stand
+     :repaired  asked claims a numbered line also hands it, for a derivable defect: repaired, but
+                never by answering the question (`asked-moves`)
+     :clauses   for a :repaired claim the ask named only by clause key (`clause-ref`), the clauses
+                it named. One named whole, or by id beside a key, has no entry.
+
+   Empty on a decision that carries no question."
   [ctx]
   (let [ids      #(cons (:claim-id %) (:claim-ids %))
-        repaired (into #{} (comp (mapcat ids) (map slug)) (:findings ctx))]
-    (into [] (comp (map slug) (remove str/blank?) (remove repaired) (distinct))
-          (sort (concat (get-in ctx [:record :asks-about]) (map str (mapcat ids (:asked-findings ctx))))))))
+        repaired (into #{} (comp (mapcat ids) (map slug)) (:findings ctx))
+        refs     (into [] (comp (map slug) (remove str/blank?) (map clause-ref))
+                       (concat (get-in ctx [:record :asks-about])
+                               (map str (mapcat ids (:asked-findings ctx)))))
+        asked    (into (sorted-set) (map first) refs)
+        whole    (into #{} (keep (fn [[id n]] (when-not n id))) refs)]
+    {:held     (vec (remove repaired asked))
+     :repaired (vec (filter repaired asked))
+     :clauses  (reduce (fn [m [id n]]
+                         (cond-> m (and n (repaired id) (not (whole id))) (update id (fnil conj (sorted-set)) n)))
+                       {} refs)}))
 
-(defn- asked-claims-moved
-  "Which of `asked` (`asked-claims`) the amendment `record` changes or drops against `prev`."
-  [prev record asked]
+(defn- named-clauses
+  "The text of each clause of claim `id` in `design` that `ns` (clause numbers) names, as the judge
+   was shown them (`subject-clauses`); a number past the claim's last clause names nothing."
+  [design id ns]
+  (let [cs (subject-clauses (get (settled/subjects design) id))]
+    (into [] (keep #(:text (get cs (dec %)))) ns)))
+
+(defn- asked-moves
+  "What the amendment `record` changes against `prev` that the person's question is about, given
+   `scope` (`asked-scope`) and `standing`, the ids the amender named under :standing-ask: one
+   `{:id :clause?}` per claim, nil when it moves none.
+
+   A :held claim changed or dropped is one. So is a :repaired claim that lost a clause the question
+   named, word for word — its other clauses are the repair's. And a :repaired claim the question
+   names whole, changed without the amender saying under :standing-ask how the change bears on the
+   question: nido cannot tell the repair's clause from the question's, and one whose repair can
+   only answer the question is left as it stands, its line under :out-of-reach."
+  [prev record {:keys [held repaired clauses]} standing]
   (let [{:keys [changed dropped]} (subject-delta prev record)
-        moved (into #{} (map slug) (concat changed dropped))]
-    (filterv moved asked)))
+        moved (into #{} (map slug) (concat changed dropped))
+        now   #(into #{} (map :text) (subject-clauses (get (settled/subjects record) %)))]
+    (not-empty
+     (into (mapv (fn [id] {:id id}) (filter moved held))
+           (keep (fn [id]
+                   (if-let [ns (get clauses id)]
+                     (when (and (moved id) (not-every? (now id) (named-clauses prev id ns)))
+                       {:id id :clause? true})
+                     (when (and (moved id) (not (contains? standing id)))
+                       {:id id}))))
+           repaired))))
+
+(defn- asked-refusal
+  "What the ledger-style refusal of an amendment that `asked-moves` found moving `moves` says."
+  [moves {:keys [repaired]}]
+  (let [[mine theirs] ((juxt filter remove) #(some #{(:id %)} repaired) moves)
+        ids #(str/join ", " (map (fn [m] (str "[" (:id m) "]")) %))]
+    (str "it changes "
+         (str/join "; and "
+                   (cond-> []
+                     (seq theirs)
+                     (conj (str (ids theirs) " — what the person's question is about, which is theirs to"
+                                " answer. Put each back exactly as it stands in the design you were given"))
+                     (seq (filter :clause? mine))
+                     (conj (str "a clause the person's question names in " (ids (filter :clause? mine))
+                                ". Put each named clause back word for word; the rest of the claim is"
+                                " yours to repair"))
+                     (seq (remove :clause? mine))
+                     (conj (str (ids (remove :clause? mine)) ", which a numbered line hands you and the"
+                                " person's question is about whole. Put each back exactly as it stands;"
+                                " its line goes to the person with their question"))))
+         ", and keep the rest of your repair")))
 
 (defn- design-amend-message
   "What the design amender is told to repair `prev` for this round's `recommend`, shown `baseline`
@@ -8834,7 +8941,11 @@
       :recommend recommend
       :reason (get-in ctx [:record :reason])
       :asks (get-in ctx [:record :asks])
-      :asks-about (asked-claims ctx)
+      :asks-about (:held (asked-scope ctx))
+      :asks-repaired (let [{:keys [repaired clauses]} (asked-scope ctx)]
+                       (mapv (fn [id] (cond-> {:id id}
+                                        (get clauses id) (assoc :clauses (named-clauses prev id (get clauses id)))))
+                             repaired))
       :raised (:findings ctx)
       ;; An ask's findings for the person are its question's,
       ;; and the prompt tells the amender that is not its to answer. So are the
@@ -8905,7 +9016,8 @@
 
         :else
         (let [{:keys [record disputes out-of-reach]} answer
-              asked  (asked-claims ctx)
+              scope  (asked-scope ctx)
+              standing (into #{} (keep :id) (:standing-ask answer))
               entry  (fn [retreats amended?]
                        (cond-> {:iter (:iter ctx) :findings (:findings ctx)
                                 :retreats retreats :disputes disputes :amended? amended?}
@@ -8950,12 +9062,8 @@
                                     ;; Refused like a ledger refusal, so the amender is asked to
                                     ;; put the asked claims back rather than the run stopping.
                                     :append (fn [record]
-                                              (if-let [moved (seq (asked-claims-moved prev record asked))]
-                                                {:record record
-                                                 :err (str "it changes " (str/join ", " (map #(str "[" % "]") moved))
-                                                           " — what the person's question is about, which is theirs to"
-                                                           " answer. Put each back exactly as it stands in the design you"
-                                                           " were given, and keep the rest of your repair")}
+                                              (if-let [moves (asked-moves prev record scope standing)]
+                                                {:record record :err (asked-refusal moves scope)}
                                                 (let [record (cite record)]
                                                   (try {:record record
                                                         :seq    (ws/seq-of-path

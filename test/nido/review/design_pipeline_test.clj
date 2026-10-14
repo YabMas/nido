@@ -2618,15 +2618,84 @@
     (is (str/includes? (second @prompts) "it changes [keyed-on-medium]")
         "an amendment that answers the person's question is refused, not appended")
     (is (= fixed (read-string appended)) "the repair beside it is what lands"))
-  (testing "a claim a numbered line hands the amender is its to repair"
-    (let [fixed (restating asked-design "keyed-on-medium" "narrowed")
+  (testing "a claim a numbered line hands the amender is held as well"
+    (let [prompts (atom [])
+          n       (atom 0)
+          fixed   (restating asked-design "keyed-on-medium" "narrowed")
           [out appended]
-          (with-amend {:prev asked-design :writes (fn [p] (spit p (pr-str {:record fixed})))}
+          (with-amend {:prev asked-design :prompts prompts
+                       :writes (fn [p] (spit p (pr-str {:record (if (= 1 (swap! n inc)) fixed asked-design)})))}
                       (ctx :findings [(assoc (check :goal-served :broken) :claim-ids ["keyed-on-medium"])]
                            :record (assoc (decision :ask) :asks-about ["keyed-on-medium"])))]
-      (is (empty? (:amend-refusals out)))
-      (is (= fixed (read-string appended))
-          "the judge filed a derivable defect on the asked claim, so its repair settles nothing asked"))))
+      (is (nil? (:status out)))
+      (is (str/includes? (second @prompts) "[keyed-on-medium], which a numbered line hands you")
+          "a derivable line on an asked claim is no licence to change what the question is about")
+      (is (= asked-design (read-string appended))))))
+
+;; Watched (ws-20261013-a392f7, e4a424): a derivable finding on the claim a person was being asked
+;; about let the amender narrow that claim along the very axis of the question, or widen scope to
+;; answer it, because the claim was exempt from the hold.
+(def ^:private two-clause-design
+  (restating asked-design "keyed-on-medium"
+             "Resolution is keyed on medium. A missing medium falls back to 512px."))
+
+(deftest a-derivable-repair-on-an-asked-claim-leaves-the-question-standing
+  (let [line [(assoc (check :goal-served :broken) :claim-ids ["keyed-on-medium"])]]
+    (testing "named whole, the claim changes only beside a :standing-ask on it"
+      (let [fixed (restating asked-design "keyed-on-medium" "resolution is keyed on medium, read once")
+            [out appended]
+            (with-amend {:prev asked-design
+                         :writes (fn [p] (spit p (pr-str {:record fixed
+                                                          :standing-ask [{:id "keyed-on-medium"
+                                                                          :because "reading it once settles nothing of the fallback"}]})))}
+                        (ctx :findings line :record (assoc (decision :ask) :asks-about ["keyed-on-medium"])))]
+        (is (empty? (:amend-refusals out))
+            "an amender that says how its repair bears on the question keeps the question the person's")
+        (is (= fixed (read-string appended)))))
+    (testing "named by clause, the clauses it names are held word for word"
+      (let [prompts (atom [])
+            n       (atom 0)
+            other   (restating two-clause-design "keyed-on-medium"
+                               "Resolution is keyed on medium, read once. A missing medium falls back to 512px.")
+            answer  (restating two-clause-design "keyed-on-medium"
+                               "Resolution is keyed on medium. A missing medium is refused.")
+            c       (ctx :findings line :record (assoc (decision :ask) :asks-about ["keyed-on-medium#2"]))
+            [out appended]
+            (with-amend {:prev two-clause-design :prompts prompts
+                         :writes (fn [p] (spit p (pr-str {:record (if (= 1 (swap! n inc)) answer other)})))}
+                        c)]
+        (is (str/includes? (first @prompts) "keep these clauses word for word")
+            "the amender is shown which clauses are the person's before it writes")
+        (is (str/includes? (first @prompts) "      A missing medium falls back to 512px.\n"))
+        (is (str/includes? (second @prompts) "a clause the person's question names in [keyed-on-medium]")
+            "a repair that rewrites the clause the question is about answers it, and is handed back")
+        (is (nil? (:status out)))
+        (is (= other (read-string appended))
+            "a repair of the claim's other clause is the amender's, and lands")))))
+
+;; Watched (ws-20261013-9d71b9): a cold second reading recommended :amend over the first reading's
+;; :ask, and the amender narrowed the asked claims — the repair decided the scope question R1 asked.
+(deftest an-amend-over-a-standing-ask-holds-the-amender-to-the-asked-claims
+  (let [appended (atom [])
+        amend    (-> (decision :amend :checks [(check :goal-served :broken)]
+                               :findings [{:cites ["src/a.clj:3"] :claim "misses a path"
+                                           :check :goal-served :claim-id "pool-in-scope"}])
+                     (dissoc :asks)
+                     (assoc :confirmed ["rounded-once"] :checked-at {"rounded-once" ["src/a.clj:2"]}))
+        answers  (atom [asks-the-person amend])]
+    (judging-a-model-design
+     asks-the-person appended
+     (fn []
+       (with-redefs [record/design-decision! (fn [opts] (let [a (first @answers)] (swap! answers rest) (named-by a opts)))
+                     record/append! (fn [_ r] {:seq (count (swap! appended conj r))})]
+         (let [r1 (run record/design-judge-stage (ctx))
+               r2 (run record/design-judge-stage (ctx :carry (:carry r1)))
+               d2 (second @appended)]
+           (is (= ["pool-in-scope"] (:asks-about d2))
+               "the departing reading carries what the question it holds is about, not only its words")
+           (is (= {:held [] :repaired ["pool-in-scope"] :clauses {}} (#'record/asked-scope r2))
+               "so the amender it hands on to is held to the asked claim like an ask's own")
+           (is (report/validate-event :design-decision d2) "and the ledger takes it")))))))
 
 (deftest a-standing-ask-leaves-the-repaired-line-answered
   ;; Filed under :out-of-reach against the line it had repaired, 'the question still stands' made
