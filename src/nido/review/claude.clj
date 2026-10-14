@@ -80,6 +80,26 @@
            last))
     (catch Exception _ nil)))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :string]] :boolean]}
+  failed-call?
+  "Whether the stream at `log-path` shows a tool call that failed: a `tool_result` the CLI marked
+   an error — a refused command, one that exited non-zero — or a final `result` listing permission
+   denials. False when the log cannot be read: a failure the log does not show is not one this
+   reading can be held to."
+  [log-path]
+  (try
+    (with-open [r (io/reader log-path)]
+      (boolean
+       (some (fn [line]
+               (when (str/starts-with? line "{")
+                 (let [e (try (json/parse-string line true) (catch Exception _ nil))]
+                   (or (and (= "result" (:type e)) (seq (:permission_denials e)))
+                       (and (= "user" (:type e))
+                            (some #(and (map? %) (= "tool_result" (:type %)) (true? (:is_error %)))
+                                  (let [c (get-in e [:message :content])] (when (sequential? c) c))))))))
+             (line-seq r))))
+    (catch Exception _ false)))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   run-claude!
   "Run claude as a reviewer over `opts` — the keys `codex/run-codex!` takes, plus an optional

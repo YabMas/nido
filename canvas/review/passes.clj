@@ -18,7 +18,11 @@
   (Operation claude-argv "The argument vector for one claude review."
     {:signature [:=> [:catn [:opts :map]] :any]})
   (Operation run-claude! "Run claude as a reviewer and keep its answer."
-    {:signature [:=> [:catn [:opts :map]] :map] :delegates [claude-argv]}))
+    {:signature [:=> [:catn [:opts :map]] :map] :delegates [claude-argv]})
+  (Operation failed-call?
+    "Whether a claude review's stream shows a tool call that was refused or errored — false when
+     the log cannot be read."
+    {:signature [:=> [:catn [:log-path [:maybe :string]]] :boolean]}))
 
 (Module review-codex
   "Launching a reviewer: codex unless a run or its project names claude, and claude in codex's
@@ -48,6 +52,18 @@
     "The reviewer that is not the one given — who reads a record the second time, so two agreeing
      readings are two judges agreeing."
     {:signature [:=> [:catn [:reviewer :keyword]] :keyword]})
+  (Operation executes?
+    "Whether a reviewer can run commands of its choosing, as against only read the tree. A clause
+     about what a host does is observed by one kind of reader and inferred by the other."
+    {:signature [:=> [:catn [:reviewer :any]] :boolean]})
+  (Operation tool-failed?
+    "Whether the log a reviewer streamed shows a call of its denied or errored — the only ground a
+     judge's tool-failure cause stands on, since a refusal it predicted and never met is none."
+    {:signature [:=> [:catn [:reviewer :any] [:log-path [:maybe :string]]] :boolean]
+     :delegates [failed-call?]})
+  (Operation log-of
+    "Where the reading a judgement names streamed: the round's log, or a stand-in's beside it."
+    {:signature [:=> [:catn [:log-path :string] [:judged-by :map]] :string]})
   (Operation reviewer-for
     "The reviewer a run is judged by: its own choice, else its project's, else codex. A name that
      is no reviewer is refused, never read as the default."

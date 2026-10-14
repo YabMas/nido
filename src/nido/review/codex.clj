@@ -175,6 +175,50 @@
   "The reviewer when neither the run nor its project names one."
   :codex)
 
+(def ^:private executing
+  "The reviewers whose sandbox runs a command they choose: codex's read-only sandbox runs anything
+   that writes nothing, while claude's shell admits only the reads `claude/allowed-commands` names.
+   A clause about what a host DOES — a binary missing, a script exiting 127 — is observed by the
+   first and only inferred by the second, so which kind of reader ruled is part of the ruling."
+  #{:codex})
+
+(defn ^{:malli/schema [:=> [:cat :any] :boolean]}
+  executes?
+  "Whether `reviewer` can run a command of its choosing. False for nil and for any name not a
+   reviewer: a reading nobody can place is not one to credit with having observed anything."
+  [reviewer]
+  (contains? executing reviewer))
+
+(def ^:private codex-failed-call
+  "How codex's stream ends an `exec` block whose command did not succeed: ` exited <n> in <t>`. A
+   command that succeeded ends ` succeeded in <t>`."
+  #"(?m)^\s*exited -?\d+ in \d")
+
+(defn ^{:malli/schema [:=> [:cat :any [:maybe :string]] :boolean]}
+  tool-failed?
+  "Whether the log `reviewer` streamed to `log-path` shows a tool call of its that was denied or
+   errored — the only ground a judge's `tool-failure` cause can stand on. A judge that predicts a
+   refusal and never makes the call has observed nothing about its tools. False when the log
+   cannot be read, or `reviewer` is none `reviewers` names."
+  [reviewer log-path]
+  (boolean
+   (when log-path
+     (case reviewer
+       :codex  (some->> (try (slurp log-path) (catch Throwable _ nil)) (re-find codex-failed-call))
+       :claude (claude/failed-call? log-path)
+       false))))
+
+(declare stand-in-log)
+
+(defn ^{:malli/schema [:=> [:cat :string :map] :string]}
+  log-of
+  "Where the reading `judged-by` names streamed, for a round that asked for `log-path`: the log
+   itself, or a stand-in's beside it (`run-reviewer!`)."
+  [log-path judged-by]
+  (if (:instead-of judged-by)
+    (stand-in-log log-path (:reviewer judged-by))
+    log-path))
+
 (defn ^{:malli/schema [:=> [:cat :keyword] :keyword]}
   other-reviewer
   "The reviewer that is not `reviewer` — who reads a record a second time, so that two agreeing
@@ -264,8 +308,8 @@
    `unavailability`'s map, so a caller tells an absent reviewer from a failed
    review without reading a log. :exit and :log-path are the LAST run's, since
    the stand-in's log is a different file. :judged-by says who that was:
-   {:reviewer <kw>}, plus :instead-of and :because (the line that made it stand
-   in) when it was a stand-in.
+   {:reviewer <kw> :executes? <bool>} (`executes?`), plus :instead-of and :because
+   (the line that made it stand in) when it was a stand-in.
 
    The primary runs first every time, including on a round after one it could not
    run in. A quota can lift mid-run, and nothing in the log says when codex's
@@ -278,7 +322,8 @@
   (let [reviewer (or reviewer default-reviewer)
         [ran u]  (loop [waits transient-retries-ms]
                    (let [{:keys [exit]} (run-one! reviewer opts)
-                         ran {:exit exit :log-path log-path :judged-by {:reviewer reviewer}}
+                         ran {:exit exit :log-path log-path
+                              :judged-by {:reviewer reviewer :executes? (executes? reviewer)}}
                          u   (why-unavailable ran out-path)]
                      (if (and (transient-signals (:signal u)) (seq waits))
                        (do (sleep! (first waits)) (recur (rest waits)))
@@ -290,6 +335,7 @@
             ran' {:exit      exit
                   :log-path  log'
                   :judged-by {:reviewer   (:reviewer stand-in)
+                              :executes?  (executes? (:reviewer stand-in))
                               :instead-of reviewer
                               :because    (:message u)}}]
         (cond-> ran'

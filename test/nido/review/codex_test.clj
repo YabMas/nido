@@ -131,7 +131,7 @@
 (deftest a-run-that-names-no-reviewer-is-judged-by-codex
   (let [{:keys [judged-by calls]} (judged {:codex {:answers? true} :claude {:answers? true}})]
     (is (= [[:codex "stack-round-1.log"]] calls))
-    (is (= {:reviewer :codex} judged-by))))
+    (is (= {:reviewer :codex :executes? true} judged-by))))
 
 (deftest a-codex-out-of-quota-hands-the-review-to-claude
   (let [{:keys [exit log-path judged-by calls]}
@@ -164,7 +164,7 @@
                  :claude {:log "Claude AI usage limit reached|1790000000\n"}})]
     (is (= [[:claude "stack-round-1.log"]] calls)
         "codex is never asked, whatever claude's log says")
-    (is (= {:reviewer :claude} judged-by))))
+    (is (= {:reviewer :claude :executes? false} judged-by))))
 
 ;; ── A vendor at capacity ────────────────────────────────────────────────────
 
@@ -214,7 +214,7 @@
     (is (zero? exit) "one blip must not cost the run that a second request a moment later answers")
     (is (nil? unavailable))
     (is (= [:codex :codex] calls) "the same reviewer — capacity is no reason to change judges")
-    (is (= {:reviewer :codex} judged-by))
+    (is (= {:reviewer :codex :executes? true} judged-by))
     (is (= 1 (count slept)) "after a backoff, not straight back into the same wall")))
 
 (deftest a-capacity-refusal-that-persists-is-reported-as-the-vendors-line
@@ -256,3 +256,33 @@
     (spit f "thinking\nworking on it\ntokens used\n1,203\n")
     (is (= "working on it" (codex/last-line f))
         "with no ERROR, the last line above the footer is still the reviewer's last words")))
+
+(deftest only-a-failed-call-in-the-stream-grounds-a-tool-failure
+  ;; Watched: a claude judge declared a subject unchecked for a tool failure on a refusal it only
+  ;; predicted — its transcript held no shasum call at all — and the cause took the subject out of
+  ;; pairing and away from its amender.
+  (let [dir    (fs/create-temp-dir)
+        write  (fn [n s] (let [f (str (fs/path dir n))] (spit f s) f))
+        codex-ok   (write "c1.log" "exec\n/bin/zsh -lc 'rg x' in /t\n succeeded in 0ms:\nsrc/a.clj:1:x\n")
+        codex-fail (write "c2.log" "exec\n/bin/zsh -lc 'clj-nrepl-eval -p 1 x' in /t\n exited 1 in 12ms:\ncannot create temp file\n")
+        claude-ok  (write "a1.log" (str "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"is_error\":false,\"content\":\"ok\"}]}}\n"
+                                        "{\"type\":\"result\",\"is_error\":false,\"permission_denials\":[]}\n"))
+        claude-err (write "a2.log" "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"is_error\":true,\"content\":\"denied\"}]}}\n")
+        claude-den (write "a3.log" "{\"type\":\"result\",\"is_error\":false,\"permission_denials\":[{\"tool_name\":\"Bash\"}]}\n")]
+    (is (not (codex/tool-failed? :codex codex-ok)) "every command codex ran succeeded")
+    (is (codex/tool-failed? :codex codex-fail) "codex marks a failed exec `exited <n> in`")
+    (is (not (codex/tool-failed? :claude claude-ok)) "a stream with no error and no denial shows no failure")
+    (is (codex/tool-failed? :claude claude-err) "a tool_result the CLI marked an error is a failed call")
+    (is (codex/tool-failed? :claude claude-den) "a permission denial is a failed call")
+    (is (not (codex/tool-failed? :claude (str (fs/path dir "absent.log"))))
+        "a log that cannot be read grounds nothing")
+    (is (not (codex/tool-failed? :claude codex-fail))
+        "each reviewer's stream is read in its own format, so codex's text proves nothing of claude")))
+
+(deftest which-reviewers-can-run-commands
+  (is (codex/executes? :codex) "codex's read-only sandbox runs any command that writes nothing")
+  (is (not (codex/executes? :claude)) "claude's shell admits only jj reads and grep")
+  (is (not (codex/executes? nil)) "a reading nobody can place observed nothing")
+  (is (= "/r/x.log" (codex/log-of "/r/x.log" {:reviewer :codex})))
+  (is (= "/r/x-claude.log" (codex/log-of "/r/x.log" {:reviewer :claude :instead-of :codex}))
+      "a stand-in streams beside the log of the reviewer it replaced"))

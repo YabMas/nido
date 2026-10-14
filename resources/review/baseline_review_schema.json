@@ -72,7 +72,7 @@
               "out-of-code",
               "tool-failure"
             ],
-            "description": "out-of-code: the evidence is not in the code, so no reading of the code can have it. tool-failure: a tool you needed to check it failed here — the sandbox denied it, a command errored or hung — so another reading with the same tools would fail the same way."
+            "description": "out-of-code: the evidence is not in the code, so no reading of the code can have it. tool-failure: a call you made to a tool you needed was denied or errored here — only one you made and saw fail, never one you expect to be refused; try it first. Your transcript is checked, and a tool-failure it does not show is read as plain unchecked."
           }
         }
       }

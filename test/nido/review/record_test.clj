@@ -2635,3 +2635,122 @@
         "p#2 held then false flips, p#3 false twice does not, and p#2 over new words pairs with nothing")
     (is (nil? (:clause-flip-rate (record/run-figures (mapv #(assoc % :code-identity (str "t" (:seq %))) es))))
         "rulings at different trees are not the same reading repeated")))
+
+(deftest a-tool-failure-stands-only-on-a-failed-call-in-the-judges-stream
+  ;; Watched: a judge marked digest-is-gnu-listing unchecked for a tool failure with no shasum call
+  ;; anywhere in its transcript — a refusal it predicted — and the cause took the subject out of
+  ;; pairing and away from its amender.
+  (let [dir    (fs/create-temp-dir)
+        quiet  (str (fs/path dir "quiet.log"))
+        failed (str (fs/path dir "failed.log"))
+        json   (baseline-json {:verdict "sufficient" :reason "r" :confirmed [] :findings []
+                               :unchecked [{:id "digest" :reason "the shell runs only jj and grep"
+                                            :cause "tool-failure"}]})
+        parse  #(record/parse-baseline-review % 3)]
+    (try
+      (spit quiet "exec\n/bin/zsh -lc 'rg x' in /t\n succeeded in 0ms:\n")
+      (spit failed "exec\n/bin/zsh -lc 'shasum -a 256 f' in /t\n exited 127 in 3ms:\n")
+      (is (= [{:id "digest" :reason "the shell runs only jj and grep"}]
+             (:unchecked (#'record/judged {:ok json :log-path quiet :judged-by codex} parse)))
+          "a failure the stream does not show is the judge's prediction, read as plain unchecked")
+      (is (= [{:id "digest" :reason "the shell runs only jj and grep" :tool-failure true}]
+             (:unchecked (#'record/judged {:ok json :log-path failed :judged-by codex} parse)))
+          "a call the judge made and saw fail is what the cause is for")
+      (finally (fs/delete-tree dir)))))
+
+(deftest a-tool-failure-does-not-clear-a-confirmation-read-once
+  ;; Watched: claude confirmed pdfbox-render once; codex, whose sandbox refused clj-nrepl-eval, left
+  ;; it unchecked for a tool failure, which cleared the second reading it was owed. Only another
+  ;; claim's read-once kept the run going to the round where claude refuted it by grep.
+  (let [failed {:format :baseline-review
+                :unchecked [{:id "pdfbox-render" :reason "clj-nrepl-eval failed" :tool-failure true}]}]
+    (is (= ["pdfbox-render"]
+           (:read-once (#'record/with-readings failed (constantly true)
+                                               {:carried {"pdfbox-render" {:ruling :holds :judged-by {:reviewer :claude}
+                                                                           :first-reading true}}
+                                                :asked ["pdfbox-render"]})))
+        "a carried first reading is still owed its second: the other judge does not share the tools that failed")
+    (is (= ["pdfbox-render"]
+           (:read-once (#'record/with-readings (assoc failed :code-identity "t" :judged-by codex)
+                                               (constantly true)
+                                               {:standing {"pdfbox-render" {:seq 8 :ws-id "w" :judged-by {:reviewer :claude}}}
+                                                :single ["pdfbox-render"]
+                                                :asked ["pdfbox-render"]})))
+        "nor is a confirmation standing on the ledger on one reading")))
+
+(deftest an-unchecked-claim-whose-every-clause-held-is-no-ruling
+  ;; Watched: codex marked pdfbox-render unchecked for a tool failure while ruling all three of its
+  ;; clauses held, with evidence and searches — and the claim-level word was taken.
+  (let [owed {"p" [{:key "p#1" :text "It renders." :field :statement :search? false}
+                   {:key "p#2" :text "It crops." :field :statement :search? false}]
+              "q" [{:key "q#1" :text "It costs." :field :statement :search? false}
+                   {:key "q#2" :text "It scales." :field :statement :search? false}]}
+        r    (#'record/held-to-clauses
+              {:unchecked [{:id "p" :reason "eval failed" :tool-failure true}
+                           {:id "q" :reason "needs a measurement"}]
+               :clause-rulings {"p#1" {:ruling :held :evidence ["a.clj:1"] :search ""}
+                                "p#2" {:ruling :held :evidence ["a.clj:2"] :search ""}
+                                "q#1" {:ruling :held :evidence ["a.clj:3"] :search ""}}}
+              owed)]
+    (is (= ["p"] (:unruled r)) "read true and unreadable at once is neither, and the round is asked again")
+    (is (= ["p"] (:unchecked-over-held r)) "and the reader is told why it is unruled")
+    (is (= [{:id "q" :reason "needs a measurement"}] (:unchecked r))
+        "a claim with a clause it could not hold is an ordinary unchecked")
+    (is (report/validate-event :baseline-review (assoc r :format :baseline-review :verdict :sufficient
+                                                       :reason "r" :baseline-seq 1))
+        "and the ledger takes it")))
+
+(deftest a-reader-that-cannot-execute-is-marked-when-it-withdraws-an-observation
+  ;; Watched: codex observed exit 127 by sourcing ci/lib.sh; claude, whose shell runs only jj and
+  ;; grep, later refuted the same clause by reasoning from the record, and only an amender's dispute
+  ;; restored it.
+  (let [held (#'record/held-clauses
+              [{:seq 3 :judged-by {:reviewer :codex :executes? true}
+                :clause-readings {"swallowed#2" {:ruling :held :text "errors are swallowed."}}}
+               {:seq 4 :judged-by {:reviewer :claude :executes? false}
+                :clause-readings {"lib#1" {:ruling :held :text "it calls sha256sum."}}}])
+        read (fn [judge] (#'record/with-readings
+                          {:format :baseline-review :judged-by judge
+                           :clause-readings {"swallowed#2" {:ruling :false :text "errors are swallowed."}
+                                             "lib#1"       {:ruling :false :text "it calls sha256sum."}}}
+                          (constantly false) {:held held}))
+        r    (read {:reviewer :claude :executes? false})]
+    (is (= [{:clause "lib#1" :seq 4} {:clause "swallowed#2" :seq 3 :by-inference true}]
+           (:contradicts-held-clause r))
+        "an inference against an observation is marked; one against another inference is not")
+    (is (not-any? :by-inference (:contradicts-held-clause (read {:reviewer :codex :executes? true})))
+        "a reader that can run the command has observed as much as the one it contradicts")
+    (is (report/validate-event :baseline-review (assoc r :verdict :sufficient :reason "r" :baseline-seq 1))
+        "and the ledger takes it")))
+
+(deftest a-reader-that-cannot-execute-is-handed-what-an-executing-one-observed
+  (let [ctx  {:carry {:quiet {:seq 7 :trace "/runs/r/baseline-review-round-3.log"
+                              :read {"lib" {:ruling :holds :judged-by {:reviewer :codex :executes? true}
+                                            :at ["ci/lib.sh:12" "PATH=/usr/bin:/bin sourcing exits 127"]}
+                                     "tag" {:ruling :holds :judged-by {:reviewer :claude :executes? false}
+                                            :at ["ci/tag.sh:3"]}}}}}
+        got  (#'record/executed-readings ctx {:seq 7} :claude)
+        text (#'record/executed-block got)]
+    (is (= {:trace "/runs/r/baseline-review-round-3.log"
+            :read {"lib" {:ruling :holds :at ["ci/lib.sh:12" "PATH=/usr/bin:/bin sourcing exits 127"]}}}
+           got)
+        "only what a judge that could run commands read, with the transcript it ran them in")
+    (is (nil? (#'record/executed-readings ctx {:seq 7} :codex))
+        "a reader that can run commands observes for itself, and stays cold")
+    (is (nil? (#'record/executed-readings ctx {:seq 8} :claude))
+        "readings of another record are not this one's")
+    (is (str/includes? text "/runs/r/baseline-review-round-3.log") "the transcript is named, to be read")
+    (is (str/includes? text "- [lib] holds: ci/lib.sh:12; PATH=/usr/bin:/bin sourcing exits 127"))
+    (is (nil? (#'record/executed-block nil)))))
+
+(deftest a-second-reading-carries-what-the-first-was-and-where-it-read
+  (let [record {:format :baseline-review :judged-by {:reviewer :codex :executes? true}
+                :confirmed ["lib"] :checked-at {"lib" ["ci/lib.sh:12"]} :first-reading ["lib"]}
+        ctx    (#'record/second-reading {:iter 3 :config {:run-id "run-1"}} {:seq 7} record)
+        q      (get-in ctx [:carry :quiet])]
+    (is (= {:ruling :holds :judged-by {:reviewer :codex :executes? true}
+            :first-reading true :at ["ci/lib.sh:12"]}
+           (get-in q [:read "lib"]))
+        "the next round needs to know it was a first reading, and a non-executing reader where it was read")
+    (is (str/ends-with? (:trace q) "run-1/baseline-review-round-3.log")
+        "the transcript is the round's own log")))

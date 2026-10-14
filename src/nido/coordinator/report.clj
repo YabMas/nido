@@ -2569,9 +2569,15 @@
 
    Kept on the judgement because a record's confirmations settle subjects for later rounds whoever
    made them, and a stand-in judging for a quota-blocked reviewer is not the instrument a reader of
-   the ledger would otherwise assume — on a design run, it can be the amender's own model."
+   the ledger would otherwise assume — on a design run, it can be the amender's own model.
+
+   `:executes?` is whether that reviewer could run commands of its choosing, as against only read
+   the tree. A clause about what a host does is observed by one and inferred by the other, so a
+   reader weighing two readings that disagree needs to know which was which. Absent on a judgement
+   from before it was kept, which says neither."
   [:map {:closed true}
    [:reviewer   keyword?]
+   [:executes?  {:optional true} boolean?]
    [:instead-of {:optional true} keyword?]
    [:because    {:optional true} string?]])
 
@@ -2603,11 +2609,14 @@
    citing nothing is the judge's word, and is counted as no ruling at all.
    :unchecked is what the judge declared it could not check here, and why — evidence that is not
    in the code (production data, a deploy history), say. A ruling, visibly not a confirmation.
-   :tool-failure on one marks a tool the judge needed failing (a sandbox denial, say), which a
-   further reading with the same tools would only repeat.
+   :tool-failure on one marks a tool the judge needed failing (a sandbox denial, say), kept only
+   when the judge's own stream shows a call of its denied or errored — a refusal it predicted and
+   never met is a plain unchecked.
    :unruled is every check the judge left without any ruling: not confirmed with evidence, not
    found against, not declared unchecked (nor, on a decision, :owed). Derived by the round, never
    by the judge, and it is what stops the judgement holding — see `review-holds?` and `proceeds?`.
+   :unchecked-over-held is those of them the judge declared unchecked while holding every clause
+   it was listed: two rulings that cannot both stand, so neither is taken.
    :read-once is every id the judgement was asked to rule on and confirmed (or, on a decision, held
    :owed) that no reading before it by another judge, at the same content and tree, had: a first
    reading. Derived by the round, and it stops the judgement holding too — one clean reading of a record is a sample, and the round
@@ -2639,7 +2648,9 @@
    is, but naming the entry, which :splits does not. :contradicts-held-clause is the same denial a
    clause at a time: each clause this judgement ruled false that its run last ruled held in the same
    words, naming the entry that held it — a held clause beside a false one confirms nothing by id,
-   so nothing else withdraws it.
+   so nothing else withdraws it. :by-inference on one says this judgement could not run commands
+   and the one that held it could: a reading of the text against an observation, which a reader
+   weighs as such.
    :spent is each subject this judgement still holds open — refutes, or asks a person about — that
    its lineage has refuted that many readings running, counting this judgement, among those an
    amender is offered a weakening, withdrawal or restatement for (`nido.review.record/spent`) —
@@ -2668,6 +2679,7 @@
    [:unchecked  {:optional true} [:vector [:map {:closed true} [:id string?] [:reason string?]
                                            [:tool-failure {:optional true} [:= true]]]]]
    [:unruled    {:optional true} [:vector string?]]
+   [:unchecked-over-held {:optional true} [:vector string?]]
    [:read-once  {:optional true} [:vector string?]]
    [:first-reading {:optional true} [:vector string?]]
    [:amendment-read-once {:optional true} [:= true]]
@@ -2688,7 +2700,8 @@
    [:contradicts-read-once {:optional true} [:vector [:map {:closed true}
                                                       [:id string?] [:seq int?] [:ws-id string?]]]]
    [:contradicts-held-clause {:optional true} [:vector [:map {:closed true}
-                                                        [:clause string?] [:seq int?]]]]
+                                                        [:clause string?] [:seq int?]
+                                                        [:by-inference {:optional true} [:= true]]]]]
    [:spent      {:optional true} [:map-of string? pos-int?]]
    [:spent-awaiting {:optional true} [:vector string?]]])
 

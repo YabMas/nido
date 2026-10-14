@@ -175,6 +175,34 @@
            "finding, naming its id.\n"
            (str/join "\n" (map #(str "- " %) lines)) "\n"))))
 
+(defn- executed-block
+  "What the reading before this one observed by running commands, put in front of a judge that
+   cannot run any: `executed` is `{:trace <log path> :read {id {:ruling :holds|:owed :at [ref …]}}}`,
+   or nil for no block.
+
+   This judge is otherwise cold, and that is what makes its agreement a second reading. The
+   exception is a reader without a shell meeting an executing one's observation: it has nothing to
+   weigh the observation with but the text, and from the text it refuted a clause the first reader
+   had seen hold by running it. So it is shown the sites and the transcript, and told that an
+   inference does not refute an observation — not told to agree."
+  [executed]
+  (when (seq (:read executed))
+    (str "\nOBSERVED BY RUNNING COMMANDS. The reading before yours was made by a reviewer\n"
+         "whose sandbox runs commands; yours does not. It ruled these sound, at the sites\n"
+         "below"
+         (when (:trace executed)
+           (str ", and its transcript — every command it ran and what it printed — is\n"
+                (:trace executed) ", which you can Read"))
+         ".\n"
+         "Check them as you would any claim. But a clause it observed by running a\n"
+         "command is not refuted by reasoning from the text alone: refute it only with a\n"
+         "counterexample you can cite in the code or in that transcript. What you could\n"
+         "only have settled by running something, leave unchecked.\n"
+         (str/join (for [[id {:keys [ruling at]}] (sort-by key (:read executed))]
+                     (str "- [" id "] " (name ruling)
+                          (when (seq at) (str ": " (str/join "; " at)))
+                          "\n"))))))
+
 (defn ^{:malli/schema [:=> [:cat :any] :string]}
   disputes-block
   "What an earlier round's amender said back, put in front of the judge.
@@ -857,7 +885,7 @@
 
    `running` is `refuted-running` over the lineage before this round; what a judge asks of a claim
    it counts as spent is held to narrowing (`spent-needs-block`). nil names none."
-  [{:keys [baseline disputes settled stance prior moved stale running]}]
+  [{:keys [baseline disputes settled stance prior moved stale running executed]}]
   (let [full     (judged-alone baseline)
         baseline (checks-of full (set (keys settled)))
         owed     (owed-rulings full settled)
@@ -1060,6 +1088,8 @@
      (spent-needs-block (select-keys running (filter (retreat/claim-ids full) owed))))
    (when-not derive?
      (stale-block (apply dissoc stale (keys settled))))
+   (when-not derive?
+     (executed-block (update executed :read #(apply dissoc % (keys settled)))))
    (disputes-block disputes)
    ;; Last thing in the window before the judge starts work. The level is stated
    ;; near the top, thousands of tokens back by the time the record has been
@@ -1673,7 +1703,8 @@
 
    `:relation-prior` is `relation-prior`'s: the last decision's rulings, shown beside the ids to rule
    on with whether the record moved under each since."
-  [{:keys [design baseline stance intent disputes settled levels prior answers relation-prior stale]}]
+  [{:keys [design baseline stance intent disputes settled levels prior answers relation-prior stale
+           executed]}]
   (let [owes?        (report/owes-a-person? design)
         design       (judged-alone design)
         baseline     (judged-alone baseline)
@@ -1859,7 +1890,10 @@
    "on it, cites what you observed on the host — the output of running it here\n"
    "(`command -v <tool>`, `<tool> --version`). Documentation, a man page or a\n"
    "package page says what is true of some host, not of this one; it is not\n"
-   "evidence for a host finding. Cannot run it? Leave the claim unchecked with why.\n\n"
+   "evidence for a host finding. Cannot run it? Leave the claim unchecked with why —\n"
+   "unless the claim is about what this change will build. That one is owed until\n"
+   "it is built, even when a host binary its premise names cannot be run here:\n"
+   "nothing you could run would show code that does not exist yet.\n\n"
    (clause-rules (clauses-owed design (decision-asked design settled)) true)
    "Populate confirmed with the claims you checked and found to hold — each by its\n"
    "id, the bracketed slug without the brackets, with the file:line references you\n"
@@ -1903,6 +1937,7 @@
    (answered-block owes? (:seq design) (:open design) answers)
    (prior-findings-block (apply dissoc prior (keys settled)))
    (stale-block (apply dissoc stale (keys settled)))
+   (executed-block (update executed :read #(apply dissoc % (keys settled))))
    (disputes-block disputes)
    (level-reminder :commitment))))
 
@@ -2075,8 +2110,9 @@
 
 (defn- parse-unchecked
   "The subjects a judge said it could not check here, each with its reason; one per id. One whose
-   cause was a tool failing carries :tool-failure — a reading with the same tools fails the same
-   way, so it owes no second reading and is not counted toward an amender's handover."
+   cause was a tool failing carries :tool-failure — no amender repairs a sandbox, so it is not
+   counted toward an amender's handover. The judge's word only: `judged` takes it off again unless
+   the judge's stream shows the failure."
   [raw]
   (into [] (comp (keep (fn [e] (when (map? e)
                                  (let [id (slug (:id e))]
@@ -2196,10 +2232,25 @@
    is what lets a later reading be compared with this one: a key is a clause's position in its
    subject, so after an amendment the same key can name another sentence.
 
-   A subject only :unchecked owes no clause: it was ruled as out of the code's reach."
+   A subject only :unchecked owes no clause: it was ruled as out of the code's reach. One whose
+   every listed clause the same judgement held, citing what a held ruling owes, was not: the
+   judgement says both that it read the claim true and that it could not read it, so neither is
+   taken. It leaves :unchecked for :unruled, and the round is asked again.
+   :unchecked-over-held names it there, since :unruled alone reads as a judge that said nothing."
   [result owed]
   (let [rulings  (:clause-rulings result)
         open-any (into #{} (mapcat #(open-clauses % rulings)) (vals owed))
+        held-all (into #{} (keep (fn [{:keys [id]}]
+                                   (let [cs (get owed id)]
+                                     (when (and (seq cs) (empty? (open-clauses cs rulings))
+                                                (every? #(= :held (get-in rulings [(:key %) :ruling])) cs))
+                                       id))))
+                       (:unchecked result))
+        result   (cond-> result
+                   (seq held-all) (-> (update :unchecked #(not-empty (filterv (complement (comp held-all :id)) %)))
+                                      (update :unruled #(vec (sort (into (set %) held-all))))
+                                      (assoc :unchecked-over-held (vec (sort held-all)))))
+        result   (cond-> result (nil? (:unchecked result)) (dissoc :unchecked))
         readings (into (sorted-map)
                        (for [cs (vals owed)
                              {:keys [key text]} cs
@@ -2818,16 +2869,24 @@
    predecessor revision with jj unprompted; without the flag jj snapshots the working copy first,
    the read-only sandbox denies that lock write, and the claim it was reading for comes back
    unchecked for a reason that has nothing to do with the claim. First rather than last, because
-   the prompts end on the list the judge's answer is drawn from."
+   the prompts end on the list the judge's answer is drawn from.
+
+   No REPL for the same reason: a judge handed a claim about runtime behaviour reaches for
+   `clj-nrepl-eval`, which fails creating its temp file in the sandbox, and it then demoted a claim
+   whose every clause it had held."
   (str "Run every jj command with --ignore-working-copy (`jj --ignore-working-copy log …`,\n"
        "`jj --ignore-working-copy file show -r <rev> -- <path>`), or jj tries to snapshot\n"
-       "the working copy and the read-only sandbox denies the lock write.\n\n"))
+       "the working copy and the read-only sandbox denies the lock write.\n\n"
+       "No REPL is reachable from this review: `clj-nrepl-eval` and every other nREPL\n"
+       "client fail in the read-only sandbox. Do not reach for one. Rule from the code;\n"
+       "a claim only a running process could settle is unchecked, cause out-of-code.\n\n"))
 
 (defn- run-round!
   "One read-only reviewer pass over a record — `:reviewer`, or codex, with
    codex's stand-in when codex has run out of quota (`codex/run-reviewer!`).
-   Returns {:ok <json-string> :judged-by <map>} or {:outcome <kw> :detail <str>} — never nil,
-   and never throws. :judged-by is `codex/run-reviewer!`'s, naming a stand-in when one answered.
+   Returns {:ok <json-string> :judged-by <map> :log-path <str>} or {:outcome <kw> :detail <str>} —
+   never nil, and never throws. :judged-by is `codex/run-reviewer!`'s, naming a stand-in when one
+   answered, and :log-path the stream of whoever did.
 
    The outcome is tagged rather than collapsed because a judgment surface cannot
    afford one confusion above all others: a round that never ran must not read
@@ -2874,7 +2933,7 @@
                                        :detail (str who " exited " exit " — see " ran-log)}
           (not (fs/exists? out-path)) {:outcome :no-output
                                        :detail (str who " wrote no answer to " out-path)}
-          :else                       (cond-> {:ok (slurp out-path)}
+          :else                       (cond-> {:ok (slurp out-path) :log-path ran-log}
                                         judged-by (assoc :judged-by judged-by)))))
     (catch Throwable t
       {:outcome :round-crashed :detail (or (ex-message t) (str (class t)))})))
@@ -2895,7 +2954,10 @@
    unusable, which is a different fact from the judge never speaking.
 
    A judgement — a parse carrying :format — keeps who answered as :judged-by, so a stand-in's
-   ruling is appended and reported as the stand-in's.
+   ruling is appended and reported as the stand-in's. Its :unchecked keeps :tool-failure only where
+   that judge's stream (`result`'s :log-path) shows a call of its denied or errored
+   (`codex/tool-failed?`): the cause exempts a subject from its second reading and its amender, and
+   a judge has claimed it for a refusal it only predicted.
 
    A parse that refused the answer by name (`parse-design-decision`'s :refused) is still
    :unusable-answer, carrying the rule as :refused and in :detail, and the refused judgement as
@@ -2910,13 +2972,18 @@
                                (get-in refusal-rules [rule :broke])
                                (when (:message parsed) (str " — " (:message parsed))))}
           (:answer parsed) (assoc :answer (:answer parsed)))
-      (let [{:keys [reviewer instead-of because]} (:judged-by result)]
+      (let [{:keys [reviewer instead-of because executes?]} (:judged-by result)]
         ;; Only the shape the ledger's closed schema admits: an append it refuses is lost whole.
         (cond-> parsed
           (and (:format parsed) (keyword? reviewer))
           (assoc :judged-by (cond-> {:reviewer reviewer}
+                              (boolean? executes?)  (assoc :executes? executes?)
                               (keyword? instead-of) (assoc :instead-of instead-of)
-                              (string? because)     (assoc :because because))))))
+                              (string? because)     (assoc :because because)))
+
+          (and (:format parsed) (some :tool-failure (:unchecked parsed))
+               (not (codex/tool-failed? reviewer (:log-path result))))
+          (update :unchecked #(mapv (fn [u] (dissoc u :tool-failure)) %)))))
       {:outcome :unusable-answer
        :detail "the answer did not satisfy what a round must return"})
     result))
@@ -3353,7 +3420,7 @@
    hold (`moved-since`). A record reading as that one in all but its provenance launches no judge,
    and is answered by the verdict that one reached (`carried-review`)."
   [{:keys [cwd code-cwd run-id label disputes baseline settled listing subject-identities
-           reviewer prior stale running] :as opts}]
+           reviewer prior stale running executed] :as opts}]
   (if-let [[project ws-id] (ledger-of opts)]
     (if-let [baseline (or baseline (ws/latest-entry project ws-id :baseline))]
       (if (baseline-round-worth-running? baseline)
@@ -3380,6 +3447,7 @@
                                                  :prior prior
                                                  :stale stale
                                                  :running running
+                                                 :executed executed
                                                  :moved (some->> (:baseline verified)
                                                                  (moved-since baseline))
                                                  :stance (stages/read-stance project)})
@@ -3628,7 +3696,7 @@
    {:outcome :code-moved :answer <the decision>}. Either way a round whose tree moved carries
    `:tree-moved` (`tree-moved`), for the report; the caller takes it off before appending."
   [{:keys [cwd code-cwd run-id label disputes design settled listing subject-identities
-           reviewer prior stale] :as opts}]
+           reviewer prior stale executed] :as opts}]
   (if-let [[project ws-id :as ledger] (ledger-of opts)]
     (if-let [design (or design (ws/latest-entry project ws-id :design))]
       (or (unverified-premise project ws-id design)
@@ -3657,6 +3725,7 @@
                           :settled  settled
                           :prior    prior
                           :stale    stale
+                          :executed executed
                           :levels   levels
                           :answers  (answered project ws-id design run-id)
                           :relation-prior prior-rs}
@@ -6037,6 +6106,20 @@
   (let [q (get-in ctx [:carry :quiet])]
     (when (= (:seq subject) (:seq q)) (:read q))))
 
+(defn- executed-readings
+  "What `executed-block` hands `reader`: the carried readings (`carried-readings`) whose judge could
+   run commands and named where it read, with the transcript of the round that made them — nil
+   when `reader` can run commands itself, since it can observe what the other observed."
+  [ctx subject reader]
+  (when-not (codex/executes? reader)
+    (let [read (into {} (keep (fn [[id {:keys [ruling judged-by at]}]]
+                                (when (and (:executes? judged-by) (seq at))
+                                  [id {:ruling ruling :at at}])))
+                     (carried-readings ctx subject))]
+      (when (seq read)
+        (cond-> {:read read}
+          (get-in ctx [:carry :quiet :trace]) (assoc :trace (get-in ctx [:carry :quiet :trace])))))))
+
 (defn- carried-ask
   "The :ask an earlier quiet round of this run made of `subject`, the same record, as
    `{:seq :asks :about}` — the entry, its question, and the ids it filed :for-person — or nil. A
@@ -6080,13 +6163,16 @@
 
 (defn- held-clauses
   "Per clause of `judgements` — one run's, oldest first — whose latest ruling in them was held, the
-   entry that held it: `{[key text] seq}`. Keyed on the words as well as the key, because a key is a
-   position and an amendment moves what sits there; a clause held, then ruled false, then held
+   entry that held it and whether its judge could run commands (`:executes?` of its :judged-by):
+   `{[key text] {:seq n :executes? bool}}`. Keyed on the words as well as the key, because a key is
+   a position and an amendment moves what sits there; a clause held, then ruled false, then held
    again is held by the last entry."
   [judgements]
-  (reduce (fn [acc {n :seq :keys [clause-readings]}]
+  (reduce (fn [acc {n :seq :keys [clause-readings judged-by]}]
             (reduce-kv (fn [a k {:keys [ruling text]}]
-                         (if (= :held ruling) (assoc a [k text] n) (dissoc a [k text])))
+                         (if (= :held ruling)
+                           (assoc a [k text] {:seq n :executes? (true? (:executes? judged-by))})
+                           (dissoc a [k text])))
                        acc clause-readings))
           {} judgements))
 
@@ -6126,8 +6212,10 @@
    there were two. An id the reading before held or owed and this one refutes is a :split
    `[{:id :was}]` — unless it was settled, which :overrides-settled says. An id the reading before
    read and this one declared unchecked stays :read-once: it was read once, and a run must not end
-   on it — unless a tool failing was the cause (:tool-failure), which a reading with the same tools
-   would only repeat.
+   on it. A tool failing (:tool-failure) excuses it only where the reading before was already
+   paired: a judge whose sandbox refused it has said nothing about the claim, and the other judge,
+   who reads next, does not share its tools — so one standing on a single confirmation (`single`
+   of `standing`, or a carried reading marked :first-reading) is still owed its second.
 
    `asked` is the ids the round owes a ruling on. :read-once holds no other, because the reading
    after it pairs them only by reading them again, and an id it was not asked about can go
@@ -6147,7 +6235,9 @@
    this reading ruled false that the run last ruled held in the same words (`held`, `held-clauses`
    of the run's earlier judgements), naming the entry that held it. A subject is confirmed only
    when every clause held, so a held clause beside a false one confirms nothing by id, and without
-   this its holding is overtaken in silence.
+   this its holding is overtaken in silence. :by-inference marks one this reading's judge, which
+   cannot run commands, withdraws from a judge that could: an inference set against what may have
+   been an observation, and a reader weighing the two has to know that.
 
    `ask` is the standing ask the reading before made of this record (`carried-ask`). A reading
    that recommends anything else is kept with :unpaired-recommend `{:was :ask :seq :asks}`, and
@@ -6187,7 +6277,12 @@
           splits    (vec (for [[id was] (sort-by key before)
                                :when (and (found id) (not (contains? settled id)))]
                            {:id id :was was}))
-          unchecked (into #{} (comp (remove :tool-failure) (map :id)) (:unchecked record))
+          unpaired? (into (set (keys once-held))
+                          (keep (fn [[id r]] (when (:first-reading r) id)))
+                          carried)
+          unchecked (into #{} (comp (remove #(and (:tool-failure %) (not (unpaired? (:id %)))))
+                                    (map :id))
+                          (:unchecked record))
           holds     (holds? record)
           firsts    (vec (sort (filter (set asked)
                                        (concat (remove seconds (keys ruled))
@@ -6196,10 +6291,12 @@
           overturns (vec (for [[id {:keys [ws-id restated?] n :seq}] (sort-by key prior)
                                :when (ruled id)]
                            {:id id :seq n :ws-id ws-id :restated? (boolean restated?)}))
+          inferred? (false? (:executes? judge))
           withdrawn (vec (for [[k {:keys [ruling text]}] (sort-by key (:clause-readings record))
-                               :let  [n (get held [k text])]
+                               :let  [{n :seq :keys [executes?]} (get held [k text])]
                                :when (and n (= :false ruling))]
-                           {:clause k :seq n}))
+                           (cond-> {:clause k :seq n}
+                             (and inferred? executes?) (assoc :by-inference true))))
           was-ask   (when (and ask (not= :ask (:recommend record)))
                       (cond-> {:was :ask :asks (:asks ask)} (:seq ask) (assoc :seq (:seq ask))))
           own-asks  (str/trim (str (:asks record)))]
@@ -6300,6 +6397,18 @@
   [record]
   (boolean (or (seq (:read-once record)) (:amendment-read-once record))))
 
+(defn- round-label
+  "What a record loop's judge round `iter` over a `kind` record names its artifacts:
+   `baseline-review-round-3`, `design-decision-round-2`."
+  [kind iter]
+  (str (name kind) "-round-" iter))
+
+(defn- round-log
+  "Where the judge of `ctx`'s round over a `kind` record streamed, when the run has a dir."
+  [ctx kind]
+  (when-let [run-id (get-in ctx [:config :run-id])]
+    (str (fs/path (cstate/run-dir run-id) (str (round-label kind (:iter ctx)) ".log")))))
+
 (defn- second-reading
   "A round that would have ended the run clean on a first reading (`read-once?`). The run goes on to
    another judgement with nothing amended; the subjects it read once are not settled, so the
@@ -6308,7 +6417,10 @@
    it leaves without a ruling is :unruled. What this round
    read is carried, with its ruling, for the pairing the ledger cannot give (`carried-readings`) —
    less what it declared unchecked, which a later reading has nothing to pair with — and the round
-   it was read in, so an amendment is read a second time and not a third (`unread-amendment?`).
+   it was read in, so an amendment is read a second time and not a third (`unread-amendment?`). Each
+   carried ruling keeps whether it was a first reading — what a tool-failure unchecked after it may
+   not clear (`with-readings`) — and the sites it was read at, which with the round's :trace are
+   what a reader that cannot run commands is handed of it (`executed-block`).
    Bounded: each such round is the other judge's, and pairs what the one before called sound, so it
    recurs only for a subject the two keep ruling differently, and the engine's cap holds either way.
 
@@ -6341,8 +6453,15 @@
                            :iter      (:iter ctx)
                            :read      (merge (apply dissoc (carried-readings ctx subject)
                                                     (map :id (:unchecked record)))
-                                             (into {} (map (fn [[id r]] [id {:ruling r :judged-by (:judged-by record)}]))
-                                                   (rulings record)))}
+                                             (let [firsts (set (:first-reading record))
+                                                   at     (merge (:owed-at record) (:checked-at record))]
+                                               (into {} (map (fn [[id r]]
+                                                               [id (cond-> {:ruling r :judged-by (:judged-by record)}
+                                                                     (firsts id)       (assoc :first-reading true)
+                                                                     (seq (get at id)) (assoc :at (vec (get at id))))]))
+                                                     (rulings record))))}
+                    (and (:judged-by record) (round-log ctx (:format record)))
+                    (assoc :trace (codex/log-of (round-log ctx (:format record)) (:judged-by record)))
                     ask (assoc :ask ask))))))
 
 (defn- ledger-lost
@@ -6401,6 +6520,7 @@
                   (baseline-review!
                    {:cwd cwd :ledger ledger :code-cwd code-cwd :run-id run-id
                     :reviewer (reading-judge ctx reviewer)
+                    :executed (executed-readings ctx subject (reading-judge ctx reviewer))
                     :baseline subject
                     :settled settled
                     :prior prior
@@ -6409,7 +6529,7 @@
                     :listing listing
                     :code-identity (:code-identity reading)
                     :subject-identities (:subject-identities reading)
-                    :label (str "baseline-review-round-" (:iter ctx))
+                    :label (round-label :baseline-review (:iter ctx))
                     :disputes (disputes-for-judge (:history ctx))}))
         record (or lost
                    reused
@@ -7856,11 +7976,12 @@
                   (design-decision!
                    {:cwd cwd :ledger ledger :code-cwd code-cwd :run-id run-id
                     :reviewer (reading-judge ctx reviewer)
+                    :executed (executed-readings ctx design (reading-judge ctx reviewer))
                     :design design :settled settled :prior prior :listing listing
                     :stale (stale-questions ctx)
                     :code-identity (:code-identity reading)
                     :subject-identities (:subject-identities reading)
-                    :label (str "design-decision-round-" (:iter ctx))
+                    :label (round-label :design-decision (:iter ctx))
                     :disputes (disputes-for-judge (:history ctx))}))
         record (or lost
                    reused
