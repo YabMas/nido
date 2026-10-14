@@ -544,7 +544,7 @@ The seeded lenses:
 | `:tarpit/control` | a claim about ordering | `:required` `:imposed` | *Out of the Tar Pit* |
 | `:ousterhout/depth` | a module | `:deep` `:shallow` | *A Philosophy of Software Design* |
 
-**What counts as a module's interface**: what is *depended on from outside* — Parnas's "what others may assume" — not what the namespace makes public. A var published and called by nobody outside is a visibility choice, not interface. Two live rounds were spent on this exact disagreement, one side counting callers and the other counting `defn`s, both correct about different things.
+**What counts as a module's interface**: what is *depended on from outside* — Parnas's "what others may assume" — not what the namespace makes public. A var published and called by nobody outside is a visibility choice, not interface. The review loop's judges and amenders judge an `:interface` by the same four rules (`interface-rule` in `nido.review.record`), so write it to them: it is ruled on the **accuracy** of what it states; one stated **by category** is refuted only by an outside member the category does not describe; a missing member refutes a list only **within the record's declared scope**, or where the omission falsifies a load-bearing reading; and a var only **tests** reach is test coupling, not a member.
 | `:parnas/dependency` | a claim about a dependency | `:on-interface` `:on-secret` `:cyclic` | *On the Criteria…* (Parnas) |
 | `:stratified/level` | a stratum — owed for every one listed | `:sound` `:mixed` `:bypassed` `:wide` `:not-a-level` | *Lisp: A Language for Stratified Design* (Abelson & Sussman); *Grokking Simplicity* (Normand) |
 

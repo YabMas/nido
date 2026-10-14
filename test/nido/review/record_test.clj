@@ -1598,11 +1598,17 @@
             :raised [{:claim-ids ["canvas.order/aggregate"] :claim "it also publishes a rounding helper"}]
             :refuted-running {"canvas.order/aggregate" 3} :out-path "/run/a.edn"})]
     (is (str/includes? p "AN INTERFACE NO ENUMERATION HAS SETTLED. [canvas.order/aggregate] has been refuted 3 readings running"))
-    (is (str/includes? p "Do NOT add the member this\nround found")
+    (is (str/includes? p "Do NOT add the member this round found")
         "each member added is the next round's finding; the enumeration is what is refuted")
     (is (str/includes? p "Restate the :interface by category"))
     (is (not (str/includes? p "A CLAIM NO REWORDING HAS SETTLED"))
-        "an interface is not weakened like a claim; it is restated as a kind")))
+        "an interface is not weakened like a claim; it is restated as a kind")
+    (is (str/includes? (record/design-amend-prompt
+                        {:design strata-design :baseline model-baseline :recommend :amend :reason "r"
+                         :raised [{:claim-ids ["canvas.order/aggregate"] :claim "c"}]
+                         :refuted-running {"canvas.order/aggregate" 2} :out-path "/run/a.edn" :by-hand 7})
+                       "entry 7 was written by hand")
+        "a design amender is told, as a baseline's is, that the enumeration it may not extend was a person's")))
 
 (deftest a-design-naming-its-strata-is-judged-on-its-levels-not-its-cut
   (let [p (record/design-prompt {:design strata-design :baseline strata-baseline})]

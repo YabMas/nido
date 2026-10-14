@@ -329,17 +329,38 @@
                            (str "    " (name v) ": " d))))))
        "\n"))
 
+(def ^:private interface-rule
+  "The one definition of an :interface that the record judges and both amenders are given, word for
+   word — and /design's SKILL.md states for the person writing one. Each side used to hold its own:
+   the judge ruled every interface clause a closed list over every requirer in the tree, tests
+   included, while the amender of a spent one was told to restate it by category. The category was
+   then refuted member by member, and no wording could settle. A rule only one side reads is a
+   disagreement the loop pays for in rounds."
+  (str "WHAT AN :interface STATES, AND HOW IT IS JUDGED — one rule for the judge and the\n"
+       "amender alike. An element's :interface is what is DEPENDED ON FROM OUTSIDE it —\n"
+       "Parnas's `what others may assume` — not what its namespace makes public: a public\n"
+       "var nothing outside calls is a visibility choice, not interface.\n"
+       "  - ACCURACY FIRST. It is ruled on what it states. A member it names that nothing\n"
+       "    outside depends on is false, and so is one stated as receiving, returning or\n"
+       "    doing what the code does not.\n"
+       "  - A CATEGORY IS RULED BY ITS CATEGORY. An :interface stated as a kind of var —\n"
+       "    `the lifecycle fns a worker is started and stopped by` — is refuted only by a\n"
+       "    member depended on from outside that falls OUTSIDE the kind it names, never by\n"
+       "    one the kind already describes, however that member is spelled.\n"
+       "  - COMPLETENESS WITHIN SCOPE. A member a list omits refutes it only when the\n"
+       "    caller depending on it is inside the record's declared scope, or when the\n"
+       "    omission falsifies a load-bearing reading — a depth verdict, a claim that\n"
+       "    rests on the list.\n"
+       "  - A TEST IS NOT OUTSIDE. A var only tests reach — a private one a test takes by\n"
+       "    #', or a public one nothing but tests calls — is test coupling, not a member.\n"
+       "    Search tests to find callers; never to widen the interface.\n"))
+
 (defn- module-block
   [modules]
   (when (seq modules)
     (str "\nMODULES — the decomposition claimed. A module is what it HIDES; its\n"
-         "interface is WHAT IS DEPENDED ON FROM OUTSIDE — Parnas's `what others\n"
-         "may assume` — not what the namespace makes public. A var that is public\n"
-         "and called by nobody outside is a visibility choice, not interface, and\n"
-         "an interface list that omits one is only wrong if some caller actually\n"
-         "leans on it. Enumerating exports is not this round's work: two earlier\n"
-         "runs were spent on that disagreement, one side counting callers and the\n"
-         "other counting defns, and it settles here in favour of callers.\n"
+         "interface is what is depended on from outside, ruled as WHAT AN :interface\n"
+         "STATES says below.\n"
          (str/join "\n"
                    (map (fn [{:keys [id module hides interface readings]}]
                           (str "- " (when id (str "[" id "] ")) module "\n"
@@ -387,7 +408,8 @@
   ;; has none left here, and a header over an empty list reads as a record that claims nothing.
   (str (when (seq elements)
          (str "\nELEMENTS — what the claims below are about, by the ids the declared design gives\n"
-              "them. A module is what it HIDES; its interface is what is depended on from outside:\n"
+              "them. A module is what it HIDES; its interface is what is depended on from outside,\n"
+              "ruled as WHAT AN :interface STATES says below:\n"
               (str/join "\n"
                         (map (fn [{:keys [id sort hides interface plays readings read-at]}]
                                (str "- [" id "] (" (name sort) ")"
@@ -641,8 +663,9 @@
    property, observation or [shape]/[composition] text; each counterexample its :falsified-by
    names; the sentences of what a module hides and of its interface; each reading. :search? marks
    a clause only a search of the whole tree can hold: every counterexample (held means it exists
-   nowhere), every sentence of an :interface (a closed list of what is depended on from outside,
-   which one outside caller of an unlisted var refutes, however it is worded), and every clause
+   nowhere), every sentence of an :interface (what is depended on from outside: whether a list or a
+   category, the member that refutes it is found only by searching the requirers, `interface-rule`),
+   and every clause
    asserting exclusivity or universality (`search-words`)."
   [content]
   (into []
@@ -797,15 +820,18 @@
        "names. Held with no search is unruled. A counterexample that exists only in\n"
        "code no caller reaches is held only with that site in the ruling's evidence,\n"
        "marked unreached; never park it in reason, where nothing reads it.\n\n"
-       "AN ENUMERATION IS RULED MEMBER BY MEMBER. A clause listing N things — an\n"
-       "interface, a set of writes, an inventory — is false at every member that is\n"
-       "wrong and at every one missing that something outside depends on. Name every\n"
-       "one in the one finding: an interface ruled incomplete names each var missing\n"
-       "from it that the namespace's requirers across the tree depend on, not the\n"
-       "first ones you reached. An interface clause owes a search whatever its words:\n"
-       "held, its search enumerates the namespace's public vars and every requirer of\n"
-       "it across the tree. A clause stating an exact count is ruled by the\n"
-       "structure it stands for; an off-by-one whose structure holds is not a finding.\n\n"
+       "AN ENUMERATION IS RULED MEMBER BY MEMBER. A clause listing N things — a set of\n"
+       "writes, an inventory, an :interface written as a list — is false at every member\n"
+       "that is wrong and at every one missing that the clause's own scope covers. Name\n"
+       "every one in the one finding, not the first ones you reached. A clause stating\n"
+       "an exact count is ruled by the structure it stands for; an off-by-one whose\n"
+       "structure holds is not a finding.\n\n"
+       interface-rule
+       "An :interface clause owes a search whatever its words: held, its search\n"
+       "enumerates the namespace's public vars and every requirer of it across the\n"
+       "tree. A finding against one says which rule above it breaks — a member\n"
+       "mis-stated, a member outside the category, or one missing within scope — and\n"
+       "names each such member with the site that depends on it.\n\n"
        "REFUTE THE CLASS, NOT THE INSTANCE. When you find a subject false on a ground\n"
        "that is a class — a conformance over every caller, an omission, a count — hold\n"
        "every other subject of this record that rests on the same ground to it before\n"
@@ -4364,19 +4390,53 @@
                            (when (and (enumerated id) (>= n withdrawable-after)) [id n]))))
           (distinct (keep :claim-id (remove #(or (:blocks %) (:unsettled %) (:for-person %)) findings))))))
 
+(def ^:private interface-cut-after
+  "How many readings running must refute an :interface before its amender's default is to cut it
+   back rather than restate it. One past `withdrawable-after`: the restatement by category it is
+   offered at that count has then been tried and refuted too, and a third restatement has quantified
+   over members and named callers nobody checked — each of them the next round's finding."
+  (inc withdrawable-after))
+
 (defn- interface-block
   "What an amender — of a baseline or a design — is told about the elements in `interfaces`, `{id
-   n}`, each an :interface refuted `n` readings running, or nil when there are none."
-  [interfaces]
+   n}`, each an :interface refuted `n` readings running, or nil when there are none. `by-hand` is
+   `withdrawal-block`'s: the record under repair was a person's, and its enumeration their scoping.
+
+   It names no cause for the run. A refutation of a restated :interface is as often a member it
+   mis-stated as one it omitted, and an amender told `each time by a member it did not list` goes
+   looking for the next member while the clause it wrote stays false."
+  [interfaces by-hand]
   (when (seq interfaces)
-    (str "\n\nAN INTERFACE NO ENUMERATION HAS SETTLED. "
-         (str/join ", " (for [[id n] interfaces] (str "[" id "] has been refuted " n " readings running")))
-         ",\neach time by a member its :interface did not list. Do NOT add the member this\n"
-         "round found: the enumeration is what keeps being refuted, and the next round finds\n"
-         "the next member. Restate the :interface by category — what kind of var it\n"
-         "publishes and which callers compose it — so a member the code adds is already\n"
-         "described. Where no category holds them, ask instead: dispute the numbered line,\n"
-         "naming why.")))
+    (let [cut (keep (fn [[id n]] (when (>= n interface-cut-after) id)) interfaces)]
+      (str "\n\nAN INTERFACE NO ENUMERATION HAS SETTLED. "
+           (str/join ", " (for [[id n] interfaces] (str "[" id "] has been refuted " n " readings running")))
+           ".\nDo NOT add the member this round found: the next round finds the next one.\n"
+           "Restate the :interface by category — the kind of var it publishes — ruled as\n"
+           "WHAT AN :interface STATES says, and hold the restatement to these:\n"
+           "  - A category quantifies (`each`, `every`, `all`) only over members you\n"
+           "    checked. One you did not check, leave out of the sentence.\n"
+           "  - It says what members receive, return or are handed only when you read\n"
+           "    every path that produces it — every call site, not the one the finding\n"
+           "    cited. One path read is a fact about that path, stated of that path.\n"
+           "  - Callers are named only from a search you ran and recorded in the element's\n"
+           "    :read-at. With no such search, name none.\n"
+           "  - A finding's :claim is a refutation, not wording to transcribe: it says what\n"
+           "    was false at the sites it cites, and is true of nothing else until you\n"
+           "    read the rest.\n"
+           "Where no category holds the members, ask instead: dispute the numbered line,\n"
+           "naming why."
+           (when (seq cut)
+             (str "\n\nFor " (str/join ", " (map #(str "[" % "]") cut)) ", refuted " interface-cut-after
+                  " or more readings running, a restatement\n"
+                  "has been tried and refuted too. The default now is to CUT IT BACK: keep only\n"
+                  "what a search recorded in :read-at establishes, and drop every member, caller\n"
+                  "and receive/return clause no reading has confirmed. Restate only with a reason\n"
+                  "the cut would lose something a claim of the record rests on."))
+           (when by-hand
+             (str "\n\nThe last enumeration was not this loop's: entry " by-hand " was written by hand.\n"
+                  "Its members were a person's scoping, not an amender's guess. Where the finding\n"
+                  "is about what that scoping left out, a precise restatement of the members the\n"
+                  "person chose, with the scope said, has not been tried and is an honest repair."))))))
 
 (defn- withdrawal-block
   "What an amender is told about the claims in `spent` (`withdrawable`) and the elements in
@@ -4409,7 +4469,7 @@
             (str "\n\nOne caveat. The last rewording was not this loop's: entry " by-hand " was written by\n"
                  "hand. If the finding is about what that edit introduced, a precise restatement\n"
                  "of what the code does has not been tried, and is a fourth honest repair."))))
-    (interface-block interfaces))))
+    (interface-block interfaces by-hand))))
 
 (defn- design-spent
   "The subjects a design round's `raised` lines refute that `refuted-running` counts at
@@ -4424,13 +4484,14 @@
 
 (defn- design-withdrawal-block
   "What a design amender is told about the subjects in `spent` (`design-spent`), or nil when there
-   are none. `enumerated` (`enumerated-ids`) says which of them are an :interface rather than a claim.
+   are none. `enumerated` (`enumerated-ids`) says which of them are an :interface rather than a claim,
+   and `by-hand` is `interface-block`'s.
 
    Not the baseline's `withdrawal-block`: a design has no :withdrawn — dropping a claim from one is
    a retreat, measured as one — so what is left to offer is weakening, a residual stated as a class,
    or the person. Each repair names the CLASS of the cases, because a rewording that answers one
    counterexample is what produced the run."
-  [spent enumerated]
+  [spent enumerated by-hand]
   (let [interfaces (filter (comp enumerated key) spent)
         claims     (remove (comp enumerated key) spent)
         running    #(str/join ", " (for [[id n] %] (str "[" id "] has been refuted " n " readings running")))]
@@ -4451,7 +4512,7 @@
             "  - ASK, when whether that class is acceptable is the intent's question and not\n"
             "    yours: dispute the numbered line as one only a person can answer, naming the\n"
             "    class. The judge is asked again with it, and may stop for the person."))
-     (interface-block interfaces))))
+     (interface-block interfaces by-hand))))
 
 (defn- refuted-ids
   "The claims a record finding refutes: a design finding's :claim-ids, a baseline refutation's
@@ -4928,7 +4989,7 @@
        "`every`, `exactly when`, and any closed list of members are claims about\n"
        "everything the code does, and one missing member refutes them. So is every\n"
        "behavioural assertion — `always`, `before`, `on its failure path` — and every\n"
-       "element's :interface, which is the closed list of what is depended on from\n"
+       "element's :interface, whose members and categories are what is depended on from\n"
        "outside. This holds of every clause you add or rewrite, and of wording you take\n"
        "from a finding: a judge's counterexample is one reading of one site, not a\n"
        "search. Write one only after the search that establishes it, and\n"
@@ -5399,7 +5460,11 @@
    the instance and left its siblings stating the same fact — each re-found by a later round, one
    per round. Made a reported sweep, so a sibling passed over is a visible omission; and a sibling
    found false is repaired in the same amendment, since it is re-judged next round either way.
-   :stale with its reason is what puts it to that judge as a question rather than a cold re-read."
+   :stale with its reason is what puts it to that judge as a question rather than a cold re-read.
+
+   An omitted :interface member is swept by its namespace: completed one named member at a time, a
+   list took a refutation round per member, and a sibling element listing the same namespace was
+   declared unaffected by the very finding that showed the omission."
   (str "SWEEP THE RECORD FOR EVERY FINDING YOU ACCEPT. A refuted fact is rarely stated\n"
        "once. For each finding you accept, go through every subject of the record —\n"
        "claim, element (its :hides and :interface), stratum reading, health observation —\n"
@@ -5411,7 +5476,14 @@
        "list it under :stale with :because — which finding it rests on, and what in it\n"
        "was false. The next judge is asked exactly that. List there, too, a subject you\n"
        "believe false and cannot repair here, and say why. Never name one you would\n"
-       "merely word differently.\n\n"))
+       "merely word differently.\n"
+       "A FINDING THAT AN :interface OMITS A MEMBER IS ABOUT ITS NAMESPACE, not its\n"
+       "member: the omission was in how the list was made, and every list made the same\n"
+       "way shares it. Search for every requirer of the namespace the cited symbol lives\n"
+       "in, record that search in :read-at, and re-check against it every claim and\n"
+       "element whose :interface enumerates members of that namespace — each listed\n"
+       "under :swept only once it has been. Never repair it by adding the one member\n"
+       "the finding named.\n\n"))
 
 (def ^:private beside-repair-rule
   "What an amender writes beside the repair, held to the code as the repair is. Each clause answers
@@ -5569,6 +5641,7 @@
           "back unchanged — not restated, not sharpened, not made more precise — unless\n"
           "the sweep below finds a finding you accepted makes it false.\n\n"))
    stale-rule
+   (when (seq (enumerated-ids nil baseline)) (str interface-rule "\n"))
    (replace-rule "baseline")
    (if gaps?
      "Answer what was asked; leave the rest exactly as it stands.\n\n"
@@ -6703,6 +6776,15 @@
       (when-let [[project ws-id] (ledger-of (:config ctx))]
         (ws/latest-entry project ws-id :baseline))))
 
+(defn- written-by-hand
+  "The :seq of `prev`, a record on `ws-id` under repair, when a person wrote it superseding another —
+   no amender's stamp on its index row (`ws/amended-seqs`) — else nil. A first record is nobody's
+   rewording, so it is never counted as one."
+  [project ws-id prev]
+  (when (and project (:seq prev) (:supersedes prev)
+             (not (contains? (ws/amended-seqs project ws-id) (:seq prev))))
+    (:seq prev)))
+
 (defn- baseline-amend-message
   "What the baseline amender is told for this round's findings against `prev`, answering into
    `out-path`."
@@ -6717,9 +6799,7 @@
                    :settled   (:settled ctx)
                    :refuted-running (:refuted-running ctx)
                    :refuted-with (:refuted-with ctx)
-                   :by-hand   (when (and project (:seq prev) (:supersedes prev)
-                                         (not (contains? (ws/amended-seqs project ws-id) (:seq prev))))
-                                (:seq prev))
+                   :by-hand   (written-by-hand project ws-id prev)
                    :stance    (stages/read-stance project)
                    :declared? (some? (design-check/design-of project (or code-cwd cwd)))})))
 
@@ -7783,9 +7863,10 @@
    design's lineage (`refutations-block`). `:asks-about` is the claim ids the person's question is
    about that no numbered line asks to have repaired (`asked-claims`): the amender is told to leave
    them as they stand, since a sweep that restates one answers the question, and to say under
-   :standing-ask how a repair bears on one."
+   :standing-ask how a repair bears on one. `:by-hand` is the :seq of the design under repair when a
+   person wrote it, superseding another (`interface-block`)."
   [{:keys [design baseline recommend reason asks asks-about raised findings rulings out-path declared?
-           check-cmd settled refuted-running resurvey-outcome intent refuted-with]}]
+           check-cmd settled refuted-running resurvey-outcome intent refuted-with by-hand]}]
   (str
    "A read-only judge derived what could be derived about this DESIGN record,\n"
    "before any code is written, and it did not come out clean.\n\n"
@@ -7866,7 +7947,7 @@
                                  (str/join ", " (for [[id n] ns] (str "[" id "] refuted " n " readings in a row")))
                                  " — see what follows the numbered lines"))))
                    raised)))
-   (design-withdrawal-block (design-spent raised refuted-running) (enumerated-ids design baseline))
+   (design-withdrawal-block (design-spent raised refuted-running) (enumerated-ids design baseline) by-hand)
    (unsettled-block :design raised)
    (when (seq findings)
      (str "\n\nWHAT THE DERIVATION FOUND:\n\n"
@@ -7913,6 +7994,7 @@
    "for what the sweep below finds a finding you accepted makes false.\n\n"
    (str/trimr
     (str stale-rule
+         (when (seq (enumerated-ids design baseline)) (str interface-rule "\n"))
          (replace-rule "design")
          "\n"
          (sound-rewrite-rules :design (some? baseline))
@@ -8429,6 +8511,7 @@
       :refuted-with (:refuted-with ctx)
       :intent (discover-intent ledger prev)
       :resurvey-outcome (:resurvey-outcome ctx)
+      :by-hand (written-by-hand project ws-id prev)
       :declared? declared?})))
 
 (defn- amend-design!

@@ -2943,6 +2943,59 @@
                                                   :refuted-running {"mod-the-order-aggregate" 1}})
                             "NO ENUMERATION HAS SETTLED")))))
 
+(deftest an-interface-is-judged-and-amended-by-one-rule
+  ;; Watched: the judge ruled a category restatement member by member over every requirer, tests'
+  ;; private-var access included, while the amender was told to restate by category — a remedy
+  ;; the judge refuted, so no wording settled.
+  (let [judge (record/baseline-prompt {:baseline a-baseline})
+        amend (record/amend-prompt {:baseline a-baseline :out-path "/x"
+                                    :findings [(assoc a-finding :claim-id "mod-the-order-aggregate")]})]
+    (doseq [[who p] [["judge" judge] ["amender" amend]]]
+      (is (str/includes? p "WHAT AN :interface STATES, AND HOW IT IS JUDGED")
+          (str "the " who " must hold an :interface to the rule the other side holds it to"))
+      (is (str/includes? p "A CATEGORY IS RULED BY ITS CATEGORY")
+          (str "a category restatement the " who " does not read as one is refuted member by member"))
+      (is (str/includes? p "is test coupling, not a member")
+          (str "a test reaching a private var widened the interface for the " who " until a person said otherwise")))
+    (is (not (str/includes? judge "every one missing that something outside depends on"))
+        "completeness is judged within the record's scope, not over every requirer in the tree"))
+  (is (not (str/includes? (record/amend-prompt {:baseline (dissoc a-baseline :modules)
+                                                :out-path "/x" :findings [a-finding]})
+                          "WHAT AN :interface STATES"))
+      "a record stating no :interface has nothing to hold to the rule"))
+
+(deftest a-restated-interface-may-not-claim-past-what-was-read
+  ;; Watched: restatements quantified `each with a page range` over members nobody checked, named
+  ;; composers no search found, and transcribed a judge's `passes it the row` to every delivery
+  ;; path — each the next round's refutation.
+  (let [f      (assoc a-finding :claim-id "mod-the-order-aggregate")
+        amend  #(record/amend-prompt (merge {:baseline a-baseline :findings [f] :out-path "/x"} %))
+        p      (amend {:refuted-running {"mod-the-order-aggregate" 2}})]
+    (is (str/includes? p "quantifies (`each`, `every`, `all`) only over members you\n    checked"))
+    (is (str/includes? p "only when you read\n    every path that produces it")
+        "one delivery path read is not every delivery path")
+    (is (str/includes? p "Callers are named only from a search you ran and recorded")
+        "a caller named from no search is the next finding")
+    (is (str/includes? p "A finding's :claim is a refutation, not wording to transcribe"))
+    (is (not (str/includes? p "by a member its :interface did not list"))
+        "a refutation of a restatement is as often a member mis-stated as one omitted")
+    (is (not (str/includes? p "CUT IT BACK"))
+        "at two readings the restatement has not been tried yet")
+    (is (str/includes? (amend {:refuted-running {"mod-the-order-aggregate" 3}})
+                       "[mod-the-order-aggregate], refuted 3 or more readings running")
+        "once a restatement has also been refuted, cutting back is the default")
+    (is (not (str/includes? p "was written by hand")))
+    (is (str/includes? (amend {:refuted-running {"mod-the-order-aggregate" 2} :by-hand 25})
+                       "The last enumeration was not this loop's: entry 25 was written by hand")
+        "a person's scoping is not an enumeration the loop extended")))
+
+(deftest an-omitted-interface-member-is-swept-by-its-namespace
+  ;; Watched: lists completed one named member per round, and a sibling element listing the same
+  ;; namespace declared unaffected by the finding that showed the omission.
+  (let [p (record/amend-prompt {:baseline a-baseline :out-path "/x" :findings [a-finding]})]
+    (is (str/includes? p "A FINDING THAT AN :interface OMITS A MEMBER IS ABOUT ITS NAMESPACE"))
+    (is (str/includes? p "Never repair it by adding the one member\nthe finding named"))))
+
 (deftest an-interface-count-survives-a-confirmation-a-later-reading-split
   ;; Watched: an inventory read C,C,F,C,F — the round-4 confirmation reset the count, the round-5
   ;; judge refuted it again on another member, and the run never saw the inventory as spent.
