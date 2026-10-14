@@ -1910,6 +1910,14 @@
    "             for_person false written out: unmarked, a finding on an asked\n"
    "             claim is filed as the person's, and the amender never sees it.\n"
    "             One finding with two repairs is two findings.\n"
+   ;; A terminal ask turned on a claim whose statement scoped it by a query and whose refuted-by
+   ;; scoped it by eligibility; the judges split over which reading held, and asked the person.
+   "             An ask that turns on which of two readings of a claim holds, where\n"
+   "             its statement says one and its own `refuted by` the other, is not\n"
+   "             the person's: the record disagrees with itself. File it\n"
+   "             for_person false, naming both texts, and let the amender make them\n"
+   "             agree. Ask the person only what the amended record still leaves\n"
+   "             open.\n"
    "  amend    — a derivable defect in the record itself, which the record can\n"
    "             repair without anyone deciding anything new.\n"
    "             Which record contradicts a recorded decision decides between the\n"

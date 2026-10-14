@@ -2055,6 +2055,15 @@
     (is (str/includes? p "its own finding with\n             for_person false written out")
         "only an explicit false keeps a finding on an asks_about claim off the person's question")))
 
+(deftest a-claim-disagreeing-with-its-own-refuted-by-is-the-amenders
+  ;; A run ended asked over which of a claim's two readings held — its statement's or its
+  ;; :falsified-by's — and the person was handed the record's own inconsistency to settle.
+  (let [p (record/design-prompt {:design design})]
+    (is (str/includes? p "its statement says one and its own `refuted by` the other, is not\n             the person's")
+        "a record disagreeing with itself is repaired by the amender, not decided by a person")
+    (is (str/includes? p "Ask the person only what the amended record still leaves\n             open")
+        "the person is asked only once the amendment has made the claim say one thing")))
+
 (deftest a-grant-bounds-what-a-derivable-repair-may-settle
   ;; A judge filed a re-keying of stored summaries as derivable because "the grants already cover
   ;; the scope and cost decisions", and the amender widened what the person had granted unasked.
