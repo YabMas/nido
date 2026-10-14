@@ -2673,6 +2673,36 @@
         (is (= other (read-string appended))
             "a repair of the claim's other clause is the amender's, and lands")))))
 
+;; Watched (ws-20261013-0dca52): a judge filed a grant-widening repair for_person false and the
+;; amender carried it into the granted claim; whether it was asked depended on which reader drew
+;; the round.
+(deftest an-amendment-changing-a-granted-claim-is-refused-and-asked
+  (let [granted  (-> asked-design
+                     (assoc :seq 4 :supersedes {:seq 2 :why "the person's rewrite" :granted "additive shape"}))
+        widened  (restating granted "sent-upright" "a sent image is upright, and so is a received one")
+        prompts  (atom [])
+        n        (atom 0)
+        [out appended]
+        (with-redefs [ws/amended-seqs (constantly #{})
+                      ws/entry-at-seq (fn [_ _ k] (when (= 4 k) granted))
+                      ws/entries-of   (constantly [])]
+          (with-amend {:prev granted :prompts prompts
+                       :writes (fn [p] (spit p (pr-str {:record (if (= 1 (swap! n inc)) widened granted)})))}
+                      (ctx :findings [(assoc (check :goal-served :broken) :claim-ids ["sent-upright"])]
+                           :record (decision :amend :checks [(check :goal-served :broken)]))))]
+    (is (str/includes? (second @prompts) "it changes what a person granted or wrote")
+        "the amendment is handed back rather than appended")
+    (is (str/includes? (second @prompts) "[sent-upright] — a claim the grant covers")
+        "the refusal names the claim the grant covers")
+    (is (= (:model granted) (:model (read-string appended))) "what lands is the claim put back")
+    (is (= :asked (:status out)) "the round asks the person instead of going on to a proceed")
+    (is (= :escalate (:control out)))
+    (is (= [{:id "sent-upright" :held :granted}]
+           (map #(select-keys % [:id :held]) (:held-for-person out)))
+        "the held claim is stamped beside the amend delta, not only in the refusal's prose")
+    (is (some #(= "[sent-upright]" (:claim %)) (:out-of-reach out))
+        "the person is told which claim the run stopped over, though the amender named no line")))
+
 ;; Watched (ws-20261013-9d71b9): a cold second reading recommended :amend over the first reading's
 ;; :ask, and the amender narrowed the asked claims — the repair decided the scope question R1 asked.
 (deftest an-amend-over-a-standing-ask-holds-the-amender-to-the-asked-claims

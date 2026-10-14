@@ -1312,13 +1312,15 @@
 
 (defn- clause-delta
   "What one claim's text and :about lost and gained between `was` and `is` — {:granted :now}, each
-   only the clauses, or :about ids, the other side lacks. A clause both sides carry is absent: it
-   reads as it did when granted."
+   only the clauses, or :about ids, the other side lacks — and :whole, `was`'s statement entire. A
+   clause both sides carry is in no delta: it reads as it did when granted. :whole is there because
+   the clause that bounds a claim's scope is often the one a repair has not changed yet, and a
+   judge shown only the changed ones weighs the repair against a grant with its scope cut out."
   [was is]
   (let [only (fn [a b] (let [b (set b)] (vec (remove b a))))
         [wc ic] [(clauses (:statement was)) (clauses (:statement is))]
         [wa ia] [(:about was) (:about is)]]
-    (cond-> {:granted (only wc ic) :now (only ic wc)}
+    (cond-> {:granted (only wc ic) :now (only ic wc) :whole (str (:statement was))}
       (not= (set wa) (set ia)) (assoc :about {:granted (only wa ia) :now (only ia wa)}))))
 
 (defn- claim-delta
@@ -1501,6 +1503,8 @@
              the design it replaced was approved
      :asked-for  the :findings entries a person filed after the design they last granted (after
              the chain's root, when nothing was granted), oldest first — {:seq :round :note :items}
+     :authored?  true when `design` itself is on the ledger and a person wrote it: narrowing any of
+             its claims is then their scope, whoever orders it
      :asked-of  per claim `design` carries, each earlier :ask decision in its lineage that filed a
              finding under it, oldest first — {id [{:seq :asks :granted {:seq :note}
              :answered {:seq :why}}]}, :granted the first approval written after that ask and
@@ -1583,6 +1587,7 @@
                            (filter #(and (= :ask (:recommend %)) (:seq %) (not (own-read? %)))
                                    (lineage-of project ws-id :design-decision :design-seq design)))]
      (cond-> {}
+       (and (:seq design) (person? design)) (assoc :authored? true)
        (seq asked-of) (assoc :asked-of asked-of)
        granted (assoc :grant (cond-> {:seq (:seq granted) :self? (= (:seq granted) (:seq design))}
                                note (assoc :note note)
@@ -1604,12 +1609,21 @@
                           :approved?  (boolean (approved (get-in rewrite [:supersedes :seq])))})
        (seq asked-for) (assoc :asked-for asked-for)))))
 
+(def ^:private why-vs-claims
+  "The rule for a person's :supersedes :why that says more, or other, than the claims of the same
+   record. Both are theirs, written together, so neither is the error the other proves: a judge that
+   read the :why as authority filed a widening of a granted claim as a derivable repair."
+  (str "Where a person's :why and the claim text of the record carrying it disagree — the\n"
+       ":why says every response, a claim names two routes — neither is the error:\n"
+       "the person wrote both. The disagreement goes to asks, never to amend, and no\n"
+       "repair cites the :why as its authority over a claim.\n"))
+
 (defn- answered-block
   "Who reads `asks`, and what is already off the table for it: the design's :open notes, a grant a
    person gave, a reply they wrote into the record, what they asked for, a question already put to
    one. `owes?` is `report/owes-a-person?` of the design, `judged` its :seq — nil on a record not
    yet on the ledger, which no earlier ask can have been of."
-  [owes? judged open {:keys [grant asked answered-since rewritten asked-for asked-of]}]
+  [owes? judged open {:keys [grant asked answered-since rewritten asked-for asked-of authored?]}]
   (str
    (if owes?
      (str "\nWHO READS asks: a person. This design declares a move they must grant\n"
@@ -1642,8 +1656,9 @@
             (str " — what changed since it:"
                  (when (seq added) (str "\n  claims added: " (str/join ", " added)))
                  (when (seq changed) (str "\n  claims changed: " (str/join ", " changed)))
-                 (str/join (for [[id {g :granted n :now about :about}] clauses]
+                 (str/join (for [[id {g :granted n :now about :about whole :whole}] clauses]
                              (str "\n    [" id "]"
+                                  (when-not (str/blank? whole) (str "\n      as granted, whole — " whole))
                                   (str/join (for [c g] (str "\n      granted: " c)))
                                   (str/join (for [c n] (str "\n      now:     " c)))
                                   (when about
@@ -1661,9 +1676,10 @@
                  (when-not (or (seq added) (seq changed) (seq dropped) (seq fields) relation) " none")
                  "\n"
                  (when (seq clauses)
-                   (str "A changed claim's text not shown under it reads as it did when granted:\n"
-                        "asks does not reopen it, and calls no claim \"revised\" without naming the\n"
-                        "clause that changed.\n"))
+                   (str "A changed claim's clauses not listed under it as granted or now read as\n"
+                        "they did when granted: asks does not reopen them, and calls no claim\n"
+                        "\"revised\" without naming the clause that changed. Its whole granted text\n"
+                        "is the scope the person granted: weigh every repair to it against that.\n"))
                  (when (or (seq added) (seq changed) (seq fields) relation)
                    (str "A question raised by an added or changed claim, a changed field or a moved\n"
                         "relation names it by what it commits to, never by its id, so the person can\n"
@@ -1684,12 +1700,22 @@
                                   (when note (str " — \"" note "\"")) "\n"
                                   (str/join (for [{a :seq q :asks} answered]
                                               (str "    answering entry " a ": " q "\n"))))))))
+          (when (:self? grant)
+            (str "This record IS what the person granted: every claim's text above is granted\n"
+                 "text, though nothing is listed as changed.\n"))
           "A grant also bounds what a repair may settle without a person. Before you file\n"
           "a finding derivable, or write that a repair needs no new human decision, set\n"
           "what the repair commits to against this grant: its scope, its cost, what it\n"
           "stores and how that is keyed. When one way of repairing it changes what the\n"
           "grant covers, the repair is a choice the grant never made — for_person, and\n"
-          "asks poses it. An amender handed it widens the grant by guessing.\n"))
+          "asks poses it. An amender handed it widens the grant by guessing, and an\n"
+          "amendment changing a claim the grant covers, unless the grant's note names\n"
+          "that claim, is refused and asked whoever filed it.\n"))
+   (when (and authored? (not (:self? grant)))
+     (str "\nA PERSON WROTE THIS RECORD. Narrowing any of its claims — a clause, a disjunct\n"
+          "or a quantifier lost, an exception or a scope condition added — or dropping\n"
+          "one changes the scope they wrote: for_person, and asks poses it, whatever your\n"
+          "repair would make true. An amendment that narrows one is refused and asked.\n"))
    (when answered-since
      (str "\nANSWERED SINCE. A person was asked at entry " (:seq answered-since) ":\n  "
           (:asks answered-since) "\n"
@@ -1702,12 +1728,15 @@
           "The answer is evidence that a person decided, never that a claim holds. A record\n"
           "still inconsistent with it — a claim, an open note or a field written before it —\n"
           "is a defect the amender repairs by carrying the answer in: amend, not ask. A\n"
-          "finding that a person has not chosen what the answer chose is answered.\n"))
+          "finding that a person has not chosen what the answer chose is answered.\n"
+          "That is for text written BEFORE the answer. A design answer's own claims were\n"
+          "written with it, and are not text the answer corrects.\n" why-vs-claims))
    (when rewritten
      (str "\nWHY ITS AUTHOR LAST REWROTE THIS RECORD — entry " (:seq rewritten)
           ", replacing entry " (:supersedes rewritten)
           (when (:approved? rewritten) ", which a person approved") ":\n  "
           (:why rewritten) "\n"
+          why-vs-claims
           "Every check is still derived over the whole record. This bears on asks: a\n"
           "question the reason already settles is not asked again"
           (if (:approved? rewritten)
@@ -1973,6 +2002,13 @@
    "             narrowing it, and an earlier decision on this design refuted the\n"
    "             strengthened form, the choice left is the narrowing, and that is\n"
    "             scope: ask.\n"
+   "             A repair that widens a scope the intent lists by name — a member\n"
+   "             the list does not name, or the list replaced by a property its\n"
+   "             members share — is scope, not a repair: for_person. Before you\n"
+   "             offer two (\"by property, or list every member\"), set each against\n"
+   "             the intent's list and offer only those inside it; an amender takes\n"
+   "             the wider. An amendment widening a claim past the routes, files or\n"
+   "             names the intent lists is refused and asked.\n"
    "  recut    — the decomposition does not hold.\n"
    "  resurvey — the PREMISE is wrong, not the commitment. A design can be sound\n"
    "             on a baseline that was not. Redesign and re-survey are different\n"
@@ -8295,6 +8331,12 @@
             (str "Done when:\n" (bullets d) "\n"))
           "A repair that leaves something a done-when names unserved — an `accepted limit`,\n"
           "a narrowed scope — is a scope decision, not a repair: it goes under :out-of-reach.\n\n"))
+   "WHAT A PERSON GRANTED OR WROTE IS THEIRS. A repair that widens what the change\n"
+   "touches beyond what its line names — a place written, a route, a population the\n"
+   "claim did not cover — or that changes a claim a person granted, narrows a claim\n"
+   "of a record a person wrote, or reaches past what the intent lists by name, is a\n"
+   "decision for them, whoever ordered it: leave the claim as it stands and put the\n"
+   "line under :out-of-reach. An amendment seen making one is refused.\n\n"
    "THE CURRENT DESIGN:\n\n" (pr-str (ws/unstamp design))
    (when baseline
      (str "\n\nTHE BASELINE IT CITES:\n\n" (pr-str (ws/unstamp baseline))))
@@ -8930,6 +8972,108 @@
                                 " its line goes to the person with their question"))))
          ", and keep the rest of your repair")))
 
+(def ^:private name-re
+  "What a record names a member of a scope by: a route (`/analytics`), a backticked name, or a file
+   by its extension. A scope listed in words (`the triage and intake agents`) is not read, and a
+   widening that adds a name of none of these shapes is missed."
+  #"`[^`\s][^`]*`|(?<![\w/.])/[A-Za-z0-9][\w/{}:.-]*|\b[\w.-]+\.(?:clj|cljs|cljc|edn|json|md|ts|tsx|js|py|sh|toml|ya?ml)\b")
+
+(defn- names-in
+  [s]
+  (into #{} (map #(str/replace % #"[.:]+$" "")) (re-seq name-re (str s))))
+
+(defn- grant-covered
+  "The claims of `granted` whose text `record` changes or drops against `prev`, each a move: one
+   whose statement in `record` is neither `prev`'s nor the granted one, or that `record` drops. A
+   claim `note` names by id is one the grant's note orders changed, and is not a move. Restoring
+   the granted text is not one either."
+  [granted note prev record]
+  (let [text    (fn [d] (into {} (map (juxt :id #(clauses (:statement %)))) (model/claims d)))
+        [g p r] (map text [granted prev record])]
+    (for [[id gc] (sort-by key g)
+          :let [pc (get p id) rc (get r id)]
+          :when (and pc (not= pc rc) (not= gc rc)
+                     (not (re-find (re-pattern (str "(?<![\\w-])" (java.util.regex.Pattern/quote (str id))
+                                                    "(?![\\w-])"))
+                                   (str note))))]
+      {:id id :held :granted
+       :why (if rc "a claim the grant covers, changed where its note does not order it"
+                   "a claim the grant covers, dropped where its note does not order it")})))
+
+(defn- person-narrowed
+  "The claims of `prev`, a record a person wrote, that `record` drops or makes claim less of
+   (`retreat/design-retreats`'s :narrowed on a statement or :falsified-by, other than one still
+   stated in what the record parks or newly cites), each a move. Whoever ordered it — a judge's
+   repair included — narrowing what a person wrote is their scope."
+  [prev record]
+  (let [ids  #(into #{} (keep :id) (model/claims %))
+        gone (sort (remove (ids record) (ids prev)))]
+    (concat
+     (for [id gone] {:id id :held :authored :why "a claim of a record a person wrote, dropped"})
+     (for [{:keys [id field signals relocated]} (retreat/design-retreats prev record)
+           :when (and id (#{:statement :falsified-by} field) (not relocated)
+                      (contains? (ids prev) id))]
+       {:id id :held :authored
+        :why (str "a claim of a record a person wrote, narrowed ("
+                  (str/join ", " (map name signals)) ")")}))))
+
+(defn- enumerated-widened
+  "The claims `record` widens past what `intent` names: a claim of `prev` naming a member the
+   intent names (`name-re`) that now names a member the intent, and `prev`'s text of it, do not —
+   or that `retreat/widened-spent` reads as stated more broadly. Each a move; none when the intent
+   names nothing, since then it lists no scope by name to widen."
+  [intent prev record]
+  (let [named (names-in (pr-str intent))
+        stmt  (fn [d] (into {} (map (juxt :id :statement)) (model/claims d)))
+        [p r] [(stmt prev) (stmt record)]
+        ;; A clause gained is a claim saying more, not a scope covering more: only these four reach
+        ;; members the claim did not cover before.
+        reach #{:quantifier-gained :exception-lost :scope-lost :disjunct-gained}
+        wider (into {} (keep (fn [{:keys [id field signals]}]
+                               (when-let [s (and (= :statement field) (seq (filter reach signals)))]
+                                 [id (vec s)])))
+                    (retreat/widened-spent :design prev record (keys p)))]
+    (when (seq named)
+      (for [[id before] (sort-by key p)
+            :let [after (get r id)
+                  scoped (seq (filter named (names-in before)))
+                  added  (sort (remove (into named (names-in before)) (names-in after)))]
+            :when (and after scoped (not= before after) (or (seq added) (get wider id)))]
+        {:id id :held :enumerated
+         :why (str "a scope the intent lists by name (" (str/join ", " (sort scoped)) "), widened"
+                   (if (seq added)
+                     (str " to " (str/join ", " added))
+                     (str " (" (str/join ", " (map name (get wider id))) ")")))}))))
+
+(defn- person-moves
+  "What the amendment `record` changes against `prev` that is a person's to decide, not a repair:
+   one `{:id :held :why}` per claim, the first reason for each, nil when it moves none. `answers`
+   is `answered` of `prev` and `granted` the design its grant names; `intent` is the goal `prev`
+   cites.
+
+     :granted     a claim the grant covers, changed unless the grant's note names it (`grant-covered`)
+     :authored    a claim of `prev` written by a person, narrowed or dropped (`person-narrowed`)
+     :enumerated  a claim widened past the members the intent names (`enumerated-widened`)
+
+   Read off the text, as `retreat` reads it: a move worded so that none of these sees it is missed,
+   and the judge's prompt is what asks for it then. Held whoever ordered it, a judge's repair
+   included, because which judge drew the round decided whether that repair was filed the person's."
+  [answers granted intent prev record]
+  (let [moves (concat (when granted (grant-covered granted (get-in answers [:grant :note]) prev record))
+                      (when (:authored? answers) (person-narrowed prev record))
+                      (enumerated-widened intent prev record))]
+    (not-empty (vec (vals (reduce (fn [m mv] (cond-> m (not (m (:id mv))) (assoc (:id mv) mv)))
+                                  (sorted-map) moves))))))
+
+(defn- person-refusal
+  "What the ledger-style refusal of an amendment `person-moves` found moving `moves` says."
+  [moves]
+  (str "it changes what a person granted or wrote, which no repair decides for them: "
+       (str/join "; " (map (fn [{:keys [id why]}] (str "[" id "] — " why)) moves))
+       ". Put each back exactly as it stands in the design you were given, and name the line"
+       " that asked for it under :out-of-reach, saying what the person must decide; keep the"
+       " rest of your repair"))
+
 (defn- design-amend-message
   "What the design amender is told to repair `prev` for this round's `recommend`, shown `baseline`
    beside it and answering into `out-path`."
@@ -9018,6 +9162,13 @@
         (let [{:keys [record disputes out-of-reach]} answer
               scope  (asked-scope ctx)
               standing (into #{} (keep :id) (:standing-ask answer))
+              answers (when (and project ws-id) (try (answered project ws-id prev) (catch Exception _ nil)))
+              granted (some->> (get-in answers [:grant :seq]) (ws/entry-at-seq project ws-id))
+              intent  (discover-intent [project ws-id] prev)
+              ;; Every move a refusal held this round, by id: put back by the amender or not, each
+              ;; is a decision the person was not asked for, and the round stops to ask it.
+              held    (atom (sorted-map))
+              hold!   (fn [moves] (swap! held into (map (juxt :id identity)) moves) moves)
               entry  (fn [retreats amended?]
                        (cond-> {:iter (:iter ctx) :findings (:findings ctx)
                                 :retreats retreats :disputes disputes :amended? amended?}
@@ -9062,8 +9213,12 @@
                                     ;; Refused like a ledger refusal, so the amender is asked to
                                     ;; put the asked claims back rather than the run stopping.
                                     :append (fn [record]
-                                              (if-let [moves (asked-moves prev record scope standing)]
-                                                {:record record :err (asked-refusal moves scope)}
+                                              (if-let [err (or (some-> (asked-moves prev record scope standing)
+                                                                       (asked-refusal scope))
+                                                               (some->> (person-moves answers granted intent prev record)
+                                                                        hold!
+                                                                        person-refusal))]
+                                                {:record record :err err}
                                                 (let [record (cite record)]
                                                   (try {:record record
                                                         :seq    (ws/seq-of-path
@@ -9105,7 +9260,21 @@
             ;; attached, rather than after a judge round re-derives what the amender said — the
             ;; amendment it made beside it, if any, is appended first and judged on the next run.
             (and (seq out-of-reach) (not (:status out)))
-            (assoc :out-of-reach out-of-reach :control :escalate :status :asked)))))))
+            (assoc :out-of-reach out-of-reach :control :escalate :status :asked)
+
+            ;; A move the person was not asked for asks them whether the amender named its line or
+            ;; not: a proceed on the amendment that put it back would leave unasked the question the
+            ;; repair raised. Each move is said under :out-of-reach beside the amender's own lines.
+            (seq @held)
+            (assoc :held-for-person (vec (vals @held)))
+
+            (and (seq @held) (not (:status out)))
+            (assoc :control :escalate :status :asked
+                   :out-of-reach (into (vec out-of-reach)
+                                       (for [{:keys [id why]} (vals @held)]
+                                         {:claim (str "[" id "]")
+                                          :because (str "the amendment changed " why
+                                                        "; refused, and left for the person")})))))))))
 
 (defn- run-design-amend-stage
   [ctx]

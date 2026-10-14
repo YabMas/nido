@@ -2080,7 +2080,7 @@
       (let [a (ledger [{:seq 17 :design {:seq 16} :at-seq 16 :note "ok"}] [])]
         (is (= {:seq 16 :self? false :note "ok"
                 :delta {:added ["c"] :changed ["b"] :dropped []
-                        :clauses {"b" {:granted ["two"] :now ["TWO"]}}}}
+                        :clauses {"b" {:granted ["two"] :now ["TWO"] :whole "two"}}}}
                (:grant a)))))
     (testing "a question put to a person stays open until a grant is written after it"
       (is (= {:seq 18 :of 16 :asks "worth it?"}
@@ -2275,11 +2275,14 @@
                            :model (claims "Every read goes through a door. LTI context is excluded."))}
         a       (answered-over ledger 42)
         p       (record/design-prompt {:design (get ledger 42) :answers a})]
-    (is (= {"doors" {:granted ["LTI context is in scope."] :now ["LTI context is excluded."]}}
+    (is (= {"doors" {:granted ["LTI context is in scope."] :now ["LTI context is excluded."]
+                     :whole "Every read goes through a door. LTI context is in scope."}}
            (get-in a [:grant :delta :clauses])))
     (is (str/includes? p "granted: LTI context is in scope.\n      now:     LTI context is excluded."))
     (is (not (str/includes? p "granted: Every read goes through a door."))
         "a clause the grant already covered is not put back in front of the judge as new")
+    (is (str/includes? p "as granted, whole — Every read goes through a door. LTI context is in scope.")
+        "the unchanged clause that bounds the claim's scope is in front of the judge weighing a repair to it")
     (is (not (str/includes? p "is the one your note ordered"))
         "no sentence crediting the person with the change is handed to the judge to repeat")
     (is (str/includes? p "only by quoting the words of the\nnote that order it")
@@ -3144,3 +3147,65 @@
         "the next round needs to know it was a first reading, and a non-executing reader where it was read")
     (is (str/ends-with? (:trace q) "run-1/baseline-review-round-3.log")
         "the transcript is the round's own log")))
+
+;; ── Holding an amendment to what a person granted or wrote ─────────────────
+
+(deftest a-person-written-record-is-flagged-and-its-why-is-not-amend-authority
+  ;; Watched (ws-20261013-9d71b9): on the person's own record the judge read "what changed since it:
+  ;; none" and narrowed it as a derivable repair. (0dca52): a carried :why saying "every mobile
+  ;; response" was cited as authority to widen a claim the same record scoped to two routes.
+  (let [ledger {24 (assoc design :seq 24)
+                30 (assoc design :seq 30 :supersedes {:seq 24 :why "every mobile response"})}
+        a      (answered-over ledger 30)
+        p      (record/design-prompt {:design (get ledger 30) :answers a})]
+    (is (true? (:authored? a)) "a record a person wrote says so")
+    (is (str/includes? p "A PERSON WROTE THIS RECORD. Narrowing any of its claims")
+        "the judge is told narrowing it is the person's scope, not a derivable repair")
+    (is (str/includes? p "The disagreement goes to asks, never to amend")
+        "a :why disagreeing with its own record's claims is a question, not an order")
+    (is (nil? (:authored? (answered-over ledger 30 :amended #{30})))
+        "an amender's record is no person's")))
+
+(deftest a-repair-widening-an-enumerated-scope-is-the-person-s
+  ;; Watched (ws-20261013-607fd9): an either/or repair's wider side broke the intent's named list,
+  ;; and the amender took it; four rounds circled on it.
+  (let [p (record/design-prompt {:design design})]
+    (is (str/includes? p "A repair that widens a scope the intent lists by name"))
+    (is (str/includes? p "offer only those inside it"))))
+
+(def ^:private person-design
+  {:format :design :seq 48
+   :model {:claims [{:id "paired" :statement "Old and new fields ship side by side. On per-course routes and /analytics only."}
+                    {:id "keyed" :statement "Every goal is keyed on its course."}]}})
+
+(defn- restated [d id text]
+  (update-in d [:model :claims] (fn [cs] (mapv #(if (= id (:id %)) (assoc % :statement text) %) cs))))
+
+(deftest an-amendment-is-held-to-what-a-person-granted-or-wrote
+  (let [moves #(#'record/person-moves %1 %2 %3 person-design %4)]
+    (testing "a claim the grant covers, changed where the note does not name it"
+      (let [r (restated person-design "paired" "Old and new fields ship side by side. On per-course routes, /analytics and /progress-goals.")]
+        (is (= [{:id "paired" :held :granted}]
+               (map #(select-keys % [:id :held]) (moves {:grant {:seq 48 :note "additive shape"}} person-design nil r)))
+            "which reader drew the round no longer decides whether the widening is asked")
+        (is (nil? (moves {:grant {:seq 48 :note "make [paired] cover the dashboard"}} person-design nil r))
+            "a change the grant's note orders by the claim's id is the person's own")
+        (is (nil? (moves {:grant {:seq 48}} person-design nil person-design))
+            "nothing moved, nothing held")))
+    (testing "restoring the granted text is no move"
+      (let [prev (restated person-design "keyed" "A goal is keyed on its course.")]
+        (is (nil? (#'record/person-moves {:grant {:seq 48}} person-design nil prev person-design)))))
+    (testing "a claim of a person-written record, narrowed"
+      (let [r (restated person-design "keyed" "Every goal is keyed on its course, except a draft goal.")]
+        (is (= [{:id "keyed" :held :authored}]
+               (map #(select-keys % [:id :held]) (moves {:authored? true} nil nil r)))
+            "an exception added to what a person wrote is their scope, whoever ordered it")
+        (is (nil? (moves {} nil nil r)) "an amender's record narrowed is a retreat, reported elsewhere")))
+    (testing "a scope the intent lists by name, widened"
+      (let [intent {:goal "Pair the fields on per-course routes and /analytics."}
+            r      (restated person-design "paired" "Old and new fields ship side by side. On per-course routes, /analytics and /progress-goals.")]
+        (is (= [{:id "paired" :held :enumerated}]
+               (map #(select-keys % [:id :held]) (moves {} nil intent r))))
+        (is (str/includes? (:why (first (moves {} nil intent r))) "/progress-goals"))
+        (is (nil? (moves {} nil {:goal "Pair the fields."} r))
+            "an intent naming nothing lists no scope to widen")))))

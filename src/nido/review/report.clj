@@ -860,6 +860,9 @@
       ;; growing, which no single amendment's retreats show.
       ;; :out-of-reach is each line the amender said only a record it may not write repairs, with
       ;; the line itself — what the run then stopped to ask the person, and held nowhere else.
+      ;; :held-for-person is each claim an amendment was refused for changing what a person granted
+      ;; or wrote (`nido.review.record/person-moves`), {:id :held :why}: the round asked over it
+      ;; whatever the amender then wrote, and the refusal text alone does not say which claim.
       ;; :standing-ask is the amender saying the person's question still stands, with the asked
       ;; claim its repair bears on where it named one — kept apart from :out-of-reach, since it
       ;; leaves every line it repaired answered.
@@ -880,6 +883,7 @@
                 (seq (:stale-because ctx)) (assoc :stale-because (into (sorted-map) (:stale-because ctx)))
                 (seq (:swept ctx)) (assoc :swept (vec (:swept ctx)))
                 (:amend-delta ctx) (assoc :delta (:amend-delta ctx))
+                (seq (:held-for-person ctx)) (assoc :held-for-person (vec (:held-for-person ctx)))
                 (:record-size ctx) (assoc :record-size (:record-size ctx))
                 (seq (:growth ctx)) (assoc :growth (vec (:growth ctx)))
                 (seq (:out-of-reach ctx)) (assoc :out-of-reach (vec (:out-of-reach ctx)))
