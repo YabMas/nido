@@ -2271,7 +2271,7 @@
     (let [found     (into #{} (mapcat refuted-ids) (:findings result))
           named     (into #{} (keep :claim-id) (:findings result))
           held?     #(and (contains? checks %) (not (found %)))
-          broken    (into #{} (map slug) breaks)
+          broken    (into #{} (map report/break-id) breaks)
           confirmed (filterv #(and (held? %) (not (broken %)) (seq (get-in result [:checked-at %])))
                              (:confirmed result))
           owed      (filterv held? (distinct (concat (:owed result) (filter broken (:confirmed result)))))
@@ -2785,7 +2785,7 @@
     (catch Exception e {:refused :parse-error :message (or (ex-message e) (str (class e)))})))
 
 (defn- mismatched
-  "The ids of `ids` whose ruling in `ruled` (by id) disagrees with `breaks`, the slugs :breaks lists:
+  "The ids of `ids` whose ruling in `ruled` (by id) disagrees with `breaks`, the ids :breaks lists:
    `[omitted overclaim]` — ruled breaks and not listed, and listed but ruled stands. An id not ruled
    is in neither."
   [ruled breaks ids]
@@ -2829,7 +2829,7 @@
    next round for free, which is the ping-pong this exists to stop."
   [rulings [then then-baseline] [now now-baseline]]
   (let [text     #(-> (ws/unstamp %) (dissoc :supersedes) (update :baseline dissoc :breaks))
-        listed   #(into #{} (map slug) (get-in % [:baseline :breaks]))
+        listed   #(into #{} (map report/break-id) (get-in % [:baseline :breaks]))
         then-txt (text then)
         now-txt  (text now)
         then-in  (listed then)
@@ -2913,13 +2913,17 @@
 
    `subjects` empty — a design with no baseline relation, or a baseline naming no ids — leaves the
    decision as it is, and so does a relation-honest the judge could not derive: its rulings answer a
-   check with no yardstick, and holding them would turn the :underivable it reported into :unruled."
-  [decision subjects breaks]
+   check with no yardstick, and holding them would turn the :underivable it reported into :unruled.
+
+   `declared` is the design's :baseline :relation. Only :revisit admits :breaks, so an id ruled
+   `breaks` under :extends or :within cannot be repaired by listing it: the finding says the repair
+   is the move to :revisit, which changes the design's standing and not only its list."
+  [decision subjects breaks declared]
   (if (or (empty? subjects)
           (some #(and (= :relation-honest (:check %)) (= :underivable (:status %))) (:checks decision)))
     decision
     (let [ruled     (into {} (map (juxt :id identity)) (:relation-rulings decision))
-          breaks    (into #{} (map slug) breaks)
+          breaks    (into #{} (map report/break-id) breaks)
           ids       (mapv second subjects)
           unruled   (remove ruled ids)
           [omitted overclaim] (mismatched ruled breaks ids)
@@ -2930,7 +2934,11 @@
                          (when (seq omitted)
                            (str "; ruled breaks, absent from :breaks: " (str/join ", " omitted)))
                          (when (seq overclaim)
-                           (str "; under :breaks, ruled standing: " (str/join ", " overclaim))))
+                           (str "; under :breaks, ruled standing: " (str/join ", " overclaim)))
+                         (when (and (seq omitted) (#{:extends :within} declared))
+                           (str "; :baseline :relation is " declared ", which admits no :breaks — listing"
+                                " them means moving the relation to :revisit, a change of the design's"
+                                " standing and not only of its list")))
           check     {:check :relation-honest :status :broken :note why}
           checks    (if (some #(= :relation-honest (:check %)) (:checks decision))
                       (mapv #(if (= :relation-honest (:check %))
@@ -3494,6 +3502,30 @@
     (:ledger opts)
     (stages/project+ws-from-cwd (:cwd opts))))
 
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
+  relation-moved-under-ask
+  "When `final`'s decision asks a person something and the newest design on its ledger declares
+   another :baseline :relation than the design that decision judged: `{:was :now :seq}`, each side
+   the citation's :relation and :breaks, :seq the newest design's entry. nil otherwise, and when the
+   ledger cannot be read.
+
+   An amender's only valid repair for an id ruled `breaks` under :extends or :within is the move to
+   :revisit, which changes the design's standing. The ask was posed before that move, about scope;
+   a person answering it unaware that the record's standing changed under it grants something
+   nobody showed them."
+  [final]
+  (let [record (:record final)]
+    (when (and (= :design-decision (:format record)) (not (str/blank? (str (:asks record)))))
+      (try
+        (when-let [[project ws-id] (ledger-of (:config final))]
+          (let [judged (ws/entry-at-seq project ws-id (:design-seq record))
+                newest (ws/latest-entry project ws-id :design)
+                cited  #(select-keys (:baseline %) [:relation :breaks])]
+            (when (and judged newest
+                       (not= (get-in judged [:baseline :relation]) (get-in newest [:baseline :relation])))
+              {:was (cited judged) :now (cited newest) :seq (:seq newest)})))
+        (catch Exception _ nil)))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   baseline-review!
   "Verify a baseline against the code. Returns the ledger record, or
@@ -3887,7 +3919,7 @@
                     again (reasked ledger design result (get-in asking [:answers :asked]) run-id)]
                 (cond-> (-> (rule result checks asked breaks)
                             (held-to-answer (clauses-owed design asked))
-                            (relation-held relation breaks))
+                            (relation-held relation breaks (get-in design [:baseline :relation])))
                   (seq levels)              (assoc :strata-read (mapv :reading levels))
                   one-tree                  (assoc :code-identity one-tree)
                   (and one-tree (seq kept)) (assoc :subject-identities kept)

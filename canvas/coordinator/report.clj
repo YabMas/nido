@@ -85,6 +85,10 @@
      and the gate offering a grant. A reader testing `:recommend` itself parks an advisory-only
      design for a person whose grant nothing then accepts."
     {:signature [:=> [:catn [:decision [:maybe :map]]] :boolean]})
+  (Operation break-id
+    "The baseline id a `:breaks` entry names, its reason and brackets taken off. The schema admits
+     any string, and every reader holding :breaks to ids compares through this."
+    {:signature [:=> [:catn [:entry :any]] :string]})
   (Operation repair-before-asking
     "The repair a design decision's `:asks` waits on: its `:recommend` when that is `:amend`,
      `:recut` or `:resurvey` and the decision does not `proceeds?` anyway, else nil.

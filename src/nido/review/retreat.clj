@@ -30,6 +30,7 @@
       its decision round is never skipped."
   (:require
    [clojure.string :as str]
+   [nido.coordinator.report :as report]
    [nido.coordinator.report.model :as model]))
 
 (defn- retreat
@@ -754,7 +755,7 @@
        ;; claiming that property holds, which quiets relation-honest exactly as softening the
        ;; relation does — and the judge re-rules it only because its membership moved. Under a
        ;; softened relation the softening is that retreat, and each id it emptied would repeat it.
-       (let [listed #(map (fn [b] (str/replace (str/trim (str b)) #"[\[\]]" "")) (get-in % [:baseline :breaks]))
+       (let [listed #(map report/break-id (get-in % [:baseline :breaks]))
              soft?  (rank-drop :softened baseline-order
                                (get-in prev [:baseline :relation]) (get-in curr [:baseline :relation]))]
          (for [id (sort (remove (set (listed curr)) (distinct (listed prev))))

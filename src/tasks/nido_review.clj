@@ -2624,6 +2624,12 @@
       (println (str "\n  WILL ASK YOU ONCE REPAIRED — the " (name repair) " recommended above comes first:"))
       (println "\n  FOR YOU TO DECIDE:"))
     (println (str "  " asks))
+    (when-let [{was :was now :now n :seq} (record/relation-moved-under-ask final)]
+      (let [line (fn [{r :relation b :breaks}]
+                   (str (some-> r name) (when (seq b) (str ", breaking " (str/join "; " b)))))]
+        (println (str "\n  THE DESIGN'S STANDING MOVED SINCE THIS WAS ASKED — its relation to the baseline was "
+                      (line was) ", and design entry " n " declares " (line now)
+                      ". Answer the question about the design as it now stands."))))
     ;; Named here because a go has exactly one record a later round reads: the grant. Written
     ;; anywhere else — a design's :summary, a supersession's :why — it is prose, the judge
     ;; reports the question unanswered, and the next round asks it again.

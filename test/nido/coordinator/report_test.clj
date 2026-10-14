@@ -2142,3 +2142,12 @@
     (is (nil? (report/repair-before-asking (d :amend {:check :decomposable :status :broken})))
         "an :amend that proceeds anyway — only the advisory check broken — repairs nothing first")
     (is (nil? (report/repair-before-asking nil)) "no decision, nothing to wait on")))
+
+(deftest a-breaks-entry-is-read-by-the-id-it-names
+  ;; The :revisit schema admits any string, and authors attach the reason to the id; a reader
+  ;; comparing whole entries finds none of the ids an `id — reason` :breaks lists.
+  (is (= "turn-is-a-process" (report/break-id "turn-is-a-process — a turn is now a session")))
+  (is (= "turn-is-a-process" (report/break-id "turn-is-a-process—a turn")) "an unspaced em dash too")
+  (is (= "canvas.order/aggregate" (report/break-id "[canvas.order/aggregate] its interface moves"))
+      "bracketed as a prompt renders ids")
+  (is (= "p" (report/break-id " p "))))

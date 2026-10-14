@@ -279,6 +279,11 @@
     "An amendment citing the record it corrects under :supersedes — the loop's to set, not the
      amender's — keeping a :why its author wrote and carrying the corrected record's own."
     {:signature [:=> [:catn [:kind :keyword] [:prev [:maybe :map]] [:record :map] [:at :map]] :map]})
+  (Operation relation-moved-under-ask
+    "When a design run ends asking a person, how the newest design's :baseline :relation moved
+     from the one the asking decision judged — the standing change a person answering scope is
+     owed. nil when it did not move, or nothing was asked."
+    {:signature [:=> [:catn [:final :map]] [:maybe :map]]})
   (Operation appended-amendment-delta
     "What the amendment a run's amender appended superseding a judged entry moved, read back off the
      ledger — for a run stopped in its amend phase, whose phase never finished to say so. nil when

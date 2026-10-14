@@ -43,6 +43,7 @@
    [babashka.process :as p]
    [clojure.string :as str]
    [nido.coordinator.record.fork :as fork]
+   [nido.coordinator.report :as report]
    [nido.coordinator.record.workstream :as ws]
    [nido.review.digest :as digest]
    [nido.vsdd.jj :as jj]))
@@ -633,11 +634,11 @@
 
 (defn- relation-of
   "What a relation-honest finding about `id` read of `record` besides the subject itself: the
-   relation the record declares to its baseline, and whether its :breaks lists `id` — bracketed or
-   not, as a judge or an amender may have written it."
+   relation the record declares to its baseline, and whether its :breaks lists `id`
+   (`report/break-id`, so an entry carrying its reason still names it)."
   [record id]
   [(get-in record [:baseline :relation])
-   (boolean (some #(= id (-> (str %) str/trim (str/replace #"^\[|\]$" "")))
+   (boolean (some #(= id (report/break-id %))
                   (get-in record [:baseline :breaks])))])
 
 (defn- relation? [finding] (= :relation-honest (:check finding)))

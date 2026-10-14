@@ -1384,7 +1384,9 @@
 
 (def ^:private ids (#'record/relation-subjects strata-baseline))
 
-(defn- held [decision breaks] (#'record/relation-held decision ids breaks))
+(defn- held
+  ([decision breaks] (held decision breaks :revisit))
+  ([decision breaks declared] (#'record/relation-held decision ids breaks declared)))
 
 (defn- every-id-stands []
   (mapv (fn [[_ id]] {:id id :ruling "stands" :reason "untouched"}) ids))
@@ -1442,6 +1444,28 @@
   (let [r (held (decided (every-id-stands)) ["one-summing-path"])]
     (is (str/includes? (:note (first (:checks r))) "under :breaks, ruled standing: one-summing-path"))
     (is (= :amend (:recommend r)))))
+
+(deftest a-breaks-entry-carrying-its-reason-still-names-its-id
+  ;; Seen live: twelve ids listed as `id — reason` were each reported absent from :breaks, a
+  ;; machine line contradicting the judge's own note that :breaks listed them all.
+  (let [rulings (assoc (every-id-stands) 0 {:id "one-summing-path" :ruling "breaks" :reason "moves"})
+        r       (decided rulings)]
+    (is (= r (held r ["one-summing-path — the second summing path is now the cache"]))
+        "an entry with its reason attached lists the id, so rulings and :breaks agree")
+    (is (= r (held r ["[one-summing-path] the second summing path"]))
+        "and so does one written bracketed, as the prompt shows ids")))
+
+(deftest an-omitted-break-under-a-relation-that-admits-none-names-the-move
+  ;; Seen live: the judge asked for :breaks under :extends, which the schema forbids, and the
+  ;; amender's only valid repair moved the design to :revisit — a change of standing that reached
+  ;; the person as a scope question with nothing saying the record's standing had moved.
+  (let [rulings (assoc (every-id-stands) 0 {:id "one-summing-path" :ruling "breaks" :reason "moves"})]
+    (doseq [declared [:extends :within]]
+      (is (str/includes? (:claim (last (:findings (held (decided rulings) [] declared))))
+                         (str ":baseline :relation is " declared ", which admits no :breaks"))
+          "the finding says the repair is a move to :revisit, not an edit of a list the schema rejects"))
+    (is (not (str/includes? (:claim (last (:findings (held (decided rulings) [] :revisit)))) "admits no"))
+        "under :revisit listing the id is the whole repair")))
 
 (deftest an-ask-stays-an-ask-over-a-mismatch
   (let [r (held (assoc (decided (every-id-stands)) :recommend :ask) ["one-summing-path"])]

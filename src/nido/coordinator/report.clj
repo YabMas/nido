@@ -1267,6 +1267,15 @@
    [:kind-era   BaselineKindEra]
    [:legacy     BaselineLegacy]])
 
+(defn ^{:malli/schema [:=> [:cat :any] :string]}
+  break-id
+  "The baseline id a `:breaks` entry names: what precedes its first whitespace or em dash, with the
+   brackets a prompt renders around an id taken off. The schema admits any string, and an author
+   writes `turn-is-a-process — a turn is now…` as readily as the bare id; every reader that holds
+   :breaks to an id compares this, or an entry with its reason attached names nothing."
+  [entry]
+  (-> (str entry) str/trim (str/replace #"[\[\]]" "") (str/split #"[\s—]+" 2) first str))
+
 (def BaselineRelation
   "How this change relates to the area's CURRENT design — the layer-2 question,
    and deliberately NOT :standing, which relates it to the project's stance. The

@@ -699,6 +699,13 @@
                                                               :claim "s-facts holds"}])))
         "a removal the judge ruled for is the repair it asked")))
 
+(deftest stripping-the-reason-off-a-breaks-entry-drops-nothing
+  (let [prev (assoc model-design :baseline {:seq 1 :relation :revisit
+                                            :breaks ["content-keyed — the key is now the path"]})
+        curr (assoc-in prev [:baseline :breaks] ["content-keyed"])]
+    (is (= [] (retreat/design-retreats prev curr))
+        "the same id still listed is no property the design newly claims holds")))
+
 (deftest a-spent-claim-stated-more-broadly-is-widened
   ;; Seen live (baseline-loop-1bb66448 round 4): a claim refuted twice was offered weakening,
   ;; splitting or withdrawal; the amender said it weakened it, widened it instead, and round 5

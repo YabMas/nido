@@ -2745,3 +2745,22 @@
         (is (str/includes? (get-in out [:record :detail]) "nido/ws-1")
             "the detail names the ledger the run lost, so a re-run knows where to go")
         (is (zero? @launched) "nothing is judged against a ledger the round cannot write to")))))
+
+(deftest an-ask-overtaken-by-a-relation-move-says-so
+  ;; Seen live: the amender's only valid repair moved :extends to :revisit, and the run stopped
+  ;; asking a scope question with nothing saying the record's standing had changed underneath it.
+  (let [judged   (assoc a-design :seq 4 :baseline {:seq 1 :relation :extends :note "n"})
+        moved    (assoc a-design :seq 5 :baseline {:seq 1 :relation :revisit :breaks ["p"] :note "n"})
+        final    {:config {:cwd "/w"} :status :asked
+                  :record {:format :design-decision :design-seq 4 :recommend :ask :asks "worth it now?"}}
+        read     (fn [newest f]
+                   (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                                 ws/entry-at-seq (fn [_ _ n] (when (= 4 n) judged))
+                                 ws/latest-entry (fn [_ _ k] (when (= :design k) newest))]
+                     (record/relation-moved-under-ask f)))]
+    (is (= {:was {:relation :extends} :now {:relation :revisit :breaks ["p"]} :seq 5} (read moved final))
+        "the move is named beside the ask, with what the newest design now breaks")
+    (is (nil? (read (assoc-in moved [:baseline :relation] :extends) final))
+        "an amendment that left the relation alone changed no standing")
+    (is (nil? (read moved (update final :record dissoc :asks)))
+        "with no question for a person there is nothing to set the move beside")))
