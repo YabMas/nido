@@ -6207,7 +6207,13 @@
    judge agreeing with itself has confirmed false claims at an unchanged tree four rounds running.
    Between independent judges holds and owed agree — both say the claim is sound, and for a claim
    about something not yet built they are one judgement read two ways — and a pair of them is what
-   lets the run end. Where the two disagree on holds and owed, whoever gave them, it is kept as
+   lets the run end. A confirmation a sibling's amendment knocked off standing (`knock-ons`, under
+   the same one-tree guard as `standing`) is a reading before for this purpose too, unless an
+   element entry the subject is about moved with it: the subject's words and what they describe are
+   what that judge read, so another judge confirming them is the second reading, and without it a
+   run on an untouched claim never ends while its neighbours are amended. It pairs and nothing
+   more — a refutation of it is the knock-on, not a :split, and no :unpaired is drawn against it.
+   Where the two disagree on holds and owed, whoever gave them, it is kept as
    :unpaired `[{:id :was :now}]`, since otherwise the run keeps the later ruling and nothing shows
    there were two. An id the reading before held or owed and this one refutes is a :split
    `[{:id :was}]` — unless it was settled, which :overrides-settled says. An id the reading before
@@ -6245,7 +6251,7 @@
    judge never shown the question cannot have. And an id the ask filed :for-person is never
    :read-once: the person's answer settles it, and no further reading can change that the run
    stops for them."
-  [record holds? {:keys [standing single settled carried prior asked unread-amendment? held ask]}]
+  [record holds? {:keys [standing single settled knock-ons carried prior asked unread-amendment? held ask]}]
   (if-not (:format record)
     record
     (let [ruled     (rulings record)
@@ -6260,8 +6266,10 @@
           before    (into {} (map (fn [[id r]] [id (:ruling r)])) (merge {} stood carried))
           ;; What this reading pairs with: a reading before it by another judge, from either source,
           ;; so an id :paired-with names is never also read once.
+          knocked   (when (:code-identity record)
+                      (keep (fn [[id k]] (when-not (:elements-moved? k) [id k])) knock-ons))
           seconds   (into #{} (keep (fn [[id r]] (when (settled/independent? (:judged-by r) judge) id)))
-                          (concat stood carried))
+                          (concat stood carried knocked))
           once-held (when (:code-identity record)
                       (into (sorted-map) (filter (comp (set single) key)) standing))
           paired    (vec (for [[id {:keys [ws-id run-id judged-by] n :seq}] once-held
@@ -6537,6 +6545,7 @@
                        (stamp-run (:config ctx))
                        (with-readings report/review-holds?
                                       {:standing standing :single single :settled settled :prior prior
+                                       :knock-ons knock-ons
                                        :carried (carried-readings ctx subject)
                                        :held (run-held-clauses project ws-id :baseline-review run-id)
                                        :asked asked
@@ -7989,6 +7998,7 @@
                        (stamp-run (:config ctx))
                        (with-readings #(or (report/proceeds? %) (asks-only? %))
                                       {:standing standing :single single :settled settled :prior prior
+                                       :knock-ons knock-ons
                                        :carried (carried-readings ctx design)
                                        :ask (carried-ask ctx design)
                                        :held (run-held-clauses project ws-id :design-decision run-id)

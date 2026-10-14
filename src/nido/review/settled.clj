@@ -519,10 +519,13 @@
                        [:=> [:cat [:maybe [:vector :map]] :map :map :map] :map]]}
   knock-ons
   "The subjects of `record` read again only because what sits around them moved, as `{id {:ws-id
-   :seq :moved}}`: the newest judgement bearing on the subject at its content, cited yardstick and
-   key at `reading`, in any context, confirmed it — but beside another `context` than the record's
-   now. :seq names that confirmation and :moved the element entries and sibling claims whose words
-   differ (`moved-around`), the amendment that reopened it.
+   :seq :moved :judged-by :elements-moved?}}`: the newest judgement bearing on the subject at its
+   content, cited yardstick and key at `reading`, in any context, confirmed it — but beside another
+   `context` than the record's now. :seq names that confirmation, :judged-by who answered it (absent
+   when it kept no one), and :moved the element entries and sibling claims whose words differ
+   (`moved-around`), the amendment that reopened it. :elements-moved? is true when one of those is
+   an element entry the subject is about, and absent when only sibling claims moved — the subject's
+   own words and what it describes then stand exactly as that confirmation read them.
 
    A refutation of one of these is an amendment's knock-on, not a judge disagreeing with a reading of
    the same words at the same tree; without it the two look alike. `effective` as `settled` takes it."
@@ -545,8 +548,12 @@
                                        last)
                            then   (some-> latest :record (context id ids))]
                        (when (and latest (not (:breaks? latest)) (not= then around))
-                         [id {:ws-id (:ws-id latest) :seq (get-in latest [:judgement :seq])
-                              :moved (moved-around then around)}]))))
+                         [id (cond-> {:ws-id (:ws-id latest) :seq (get-in latest [:judgement :seq])
+                                      :moved (moved-around then around)}
+                               (get-in latest [:judgement :judged-by])
+                               (assoc :judged-by (get-in latest [:judgement :judged-by]))
+                               (not= (:elements then) (:elements around))
+                               (assoc :elements-moved? true))]))))
              (subjects record))))))
 
 (defn ^{:malli/schema [:function

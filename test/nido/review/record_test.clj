@@ -365,6 +365,38 @@
 (def ^:private codex {:reviewer :codex})
 (def ^:private claude {:reviewer :claude})
 
+;; Watched (da6d82): m-facade, its words unchanged, was confirmed by codex in R1 and by claude in
+;; R2, but a sibling's amendment had knocked the R1 confirmation off standing, so R2 recorded it as
+;; another :first-reading and its run stayed at 3 — named :unfixable on a claim nobody touched.
+(deftest an-independent-confirmation-pairs-with-the-reading-a-knock-on-reopened
+  (let [read      (fn [judge knock-on]
+                    (#'record/with-readings {:format :baseline-review :code-identity "t"
+                                             :confirmed ["m-facade"] :checked-at {"m-facade" ["a.clj:1"]}
+                                             :findings [{:claim-id "other" :cites ["b.clj:2"] :claim "no"}]
+                                             :judged-by judge}
+                                            (constantly false)
+                                            {:knock-ons {"m-facade" knock-on}
+                                             :asked ["m-facade" "other"]}))
+        knocked   {:ws-id "ws-1" :seq 17 :moved ["text-less"] :judged-by codex}
+        refute    {:format :baseline-review
+                   :findings [{:claim-id "m-facade" :cites ["c.clj:3"] :claim "no"}]}
+        paired    (read claude knocked)]
+    (is (nil? (:first-reading paired))
+        "another judge confirming the same words beside an amended sibling is the second reading")
+    (is (nil? (get (record/refuted-running nil [refute refute refute paired]) "m-facade"))
+        "so the run on the untouched claim ends")
+    (is (nil? (:splits paired)) "a knock-on pairs; it is no reading the confirmation is set against")
+    (is (= ["m-facade"] (:first-reading (read codex knocked)))
+        "the judge that confirmed it before agreeing with itself is still one sample")
+    (is (= ["m-facade"] (:first-reading (read claude (assoc knocked :elements-moved? true))))
+        "an element entry the claim is about moved, so the earlier judge read something else")
+    (is (= ["m-facade"] (:first-reading (#'record/with-readings
+                                          {:format :baseline-review :confirmed ["m-facade"]
+                                           :checked-at {"m-facade" ["a.clj:1"]} :judged-by claude}
+                                          (constantly false)
+                                          {:knock-ons {"m-facade" knocked} :asked ["m-facade"]})))
+        "a record that read no single tree pairs with nothing a knock-on names")))
+
 (deftest a-holds-reading-then-an-owed-one-is-kept-as-unpaired
   ;; Watched: no-cutoff held on round 1 and owed on round 2 at one tree; the run kept the owed
   ;; ruling, and neither the report nor the figures showed there had been two.

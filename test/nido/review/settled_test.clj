@@ -472,6 +472,22 @@
       (is (not (contains? (settled/knock-ons l amended tree-a) "on-a"))
           "a subject whose last reading found against it is owed a reading anyway"))))
 
+(deftest a-knock-on-says-who-confirmed-it-and-whether-what-it-describes-moved
+  ;; Watched: an untouched claim confirmed by codex, knocked on by a sibling's amendment and
+  ;; confirmed again by claude stayed a first reading, so its refutation run never ended. Pairing
+  ;; the two needs the first judge, and is honest only while the subject's own element entries
+  ;; stand as that judge read them.
+  (let [on-a-2  (assoc on-a :id "on-a-2" :statement "a is written by one job")
+        l       [(ledger :baselines [(hub-baseline 1 hub on-a on-a-2 on-b)]
+                         :reviews [(review 2 1 :confirmed ["hub" "on-a" "on-a-2" "on-b"] :judged-by codex)])]
+        sibling (hub-baseline 3 hub on-a (assoc on-a-2 :statement "a is written by two jobs") on-b)
+        element (assoc-in sibling [:model :elements 0 :hides] "a order and a cadence")]
+    (is (= {:ws-id "ws-1" :seq 2 :moved ["on-a-2"] :judged-by codex}
+           (get (settled/knock-ons l sibling tree-a) "on-a"))
+        "only a sibling moved: the confirmation names its judge, and nothing it described has moved")
+    (is (true? (:elements-moved? (get (settled/knock-ons l element tree-a) "on-a")))
+        "an element entry the subject is about moved: what that judge read is not what is there now")))
+
 (deftest a-changed-yardstick-unsettles-what-was-judged-against-the-old-one
   ;; A design resting on a re-surveyed baseline, or written for a goal that moved, is judged against
   ;; a different yardstick however identical its claims are.
