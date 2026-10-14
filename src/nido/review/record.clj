@@ -6522,9 +6522,13 @@
    `ask` is the standing ask the reading before made of this record (`carried-ask`). A reading
    that recommends anything else is kept with :unpaired-recommend `{:was :ask :seq :asks}`, and
    carries the ask's question in its own :asks — the claims agreeing does not answer it, and a
-   judge never shown the question cannot have. And an id the ask filed :for-person is never
-   :read-once: the person's answer settles it, and no further reading can change that the run
-   stops for them."
+   judge never shown the question cannot have. A reading that asks too, in other words, is kept
+   with :paired-ask `{:seq :asks}`, and its :asks is its own question followed by the ask's, said
+   to be the reading before's: no two judges word one question alike, so the two cannot be told
+   the same question or two — and one only the reading before raised, dropped, never reaches the
+   person. Where they disagree is left to the person, who reads both. And an id the ask filed
+   :for-person is never :read-once: the person's answer settles it, and no further reading can
+   change that the run stops for them."
   [record holds? {:keys [standing single settled knock-ons carried prior asked unread-amendment? held ask]}]
   (if-not (:format record)
     record
@@ -6581,12 +6585,23 @@
                              (and inferred? executes?) (assoc :by-inference true))))
           was-ask   (when (and ask (not= :ask (:recommend record)))
                       (cond-> {:was :ask :asks (:asks ask)} (:seq ask) (assoc :seq (:seq ask))))
-          own-asks  (str/trim (str (:asks record)))]
+          own-asks  (str/trim (str (:asks record)))
+          also-ask  (when (and ask (= :ask (:recommend record))
+                               (not (str/blank? (:asks ask))) (not= own-asks (str/trim (:asks ask))))
+                      (cond-> {:asks (:asks ask)} (:seq ask) (assoc :seq (:seq ask))))]
       (cond-> record
         was-ask                          (assoc :unpaired-recommend was-ask
                                                 :asks (if (or (str/blank? own-asks) (= own-asks (:asks ask)))
                                                         (:asks ask)
                                                         (str own-asks "\n\n" (:asks ask))))
+        also-ask                         (assoc :paired-ask also-ask
+                                                :asks (if (str/blank? own-asks)
+                                                        (:asks ask)
+                                                        (str own-asks "\n\n"
+                                                             "The reading before this one"
+                                                             (when (:seq ask) (str " (entry " (:seq ask) ")"))
+                                                             " asked as well, in its own words:\n\n"
+                                                             (:asks ask))))
         (seq once)                       (assoc :read-once once)
         (seq firsts)                     (assoc :first-reading firsts)
         (and holds unread-amendment?)    (assoc :amendment-read-once true)
@@ -6711,12 +6726,20 @@
    from the account of how the decision was arrived at. Nothing that counts attempts or stalls
    reads a quiet entry (`raised-since`, `record-round-veto`, the engine's `unfixable`).
 
+   Its entry keeps what the round recommended and, on an :ask, the question, so two readings that
+   split — one asking, the next proceeding — read as a split there and not as two alike rounds.
+
    An :ask is carried too, with `at`, the entry it was appended as (`carried-ask`) — and kept
-   through a later quiet round of the same record that did not ask, since nothing has answered it."
+   through a later quiet round of the same record that did not ask, since nothing has answered it.
+   A later one that asks carries its own, which holds the earlier's (`with-readings`), about the
+   claims of both."
   [ctx subject record & [at]]
   (-> ctx
       (update :history (fnil conj [])
               (cond-> {:iter (:iter ctx) :findings [] :retreats [] :disputes [] :quiet true}
+                (:recommend record)           (assoc :recommend (:recommend record))
+                (and (= :ask (:recommend record)) (not (str/blank? (str (:asks record)))))
+                (assoc :asks (:asks record))
                 (seq (:read-once record))     (assoc :read-once (vec (:read-once record)))
                 (:amendment-read-once record) (assoc :amendment-read-once true)))
       (assoc :control :next-round
@@ -6724,13 +6747,16 @@
                              (seq (:read-once record))      (assoc :read-once (vec (:read-once record)))
                              (:amendment-read-once record)  (assoc :amendment true)))
       (assoc-in [:carry :quiet]
-                (let [ask (if (= :ask (:recommend record))
-                            (cond-> {:asks  (:asks record)
-                                     :about (into [] (comp (filter :for-person) (keep :claim-id)
-                                                           (map str) (distinct))
-                                                  (:findings record))}
-                              at (assoc :seq at))
-                            (carried-ask ctx subject))]
+                (let [before (carried-ask ctx subject)
+                      ask    (if (= :ask (:recommend record))
+                               (cond-> {:asks  (:asks record)
+                                        :about (into [] (distinct)
+                                                     (concat (into [] (comp (filter :for-person) (keep :claim-id)
+                                                                            (map str))
+                                                                   (:findings record))
+                                                             (:about before)))}
+                                 at (assoc :seq at))
+                               before)]
                   (cond-> {:seq       (:seq subject)
                            :iter      (:iter ctx)
                            :read      (merge (apply dissoc (carried-readings ctx subject)
@@ -7251,14 +7277,17 @@
    found nothing and gave up nothing are still listed: a round that passed
    quietly is evidence about the ones that did not. A `:quiet` round — one that
    would have ended the run on a first reading and read again instead — is
-   listed as that. Each is numbered by the run's round (:iter), so a decision's
+   listed as that, with what it recommended and what it asked: readings that
+   split on whether to ask are what the person is weighing. Each is numbered by the run's round (:iter), so a decision's
    account and the report's rounds name the same round by the same number; a
    history entry from before entries carried one is numbered by position."
   [history]
   (vec (map-indexed
-        (fn [i {:keys [iter findings asked retreats disputes amended? quiet]}]
+        (fn [i {:keys [iter findings asked retreats disputes amended? quiet recommend asks]}]
           (cond-> {:round (or iter (inc i))}
             quiet (assoc :quiet true)
+            (and quiet recommend) (assoc :recommend (name recommend))
+            (and quiet (not (str/blank? (str asks)))) (assoc :asks asks)
             (seq findings) (assoc :found (mapv design-finding-label findings))
             (seq asked) (assoc :asked (mapv design-finding-label asked))
             (some? amended?) (assoc :amended (boolean amended?))
@@ -8355,11 +8384,14 @@
       ;; Would proceed, or stop for a person over nothing derivable (`asks-only?`), on claims it read
       ;; once or on an amendment's first reading: appended as the reading it is — it does not
       ;; proceed, so it clears nothing — and read again before a person is asked, so a person is not
-      ;; asked over a derivable defect one judge missed.
+      ;; asked over a derivable defect one judge missed. An :ask's findings for the person are
+      ;; still what it asked over, as :asked-findings, though it hands nothing on.
       (and (empty? unsettled) (read-once? record))
-      (let [answer (put! ledger record)]
-        (with-appended (second-reading (assoc ctx :record record :findings []
-                                              :underivable (underivable-checks record))
+      (let [answer (put! ledger record)
+            person (when (= :ask (:recommend record)) (filterv :for-person (:findings record)))]
+        (with-appended (second-reading (cond-> (assoc ctx :record record :findings []
+                                                      :underivable (underivable-checks record))
+                                         (seq person) (assoc :asked-findings person))
                                        design record (:seq answer))
                        answer))
 

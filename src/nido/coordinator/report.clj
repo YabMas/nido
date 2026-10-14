@@ -2852,10 +2852,14 @@
 
    :asked is what the round found that was the person's — left out of :found, which is what the
    round handed an amender. :quiet marks a round that would have ended the run on a first reading
-   and was read again instead; :round is the run's own round number."
+   and was read again instead, :recommend what that reading recommended and :asks, on an ask, its
+   question — the next reading may recommend otherwise, and a split between the two is otherwise
+   invisible; :round is the run's own round number."
   [:map {:closed true}
    [:round    int?]
    [:quiet    {:optional true} boolean?]
+   [:recommend {:optional true} string?]
+   [:asks     {:optional true} string?]
    [:found    {:optional true} [:vector string?]]
    [:asked    {:optional true} [:vector string?]]
    [:amended  {:optional true} boolean?]
@@ -2998,6 +3002,13 @@
                 [:unpaired-recommend    {:optional true}
                  [:map {:closed true}
                   [:was  [:= :ask]]
+                  [:seq  {:optional true} int?]
+                  [:asks [:re #"\S"]]]]
+                ;; The :ask the reading before this one made of the same record, when this one asks
+                ;; too in other words: which entry, and its question — carried in :asks after this
+                ;; one's own, so a question only the reading before raised still reaches the person.
+                [:paired-ask            {:optional true}
+                 [:map {:closed true}
                   [:seq  {:optional true} int?]
                   [:asks [:re #"\S"]]]]
                 ;; As on a baseline review.
@@ -4550,6 +4561,13 @@
       (when-not (verdict-holds verdict)
         ["\n> Re-survey — the design may be sound on a bad premise."])))))
 
+(defn- quiet-asks
+  "A quiet round's question on the one line its trajectory row has: whitespace run together, and cut
+   at 240 characters. The whole of it is in the ask the person reads below, or on the round's entry."
+  [asks]
+  (let [s (str/replace (str/trim asks) #"\s+" " ")]
+    (if (> (count s) 240) (str (subs s 0 240) "…") s)))
+
 (defn- trajectory->markdown
   "How the decision was arrived at, round by round.
 
@@ -4559,9 +4577,12 @@
   [trajectory]
   (when (seq trajectory)
     (cons "\n## How this was arrived at"
-          (for [{:keys [round found amended weakened disputed quiet]} trajectory]
+          (for [{:keys [round found amended weakened disputed quiet recommend asks]} trajectory]
             (str "- **round " round "** — "
                  (cond
+                   (and quiet (= "ask" recommend))
+                   (str "asked" (when-not (str/blank? asks) (str ": " (quiet-asks asks))) "; read again")
+                   (and quiet (= "proceed" recommend)) "proceeded; read again"
                    quiet       "would have ended on a first reading; read again"
                    (seq found) (str "found " (str/join ", " found))
                    :else       "nothing left to derive")

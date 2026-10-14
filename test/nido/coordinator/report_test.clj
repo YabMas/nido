@@ -1770,6 +1770,23 @@
     (is (< (str/index-of md "How this was arrived at")
            (str/index-of md "For you to decide")))))
 
+;; Watched (ws-20261013-20d821): rounds 3 and 4 asked and proceeded, and both read "would have ended
+;; on a first reading; read again", so the person could not see the judges split 2-1 on the very
+;; question they were asked.
+(deftest a-quiet-round-says-what-it-recommended
+  (let [t   [{:round 3 :quiet true :recommend "ask" :asks "Is that\n  maintenance worth it?"}
+             {:round 4 :quiet true :recommend "proceed"}
+             {:round 5 :quiet true}]
+        d   (assoc a-decision :trajectory t)
+        md  (report/report->markdown d)]
+    (is (report/validate-event :design-decision d) "the ledger takes what a quiet round recommended")
+    (is (str/includes? md "**round 3** — asked: Is that maintenance worth it?; read again")
+        "an ask a later reading did not repeat is still visible as asked")
+    (is (str/includes? md "**round 4** — proceeded; read again")
+        "a proceed reads differently from an ask, so a split shows")
+    (is (str/includes? md "**round 5** — would have ended on a first reading; read again")
+        "an entry from before rounds carried a recommendation still reads")))
+
 (deftest a-decision-with-no-trajectory-renders-no-section
   (let [md (report/report->markdown a-decision)]
     (is (not (str/includes? md "How this was arrived at")))))

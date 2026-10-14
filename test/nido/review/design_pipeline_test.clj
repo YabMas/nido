@@ -2101,7 +2101,7 @@
              "the quiet round enters the history at its own round number")
          (let [r2 (run record/design-judge-stage (ctx :iter 4 :history (:history r1) :carry (:carry r1)))]
            (is (= :proceed (:status r2)))
-           (is (= [{:round 2 :amended true} {:round 3 :quiet true}]
+           (is (= [{:round 2 :amended true} {:round 3 :quiet true :recommend "proceed"}]
                   (:trajectory (last @appended)))
                "rounds are named by the run's number, and the quiet one is said, not skipped")))))))
 
@@ -2211,6 +2211,57 @@
            (is (= :proceed (:status r2)) "the proceed parks for the person, who reads the question")
            (is (= :escalate (:control r2)))
            (is (report/validate-event :design-decision d2) "and the ledger takes it")))))))
+
+;; Watched (ws-20261013-f8b578): a first reading asked two questions, the cold second reading of the
+;; same record asked only the first, and the second — whether an amendment still met the person's
+;; own grant — never reached the person.
+(deftest an-ask-after-an-ask-keeps-both-questions
+  (let [appended (atom [])
+        again    (-> (decision :ask :checks [(check :goal-served :broken)]
+                               :findings [{:cites ["c"] :claim "over-serves the goal"
+                                           :check :goal-served :claim-id "pool-in-scope"
+                                           :for-person true}])
+                     (assoc :asks "is the delay worth the saving?"
+                            :confirmed ["rounded-once"] :checked-at {"rounded-once" ["src/a.clj:2"]}))
+        answers  (atom [asks-the-person again])]
+    (judging-a-model-design
+     asks-the-person appended
+     (fn []
+       (with-redefs [record/design-decision! (fn [opts] (let [a (first @answers)] (swap! answers rest) (named-by a opts)))
+                     record/append! (fn [_ r] {:seq (count (swap! appended conj r))})]
+         (let [r1 (run record/design-judge-stage (ctx :iter 1))
+               r2 (run record/design-judge-stage (ctx :iter 2 :history (:history r1) :carry (:carry r1)))
+               d2 (second @appended)]
+           (is (= :next-round (:control r1)))
+           (is (= ["pool-in-scope"] (mapv :claim-id (:asked-findings r1)))
+               "a read-once ask hands nothing on, but the report still shows what it asked over")
+           (is (= {:iter 1 :quiet true :recommend :ask :asks (:asks asks-the-person)}
+                  (select-keys (last (:history r1)) [:iter :quiet :recommend :asks]))
+               "the quiet round keeps its question, for the account of how the decision was reached")
+           (is (= :asked (:status r2)))
+           (is (= {:seq 1 :asks (:asks asks-the-person)} (:paired-ask d2))
+               "the two readings worded their questions apart, and the record says so")
+           (is (str/includes? (:asks d2) "is the delay worth the saving?"))
+           (is (str/includes? (:asks d2) (:asks asks-the-person))
+               "a question only the first reading raised still reaches the person")
+           (is (= [{:round 1 :quiet true :recommend "ask" :asks (:asks asks-the-person)}]
+                  (:trajectory d2)))
+           (is (report/validate-event :design-decision d2) "and the ledger takes it")))))))
+
+(deftest an-ask-in-the-same-words-is-not-asked-twice
+  (let [appended (atom [])
+        same     (assoc asks-the-person :checked-at {"rounded-once" ["src/a.clj:2"]})
+        answers  (atom [asks-the-person same])]
+    (judging-a-model-design
+     asks-the-person appended
+     (fn []
+       (with-redefs [record/design-decision! (fn [opts] (let [a (first @answers)] (swap! answers rest) (named-by a opts)))
+                     record/append! (fn [_ r] {:seq (count (swap! appended conj r))})]
+         (let [r1 (run record/design-judge-stage (ctx))
+               _  (run record/design-judge-stage (ctx :carry (:carry r1)))
+               d2 (second @appended)]
+           (is (nil? (:paired-ask d2)))
+           (is (= (:asks asks-the-person) (:asks d2)) "one question, put once")))))))
 
 (deftest a-proceed-over-a-standing-ask-writes-no-clearance
   ;; A design owing nobody is cleared by its proceeding decision's append, which would answer the
