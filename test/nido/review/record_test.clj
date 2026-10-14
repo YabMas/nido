@@ -2588,6 +2588,54 @@
     (is (= :proceed (status (update d :supersedes dissoc :granted))) "no grant carried, the person is asked")
     (is (empty? @written))))
 
+(deftest a-granted-move-carries-onto-a-successor-declaring-it-unchanged
+  ;; A revisit approved at entry 21 for design 18 was replaced by design 22 declaring the same move
+  ;; word for word; the proceed on 22 parked the person on whether the move was worth building.
+  (let [move     {:seq 5 :relation :revisit :breaks ["pdf-served-by-public-url" "m-pdf-viewer"]}
+        granted  (assoc design :seq 18 :baseline move)
+        current  (assoc design :seq 22 :baseline move :summary "repaired"
+                        :supersedes {:seq 18 :why "corrected against the code after round 1 of run r"})
+        approval {:format :design-approved :seq 21 :design {:seq 18} :at-seq 20 :note "go"}
+        written  (atom [])
+        status   (fn [d]
+                   (let [ledger {18 granted 21 approval 22 d}]
+                     (with-redefs [ws/amended-seqs (constantly #{22})
+                                   ws/entry-at-seq (fn [_ _ n] (get ledger n))
+                                   ws/entries-of   (fn [_ _ k] (->> (vals ledger) (filter #(= k (:format %)))
+                                                                    (sort-by :seq) vec))
+                                   ws/append-entry! (fn [_ _ _ body] (swap! written conj (read-string body)) "0024.edn")
+                                   nido.coordinator.record.standing/of-design (constantly {:decidable? true})]
+                       (#'record/proceeding-status [:nido "ws-1"] {:design-seq 22} {:seq 23}))))]
+    (is (= :cleared (status current))
+        "the move was granted and is unchanged, so parking asks the person for a grant they gave")
+    (is (= [{:format :design-approved :design {:seq 22} :at-seq 23 :carried true :note "go" :from {:seq 18}}]
+           @written)
+        "the carried grant names the grant it carried, so a reader can trace it to a person")
+    (is (= (first @written) (report/validate-event :design-approved (first @written))))
+    (reset! written [])
+    (is (= :proceed (status (update-in current [:baseline :breaks] conj "st-admin-ui")))
+        "a successor breaking more than was granted asks the person for the new break")
+    (is (= :proceed (status (assoc current :standing {:relation :challenges :note "n"})))
+        "a stance challenge nobody granted is still the person's")
+    (is (empty? @written))))
+
+(deftest a-judge-is-told-a-carried-move-stops-nobody
+  ;; The prompt told the judge "a proceed stops for them" over a move already granted, so its asks
+  ;; posed the worth of the whole move again.
+  (let [move    {:seq 5 :relation :revisit :breaks ["a"]}
+        ledger  {18 (assoc design :seq 18 :baseline move)
+                 21 {:format :design-approved :seq 21 :design {:seq 18} :at-seq 20}
+                 22 (assoc design :seq 22 :baseline move
+                           :supersedes {:seq 18 :why "corrected against the code after round 1 of run r"})}
+        p       (fn [d] (record/design-prompt {:design d :answers (answered-over (assoc ledger 22 d) 22 :amended #{22})}))
+        carried (p (get ledger 22))
+        moved   (p (update-in (get ledger 22) [:baseline :breaks] conj "b"))]
+    (is (str/includes? carried "a person granted it at entry 18")
+        "the judge must know the move is granted, or its asks re-pose it")
+    (is (not (str/includes? carried "so a proceed stops for them")))
+    (is (str/includes? moved "so a proceed stops for them")
+        "a moved move is the person's again")))
+
 ;; ── A claim spent across runs ───────────────────────────────────────────────
 
 (deftest a-subject-is-spent-once-a-rewording-was-itself-refuted

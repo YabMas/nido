@@ -3333,16 +3333,19 @@
    :design names what was approved, by number. Not `the latest design`, for the
    same reason no other citation in this ledger is.
 
-   :carried marks a grant the design round wrote rather than a gate: the design
-   was written by a person carrying their grant (`:supersedes :granted`), a round
-   found nothing that stops it, and :note is that carried grant word for word.
-   Parking it for a second approval of the same words asked the person nothing."
+   :carried marks a grant the design round wrote rather than a gate, after a round
+   found nothing that stops the design: either a person wrote it carrying their
+   grant (`:supersedes :granted`), and :note is that grant word for word, or a
+   person granted the design it replaces — :from — and the move it declares has
+   not changed since, and :note is that grant's. Parking either for a second
+   approval asked the person nothing they had not answered."
   [:map {:closed true}
    [:format  [:= :design-approved]]
    [:design  [:map {:closed true} [:seq int?]]]
    [:at-seq  int?]
    [:note    {:optional true} string?]
-   [:carried {:optional true} [:= true]]])
+   [:carried {:optional true} [:= true]]
+   [:from    {:optional true} [:map {:closed true} [:seq int?]]]])
 
 (def DesignCleared
   "A decision round found this design implementable without a person: it

@@ -546,6 +546,20 @@
                      "For you to decide: scope?")
       "an :ask waits on no repair, so its question is the person's to answer now"))
 
+(deftest a-grant-owed-proceed-names-the-move-it-grants
+  ;; The final ask of an eight-round run no longer named the four breaks it was meant to grant, and
+  ;; the gate is what the person approves from.
+  (let [design {:seq 4 :standing {:relation :conforms}
+                :baseline {:seq 2 :relation :revisit :at "ingest" :breaks ["recipe-in-one-place" "m-layout"]}}
+        needs  (drive/decision-needs :proceed [(a-decision 9 :proceed "bump the version by hand?" :findings [])]
+                                     design)]
+    (is (str/includes? needs "revisits baseline entry 2, at ingest, breaking:\n    - recipe-in-one-place\n    - m-layout")
+        "approving grants every declared break, so every one is on the gate whatever the asks say")
+    (is (not (str/includes? (drive/decision-needs :proceed [(a-decision 9 :proceed "" :findings [])]
+                                                  (assoc design :baseline {:seq 2 :relation :extends}))
+                            "Approving grants"))
+        "a design owing nobody has no move to grant")))
+
 (deftest a-round-that-appended-no-decision-keeps-the-honest-fallback
   (is (nil? (drive/decision-needs :subjects-undeclared [])))
   (is (not (str/includes? (drive/decision-needs :asked [(a-decision 3 :ask "scope?" :findings [])])

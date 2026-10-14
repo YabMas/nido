@@ -64,10 +64,29 @@
     (seq tried)   (assoc :tried (mapv attempt tried))
     (seq options) (assoc :options (vec options))))
 
-(defn ^{:malli/schema [:=> [:cat :keyword [:sequential :map]] [:maybe :string]]}
+(defn- declared-move
+  "The move `design` declares that a person must grant (`report/owes-a-person?`) — its stance
+   relation when it challenges, and its baseline relation with every :breaks entry — as gate text;
+   nil when it declares none. Read off the record, never off the judge's asks: an ask written over
+   eight rounds can drop the breaks it was meant to grant, and approving still grants them."
+  [design]
+  (when (and design (report/owes-a-person? design))
+    (let [{sr :relation snote :note} (:standing design)
+          {br :relation :keys [breaks at] bseq :seq} (:baseline design)]
+      (str "\nApproving grants the move this design (entry " (:seq design) ") declares:"
+           (when (= :challenges sr)
+             (str "\n  challenges the project stance" (when-not (str/blank? snote) (str " — " snote))))
+           (when (= :revisit br)
+             (str "\n  revisits baseline entry " bseq (when-not (str/blank? at) (str ", at " at))
+                  ", breaking:"
+                  (str/join (for [b breaks] (str "\n    - " b)))))))))
+
+(defn ^{:malli/schema [:=> [:cat :keyword [:sequential :map] [:? [:maybe :map]]] [:maybe :string]]}
   decision-needs
   "What a person is asked when a design round stops at `outcome`, from the `decisions` that round
    appended, oldest first — or nil when it appended none, and the fallback is all there is to say.
+   `design` is the record the newest decision judged; when it declares a move a person must grant
+   and the round stopped for one (:proceed or :asked), the move is rendered from it (`declared-move`).
 
    The newest decision is where the run stopped, so the question is its: what it recommended, the
    checks it left broken and the claims they name, and its :asks verbatim — labelled as waiting on
@@ -78,25 +97,27 @@
    On :no-progress the newest decision's findings are what repeated and stopped the run, and each
    is quoted beside :asks: the judge wrote :asks without knowing the run would end on it, so it is
    often a standing scope question that never mentions what actually blocks."
-  [outcome decisions]
-  (when-let [{:keys [recommend asks checks findings reason] :as last-d} (last decisions)]
-    (let [broken  (keep #(when (= :broken (:status %)) (:check %)) checks)
-          claims  (distinct (keep #(not-empty (str (:claim-id %))) findings))
-          earlier (remove #{asks} (distinct (keep :asks (butlast decisions))))]
-      (str "a decision on the design round, which stopped at " (name outcome)
-           " on the decision at entry " (:seq last-d) " recommending " (name recommend)
-           (when (seq broken) (str " — broken: " (str/join ", " (map name broken))))
-           (when (seq claims) (str " — claims: " (str/join ", " claims)))
-           (when (#{:amend :recut :resurvey} recommend)
-             (str ". It named a repair the run did not carry out: " reason))
-           (when (and (= :no-progress outcome) (seq findings))
-             (str "\nStopped on, found again unchanged:"
-                  (str/join (for [{:keys [claim]} findings] (str "\n  - " claim)))))
-           (when-not (str/blank? (str asks))
-             (str (if (report/repair-before-asking last-d) "\nWill ask once repaired: " "\nFor you to decide: ")
-                  asks))
-           (when (seq earlier)
-             (str "\nAsked earlier in the same run: " (str/join " / " earlier)))))))
+  ([outcome decisions] (decision-needs outcome decisions nil))
+  ([outcome decisions design]
+   (when-let [{:keys [recommend asks checks findings reason] :as last-d} (last decisions)]
+     (let [broken  (keep #(when (= :broken (:status %)) (:check %)) checks)
+           claims  (distinct (keep #(not-empty (str (:claim-id %))) findings))
+           earlier (remove #{asks} (distinct (keep :asks (butlast decisions))))]
+       (str "a decision on the design round, which stopped at " (name outcome)
+            " on the decision at entry " (:seq last-d) " recommending " (name recommend)
+            (when (seq broken) (str " — broken: " (str/join ", " (map name broken))))
+            (when (seq claims) (str " — claims: " (str/join ", " claims)))
+            (when (#{:amend :recut :resurvey} recommend)
+              (str ". It named a repair the run did not carry out: " reason))
+            (when (and (= :no-progress outcome) (seq findings))
+              (str "\nStopped on, found again unchanged:"
+                   (str/join (for [{:keys [claim]} findings] (str "\n  - " claim)))))
+            (when-not (str/blank? (str asks))
+              (str (if (report/repair-before-asking last-d) "\nWill ask once repaired: " "\nFor you to decide: ")
+                   asks))
+            (when (seq earlier)
+              (str "\nAsked earlier in the same run: " (str/join " / " earlier)))
+            (when (#{:proceed :asked} outcome) (declared-move design)))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   park!
@@ -430,8 +451,10 @@
                      project ws-id
                      (cond-> {:stage stage :outcome outcome :tried tried}
                        (= :decide-design stage)
-                       (assoc :needs (decision-needs outcome
-                                                     (decisions-since project ws-id since)))))
+                       (assoc :needs (let [ds (decisions-since project ws-id since)]
+                                       (decision-needs outcome ds
+                                                       (some->> (:design-seq (last ds))
+                                                                (ws/entry-at-seq project ws-id)))))))
                     :outcome outcome :attempts attempt)
 
              (< attempt max-attempts)
