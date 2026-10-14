@@ -651,6 +651,20 @@
         "routing-coherent checks that a spin-out names its follow-up; a judge shown no ref rules
          the routing broken and asks a person for a ref the record already holds")))
 
+(deftest the-decision-prompt-shows-each-seam-and-what-closes-it
+  (let [p (record/design-prompt
+           {:design (assoc design :seams [{:what "inline and MCP keep two text vocabularies"
+                                           :visible-how "both paths still read their own field"
+                                           :closed-by :spun-out :ref "FU-470"}
+                                          {:what "legacy rows stay unupgraded"
+                                           :visible-how "a version column below the recipe's"}])})]
+    (is (str/includes? p (str "inline and MCP keep two text vocabularies — visible as: both paths"
+                              " still read their own field; spun out as FU-470"))
+        "a seam's closing ref is where a spin-out's follow-up is written down; a judge that cannot
+         see it rules routing-coherent broken and asks a person for a ref the record already holds")
+    (is (str/includes? p "legacy rows stay unupgraded — visible as: a version column below the recipe's\n")
+        "a legacy seam names no closure, and saying nothing is more honest than inventing one")))
+
 (deftest the-decision-prompt-asks-a-person-in-their-terms-and-all-at-once
   ;; Each clause answers a run where the person was asked badly: three mechanism-worded questions
   ;; in one, one they said they did not follow; an openly stated deferral left for a second run and

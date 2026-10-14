@@ -1852,6 +1852,15 @@
           (bullets (map #(str (:health-id %) " → " (name (:to %))
                               (when (:ref %) (str " (" (:ref %) ")"))
                               (when (:why %) (str " — " (:why %)))) rt)) "\n"))
+   ;; routing-coherent asks whether a spin-out names its follow-up, and a seam's closure is
+   ;; often where that ref lives. A judge shown no seams rules the routing broken and asks a
+   ;; person for a ref the record already holds.
+   (when-let [ss (seq (:seams design))]
+     (str "\nSEAMS — what this change leaves open on purpose, each with how a reader\n"
+          "sees it and what closes it:\n"
+          (bullets (map #(str (:what %) " — visible as: " (:visible-how %)
+                              (when-let [c (report/seam-closure %)] (str "; " c)))
+                        ss)) "\n"))
    (baseline-block baseline)
    (when stance (str "\nPROJECT STANCE — framing only:\n" stance "\n"))
    "\nDERIVE THESE FOUR. Each is decidable; none is a matter of taste:\n\n"
