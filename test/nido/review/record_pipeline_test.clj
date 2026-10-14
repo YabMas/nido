@@ -845,6 +845,78 @@
         (is (= {"c1" 2} (:spent (last @appended)))
             "the judgement on the ledger names the spent claim, where the hand amender reads next")))))
 
+(def ^:private two-claims
+  (update a-baseline :load-bearing conj {:id "c2" :property "an order's total is never negative"
+                                         :evidence ["src/order/aggregate.clj:30"]}))
+
+(def ^:private refutes-c2
+  {:claim-id "c2" :cites ["an order's total is never negative"]
+   :claim "a refund line drives the total below zero" :evidence ["src/order/refund.clj:9"]})
+
+(deftest a-capped-round-amends-what-is-not-spent-and-names-what-is
+  ;; A run capped over m-facade/m-variations ended at its judgement, and the round's two fresh
+  ;; refutations — neither spent — reached no amender: the amend prompt holding their repairs was
+  ;; never run, and a person reapplied it by hand between runs.
+  (let [baseline (assoc two-claims :seq 5)
+        refuted  {:format :baseline-review :baseline-seq 5 :verdict :falsified :seq 6
+                  :findings [(assoc a-finding :claim-id "c1")]}
+        prompt   (atom nil)]
+    (with-redefs [record/baseline-review! (fn [_] {:format :baseline-review :baseline-seq 5
+                                                   :verdict :falsified
+                                                   :findings [(assoc a-finding :claim-id "c1") refutes-c2]})
+                  record/append! (fn [_ _] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] baseline)
+                  ws/entry-at-seq (fn [_ _ n] (when (= 5 n) baseline))
+                  ws/entries-of (fn [_ _ k] (case k :baseline-review [refuted] :baseline [baseline] []))
+                  ws/append-entry! (fn [_ _ _ _] "/ws/entries/0007-baseline.edn")
+                  stages/working-copy-state (fn [_] "")
+                  design-check/design-of (fn [_ _] nil)
+                  stages/read-stance (fn [_] nil)
+                  agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! prompt first-message)
+                                  (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
+                                        (pr-str (dissoc baseline :seq)))
+                                  {:num-turns 3})]
+      (let [out (rloop/run-loop {:run-id "r-spent-rest" :cwd "/w" :max-iters 1 :judged-after :judge
+                                 :pipeline record/baseline-pipeline
+                                 :finding-key record/baseline-finding-key
+                                 :spent record/spent-at-cap :unspent record/unspent-at-cap
+                                 :repair-at-cap? true})]
+        (is (= :unfixable (:status out)) "the spent claim still ends the run as a person's decision")
+        (is (= ["c1"] (:unfixable out)) "naming only the spent claim")
+        (is (str/includes? (str @prompt) "a refund line drives the total below zero")
+            "the fresh refutation reaches the amender at the cap")
+        (is (not (str/includes? (str @prompt) "A CLAIM NO REWORDING HAS SETTLED"))
+            "the spent claim is not handed back for another rewording")
+        (is (= ["c1"] (keep :claim-id (:spent-findings out)))
+            "what was withheld is kept, for the prompt a person is left")))))
+
+(deftest a-claim-the-last-judgement-confirmed-is-not-spent
+  ;; Two runs ended :unfixable naming claims the final judge had just confirmed, and the headline
+  ;; told the person rewording had not settled them: a first-reading confirmation does not end a
+  ;; refutation run, so the running count still read 2 over a claim that currently holds.
+  (let [baseline (assoc two-claims :seq 5)
+        prior    [{:format :baseline-review :baseline-seq 5 :verdict :falsified :seq 6
+                   :findings [(assoc a-finding :claim-id "c1")]}
+                  {:format :baseline-review :baseline-seq 5 :verdict :falsified :seq 7
+                   :findings [(assoc a-finding :claim-id "c1" :evidence ["src/order/invoice.clj:91"])]}]]
+    (with-redefs [record/baseline-review! (fn [_] {:format :baseline-review :baseline-seq 5
+                                                   :verdict :falsified :confirmed ["c1"]
+                                                   :first-reading ["c1"]
+                                                   :findings [refutes-c2]})
+                  record/append! (fn [_ _] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] baseline)
+                  ws/entry-at-seq (fn [_ _ n] (when (= 5 n) baseline))
+                  ws/entries-of (fn [_ _ k] (case k :baseline-review prior :baseline [baseline] []))
+                  stages/working-copy-state (fn [_] "")]
+      (let [out (run record/judge-stage (ctx :config {:cwd "/w" :run-id "r-confirmed"}))]
+        (is (= 2 (get-in out [:refuted-running "c1"]))
+            "the run itself goes on until a second reading agrees")
+        (is (not (contains? (:spent out) "c1"))
+            "but a claim the judgement confirmed is not one to tell a person to weaken")))))
+
 ;; ── A narrowing claim is not a stall ────────────────────────────────────────
 
 (defn- refuting [id evidence]
@@ -3158,6 +3230,13 @@
           "the prompt carries the findings the round would have handed its amender")
       (is (nil? (record/write-owed-amend-prompt! (assoc final :amended? true)))
           "a round that amended owes no prompt")
+      (let [rest-amended (assoc final :amended? true :findings [refutes-c2]
+                                :spent-findings [(assoc a-finding :claim-id "c1")])
+            path         (record/write-owed-amend-prompt! rest-amended)]
+        (is (str/includes? (slurp path) "the invoice renderer sums independently")
+            "a round that amended only what was not spent leaves the person the spent claim's prompt")
+        (is (not (str/includes? (slurp path) "a refund line drives the total below zero"))
+            "and not the findings its amender already answered"))
       (is (nil? (record/write-owed-amend-prompt! (assoc final :spent {})))
           "an ordinary :unfixable was amended round after round and owes none"))))
 

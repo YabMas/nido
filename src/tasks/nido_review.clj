@@ -2147,6 +2147,10 @@
     ;; repair, or — at a cap — subjects earlier runs already did.
     (and (= :unfixable status) (record/spent-at-cap final))
     (str (shared-remedies ::spent)
+         (when (:amended? final)
+           (str "; round " (:iter final) "'s amendment"
+                (when-let [s (get-in final [:carry :under-repair :seq])] (str " (entry " s ")"))
+                " answers the round's other findings and has not been read — re-run to judge it"))
          (when-let [p (:amend-prompt final)] (str " — the amend prompt the round did not reach is " p)))
 
     ;; Only reachable when a caller asked for a cap, so it is the reader's own bound coming back.
@@ -2347,6 +2351,7 @@
                                  :finding-key finding-key
                                  :attempt-key (record/attempt-key finding-key)
                                  :spent record/spent-at-cap
+                                 :unspent record/unspent-at-cap
                                  :owes-reading record/owed-reading
                                  :repair-at-cap? true}
                           changed?    (assoc :changed? changed?)

@@ -2640,9 +2640,10 @@
    clause at a time: each clause this judgement ruled false that its run last ruled held in the same
    words, naming the entry that held it — a held clause beside a false one confirms nothing by id,
    so nothing else withdraws it.
-   :spent is each subject its lineage has refuted that many readings running, counting this
-   judgement, among those an amender is offered a weakening, withdrawal or restatement for
-   (`nido.review.record/spent`) — reworded and refuted again, recorded where a hand amender reads
+   :spent is each subject this judgement still holds open — refutes, or asks a person about — that
+   its lineage has refuted that many readings running, counting this judgement, among those an
+   amender is offered a weakening, withdrawal or restatement for (`nido.review.record/spent`) —
+   reworded and refuted again, recorded where a hand amender reads
    before writing the next rewording. :spent-awaiting is those of them this judgement held only as
    a person's question: their count stopped when it was asked and is owed an answer, not a
    rewording. Derived by the round.

@@ -131,6 +131,10 @@
     "What a record run reaching its cap ends :unfixable on instead of :max-iters: the spent subjects
      of a round that still owes an amendment, less those held only as a person's question."
     {:signature [:=> [:catn [:ctx :map]] [:maybe [:sequential :string]]]})
+  (Operation unspent-at-cap
+    "What a capped round over a spent subject still repairs before it ends :unfixable: its findings
+     against anything not spent, with those against only spent subjects withheld for the person."
+    {:signature [:=> [:catn [:ctx :map]] [:maybe :map]]})
   (Operation owed-reading
     "What a round sent on to its second reading read once — the record, the ids, whether it was an
      amendment's first reading. The engine counts no round against the cap that only reads this

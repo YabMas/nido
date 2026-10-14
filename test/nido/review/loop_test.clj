@@ -753,6 +753,26 @@
                                           :repair-at-cap? true :spent (constantly ["s"])}))))
     (is (zero? @amended) "a spent subject is not reworded once more because the cap allows a repair")))
 
+(deftest a-capped-round-repairs-what-is-not-spent-before-ending-unfixable
+  ;; One spent subject at the cap ended the run at its judgement, and the repairs owed for every
+  ;; other finding of that judgement were reapplied by hand between runs, without the amender's
+  ;; rules — the very loop the spent check exists to stop.
+  (let [handed  (atom nil)
+        pipe    [(stage :judge (fn [c] (assoc c :findings [{:title "spent"} {:title "fresh"}])))
+                 (stage :amend (fn [c] (reset! handed (:findings c)) (assoc c :amended? true)))]
+        unspent (fn [c] (update c :findings #(filterv (comp #{"fresh"} :title) %)))
+        out     (run-loop {:run-id "r" :max-iters 1 :pipeline pipe :judged-after :judge
+                           :repair-at-cap? true :spent (constantly ["s"]) :unspent unspent})]
+    (is (= :unfixable (:status out)) "the spent subject still ends the run, not the cap")
+    (is (= ["s"] (:unfixable out)) "and the run names it, as a person's decision")
+    (is (= [{:title "fresh"}] @handed) "the amender is handed only what rewording may still settle")
+    (is (:amended? out))
+    (reset! handed nil)
+    (is (= :unfixable (:status (run-loop {:run-id "r" :max-iters 1 :pipeline pipe :judged-after :judge
+                                          :repair-at-cap? true :spent (constantly ["s"])
+                                          :unspent #(assoc % :findings [])}))))
+    (is (nil? @handed) "a judgement holding nothing but spent subjects ends at the judgement")))
+
 (deftest an-escalation-runs-the-repairs-it-ruled-beside-it-first
   ;; A warden escalated a design contradiction and, in the same answer, ruled an unrelated test
   ;; defect `fix` — "a real test failure … and should be fixed". The run ended on the judgement,

@@ -1612,6 +1612,8 @@
     (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :sufficient})]
       (with-out-str (t/baseline-cmd ":cwd" "/w" ":max-iters" "2"))
       (is (true? (:repair-at-cap? @seen)))
+      (is (= record/unspent-at-cap (:unspent @seen))
+          "a cap over a spent subject still amends the rest of its judgement")
       (is (= record/owed-reading (:owes-reading @seen))))))
 
 (deftest a-record-loop-report-names-who-launched-it-and-with-what

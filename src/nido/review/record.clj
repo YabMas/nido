@@ -4129,6 +4129,17 @@
 
 (declare refuted-ids check-statuses claim-finding? run-keys enumerated-ids)
 
+(defn- judged-subjects
+  "The ids `record`'s findings still hold open: each one counts against (`run-keys`), and each one
+   a :for-person finding asks about. What a judgement is :spent over. `refuted-running` keeps a
+   run going past a confirmation on a first reading, so a subject this judgement confirmed can
+   still count `withdrawable-after` readings running — spent over that, the run would end
+   :unfixable telling a person to weaken a claim that holds."
+  [record]
+  (let [statuses (check-statuses record)]
+    (into #{} (mapcat #(concat (run-keys statuses %) (when (:for-person %) (refuted-ids %))))
+          (:findings record))))
+
 (defn- awaiting-person
   "The ids of `spent` that `findings` hold only as a person's question: asked about under a
    :for-person finding and refuted by none (`run-keys`). Such a subject's count stopped when the
@@ -4147,6 +4158,21 @@
   [ctx]
   (when (seq (:findings ctx))
     (seq (remove (set (:spent-awaiting ctx)) (keys (:spent ctx))))))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
+  unspent-at-cap
+  "A record run's `run-loop` :unspent: `ctx` with :findings narrowed to those the amender may still
+   repair at the cap — every finding but one that counts only against `spent-at-cap` subjects
+   (`run-keys`) — and the withheld ones as :spent-findings, which are the person's
+   (`write-owed-amend-prompt!`). A finding against a spent subject and another is kept, since
+   withholding it leaves the other unanswered. nil when nothing is spent."
+  [ctx]
+  (when-let [spent (some-> (spent-at-cap ctx) set)]
+    (let [statuses (check-statuses (:record ctx))
+          spent?   #(let [ks (run-keys statuses %)] (and (seq ks) (every? spent ks)))]
+      (assoc ctx
+             :findings (filterv (complement spent?) (:findings ctx))
+             :spent-findings (filterv spent? (:findings ctx))))))
 
 (defn- run-keys
   "What one finding of a judgement counts against in `refuted-running`. A finding under a check the
@@ -6403,7 +6429,8 @@
                     (into (if project (vec (ws/entries-of project ws-id :baseline-review)) []) mine))
         running   (when reviews (refuted-running subject (into lineage mine)))
         unsettled (if reviews (unsettled-findings record (unchecked-running reviews)) [])
-        spent-now (spent running (into (retreat/claim-ids subject) (enumerated-ids nil subject)))
+        spent-now (spent running (every-pred (into (retreat/claim-ids subject) (enumerated-ids nil subject))
+                                             (judged-subjects record)))
         awaiting  (awaiting-person spent-now (check-statuses record) (:findings record))
         record    (cond-> record
                     (seq spent-now) (assoc :spent spent-now)
@@ -7865,7 +7892,8 @@
         ;; Every append below writes `record`; a reused one is on the ledger already.
         put!    (fn [ledger record] (if reused (reused-answer reused) (append! ledger record)))
         ;; A derivation check is never spent: no amender can weaken one (`spent`).
-        spent-now (spent running (complement (into #{} (map str) (report/derivations-of design))))
+        spent-now (spent running (every-pred (complement (into #{} (map str) (report/derivations-of design)))
+                                             (judged-subjects record)))
         awaiting  (awaiting-person spent-now (check-statuses record) (:findings record))
         record (cond-> record
                  (seq spent-now) (assoc :spent spent-now)
@@ -8233,8 +8261,11 @@
       :asks-about (asked-claims ctx)
       :raised (:findings ctx)
       ;; An ask's findings for the person are its question's,
-      ;; and the prompt tells the amender that is not its to answer.
-      :findings (vec (remove :for-person (get-in ctx [:record :findings])))
+      ;; and the prompt tells the amender that is not its to answer. So are the
+      ;; prose findings behind a line withheld at the cap (`unspent-at-cap`).
+      :findings (let [spent (when (seq (:spent-findings ctx)) (set (spent-at-cap ctx)))
+                      withheld? #(let [ids (refuted-ids %)] (and spent (seq ids) (every? spent ids)))]
+                  (vec (remove #(or (:for-person %) (withheld? %)) (get-in ctx [:record :findings]))))
       :rulings (get-in ctx [:record :relation-rulings])
       :out-path out-path
       :check-cmd (when (and project ws-id) (amend-check-cmd project ws-id :design out-path))
@@ -8514,18 +8545,21 @@
   write-owed-amend-prompt!
   "The prompt the last round's amender would have been given, written to the run dir as
    `amend-prompt-round-<n>.md` when the run ended at its cap holding findings that round never
-   amended — the cap fell on a `spent` subject and ended :unfixable at the judgement — and its
-   path; nil when the run owes no amendment. A person who corrects the record by hand then works
+   amended — the cap fell on a `spent` subject and ended :unfixable, at the judgement or after
+   amending the rest (`unspent-at-cap`), whose withheld :spent-findings are then the prompt's — and
+   its path; nil when the run owes no amendment. A person who corrects the record by hand then works
    under the rules the amender would have, the withdrawal offer above all, rather than rewording it
    once more. A design round that recommended a re-survey has no prompt: its repair is a loop."
   [final]
   (let [{:keys [status findings amended? record iter]} final
         run-id   (get-in final [:config :run-id])
         design?  (= :design-decision (:format record))
-        owed?    (and run-id (seq findings) (not amended?)
-                      (or (= :max-iters status)
+        owed     (if amended? (:spent-findings final) findings)
+        owed?    (and run-id (seq owed)
+                      (or (and (= :max-iters status) (not amended?))
                           (and (= :unfixable status) (spent-at-cap final)))
-                      (not (and design? (= :resurvey (:recommend record)))))]
+                      (not (and design? (= :resurvey (:recommend record)))))
+        final    (-> final (assoc :findings owed) (dissoc :spent-findings))]
     (when owed?
       (let [dir      (cstate/run-dir run-id)
             out-path (str (fs/path dir (str (when design? "design-") "amend-round-" iter ".edn")))

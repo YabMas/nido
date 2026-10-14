@@ -152,7 +152,9 @@
                            curr-findings))))))
 
 (defn- terminal
-  "The status this round ends on, or nil to keep going.
+  "The status this round ends on, or nil to keep going — or, at a cap over a spent subject, the
+   round's ctx without a status: the rest of its pipeline runs on that ctx and repairs what is not
+   spent, and the check after the pipeline ends the run.
 
    `prior` is every round before this one. Split out of `run-loop` because it is
    now asked at two moments — after the stage that produces the judgement
@@ -168,7 +170,7 @@
    raised: read over every finding, a round whose only finding is ruled a deviation would end
    :no-progress naming a finding the remainder says is not open."
   [{:keys [finding-key attempt-key attempted? prev-findings counted max-iters
-           changed? spent owes-reading repair-at-cap? rereading? held]} ctx prior judged?]
+           changed? spent unspent owes-reading repair-at-cap? rereading? held]} ctx prior judged?]
   (let [findings (held ctx)]
     (cond
       ;; BEFORE no-progress?, because both are true of a run that ends holding the
@@ -193,9 +195,14 @@
       ;; A cap ends the run whatever it holds, and :max-iters reads as "the bound you passed came
       ;; back", which sends a reader to amend and run again. Over a subject the pipeline reads as
       ;; spent that is the one thing not to do: the count runs across runs, so a chain of capped
-      ;; runs amended by hand between them is the loop that no single run sees.
+      ;; runs amended by hand between them is the loop that no single run sees. What the judgement
+      ;; found against anything else is still repaired first, at the judgement (`unspent`): one
+      ;; spent subject otherwise left every other finding to be reapplied by hand. After the repair
+      ;; this branch is reached again, from the pipeline's end, and ends the run.
       (and max-iters (>= counted max-iters) (seq (spent ctx)))
-      (assoc ctx :status :unfixable :unfixable (vec (spent ctx)))
+      (or (when (and judged? repair-at-cap?)
+            (when-let [c (unspent ctx)] (when (seq (:findings c)) c)))
+          (assoc ctx :status :unfixable :unfixable (vec (spent ctx))))
 
       ;; A round owing a second reading at the cap gets it, uncounted — once. A second reading that
       ;; itself owes another is a judge ruling one subject two ways, and the cap ends it under its own
@@ -294,7 +301,11 @@
                        (end? ctx' (filterv #(not= (:iter ctx') (:iter %)) (:history ctx'))
                              true))]
            (cond
-             final (reduced final)
+             (:status final) (reduced final)
+
+             ;; The cap's repair of what is not spent (`terminal`): the round goes on, on the ctx
+             ;; the check handed back.
+             final final
 
              ;; This ROUND is over and the run is not: a stage with nothing
              ;; further to do here and something still to do next round. The
@@ -324,7 +335,7 @@
    terminates on its own merits (converged / escalated / clean / no-progress /
    error). A round that changes nothing still ends the run via `no-progress?`,
    so unbounded does not mean non-terminating. Pass :max-iters only to cap it.
-   :emit / :clock / :attempt-key / :attempted? / :owed / :spent / :owes-reading /
+   :emit / :clock / :attempt-key / :attempted? / :owed / :spent / :unspent / :owes-reading /
    :repair-before-escalate? are injection seams.
    :repair-before-escalate? is asked of a judgement that escalates: truthy runs the rest of the
    round's pipeline — its repairs — before the run ends :escalated. It defaults to \"never\", which
@@ -351,7 +362,10 @@
    which leaves the set equality standing alone. :spent is what a round still owes a repair
    on that rewording has already failed to settle, off its ctx: a run that reaches its cap
    holding any ends :unfixable naming them rather than :max-iters. It defaults to \"nothing is
-   spent\". :owed is what the RUN still owes, off a round's ctx, and so
+   spent\". :unspent is that round's ctx holding only the :findings a repair may still answer —
+   those against no spent subject — or nil: with :repair-at-cap?, the rest of the pipeline runs on
+   it before the run ends :unfixable. It defaults to \"nothing\", which ends the run at the
+   judgement. :owed is what the RUN still owes, off a round's ctx, and so
    whether a pipeline saying stop has CONVERGED or merely stopped: a run that
    ends holding something reports :unresolved instead. The whole ctx rather
    than the round's findings, because what a run holds is not all in its last
@@ -373,7 +387,7 @@
    throw crashes the run, because finalizing on it would publish a verdict
    nobody reached."
   [{:keys [run-id max-iters pipeline emit clock finding-key attempt-key
-           attempted? judged-after owed changed? spent owes-reading repair-at-cap?
+           attempted? judged-after owed changed? spent unspent owes-reading repair-at-cap?
            repair-before-escalate?] :as config
     :or   {emit (fn [_]) clock #(Instant/now)
            attempted? (constantly true)
@@ -381,6 +395,7 @@
            owed (constantly nil)
            changed? (constantly false)
            spent (constantly nil)
+           unspent (constantly nil)
            owes-reading (constantly nil)}}]
   (let [pipeline (or pipeline
                      (throw (ex-info "run-loop needs a :pipeline — the engine runs what its caller passes and names no program of its own" {})))
@@ -419,7 +434,7 @@
             cfg  {:finding-key finding-key :attempt-key attempt-key
                   :attempted? attempted?
                   :prev-findings prev-findings :changed? changed? :spent spent
-                  :owes-reading owes-reading :repair-at-cap? repair-at-cap?
+                  :unspent unspent :owes-reading owes-reading :repair-at-cap? repair-at-cap?
                   :rereading? rereading? :held held
                   :iter iter :counted counted :max-iters max-iters}
             end? (fn [c prior judged?] (terminal cfg c prior judged?))
