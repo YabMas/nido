@@ -841,3 +841,22 @@
                                [{:finding 1 :stale ["k1"]}] {"k1" "narrowed to the write path"})]
     (is (= [] (retreat/declared {"k1" "narrowed to the write path"} rs))
         "a narrowing the text already reported is ordered, not declared a second time")))
+
+(deftest a-narrowing-late-in-a-long-field-shows-the-words-that-changed
+  ;; Seen live: three weakenings whose before and after read character-identical, because the
+  ;; edit sat past the 140 characters each side was clipped to, and the person reading the
+  ;; trajectory could not see what had been given up.
+  (let [lead   (str "two analyses of one blob in flight at once, observed by the lease table, the job log, "
+                    "the worker heartbeat and the analysis store taken together, ")
+        prev   (assoc-in model-design [:model :claims 0 :falsified-by] (str lead "at any time"))
+        curr   (assoc-in model-design [:model :claims 0 :falsified-by]
+                         (str lead "at any time other than after the first job's lease lapsed"))
+        [r]    (narrowed (retreat/design-retreats prev curr))
+        [_ before after] (re-find #": \"([^\"]*)\" → \"([^\"]*)\"$" (:detail r))]
+    (is (< 140 (count lead)) "the edit sits past what one clipped side can hold")
+    (is (not= before after) "the two sides differ where the field did, or the line shows no change")
+    (is (str/includes? after "other than after the first job's lease lapsed")
+        "the words the record gave up are the ones a reader has to see")
+    (is (str/starts-with? before "…") "an elided common prefix is marked, not silently dropped")
+    (is (str/includes? before "taken together, at any time")
+        "a few words ahead of the change stay, so it reads in place")))

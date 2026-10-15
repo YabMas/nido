@@ -215,6 +215,20 @@
   (let [s (str/replace (str s) #"\s+" " ")]
     (if (> (count s) 140) (str (subs s 0 140) "…") s)))
 
+(defn- clip-change
+  "`before → after` as one quoted pair, each side clipped from a word boundary a few words ahead
+   of where the two first differ, so the change is what fits in the 140 characters. Clipped from
+   the start, a long field edited past its 140th character read as two identical strings."
+  [before after]
+  (let [ws    #(str/replace (str %) #"\s+" " ")
+        b     (ws before)
+        a     (ws after)
+        same  (count (take-while true? (map = b a)))
+        cut   (- same 40)
+        start (if (pos? cut) (or (some-> (str/last-index-of b " " cut) inc) cut) 0)
+        side  #(str (when (pos? start) "…") (clip (subs % start)))]
+    (str "\"" (side b) "\" → \"" (side a) "\"")))
+
 (defn- cites?
   [s id]
   (boolean (re-find (re-pattern (str "(?i)(?<![\\w-])" (java.util.regex.Pattern/quote id) "(?![\\w-])")) (str s))))
@@ -252,7 +266,7 @@
                       {:what    :narrowed
                        :detail  (str label (when id (str " " id "'s")) " " (name field) " "
                                      (str/join ", " (map signal-words signals))
-                                     ": \"" (clip before) "\" → \"" (clip after) "\"")
+                                     ": " (clip-change before after))
                        :id      by
                        :field   field
                        :signals signals
@@ -881,7 +895,7 @@
         :signals (mapv first signals)
         :detail  (str "spent claim " id "'s " (name field) " "
                       (str/join ", " (map second signals))
-                      ": \"" (clip before) "\" → \"" (clip after) "\"")}))))
+                      ": " (clip-change before after))}))))
 
 ;; ── Reporting ───────────────────────────────────────────────────────────────
 
