@@ -782,3 +782,62 @@
         g    (retreat/growth model-design curr)]
     (is (= [{:field :statement :id "one-analysis" :from 45 :to (count long)}] g))
     (is (re-find #"one-analysis's statement" (retreat/growth-summary g)))))
+
+;; ── A retreat linked to the finding that ordered it ──────────────────────────
+
+(def ^:private two-way-shape
+  "Rows are sorted into ordinary or last-life. A crash-exhausted row is taken like any other.")
+
+(deftest a-refuted-shape-narrowed-at-its-findings-request-is-ordered
+  ;; Seen live in eight runs (01ca8f, 571ddd, 7105af, 7b0d1d, cc74eb, f787bf, ffb221, b2bbe6): the
+  ;; judge filed 'shape#3 is false' under claim-id "shape", the amender cut the clause, and the
+  ;; headline's one unasked weakening was that repair — the shape had no id to be asked for by.
+  (let [findings [{:claim-id "shape" :claim "shape#2 is false: a crash-exhausted row is skipped"
+                   :needs "drop the crash-exhausted sentence"}]]
+    (doseq [[kind prev retreats] [[:baseline (assoc model-baseline :shape two-way-shape)
+                                   #(retreat/baseline-retreats %1 %2 nil findings)]
+                                  [:design (assoc model-design :shape two-way-shape)
+                                   #(retreat/design-retreats %1 %2 findings)]]]
+      (let [curr (assoc prev :shape "Rows are sorted into ordinary or last-life.")
+            [r]  (narrowed (retreats prev curr))]
+        (is (= "shape" (:id r)) (str kind ": the shape is reported under the id judges file it by"))
+        (is (:ordered r) (str kind ": the repair the finding asked for is not a weakening nobody asked for"))
+        (is (= ["drop the crash-exhausted sentence"] (:answering r)))
+        (is (= [] (retreat/unasked [r])))
+        (is (re-find #"^the \w+'s shape lost a clause" (:detail r))
+            (str kind ": the shape is still named as the record's own, not as a claim"))))))
+
+(deftest a-shape-restated-around-a-claim-the-round-found-against-is-ordered
+  ;; Seen live (b2bbe6, ffb221): the finding was on claim-reclaims-expired-unbounded, and the
+  ;; amender carried its repair by rewriting the shape to name that claim.
+  (let [prev     (assoc model-design :shape (str two-way-shape " Each is reclaimed or failed."))
+        curr     (assoc prev :shape (str two-way-shape " Each is handled by [claim-reclaims]."))
+        findings [{:claim-id "claim-reclaims" :claim "claim-reclaims#3 is false"}]
+        [r]      (narrowed (retreat/design-retreats prev curr findings))]
+    (is (:ordered r) "the shape now carries the repair under the claim the finding named")
+    (is (= ["claim-reclaims#3 is false"] (:finding r)))
+    (is (not (:ordered (first (narrowed (retreat/design-retreats prev curr [{:claim-id "elsewhere" :claim "x"}])))))
+        "a finding at a claim the shape does not name orders nothing")))
+
+(deftest a-narrowing-the-amenders-sweep-puts-under-a-finding-is-ordered
+  ;; Seen live (f8b578, 3153e0, f787bf): the amender's :swept listed the subject under the finding
+  ;; it answered — as amended, or as stale with a stated cause — and the narrowing read as unasked.
+  (let [findings [{:claim-id "image-spend-tracked" :claim "spend is not tracked per image"
+                   :needs "split the token and cost counterexamples"}]
+        rs       [{:what :narrowed :id "shape" :field :shape}
+                  {:what :narrowed :id "k1" :field :statement}
+                  {:what :narrowed :id "k2" :field :statement}]
+        swept    [{:finding 1 :amended ["shape"] :stale ["k1" "k2"]}]
+        [s k1 k2] (retreat/attributed rs findings swept {"k1" "Finding 1: its words now depend on the windows"})]
+    (is (:ordered s) "swept as amended by finding 1")
+    (is (= ["spend is not tracked per image"] (:finding s)) "linked to the finding it names")
+    (is (:ordered k1) "swept as stale by finding 1, with the reason it gave")
+    (is (not (:ordered k2)) "stale with no reason says nothing about what ordered it")
+    (is (= [k2] (retreat/unasked [s k1 k2]))))
+  (is (= [{:what :narrowed :id "k1"}]
+         (retreat/attributed [{:what :narrowed :id "k1"}] [{:claim-id "k1"}] [{:finding 2 :amended ["k1"]}] {}))
+      "a sweep entry naming no listed finding attributes nothing")
+  (let [rs (retreat/attributed [{:what :narrowed :id "k1"}] [{:claim-id "x" :claim "c"}]
+                               [{:finding 1 :stale ["k1"]}] {"k1" "narrowed to the write path"})]
+    (is (= [] (retreat/declared {"k1" "narrowed to the write path"} rs))
+        "a narrowing the text already reported is ordered, not declared a second time")))

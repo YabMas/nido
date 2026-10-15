@@ -7348,6 +7348,7 @@
                                           prev record (select-keys (:withdrawn answer)
                                                                    (concat (keys offered) (keep :id (:health prev))))
                                           (:findings ctx)) rs
+                                     (retreat/attributed rs (:findings ctx) (:swept answer) (:stale-because answer))
                                      (into rs (retreat/declared (:stale-because answer) rs)))
                           ;; Stamped, not as the amender wrote it. The judge
                           ;; labels its verdict with the :seq of the record it
@@ -9267,6 +9268,7 @@
                   (if (:status written)
                     (refused-stop ctx written disputes)
                     (let [retreats (as-> (retreat/design-retreats prev record (:findings ctx)) rs
+                                     (retreat/attributed rs (:findings ctx) (:swept answer) (:stale-because answer))
                                      (into rs (retreat/declared (:stale-because answer) rs)))
                           growth   (retreat/growth (or (get-in ctx [:carry :as-authored]) prev) record)]
                       ;; :as-authored is the design the run's first amendment read, set once:

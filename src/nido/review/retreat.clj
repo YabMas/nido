@@ -96,13 +96,13 @@
    An ordered retreat is still reported, because a narrowing is a narrowing however sanctioned; it
    is left out of the unasked count (`unasked`), which is the one a reader is meant to act on.
    Linking it is what lets a reader tell the honest repair from the silent one without re-deriving
-   the run."
+   the run. Asked again under another id, the first finding found stays the one it names."
   [r {:keys [at needs checks]} id field]
   (let [found  (some-> id at)
         broken (filter #(contains? (check-orders %) field) checks)]
     (cond-> r
       (or found (seq broken)) (assoc :ordered true)
-      (seq found)             (assoc :finding found)
+      (seq found)             (update :finding #(or % found))
       (seq broken)            (assoc :checks (vec (sort broken)))
       (seq (some-> id needs)) (update :answering #(or % (needs id))))))
 
@@ -225,6 +225,11 @@
    unknown, `asked` what the round asked for (`asks`). A narrowing whose only loss is clauses that
    reappear in `parked` is `:relocated`; one the round asked for is `:ordered` (`answered`).
 
+   A subject with no id of its own — the record's shape — is reported and asked for under its
+   field's name, `\"shape\"`, the claim-id a judge files a finding against it under. A shape is also
+   asked for by a finding at any claim its new text names as `[id]`: a shape is a composition of
+   its claims, and a repair to one is often carried by restating how the shape composes them.
+
    One whose only losses are clauses and disjuncts that reappear in subjects of `curr` it newly
    cites by id (`… (see one-covering-rule)`) is not reported at all: the record still makes the
    commitment, under the id it now points at, and is judged there."
@@ -237,20 +242,23 @@
                                 t)))]
     (for [[label id field before] (subjects prev)
           :let [after   (get now [label id field])
-                signals (narrowing field before after)]
+                signals (narrowing field before after)
+                by      (or id (name field))
+                named   (when (= :shape field) (map second (re-seq #"\[([^\[\]\s]+)\]" (str after))))]
           :when (and signals
                      (not (and (every? #{:disjunct-lost :clause-lost} signals)
                                (relocated? before after (moved id before after)))))]
-      (cond-> (answered {:what    :narrowed
-                         :detail  (str label (when id (str " " id "'s")) " " (name field) " "
-                                       (str/join ", " (map signal-words signals))
-                                       ": \"" (clip before) "\" → \"" (clip after) "\"")
-                         :field   field
-                         :signals signals
-                         :from    before
-                         :to      after}
-                        asked id field)
-        id (assoc :id id)
+      (cond-> (reduce #(answered %1 asked %2 field)
+                      {:what    :narrowed
+                       :detail  (str label (when id (str " " id "'s")) " " (name field) " "
+                                     (str/join ", " (map signal-words signals))
+                                     ": \"" (clip before) "\" → \"" (clip after) "\"")
+                       :id      by
+                       :field   field
+                       :signals signals
+                       :from    before
+                       :to      after}
+                      (cons by named))
         (and (= [:clause-lost] signals) (relocated? before after parked))
         (assoc :relocated true)))))
 
@@ -896,6 +904,33 @@
                :when (and (re-find narrowing-declared (str why)) (not (reported id)))]
            (assoc (retreat :narrowing-declared (str id " — narrowed by the amender's account: " (clip why)))
                   :id id :declared true :because why)))))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe [:sequential :map]] [:maybe [:sequential :map]]
+                            [:maybe [:sequential :map]] [:maybe [:map-of :string :string]]]
+                      [:vector :map]]}
+  attributed
+  "`retreats` with each one at an id the amender's sweep put under a finding marked `:ordered` by
+   that finding (`answered`): an id the sweep lists under the finding's :amended, or under its
+   :stale with a reason in `stale-because`. `swept` is `[{:finding n :amended :stale}]` with `n`
+   counting `findings` from 1, as the amend answer gives it.
+
+   A judge names the subject it refutes, and the amender then repairs whatever that refutation
+   reaches — a shape restating the claim it found against, a claim resting on the fact it refuted.
+   The sweep is the only record of that reach, and without it each knock-on repair reads as a
+   narrowing nobody asked for. The finding is linked, so a reader can check the attribution."
+  [retreats findings swept stale-because]
+  (let [by-id (reduce (fn [m {:keys [finding amended stale]}]
+                        (if-let [f (when (int? finding) (nth (vec findings) (dec finding) nil))]
+                          (reduce #(update %1 %2 (fnil conj []) f) m
+                                  (concat amended (filter #(contains? stale-because %) stale)))
+                          m))
+                      {} swept)]
+    (mapv (fn [r]
+            (if-let [fs (some-> (:id r) by-id)]
+              ;; Re-filed under the retreat's id, so `asks` reads each as a finding at it.
+              (answered r (asks (map #(assoc % :claim-id (:id r) :claim-ids []) fs)) (:id r) nil)
+              r))
+          retreats)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :keyword]}
   retreat-class

@@ -381,7 +381,8 @@
      lost, and a retreat at a claim a finding named is marked as asked for and linked to it, so a
      narrowing the judge asked for reads apart from one nobody asked for — a dropped citation only
      when the finding's stated repair asks for less or it names the place dropped. A claim, module or shape
-     kept by id that commits to less in place is reported as narrowed."
+     kept by id that commits to less in place is reported as narrowed; the shape under the id
+     `shape`, and asked for also by a finding at a claim its new text names as `[id]`."
     {:signature [:=> [:catn [:prev :map] [:curr :map]
                             [:withdrawn [:? [:maybe [:map-of :string :string]]]]
                             [:findings [:? [:maybe [:sequential :map]]]]] :any]})
@@ -391,7 +392,8 @@
     "What a superseding design no longer claims, including a claim, element or shape kept by id
      that commits to less in place, and an id taken off its baseline citation's :breaks. `:findings`
      are the decision round's: a retreat at an id one named, or on a field a broken check judges, is
-     marked as asked for."
+     marked as asked for; the shape is asked for under the id `shape`, and by a finding at a claim
+     its new text names as `[id]`."
     {:signature [:=> [:catn [:prev :map] [:curr :map]
                             [:findings [:? [:maybe [:sequential :map]]]]] :any]})
   (Operation widened-spent
@@ -409,6 +411,15 @@
      retreat already reports — counted with that reason, so a narrowing the text hides is not lost."
     {:signature [:=> [:catn [:stale-because [:maybe [:map-of :string :string]]]
                             [:retreats [:maybe [:sequential :map]]]]
+                 [:vector :map]]})
+  (Operation attributed
+    "The retreats marked asked for by the finding the amender's sweep filed their subject under —
+     amended for it, or put in question by it with a reason — and linked to that finding, so a
+     knock-on repair reads apart from a narrowing nobody asked for."
+    {:signature [:=> [:catn [:retreats [:maybe [:sequential :map]]]
+                            [:findings [:maybe [:sequential :map]]]
+                            [:swept [:maybe [:sequential :map]]]
+                            [:stale-because [:maybe [:map-of :string :string]]]]
                  [:vector :map]]})
   (Operation retreat-class
     "Which of four a retreat is: relocated, requested by a finding, declared by the amender, or
