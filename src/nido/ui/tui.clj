@@ -947,20 +947,32 @@
 ;; Dev-environment controls — wrap dev/dev-action! for the workstream detail view
 ;; ---------------------------------------------------------------------------
 
+(defn- silent-dev-action!
+  "dev/dev-action! with the background future's output discarded. These run
+   from update-fn rather than through captured-cmd, so the future would
+   otherwise inherit the real stdout and print setup-step/log-step lines over
+   charm's alt-screen. `future` conveys the binding to its thread. A failure
+   still surfaces: dev-action! records it in the session's dev-state, and the
+   detail view's status row reads `failed`."
+  [project ws-id session action]
+  (let [sink (java.io.Writer/nullWriter)]
+    (binding [*out* sink *err* sink]
+      (dev/dev-action! project ws-id session action))))
+
 (defn- dev-start!
   "Start the dev environment for `session` in `project`/`ws-id` (background future)."
   [project ws-id session]
-  (dev/dev-action! project ws-id session "start"))
+  (silent-dev-action! project ws-id session "start"))
 
 (defn- dev-stop!
   "Stop the dev environment for `session` in `project`/`ws-id` (background future)."
   [project ws-id session]
-  (dev/dev-action! project ws-id session "stop"))
+  (silent-dev-action! project ws-id session "stop"))
 
 (defn- dev-restart!
   "Restart the dev environment for `session` in `project`/`ws-id` (background future)."
   [project ws-id session]
-  (dev/dev-action! project ws-id session "restart"))
+  (silent-dev-action! project ws-id session "restart"))
 
 ;; ---------------------------------------------------------------------------
 ;; Pickup — drive a Notion ticket (URL / page-id / BR-####) from the ops
