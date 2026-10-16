@@ -98,3 +98,20 @@
     (fn [kept]
       (is (= :started (lifecycle/up! "feat" {:project "brian"})))
       (is (empty? @kept)))))
+
+(deftest an-unnameable-session-is-refused-not-kept
+  (with-session (fn [& _] (throw (ex-info "the start must not be reached" {})))
+    (fn [kept]
+      (doseq [[name opts] [["teacher assistant contextual awerness" {}]
+                           ["feat" {:branch "a|b"}]]]
+        (let [e (caught #(lifecycle/up! name (assoc opts :project "brian")))]
+          (is (= :invalid-session-name (:reason (ex-data e))) name)
+          (is (nil? (:session-failure/id (ex-data e)))
+              "a refusal carries no failure id")))
+      (is (empty? @kept) "a name that can never start is never kept for a recovery to retry"))))
+
+(deftest session-name-problem-admits-the-names-sessions-use
+  (doseq [ok ["feat" "feat/x" "impl-br-5180-learning" "run-brian-triage-teacher-bugs-5d4dcccc" "v1.2_rc"]]
+    (is (nil? (lifecycle/session-name-problem ok)) ok))
+  (doseq [bad ["teacher assistant" "" "-x" ".x" "a..b" "a//b" "a/" "a." "a|b" "it's" nil]]
+    (is (some? (lifecycle/session-name-problem bad)) (pr-str bad))))

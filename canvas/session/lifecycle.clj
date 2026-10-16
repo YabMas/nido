@@ -46,8 +46,15 @@
      :delegates [resolve-project worktree-path]})
   (Operation session-weight "The weight a named session's record should carry, read from its profile."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :keyword] :delegates [session-coords]})
-  (Operation up! "Bring a session up: worktree if missing, then its services."
-    {:signature [:=> [:catn [:name :string] [:opts :map]] :any] :delegates [worktree-path]})
+  (Operation session-name-problem
+    "Why a string cannot name a session, or nil when it can. The name becomes a directory, a jj
+     bookmark and a revset pattern, so it admits only what all three accept."
+    {:signature [:=> [:catn [:s :any]] [:maybe :string]]})
+  (Operation up!
+    "Bring a session up: worktree if missing, then its services. REFUSES a name
+     `session-name-problem` rejects, before the start — so it is never kept as a failure."
+    {:signature [:=> [:catn [:name :string] [:opts :map]] :any]
+     :delegates [worktree-path session-name-problem]})
   (Operation down! "Stop a session. Worktree and state are PRESERVED."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]})
   (Operation restart! "Stop then start, worktree untouched."

@@ -154,3 +154,17 @@
       (is (= :resume-turn
              (:kind (restore/continuation (assoc f :origin {:kind :resume :ws-id "w" :input "x"})
                                           {:ws {:closed {:at "2026-09-17T09:00:00Z"}}})))))))
+
+(deftest a-start-under-a-name-up-refuses-is-withdrawn-not-retried
+  (with-tmp
+    (fn [enqueued]
+      (let [f   (keep-failure! {:session "teacher assistant contextual awerness"}
+                               "Error: Failed to parse name pattern: Syntax error")
+            w   (recovery-ws! f)
+            ups (atom 0)]
+        (with-redefs [lifecycle/up! (fn [& _] (swap! ups inc))]
+          (let [{:keys [outcomes closed?]} (restore/restore! :nido w)]
+            (is (= [{:failure (:id f) :outcome :withdrawn}] outcomes))
+            (is closed? "nothing is left owed, so the recovery closes")))
+        (is (zero? @ups) "restoring it could only be refused again")
+        (is (empty? @enqueued))))))

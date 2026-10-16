@@ -41,13 +41,21 @@
      {:kind :successor :run run}         a Run that failed on it
      {:kind :resume-turn …}              a reply whose turn could not start
      {:kind :withdrawn}                  the origin's workstream closed after the
-                                         failure; there is nothing left to continue
+                                         failure, or the start named a session
+                                         `up!` now refuses; there is nothing left
+                                         to continue
 
-   Withdrawn only for a closed workstream — never because the session is gone,
-   which the teardown of every failed Run makes true."
+   Withdrawn for a closed workstream or an unnameable session — never because
+   the session is gone, which the teardown of every failed Run makes true. An
+   unnameable session predates the refusal: restoring it could only be refused
+   again, and the refusal is not a failure, so it would stay owed forever."
   [f {:keys [run ws]}]
   (let [{:keys [kind] :as origin} (:origin f)]
     (cond
+      (or (some-> (:session f) lifecycle/session-name-problem)
+          (some-> (get-in f [:opts :branch]) lifecycle/session-name-problem))
+      {:kind :withdrawn}
+
       (and (#{:run :resume} kind) ws (closed-after? ws (:at f)))
       {:kind :withdrawn}
 

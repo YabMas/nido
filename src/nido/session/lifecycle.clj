@@ -484,6 +484,36 @@
 ;; Public lifecycle
 ;; ---------------------------------------------------------------------------
 
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :string]]}
+  session-name-problem
+  "Why `s` cannot name a session, or nil when it can. A session name becomes a
+   directory under the worktree root and, unless `:branch` is given, the jj
+   bookmark and workspace name — and nido hands the bookmark to `jj bookmark
+   list` as a revset pattern. So the rule is the intersection: ASCII letters,
+   digits, `.`, `_`, `-` and `/` (slash-namespaced names like `feat/x` are
+   real), starting with a letter or digit, never `..`, `//`, or a trailing `/`
+   or `.`. Narrower than git's ref rules on purpose: `(`, `|` and quotes are
+   legal refs yet break the revset, and a space is neither."
+  [s]
+  (cond
+    (not (string? s))                           "it is not a string"
+    (not (re-matches #"[A-Za-z0-9][A-Za-z0-9._/-]*" s))
+    "it may hold only ASCII letters, digits, `.`, `_`, `-` and `/`, starting with a letter or digit"
+    (re-find #"\.\.|//|[/.]$" s)              "it may not contain `..` or `//`, or end in `/` or `.`"))
+
+(defn- refuse-unnameable!
+  "Throw when `name`, or the bookmark it starts on, cannot name a session. A
+   refusal: thrown before the start, so it is never kept as a start failure
+   that a recovery would retry forever."
+  [name branch]
+  (doseq [[what s] [["session name" name] ["branch" branch]]]
+    (when-let [why (session-name-problem s)]
+      (throw (ex-info (str "Refusing " what " " (pr-str s) ": " why
+                           " — e.g. " (pr-str (-> (str s) str/trim str/lower-case
+                                                  (str/replace #"[^a-z0-9._/-]+" "-")
+                                                  (str/replace #"^[^a-z0-9]+|[/.-]+$" ""))))
+                      {:reason :invalid-session-name :session name :value s})))))
+
 (defn- with-context [name opts]
   (let [[project-name {:keys [directory]}] (resolve-project opts)
         wt-path (or (some-> (:path opts) str fs/expand-home str)
@@ -651,6 +681,7 @@
   [name opts]
   (let [{:keys [project-name project-dir wt-path branch base instance-id] :as ctx}
         (with-context name opts)
+        _       (refuse-unnameable! name branch)
         profile (effective-profile project-name opts)]
     (with-session-lock
      instance-id :up
