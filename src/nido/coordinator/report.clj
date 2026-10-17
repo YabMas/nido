@@ -3503,8 +3503,10 @@
    Written by `bb nido:recovery:restore`, never by the agent: an outcome is a
    fact the verb observed. :restored means the session's start returned and
    whatever the failure interrupted was handed to the daemon — :continuation
-   says what. :withdrawn means the workstream the failure's origin names was
-   closed after the failure, so there is no work left to continue. :not-restored
+   says what. :withdrawn means there is no work left for this restore to
+   continue: the workstream the failure's origin names was closed after the
+   failure, or — with :continuation {:continued-by <run-id>} — another Run already
+   carries on the failed Run's work, so nothing was started. :not-restored
    names, under :failure-left, the failure its own attempt kept.
 
    A failure named :restored or :withdrawn here is settled once this workstream

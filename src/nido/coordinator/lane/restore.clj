@@ -34,7 +34,8 @@
 (defn ^{:malli/schema [:=> [:cat :map :map] :map]}
   continuation
   "What continues failure `f` once its session is up, given `facts` read for it:
-   :run (the Run its origin names) and :ws (the workstream its origin names).
+   :run (the Run its origin names), :ws (the workstream its origin names) and
+   :continued-by (the id of a Run already carrying on a failed :run's work, or nil).
 
      {:kind :none}                       a person's start; bringing it up is all
      {:kind :execute :run-id id}         a Run that parked on its failed start
@@ -44,12 +45,15 @@
                                          failure, or the start named a session
                                          `up!` now refuses; there is nothing left
                                          to continue
+     {:kind :withdrawn :continued-by id} a failed Run whose work Run `id` already
+                                         carries on; another successor would do
+                                         the same work twice
 
    Withdrawn for a closed workstream or an unnameable session — never because
    the session is gone, which the teardown of every failed Run makes true. An
    unnameable session predates the refusal: restoring it could only be refused
    again, and the refusal is not a failure, so it would stay owed forever."
-  [f {:keys [run ws]}]
+  [f {:keys [run ws continued-by]}]
   (let [{:keys [kind] :as origin} (:origin f)]
     (cond
       (or (some-> (:session f) lifecycle/session-name-problem)
@@ -65,11 +69,39 @@
       (and (= :run kind) run (= :awaiting-review (:state run)))
       {:kind :execute :run-id (:id run)}
 
+      (and (= :run kind) run (= :failed (:state run)) continued-by)
+      {:kind :withdrawn :continued-by continued-by}
+
       (and (= :run kind) run (= :failed (:state run)))
       {:kind :successor :run run}
 
       :else
       {:kind :none})))
+
+(def ^:private carrying-on
+  "Run states in which a Run is still doing, or has done, its trigger's work."
+  #{:queued :preprocessing :running :awaiting-review :done})
+
+(defn- continued-by
+  "The id of a Run that already carries on failed `run`'s work — its trigger and
+   payload on its workstream, minted after it, in a state in `carrying-on` — or nil.
+
+   A restore's successor that fails to start is a failure of the same cause whose
+   origin is still `run`, so one cause can name several failures of one Run; each
+   would otherwise mint a successor of its own. Reads every Run record."
+  [run]
+  (let [{:keys [id trigger workstream-id event-payload]} run
+        minted (fn [r] (:at (first (:state-history r))))]
+    (some (fn [other-id]
+            (when (not= other-id id)
+              (when-let [r (runs/read-run other-id)]
+                (when (and (= trigger (:trigger r))
+                           (= workstream-id (:workstream-id r))
+                           (= event-payload (:event-payload r))
+                           (carrying-on (:state r))
+                           (pos? (compare (minted r) (minted run))))
+                  other-id))))
+          (sort (runs/list-run-ids)))))
 
 (defn- facts-for [f]
   (let [{:keys [kind run-id project ws-id session]} (:origin f)
@@ -80,8 +112,10 @@
               nil)
         ws-id (or ws-id (:workstream-id run))
         p     (or (some-> project name keyword) (:project run))]
-    {:run run
-     :ws  (when (and p ws-id) (ws/read-ws p ws-id))}))
+    {:run          run
+     :ws           (when (and p ws-id) (ws/read-ws p ws-id))
+     :continued-by (when (and (= :run kind) (= :failed (:state run)))
+                     (continued-by run))}))
 
 (defn- successor!
   "A new Run of `run`'s trigger and payload on `run`'s own workstream, its session
@@ -120,7 +154,8 @@
         cont   (continuation f facts)
         origin (assoc (:origin f) :restoring (:id f))]
     (if (= :withdrawn (:kind cont))
-      {:failure (:id f) :outcome :withdrawn}
+      (cond-> {:failure (:id f) :outcome :withdrawn}
+        (:continued-by cont) (assoc :continuation {:continued-by (:continued-by cont)}))
       (try
         (let [handed
               (case (:kind cont)

@@ -125,6 +125,45 @@
                 "its session is started here, before the daemon hears of it")
             (is (= [{:type :execute-run :run-id next-id}] @enqueued))))))))
 
+(deftest a-failed-run-gets-one-successor-however-many-of-its-starts-failed
+  (with-tmp
+    (fn [enqueued]
+      (let [origin-ws (ws/create! :brian {:stage :triaging :external-refs []})
+            trigger   {:name :triage-new :source {:type :notion-view} :skill :triage-bug
+                       :payload "{{event/id}}" :limits {:budget "1h"}}
+            failed    (runs/create-run! {:project :brian :trigger trigger :payload {:id "BR-1"}
+                                         :priority 3 :session-profile :full
+                                         :workstream-id (:id origin-ws)}
+                                        {:fired-at "t" :fired-by "test"})
+            _         (runs/transition! (:id failed) :failed)
+            origin    (runs/run-origin (runs/read-run (:id failed)))
+            ;; Two earlier restores' successors that failed to start: both name
+            ;; the same failed Run as their origin, under one cause.
+            f1        (keep-failure! {:session "run-a" :origin origin} "relation already exists")
+            f2        (keep-failure! {:session "run-b" :origin origin} "relation already exists")
+            w         (recovery-ws! f1)]
+        (with-redefs [triggers/load-for-project (fn [p] (if (= :brian p) [trigger] []))
+                      spawn/create-session-for-run! (fn [& _] nil)
+                      runs/spawn-session-for-run! (fn [& _] nil)]
+          (let [{:keys [outcomes closed?]} (restore/restore! :nido w)
+                {[minted] :restored [other] :withdrawn} (group-by :outcome outcomes)
+                next-id (-> minted :continuation :run-id)]
+            (is (= :successor (-> minted :continuation :kind)))
+            (is (= #{(:id f1) (:id f2)} (set (map :failure outcomes))))
+            (is (= {:outcome :withdrawn :continuation {:continued-by next-id}}
+                   (dissoc other :failure))
+                "whichever comes second names the successor the first minted, and mints none")
+            (is (= [{:type :execute-run :run-id next-id}] @enqueued)
+                "the triage runs once")
+            (is closed?)))))))
+
+(deftest a-failed-run-whose-work-is-already-carried-on-is-withdrawn
+  (let [f   {:at "2026-09-17T10:00:00Z" :origin {:kind :run :run-id "R"}}
+        run {:id "R" :state :failed}]
+    (is (= {:kind :withdrawn :continued-by "S"}
+           (restore/continuation f {:run run :ws {} :continued-by "S"})))
+    (is (= :successor (:kind (restore/continuation f {:run run :ws {} :continued-by nil}))))))
+
 (deftest a-failure-whose-work-was-closed-is-withdrawn
   (with-tmp
     (fn [enqueued]
