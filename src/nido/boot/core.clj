@@ -34,6 +34,7 @@
    [nido.coordinator.source.improvement :as improvement-source]
    [nido.coordinator.source.start-failures :as start-failures-source]
    [nido.coordinator.source.sweep :as sweep-source]
+   [nido.coordinator.source.review-queue-nightly :as review-queue-nightly-source]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.status-file :as status-file]
    [nido.coordinator.lane.drive :as drive]
@@ -1473,6 +1474,7 @@
   (slack-reaction-source/register!)                   ; register Slack-reaction source plugin
   (improvement-source/register!)                      ; register the approved-improvement source
   (sweep-source/register!)                            ; register the daily improvement sweep
+  (review-queue-nightly-source/register!)             ; register the nightly review-queue grooming
   (start-failures-source/register!)                   ; register the failed-session-start source
   (loop []
     (tick!)

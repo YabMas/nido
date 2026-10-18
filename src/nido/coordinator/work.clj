@@ -933,26 +933,34 @@
 ;; ---------------------------------------------------------------------------
 ;; Review-queue grooming
 
+(def ^:private review-queue-log-size
+  "How many groomings the log shows: two weeks of nightly runs."
+  14)
+
 (defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
   review-queues
   "The latest review-queue grooming of every project whose triggers declare the
-   plan trigger, as view.review-queue/overview shows one. A project that declares
-   it and was never groomed is there too, at `:stage :none`, so the surface can
-   offer to run it. Read on every call."
+   plan trigger, as view.review-queue/overview shows one, with `:log` — its newest
+   groomings, newest first, as view.review-queue/log-entry shows each. A project
+   that declares it and was never groomed is there too, at `:stage :none` with an
+   empty log, so the surface can offer to run it. Read on every call."
   []
   (vec (for [[pname _] (project/list-projects)
              :let  [pk (keyword pname)]
              :when (some #(= review-queue/plan-trigger (:name %))
                          (triggers/load-for-project pk))
-             :let  [run (review-queue/latest-plan-run pk)
-                    id  (:id run)]]
-         (review-queue-view/overview
-          {:project   pk
-           :plan-run  run
-           :plan      (some-> id review-queue/read-plan)
-           :decisions (if id (review-queue/read-decisions id) {:decisions {}})
-           :results   (if id (review-queue/read-results id) {})
-           :apply-run (some->> id (review-queue/apply-run-for pk))}))))
+             :let  [applies (review-queue/apply-runs-by-plan pk)
+                    grooming (fn [run]
+                               (let [id (:id run)]
+                                 {:project   pk
+                                  :plan-run  run
+                                  :plan      (some-> id review-queue/read-plan)
+                                  :decisions (if id (review-queue/read-decisions id) {:decisions {}})
+                                  :results   (if id (review-queue/read-results id) {})
+                                  :apply-run (get applies id)}))
+                    runs (take review-queue-log-size (review-queue/plan-runs pk))]]
+         (assoc (review-queue-view/overview (grooming (first runs)))
+                :log (mapv (comp review-queue-view/log-entry grooming) runs)))))
 
 (defn ^{:malli/schema [:=> [:cat :RunId :int :keyword] :map]}
   decide-review-item!
@@ -972,10 +980,9 @@
    than this one's. The key is what makes the apply queued once per plan: a retry after any
    stop finds it taken. Refusals are record.review-queue/apply!'s."
   [run-id fire]
-  (let [payload {:id       (str "apply-" (subs run-id (max 0 (- (count run-id) 8))))
-                 :plan-run run-id}]
-    (review-queue/apply! run-id #(fire review-queue/apply-trigger payload
-                                       (str "review-queue-apply-" run-id)))))
+  (review-queue/apply! run-id #(fire review-queue/apply-trigger
+                                     (review-queue/apply-payload run-id)
+                                     (review-queue/apply-key run-id))))
 
 (defn- hold-state
   "What a hold's engagement means for the sweep it holds. `:idle` is the one

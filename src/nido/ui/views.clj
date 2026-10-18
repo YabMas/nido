@@ -3177,16 +3177,46 @@
     (= :applied stage)  (str (:applied counts) " applied · " (:failed counts) " failed · "
                              (:skipped counts) " skipped")))
 
+(def ^:private rq-decider-label {:nightly "decided by nido" :person "decided by a person"})
+
+(defn- local-minute
+  "An ISO instant as `yyyy-MM-dd HH:mm` on this machine's clock — the clock the
+   nightly grooming's `:at` is read on unless its source names a zone — or nil."
+  [iso]
+  (try (.format (.atZone (java.time.Instant/parse (str iso)) (java.time.ZoneId/systemDefault))
+                (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm"))
+       (catch Exception _ nil)))
+
+(defn- rq-log-line
+  "One grooming in the log: when, how it was started, who decided it, and what came of it."
+  [{:keys [started-at nightly? decided-by stage counts]}]
+  [:li
+   [:b (or (local-minute started-at) "–")]
+   (str " · " (if nightly? "nightly" "started from this page")
+        " · " (get rq-decider-label decided-by "undecided")
+        " · "
+        (case stage
+          :applied  (str (:applied counts) " applied · " (:failed counts) " failed · "
+                         (:passed counts) " skipped")
+          :applying (str "applying " (:approved counts) " writes")
+          :unfired  "apply not queued"
+          :deciding (if (zero? (:items counts)) "nothing to write" "plan awaiting a decision")
+          :planning "planning"
+          :failed   "ended without a plan"
+          (some-> stage name)))])
+
 (defn- rq-section
   "One project's grooming: where it stands, the levers that fit that stage, the
-   queue in rank order with each ticket's proposed writes, and the flags."
-  [{:keys [project stage run-id tickets general flags counts] :as q} requested?]
+   queue in rank order with each ticket's proposed writes, the flags, and the log
+   of its recent groomings."
+  [{:keys [project stage run-id tickets general flags counts nightly? decided-by log] :as q} requested?]
   (let [run-url   (str "/operations/review-queue/" (name project) "/run")
         idle?     (and (not requested?) (#{:none :failed :deciding :applied} stage))]
     [:div.rq-section
      [:div.ops-head
       [:strong (str "Review queue · " (name project))]
-      [:span.meta (rq-stage-line q requested?)]]
+      [:span.meta (rq-stage-line q requested?)
+       (when-let [l (get rq-decider-label decided-by)] (str " · " l))]]
      [:div.actions {:style "margin-bottom:14px"}
       (when idle?
         [:button {:class (str "btn" (when (#{:none :applied :failed} stage) " btn-primary"))
@@ -3201,7 +3231,9 @@
       (when (= :unfired stage)
         [:button.btn.btn-primary {"data-on:click" (str "@post('" (rq-base project run-id) "/apply')")}
          "Apply again"])]
-     (when (and (= :deciding stage) (not requested?))
+     (when (and nightly? (#{:planning :deciding} stage) (not requested?))
+       [:p.meta "Nightly grooming — nido approves every undecided write and applies the plan once it is done."])
+     (when (and (= :deciding stage) (not requested?) (not nightly?))
        [:p.meta (if (pos? (:undecided counts))
                   "Approve or skip every item to apply. Nothing is written to Notion until you press Apply."
                   "Nothing is written to Notion until you press Apply.")])
@@ -3220,7 +3252,10 @@
              [:div.prop (for [it general] (rq-item project run-id stage it))]))
      (when (seq flags)
        (list [:h3.rec-title "Flags — for a person, not acted on"]
-             [:ul.rq-flags (for [f flags] [:li f])]))]))
+             [:ul.rq-flags (for [f flags] [:li f])]))
+     (when (seq log)
+       (list [:h3.rec-title "Log"]
+             [:ul.rq-log (for [e log] (rq-log-line e))]))]))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe [:vector :map]] [:set :any]] :string]}
   review-queue-fragment

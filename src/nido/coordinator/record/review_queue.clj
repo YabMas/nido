@@ -57,9 +57,10 @@
 
 (defn ^{:malli/schema [:=> [:cat :RunId] :map]}
   read-decisions
-  "`{:decisions {n :approved|:skipped} :applying {:at iso :fired-at iso}}` — :applying
-   present once someone asked for the plan to be carried out, after which no decision may
-   change; :fired-at once its apply trigger was queued."
+  "`{:decisions {n :approved|:skipped} :applying {:at iso :by :person|:nightly :fired-at iso}}`
+   — :applying present once someone asked for the plan to be carried out, after which no
+   decision may change; :by who decided, absent on a plan frozen before it was kept; :fired-at
+   once its apply trigger was queued."
   [run-id]
   (let [d (read-quietly (decisions-path run-id))]
     (if (map? d) d {:decisions {}})))
@@ -91,11 +92,30 @@
             :else (do (io/write-edn! path (assoc-in d [:decisions n] verdict))
                       {:decision :recorded})))))))
 
-(defn ^{:malli/schema [:=> [:cat :RunId [:=> [:cat] :any]] :map]}
+(defn ^{:malli/schema [:=> [:cat :RunId] :string]}
+  apply-key
+  "The queue key a plan's apply is fired under. Whoever fires the apply — the page or the
+   nightly source — fires it under this key, which is what queues it once per plan."
+  [run-id]
+  (str "review-queue-apply-" run-id))
+
+(defn ^{:malli/schema [:=> [:cat :RunId] :map]}
+  apply-payload
+  "The apply trigger's payload for plan `run-id`. `:id` is unique per plan; `:plan-run` is what
+   the apply run is told to carry out, and what apply-run-for finds it by."
+  [run-id]
+  {:id       (str "apply-" (subs run-id (max 0 (- (count run-id) 8))))
+   :plan-run run-id})
+
+(defn ^{:malli/schema [:=> [:cat :RunId [:=> [:cat] :any] [:? [:enum :person :nightly]]] :map]}
   apply!
   "Freeze plan `run-id`'s decisions and call `fire` to queue its apply, all under the plan's
-   lock. Returns `{:decision :begun :approved [n ..]}`, or refuses without firing:
-   `:undecided` (with `:items`) while any item holds no decision, `:nothing-approved`, or
+   lock. `by` is who decided — :person (the default) or :nightly — and is kept under
+   `:applying :by` with the freeze. A :nightly freeze with nothing approved still fires: a
+   nightly grooming always ends applied, so the log never shows one waiting on nobody. Returns `{:decision :begun :approved [n ..]}`, or refuses
+   without firing:
+   `:undecided` (with `:items`) while any item holds no decision, `:nothing-approved` (never for
+   :nightly), or
    `:already-applying` once a fire is recorded.
 
    The fire is recorded only after `fire` returns. A `fire` that throws leaves the plan frozen
@@ -103,26 +123,27 @@
    stranded. A stop between `fire` returning and the record being written leaves a plan that
    looks unfired; the next call fires again, and `fire` must answer that without queueing a
    second envelope — which is why the caller keys it by the plan."
-  [run-id fire]
-  (let [path (decisions-path run-id)]
-    (io/with-file-lock
-      (io/lock-path-for path)
-      (fn []
-        (let [d         (read-decisions run-id)
-              ds        (:decisions d)
-              items     (map :n (:items (read-plan run-id)))
-              undecided (vec (remove #(contains? ds %) items))
-              approved  (->> ds (filter (comp #{:approved} val)) (map key) sort vec)]
-          (cond
-            (get-in d [:applying :fired-at]) {:decision :already-applying}
-            (seq undecided)                  {:decision :undecided :items undecided}
-            (empty? approved)                {:decision :nothing-approved}
-            :else
-            (let [frozen (if (:applying d) d (assoc d :applying {:at (clock/now-iso)}))]
-              (io/write-edn! path frozen)
-              (fire)
-              (io/write-edn! path (assoc-in frozen [:applying :fired-at] (clock/now-iso)))
-              {:decision :begun :approved approved})))))))
+  ([run-id fire] (apply! run-id fire :person))
+  ([run-id fire by]
+   (let [path (decisions-path run-id)]
+     (io/with-file-lock
+       (io/lock-path-for path)
+       (fn []
+         (let [d         (read-decisions run-id)
+               ds        (:decisions d)
+               items     (map :n (:items (read-plan run-id)))
+               undecided (vec (remove #(contains? ds %) items))
+               approved  (->> ds (filter (comp #{:approved} val)) (map key) sort vec)]
+           (cond
+             (get-in d [:applying :fired-at]) {:decision :already-applying}
+             (seq undecided)                  {:decision :undecided :items undecided}
+             (and (empty? approved) (not= :nightly by)) {:decision :nothing-approved}
+             :else
+             (let [frozen (if (:applying d) d (assoc d :applying {:at (clock/now-iso) :by by}))]
+               (io/write-edn! path frozen)
+               (fire)
+               (io/write-edn! path (assoc-in frozen [:applying :fired-at] (clock/now-iso)))
+               {:decision :begun :approved approved}))))))))
 
 (defn- runs-of
   "The runs of `trigger` for `project`, newest first, found by id rather than by
@@ -137,11 +158,25 @@
          (sort-by (fn [r] (some-> r :state-history first :at)) #(compare %2 %1))
          vec)))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :Run]]}
+  plan-runs
+  "Every plan run for `project`, newest first."
+  [project]
+  (runs-of project plan-trigger))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :Run]]}
   latest-plan-run
   "The newest plan run for `project`, or nil when it has never been groomed."
   [project]
-  (first (runs-of project plan-trigger)))
+  (first (plan-runs project)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:map-of :RunId :Run]]}
+  apply-runs-by-plan
+  "The newest apply run fired for each plan run of `project`, keyed by the plan run's id."
+  [project]
+  (reduce (fn [m r] (let [k (get-in r [:event-payload :plan-run])]
+                      (cond-> m (and k (not (contains? m k))) (assoc k r))))
+          {} (runs-of project apply-trigger)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :RunId] [:maybe :Run]]}
   apply-run-for

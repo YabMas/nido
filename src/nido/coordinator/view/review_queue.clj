@@ -35,6 +35,17 @@
       (#{:queued :preprocessing :running} ps)           :planning
       :else                                             :failed)))
 
+(defn- nightly?
+  "Whether the nightly source fired this plan run — it marks the payload it queues."
+  [plan-run]
+  (= "true" (str (get-in plan-run [:event-payload :nightly]))))
+
+(defn- decided-by
+  "Who decided a frozen grooming: :nightly or :person, nil while nothing is frozen. A plan
+   frozen before the decider was kept was frozen from the page, so it reads :person."
+  [decisions]
+  (when-let [a (:applying decisions)] (or (:by a) :person)))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   overview
   "One grooming for the dashboard: `:stage` (see `stage`), the plan run's id and
@@ -57,6 +68,8 @@
         outcomes (frequencies (keep (comp :outcome :result) items))]
     {:project    project
      :stage      (stage in)
+     :nightly?   (nightly? plan-run)
+     :decided-by (decided-by decisions)
      :run-id     (:id plan-run)
      :started-at (some-> plan-run :state-history first :at)
      :apply-run  (:id apply-run)
@@ -68,4 +81,14 @@
                   :skipped    (count (filter #(= :skipped (:decision %)) items))
                   :undecided  (count (remove :decision items))
                   :applied    (get outcomes :applied 0)
-                  :failed     (get outcomes :failed 0)}}))
+                  :failed     (get outcomes :failed 0)
+                  ;; approved, and passed over by the apply run — a page edited since it was read
+                  :passed     (get outcomes :skipped 0)}}))
+
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  log-entry
+  "One grooming as the log shows it: its plan run's id and start, whether the nightly
+   source fired it, who decided it (nil until frozen), its stage, and its counts — the
+   same `stage` and `:counts` overview gives, over the same records."
+  [in]
+  (select-keys (overview in) [:run-id :started-at :nightly? :decided-by :stage :counts]))

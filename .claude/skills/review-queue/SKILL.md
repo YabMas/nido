@@ -1,17 +1,19 @@
 ---
 name: review-queue
-description: Groom brian's Notion Review queue — every ticket in Review whose Lifecycle is Development, Staging or Prod. The plan leg judges each ticket's QA instructions against docs/reference/qa-brief.md, proposes a brief where they fall short or are in another style, a Follow-up block for what a person still owes, a Release Blocker Priority where the change alters what users experience, and a cleanup where the page buries them, ranks the queue by what most needs a reviewer's attention, and writes the plan for a person to decide on the Operations page. The apply leg (`/review-queue apply <plan-run-id>`) carries out exactly the writes that person approved. Fired by the :review-queue and :review-queue-apply triggers on brian. Usage: /review-queue | /review-queue apply <plan-run-id>
+description: Groom brian's Notion Review queue — every ticket in Review whose Lifecycle is Development, Staging or Prod. The plan leg judges each ticket's QA instructions against docs/reference/qa-brief.md, proposes a brief where they fall short or are in another style, a Follow-up block for what a person still owes, a Release Blocker Priority where the change alters what users experience, and a cleanup where the page buries them, ranks the queue by what most needs a reviewer's attention, and writes the plan for a person to decide on the Operations page — or, on the nightly run, for nido to approve in full. The apply leg (`/review-queue apply <plan-run-id>`) carries out exactly the writes that were approved. Fired by the :review-queue and :review-queue-apply triggers on brian. Usage: /review-queue | /review-queue apply <plan-run-id>
 ---
 
 # /review-queue
 
 > **Harness-side skill, owned by nido.** Two legs, each its own `:lite` Run on
-> project `brian`, both started from the dashboard's **Operations → Review queue**:
+> project `brian`, started either from the dashboard's **Operations → Review
+> queue** or by the nightly source (`:review-queue-nightly`) after midnight:
 >
 > - **plan** — `/review-queue`, fired by `:review-queue`. Reads, judges, ranks,
 >   writes the plan (§1–§5). Writes nothing to Notion.
 > - **apply** — `/review-queue apply <plan-run-id>`, fired by `:review-queue-apply`
->   once a person has approved writes on the page. Carries them out (§6–§7).
+>   once the writes are decided — by a person on the page, or on the nightly run
+>   by nido approving every write nobody decided. Carries them out (§6–§7).
 >
 > Sibling of `/land` §6, which writes the same QA brief onto one ticket at
 > landing; this skill does it for the whole queue, after the fact.
@@ -29,7 +31,14 @@ The plan leg makes its proposals per ticket — its **rank**, its **QA brief**,
 its **Follow-up**, whether it is a **release blocker**, its **cleanup** — as one numbered plan, and ends. A person goes through it on the
 Operations page and approves or skips each write. The apply leg then carries out
 **exactly the approved writes, as the plan worded them** — that is the safety:
-nothing reaches Notion that a person did not read and approve by number.
+nothing reaches Notion that was not approved by number.
+
+**On the nightly run nobody reads the plan first.** Its payload id is
+`nightly-<date>`; nido approves every item nobody decided as soon as the plan
+run ends, and applies it. So on that run every write you number is a write you
+are making — propose only what you would stand behind unreviewed, and put
+anything that needs a person's judgment under `:flags`, which are never applied.
+The page logs each grooming with who decided it.
 
 ## Two hard boundaries
 
@@ -249,7 +258,8 @@ EDN
 ```
 
 **Do not wait for an answer in this session**, and write nothing to Notion. The
-decisions are made on the page; a separate Run carries them out.
+decisions are made on the page, or by nido on the nightly run; a separate Run
+carries them out.
 
 ## 6. The apply leg: carry out what was approved
 
@@ -258,7 +268,7 @@ own run's status file, then read, from the PLAN run's artifacts dir
 (`~/.nido/runs/<plan-run-id>/artifacts/`):
 
 - `review-queue-plan.edn` — the plan, as §5 wrote it
-- `review-queue-decisions.edn` — `{:decisions {n :approved|:skipped} :applying {:at …}}`
+- `review-queue-decisions.edn` — `{:decisions {n :approved|:skipped} :applying {:at … :by :person|:nightly}}`
 
 **Claim the plan before anything else:**
 
