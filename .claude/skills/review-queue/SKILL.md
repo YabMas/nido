@@ -1,6 +1,6 @@
 ---
 name: review-queue
-description: Groom brian's Notion Review queue — every ticket in Review whose Lifecycle is Development, Staging or Prod. The plan leg judges each ticket's QA instructions against docs/reference/qa-brief.md, proposes a brief where they fall short or are in another style, a Follow-up block for what a person still owes, a Release Blocker Priority where the change alters what users experience, and a cleanup where the page buries them, ranks the queue by what most needs a reviewer's attention, and writes the plan for a person to decide on the Operations page — or, on the nightly run, for nido to approve in full. The apply leg (`/review-queue apply <plan-run-id>`) carries out exactly the writes that were approved. Fired by the :review-queue and :review-queue-apply triggers on brian. Usage: /review-queue | /review-queue apply <plan-run-id>
+description: Groom brian's Notion Review queue — every ticket in Review whose Lifecycle is Development, Staging or Prod. The plan leg judges each ticket's QA instructions against docs/reference/qa-brief.md, proposes a brief where they fall short or are in another style, a Follow-up block for what a person still owes, a cleanup where the page buries them, and the Priority bucket each ticket's review warrants — 0 – Release Blocker to 5 - Wont, raised or lowered from what it carried in development — and writes the plan for a person to decide on the Operations page — or, on the nightly run, for nido to approve in full. The apply leg (`/review-queue apply <plan-run-id>`) carries out exactly the writes that were approved. Fired by the :review-queue and :review-queue-apply triggers on brian. Usage: /review-queue | /review-queue apply <plan-run-id>
 ---
 
 # /review-queue
@@ -9,8 +9,8 @@ description: Groom brian's Notion Review queue — every ticket in Review whose 
 > project `brian`, started either from the dashboard's **Operations → Review
 > queue** or by the nightly source (`:review-queue-nightly`) after midnight:
 >
-> - **plan** — `/review-queue`, fired by `:review-queue`. Reads, judges, ranks,
->   writes the plan (§1–§5). Writes nothing to Notion.
+> - **plan** — `/review-queue`, fired by `:review-queue`. Reads, judges, buckets
+>   by Priority, writes the plan (§1–§5). Writes nothing to Notion.
 > - **apply** — `/review-queue apply <plan-run-id>`, fired by `:review-queue-apply`
 >   once the writes are decided — by a person on the page, or on the nightly run
 >   by nido approving every write nobody decided. Carries them out (§6–§7).
@@ -24,11 +24,12 @@ Review is where a person checks shipped work, and the queue is read in Notion:
 the ticket, not the PR. What arrives there is uneven — some tickets carry a clean
 set of steps, some only a bug report written before anyone understood the bug,
 some a hundred blocks of engineering handoff with the steps nowhere. And the
-queue has no order, so a reviewer picks what looks quick rather than what
-matters.
+queue's `Priority` says how much the work mattered before it was built, not how
+much its review matters now, so a reviewer picks what looks quick rather than
+what matters.
 
-The plan leg makes its proposals per ticket — its **rank**, its **QA brief**,
-its **Follow-up**, whether it is a **release blocker**, its **cleanup** — as one numbered plan, and ends. A person goes through it on the
+The plan leg makes its proposals per ticket — its **Priority bucket**, its **QA
+brief**, its **Follow-up**, its **cleanup** — as one numbered plan, and ends. A person goes through it on the
 Operations page and approves or skips each write. The apply leg then carries out
 **exactly the approved writes, as the plan worded them** — that is the safety:
 nothing reaches Notion that was not approved by number.
@@ -43,7 +44,7 @@ The page logs each grooming with who decided it.
 ## Two hard boundaries
 
 1. **Never change Status, Lifecycle, Ball Holder or any property but
-   `Review rank`, `GitHub PR`, and `Priority` raised to `0 – Release Blocker`,
+   `GitHub PR` and `Priority` — set to one of its six options, never cleared —
    and no view but the Review view's sort.** Where one looks wrong — shipped work with no
    Lifecycle, a ticket its own comments call finished — the plan *flags* it for
    the human. Moving a ticket through the workflow is theirs.
@@ -79,12 +80,6 @@ what a human wants to hear about, so run the same query once with
 planning anything for them. The Lifecycle clause for that query is
 `{"property":"Lifecycle","select":{"is_empty":true}}`.
 
-Also read which tickets carry a `Review rank` now
-(`{"property":"Review rank","number":{"is_not_empty":true}}`) — a ticket that
-has left the queue keeps its number until something clears it (§5). No such
-property yet → this is the first run; skip the query, and the plan proposes
-adding it.
-
 **Read the Review view** — the view the queue is read in: the one named `Review`
 on the linked database of the Tech Work page (database
 `330fca9f-403c-80c4-b087-e35da50a5b6d`).
@@ -94,10 +89,11 @@ notion api GET "/v1/views?database_id=330fca9f403c80c4b087e35da50a5b6d"   # ids
 notion api GET "/v1/views/<view-id>"                                       # name, sorts
 ```
 
-A view's `sorts` name properties by id — the `Review rank` property's id is in
+A view's `sorts` name properties by id — the `Priority` property's id is in
 `notion api GET /v1/data_sources/<data-source-id>`. When the Review view's sorts do
-not lead with `Review rank` ascending, the plan holds sorting it as one numbered
-item. No view named `Review` there, or more than one → a flag, and no sort item:
+not lead with `Priority` ascending — Notion sorts a select by its option order,
+so ascending puts Release Blockers first — the plan holds sorting it as one
+numbered item. No view named `Review` there, or more than one → a flag, and no sort item:
 the plan cannot say which view the queue is read in.
 
 For each ticket in scope, read everything a reviewer would, and what they
@@ -156,15 +152,6 @@ Lifecycle or Status that reads wrong, a missing Priority — is never a follow-u
 and never written onto the ticket. It goes in `:flags`, for the person running
 the grooming: it says the tooling that keeps tickets missed something.
 
-### Release blocker
-
-For a ticket not yet in production (Lifecycle Development or Staging) whose
-`Priority` is not already `0 – Release Blocker`, decide whether it should be, by
-`docs/reference/qa-brief.md` § "Release blocker". Propose it as one `:blocker`
-item: the one-sentence reason, the Priority it replaces, and — read from the
-ticket's `App Domain`, `Ball Holder` and `Participants` — whether the mark would
-also hold the next mobile app release. Never propose lowering a Priority.
-
 A brief is wanted where it tells a reviewer what to do. A ticket whose Review is
 a **design sign-off** — no code yet, a spec or a Figma awaiting approval — needs
 no QA brief; flag that its Status reads as QA work when it is not.
@@ -178,12 +165,23 @@ removes, and say in the plan which blocks stay put and why, so the human is not
 surprised by a half-folded page.
 
 
-## 4. Rank the queue
+## 4. Put each ticket in its Priority bucket
 
-Rank answers one question: **if the reviewer does only the top few today, which
-few matter most?** It is a judgement, so every rank carries its one-line
-reason — the reasons are what the human approves, and a rank without one cannot
-be argued with.
+There is no ordered list. In Review, `Priority` says **how much this ticket's
+review matters now**, and the Review view sorts by it, so the bucket is the
+order. The Priority a ticket carried through development is evidence, not the
+answer: a `2 - Should` feature whose change locks teachers out when it is wrong
+is a `1 - Must` to review, or a Release Blocker; a `1 - Must` that turned out
+to be a one-line copy fix may be a `3 - Could`. Move it either way.
+
+| bucket | in Review it means |
+|---|---|
+| `0 – Release Blocker` | must be reviewed before it reaches production — `docs/reference/qa-brief.md` § "Release blocker" decides it |
+| `1 - Must` | review today: a flaw here is serious, or it is already in front of users |
+| `2 - Should` | review this cycle |
+| `3 - Could` | review when the above are clear |
+| `4 - Would` | low risk, nobody waiting; a glance is enough |
+| `5 - Wont` | nothing for a reviewer to do — say why, and flag it if Status should move |
 
 Weigh four things, per ticket:
 
@@ -192,13 +190,21 @@ Weigh four things, per ticket:
 | **Consequence of a flaw** | money, access, licences, sign-in, merges, data loss — anything irreversible or that locks people out; many users or a paying customer | cosmetic, superadmin-only, trivially reverted |
 | **Chance of a serious finding** | large or cross-cutting PR, concurrency, auth, billing, migrations; verified only by automated tests; contested in comments | small, local, already clicked through by someone |
 | **Exposure now** | Prod — if it is wrong, it is wrong for users today; Staging — review is what gates the release | Development — not in front of anyone yet |
-| **Importance of the work** | a named customer waiting, an exam or rollout date, `Priority` 0–1, other tickets `Blocked by` it | internal cleanup, no one waiting |
+| **Importance of the work** | a named customer waiting, an exam or rollout date, other tickets `Blocked by` it | internal cleanup, no one waiting |
 
-Order by the first three together — the risk a review retires — then by
-importance. **Break ties toward the cheaper review**: two equally risky tickets,
-the one a reviewer clears in ten minutes goes first. A ticket that needs a brief
-written before anyone can review it ranks as if the brief existed; the plan
-writes the brief.
+The first three together are the risk a review retires; importance moves a
+ticket up a bucket, never down. A ticket that needs a brief written before
+anyone can review it is bucketed as if the brief existed; the plan writes the
+brief.
+
+Every ticket gets a bucket and a one-line reason — the reason is what the
+person approving reads, and a bucket without one cannot be argued with. Where
+the bucket differs from the ticket's `Priority`, propose it as one `:priority`
+item: the option it replaces, the option it becomes, the reason, and for a
+Release Blocker — read from `App Domain`, `Ball Holder` and `Participants` —
+whether the mark would also hold the next mobile app release
+(`docs/reference/qa-brief.md` § "Release blocker"). Where they match, no item.
+A ticket with no `Priority` gets one like any other. Never propose clearing it.
 
 ## 5. Write the plan, then end
 
@@ -211,24 +217,26 @@ exactly this shape — the dashboard renders it, and the apply leg is held to it
             :url       "https://www.notion.so/<page-id>"
             :page-id   "<page-id>"
             :lifecycle "Prod"
-            :rank      1
+            :priority  "1 - Must"       ; the bucket the plan puts it in — exactly an option's name
+            :priority-was "2 - Should"  ; what the ticket carried when it was read; nil when empty
             :why       "data loss and access for every teacher; five concurrency fixes; tests only"
             :qa        :write          ; :keep | :correct | :restyle | :write | :design-signoff
             :last-read "2026-09-28T09:14:03.000Z"}]
- :items   [{:n 1 :br "BR-6348" :kind :rank   :summary "rank → 1"}
+ :items   [{:n 1 :br "BR-6348" :kind :priority :summary "Priority 2 - Should → 1 - Must"
+            :detail "data loss and access for every teacher; in production now"}
            {:n 2 :br "BR-6348" :kind :brief  :summary "prepend a QA brief (none on the page)"
             :detail "<the full brief, exactly as it will appear>"}
            {:n 3 :br "BR-6348" :kind :fold   :summary "fold 118 blocks into Engineering notes & history"
             :detail "stays put: 1 inline-commented paragraph\n<block ids>"}
            {:n 5 :br "BR-6348" :kind :fold   :summary "fold the original report (9 blocks, 2 images) into Original report"
             :detail "<block ids>"}
-           {:n 6 :br "BR-6348" :kind :blocker :summary "Priority 2 - Should → 0 – Release Blocker"
+           {:n 6 :br "BR-6411" :kind :priority :summary "Priority 2 - Should → 0 – Release Blocker"
             :detail "teachers see a new save-conflict warning when editing a course\nApp Domain Teacher — does not hold the mobile release"}
+           {:n 7 :br "BR-6390" :kind :priority :summary "Priority 1 - Must → 4 - Would"
+            :detail "a label change on a superadmin screen, already clicked through on staging"}
            {:n 4 :br "BR-6454" :kind :delete :summary "delete the empty bug-report template (16 blocks)"
             :detail "<every deleted line, quoted>\n<block ids>"}
-           {:n 9 :br nil       :kind :schema :summary "add number property Review rank to the Task Database"}
-           {:n 10 :br "BR-6056" :kind :clear-rank :summary "left the queue (Status Done) — clear Review rank"}
-           {:n 11 :br nil      :kind :view-sort :summary "sort the Review view by Review rank, ascending"
+           {:n 11 :br nil      :kind :view-sort :summary "sort the Review view by Priority, ascending"
             :detail "view 372fca9f-403c-808b-86af-000c78baf1e2; sorts now: none"}]
  :flags   ["BR-6363, BR-6362 are in Review with no Lifecycle; their comments say running in production"
            "BR-6370 in Review is a design sign-off, not QA work"]}
@@ -236,16 +244,16 @@ exactly this shape — the dashboard renders it, and the apply leg is held to it
 
 - **`:n` is the identity** a person approves. Number every write once, globally,
   from 1.
-- **`:kind`** is one of `:rank`, `:brief`, `:correct`, `:follow-up`, `:blocker`, `:delete`,
-  `:fold`, `:clear-rank`, `:schema`, `:view-sort`. A restyle is a `:brief` whose
+- **`:kind`** is one of `:priority`, `:brief`, `:correct`, `:follow-up`, `:delete`,
+  `:fold`, `:view-sort`. A restyle is a `:brief` whose
   `:detail` also lists the old blocks it replaces. A `:follow-up` carries every
   to-do's text, and the ids of the body to-dos it moves in. `:br nil` for a write about no one ticket.
 - **`:detail` is what the apply leg executes from.** Put in it everything that
   leg needs and a reviewer should read: the full brief text, every quoted line a
   delete removes, the block ids a fold or delete touches, what stays put and why.
   A person approving `:summary` alone approved something they did not see.
-- Every ticket in scope appears in `:tickets` with its `:rank`, even when it has
-  no write besides the rank.
+- Every ticket in scope appears in `:tickets` with its `:priority` bucket and
+  `:why`, even when its Priority already matches and it has no write at all.
 
 Write `<artifacts-dir>/review-queue-plan.md` beside it — the same plan as prose,
 for a person reading the run's artifacts — and print a one-paragraph summary in
@@ -309,37 +317,25 @@ ticket's `:last-read` → a person has been on it: record `:skipped` for every
 approved write on that ticket rather than apply a plan drawn from a page that no
 longer exists.
 
-**The schema write, if approved, goes first** — every rank needs it:
-
-```bash
-notion api PATCH /v1/data_sources/<data-source-id> --body - <<'JSON'
-{"properties": {"Review rank": {"number": {"format": "number"}}}}
-JSON
-```
-
-(The data-source id comes from `notion api GET /v1/databases/124fca9f-403c-80d4-896f-fc857e105e35`
-→ `data_sources[0].id`; see the data-source gotcha in `notion-access.md`.)
-
-**The view sort, if approved, goes after the schema write** — it names the
-property by id, so the property has to exist. Put `Review rank` ascending first
-and keep the view's other sorts after it:
+**The view sort, if approved.** Put `Priority` ascending first and keep the
+view's other sorts after it:
 
 ```bash
 notion api PATCH /v1/views/<view-id> --body - <<'JSON'
-{"sorts": [{"property": "<Review rank property id>", "direction": "ascending"}, …the view's other sorts…]}
+{"sorts": [{"property": "<Priority property id>", "direction": "ascending"}, …the view's other sorts…]}
 JSON
 notion api GET /v1/views/<view-id>     # read it back
 ```
 
-Record it `:applied` only when the sorts read back lead with `Review rank`
+Record it `:applied` only when the sorts read back lead with `Priority`
 ascending, and `:failed` with what came back otherwise.
 
-**Ranks:** `notion page set <id> "Review rank=<n>"`; clearing one sets it empty.
-
-**Release blockers:** `notion page set <id> "Priority=0 – Release Blocker"` (an
-en dash), then read the page back. If `Priority` changed since the plan read it,
-the page-edited re-check above has already skipped the ticket; the write never
-lowers anything.
+**Priority:** `notion page set <id> "Priority=<option>"` with the option's name
+exactly as the item names it — `0 – Release Blocker` has an en dash, the other
+five a hyphen — then read the page back, and record `:applied` only when it
+reads that option. A lowering is carried out like a raising. If `Priority`
+changed since the plan read it, the page-edited re-check above has already
+skipped the ticket.
 
 **Briefs:** write as `docs/reference/qa-brief.md` § "How it is written to Notion"
 says — earlier briefs noted by id, the new one prepended, the first child read
@@ -389,8 +385,8 @@ Undo: <plan-run-artifacts>/deleted-blocks.edn (<k> blocks)
 ## What this skill does NOT do
 
 - **No workflow moves.** Status, Lifecycle and Ball Holder belong to people;
-  anything that looks wrong is a flag (boundary 1). Priority moves only up, to
-  Release Blocker, and only as an approved item.
+  anything that looks wrong is a flag (boundary 1). Priority moves to the
+  approved bucket, up or down, only as an approved item, and is never cleared.
 - **No review.** It prepares the queue for a reviewer; it does not click
   through a single step or judge whether a change works.
 - **No Code Review tickets, and no Review tickets without a Lifecycle in scope.**
@@ -404,9 +400,9 @@ Undo: <plan-run-artifacts>/deleted-blocks.edn (<k> blocks)
 
 A fresh plan run reads the queue fresh. A brief an earlier apply wrote is in the
 shape and passes the adequacy test, so it is kept; a `Follow-up` block is
-rewritten only when its open actions changed; a fold already done leaves nothing to fold; ranks are
-rewritten to the new order. Re-running is how the order stays current as tickets
-arrive and leave.
+rewritten only when its open actions changed; a fold already done leaves nothing to fold; a ticket
+already in the bucket its review warrants gets no Priority item. Re-running is how
+the buckets stay current as tickets arrive and their exposure changes.
 
 The page freezes the decisions, queues one apply and records it; a plan whose apply is
 recorded is refused. A second apply run can still arrive (see the claim in §6), and it

@@ -501,7 +501,7 @@ alters what users experience. A blocker it is, and `Priority` is not already
   and read it back. Only ever raise; a Priority already at 0 is left alone.
 - **It would** → leave `Priority` as it is. A mark that holds another team's
   release is not one to make with nobody watching: report it in §7 as proposed,
-  with its reason, and `/review-queue` puts it to a person on the Operations page.
+  with its reason, and `/review-queue` decides it when it next buckets the queue.
 
 **Nothing a person wrote is lost or edited** — the report, its screenshots and
 videos and the triage note are folded whole, never rewritten. Comments, the

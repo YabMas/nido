@@ -3102,8 +3102,9 @@
   (str "/operations/review-queue/" (name project) "/" run-id))
 
 (def ^:private rq-kind-label
-  {:rank "rank" :brief "QA brief" :correct "correct" :follow-up "follow-up"
-   :blocker "release blocker"
+  {:priority "priority" :brief "QA brief" :correct "correct" :follow-up "follow-up"
+   ;; kinds only plans from before the Priority buckets carry, kept so the log renders them
+   :rank "rank" :blocker "release blocker"
    :delete "delete" :fold "fold"
    :clear-rank "clear rank" :schema "schema" :view-sort "view sort"})
 
@@ -3149,10 +3150,14 @@
                   "data-on:click" (post "approved")} "Approve"]
         [:button.btn {"data-on:click" (post "skipped")} "Skip"]])]))
 
-(defn- rq-ticket [project run-id stage {:keys [rank br title url lifecycle qa why items]}]
+(defn- rq-ticket [project run-id stage {:keys [priority priority-was rank br title url lifecycle qa why items]}]
   [:div.prop
    [:div.prop-head
-    [:span.rq-rank (if rank (str "#" rank) "–")]
+    [:span.rq-rank (cond (and priority (not= priority priority-was))
+                         (str (or priority-was "no Priority") " → " priority)
+                         priority priority
+                         rank     (str "#" rank)
+                         :else    "–")]
     [:a.prop-where {:href url :target "_blank"} br]
     [:span.rq-title title]
     (when lifecycle [:span.meta lifecycle])
@@ -3207,7 +3212,7 @@
 
 (defn- rq-section
   "One project's grooming: where it stands, the levers that fit that stage, the
-   queue in rank order with each ticket's proposed writes, the flags, and the log
+   queue by Priority bucket with each ticket's proposed writes, the flags, and the log
    of its recent groomings."
   [{:keys [project stage run-id tickets general flags counts nightly? decided-by log] :as q} requested?]
   (let [run-url   (str "/operations/review-queue/" (name project) "/run")
@@ -3241,12 +3246,19 @@
        [:p.meta "Your decisions are frozen, but the apply run was never queued. Apply again queues it with the same decisions."])
      (when (seq tickets)
        (list
-        [:h3.rec-title "Order"]
-        [:ol.rq-order
-         (for [{:keys [br title why]} tickets]
-           [:li [:b br] " " title (when why [:span.meta (str " — " why)])])]
-        [:h3.rec-title "Tickets"]
-        (for [t tickets] (rq-ticket project run-id stage t))))
+        ;; Tickets arrive sorted by bucket, so a bucket is a run of them. A plan from
+        ;; before the buckets has none, and keeps its ranked order list.
+        (if (some :priority tickets)
+          (for [grp (partition-by :priority tickets)]
+            (list [:h3.rec-title (or (:priority (first grp)) "No Priority")]
+                  (for [t grp] (rq-ticket project run-id stage t))))
+          (list
+           [:h3.rec-title "Order"]
+           [:ol.rq-order
+            (for [{:keys [br title why]} tickets]
+              [:li [:b br] " " title (when why [:span.meta (str " — " why)])])]
+           [:h3.rec-title "Tickets"]
+           (for [t tickets] (rq-ticket project run-id stage t))))))
      (when (seq general)
        (list [:h3.rec-title "Across the queue"]
              [:div.prop (for [it general] (rq-item project run-id stage it))]))

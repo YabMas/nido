@@ -115,9 +115,13 @@ Not a blocker:
 - a ticket already in production — there is no release left for it to hold.
 
 If unsure, propose it, and say why in one sentence; the reason is what the
-person approving reads. Only ever raise: never clear or lower a Priority a
-person set. (This overloads `Priority`, which otherwise ranks work before it is
-built. It is accepted for now and will be revisited.)
+person approving reads.
+
+`Priority` means two things in two phases. Before a ticket is built it ranks the
+work; once it is in Review it says how much its review matters now, and
+`/review-queue` re-buckets it on that basis — up or down, to any of its six
+options, a Release Blocker included. `/land` only ever raises, to Release
+Blocker, at the moment it lands; neither ever clears it.
 
 **The mark reaches further than the web release.** brian-mobile's release gate
 (`tool/release_blocker.dart check`) holds a mobile release while any
@@ -127,8 +131,8 @@ A web change marked a blocker under those conditions holds the next app release
 too, until its ticket is Done. Say so beside the reason whenever it applies.
 
 `/land` sets the mark itself when it lands the change, unless it would hold the
-mobile release; `/review-queue` proposes it for a person to approve, and is
-where a mark `/land` held back reaches one.
+mobile release; `/review-queue` decides it with every other bucket, and is where
+a mark `/land` held back is decided.
 
 ## How it is written to Notion
 

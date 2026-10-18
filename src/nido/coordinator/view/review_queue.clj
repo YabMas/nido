@@ -46,10 +46,19 @@
   [decisions]
   (when-let [a (:applying decisions)] (or (:by a) :person)))
 
+(defn- bucket
+  "Where a Priority option sorts: its leading digit, so `0 – Release Blocker`
+   first and `5 - Wont` last, and a ticket with none after all six. A plan
+   written before tickets carried a bucket has none on any ticket, and is
+   ordered by its ranks instead."
+  [priority]
+  (or (some->> priority str (re-find #"^\s*(\d)") second parse-long) 9))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   overview
   "One grooming for the dashboard: `:stage` (see `stage`), the plan run's id and
-   when it started, the plan's tickets in rank order each carrying its own items,
+   when it started, the plan's tickets by Priority bucket (see `bucket`) each
+   carrying its own items,
    the items with no ticket (schema changes, clearing ranks) under `:general`, the
    flags, and `:counts` of decisions and outcomes.
 
@@ -63,7 +72,9 @@
         items    (mapv item (:items plan))
         by-br    (group-by :br items)
         tickets  (->> (:tickets plan)
-                      (sort-by #(or (:rank %) Long/MAX_VALUE))
+                      (sort-by (if (some :priority (:tickets plan))
+                                 (comp bucket :priority)            ; stable: plan order within a bucket
+                                 #(or (:rank %) Long/MAX_VALUE)))
                       (mapv #(assoc % :items (vec (get by-br (:br %))))))
         outcomes (frequencies (keep (comp :outcome :result) items))]
     {:project    project

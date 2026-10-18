@@ -18,9 +18,13 @@
   "Every envelope the Operations surface queues, it queues through control/fire! — the review-queue page's run lever calling it, and its apply lever handing it to begin-review-apply! to call under the plan's lock — and never through the queue namespace or an envelope the work plane builds."
   {:about [handle-request fire!] :evidence "round"})
 
-(Claim review-queue-in-rank-order
-  "review-queues presents a plan's tickets in the order of their rank, and the review-queue page renders them in that order, each with its rank and its reason; every rank the plan would write to Notion, adding the Review rank property, clearing a departed ticket's rank and sorting the Review view by Review rank are each a numbered item, decided like any other write — by a person through decide-review-item!, or for a nightly grooming by the nightly source — so no rank reaches Notion that was not approved as a numbered item."
-  {:about [review-queues review-queue-fragment decide-review-item!] :evidence "round"})
+(Claim review-queue-by-priority-bucket
+  "review-queues presents a plan's tickets by the Priority bucket the plan gives each, 0 – Release Blocker first and a ticket with none after all six, tickets in one bucket in the order the plan lists them, and a plan none of whose tickets carries a bucket in their :rank order; the review-queue page renders them in that order, a bucketed plan's tickets grouped under a heading per bucket, with each ticket's bucket and the Priority it replaces, and its log shows a plan run alike whether its plan carries buckets or ranks."
+  {:about [review-queues review-queue-fragment] :evidence "round"})
+
+(Claim grooming-writes-approved-priority
+  "A grooming's plan proposes at most one :priority item per ticket, naming one of brian's six Priority options, above or below the ticket's current Priority, with its reason; sorting the Review view by Priority is a numbered item too. The grooming's apply leg sets a ticket's Priority to exactly the option an approved :priority item names, refusing none for being a lowering, and writes no Priority and no view sort that is not a numbered item recorded :approved — decided by a person through decide-review-item!, or for a nightly grooming by the nightly source."
+  {:about [decide-review-item!] :evidence "round"})
 
 (Claim nightly-plan-once-a-day
   "The nightly source queues a project's plan trigger at most once per calendar day in its zone — the configured :zone, or the daemon's system default zone when none is configured — on its first poll at or after :at that day, under a key naming the project and that day; a daemon down at :at queues it on its first poll later the same day, and none before :at. brian's :review-queue trigger declares this source with :at \"00:00\"."

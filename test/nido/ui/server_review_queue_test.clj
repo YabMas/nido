@@ -64,7 +64,7 @@
 (defn- post! [uri & [qs]]
   (server/handle-request {:request-method :post :uri uri :query-string qs}))
 
-(deftest the-plan-is-shown-in-rank-order-with-its-writes
+(deftest a-plan-from-before-the-buckets-is-shown-in-rank-order-with-its-writes
   (with-plan
     (fn [_ _]
       (let [body (get-body "/operations/review-queue")]
@@ -204,3 +204,28 @@
       "frozen, and the fire never recorded")
   (is (= :applied (rqv/stage {:plan-run {:state :done} :plan plan :decisions {:applying {:at "t"}}
                               :apply-run {:state :done}}))))
+
+(deftest tickets-are-shown-by-priority-bucket-release-blockers-first
+  ;; The bucket is the order; the Priority a ticket carried in development is not.
+  (let [bucketed {:tickets [{:br "BR-3" :title "Copy fix" :url "https://n/3" :lifecycle "Staging"
+                             :priority "4 - Would" :priority-was "1 - Must" :why "one label, superadmin"}
+                            {:br "BR-4" :title "Licences" :url "https://n/4" :lifecycle "Staging"
+                             :priority "0 – Release Blocker" :priority-was "2 - Should" :why "teachers locked out if wrong"}
+                            {:br "BR-5" :title "Quiz order" :url "https://n/5" :lifecycle "Prod"
+                             :priority "2 - Should" :priority-was "2 - Should" :why "in production, low risk"}]
+                  :items   [{:n 1 :br "BR-3" :kind :priority :summary "Priority 1 - Must → 4 - Would"}
+                            {:n 2 :br "BR-4" :kind :priority :summary "Priority 2 - Should → 0 – Release Blocker"}]
+                  :flags   []}]
+    (with-plan
+      (fn [run-id _]
+        (io/write-edn! (rq/plan-path run-id) bucketed)
+        (let [body (get-body "/_fragment/operations/review-queue")
+              at   #(str/index-of body %)]
+          (is (< (at "teachers locked out") (at "in production, low risk") (at "one label, superadmin"))
+              "Release Blocker, then Should, then Would — a lowering sorts down")
+          (is (str/includes? body "2 - Should → 0 – Release Blocker") "a raise shows where it came from")
+          (is (str/includes? body "1 - Must → 4 - Would") "and so does a lowering")
+          (is (< (at ">0 – Release Blocker<") (at "teachers locked out") (at ">2 - Should<")
+                 (at "in production, low risk") (at ">4 - Would<") (at "one label, superadmin"))
+              "each bucket's tickets under its own heading")
+          (is (str/includes? body ">priority<") "the item is labelled by its kind"))))))
