@@ -13,10 +13,6 @@
   "spawn reaches a session only through the same path up takes — a workstream that cannot be joined is refused before anything is provisioned — and its only use of :ws-id is to hand it to that path."
   {:about [spawn up] :evidence "round"})
 
-(Claim kickoff-runs-once-in-its-home
-  "A staged kickoff starts at most one agent: the hook moves it out of the session home before running it, so a second shell opening there finds nothing; and it runs only in a shell whose cwd is that session's home."
-  {:about [stage-kickoff!] :evidence "round"})
-
 (Claim child-told-its-parent
   "The child agent's first prompt carries the brief verbatim, the parent agent's address, and when to message it; and the child agent is started under the child session's name, which is the address spawn reports to its caller."
   {:about [stage-kickoff! spawn] :evidence "round"})

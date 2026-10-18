@@ -295,8 +295,8 @@
    `:model` is the child's claude model; given none, claude's default — it
    need not match the parent's.
 
-   The kickoff runs from a zsh hook; without it the tab is a bare shell and
-   the printed command starts the agent by hand. Outside Warp no tab opens."
+   In Warp the child's tab runs the kickoff as though typed at its prompt.
+   Outside Warp no tab opens, and the printed command starts the agent by hand."
   [& args]
   (let [[pos opts]   (task-args/split-args args #{:parent-agent :brief-file :model})
         project      (require-project opts)
@@ -307,15 +307,9 @@
         brief-file   (or (:brief-file opts)
                          (throw (ex-info "Missing :brief-file <path>" {})))
         brief        (slurp brief-file)
-        [pp ps]      (parent-coords!)
-        hook?        (lifecycle/kickoff-hook-installed?)]
+        [pp ps]      (parent-coords!)]
     (when (and (= pp project) (= ps child))
       (throw (ex-info "A session cannot spawn itself" {:session child})))
-    (when-not hook?
-      (println "The kickoff hook is not in ~/.zshrc, so the child's agent will not start by itself.")
-      (println "Add this once, then open new shells:")
-      (println)
-      (println lifecycle/kickoff-hook-snippet))
     ;; :yes — spawn is one command whoever issues it, so it never stops at the
     ;; budget question a person running it by hand would otherwise be asked.
     (when-let [home (up* project child (some-> (:ws-id opts) str)
@@ -331,13 +325,12 @@
                             :prompt (kickoff-prompt {:parent-agent parent-agent :parent-project pp
                                                      :parent-session ps :child child :brief brief})})
             tab?    (lifecycle/warp?)]
-        (when tab? (lifecycle/spawn-tab! child {:project project :cd :home}))
+        (when tab? (lifecycle/spawn-tab! child {:project project :cd :home :command by-hand}))
         (println)
         (println (str "Spawned " project "/" child " — its agent answers to `" child "`."))
-        (cond
-          (not tab?) (println (str "  Not in Warp: open a terminal and run  " by-hand))
-          hook?      (println "  Its tab is open; the agent starts on the tab's first prompt.")
-          :else      (println (str "  Its tab is open; start the agent there with  " by-hand)))
+        (if tab?
+          (println "  Its tab is open, with the agent starting in it.")
+          (println (str "  Not in Warp: open a terminal and run  " by-hand)))
         home))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}

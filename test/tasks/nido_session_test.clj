@@ -151,18 +151,17 @@
 (defn- spawn-calls
   "Run spawn with every effect recorded instead of performed. Returns
    [calls printed-output]."
-  [{:keys [joinable hook? warp?] :or {hook? true warp? true}} & args]
+  [{:keys [joinable warp?] :or {warp? true}} & args]
   (let [calls (atom [])
         brief (str (babashka.fs/create-temp-file))]
     (spit brief "Build the widget.")
     (with-redefs [lifecycle/session-from-cwd            (fn [] {:project "nido" :session "parent"})
-                  lifecycle/kickoff-hook-installed?     (fn [] hook?)
                   lifecycle/warp?                       (fn [] warp?)
                   lifecycle/up!                         (fn [s _] (swap! calls conj [:up s]))
                   lifecycle/session-weight              (fn [_ _] :heavy)
                   lifecycle/link-add!                   (fn [s o] (swap! calls conj [:link s (select-keys o [:project :type :url :title])]))
                   lifecycle/stage-kickoff!              (fn [s o] (swap! calls conj [:kickoff s o]) "cd /h && zsh k")
-                  lifecycle/spawn-tab!                  (fn [s o] (swap! calls conj [:tab s (:cd o)]))
+                  lifecycle/spawn-tab!                  (fn [s o] (swap! calls conj [:tab s (:cd o) (:command o)]))
                   state/session-home-dir                (fn [_ _] "/tmp/home")
                   scratch/joinable                      (or joinable (fn [& _] nil))
                   scratch/birth!                        (fn [p s _w ws] (swap! calls conj [:birth p s ws]))
@@ -200,13 +199,8 @@
     (is (= "kid" (:agent-name o)) "the child's agent answers to the child's session name")
     (is (str/includes? (:prompt o) "SendMessage to `parent-a1`"))
     (is (str/ends-with? (:prompt o) "Build the widget.\n") "the brief verbatim, last")
-    (is (some #(= [:tab "kid" :home] %) calls) "the tab opens at the home, where the hook looks")))
-
-(deftest spawn-without-the-hook-says-so-and-what-to-run
-  (let [[calls out] (spawn-calls {:hook? false})]
-    (is (str/includes? out "_nido_kickoff()") "the snippet to install")
-    (is (str/includes? out "cd /h && zsh k") "the command that starts the agent by hand")
-    (is (some #(= :kickoff (first %)) calls) "the kickoff is still staged")))
+    (is (some #(= [:tab "kid" :home "cd /h && zsh k"] %) calls)
+        "the tab runs the kickoff as a typed command, so the agent gets the keyboard")))
 
 (deftest spawn-outside-warp-opens-no-tab
   (let [[calls out] (spawn-calls {:warp? false})]

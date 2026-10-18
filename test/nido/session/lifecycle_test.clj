@@ -156,6 +156,34 @@
               "spawn-tab! must NOT write the cd-target-file handoff")))
       (finally (fs/delete-tree tmp)))))
 
+(deftest spawn-tab!-runs-a-command-through-a-tab-config-that-deletes-itself
+  (let [tmp (fs/create-temp-dir)
+        user-home    (str (fs/path tmp "user"))
+        session-home (str (fs/path tmp "sessions" "fakeproj" "feat-x"))
+        captured     (atom nil)
+        home-prop    (System/getProperty "user.home")]
+    (try
+      (fs/create-dirs session-home)
+      (System/setProperty "user.home" user-home)
+      (with-redefs [nido.platform.core/nido-home                 (constantly (str tmp))
+                    nido.session.state/session-home-dir (fn [_ _] session-home)
+                    nido.session.lifecycle/resolve-project
+                    (fn [_] ["fakeproj" {:directory (str tmp)}])
+                    babashka.process/shell
+                    (fn [& args] (reset! captured (vec args)) nil)]
+        (lifecycle/spawn-tab! "feat-x" {:project "fakeproj" :command "zsh \"k\""})
+        (let [uri  (last (remove map? @captured))
+              id   (subs uri (count "warp://tab_config/"))
+              cfg  (str (fs/path user-home ".warp" "tab_configs" (str id ".toml")))
+              toml (slurp cfg)]
+          (is (str/starts-with? uri "warp://tab_config/nido-"))
+          (is (str/includes? toml (str "directory = \"" session-home "\"")))
+          (is (str/includes? toml (str "commands = [\"rm -f '" cfg "'; zsh \\\"k\\\"\"]"))
+              "the command, TOML-escaped, after deleting its own config")))
+      (finally
+        (System/setProperty "user.home" home-prop)
+        (fs/delete-tree tmp)))))
+
 (deftest spawn-tab!-url-encodes-the-path-but-keeps-slashes-literal
   (let [tmp (fs/create-temp-dir)
         project-name "fakeproj"
@@ -542,31 +570,5 @@
         (is (str/includes? script " :model 'claude-opus-5-5'"))
         (is (not (str/includes? script ":permission-mode"))
             "a kickoff never overrides the worktree's launch baseline")
-        (is (= "Go.\n" (slurp (str (fs/path home (str @#'lifecycle/kickoff-file "-prompt.md"))))))
+        (is (= "Go.\n" (slurp (str (fs/path home ".nido-kickoff-prompt.md")))))
         (is (= (str "cd '" home "' && zsh " @#'lifecycle/kickoff-file) by-hand))))))
-
-(deftest the-hook-runs-a-staged-kickoff-once-and-only-in-a-session-home
-  (if-not (fs/which "zsh")
-    (println "skipped: no zsh")
-    ;; Real path: on macOS the temp dir sits under the /var symlink, and zsh's
-    ;; $PWD is the resolved path, so an unresolved $HOME would never prefix it.
-    (let [fake-home (str (fs/real-path (fs/create-temp-dir)))
-          sess      (str (fs/path fake-home ".nido" "sessions" "p" "s"))
-          other     (str (fs/path fake-home "elsewhere"))
-          marker    (str (fs/path fake-home "ran"))
-          kick      @#'lifecycle/kickoff-file
-          run-hook  (fn [dir]
-                      (babashka.process/shell
-                       {:dir dir :out :string :err :string :continue true
-                        :extra-env {"HOME" fake-home}}
-                       "zsh" "-f" "-c" (str lifecycle/kickoff-hook-snippet "\n_nido_kickoff\n")))]
-      (fs/create-dirs sess)
-      (fs/create-dirs other)
-      (spit (str (fs/path other kick)) (str "echo other >> " marker "\n"))
-      (spit (str (fs/path sess kick)) (str "echo ran >> " marker "\n"))
-      (run-hook other)
-      (is (not (fs/exists? marker)) "a kickoff outside a session home never runs")
-      (run-hook sess)
-      (run-hook sess)
-      (is (= "ran\n" (slurp marker)) "two shells, one agent")
-      (is (not (fs/exists? (fs/path sess kick))) "the staging is consumed"))))

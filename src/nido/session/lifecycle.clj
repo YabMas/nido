@@ -992,73 +992,72 @@
            (str/replace "+" "%20")
            (str/replace "%2F" "/"))))
 
+(defn- sh-quote [s]
+  (str "'" (str/replace (str s) "'" "'\\''") "'"))
+
+(defn- toml-str [s]
+  (str "\"" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) "\""))
+
+(defn- warp-tab-config-uri!
+  "Write a Warp tab config that opens at `path` and runs `command` as though typed
+   at its prompt, and return the `warp://tab_config/` URI that opens it. The
+   config is for this one opening: its command deletes it first, so it never
+   lingers in Warp's tab-config menu."
+  [path command]
+  (let [id  (str "nido-" (subs (str (random-uuid)) 0 8))
+        cfg (fs/path (System/getProperty "user.home") ".warp" "tab_configs" (str id ".toml"))]
+    (fs/create-dirs (fs/parent cfg))
+    (spit (str cfg)
+          (str "name = " (toml-str id) "\n\n"
+               "[[panes]]\n"
+               "id = \"main\"\n"
+               "type = \"terminal\"\n"
+               "directory = " (toml-str path) "\n"
+               "commands = [" (toml-str (str "rm -f " (sh-quote cfg) "; " command)) "]\n"))
+    (str "warp://tab_config/" id)))
+
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   spawn-tab!
   "Open a new Warp tab in the *current* window at the session's `:enter` cwd and
-   return that path. Warp's URI scheme can neither run a command nor set the tab
-   title, so the tab lands at a bare shell; the title is set by the zsh precmd
-   hook (see CLAUDE.md) from $PWD. The TUI calls this in Warp so nido stays put;
-   other terminals use `enter!` + the parent-shell handoff instead.
+   return that path. The title is set by the zsh precmd hook (see CLAUDE.md)
+   from $PWD. The TUI calls this in Warp so nido stays put; other terminals use
+   `enter!` + the parent-shell handoff instead.
+
+   `:command`, when given, runs in the tab as though typed at its prompt. It
+   has to: Warp hands the keyboard only to a program started that way, so one
+   a shell hook starts runs deaf to its own tab. Warp's new-tab URI cannot
+   carry a command, so a command goes through a tab config instead.
 
    `:cd` / `:auto-up?` behave as in `enter!`."
-  [name opts]
+  [name {:keys [command] :as opts}]
   (when (:auto-up? opts) (up! name opts))
   (let [path (resolve-cd-target name opts)]
-    (shell {:out :string :err :string} "open" (warp-new-tab-uri path))
+    (shell {:out :string :err :string} "open"
+           (if command (warp-tab-config-uri! path command) (warp-new-tab-uri path)))
     path))
 
 (def ^:private kickoff-file
-  "Name of the staged kickoff in a session-home. Spelled here and in
-   `kickoff-hook-snippet`, nowhere else."
-  ".nido-kickoff")
-
-(def kickoff-hook-snippet
-  "The zsh hook that runs a staged kickoff, for `~/.zshrc`. It MOVES the file
-   out before running it, so of two shells opening in one session-home only the
-   one whose move succeeds starts an agent. It stays installed rather than
-   removing itself, as the tab-title hook does, because one shell may see
-   several spawns over its life."
-  (str "# Start the agent `nido session:spawn` staged for this session-home, once.\n"
-       "autoload -Uz add-zsh-hook\n"
-       "_nido_kickoff() {\n"
-       "  [[ \"$PWD\" == \"$HOME/.nido/sessions/\"* && -f " kickoff-file " ]] || return 0\n"
-       "  local f\n"
-       "  f=$(mktemp -t nido-kickoff) || return 0\n"
-       "  mv " kickoff-file " \"$f\" 2>/dev/null || { rm -f \"$f\"; return 0; }\n"
-       "  zsh \"$f\"\n"
-       "  rm -f \"$f\"\n"
-       "}\n"
-       "add-zsh-hook precmd _nido_kickoff\n"))
-
-(defn ^{:malli/schema [:=> [:cat] :boolean]}
-  kickoff-hook-installed?
-  "Whether `~/.zshrc` defines the kickoff hook. A text search, so a hook
-   sourced from another file reads as absent — the cost is a warning, never
-   a refusal."
-  []
-  (let [rc (fs/path (System/getProperty "user.home") ".zshrc")]
-    (boolean (and (fs/exists? rc) (str/includes? (slurp (str rc)) "_nido_kickoff")))))
-
-(defn- sh-quote [s]
-  (str "'" (str/replace (str s) "'" "'\\''") "'"))
+  "Name of the staged kickoff in a session-home. It is not `.nido-kickoff`, the
+   name the retired zsh precmd hook consumes, so a hook left in a `~/.zshrc`
+   cannot start the agent deaf before the tab runs it."
+  ".nido-kickoff.zsh")
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :string]}
   stage-kickoff!
   "Leave a kickoff in the session-home that starts its agent through
    `nido work` in the worktree, named `:agent-name`, given `:prompt` as its
    first turn, and run on `:model` when given — in the permission mode the
-   worktree's launch baseline sets, which a kickoff never overrides. A shell
-   opening in the session-home runs it through the hook.
-   Returns the command that runs it by hand, for when no hook will. The
-   prompt is kept beside it rather than inlined, because a brief of any
-   length survives a file where it would not survive quoting.
+   worktree's launch baseline sets, which a kickoff never overrides.
+   Returns the command that runs it — what spawn's tab runs, and what a
+   person runs outside Warp. The prompt is kept beside it rather than
+   inlined, because a brief of any length survives a file where it would not
+   survive quoting.
 
-   Staging again before the hook ran replaces the earlier kickoff; nothing
-   queues."
+   Staging again replaces the earlier kickoff; nothing queues."
   [name {:keys [agent-name prompt model] :as opts}]
   (let [home     (resolve-cd-target name (assoc opts :cd :home))
         worktree (resolve-cd-target name (assoc opts :cd :worktree))
-        prompt-f (str (fs/path home (str kickoff-file "-prompt.md")))
+        prompt-f (str (fs/path home ".nido-kickoff-prompt.md"))
         script   (str "cd " (sh-quote worktree) " || exit 1\n"
                       "bb --config " (sh-quote (str (fs/path (core/nido-source-dir) "bb.edn")))
                       " nido:work :name " (sh-quote agent-name)
@@ -1066,7 +1065,7 @@
                       (when model (str " :model " (sh-quote model)))
                       "\n")]
     (spit prompt-f prompt)
-    ;; Written aside and renamed in, so the hook never runs a half-written file.
+    ;; Written aside and renamed in, so nothing ever runs a half-written file.
     (let [tmp (str (fs/path home (str kickoff-file ".tmp")))]
       (spit tmp script)
       (fs/move tmp (fs/path home kickoff-file) {:replace-existing true :atomic-move true}))

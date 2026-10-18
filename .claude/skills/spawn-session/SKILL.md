@@ -69,9 +69,8 @@ and opens a tab beside yours where the child's agent starts on the brief. The
 child's agent answers to `<child-session>`. Record nothing else — the links are
 already written on both sides.
 
-If it says the kickoff hook is missing, tell the person: the tab is a bare shell
-until they install it (nido's CLAUDE.md, *Spawned sessions start their own
-agent*), and the printed command starts the child now.
+Outside Warp no tab opens: tell the person the printed command starts the
+child in a terminal of their own.
 
 ## 4. Talk to it
 
