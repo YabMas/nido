@@ -831,7 +831,12 @@
 
    :read-at is where the author looked, as on a claim: an :interface or :hides is as universal as
    any statement — `the rest calls only these` is refuted by one outside caller — and the search
-   that established it has to be somewhere the next reader can run it again."
+   that established it has to be somewhere the next reader can run it again.
+
+   :defines-generation marks an element whose change makes a new generation of the design: within
+   a generation the marked ids hold, and changing them takes a :generation entry. The mark says
+   only that; how a marked element is carried is decided above the ledger. Absent means unmarked —
+   there is no `false`, so a record says nothing about an element it does not mark."
   [:map {:closed true}
    [:id        string?]
    [:sort      [:enum :module :operation :kind :role :stratum]]
@@ -839,7 +844,8 @@
    [:interface {:optional true} string?]
    [:plays     {:optional true} [:vector {:min 1} string?]]
    [:readings  {:optional true} [:vector ElementReading]]
-   [:read-at   {:optional true} [:vector string?]]])
+   [:read-at   {:optional true} [:vector string?]]
+   [:defines-generation {:optional true} [:= true]]])
 
 (def Claim
   "One claim about the area, the same in a baseline and a design.
@@ -3712,17 +3718,115 @@
 
    :design cites the design the layer was built under, as :implementation-completed does. :of is
    the cut /stack drew for that design, repeated on every layer entry; the earliest one under a
-   design is the count read, so a re-cut is a new design rather than a new count."
+   design is the count read, so a re-cut is a new design rather than a new count.
+
+   :seat names the seat whose layer it is, on a workstream carried by seats; :layer and :of are
+   then its position and count among that seat's layers, not the whole stack's, so two seats'
+   layers at one position are two layers. Absent, the layer belongs to the workstream's one stack."
   [:and
    [:map {:closed true}
     [:format   [:= :layer-completed]]
     [:design   [:map {:closed true} [:seq int?]]]
     [:layer    pos-int?]
     [:of       pos-int?]
+    [:seat     {:optional true} [:string {:min 1}]]
     [:bookmark {:optional true} string?]
     [:commit   {:optional true} string?]]
    [:fn {:error/message "a layer's index is at most the number of layers the cut planned"}
     (fn [{:keys [layer of]}] (<= layer of))]])
+
+;; ── Generations: a design's generation-defining elements, and the talk that moves them ──
+;;
+;; A generation is a span of one workstream's ledger within which the ids its designs mark
+;; generation-defining hold. These are the entries that open one and the ones its participants
+;; settle disagreements with. Which entries belong to which generation is the ledger's reading;
+;; these say only what each entry carries.
+
+(def ^:private SeatWriter
+  [:map {:closed true} [:as [:= :seat]] [:seat [:string {:min 1}]] [:session [:string {:min 1}]]])
+
+(def ^:private ConductorWriter
+  [:map {:closed true} [:as [:= :conductor]] [:session [:string {:min 1}]]])
+
+(def Writer
+  "Who wrote an entry, as the verb that appends it stamped it from where it ran — never as the
+   writer said. A seat's occupant writes as its seat, the conductor as the conductor, any other
+   session by its name, and a person from outside every session."
+  [:multi {:dispatch :as}
+   [:seat      SeatWriter]
+   [:conductor ConductorWriter]
+   [:session   [:map {:closed true} [:as [:= :session]] [:session [:string {:min 1}]]]]
+   [:person    [:map {:closed true} [:as [:= :person]]]]])
+
+(def ^:private Participant
+  "The writers a tension, an accord and a withdrawal may have: those carrying the workstream."
+  [:multi {:dispatch :as}
+   [:seat      SeatWriter]
+   [:conductor ConductorWriter]])
+
+(def ^:private tension-fields
+  "What a tension says, wherever it is carried: on its own entry, or by value on a :generation."
+  [[:by        Participant]
+   [:to        [:or [:= :conductor] [:string {:min 1}]]]
+   [:about     [:vector {:min 1} [:string {:min 1}]]]
+   [:statement [:string {:min 1}]]])
+
+(def Recut
+  "A proposal that the current generation's generation-defining ids are wrong, naming the ids it
+   proposes instead and why. Anyone may write one; it changes nothing on its own — the ids, the
+   seats and their occupants stand until a person opens a generation from it.
+
+   :tensions cites the tensions it was raised from, when it was raised from any."
+  [:map {:closed true}
+   [:format   [:= :recut]]
+   [:by       Writer]
+   [:ids      [:vector {:min 1} [:string {:min 1}]]]
+   [:why      [:string {:min 1}]]
+   [:tensions {:optional true} [:vector {:min 1} [:map {:closed true} [:seq int?]]]]])
+
+(def Tension
+  "A disagreement raised by a seat or the conductor, addressed to a seat or to the conductor, about
+   the elements or claims named under :about. :to is a seat's id, or :conductor. Whether it is open is
+   never stored: an :accord from its addressee or a :withdrawal from its raiser settles it."
+  (into [:map {:closed true} [:format [:= :tension]]] tension-fields))
+
+(def Accord
+  "A tension settled by its addressee: what was agreed, which is what the seats rely on after."
+  [:map {:closed true}
+   [:format  [:= :accord]]
+   [:by      Participant]
+   [:tension [:map {:closed true} [:seq int?]]]
+   [:terms   [:string {:min 1}]]])
+
+(def Withdrawal
+  "A tension withdrawn by the one who raised it."
+  [:map {:closed true}
+   [:format  [:= :withdrawal]]
+   [:by      Participant]
+   [:tension [:map {:closed true} [:seq int?]]]
+   [:note    {:optional true} string?]])
+
+(def Generation
+  "A person opening a new generation of the workstream's design from a :recut.
+
+   :recut cites the proposal of the generation this closes, and is the only entry of that
+   generation it cites. :words are the person's, :ids the generation-defining ids they approve —
+   which the new generation's designs are then held to. Everything else the new generation inherits
+   it carries BY VALUE: the claims the closing generation saw falsified and what falsified each,
+   the tensions the :recut names as its cause, and the base revision the conductor chose to build
+   from. A new generation keeps the workstream's intent and baseline; its first design supersedes
+   the last design of the one it closes.
+
+   Written only by the verb a person runs, which the generic appends refuse to stand in for."
+  [:map {:closed true}
+   [:format    [:= :generation]]
+   [:recut     [:map {:closed true} [:seq int?]]]
+   [:words     [:string {:min 1}]]
+   [:ids       [:vector {:min 1} [:string {:min 1}]]]
+   [:base-rev  [:string {:min 1}]]
+   [:falsified {:optional true}
+    [:vector {:min 1} [:map {:closed true} [:claim [:string {:min 1}]] [:by [:string {:min 1}]]]]]
+   [:tensions  {:optional true} [:vector {:min 1} (into [:map {:closed true}] tension-fields)]]])
 
 (def event-schemas
   "Entry :kind → its Malli schema. Drives ledger-boundary validation + rendering.
@@ -3765,7 +3869,12 @@
    :scratch                  Scratch
    :notion-status            NotionStatus
    :layer-completed          LayerCompleted
-   :issue                    Issue})
+   :issue                    Issue
+   :generation               Generation
+   :recut                    Recut
+   :tension                  Tension
+   :accord                   Accord
+   :withdrawal               Withdrawal})
 
 (def read-schemas
   "Kinds whose READ contract is wider than their write contract, because records
@@ -4323,8 +4432,8 @@
   (str/join "\n" (remove nil? [(str "# Notion status: " status) (str "_page " page-id "_")
                                 (when by (str "_observed by " (name by) "_"))])))
 
-(defn- layer-completed->markdown [{:keys [design layer of bookmark commit]}]
-  (str/join "\n" (remove nil? [(str "# Layer " layer "/" of " done")
+(defn- layer-completed->markdown [{:keys [design layer of seat bookmark commit]}]
+  (str/join "\n" (remove nil? [(str "# Layer " layer "/" of (when seat (str " of seat `" seat "`")) " done")
                                 (str "_under the design at entry " (:seq design) "_")
                                 (when (or bookmark commit)
                                   (str/join " · " (remove nil? [(when bookmark (str "`" bookmark "`")) commit])))])))
@@ -4334,6 +4443,69 @@
     (remove nil? ["# Merged"
                   (str "**" title "** — " url)
                   (str "`" (or pr commit) "`" (when merged-at (str " · " merged-at)))])))
+
+(defn- writer->text [{:keys [as seat session]}]
+  (case as
+    :seat      (str "seat `" seat "` (" session ")")
+    :conductor (str "the conductor (" session ")")
+    :session   (str "session " session)
+    :person    "a person"))
+
+(defn- addressee->text [to]
+  (if (= :conductor to) "the conductor" (str "seat `" to "`")))
+
+(defn- ids->text [ids] (str/join ", " (map #(str "`" % "`") ids)))
+
+(defn- generation->markdown [{:keys [recut words ids base-rev falsified tensions]}]
+  (str/join "\n"
+    (concat ["# Generation opened"
+             ""
+             (str "From the re-cut at entry " (:seq recut) ", on `" base-rev "`.")
+             ""
+             words
+             ""
+             (str "**Generation-defining** — " (ids->text ids))]
+            (when (seq falsified)
+              (concat ["" "## Falsified"] (map #(str "- `" (:claim %) "` — " (:by %)) falsified)))
+            (when (seq tensions)
+              (concat ["" "## Tensions that caused it"]
+                      (map #(str "- " (writer->text (:by %)) " to " (addressee->text (:to %))
+                                 " on " (ids->text (:about %)) ": " (:statement %))
+                           tensions))))))
+
+(defn- recut->markdown [{:keys [by ids why tensions]}]
+  (str/join "\n"
+    (remove nil? ["# Re-cut proposed"
+                  ""
+                  (str "_by " (writer->text by) "_")
+                  ""
+                  why
+                  ""
+                  (str "**Generation-defining** — " (ids->text ids))
+                  (when (seq tensions)
+                    (str "\nRaised from the tensions at entries "
+                         (str/join ", " (map :seq tensions)) "."))])))
+
+(defn- tension->markdown [{:keys [by to about statement]}]
+  (str/join "\n" ["# Tension"
+                  ""
+                  (str "_" (writer->text by) " to " (addressee->text to) ", on " (ids->text about) "_")
+                  ""
+                  statement]))
+
+(defn- accord->markdown [{:keys [by tension terms]}]
+  (str/join "\n" ["# Accord"
+                  ""
+                  (str "_" (writer->text by) " settles the tension at entry " (:seq tension) "_")
+                  ""
+                  terms]))
+
+(defn- withdrawal->markdown [{:keys [by tension note]}]
+  (str/join "\n" (remove nil? ["# Tension withdrawn"
+                                ""
+                                (str "_" (writer->text by) " withdraws the tension at entry "
+                                     (:seq tension) "_")
+                                (when note (str "\n" note))])))
 
 (defn- phase-gate->markdown [{:keys [design opens evidence]}]
   (str/join "\n" ["# Phase gate met"
@@ -4992,6 +5164,11 @@
     :scratch                  (scratch->markdown report)
     :notion-status            (notion-status->markdown report)
     :layer-completed          (layer-completed->markdown report)
+    :generation               (generation->markdown report)
+    :recut                    (recut->markdown report)
+    :tension                  (tension->markdown report)
+    :accord                   (accord->markdown report)
+    :withdrawal               (withdrawal->markdown report)
     :issue                    (str "# Issue " (:id report)
                                    (when-let [t (:title report)] (str "\n\n" t)))
     ""))
@@ -5041,7 +5218,15 @@
                                    (count (:items report)) " resolved")
     :scratch                  "One-off"
     :notion-status            (str "Notion status: " (:status report))
-    :layer-completed          (str "Layer " (:layer report) "/" (:of report) " done")
+    :layer-completed          (str "Layer " (:layer report) "/" (:of report)
+                                   (some->> (:seat report) (str " of "))  " done")
+    :generation               (str "Generation opened: " (first-line (:words report)))
+    :recut                    (str "Re-cut proposed: " (first-line (:why report)))
+    :tension                  (str "Tension to " (addressee->text (:to report)) ": "
+                                   (first-line (:statement report)))
+    :accord                   (str "Accord on entry " (:seq (:tension report)) ": "
+                                   (first-line (:terms report)))
+    :withdrawal               (str "Tension at entry " (:seq (:tension report)) " withdrawn")
     :issue                    (str "Issue " (:id report))
     :triage-accepted          (if-let [d (:direction report)]
                                 (str "Accepted: direction " (:letter d) " — " (:label d))
