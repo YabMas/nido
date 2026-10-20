@@ -636,8 +636,43 @@
 
   nido:workstream:generation:open
   {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "Open the next generation of a workstream's design from a re-cut — a person's verb: :recut <seq> :words \"…\" :base-rev <rev> [:ids a,b — default: the re-cut's] [:falsified-file <edn>]. Resolves the workstream from cwd, or :project with :ws-id/:ref."
+   :doc "Open the next generation of a workstream's design from a re-cut — a person's verb: :recut <seq> :words \"…\" :base-rev <rev> [:ids a,b — default: the re-cut's]. The falsified claims and the re-cut's tensions are carried from the ledger. Retires every seat occupant of the closing generation; the conductor continues. Resolves the workstream from cwd, or :project with :ws-id/:ref."
    :task (apply nido-workstream/generation-open-cmd *command-line-args*)}
+
+  nido:seats:carry
+  {:requires ([tasks.nido-seats :as nido-seats])
+   :doc "Carry the workstream by its strata: occupy every seat of the current generation no session holds. Refused, naming each, unless the generation-defining ids are exactly the governing design's strata. Resolves the workstream from cwd, or :project with :ws-id."
+   :task (apply nido-seats/carry-cmd *command-line-args*)}
+
+  nido:seats:occupy
+  {:requires ([tasks.nido-seats :as nido-seats])
+   :doc "Occupy one seat with a driven session of its own: :seat <id>."
+   :task (apply nido-seats/occupy-cmd *command-line-args*)}
+
+  nido:seats:replace
+  {:requires ([tasks.nido-seats :as nido-seats])
+   :doc "Replace a seat's occupant with a fresh Claude session on the same record, briefed from the records: :seat <id>."
+   :task (apply nido-seats/replace-cmd *command-line-args*)}
+
+  nido:seats:conductor
+  {:requires ([tasks.nido-seats :as nido-seats])
+   :doc "Start the workstream's conductor — a session of its own that occupies no seat."
+   :task (apply nido-seats/conductor-cmd *command-line-args*)}
+
+  nido:seats:record
+  {:requires ([tasks.nido-seats :as nido-seats])
+   :doc "Record a seat's or the conductor's move, its writer stamped from the session this runs in: :kind tension :to <seat|conductor> :about a,b :statement \"…\" | :kind accord :tension <seq> :terms \"…\" | :kind withdrawal :tension <seq> [:note \"…\"] | :kind recut :ids a,b :why \"…\" [:tensions 12,14] (a re-cut from anyone)."
+   :task (apply nido-seats/record-cmd *command-line-args*)}
+
+  nido:seats:send
+  {:requires ([tasks.nido-seats :as nido-seats])
+   :doc "Message a seat or the conductor from the seat or conductor this runs in: :to <seat|conductor> :text \"…\". Logged per generation, delivered through conduct in the order sent."
+   :task (apply nido-seats/send-cmd *command-line-args*)}
+
+  nido:seats:show
+  {:requires ([tasks.nido-seats :as nido-seats])
+   :doc "Who occupies each seat now, and the seat messages of a generation: [:generation <n> — default: the current one]."
+   :task (apply nido-seats/show-cmd *command-line-args*)}
 
   nido:workstream:blocker:answer
   {:requires ([tasks.nido-workstream :as nido-workstream])

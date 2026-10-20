@@ -17,6 +17,9 @@
    A session OUTLIVES the machine it ran on: `:archived` is exactly that outliving, and is why
    this record and the provisioned instance are two things and not one.
 
+   It may name the seat of its workstream it occupies and the generation it occupies it in, or
+   name itself the workstream's conductor — never both.
+
    SHAPELESS. The closed malli schema in the code is validated on every write, and a second copy
    here would be the copy nothing checks.")
 
@@ -29,7 +32,8 @@
 
   {:child [Session]}
   (Operation validate
-    "The record, or a throw carrying malli's explanation of why it is not one."
+    "The record, or a throw carrying malli's explanation of why it is not one — or naming a record
+     that names both a seat and the conductor."
     {:signature [:=> [:catn [:s Session]] Session]})
   (Operation read-session
     "One session by project, workstream and name. nil when there is none."

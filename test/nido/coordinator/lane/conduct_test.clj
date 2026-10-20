@@ -24,7 +24,7 @@
 
 (deftest a-queued-instruction-goes-to-a-done-session-with-its-token-already-pending
   (let [d (conduct/decide (assoc driving :queued "do it") done-row [] ctx)]
-    (is (= [[:send "do it\n\n[nido-send T]" "T" "do it"]] (:actions d)))
+    (is (= [[:send "do it\n\n[nido-send T]" "T" "do it" false]] (:actions d)))
     (is (= {:token "T" :at "t1" :via :send :seen? false} (get-in d [:facet :pending]))
         "recorded in the facet the caller writes before it delivers")
     (is (nil? (get-in d [:facet :queued])))))
@@ -357,6 +357,28 @@
                                             (catch Exception e e)))))))
       (is (= driving (facet)) "nothing is overwritten"))))
 
+(deftest start-refuses-a-released-record-whose-session-is-still-alive
+  ;; Whoever drives it: a start over a released record would leave the earlier session running
+  ;; with nothing recording it.
+  (with-tmp
+    (fn []
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :driver :nobody)))
+      (with-redefs [substrate/trusted?  (constantly true)
+                    substrate/listing   (constantly [done-row])
+                    substrate/dispatch! (fn [_] (throw (ex-info "must not" {})))]
+        (is (= :live (:reason (ex-data (try (conduct/start! {:project :nido :ws-id "ws-1" :session-name "kid" :cwd "/wt" :prompt "go"})
+                                            (catch Exception e e))))))))))
+
+(deftest seat-messages-are-given-in-the-order-sent-after-any-queued-instruction
+  (let [f  (assoc driving :queued "do it" :inbox ["m1" "m2"])
+        d1 (conduct/decide f done-row [] ctx)]
+    (is (= "do it" (nth (first (:actions d1)) 3)) "the queued instruction goes first")
+    (is (= ["m1" "m2"] (get-in d1 [:facet :inbox])))
+    (let [d2 (conduct/decide (assoc (:facet d1) :pending nil) done-row [] ctx)]
+      (is (= ["m1" true] (subvec (first (:actions d2)) 3)))
+      (is (= ["m2"] (get-in d2 [:facet :inbox])))
+      (is (nil? (get-in d2 [:facet :queued]))))))
+
 (deftest start-refuses-while-a-start-is-in-flight
   (with-tmp
     (fn []
@@ -573,3 +595,27 @@
       (is (nil? (with-redefs [session/read-session (constantly {:claude nil})]
                   (conduct/retire! :nido "ws-1" "kid" {})))
           "a session without a facet has nothing to retire"))))
+
+(deftest retire-stops-a-process-a-failed-start-left-running
+  (with-tmp
+    (fn []
+      (session/update-substrate! :nido "ws-1" "kid" (constantly {:dispatching {:token "t" :at "now" :bg-id "bg-9"}}))
+      (let [stopped (atom [])]
+        (with-redefs [substrate/stop! (fn [id _] (swap! stopped conj id) true)]
+          (conduct/retire! :nido "ws-1" "kid" {}))
+        (is (= ["bg-9"] @stopped))
+        (is (nil? (:dispatching (session/read-session :nido "ws-1" "kid"))) "its note cleared, so nothing names it after")))))
+
+(deftest a-seat-message-waits-behind-another-and-an-undelivered-one-goes-back-first
+  (with-tmp
+    (fn []
+      (auto-baseline!)
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :cursor 2)))
+      (conduct/message! :nido "ws-1" "kid" "m1")
+      (conduct/message! :nido "ws-1" "kid" "m2")
+      (is (= ["m1" "m2"] (:inbox (facet))) "none refused because another waits")
+      (with-redefs [substrate/listing (constantly [done-row])
+                    substrate/send!   (fn [_ _] {:delivered? false})]
+        (is (= 1 (count (:failed (conduct/conduct! {:projects [:nido]}))))))
+      (is (= ["m1" "m2"] (:inbox (facet))) "the undelivered message is back at the head")
+      (is (nil? (:queued (facet)))))))

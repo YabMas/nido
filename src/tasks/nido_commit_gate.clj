@@ -2,10 +2,13 @@
 (ns tasks.nido-commit-gate
   "bb-task entrypoint: nido's commit gate, run as a Claude Code `PreToolUse`
    hook on Bash. Exit 2 with the reason on stderr blocks the command; 0 lets it
-   run. Every judgement is `nido.session.commit-gate/verdict`'s, and so is its
-   failing-open contract — this only reads the host's JSON and answers."
+   run. Two judges, each failing open: the project's own convention
+   (`nido.session.commit-gate/verdict`), and for a seat's occupant that every
+   commit and PR title names its seat and position (`nido.coordinator.lane.seats/
+   gate-verdict`). This composes them; it judges nothing itself."
   (:require
    [cheshire.core :as json]
+   [nido.coordinator.lane.seats :as seats]
    [nido.session.commit-gate :as gate]))
 
 (defn- hook-input
@@ -19,7 +22,7 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   gate-cmd [& _args]
-  (if-let [reason (some-> (hook-input) gate/verdict)]
+  (if-let [reason (when-let [in (hook-input)] (or (gate/verdict in) (seats/gate-verdict in)))]
     (do (binding [*out* *err*] (println reason))
         (System/exit 2))
     (System/exit 0)))

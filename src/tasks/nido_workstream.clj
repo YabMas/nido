@@ -6,6 +6,7 @@
    [clojure.edn :as edn]
    [clojure.string :as str]
    [nido.coordinator.lane.pipeline :as pipeline]
+   [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.view.workstreams :as wsv]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.workstream :as ws]
@@ -328,9 +329,12 @@
   generation-open*
   "Open the next generation of the workstream's design from the re-cut at :recut, in the person's
    :words, building from :base-rev. The generation-defining ids are :ids (comma-separated), else
-   the ones the re-cut proposes. :falsified-file is an EDN vector of {:claim :by} — the claims the
-   closing generation saw falsified and what falsified each."
-  [{:keys [recut words base-rev ids falsified-file] :as opts}]
+   the ones the re-cut proposes. The claims the closing generation saw falsified, and the tensions
+   the re-cut names, the ledger carries itself from the closing span — nobody supplies them. Every
+   seat occupant of the closing generation is retired as it opens; the conductor's continues, and
+   a retirement that fails here is completed before any seat of the new generation is occupied.
+   Answers {:generation <entry> :retired [session …]}."
+  [{:keys [recut words base-rev ids] :as opts}]
   (let [[p id] (here opts)
         n      (some-> recut str parse-long)
         w      (ws/read-ws p id)
@@ -344,9 +348,9 @@
       (throw (ex-info "A generation is opened in the person's words — pass :words \"…\"" {:ws-id id})))
     (when (str/blank? (str base-rev))
       (throw (ex-info "Pass :base-rev — the revision the new generation builds from" {:ws-id id})))
-    (ws/open-generation! p id (cond-> {:format :generation :recut {:seq n} :words (str words)
-                                       :ids ids :base-rev (str base-rev)}
-                                falsified-file (assoc :falsified (edn/read-string (slurp (str falsified-file))))))))
+    (let [opened (ws/open-generation! p id {:format :generation :recut {:seq n} :words (str words)
+                                            :ids ids :base-rev (str base-rev)})]
+      {:generation opened :retired (:retired (seats/reseat! p id))})))
 
 (defn- unanswered-blockers
   "The seqs of this workstream's blockers no :blocker-answered names, oldest first — off the
@@ -378,7 +382,7 @@
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   blocker-answer-cmd [& args] (run* blocker-answer* args #{:answer}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  generation-open-cmd [& args] (run* generation-open* args #{:words :base-rev :ids :falsified-file}))
+  generation-open-cmd [& args] (run* generation-open* args #{:words :base-rev :ids}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   status-backfill-cmd [& args]
   (let [[_ opts] (task-args/split-args args)]

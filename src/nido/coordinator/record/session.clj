@@ -48,6 +48,9 @@
                       [:seen? boolean?]]]]
    ;; One instruction waiting for the session to be ready for it.
    [:queued [:maybe string?]]
+   ;; Seat messages waiting, oldest first — each given in turn once nothing is queued; none is
+   ;; refused because another waits.
+   [:inbox {:optional true} [:vector string?]]
    ;; The session's last Stop left work of its own running (background tasks, crons), so the
    ;; turn that follows is the session's own and not a person's.
    [:own-work? boolean?]
@@ -83,6 +86,11 @@
                                                  [:token string?] [:at string?]
                                                  [:policy {:optional true} [:maybe [:map-of keyword? any?]]]
                                                  [:bg-id {:optional true} [:maybe string?]]]]]
+   ;; The seat of its workstream this session occupies, and the generation it occupies it in.
+   ;; A seat is never occupied across generations: a new generation's seats get new sessions.
+   [:seat              {:optional true} [:map {:closed true} [:id string?] [:generation pos-int?]]]
+   ;; The workstream's conductor, whatever the generation. Never also a seat's occupant.
+   [:conductor         {:optional true} [:= true]]
    [:created-at        string?]])
 
 (defn- shed
@@ -93,10 +101,14 @@
 
 (defn ^{:malli/schema [:=> [:cat :Session] :Session]}
   validate [s]
-  (if (m/validate Session s)
-    s
+  (cond
+    (not (m/validate Session s))
     (throw (ex-info "Invalid Session record"
-                    {:errors (m/explain Session s) :session s}))))
+                    {:errors (m/explain Session s) :session s}))
+    (and (:seat s) (:conductor s))
+    (throw (ex-info "A session record names a seat or the conductor, never both"
+                    {:session (:name s) :seat (:seat s)}))
+    :else s))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] [:maybe :Session]]}
   read-session
@@ -168,18 +180,19 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Session]}
   create!
   "Persist a fresh :live session. `opts` carries :name, :weight, and :autonomy
-   (nil for human sessions, or a full Autonomy map). Reads via (:name opts)
-   rather than destructuring to avoid shadowing clojure.core/name."
+   (nil for human sessions, or a full Autonomy map), and optionally :seat or :conductor.
+   Reads via (:name opts) rather than destructuring to avoid shadowing clojure.core/name."
   [project ws-id opts]
   (let [now (clock/now-iso)]
-    (write! {:name              (:name opts)
-             :workstream-id     ws-id
-             :project           project
-             :weight            (:weight opts)
-             :substrate         :live
-             :substrate-history [{:at now :substrate :live}]
-             :autonomy          (:autonomy opts)
-             :created-at        now})))
+    (write! (merge {:name              (:name opts)
+                    :workstream-id     ws-id
+                    :project           project
+                    :weight            (:weight opts)
+                    :substrate         :live
+                    :substrate-history [{:at now :substrate :live}]
+                    :autonomy          (:autonomy opts)
+                    :created-at        now}
+                   (select-keys opts [:seat :conductor])))))
 
 (defn ^{:malli/schema [:=> [:cat :Session] :boolean]}
   live?       [s] (= :live (:substrate s)))

@@ -153,10 +153,12 @@
    Actions: [:turn-ended event instruction] — instruction the pending nido gave whose token a
    recorded prompt carried, nil for a turn it did not give — [:denial event], [:held because], [:notify-blocked],
    [:refused why] when only the baseline keeps a queued instruction back, and at most one of
-   [:send tagged-text token text] / [:wake tagged-text token text] — whose token the returned
-   facet already holds as pending, so it is recorded before anything is delivered. Only a session
-   the listing shows done, or blocked with its Stop as its latest recorded event, is given
-   anything; a wake goes only to a session whose latest recorded event is its Stop."
+   [:send tagged-text token text from-inbox?] / [:wake tagged-text token text from-inbox?] —
+   whose token the returned facet already holds as pending, so it is recorded before anything is
+   delivered. What is given is the queued instruction, else the oldest seat message in the
+   inbox. Only a session the listing shows done, or blocked with its Stop as its latest recorded
+   event, is given anything; a wake goes only to a session whose latest recorded event is its
+   Stop."
   [facet row evs {:keys [now token hold-sends? baseline latest]}]
   (let [{f :facet acts :actions} (reduce read-event {:facet facet :actions []} evs)
         listed-turn? (and (= :nido (:driver f)) (nil? (:hold f)) (nil? (:pending f))
@@ -175,18 +177,21 @@
         ;; Blocked after its Stop, a session is waiting on the answer a person queued for it;
         ;; blocked mid-turn, it is waiting on something a message would not answer.
         ready-state? (or (= "done" (:state row)) (and blocked? stopped?))
+        from-inbox? (and (nil? (:queued f)) (boolean (seq (:inbox f))))
+        text      (if from-inbox? (first (:inbox f)) (:queued f))
         gated?    (and (= :nido (:driver f)) (nil? (:hold f)) (nil? (:pending f))
-                       (:queued f) row ready-state? (not (:own-work? f))
+                       text row ready-state? (not (:own-work? f))
                        (not hold-sends?)
                        (or (= :send via) stopped?))
         ready?    (and gated? (= :shown baseline))]
     {:facet   (cond-> f
-                ready? (assoc :pending {:token token :at now :via via :seen? false}
-                              :queued nil :idle-seen nil))
+                ready? (assoc :pending {:token token :at now :via via :seen? false} :idle-seen nil)
+                (and ready? from-inbox?) (update :inbox (comp vec rest))
+                (and ready? (not from-inbox?)) (assoc :queued nil))
      :actions (cond-> acts
                 announce? (conj [:notify-blocked])
                 (and gated? (not ready?)) (conj [:refused baseline])
-                ready?    (conj [via (tagged (:queued f) token) token (:queued f)]))}))
+                ready?    (conj [via (tagged text token) token text from-inbox?]))}))
 
 ;; ── finding the sessions ────────────────────────────────────────────────────
 
@@ -257,7 +262,8 @@
    session, so no facet is ever without its session's id. Answers the facet written.
 
    Refused, writing nothing, while a turn nido did not give holds the record's session, while
-   its session is alive with nido driving it — release or retire it first — and while another
+   the listing shows its session alive — whoever drives it, so a start over a released record
+   never leaves the earlier session running unrecorded; retire it first — and while another
    start for the record is in flight. Throws when the session cannot be started: the note is
    cleared, or — when the adapter says it left a process running that the listing has not named
    — kept with that process's :bg-id, for conduct! to name it."
@@ -280,9 +286,8 @@
                  {:hold hold}))
        (when dispatching
          (refuse :dispatching "A start for this session is already in flight" {:dispatching dispatching}))
-       (when (and claude (= :nido (:driver claude)) (:pid (row-for listing claude)))
-         (refuse :live (str "Its session " (:session-id claude) " is alive with nido driving it — "
-                            "release or retire it first")
+       (when (and claude (:pid (row-for listing claude)))
+         (refuse :live (str "Its session " (:session-id claude) " is alive — retire it first")
                  {:session-id (:session-id claude)}))
        (assoc m :dispatching (cond-> {:token token :at now} policy (assoc :policy policy)))))
     (try
@@ -393,6 +398,19 @@
                 (:queued f) (throw (ex-info "An instruction is already queued" {:reason :already-queued :session session-name}))
                 :else (assoc f :queued text))))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName :string] :map]}
+  message!
+  "Put a seat message in the inbox of a session nido drives, behind any already waiting;
+   conduct! gives each in turn once nothing is queued and the session is ready. Tokened like any
+   instruction, so it never holds the session. Refused only when the session has no facet."
+  [project ws-id session-name text]
+  (:claude (session/update-claude!
+            project ws-id session-name
+            (fn [f]
+              (if (nil? f)
+                (throw (ex-info "Not a substrate session" {:reason :no-facet :session session-name}))
+                (update f :inbox (fnil conj []) text))))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   conduct!
   "One pass over every session with a :claude facet: read its new events and its row in the
@@ -430,7 +448,7 @@
                 (reset! out d)
                 (assoc (:facet d) :cursor cursor))))
            (reduce
-            (fn [r [kind a b c]]
+            (fn [r [kind a b c inbox?]]
               (case kind
                 :turn-ended     (update r :turn-ends conj (assoc who :event a :instruction b))
                 :denial         (update r :denials conj (assoc who :event a))
@@ -452,8 +470,10 @@
                     (update r :left-running conj (assoc who :via kind :running running))
                     :else
                     (do (session/update-claude! project ws-id session-name
-                                                ;; Back to the queue: undelivered is not outstanding.
-                                                #(assoc % :pending nil :queued c))
+                                                ;; Back where it waited: undelivered is not outstanding.
+                                                #(cond-> (assoc % :pending nil)
+                                                   inbox?       (update :inbox (fn [q] (into [c] q)))
+                                                   (not inbox?) (assoc :queued c)))
                         (update r :failed conj (assoc who :via kind)))))))
             (cond-> report
               (and (= :nido (:driver facet)) (= "working" (:state row)))
@@ -466,14 +486,20 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName :map] [:maybe :map]]}
   retire!
   "Stop driving a session and stop its process, before the session it belongs to is torn down —
-   so nothing tears down a workspace under a session still working in it. The conversation is
-   kept. Answers the facet, or nil for a session without one; throws, the session released,
-   when Claude Code refuses the stop."
+   so nothing tears down a workspace under a session still working in it. A process a failed
+   start left running, known only by the :bg-id its :dispatching note keeps, is a session too:
+   it is stopped and the note cleared. The conversation is kept. Answers the facet, or nil for a
+   session without one; throws, the session released, when Claude Code refuses the stop."
   [project ws-id session-name opts]
-  (when (:claude (session/read-session project ws-id session-name))
-    (let [f (release! project ws-id session-name)]
-      (when-let [id (:bg-id f)] (substrate/stop! id opts))
-      f)))
+  (let [s (session/read-session project ws-id session-name)]
+    (when-let [bg-id (get-in s [:dispatching :bg-id])]
+      (substrate/stop! bg-id opts)
+      (session/update-substrate! project ws-id session-name
+                                 (fn [m] (cond-> m (= bg-id (get-in m [:dispatching :bg-id])) (assoc :dispatching nil)))))
+    (when (:claude s)
+      (let [f (release! project ws-id session-name)]
+        (when-let [id (:bg-id f)] (substrate/stop! id opts))
+        f))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   live-states

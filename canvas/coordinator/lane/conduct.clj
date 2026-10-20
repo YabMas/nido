@@ -62,6 +62,11 @@
   (Operation instruct!
     "Queue the next instruction for a session nido drives, given once it is ready for it."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:text :string]] :map]})
+  (Operation message!
+    "Put a seat message in a driven session's inbox, behind any already waiting: each is given in
+     turn, tokened, once nothing is queued and the session is ready, and none is refused because
+     another waits."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:text :string]] :map]})
   (Operation conduct!
     "One pass: read every new session event and the substrate's listing, decide, record, then
      deliver — only while the session's own events still show the launch baseline; answer what
