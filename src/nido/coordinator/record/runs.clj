@@ -135,15 +135,26 @@
            (mapv #(str (fs/file-name %))))
       [])))
 
+(defn- settled-workstream?
+  "Whether the run's workstream stands settled on its ledger. A run on a settled workstream does
+   not hold its trigger's slot, even parked: a person closed the work without answering it (the
+   TUI's done lever closes a workstream and leaves its parked run), and the sweep cannot reach a
+   run whose ticket it does not see resolved."
+  [{:keys [project workstream-id]}]
+  (boolean (when (and project workstream-id)
+             (some-> (cws/read-ws project workstream-id) cws/closure))))
+
 (defn ^{:malli/schema [:=> [:cat] [:map-of :keyword :int]]}
   in-progress-count-by-trigger
-  "Map {trigger-kw → count} of runs in an in-progress state, grouped by
-   :trigger. Scans the runs dir. The scheduler reads this to enforce per-trigger
-   :max-in-flight caps; recomputed each tick so it is restart-safe."
+  "Map {trigger-kw → count} of runs in an in-progress state — working, or parked for a person's
+   review — grouped by :trigger, leaving out runs on a settled workstream. Scans the runs dir.
+   The scheduler reads this to enforce per-trigger :max-in-flight caps; recomputed each tick so
+   it is restart-safe."
   []
   (->> (list-run-ids)
        (keep read-run)
        (filter #(contains? in-progress-states (:state %)))
+       (remove settled-workstream?)
        (reduce (fn [m r] (update m (:trigger r) (fnil inc 0))) {})))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] [:maybe :Run]]}

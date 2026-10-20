@@ -65,7 +65,7 @@
   ([project gen]
    (->> (ws/list-ids project)
         (keep #(ws/read-ws project %))
-        (remove :closed)
+        (remove ws/closure)
         (keep (fn [w]
                 (let [basis (wsv/title-basis w (session/list-sessions project (:id w)))]
                   (cond
@@ -101,7 +101,7 @@
                              [instance-id dir]))]
     (into []
           (for [w     (keep #(ws/read-ws project %) (ws/list-ids project))
-                :when (not (:closed w))
+                :when (not (ws/closure w))
                 :let  [sessions (session/list-sessions project (:id w))
                        title    (str/replace (wsv/label w sessions) #"[\t\r\n]+" " ")]
                 s     sessions

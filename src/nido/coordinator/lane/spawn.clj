@@ -103,7 +103,7 @@
     (try
       (let [run (runs/create-run! (assoc routed :workstream-id (:id w)) meta)]
         (create-session-for-run! run (:id w))
-        (when (:closed w)
+        (when (ws/closure w)
           (ws/reopen! project (:id w) (initial-stage routed)))
         run)
       (catch Throwable t
@@ -111,22 +111,27 @@
           (ws/delete! project (:id w)))
         (throw t)))))
 
+(def ^:private pending-states
+  "Run states in which a run is still in flight FOR DEDUP: queued included, because the pre-spawn
+   gate exists to avoid minting a SECOND run for a ticket whose first is merely queued. A run
+   ended :done/:failed/:halted is settled, which keeps its ticket re-triable."
+  #{:queued :preprocessing :running :awaiting-review})
+
 (defn ^{:malli/schema [:=> [:cat :map] :boolean]}
-  ref-has-pending-session?
-  "True when this fire's external ref already resolves to a workstream that has an
-   in-flight autonomous session for the SAME trigger (queued/preprocessing/
-   running/parked). The coordinator's pre-spawn gate uses this to drop a reconcile
-   re-emit instead of minting a duplicate run — the fix for the :queued-run
-   pileup: a merely-queued triage writes no ticket-ledger status, so the
-   ticket-status gate alone can't dedup it. Ref-less fires (no dedup key) are
-   never suppressed. The run stores its trigger as the trigger's :name keyword
-   (runs/create-run!), so we match against that, not the routed trigger map."
+  ref-has-pending-run?
+  "True when this fire's external ref already resolves to a workstream with a run of the SAME
+   trigger still in flight (see pending-states). The coordinator's pre-spawn gate uses this to
+   drop a reconcile re-emit instead of minting a duplicate run — the fix for the :queued-run
+   pileup: a merely-queued triage records nothing on the ticket's ledger, so the ticket-status
+   gate alone can't dedup it. Ref-less fires (no dedup key) are never suppressed. The run stores
+   its trigger as the trigger's :name keyword (runs/create-run!), so that is what is matched."
   [routed]
   (boolean
    (when-let [ref (external-ref (:payload routed))]
      (when-let [w (ws/find-by-ref (:project routed) (:adapter ref) (:id ref))]
-       (session/pending-session-for-trigger?
-        (:project routed) (:id w) (-> routed :trigger :name))))))
+       (some #(and (= (-> routed :trigger :name) (:trigger %))
+                   (contains? pending-states (:state %)))
+             (runs/runs-of (:project routed) (:id w)))))))
 
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]}
   spawn-and-submit!

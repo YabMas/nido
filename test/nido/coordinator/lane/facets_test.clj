@@ -9,6 +9,7 @@
    [nido.notion.client :as notion]
    [nido.notion.views :as views]))
 
+
 (def ^:private payload
   {:source :notion-view :page-id "p" :title "X"
    :app-domain ["Teacher"] :type "bug" :status "Needs verification"})
@@ -53,7 +54,7 @@
 (deftest refresh-ws-noop-for-refless
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
         (is (nil? (facets/refresh-ws! :brian (:id w) "tok")))
         (is (nil? (:facets (ws/read-ws :brian (:id w)))))))))
 

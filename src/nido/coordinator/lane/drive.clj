@@ -8,11 +8,10 @@
    driver that could fire but not park would strand a workstream mid-pipeline
    with nothing on the ledger saying why.
 
-   Parking is two facts and no cleverness. The ledger gains a halt saying what
-   was needed and what had already been tried, and the session — if one is alive
-   — goes to :parked so the gate surface offers it. Neither is derivable from the
-   other: the ledger entry is what the NEXT session reads, and the phase is what
-   puts the row in front of a human now."
+   Parking is one fact and no cleverness: the ledger gains a halt saying what was
+   needed and what had already been tried. That entry is what the NEXT session
+   reads, and it is also what puts the row in front of a person now — status places
+   a workstream holding an unanswered blocker at :blocked, owed by a person."
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
@@ -121,33 +120,18 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   park!
-  "Stop this workstream and record why. Returns {:parked <session-or-nil>
-   :seq <ledger-seq>}, or {:refused <reason>} when there is nothing to write.
+  "Stop this workstream and record why. Returns {:seq <ledger-seq>}, or
+   {:refused <reason>} when there is nothing to write.
 
    Refuses rather than writing a malformed halt: a park that threw would leave
    the workstream running with a stage already finished, which is worse than one
-   that stopped and said it could not explain itself.
-
-   Best-effort on the PHASE and strict on the LEDGER, and the asymmetry is
-   deliberate. The ledger entry is the durable half — it is what the next session
-   reads and what the gate renders — while a session to park may simply not exist
-   (a mechanical stage runs as a task, not as an agent, so there is often nobody
-   to put to sleep). Failing the whole park because there was no session would
-   throw away the record that matters."
+   that stopped and said it could not explain itself."
   [project ws-id halt]
   (let [record (halt-for halt)]
     (if-not (try (report/validate-event :blocker record) (catch Throwable _ nil))
       {:refused :invalid-halt :record record}
-      (let [path (ws/append-entry! project ws-id {:kind :blocker} (pr-str record))
-            seq-n (some->> path (re-find #"/(\d+)-blocker\.edn$") second parse-long)
-            s    (->> (session/list-sessions project ws-id)
-                      (remove session/parked?)
-                      (filter :autonomy)
-                      first)]
-        (when s
-          (try (session/set-phase! project ws-id (:name s) :parked)
-               (catch Throwable _ nil)))
-        {:parked (:name s) :seq seq-n}))))
+      (let [path (ws/append-entry! project ws-id {:kind :blocker} (pr-str record))]
+        {:seq (some->> path (re-find #"/(\d+)-blocker\.edn$") second parse-long)}))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :any]}
   park-on-escalate!

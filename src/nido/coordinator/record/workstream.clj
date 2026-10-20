@@ -343,6 +343,21 @@
                (assoc :seq (:seq e) :at (:at e)))
            (catch Throwable _ nil)))))
 
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :map]]}
+  closure
+  "How the ledger says the workstream `w` stands settled: the newest :closed entry, unless a
+   :reopened or a :phase-gate came after it — then nil, since opening the next phase is a reopen
+   by definition. Nil for a workstream that does not exist.
+
+   The newest close is read by its :seq, and when it cannot be read the answer is still closed —
+   `{:seq n :unreadable? true}`, with no outcome — never an older close's payload, which would
+   report an outcome the workstream has since moved past."
+  [w]
+  (let [newest (last (filter #(#{:closed :reopened :phase-gate} (:kind %)) (:entries w)))]
+    (when (= :closed (:kind newest))
+      (or (read-entry-at w (:seq newest))
+          {:seq (:seq newest) :unreadable? true}))))
+
 (defn- check-routes-total!
   "Every health observation on the cited `baseline` is routed exactly once by
    `record`, none is invented, and none the baseline marked invisibly incomplete is
@@ -1156,7 +1171,7 @@
    design its close names, and a design written while it waits would put one gate on
    the board and open another; a newer design takes over after the gate opens."
   [w kind]
-  (when (and (= :design kind) (= :between-phases (get-in w [:closed :outcome])))
+  (when (and (= :design kind) (= :between-phases (:outcome (closure w))))
     (throw (ex-info (str (:id w) " is waiting between phases — open the next phase before"
                          " writing a design over it")
                     {:ws-id (:id w) :kind kind}))))
@@ -1813,8 +1828,9 @@
    written after the gate."
   [project ws-id]
   (when-let [w (read-ws project ws-id)]
-    (let [close-seq (when (= :between-phases (get-in w [:closed :outcome]))
-                      (get-in w [:closed :design :seq]))
+    (let [closed    (closure w)
+          close-seq (when (= :between-phases (:outcome closed))
+                      (get-in closed [:design :seq]))
           gate      (->> (:entries w) (filter #(= :phase-gate (:kind %))) (sort-by :seq) last)
           newest    (->> (:entries w) (filter #(= :design (:kind %))) (map :seq) (reduce max 0))
           n         (cond close-seq                            close-seq
@@ -1844,15 +1860,16 @@
     (fn []
       (let [w      (or (read-ws project ws-id)
                        (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
-            n      (get-in w [:closed :design :seq])
+            closed (closure w)
+            n      (get-in closed [:design :seq])
             design (when n (read-entry-at w n))
             p      (when (= :design (:format design)) (phase/progress design (:entries w)))
             refuse (fn [why data]
                      (throw (ex-info (str "Cannot open a phase on " ws-id ": " why)
                                      (merge {:ws-id ws-id} data))))]
         (cond
-          (not= :between-phases (get-in w [:closed :outcome]))
-          (refuse "it is not settled between phases" {:closed (:closed w)})
+          (not= :between-phases (:outcome closed))
+          (refuse "it is not settled between phases" {:closed closed})
 
           (str/blank? (:evidence gate))
           (refuse "the gate carries no evidence" {})
@@ -2118,11 +2135,3 @@
   [project external-id entry content]
   (append-entry! project (:id (find-or-mint-by-ref! project external-id)) entry content))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :keyword]}
-  engagement
-  "Engagement state of a workstream: loads its sessions and projects. Returns
-   :idle / :active / :parked-at-gate / :settled. Returns :idle if the workstream
-   is absent (read-ws nil → no :closed, no sessions)."
-  [project ws-id]
-  (let [w (read-ws project ws-id)]
-    (session/engagement-state (:closed w) (session/list-sessions project ws-id))))

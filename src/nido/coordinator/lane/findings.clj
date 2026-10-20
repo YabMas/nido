@@ -1,14 +1,15 @@
 (ns nido.coordinator.lane.findings
   "Staging findings round: a human files findings after reviewing the deployed
    staging build; nido records the immutable :findings event on the workstream's
-   active ledger, seeds a live resolution tracker, reopens the workstream to
-   :in-progress, and provisions a fresh impl session off current main. Modeled on
-   nido.coordinator.lane.promote. See spec
+   active ledger, reopens the workstream to :in-progress, and provisions a fresh impl
+   session off current main. Each item's resolution is a later :findings-resolved
+   entry, and what a round still owes is `standing/open-findings` — nothing tracks it
+   beside the ledger. Modeled on nido.coordinator.lane.promote. See spec
    docs/superpowers/specs/2026-07-13-staging-findings-round-design.md."
   (:require
    [clojure.pprint :as pprint]
-   [nido.coordinator.record.clock :as clock]
    [nido.coordinator.source.queue :as queue]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.workstream :as ws]))
@@ -36,8 +37,8 @@
 (defn- enqueue-impl!
   "Enqueue a :plan-bug provisioning envelope so the daemon builds a fresh impl session
    off current main. Only for Notion-backed workstreams (see notion-br). Returns the
-   envelope path, or nil when skipped (non-Notion ws — reopen + event + tracker still
-   apply; a human resumes the work)."
+   envelope path, or nil when skipped (non-Notion ws — reopen and event still apply; a
+   human resumes the work)."
   [project w]
   (when-let [br (notion-br w)]
     (cstate/ensure-dirs!)
@@ -53,29 +54,28 @@
   file!
   "File a staging findings round on a shipped (settled) workstream. `opts` =
    {:items [{:summary :severity (:id) (:area)} …] :staging-ref? :note? :session?}.
-   Appends the immutable :findings event, seeds the tracker, reopens to
-   :in-progress, and enqueues a provisioning envelope. Returns {:round n :queued p}.
-   Throws if the workstream is absent or not settled.
+   Appends the immutable :findings event, reopens to :in-progress, and enqueues a
+   provisioning envelope. Returns {:round n :queued p}. Throws if the workstream is
+   absent or not settled.
 
-   A round filed on a workstream closed :between-phases keeps the design that close
-   named on the tracker, as :between-phases: the round is about the phase that
-   landed, and `resolve!` returns the workstream to its gate under that plan."
+   A round filed on a workstream closed :between-phases names the design that close
+   named, as :between-phases: the round is about the phase that landed, and resolving
+   its last item returns the workstream to its gate under that plan."
   [project ws-id {:keys [items staging-ref note session]}]
-  (let [w (or (ws/read-ws project ws-id)
-              (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
-    (when-not (:closed w)
+  (let [w      (or (ws/read-ws project ws-id)
+                   (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+        closed (ws/closure w)]
+    (when-not closed
       (throw (ex-info "Can only file findings on a shipped (settled) workstream"
-                      {:project project :ws-id ws-id :stage (:stage w)})))
-    (let [round-n (inc (:round (:findings w) 0))
+                      {:project project :ws-id ws-id})))
+    (let [round-n (inc (:round (standing/newest-findings project ws-id w) 0))
           items*  (assign-ids items)
           round   (cond-> {:format :findings :round round-n :items items*}
                     staging-ref (assoc :staging-ref staging-ref)
-                    note        (assoc :note note))]
+                    note        (assoc :note note)
+                    (= :between-phases (:outcome closed))
+                    (assoc :between-phases (get-in closed [:design :seq])))]
       (append-event! project w round session)
-      (ws/set-findings! project ws-id
-                        (cond-> {:round round-n :open (set (map :id items*)) :resolved {}}
-                          (= :between-phases (get-in w [:closed :outcome]))
-                          (assoc :between-phases (get-in w [:closed :design :seq]))))
       (ws/reopen! project ws-id :in-progress)
       {:round round-n :queued (enqueue-impl! project w)})))
 
@@ -94,43 +94,33 @@
    The round belonged to the landed phase: filing it wrote no gate, so that phase is
    still current, and its end returns the workstream to its gate — never on to
    implementing the next phase, which only `lane.phase/advance!` opens."
-  [project ws-id tracker]
+  [project ws-id round]
   (let [w (ws/read-ws project ws-id)]
-    (when (and (contains? tracker :between-phases)
-               (nil? (:closed w))
+    (when (and (:between-phases round)
+               (nil? (ws/closure w))
                (not (published-since-round? w)))
-      (ws/close! project ws-id :between-phases (:between-phases tracker)))))
+      (ws/close! project ws-id :between-phases (:between-phases round)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any :any] :map]}
   resolve!
-  "Mark findings items resolved by PR/commit `by`: record them as a :findings-resolved entry,
-   and move each known id from :open to :resolved {id {:by by :at …}} on the tracker; unknown
-   ids are ignored, and a call resolving none records nothing. Throws when there is no open
-   findings tracker. Returns the updated tracker.
+  "Mark items of the newest findings round resolved by PR/commit `by`: record the ones still
+   open as a :findings-resolved entry; unknown and already-resolved ids are ignored, and a call
+   resolving none records nothing. Throws when the workstream holds no findings round. Returns
+   `{:round n :open #{ids still open}}`.
 
    Resolving the last open item of a round filed on a phased workstream between
    its phases settles it between phases again (`settle-between-phases!`)."
   [project ws-id item-ids by]
-  (let [w (ws/read-ws project ws-id)
-        t (:findings w)]
-    (when-not t
+  (let [w     (ws/read-ws project ws-id)
+        round (when w (standing/newest-findings project ws-id w))]
+    (when-not round
       (throw (ex-info "No open findings round" {:project project :ws-id ws-id})))
-    (let [at  (clock/now-iso)
-          ids (filter (:open t) item-ids)
-          t'  (-> t
-                  (update :open #(reduce disj % ids))
-                  (update :resolved merge
-                          (into {} (map (fn [id] [id {:by by :at at}])) ids)))]
+    (let [open (standing/open-findings project ws-id)
+          ids  (vec (distinct (filter open item-ids)))]
       (when (seq ids)
         (ws/append-entry! project ws-id {:kind :findings-resolved}
-                          (pr-str {:format :findings-resolved :round (:round t)
-                                   :items (vec ids) :by (str by)})))
-      (ws/set-findings! project ws-id t')
-      (when (empty? (:open t')) (settle-between-phases! project ws-id t'))
-      t')))
-
-(defn ^{:malli/schema [:=> [:cat :Workstream] :int]}
-  open-count
-  "Count of unresolved finding ids on a workstream record (0 when no tracker)."
-  [ws-record]
-  (count (:open (:findings ws-record))))
+                          (pr-str {:format :findings-resolved :round (:round round)
+                                   :items ids :by (str by)})))
+      (let [left (reduce disj open ids)]
+        (when (empty? left) (settle-between-phases! project ws-id round))
+        {:round (:round round) :open left}))))

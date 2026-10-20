@@ -1187,18 +1187,18 @@
                          br " (" (name decision) ")"))))
 
       ;; Reconcile dedup (spec §Coordinator pre-spawn gate): a re-emit whose ref
-      ;; already has an in-flight session for this trigger (queued/preprocessing/
-      ;; running/parked) is dropped without minting a duplicate run. This closes
+      ;; already has an in-flight run for this trigger (queued/preprocessing/
+      ;; running/awaiting-review) is dropped without minting a duplicate run. This closes
       ;; the :queued-pileup gap the ticket-status gate above misses — a merely-
       ;; :queued triage writes no ledger status, so without this a reconcile
       ;; source re-queues the same ticket every poll (thousands of phantom
       ;; :queued runs). No spawn ⇒ no anomaly bump.
-      (spawn/ref-has-pending-session? routed)
+      (spawn/ref-has-pending-run? routed)
       (binding [*err* *err*]
         (.println ^java.io.PrintWriter *err*
                   (str "INFO: reconcile dedup — " (name (:project routed)) "/"
                        (-> routed :payload :id) " already has an in-flight "
-                       (name (-> routed :trigger :name)) " session")))
+                       (name (-> routed :trigger :name)) " run")))
 
       :else
       (do
@@ -1355,13 +1355,8 @@
                (binding [*err* *err*]
                  (.println ^java.io.PrintWriter *err*
                            (str "nido conduct: pass failed — " (ex-message t))))))
-        (let [on-spawn (fn [rid] (execute! rid))
-              ;; :merge Runs reuse an existing session whose autonomy :trigger is
-              ;; NOT :merge, so session-based gating can't see them — count :merge
-              ;; from Run state instead (no double-count: no session carries :merge).
-              in-flight (-> (reduce (fn [m p] (merge-with + m (session/gating-count-by-trigger p)))
-                                    {} (registered-projects))
-                            (assoc :merge (get (runs/in-progress-count-by-trigger) :merge 0)))]
+        (let [on-spawn  (fn [rid] (execute! rid))
+              in-flight (runs/in-progress-count-by-trigger)]
           ;; Under a usage hold the queue waits: nothing is promoted, so no Run
           ;; starts only to be rejected. Reaping is skipped with it, which is
           ;; harmless — a finished future is reaped on the first tick after.

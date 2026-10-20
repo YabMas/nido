@@ -8,6 +8,7 @@
    [nido.coordinator.lane.backfill :as backfill]
    [nido.coordinator.lane.findings :as findings]
    [nido.coordinator.record.runs :as runs]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.workstream :as ws]
@@ -32,7 +33,7 @@
           (ws/close! :brian id :done)
           (findings/file! :brian id {:items [{:summary "a" :severity :tweak}
                                              {:summary "b" :severity :tweak}]})
-          (let [item (first (:open (:findings (ws/read-ws :brian id))))]
+          (let [item (first (sort (standing/open-findings :brian id)))]
             (findings/resolve! :brian id [item "unknown"] "PR #9")
             (is (= {:format :findings-resolved :round 1 :items [item] :by "PR #9"}
                    (select-keys (last (ws/entries-of :brian id :findings-resolved))

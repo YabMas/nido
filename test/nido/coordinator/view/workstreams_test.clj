@@ -10,6 +10,15 @@
    [nido.coordinator.record.workstream :as workstream]
    [nido.coordinator.view.workstreams :as wsv]))
 
+(defn- one-off!
+  "A ref-less workstream born a one-off: its ledger holds the :scratch birth entry that
+   `scratch/birth!` appends as it mints one."
+  []
+  (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
+    (workstream/append-entry! :brian (:id w) {:kind :scratch} (pr-str {:format :scratch}))
+    (workstream/read-ws :brian (:id w))))
+
+
 ;; ---------------------------------------------------------------------------
 ;; Fixtures — write real workstream.edn / session.edn under a tmp nido-root
 ;; ---------------------------------------------------------------------------
@@ -147,80 +156,39 @@
     (is (= "ws-20260601-abcdef" (wsv/label ws [])))))
 
 ;; ---------------------------------------------------------------------------
-;; last-activity — max ISO timestamp across stage-history + session histories
+;; last-activity — max ISO timestamp across the ledger, the record and session histories
 ;; ---------------------------------------------------------------------------
 
 (deftest last-activity-takes-max-across-sources
-  (let [ws {:stage-history [{:at "2026-06-01T00:00:00Z" :stage :investigating}]}
+  (let [ws {:created-at "2026-06-01T00:00:00Z"
+            :entries [{:kind :intent :seq 1 :at "2026-06-05T09:00:00Z"}]}
         sessions [{:created-at "2026-06-02T00:00:00Z"
-                   :substrate-history [{:at "2026-06-02T00:00:00Z" :substrate :live}]
-                   :autonomy {:phase-history [{:at "2026-06-05T09:00:00Z" :phase :running}]}}]]
+                   :substrate-history [{:at "2026-06-03T00:00:00Z" :substrate :live}]}]]
     (is (= "2026-06-05T09:00:00Z" (wsv/last-activity ws sessions)))))
 
 (deftest last-activity-handles-no-sessions
-  (let [ws {:stage-history [{:at "2026-06-01T00:00:00Z" :stage :investigating}]}]
+  (let [ws {:created-at "2026-06-01T00:00:00Z"}]
     (is (= "2026-06-01T00:00:00Z" (wsv/last-activity ws [])))))
 
 ;; ---------------------------------------------------------------------------
 ;; workstream-rows — assembled from disk
 ;; ---------------------------------------------------------------------------
 
-(deftest workstream-rows-projects-engagement-and-counts
+(deftest workstream-rows-carry-each-workstreams-attributes
   (with-tmp
     (fn [_]
-      ;; idle: open workstream, no sessions
       (make-ws! :brian {:stage :triaging})
-      ;; active: one live autonomous session, running
       (let [w (make-ws! :brian {:stage :triaging
                                 :external-refs [{:adapter :notion :id "BR-1" :title "Active one"}]})]
         (make-session! :brian (:id w) "run-a" {:autonomy autonomy-running}))
       (let [rows (wsv/workstream-rows :brian)
             by-label (into {} (map (juxt :label identity)) rows)]
         (is (= 2 (count rows)))
-        (is (= :active (:engagement (by-label "Active one"))))
         (is (= 1 (:session-count (by-label "Active one"))))
-        (is (some #(= :idle (:engagement %)) rows))
         (is (every? :ws-id rows))
-        (is (every? #(= :brian (:project %)) rows))))))
-
-(deftest human-engagement-reflects-real-liveness-via-live-names
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
-        (session/create! :brian (:id w) {:name "refshot" :weight :light :autonomy nil})
-        (let [ws (workstream/read-ws :brian (:id w))]
-          (is (= :active (:engagement (wsv/workstream-row :brian ws)))
-              "default arity = legacy behavior (static :live ⇒ :active)")
-          (is (= :idle (:engagement (wsv/workstream-row :brian ws #{})))
-              "human session not in the live-set ⇒ downgraded to :idle")
-          (is (= :active (:engagement (wsv/workstream-row :brian ws #{"refshot"})))
-              "human session in the live-set ⇒ stays :active"))))))
-
-(deftest autonomous-engagement-ignores-live-names
-  (with-tmp
-    (fn [_]
-      (let [w (make-ws! :brian {:stage :triaging
-                                :external-refs [{:adapter :notion :id "BR-1"}]})]
-        (make-session! :brian (:id w) "run-a" {:autonomy autonomy-running})
-        (is (= :active (:engagement (wsv/workstream-row :brian (workstream/read-ws :brian (:id w)) #{})))
-            "autonomous (coordinator-managed) sessions aren't downgraded by the live-set")))))
-
-(deftest workstream-rows-threads-live-names
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
-        (session/create! :brian (:id w) {:name "downie" :weight :light :autonomy nil}))
-      (is (= [:idle]   (map :engagement (wsv/workstream-rows :brian #{}))))
-      (is (= [:active] (map :engagement (wsv/workstream-rows :brian #{"downie"})))))))
-
-(deftest workstream-rows-marks-closed-as-settled
-  (with-tmp
-    (fn [_]
-      (let [w (make-ws! :brian {:stage :triaging
-                                :closed {:at "2026-06-06T00:00:00Z" :outcome :done}})]
-        (make-session! :brian (:id w) "run-a" {:autonomy autonomy-running}))
-      (let [rows (wsv/workstream-rows :brian)]
-        (is (= [:settled] (map :engagement rows)))))))
+        (is (every? #(= :brian (:project %)) rows))
+        (is (not-any? #(contains? % :stage) rows)
+            "where a workstream sits is status's answer, never the view's")))))
 
 (deftest workstream-rows-carries-max-session-priority
   (with-tmp
@@ -231,32 +199,10 @@
       (is (= 7 (:priority (first (wsv/workstream-rows :brian))))
           "row severity = highest autonomy :priority across its sessions"))))
 
-(deftest workstream-rows-parked-beats-active
-  (with-tmp
-    (fn [_]
-      (let [w (make-ws! :brian {:stage :triaging})]
-        (make-session! :brian (:id w) "run-parked"
-                       {:autonomy (assoc autonomy-running :phase :parked)}))
-      (is (= [:parked-at-gate] (map :engagement (wsv/workstream-rows :brian)))))))
-
 
 ;; ---------------------------------------------------------------------------
 ;; grouped-by-stage + workstream-rows stage projection
 ;; ---------------------------------------------------------------------------
-
-(deftest workstream-rows-projects-stage-and-needs-you
-  (with-tmp
-    (fn [_]
-      (let [w (make-ws! :brian {:external-refs [{:adapter :notion :id "BR-9" :title "Ready one"}]
-                                :stage :triaging})]
-        (tickets/open! :brian "BR-9" {:title "Ready one"})
-        (tickets/set-status! :brian "BR-9" :triaged)
-        (make-session! :brian (:id w) "s1" {:substrate :archived
-                                            :autonomy (assoc autonomy-running :phase :done)})
-        (let [r (first (wsv/workstream-rows :brian))]
-          (is (= :ready (:stage r)))
-          (is (false? (:needs-you r)) ":ready is a pull queue, not a needs-you gate")
-          (is (= "BR-9" (:br-id r)) "row carries the ticket id for the promote shortcut"))))))
 
 (deftest grouped-by-stage-splits-triage-and-drops-done-and-ready
   (let [rows [{:ws-id "r1" :stage :ready       :needs-you true  :last-activity "2026-06-01T00:00:00Z"}
@@ -303,7 +249,7 @@
 ;; session-rows (workstream detail) + formatting
 ;; ---------------------------------------------------------------------------
 
-(deftest session-rows-reports-phase-weight-substrate
+(deftest session-rows-reports-weight-substrate
   (with-tmp
     (fn [_]
       (let [w (make-ws! :brian {:stage :triaging})]
@@ -313,10 +259,8 @@
         (let [rows  (wsv/session-rows :brian (:id w) [])
               by    (into {} (map (juxt :name identity)) rows)]
           (is (= 2 (count rows)))
-          (is (= :running (:phase (by "run-auto"))))
           (is (= :heavy   (:weight (by "run-auto"))))
-          (is (= :live    (:substrate (by "run-auto"))))
-          (is (nil?       (:phase (by "human-sess")))))))))
+          (is (= :live    (:substrate (by "run-auto")))))))))
 
 (deftest session-rows-show-the-substrates-state-and-who-drives
   (with-tmp
@@ -356,7 +300,7 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest ws-source-classifies-from-the-raw-record
-  (is (= :scratch (wsv/ws-source {:stage :scratch :external-refs []})))
+  (is (= :scratch (wsv/ws-source {:external-refs [] :entries [{:kind :scratch :seq 1}]})))
   (is (= :notion  (wsv/ws-source {:stage :triaging
                                   :external-refs [{:adapter :notion :id "BR-1"}]})))
   (is (= :notion  (wsv/ws-source {:stage :triaging :external-refs []})))
@@ -368,7 +312,7 @@
 (deftest workstream-row-carries-source
   (with-tmp
     (fn [_]
-      (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
+      (let [w (one-off!)]
         (session/create! :brian (:id w) {:name "refshot" :weight :light :autonomy nil})
         (is (= :scratch (:source (wsv/workstream-row :brian (workstream/read-ws :brian (:id w))))))))))
 
@@ -434,30 +378,6 @@
   (assoc autonomy-running :phase :parked
          :phase-history [{:at "2026-06-01T00:00:00Z" :phase :parked}]))
 
-(deftest workstream-row-shipping-with-parked-session-is-blocked
-  (with-tmp
-    (fn [_]
-      (let [w (make-ws! :brian {:stage :shipping})]
-        (make-session! :brian (:id w) "ship-auto" {:autonomy autonomy-parked})
-        (let [row (wsv/workstream-row :brian (workstream/read-ws :brian (:id w)))]
-          (is (= :shipping (:stage row)) "stage is projected from the stored :shipping override")
-          ;; The merge sub-state reaches a surface through :doing and nothing
-          ;; else. It had its own row key until the render layer took the last
-          ;; reader off it; leaving the key behind would have meant two fields
-          ;; computing merge state from the same sessions, which is the one
-          ;; projection claim not holding.
-          (is (= {:source :merge :phase :blocked} (:doing row))
-              "parked autonomous session → the merge lane is blocked"))))))
-
-(deftest workstream-row-non-shipping-reports-the-session-not-the-lane
-  (with-tmp
-    (fn [_]
-      (let [w (make-ws! :brian {:stage :triaging})]
-        (make-session! :brian (:id w) "run-a" {:autonomy autonomy-running})
-        (let [row (wsv/workstream-row :brian (workstream/read-ws :brian (:id w)))]
-          (is (= :session (:source (:doing row)))
-              "a workstream that is not shipping never answers :merge"))))))
-
 (deftest by-notion-priority-orders-lowest-rank-first
   (let [rows [{:ws-id "a" :notion-priority 2 :priority 0 :last-activity "t"}
               {:ws-id "b" :notion-priority nil :priority 0 :last-activity "t"}
@@ -473,7 +393,7 @@
       (let [w     (make-ws! :brian {:external-refs [{:adapter :notion :id "BR-1"
                                                      :page-id "pg-1"}]})
             facts {"pg-1" {:status "Not started" :priority 2 :ball-ids #{}}}
-            row   (wsv/workstream-row :brian w nil facts)]
+            row   (wsv/workstream-row :brian w facts)]
         (is (= 2 (:notion-priority row)))))))
 
 (deftest grouped-by-stage-includes-shipping-band
@@ -494,64 +414,6 @@
   (make-ws! project (merge {:external-refs [{:adapter :notion :id "BR-1" :page-id "pg-1"}]}
                            overrides)))
 
-(deftest notion-driven-stale-close-reappears
-  (with-tmp
-    (fn [_]
-      ;; nido closed it, but Notion says In progress and the page is cached → reappears.
-      (let [w     (notion-ws! :brian {:closed {:at "t" :outcome :done}})
-            facts {"pg-1" {:status "In progress" :priority nil :ball-ids #{}}}
-            row   (wsv/workstream-row :brian w nil facts)]
-        (is (= :in-progress (:stage row)) "Notion status drives, nido close ignored")
-        (is (not= :settled (:engagement row)) "engagement not settled → to-spine won't fold to :done")))))
-
-(deftest notion-driven-dismissed-reappears
-  (with-tmp
-    (fn [_]
-      (tickets/write-meta! :brian "BR-1"
-        {:br-id "BR-1" :status :dismissed :entries [{:kind :triage :seq 1}]})
-      (let [w     (notion-ws! :brian {})
-            facts {"pg-1" {:status "Not started" :priority nil :ball-ids #{}}}
-            row   (wsv/workstream-row :brian w nil facts)]
-        ;; Reappears (not hidden as :done), as :triage — it has an OLD report but
-        ;; status isn't :triaged, so it is NOT promotable; :ready would show a dead
-        ;; Promote button (promote accepts only :triaged).
-        (is (= :triage (:stage row)) "dismissed reappears as :triage, not :ready")))))
-
-(deftest notion-driven-triaged-status-is-ready
-  (with-tmp
-    (fn [_]
-      ;; :triaged (the promotable disposition) + non-terminal Notion → :ready.
-      (tickets/write-meta! :brian "BR-1"
-        {:br-id "BR-1" :status :triaged :entries [{:kind :triage :seq 1}]})
-      (let [w   (notion-ws! :brian {})
-            row (wsv/workstream-row :brian w nil {"pg-1" {:status "Not started" :priority nil :ball-ids #{}}})]
-        (is (= :ready (:stage row)) "status :triaged → :ready (promotable)")))))
-
-(deftest notion-driven-reopened-with-old-report-is-triage
-  (with-tmp
-    (fn [_]
-      ;; The BR-4826 case: has an OLD :triage entry but was re-opened to :investigating.
-      (tickets/write-meta! :brian "BR-1"
-        {:br-id "BR-1" :status :investigating :entries [{:kind :triage :seq 1}]})
-      (let [w   (notion-ws! :brian {})
-            row (wsv/workstream-row :brian w nil {"pg-1" {:status "Not started" :priority nil :ball-ids #{}}})]
-        (is (= :triage (:stage row)) "old report but :investigating → :triage, not :ready")))))
-
-(deftest notion-driven-terminal-status-is-done
-  (with-tmp
-    (fn [_]
-      (let [w   (notion-ws! :brian {})
-            row (wsv/workstream-row :brian w nil {"pg-1" {:status "Done" :priority nil :ball-ids #{}}})]
-        (is (= :done (:stage row)))))))
-
-(deftest notion-uncached-uses-legacy-path
-  (with-tmp
-    (fn [_]
-      ;; Notion-backed but page NOT in the cache → legacy: closed → :done, no crash.
-      (let [w   (notion-ws! :brian {:closed {:at "t" :outcome :done}})
-            row (wsv/workstream-row :brian w nil {})]  ; empty cache
-        (is (= :done (:stage row)))
-        (is (= :settled (:engagement row)) "legacy engagement still reads :closed")))))
 
 ;; ---------------------------------------------------------------------------
 ;; workstream-rows — bare rows for uncovered watched-view pages
@@ -566,7 +428,7 @@
          :pages {"pg-cov"  {:status "Not started" :priority 2 :ball-ids #{} :title "Covered" :br "BR-1"}
                  "pg-bare" {:status "Not started" :priority 1 :ball-ids #{} :title "Orphan" :br "BR-9"}}})
       (make-ws! :brian {:external-refs [{:adapter :notion :id "BR-1" :page-id "pg-cov"}]})
-      (let [rows (wsv/workstream-rows :brian nil)
+      (let [rows (wsv/workstream-rows :brian)
             bare (first (filter :bare? rows))]
         (is (= 1 (count (filter :bare? rows))) "exactly one bare row (pg-bare)")
         (is (= "pg-bare" (:ws-id bare)) "bare ws-id is the page-id")
@@ -578,30 +440,6 @@
         (is (false? (:needs-you bare)))
         (is (nil? (first (filter #(= "pg-cov" (:ws-id %)) rows)))
             "covered page does NOT get a bare row (real ws row instead)")))))
-
-(deftest notion-driven-in-flight-promote-shows-in-progress
-  (with-tmp
-    (fn [_]
-      ;; Promoted ticket: local status :implementing + live impl work, but the Notion
-      ;; cache still lags at "Not started". The board must show :in-progress — nido's
-      ;; in-flight work is ahead of the eventually-consistent cache. (Bug was :ready.)
-      (tickets/write-meta! :brian "BR-1"
-        {:br-id "BR-1" :status :implementing :entries [{:kind :triage :seq 1}]})
-      (let [w   (notion-ws! :brian {})
-            row (wsv/workstream-row :brian w nil {"pg-1" {:status "Not started" :priority nil :ball-ids #{}}})]
-        (is (= :in-progress (:stage row))
-            "local :implementing overrides the stale Notion 'Not started'")))))
-
-(deftest notion-driven-in-flight-yields-to-terminal-notion
-  (with-tmp
-    (fn [_]
-      ;; local :implementing but Notion is Done → terminal wins (really finished, off board).
-      (tickets/write-meta! :brian "BR-1"
-        {:br-id "BR-1" :status :implementing :entries [{:kind :triage :seq 1}]})
-      (let [w   (notion-ws! :brian {})
-            row (wsv/workstream-row :brian w nil {"pg-1" {:status "Done" :priority nil :ball-ids #{}}})]
-        (is (= :done (:stage row))
-            "terminal Notion status wins over the in-flight overlay")))))
 
 (deftest grouped-by-stage-omits-ready-band
   (let [rows [{:stage :ready :last-activity "t" :needs-you false}
@@ -615,39 +453,6 @@
 ;; ---------------------------------------------------------------------------
 ;; :dismissed? — the local dismiss veto carried onto every row
 ;; ---------------------------------------------------------------------------
-
-(deftest workstream-row-flags-a-dismissed-ticket
-  (with-tmp
-    (fn [_]
-      (let [w (make-ws! :brian {:external-refs [{:adapter :notion :id "BR-1"
-                                                 :page-id "pg-1" :url "u"}]})]
-        (tickets/open! :brian "BR-1" {:title "t"})
-        (tickets/dismiss! :brian "BR-1")
-        (is (true? (:dismissed? (wsv/workstream-row :brian w nil
-                                                    {"pg-1" {:status "Needs verification"}})))
-            "a :dismissed ticket flags its row")))))
-
-(deftest workstream-row-not-dismissed-by-default
-  (with-tmp
-    (fn [_]
-      (let [w (make-ws! :brian {:external-refs [{:adapter :notion :id "BR-2"
-                                                 :page-id "pg-2" :url "u"}]})]
-        (tickets/open! :brian "BR-2" {:title "t"})
-        (tickets/set-status! :brian "BR-2" :awaiting-input)
-        (is (false? (:dismissed? (wsv/workstream-row :brian w nil
-                                                     {"pg-2" {:status "Needs verification"}}))))))))
-
-(deftest bare-row-flags-a-dismissed-ticket
-  (with-tmp
-    (fn [_]
-      (tickets/open! :brian "BR-3" {:title "t"})
-      (tickets/dismiss! :brian "BR-3")
-      (is (true? (:dismissed? (wsv/bare-row :brian "pg-3"
-                                            {:status "Needs verification" :br "BR-3"})))
-          "a CLI-dismissed orphan ticket stays hidden")
-      (is (false? (:dismissed? (wsv/bare-row :brian "pg-4"
-                                             {:status "Needs verification" :br nil})))
-          "no ledger ref → not dismissed"))))
 
 (deftest grouped-by-stage-collects-a-dismissed-band
   (let [rows [{:ws-id "a" :stage :triage     :needs-you false :last-activity "2026-01-01"}

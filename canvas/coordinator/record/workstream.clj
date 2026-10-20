@@ -223,6 +223,10 @@
     "The workstream carrying this external id, whichever adapter raised it."
     {:signature [:=> [:catn [:project ProjectName] [:external-id :string]] [:maybe Workstream]]
      :delegates [list-ids read-ws]})
+  (Operation closure
+    "The newest :closed entry, unless a :reopened or a :phase-gate came after it — how the ledger
+     says a workstream stands settled, read off its entries and never off a stored field."
+    {:signature [:=> [:catn [:w :any]] [:maybe :map]]})
   (Operation find-or-mint-by-ref!
     "The workstream carrying this external id, minting a minimal one when none does — the spine
      every ticket-keyed write shares, so intake-triage and pickup-drive land on one workstream."
@@ -294,8 +298,4 @@
      a citation was owed at all. A boolean on purpose, so no writer can read it as `which
      design`. PUBLIC because the :pr-opened writer, the merge poller and the review loop each
      ask it, and three implementations of `does this ledger hold a design` would drift."
-    {:signature [:=> [:catn [:w Workstream]] :boolean]})
-  (Operation engagement
-    "Whether anyone is engaged with this workstream, from its own sessions."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :keyword]
-     :delegates [read-ws session/list-sessions session/engagement-state]}))
+    {:signature [:=> [:catn [:w Workstream]] :boolean]}))

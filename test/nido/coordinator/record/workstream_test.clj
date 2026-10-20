@@ -11,6 +11,7 @@
    [nido.coordinator.record.workstream :as ws]
    [nido.platform.io :as io]))
 
+
 (def example-ws
   {:id            "ws-20260605-a1b2c3"
    :project       :brian
@@ -220,19 +221,6 @@
                               :external-refs [{:adapter :notion :id "BR-99"}]})
           (is (= (:id w) (:id (ws/find-by-ref :brian :notion "BR-42"))))
           (is (nil? (ws/find-by-ref :brian :notion "BR-nope")))))
-      (finally (fs/delete-tree tmp)))))
-
-(deftest engagement-reads-sessions-off-disk
-  (let [tmp (fs/create-temp-dir)]
-    (try
-      (with-redefs [core/nido-root (constantly (str tmp))
-                    clock/now-iso (constantly "2026-06-05T09:00:00Z")]
-        (let [w (ws/create! :brian {:stage :triaging})]
-          (is (= :idle (ws/engagement :brian (:id w))))
-          (sess/create! :brian (:id w) {:name "s1" :weight :light :autonomy nil})
-          (is (= :active (ws/engagement :brian (:id w))))
-          (ws/close! :brian (:id w) :dropped)
-          (is (= :settled (ws/engagement :brian (:id w))))))
       (finally (fs/delete-tree tmp)))))
 
 (deftest create-persists-intake
@@ -1376,7 +1364,7 @@
   ;; citation there would be inventing a generation to blame.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
         (is (some? (ws/append-entry! :brian (:id w) {:kind :implementation-completed}
                                      (pr-str an-implementation))))
         (is (nil? (:under (last (:entries (ws/read-ws :brian (:id w)))))))))))
@@ -1387,7 +1375,7 @@
   ;; `trail-standing`'s `>=` reads it as work done under that design.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo
              #"Implementation-completed :design cites entry 999, which is not on this workstream"
@@ -1663,7 +1651,7 @@
   ;; those enforces nothing and gets switched off.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
         (is (some? (ws/append-entry! :brian (:id w) {:kind :implementation-completed}
                                      (pr-str an-implementation))))))))
 
@@ -1862,7 +1850,7 @@
   ;; work recorded before any design would satisfy a design appended later.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"Implementation-completed :design cites entry 999"
              (ws/append-entry! :brian (:id w) {:kind :implementation-completed}

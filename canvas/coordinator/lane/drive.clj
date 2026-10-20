@@ -173,9 +173,9 @@
   (Operation spawn-records! "Ensure the workstream, create the run, create its session."
     {:signature [:=> [:catn [:routed :map] [:meta :map]] :map]
      :delegates [ensure-workstream! runs/create-run! create-session-for-run!]})
-  (Operation ref-has-pending-session? "Whether this fire's ref already has work in flight."
+  (Operation ref-has-pending-run? "Whether this fire's ref already has a run of its trigger in flight."
     {:signature [:=> [:catn [:routed :map]] :boolean]
-     :delegates [external-ref workstream/find-by-ref session/pending-session-for-trigger?]})
+     :delegates [external-ref workstream/find-by-ref runs/runs-of]})
   (Operation spawn-and-submit! "Spawn the records and hand the run to the scheduler."
     {:signature [:=> [:catn [:routed :map] [:meta :map]] :any]
      :delegates [spawn-records! executor/submit!]}))

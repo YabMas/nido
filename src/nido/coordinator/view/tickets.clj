@@ -1,19 +1,32 @@
 (ns nido.coordinator.view.tickets
   "Pure data layer for the TUI tickets screen and the `nido:tickets:list` CLI:
-   reads per-ticket records across all projects, groups them by lifecycle
-   stage, and formats display rows. No charm dependencies — the TUI's
-   update/view functions consume this. The actionable group is :ready (acked
-   triage, status :triaged) — those are the tickets you promote to start an
-   implementation session."
+   reads per-ticket records across all projects with each one's derived status
+   (`tickets/status-of`), groups them by lifecycle stage, and formats display
+   rows. No charm dependencies — the TUI's update/view functions consume this.
+   The actionable group is :ready (acked triage, status :triaged) — those are
+   the tickets you promote to start an implementation session."
   (:require
    [babashka.fs :as fs]
    [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.tickets :as tickets]
+   [nido.coordinator.record.workstream :as cws]
    [nido.platform.io :as io]))
+
+(defn- by-ref
+  "Each workstream of `project` by the id of every external ref it carries — read once, so a
+   project's tickets find their workstreams without a scan each."
+  [project]
+  (into {} (for [id (cws/list-ids project)
+                 :let [w (cws/read-ws project id)]
+                 :when w
+                 r (:external-refs w)]
+             [(:id r) w])))
 
 (defn ^{:malli/schema [:=> [:cat] [:vector :Ticket]]}
   read-all-tickets
-  "Read every ticket meta.edn under ~/.nido/projects/*/tickets/*/, each tagged
-   with its :project (keyword). Skips malformed/missing files silently."
+  "Read every ticket meta.edn under ~/.nido/projects/*/tickets/*/, each tagged with its :project
+   (keyword), the :status its workstream's ledger and runs derive (`tickets/status-of`), and
+   :last-at, its workstream's newest entry. Skips malformed/missing files silently."
   []
   (let [projects-dir (fs/path (cstate/nido-root) "projects")]
     (if-not (fs/exists? projects-dir)
@@ -23,12 +36,17 @@
               :when (fs/directory? proj)
               :let  [tdir (fs/path proj "tickets")]
               :when (fs/exists? tdir)
+              :let  [project (keyword (str (fs/file-name proj)))
+                     wss     (by-ref project)]
               tk    (fs/list-dir tdir)
               :when (fs/directory? tk)
               :let  [m (try (io/read-edn (str (fs/path tk "meta.edn")))
                             (catch Exception _ nil))]
-              :when m]
-          (assoc m :project (keyword (str (fs/file-name proj)))))))))
+              :when m
+              :let  [w (wss (str (fs/file-name tk)))]]
+          (assoc m :project project
+                   :status  (tickets/status-of project w)
+                   :last-at (some-> w :entries last :at)))))))
 
 (defn ^{:malli/schema [:=> [:cat :Ticket] :keyword]}
   classify
@@ -46,9 +64,9 @@
 
 (defn ^{:malli/schema [:=> [:cat :Ticket] [:maybe :string]]}
   last-activity
-  "Best timestamp for ordering: the latest ledger entry's :at, else :triaged-at."
+  "Best timestamp for ordering: its workstream's newest entry's :at (`read-all-tickets`)."
   [m]
-  (or (some-> m :entries last :at) (:triaged-at m)))
+  (:last-at m))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :Ticket]] :map]}
   grouped-tickets

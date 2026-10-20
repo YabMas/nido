@@ -8,6 +8,7 @@
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.source.queue :as queue]
    [nido.coordinator.lane.spawn :as spawn]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.triggers :as triggers]
@@ -61,7 +62,7 @@
     {:repo (subs id 0 i) :number (parse-long (subs id (inc i)))}))
 
 (defn- promote-github! [project w]
-  (if (not= :ready (:stage w))
+  (if (or (ws/closure w) (standing/ever-chose? project (:id w) :in-progress))
     {:decision :skip-active}
     (let [ref (github-issue-ref w)
           {:keys [repo number]} (parse-issue-id (:id ref))
@@ -87,7 +88,7 @@
      {:decision :skip-no-trigger} — its originating trigger is gone from triggers.edn"
   [project ws-id]
   (let [w (ws/read-ws project ws-id)]
-    (if (not= :incoming (:stage w))
+    (if (not= :incoming (standing/chosen-stage project ws-id w))
       {:decision :skip-not-inbox}
       (let [{:keys [trigger payload]} (:intake w)
             t (triggers/find-by-name (triggers/load-for-project project) trigger)]

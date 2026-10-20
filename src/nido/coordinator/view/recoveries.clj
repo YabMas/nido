@@ -51,17 +51,17 @@
 (defn- open-runs [mine]
   (vec (sort-by first-at (mapcat :runs (remove :closed mine)))))
 
-(defn- phases [mine]
-  (for [r mine, s (:sessions r)]
-    {:open? (not (:closed r)) :phase (get-in s [:autonomy :phase]) :ws-id (:ws-id r)}))
+(defn- run-states [mine]
+  (for [r mine, run (:runs r)]
+    {:open? (not (:closed r)) :state (:state run) :ws-id (:ws-id r)}))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :map]}
   cause-state
   "Where `cause` stands, given the owed failures and recoveries in `ctx`:
 
-     :needs-you   a recovery session of it is parked on an open workstream — a
+     :needs-you   a recovery run of it is parked for review on an open workstream — a
                   person is being asked something (:gate-ws names where)
-     :recovering  a recovery session of it is queued or running
+     :recovering  a recovery run of it is queued or running
      :waiting     its open workstream's latest recoveries failed and it is not
                   yet due (:due-at is when it is)
      :owed        failures are owed or a workstream is open, and nothing above
@@ -69,8 +69,7 @@
      :dismissed   nothing owed or open; its latest recovery closed otherwise"
   [cause {:keys [owed recoveries now pacing]}]
   (let [mine   (filter #(= cause (:cause %)) recoveries)
-        ph     (phases mine)
-        parked (some #(when (and (:open? %) (= :parked (:phase %))) %) ph)
+        parked (some #(when (and (:open? %) (= :awaiting-review (:state %))) %) (run-states mine))
         runs   (open-runs mine)
         due-at (when (seq runs) (sf/due-at runs pacing))
         live?  (or (some #(= cause (:cause %)) owed) (some (complement :closed) mine))]

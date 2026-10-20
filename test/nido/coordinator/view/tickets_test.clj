@@ -35,7 +35,7 @@
   (is (= :other       (tv/classify {:status nil}))))
 
 (deftest grouped-tickets-buckets-and-orders
-  (let [mk (fn [br status at] {:br-id br :status status :triaged-at at})
+  (let [mk (fn [br status at] {:br-id br :status status :last-at at})
         all [(mk "BR-1" :triaged "2026-06-04T10:00:00Z")
              (mk "BR-2" :triaged "2026-06-05T10:00:00Z")
              (mk "BR-3" :planning "2026-06-05T09:00:00Z")

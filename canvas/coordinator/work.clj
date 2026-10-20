@@ -68,11 +68,6 @@
   (Operation list-workstreams "Every workstream of a project, as enriched rows on the spine."
     {:signature [:=> [:catn [:project ProjectName] [:live-names [:? :any]]] [:vector :map]]
      :delegates [view/workstream-rows]})
-  (Operation status-audit
-    "Every open workstream on which status and the record projection it replaced disagree, with
-     both answers — the first phase's exit instrument."
-    {:signature [:=> [:catn [:project ProjectName] [:live-names [:? :any]]] [:vector :map]]
-     :delegates [list-workstreams view/workstream-rows]})
   (Operation winding-down
     "Workstreams that are FINISHED and still holding a live session — the ones costing memory
      for work nobody is doing."
@@ -195,7 +190,7 @@
      what its sessions say: a hold no live session works on is one nothing will ever release."
     {:signature [:=> [:catn] [:vector :map]]
      :delegates [triggers/load-for-project workstream/list-ids workstream/read-ws
-                 session/list-sessions session/engagement-state]})
+                 session/list-sessions]})
   (Operation review-queues
     "The latest review-queue grooming of every project whose triggers declare the plan trigger —
      its stage, its plan's tickets in rank order each with its proposed writes, and what was

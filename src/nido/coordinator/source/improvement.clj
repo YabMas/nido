@@ -17,9 +17,9 @@
    THE ONE-AT-A-TIME RULE LIVES HERE, and it has to. Three things were verified
    about the alternatives before this was built:
 
-   1. It cannot be the trigger's `:max-in-flight`. That gate counts sessions in
-      `session/gating-phases`, which is #{:preprocessing :running :parked} — so
-      a session that FAILS or is halted releases the slot, and the next poll
+   1. It cannot be the trigger's `:max-in-flight`. That gate counts runs in
+      progress or parked for review (runs/in-progress-count-by-trigger) — so a
+      run that FAILS or is halted releases the slot, and the next poll
       starts a second improvement on top of a branch the first one abandoned
       mid-edit.
 

@@ -46,6 +46,10 @@
     "Queue a body of work against a run that has already been spawned."
     {:signature [:=> [:catn [:opts :map]] :any]
      :delegates [turn-id submit!]})
+  (Operation turn-pending?
+    "Whether a turn against a run is queued or running in this process's executor — what refuses
+     a second reply while the first waits for a slot."
+    {:signature [:=> [:catn [:run-id RunId]] :boolean]})
   (Operation driven?
     "Whether anything in this process has ever ticked the executor — how a caller tells a live
      daemon from a bare JVM that merely loaded the namespace."

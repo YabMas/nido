@@ -366,13 +366,6 @@
     (prn (backfill/backfill! (keyword (:project opts))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  status-audit-cmd [& args]
-  (let [[_ opts] (task-args/split-args args)
-        diffs (work/status-audit (keyword (:project opts)))]
-    (doseq [d diffs] (prn d))
-    (println (count diffs) "open workstreams where status and the record projection disagree")))
-
-(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   backfill-landings-cmd [& args]
   (let [[_ opts] (task-args/split-args args)] (backfill-landings* opts)))
 

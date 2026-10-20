@@ -7,6 +7,7 @@
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.runs :as runs]
+            [canvas.coordinator.record.session :refer [Session]]
             [canvas.coordinator.record.state :refer [Path WorkstreamId SessionName]]
             [canvas.coordinator.record.tickets :as tickets :refer [TicketId]]
             [canvas.coordinator.record.workstream :as workstream :refer [Workstream]]
@@ -51,13 +52,12 @@
    they are the same work not being finished."
   (Operation file! "File a findings round on a shipped workstream, reopening it."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts :map]] :map]
-     :delegates [workstream/read-ws workstream/append-entry! workstream/set-findings!
+     :delegates [workstream/read-ws workstream/closure workstream/append-entry!
                  workstream/reopen!]})
-  (Operation resolve! "Mark findings resolved by a pull request or commit."
+  (Operation resolve! "Record findings resolved by a pull request or commit; the ones still open
+     afterwards are what the round owes."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:item-ids :any] [:by :any]] :map]
-     :delegates [workstream/read-ws workstream/set-findings!]})
-  (Operation open-count "How many findings are still open on a workstream."
-    {:signature [:=> [:catn [:ws-record Workstream]] :int]}))
+     :delegates [workstream/read-ws workstream/append-entry! workstream/close!]}))
 
 (Module lane-intake
   "Queue-mode intake: a fire that becomes a passive workstream instead of a session.
@@ -121,14 +121,20 @@
      :delegates [workstream/read-ws workstream/plan-design workstream/open-phase!]}))
 
 (Module lane-resume
-  "Re-engaging a parked session with a human's answer."
+  "Re-engaging a session waiting on a person with their answer. Which session waits is read off
+   run records, run locks, the executor and status — no stored phase says it."
   (Operation resume-cwd
     "Where to relaunch so the agent finds its own history. A resume in the wrong directory
      starts a conversation that has forgotten everything."
     {:signature [:=> [:catn [:sid :any] [:worktree Path] [:home Path]] Path]})
-  (Operation resume! "Re-engage a parked session with input."
+  (Operation waiting-session
+    "The session waiting on a person's reply: no agent of its run running, no reply to it queued,
+     and its run parked for review or a person owed the workstream's next move."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe Session]]
+     :delegates [runs/find-for-session runs/live?]})
+  (Operation resume! "Re-engage a session waiting on a person with their input."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:input :string]] :any]
-     :delegates [resume-cwd]}))
+     :delegates [waiting-session resume-cwd]}))
 
 (Module lane-scratch
   "Which workstream a session a person started by hand belongs to: the one the start names, or

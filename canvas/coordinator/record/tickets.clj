@@ -71,7 +71,7 @@
      triaged, investigating, awaiting input, or nil when it is re-triable — read off that
      workstream's ledger and runs, optionally leaving one run out."
     {:signature [:=> [:catn [:project ProjectName] [:w :any]] [:maybe :keyword]]
-     :delegates [runs/runs-of standing/closure standing/verdict standing/chosen-stage
+     :delegates [runs/runs-of workstream/closure standing/verdict standing/chosen-stage
                  standing/restored-at]})
   (Operation status
     "`status-of` the workstream carrying the ticket, or nil when none does."
@@ -113,7 +113,7 @@
     "Take a ticket off the triage radar: settle the workstream carrying it :dismissed, minting one
      when none does."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] Ticket]
-     :delegates [update-meta! workstream/find-or-mint-by-ref! standing/closure workstream/close!]})
+     :delegates [update-meta! workstream/find-or-mint-by-ref! workstream/closure workstream/close!]})
   (Operation latest-triage-report
     "The newest triage report on the workstream this ticket raised, or nil."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] [:maybe :map]]

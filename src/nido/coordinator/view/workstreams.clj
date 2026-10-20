@@ -1,7 +1,7 @@
 (ns nido.coordinator.view.workstreams
   "Pure data layer for the TUI workstreams surface: reads a project's
-   workstreams + their coordinator-sessions, projects engagement state, and
-   formats display rows. No charm dependencies — the TUI's update/view
+   workstreams + their coordinator-sessions and formats display rows; where a
+   row sits and what it is doing come from status (`nido.coordinator.work`). No charm dependencies — the TUI's update/view
    functions consume this. Replaces runs-view + tickets-view as the
    coordination overview."
   (:require
@@ -11,9 +11,9 @@
    [nido.coordinator.source.notion-cache :as notion-cache]
    [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.phase :as phase]
+   [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.standing :as standing]
-   [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.workstream :as workstream]))
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] [:maybe :map]]}
@@ -82,9 +82,8 @@
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] :keyword]}
   ws-source
-  "Source bucket of a workstream, classified from its RAW record (not a projected
-   row — workstream-row's :stage is unreliable for scratch). :scratch when the
-   stored stage is :scratch (a one-off, set by scratch/birth!); :github when it
+  "Source bucket of a workstream, classified from its record: :scratch when its
+   ledger holds the birth entry of a one-off (scratch/birth!); :github when it
    carries a :github-issue ref (Phase 3); :slack when it carries a :slack-message
    ref; :review-run when it carries a :review-run ref — a workstream minted to
    HOLD a review-loop analysis rather than to do work, which is why it is a
@@ -94,7 +93,7 @@
    dropped from every view."
   [ws]
   (cond
-    (= :scratch (:stage ws))                                      :scratch
+    (standing/born-scratch? ws)                                   :scratch
     (some #(= :github-issue (:adapter %)) (:external-refs ws))   :github
     (some #(= :slack-message (:adapter %)) (:external-refs ws))  :slack
     (some #(= :review-run (:adapter %)) (:external-refs ws))     :review-run
@@ -159,18 +158,18 @@
 
 (defn- timestamps [ws sessions]
   (concat
-   (map :at (:stage-history ws))
+   [(:created-at ws)]
+   (map :at (:entries ws))
    (mapcat (fn [s]
              (concat (map :at (:substrate-history s))
-                     (map :at (get-in s [:autonomy :phase-history]))
                      [(:created-at s)]))
            sessions)))
 
 (defn ^{:malli/schema [:=> [:cat :Workstream :any] [:maybe :string]]}
   last-activity
-  "Latest ISO-8601 timestamp across the workstream's stage-history and each
-   session's substrate-history / autonomy phase-history / created-at. ISO
-   strings sort lexically = chronologically. nil when nothing is present."
+  "Latest ISO-8601 timestamp across the workstream's creation, its ledger entries and each
+   session's substrate-history / created-at. ISO strings sort lexically = chronologically. nil
+   when nothing is present."
   [ws sessions]
   (->> (timestamps ws sessions) (remove nil?) sort last))
 
@@ -180,21 +179,6 @@
    ticket's severity-calc, so it drives the same ordering the executor picks by."
   [sessions]
   (->> sessions (keep #(get-in % [:autonomy :priority])) (reduce max 0)))
-
-(defn- reconcile-liveness
-  "A human (non-autonomous) session carries a static :substrate that is never
-   synced to real service state, so a downed one-off would read :live — and thus
-   :active — forever. Downgrade a human :live session whose name is NOT in
-   `live-names` (the set of sessions actually holding ports) to :archived for the
-   projection only, so engagement reflects reality. Autonomous sessions are
-   coordinator-managed (substrate flips via archive! on Run teardown) and pass
-   through untouched."
-  [live-names s]
-  (if (and (nil? (:autonomy s))
-           (= :live (:substrate s))
-           (not (contains? live-names (:name s))))
-    (assoc s :substrate :archived)
-    s))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :map]]}
   round-progress
@@ -243,19 +227,67 @@
       (assoc doing :progress p)
       doing)))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :map] [:maybe :keyword] [:? :any]] [:maybe :map]]}
+(defn- merge-substate
+  "How far the merge lane has got with the workstream, from its newest merge run's state, or nil
+   when no merge run says."
+  [runs]
+  (when-let [r (last (filter #(or (= :merge (:mode %)) (= :merge (:trigger %))) runs))]
+    (case (:state r)
+      :queued                   :queued
+      (:running :preprocessing) :driving
+      :awaiting-review          :blocked
+      :done                     :awaiting-merge
+      nil)))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
+  doing
+  "What this workstream is DOING right now — one source, or nil — as
+   `{:source :claim|:merge|:session, …}`.
+
+   THREE SOURCES, and the precedence is total so that exactly one ever answers: a merge run and
+   an agent's burst read by different callers that never met once described one workstream two
+   ways at once.
+
+     over      — nothing. A settled close, or a band of :done, which is how a Notion-driven
+                 workstream ends: its ticket goes terminal under it.
+     :claim    — a named process holds the workstream's activity lock right now.
+     :merge    — the workstream's band is :shipping; the merge run's own state says how far
+                 along, or :queued when no merge run says — the lane takes one branch at a time,
+                 so waiting for it is a state the board keeps saying.
+     :session  — an agent holds its run's lock: `runs` carries each of the workstream's runs
+                 with :live? beside it.
+
+   The claim outranks the other two because it is evidence of a process alive at the instant of
+   the read. A run parked for review is deliberately not `doing`: it is a gate, and calling it
+   activity would report a workstream waiting on a person as one that is busy. `claim` and the
+   runs' liveness arrive as ARGUMENTS, so this stays pure."
+  [{:keys [closed stage claim runs]}]
+  (cond
+    (or (some? closed) (= :done stage)) nil
+
+    (some? claim)
+    (into {:source :claim}
+          (select-keys claim [:kind :run-id :report-path :started-at :pid]))
+
+    (= :shipping stage)
+    {:source :merge :phase (or (merge-substate runs) :queued)}
+
+    :else
+    (when-let [r (last (filter :live? runs))]
+      {:source :session :phase (:state r) :session (:session-name r)})))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :map] [:maybe :keyword]] [:maybe :map]]}
   doing-at
   "What is underway in workstream `ws-id` right now, given the closure and band the caller
-   settled on — `session/doing` with the claim read here and the running round's progress beside
-   it. The board passes status's band, so what is underway and where the row sits are one answer."
-  ([project ws-id closed stage] (doing-at project ws-id closed stage nil))
-  ([project ws-id closed stage sessions]
-   (with-progress
-     (session/doing
-      {:closed   closed
-       :sessions (or sessions (session/list-sessions project ws-id))
-       :stage    stage
-       :claim    (activity/read-live project ws-id)}))))
+   settled on — `doing` with the claim and the runs' liveness read here and the running round's
+   progress beside it. The board passes status's band, so what is underway and where the row sits
+   are one answer."
+  [project ws-id closed stage]
+  (with-progress
+    (doing {:closed closed
+            :stage  stage
+            :claim  (activity/read-live project ws-id)
+            :runs   (mapv #(assoc % :live? (runs/live? (:id %))) (runs/runs-of project ws-id))})))
 
 (defn- standing-design
   "The design whose plan governs the workstream (`workstream/plan-design` — the one
@@ -268,48 +300,20 @@
                (:cleared? (standing/of-design project ws-id d)))
       d)))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :Workstream [:? :any] [:? :any]] :WorkstreamRow]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :Workstream [:? :any]] :WorkstreamRow]}
   workstream-row
-  "One display row for a workstream: reads its sessions and projects engagement
-   + lifecycle stage. `live-names` (optional) is the set of session names actually
-   holding ports; when supplied, a human session not in it is treated as down so
-   :engagement reflects real liveness rather than the static :substrate. Omit it
-   (or pass nil) for the legacy substrate-only projection. `facts` is the
-   project's Notion page-id → {:status :priority :ball-ids} cache
+  "One display row for a workstream: what it is and where it came from — label, links, source,
+   priorities, activity, open findings. Where it sits on the board, whether it needs a person and
+   what is underway are status's to answer, and the board adds them (`work/list-workstreams`).
+   `facts` is the project's Notion page-id → {:status :priority :ball-ids} cache
    (nido.coordinator.source.notion-cache); nil ⇒ no Notion priority is stamped."
-  ([project ws] (workstream-row project ws nil nil))
-  ([project ws live-names] (workstream-row project ws live-names nil))
-  ([project ws live-names facts]
-   (let [sessions       (session/list-sessions project (:id ws))
-         eng-sessions   (if live-names (mapv #(reconcile-liveness live-names %) sessions) sessions)
-         br-id          (:id (ledger-ref ws))
-         ;; The status the ticket record STORED: this row is the stored copies' projection,
-         ;; which status's derivation replaced and the audit compares against.
-         local-status   (when br-id (:status (tickets/read-meta project br-id)))
-         page-id        (:page-id (notion-ref ws))
-         notion-backed? (some? (notion-ref ws))
-         in-cache?      (boolean (and page-id (contains? facts page-id)))
-         shipping?      (and (nil? (:closed ws)) (= :shipping (:stage ws)))
-         notion-driven? (and notion-backed? (or in-cache? shipping?))
-         proj           (if notion-driven?
-                          (session/notion-stage-projection
-                            {:shipping?          shipping?
-                             :in-flight?         (contains? #{:planning :implementing} local-status)
-                             :notion-status      (get-in facts [page-id :status])
-                             :triaged?           (= :triaged local-status)
-                             :sessions           sessions})
-                          (session/stage-projection
-                            (:closed ws)
-                            local-status
-                            sessions (:stage ws)))
-         ;; Bound rather than inlined because the row reports it twice — once as
-         ;; itself and once as the merge lane's sub-state — and two calls would
-         ;; be two reads of the claim, which is two moments.
-         doing          (doing-at project (:id ws)
-                                  (when-not notion-driven? (:closed ws)) (:stage proj) sessions)]
+  ([project ws] (workstream-row project ws nil))
+  ([project ws facts]
+   (let [sessions (session/list-sessions project (:id ws))
+         page-id  (:page-id (notion-ref ws))]
      {:ws-id           (:id ws)
       :project         project
-      :br-id           br-id
+      :br-id           (:id (ledger-ref ws))
       ;; promote-id stays Notion-or-GitHub. A Slack inbox workstream IS promotable
       ;; (promote → start-triage!), but its promote decisions (:triaging etc.) are
       ;; reported br-independently, so it needs no promote-id.
@@ -318,49 +322,16 @@
       :label           (label ws sessions)
       :links           (ref-links ws)
       :source          (ws-source ws)
-      :stage           (:stage proj)
-      :needs-you       (:needs-you proj)
-      ;; The local dismiss veto. Notion-driven rows ignore nido :closed AND the
-      ;; :dismissed disposition in their projection, so this flag is the ONLY
-      ;; carrier of a nido-side dismiss to the board. work/to-spine reads it.
-      ;; TWO carriers, because neither alone covers every row: the ticket status
-      ;; needs a ledger ref (notion-or-slack) that a ref-less coordinator
-      ;; workstream doesn't have, and the :closed outcome is ignored outright by
-      ;; the notion-driven projection. reopen! clears :closed, so restore! undoes
-      ;; both halves without a second write.
-      :dismissed?      (or (= :dismissed local-status)
-                           (= :dismissed (get-in ws [:closed :outcome])))
-      ;; Notion-driven rows ignore nido :closed for engagement too — else a
-      ;; reopened-in-Notion ticket reads :settled and to-spine folds it to :done.
-      :engagement      (session/engagement-state (when-not notion-driven? (:closed ws)) eng-sessions)
       :priority        (max-priority sessions)
       :notion-priority (get-in facts [page-id :priority])
       :session-count   (count sessions)
       :last-activity   (last-activity ws sessions)
       :facets          (:facets ws)
-      ;; What is underway RIGHT NOW, from the one projection that composes every
-      ;; source that can say so. The claim is read here rather than inside the
-      ;; projection so that the projection stays pure — this fn already reads
-      ;; sessions and ticket status, so it is the layer that may touch disk.
-      ;; Cheap when nothing is running: no activity has ever been claimed against
-      ;; most workstreams, so the probe is a stat that finds no lock file.
-      ;; Closure and stage are the row's EFFECTIVE ones, never the stored ones. A
-      ;; Notion-driven row ignores a stale local :closed, and a merged shipment
-      ;; leaves :stage :shipping behind on the record — so passing the stored
-      ;; pair would let one row answer the same question twice, :doing saying
-      ;; :awaiting-merge on a row projected :done.
-      :doing           doing
-      ;; Standing's answer, read off the ledger — the one placement asks — never the stored
-      ;; tracker, which a resolution entry does not clear. Asked only of a ledger holding a
-      ;; findings round: nearly none do, and a board reads ~1000 rows.
+      ;; Standing's answer, read off the ledger — the one placement asks. Asked only of a ledger
+      ;; holding a findings round: nearly none do, and a board reads ~1000 rows.
       :open-findings   (if (some #(= :findings (:kind %)) (:entries ws))
                          (count (standing/open-findings project (:id ws)))
-                         0)
-      ;; :between-phases? is read from :closed whatever drives the row: between
-      ;; phases is nido's own fact about the plan, which no ticket status carries.
-      ;; Where the row stands IN that plan is `phase-progress`, asked only for
-      ;; rows the board draws.
-      :between-phases? (= :between-phases (get-in ws [:closed :outcome]))})))
+                         0)})))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
   phase-progress
@@ -378,54 +349,50 @@
   bare-row
   "A display row for a watched-view Notion page with NO nido workstream, so an
    orphan / never-provisioned ticket is visible on the board. Synthetic :ws-id is
-   the Notion page-id (stable + unique). Notion-driven stage; no sessions → engagement
-   :idle, needs-you false. Read-only: mutations guard on the missing workstream."
+   the Notion page-id (stable + unique). Its band is the Notion status's: a ticket with
+   no workstream holds no triage, so nothing on it is promotable yet. No sessions →
+   engagement :idle, needs-you false. Read-only: mutations guard on the missing workstream."
   [project page-id {:keys [status priority title br]}]
-  (let [tstatus  (when br (tickets/status project br))
-        triaged? (= :triaged tstatus)]
-    {:ws-id           page-id
-     :project         project
-     :br-id           br
-     :promote-id      br
-     :label           (or title br "(untitled)")
-     :links           (ref-links {:external-refs [{:adapter :notion
-                                                   :id      (or br page-id)
-                                                   :title   title
-                                                   :page-id page-id}]})
-     :source          :notion
-     :stage           (session/notion-stage status triaged?)
-     :needs-you       false
-     :engagement      :idle
-     :priority        0
-     :notion-priority priority
-     :session-count   0
-     :last-activity   nil
-     :facets          nil
-     ;; No workstream exists, so nothing can hold a claim against it.
-     :doing           nil
-     :open-findings   0
-     :dismissed?      (= :dismissed tstatus)
-     :bare?           true}))
+  {:ws-id           page-id
+   :project         project
+   :br-id           br
+   :promote-id      br
+   :label           (or title br "(untitled)")
+   :links           (ref-links {:external-refs [{:adapter :notion
+                                                 :id      (or br page-id)
+                                                 :title   title
+                                                 :page-id page-id}]})
+   :source          :notion
+   :stage           (session/notion-stage status false)
+   :needs-you       false
+   :engagement      :idle
+   :priority        0
+   :notion-priority priority
+   :session-count   0
+   :last-activity   nil
+   :facets          nil
+   ;; No workstream exists, so nothing can hold a claim against it.
+   :doing           nil
+   :open-findings   0
+   :bare?           true})
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :WorkstreamRow]]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :WorkstreamRow]]}
   workstream-rows
   "All display rows for a project: one per workstream, PLUS a synthesized bare row
    for each watched-view page (from the Notion cache) that no workstream covers — so
-   orphan / never-provisioned tickets are visible. `live-names` is threaded into each
-   real row's engagement projection. Builds the page-facts cache once."
-  ([project] (workstream-rows project nil))
-  ([project live-names]
-   (let [facts    (notion-cache/project-page-facts project)
-         wss      (keep #(workstream/read-ws project %) (workstream/list-ids project))
-         ws-rows  (mapv #(workstream-row project % live-names facts) wss)
-         covered  (into #{} (mapcat (fn [w] (remove nil? [(:page-id (notion-ref w))
-                                                           (:id (ledger-ref w))]))) wss)
-         bare     (->> facts
-                       (remove (fn [[page-id fct]]
-                                 (or (contains? covered page-id)
-                                     (contains? covered (:br fct)))))
-                       (mapv (fn [[page-id fct]] (bare-row project page-id fct))))]
-     (into ws-rows bare))))
+   orphan / never-provisioned tickets are visible. Builds the page-facts cache once."
+  [project]
+  (let [facts   (notion-cache/project-page-facts project)
+        wss     (keep #(workstream/read-ws project %) (workstream/list-ids project))
+        ws-rows (mapv #(workstream-row project % facts) wss)
+        covered (into #{} (mapcat (fn [w] (remove nil? [(:page-id (notion-ref w))
+                                                         (:id (ledger-ref w))]))) wss)
+        bare    (->> facts
+                     (remove (fn [[page-id fct]]
+                               (or (contains? covered page-id)
+                                   (contains? covered (:br fct)))))
+                     (mapv (fn [[page-id fct]] (bare-row project page-id fct))))]
+    (into ws-rows bare)))
 
 (defn- by-newest
   "Newest-activity first. ISO strings sort lexically = chronologically; a nil
@@ -459,9 +426,9 @@
                 rows)))
 
 (def triage-in-flight-engagements
-  "Engagement states that occupy a triage slot: a session is parked at the gate
-   for you, or actively running. Everything else in the triage stage is queued
-   backlog waiting for a free slot. Mirrors session/gating-phases."
+  "Engagement states that occupy a triage slot: waiting at the gate for you, or
+   actively running. Everything else in the triage stage is queued backlog waiting
+   for a free slot. Mirrors what runs/in-progress-count-by-trigger counts."
   #{:parked-at-gate :active})
 
 (defn- triage-split
@@ -513,30 +480,31 @@
   "Display rows for one workstream's sessions, ordered most-recently-active first, in the state
    the substrate's listing reports and with who drives each in one vocabulary whoever started it:
    :driver is what a session's :claude facet records, :nobody without one; :state is the
-   listing's, nil for a session it does not list. :phase is nil for human sessions.
+   listing's, nil for a session it does not list.
 
    `listing` is the substrate's rows for this workstream's directories — View may not reach the
    substrate, so its caller reads them and hands them down, each marked :baseline-shown? by the
    check conduct makes. A listed background session no record names gets a row of its own when it
    is so marked: a person's own session in the workstream's home or worktree, which nido could
-   adopt. :recorded? says which:
-   only a recorded row's :name is a nido session to open."
+   adopt. :recorded? says which: only a recorded row's :name is a nido session to open. A recorded
+   row's :last-activity is its owning run's newest transition, else its own."
   [project ws-id listing]
   (let [by-id     (into {} (map (juxt :sessionId identity)) listing)
         sessions  (session/list-sessions project ws-id)
+        ran-at    (into {} (map (juxt :session-name #(-> % :state-history last :at)))
+                        (runs/runs-of project ws-id))
         on-record (set (keep #(get-in % [:claude :session-id]) sessions))
         recorded  (mapv (fn [s]
                           (let [row (get by-id (get-in s [:claude :session-id]))]
                             {:name          (:name s)
                              :project       project
                              :recorded?     true
-                             :phase         (get-in s [:autonomy :phase])
                              :weight        (:weight s)
                              :substrate     (:substrate s)
                              :state         (:state row)
                              :driver        (or (get-in s [:claude :driver]) :nobody)
                              :held?         (some? (get-in s [:claude :hold]))
-                             :last-activity (or (some-> s :autonomy :phase-history last :at)
+                             :last-activity (or (ran-at (:name s))
                                                 (some-> s :substrate-history last :at)
                                                 (:created-at s))}))
                         sessions)

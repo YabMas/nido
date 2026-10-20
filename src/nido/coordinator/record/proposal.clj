@@ -228,8 +228,9 @@
                  (let [w (cws/read-ws pk ws-id)]
                    (when-let [ref (some #(when (= improvement-adapter (:adapter %)) %)
                                         (:external-refs w))]
-                     {:address (:id ref) :ws-id ws-id :open? (nil? (:closed w))
-                      :outcome (:outcome (:closed w))}))))
+                     (let [closed (cws/closure w)]
+                       {:address (:id ref) :ws-id ws-id :open? (nil? closed)
+                        :outcome (:outcome closed)})))))
          vec)))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :map] [:vector :map]] [:maybe :map]]}
@@ -248,8 +249,8 @@
 
    An attempt is already open. This is the one-at-a-time rule, and it lives HERE
    rather than in the trigger's `:max-in-flight`, which cannot express it:
-   `session/gating-phases` is #{:preprocessing :running :parked}, so a session
-   that fails or is halted releases the slot and the next poll starts another
+   it counts runs in progress or parked for review (runs/in-progress-count-by-trigger), so a
+   run that fails or is halted releases the slot and the next poll starts another
    improvement on top of a branch the last one abandoned. An open workstream is
    released by a close and by nothing else.
 

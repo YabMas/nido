@@ -1086,7 +1086,7 @@
           ;; the two most expensive things on this path, and the board runs this
           ;; once per rendered row.
           re     (reentry/of* w design st bst)
-          closed (standing/closure project ws-id w)
+          closed (ws/closure w)
           blocker (unanswered-blocker project ws-id w)
           ;; A ticket a person settled in Notion is settled here too: placed where a close is,
           ;; owing nobody, so the board's band and the pane's owed-by are one answer. Not over an
@@ -1167,10 +1167,8 @@
         ;; the fallback report both need to say WHY — building either on a second
         ;; derivation would be the two-answers defect this change exists to close.
         :read   {:ledger        (count (:entries w))
-                :kinds         ks
-                :board-stage   (:stage w)
-                 :sessions      (mapv (juxt :name #(get-in % [:autonomy :phase]))
-                                      (csession/list-sessions project ws-id))
+                 :kinds         ks
+                 :sessions      (mapv :name (csession/list-sessions project ws-id))
                  :standing      (when st (select-keys st [:live? :decidable? :decided?]))}}
 
         re (assoc :re-entry re)

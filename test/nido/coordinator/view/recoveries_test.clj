@@ -20,10 +20,9 @@
    :error (when reason {:reason reason})
    :state-history [{:at started :state :queued} {:at ended :state state}]})
 
-(defn- recovery [ws-id cause & {:keys [closed named runs phases entries]}]
+(defn- recovery [ws-id cause & {:keys [closed named runs entries]}]
   {:ws-id ws-id :cause cause :closed closed :named (set named)
-   :settled #{} :runs (vec runs)
-   :sessions (vec (for [p phases] {:autonomy {:phase p}}))
+   :settled #{} :runs (vec runs) :sessions []
    :entries (or entries {})})
 
 (defn- overview [failures recoveries & {:keys [feed-from]}]
@@ -41,9 +40,9 @@
   (let [ov (overview
             [(failure "F1" "c-owed") (failure "F2" "c-owed" :session "other")
              (failure "F3" "c-run") (failure "F4" "c-park") (failure "F5" "c-wait")]
-            [(recovery "ws-run" "c-run" :named ["F3"] :phases [:running])
-             (recovery "ws-park" "c-park" :named ["F4"] :phases [:parked])
-             (recovery "ws-wait" "c-wait" :named ["F5"] :phases [:failed]
+            [(recovery "ws-run" "c-run" :named ["F3"] :runs [(run "r3" :running)])
+             (recovery "ws-park" "c-park" :named ["F4"] :runs [(run "r4" :awaiting-review)])
+             (recovery "ws-wait" "c-wait" :named ["F5"]
                        :runs [(run "r1" :failed :ended "2026-09-17T11:59:30Z")])])]
     (is (= :owed (state-of ov "c-owed")))
     (is (= :recovering (state-of ov "c-run")))

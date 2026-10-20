@@ -5,6 +5,7 @@
    [nido.platform.core :as core]
    [nido.coordinator.lane.findings :as findings]
    [nido.coordinator.source.queue :as queue]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.workstream :as ws]))
@@ -22,7 +23,7 @@
     (ws/close! :brian (:id w) :done)
     w))
 
-(deftest file-appends-event-to-workstream-ledger-seeds-tracker-reopens-enqueues
+(deftest file-appends-event-to-workstream-ledger-reopens-enqueues
   (with-tmp
     (fn []
       (let [enq (atom nil)]
@@ -36,10 +37,10 @@
             (is (= 1 (:round res)))
             (let [w2 (ws/read-ws :brian (:id w))]
               (is (= :findings (-> w2 ws/newest-record :kind)))
-              (is (= #{"f1" "f2"} (-> w2 :findings :open)))
-              (is (= 1 (-> w2 :findings :round)))
-              (is (nil? (:closed w2)))
-              (is (= :in-progress (:stage w2))))
+              (is (= #{"f1" "f2"} (standing/open-findings :brian (:id w))))
+              (is (= 1 (:round (ws/latest-entry :brian (:id w) :findings))))
+              (is (nil? (ws/closure w2)))
+              (is (= :in-progress (standing/chosen-stage :brian (:id w) w2))))
             (is (= :plan-bug (-> @enq :target :trigger)))
             (is (= "BR-7" (-> @enq :payload :id)))))))))
 
@@ -51,7 +52,7 @@
                      (findings/file! :brian (:id w)
                                      {:items [{:summary "A" :severity :tweak}]})))))))
 
-(deftest resolve-moves-open-to-resolved
+(deftest resolve-records-the-open-items-it-resolves
   (with-tmp
     (fn []
       (with-redefs [queue/enqueue! (fn [_] "/q/x.edn")]
@@ -59,11 +60,16 @@
           (findings/file! :brian (:id w)
                           {:items [{:summary "A" :severity :blocker}
                                    {:summary "B" :severity :tweak}]})
-          (findings/resolve! :brian (:id w) ["f1" "unknown"] "brian#812")
-          (let [t (:findings (ws/read-ws :brian (:id w)))]
-            (is (= #{"f2"} (:open t)))
-            (is (= "brian#812" (get-in t [:resolved "f1" :by])))
-            (is (= 1 (findings/open-count (ws/read-ws :brian (:id w)))))))))))
+          (is (= {:round 1 :open #{"f2"}}
+                 (findings/resolve! :brian (:id w) ["f1" "unknown"] "brian#812")))
+          (is (= #{"f2"} (standing/open-findings :brian (:id w))))
+          (is (= [{:round 1 :items ["f1"] :by "brian#812"}]
+                 (map #(select-keys % [:round :items :by])
+                      (ws/entries-of :brian (:id w) :findings-resolved)))
+              "only the open item it named is recorded — an unknown id records nothing")
+          (findings/resolve! :brian (:id w) ["f1"] "again")
+          (is (= 1 (count (ws/entries-of :brian (:id w) :findings-resolved)))
+              "and an item already resolved is not resolved twice"))))))
 
 (deftest round-increments-on-second-filing
   (with-tmp
@@ -74,7 +80,7 @@
           (ws/close! :brian (:id w) :done)
           (let [res2 (findings/file! :brian (:id w) {:items [{:summary "C" :severity :blocker}]})]
             (is (= 2 (:round res2)))
-            (is (= #{"f1"} (-> (ws/read-ws :brian (:id w)) :findings :open)))))))))
+            (is (= #{"f1"} (standing/open-findings :brian (:id w))))))))))
 
 (deftest file-on-non-notion-workstream-skips-provisioning
   (with-tmp
@@ -87,9 +93,9 @@
               ;; no provisioning envelope for a non-Notion ws …
               (is (nil? (:queued res)))
               (is (zero? @enq))
-              ;; … but reopen + tracker + event still applied
-              (is (= #{"f1"} (-> (ws/read-ws :brian (:id w)) :findings :open)))
-              (is (= :in-progress (:stage (ws/read-ws :brian (:id w))))))))))))
+              ;; … but reopen + event still applied
+              (is (= #{"f1"} (standing/open-findings :brian (:id w))))
+              (is (= :in-progress (standing/chosen-stage :brian (:id w) (ws/read-ws :brian (:id w))))))))))))
 
 (deftest file-appends-to-own-entries-when-workstream-has-nonempty-entries
   (with-tmp
@@ -126,11 +132,11 @@
         (let [w (shipped-ticket-ws)]
           (ws/close! :brian (:id w) :between-phases 3)
           (findings/file! :brian (:id w) {:items [{:summary "A" :severity :tweak}]})
-          (is (nil? (:closed (ws/read-ws :brian (:id w)))) "filing reopens it, as for any landing")
-          (is (= 3 (:between-phases (:findings (ws/read-ws :brian (:id w))))) "the tracker keeps the plan")
+          (is (nil? (ws/closure (ws/read-ws :brian (:id w)))) "filing reopens it, as for any landing")
+          (is (= 3 (:between-phases (ws/latest-entry :brian (:id w) :findings))) "the round names the plan")
           (findings/resolve! :brian (:id w) ["f1"] "commit abc")
           (is (= {:outcome :between-phases :design {:seq 3}}
-                 (select-keys (:closed (ws/read-ws :brian (:id w))) [:outcome :design]))
+                 (select-keys (ws/closure (ws/read-ws :brian (:id w))) [:outcome :design]))
               "the round belonged to the landed phase; its gate is owed again under the same plan"))))))
 
 (deftest resolving-a-round-with-a-fix-published-leaves-the-landing-to-close-it
@@ -142,7 +148,7 @@
           (findings/file! :brian (:id w) {:items [{:summary "A" :severity :tweak}]})
           (ws/append-entry! :brian (:id w) {:kind :pr-opened} (pr-str {:format :pr-opened :url "u" :title "fix"}))
           (findings/resolve! :brian (:id w) ["f1"] "pr 12")
-          (is (nil? (:closed (ws/read-ws :brian (:id w))))
+          (is (nil? (ws/closure (ws/read-ws :brian (:id w))))
               "its fix PR will close it between phases when it lands"))))))
 
 (deftest resolving-a-round-on-a-done-workstream-leaves-it-open
@@ -152,4 +158,4 @@
         (let [w (shipped-ticket-ws)]
           (findings/file! :brian (:id w) {:items [{:summary "A" :severity :tweak}]})
           (findings/resolve! :brian (:id w) ["f1"] "commit abc")
-          (is (nil? (:closed (ws/read-ws :brian (:id w))))))))))
+          (is (nil? (ws/closure (ws/read-ws :brian (:id w))))))))))

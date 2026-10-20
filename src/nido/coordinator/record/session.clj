@@ -184,24 +184,6 @@
   live?       [s] (= :live (:substrate s)))
 (defn ^{:malli/schema [:=> [:cat :Session] :boolean]}
   autonomous? [s] (some? (:autonomy s)))
-(defn ^{:malli/schema [:=> [:cat :Session] :boolean]}
-  parked?     [s] (and (live? s) (= :parked (get-in s [:autonomy :phase]))))
-
-(def active-phases
-  "Autonomy phases where the session is actively executing (not queued/parked)."
-  #{:preprocessing :running})
-
-(defn ^{:malli/schema [:=> [:cat :Session] :boolean]}
-  working?
-  "A live session doing actual work: a live human session (no autonomy), or a
-   live autonomous session in preprocessing/running. A queued or parked
-   autonomous session is NOT working."
-  [s]
-  (and (live? s)
-       (if (autonomous? s)
-         (contains? active-phases (get-in s [:autonomy :phase]))
-         true)))
-
 (defn ^{:malli/schema [:=> [:cat :Session] [:maybe :map]]}
   claude-facet [s] (:claude s))
 
@@ -287,41 +269,19 @@
                       {:project project :ws-id ws-id :session session-name})))
     (write! (assoc-in s [:autonomy :claude-session-id] id))))
 
-(defn ^{:malli/schema [:=> [:cat :any [:sequential :Session]] :keyword]}
-  engagement-state
-  "Pure projection of a workstream's engagement.
-   :settled        — workstream closed
-   :parked-at-gate — a live session is parked awaiting human review
-   :active         — a live session is actively executing (running/preprocessing, or a live human session)
-   :queued         — live session(s) exist but none are working or parked (queued/pending, not yet started)
-   :idle           — no live sessions
-   Order: settled > parked > active > queued > idle. A parked or queued session
-   is also live, so the phase-aware checks must precede the bare live? check."
-  [closed sessions]
-  (cond
-    (some? closed)            :settled
-    (some parked? sessions)   :parked-at-gate
-    (some working? sessions)  :active
-    (some live? sessions)     :queued
-    :else                     :idle))
-
 (def lifecycle-stages
-  "The stage keywords the overview groups by. A workstream's stored :stage acts
-   as a manual override ONLY when it is one of these AND the workstream is open
-   (see stage-projection) — the default :triaging that create! writes is
-   intentionally absent, so it never overrides the projection. :incoming is the
-   pre-triage queue stage (session-less, awaiting a human promote/dismiss).
-   :shipping is the merge-pipeline stage (set explicitly by the ship handler,
-   never derived) — honored as a stored override on an open workstream."
+  "The stage keywords the board groups by. A stage choice — a :stage-set or :reopened entry —
+   places a workstream ONLY when it names one of these (`standing/chosen-stage`); a choice of
+   any other stage hands the band back to where status places the work. :incoming is the
+   pre-triage queue stage (session-less, awaiting a human promote/dismiss). :shipping is the
+   merge-pipeline stage (chosen by the ship handler, never derived)."
   #{:incoming :triage :ready :in-progress :shipping :done})
 
 (def marker-stages
-  "Stages a workstream may be STORED at that deliberately do NOT override the
-   projection: :triaging (create!'s default — the workstream has been minted but
-   its position is whatever the projection derives) and :scratch (the marker
-   work/to-spine keys a scratch one-off on before folding it to :in-progress).
-   Kept out of lifecycle-stages on purpose; kept legal to write, because both are
-   written by nido itself."
+  "Stages a workstream may be set to that deliberately place nothing: :triaging (create!'s
+   default — the workstream has been minted and its band is wherever status places it) and
+   :scratch (a one-off's, though what marks one is its :scratch birth entry). Kept out of
+   lifecycle-stages on purpose; kept legal to write, because both are written by nido itself."
   #{:triaging :scratch})
 
 (def storable-stages
@@ -330,53 +290,13 @@
    them. Enforced by workstream/create! and workstream/advance-stage!.
 
    Wider than lifecycle-stages, and the difference is the whole point: a marker
-   stage is legal but never overrides, so the two sets must not be conflated.
-   Anything outside this set was silently accepted and then silently ignored by
-   every projection — a workstream stored at, say, :implementing (a TICKET status,
-   not a stage) fell through to derive-stage and landed back in the triage queue
-   with no indication anything had gone wrong. :inbox is absent by design: it is
+   stage is legal but places nothing, so the two sets must not be conflated.
+   Anything outside this set would be silently accepted and then silently ignored —
+   a workstream set to, say, :implementing (a TICKET status, not a stage) would land
+   back in the triage queue with no indication anything had gone wrong. :inbox is absent by design: it is
    legacy-on-read only (workstream/normalize-legacy-stage maps it to :incoming),
    never something new code may write."
   (into lifecycle-stages marker-stages))
-
-(defn- derive-stage
-  "Lifecycle stage from workstream :closed + local ticket status.
-   A ticket with NO ledger entry (nil status) is :triage — it has not been
-   triaged yet, regardless of whether its run failed/archived. So a failed
-   triage stays in the queue instead of silently vanishing to :done. :dismissed
-   is the off-radar terminal state (human waved it off). (`sessions` is retained
-   in the signature for call-site compatibility; the projection no longer reads it.)"
-  [closed ticket-status _sessions]
-  (cond
-    (some? closed)                                              :done
-    (contains? #{:dismissed :done} ticket-status)               :done
-    (contains? #{:planning :implementing} ticket-status)        :in-progress
-    (= :triaged ticket-status)                                  :ready
-    ;; everything else — :investigating / :awaiting-input / nil (never triaged) — is triage
-    :else                                                       :triage))
-
-(defn- stage-needs-you
-  "Does this stage want the human right now? Needs-you is PUSH: a live agent is
-   parked mid-flight, blocked on your decision. :triage/:in-progress/:shipping
-   qualify only when a session is parked at the gate. Everything at rest is a PULL
-   queue, never a gate: :ready (triaged, you pull it off the board to promote) and
-   :incoming (Slack holding pen, pulled under its lens) — and :done is done."
-  [stage sessions]
-  (case stage
-    (:triage :in-progress :shipping)  (boolean (some parked? sessions))
-    false))
-
-(defn ^{:malli/schema [:=> [:cat :any :any [:sequential :Session] :any] :StageProjection]}
-  stage-projection
-  "Pure lifecycle projection for a workstream → {:stage <kw> :needs-you <bool>}.
-   `ticket-status` is the local ticket meta :status (nil when no ticket ref);
-   `stage-override` is the workstream's stored :stage, honored only when it names
-   a lifecycle stage AND the workstream is open (closed → always :done)."
-  [closed ticket-status sessions stage-override]
-  (let [stage (if (and (nil? closed) (contains? lifecycle-stages stage-override))
-                stage-override
-                (derive-stage closed ticket-status sessions))]
-    {:stage stage :needs-you (stage-needs-you stage sessions)}))
 
 (def notion-terminal-statuses
   "Notion statuses that are done from nido's side → off the board. 'Review' is a
@@ -403,35 +323,6 @@
     triaged?                                              :ready
     :else                                                 :triage))
 
-(defn ^{:malli/schema [:=> [:cat :map] :StageProjection]}
-  notion-stage-projection
-  "Stage + needs-you for a Notion-driven workstream (page in a watched-view cache,
-   or on the merge lane). Precedence:
-     1. merge-lane :shipping overlay (a session on the merge lane)
-     2. nido in-flight overlay: local ticket status :planning/:implementing → :in-progress,
-        UNLESS Notion is already terminal. Promote advances nido's local state and
-        provisions an impl session immediately, but flips Notion asynchronously — so
-        nido's own in-flight work is ahead of the eventually-consistent Notion cache.
-        Honor it, or a just-promoted ticket sits at :ready with a live Promote button
-        until the cache repolls. (Distinct from :dismissed, which we still ignore.)
-     3. notion-stage (the cached Notion status, refined by the :triaged disposition).
-   Returns {:stage :needs-you}."
-  [{:keys [shipping? in-flight? notion-status triaged? sessions]}]
-  (let [stage (cond
-                shipping?
-                :shipping
-                (and in-flight? (not (contains? notion-terminal-statuses notion-status)))
-                :in-progress
-                :else
-                (notion-stage notion-status triaged?))]
-    {:stage stage :needs-you (stage-needs-you stage sessions)}))
-
-(def in-progress-phases
-  "Autonomy phases that occupy a trigger's in-flight budget: spawned and not yet
-   terminal or parked. :queued is the pending pool and does NOT count; :parked is
-   a human gate, not in-flight."
-  #{:preprocessing :running})
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] [:maybe :WorkstreamId]]}
   workstream-id-for
   "The workstream holding the session named `session-name` in `project`, or nil when none does.
@@ -450,150 +341,3 @@
                            (str/join ", " hs))
                       {:reason :name-held-twice :session session-name :holders hs :project project})))))
 
-(def gating-phases
-  "Autonomy phases that occupy a trigger's in-flight budget FOR SCHEDULING.
-   Includes :parked to preserve the legacy run-based backpressure (a session
-   awaiting human review still holds the trigger's slot). Distinct from
-   in-progress-phases, which is 'actively executing' work."
-  #{:preprocessing :running :parked})
-
-(def pending-phases
-  "Autonomy phases where a session's run is still in flight FOR DEDUP. Unlike
-   gating-phases (scheduling backpressure), this INCLUDES :queued: the reconcile
-   pre-spawn gate exists precisely to avoid minting a SECOND run for a ticket
-   whose first is merely queued (a :queued triage writes no ticket-ledger status,
-   so the status gate alone can't dedup it). Terminal phases (:done/:failed/
-   :halted) are excluded so a settled ticket stays re-triable."
-  #{:queued :preprocessing :running :parked})
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :boolean]}
-  pending-session-for-trigger?
-  "True when workstream `ws-id` already has an autonomous session for `trigger`
-   whose phase is still in flight (see pending-phases). The coordinator's
-   pre-spawn gate uses this to drop a reconcile re-emit instead of piling a
-   duplicate run onto a ticket whose first is not yet terminal. Reads disk."
-  [project ws-id trigger]
-  (boolean
-   (some (fn [s]
-           (and (autonomous? s)
-                (= trigger (get-in s [:autonomy :trigger]))
-                (contains? pending-phases (get-in s [:autonomy :phase]))))
-         (list-sessions project ws-id))))
-
-(defn- ws-closed?
-  "True when the workstream's record carries a :closed settlement. Read directly
-   off disk (not via workstream/read-ws — that ns requires this one). A closed
-   workstream's sessions no longer occupy a trigger's in-flight budget even if a
-   session was left :live + :parked (e.g. the TUI [d]one lever, which closes the
-   workstream without resolving the ticket, so sweep-resolved! can't reap it)."
-  [project ws-id]
-  (some? (:closed (io/read-edn (cstate/workstream-edn-path project ws-id)))))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :any] [:map-of :keyword :int]]}
-  count-by-trigger
-  "Map {trigger-kw → count} of LIVE autonomous sessions whose phase is in
-   `phase-set`, grouped by autonomy :trigger, across all of `project`'s OPEN
-   workstreams. Sessions on closed workstreams are excluded — their work is
-   settled and must not pin a trigger at its cap. Scans disk; restart-safe."
-  [project phase-set]
-  (->> (list-ws-ids project)
-       (remove #(ws-closed? project %))
-       (mapcat #(list-sessions project %))
-       (filter live?)
-       (filter autonomous?)
-       (filter #(contains? phase-set (get-in % [:autonomy :phase])))
-       (reduce (fn [m s] (update m (get-in s [:autonomy :trigger]) (fnil inc 0))) {})))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName] [:map-of :keyword :int]]}
-  in-flight-by-trigger
-  "Active-work count per trigger (preprocessing+running). Distinct from
-   scheduling backpressure (see gating-count-by-trigger)."
-  [project]
-  (count-by-trigger project in-progress-phases))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName] [:map-of :keyword :int]]}
-  gating-count-by-trigger
-  "Scheduling backpressure count per trigger (preprocessing+running+parked).
-   The scheduler reads this to enforce per-trigger :max-in-flight — the session
-   analogue of runs/in-progress-count-by-trigger."
-  [project]
-  (count-by-trigger project gating-phases))
-
-(defn ^{:malli/schema [:=> [:cat [:sequential :Session]] [:maybe :keyword]]}
-  ship-substate
-  "Merge-lane sub-state for a :shipping workstream, from its LIVE autonomous
-   session phase. Archived sessions (e.g. a prior triage run) are skipped so
-   the board badge reflects the live merge driver, not an old parked run.
-   nil when no live autonomous session backs it."
-  [sessions]
-  (when-let [s (first (filter (every-pred live? autonomous?) sessions))]
-    (case (get-in s [:autonomy :phase])
-      :queued                   :queued
-      (:running :preprocessing) :driving
-      :parked                   :blocked
-      :done                     :awaiting-merge
-      nil)))
-
-(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
-  doing
-  "What this workstream is DOING right now — one source, or nil — as
-   `{:source :claim|:merge|:session, …}`.
-
-   The SECOND facet beside `engagement-state`, and the two answer different
-   questions. Engagement says whether anyone is engaged and whether they are
-   waiting on you; this says which of the things that can be underway IS. A
-   workstream reads :active with `doing` nil whenever a human is in the session
-   and has started nothing nido can name, which is the common case and not a gap.
-
-   THREE SOURCES, and the precedence is total so that exactly one ever answers.
-   That totality is the point: before it, a workstream could be described two
-   ways at once because a merge run and an autonomous burst were read by
-   different callers that never met.
-
-     over      — nothing. A settled :closed, or an effective stage of :done,
-                 which is how a Notion-driven workstream ends: its ticket goes
-                 terminal and nido never writes :closed at all, so a row that
-                 tested :closed alone reported a stage of :done and an activity
-                 in the same breath.
-     :claim    — a named process holds the workstream's activity lock right now.
-     :merge    — the workstream is stored at :shipping; the merge lane's own
-                 sub-state says how far along, or :queued when nothing of it is
-                 running yet.
-     :session  — a live autonomous session is executing.
-
-   The claim outranks the other two because it is evidence of a process alive at
-   the instant of the read, while a phase and a stage are flags written at the
-   edges of a burst and left behind by a crash. `claim` arrives as an ARGUMENT
-   and is never read here: this stays pure, so the caller that can reach the
-   filesystem is the one that does.
-
-   A PARKED session is deliberately not `doing`. It is a gate — engagement's
-   :parked-at-gate already says so, and calling it activity would report a
-   workstream waiting on a human as one that is busy."
-  [{:keys [closed sessions stage claim]}]
-  (cond
-    ;; `stage` is the row's EFFECTIVE stage, so :done covers both ways a
-    ;; workstream ends — nido's own settlement and a ticket the source system
-    ;; closed under it. Testing :closed alone let one row answer the terminality
-    ;; question two ways at once.
-    (or (some? closed) (= :done stage)) nil
-
-    (some? claim)
-    (into {:source :claim}
-          (select-keys claim [:kind :run-id :report-path :started-at :pid]))
-
-    ;; :queued is the merge lane's RESTING state, and it is an answer rather
-    ;; than an absence: the lane takes one branch at a time, so a shipment with
-    ;; no live session is waiting its turn — which is the whole reason it is
-    ;; sitting there. Answering nil would make a shipping row go blank the
-    ;; moment its session ends, indistinguishable from nothing happening.
-    (= :shipping stage)
-    {:source :merge :phase (or (ship-substate sessions) :queued)}
-
-    :else
-    ;; Filter to the ACTIVELY-EXECUTING autonomous sessions before selecting one:
-    ;; a workstream can hold several live autonomous sessions, and taking the
-    ;; first live one would answer nil whenever a parked or queued session
-    ;; happened to sort ahead of the running one.
-    (when-let [s (first (filter (every-pred autonomous? working?) sessions))]
-      {:source :session :phase (get-in s [:autonomy :phase]) :session (:name s)})))

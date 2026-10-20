@@ -12,6 +12,15 @@
    [nido.coordinator.record.workstream :as ws]
    [nido.github.client :as gh]))
 
+(defn- one-off!
+  "A ref-less workstream born a one-off: its ledger holds the :scratch birth entry that
+   `scratch/birth!` appends as it mints one."
+  []
+  (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+    (ws/append-entry! :brian (:id w) {:kind :scratch} (pr-str {:format :scratch}))
+    (ws/read-ws :brian (:id w))))
+
+
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
     (try (with-redefs [core/nido-root (constantly (str tmp))]
@@ -92,7 +101,9 @@
 (deftest promote-workstream-github-refuses-when-already-promoted
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs [{:adapter :github-issue :id "o/r#42"}]})]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs [{:adapter :github-issue :id "o/r#42"}]})]
+        ;; What promoting it records: a person's choice to put it in progress.
+        (ws/advance-stage! :brian (:id w) :in-progress :person)
         (is (= :skip-active (:decision (promote/promote-workstream! :brian (:id w)))))
         (is (empty? (queued-envelopes)))))))
 
@@ -108,7 +119,7 @@
 (deftest promote-workstream-scratch-is-not-promotable
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+      (let [w (one-off!)]
         (is (= :skip-not-promotable (:decision (promote/promote-workstream! :brian (:id w)))))))))
 
 (deftest promote!-enqueues-a-keyword-project-target

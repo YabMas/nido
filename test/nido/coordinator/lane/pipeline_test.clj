@@ -412,7 +412,8 @@
         (let [r (p/of :brian id)]
           (is (= 1 (:ledger (:read r))))
           (is (= #{:intent} (:kinds (:read r))))
-          (is (contains? (:read r) :board-stage))
+          (is (not (contains? (:read r) :board-stage))
+              "nor a stored stage: a stage choice is an entry, among the kinds it read")
           (is (not (contains? (:read r) :ticket-status))
               "the position level reads no ref, so no ticket status it would key")
           (is (contains? (:read r) :sessions))
@@ -1374,7 +1375,7 @@
         (let [w      (ws/read-ws :brian id)
               newest (last (filter #(= :closed (:kind %)) (:entries w)))]
           (spit (str (fs/path (cstate/workstream-dir :brian id) (:file newest))) "{:not edn")
-          (let [c (standing/closure :brian id (ws/read-ws :brian id))]
+          (let [c (ws/closure (ws/read-ws :brian id))]
             (is (= (:seq newest) (:seq c)))
             (is (nil? (:outcome c)) "the older :between-phases is not revived"))
           (is (= :shipped (:at (p/of :brian id))) "unreadable, and still closed"))))))

@@ -333,22 +333,24 @@
             {:brian [triage-trigger]})
           (is (= 1 @created) "untriaged ticket creates a Run"))))))
 
-(deftest gate-dedups-untriaged-ticket-with-inflight-session
-  ;; The reconcile-dedup gate: even with NO ticket record (status gate returns
-  ;; :spawn — cf. gate-allows-untriaged-ticket, which creates 1 Run), a re-emit
-  ;; whose ref already has an in-flight :queued session for this trigger must NOT
-  ;; mint a duplicate. This is the fix for the thousands-of-:queued-runs pileup.
+(deftest gate-dedups-a-ref-with-a-run-in-flight
+  ;; The reconcile-dedup gate: a re-emit whose ref already has an in-flight :queued run for
+  ;; this trigger must NOT mint a duplicate. This is the fix for the thousands-of-:queued-runs
+  ;; pileup. (An investigating run open on the ticket makes it :investigating too, so the
+  ;; status gate drops this re-emit first; the dedup is what holds for any trigger.)
   (gate-with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :triaging
                                   :external-refs [{:adapter :notion :id "BR-5236"}]})]
-        (session/create! :brian (:id w)
-                         {:name "run-triage-new-x" :weight :light
-                          :autonomy {:skill :triage-bug :first-message "m" :agent :claude
-                                     :claude-session-id nil :trigger :triage-new :limits {}
-                                     :priority 0 :uncapped? false :on-promote nil
-                                     :phase :queued
-                                     :phase-history [{:at "t0" :phase :queued}] :error nil}})
+        (runs/write-run! {:id "rq" :project :brian :trigger :triage-new
+                          :source {:type :notion-view} :event-payload {:id "BR-5236"}
+                          :skill :triage-bug :first-message "m" :agent :claude
+                          :session-name "run-triage-new-x" :workstream-id (:id w)
+                          :claude-session-id nil :limits {}
+                          :priority 0 :session-profile :lite :uncapped? false
+                          :state :queued :state-history [{:at "t0" :state :queued}]
+                          :artifacts [] :error nil})
+        (runs/register! "rq")
         (let [created (atom 0)]
           (with-redefs [runs/create-run!        (fn [& _] (swap! created inc) {:id "run-x"})
                         spawn/create-session-for-run! (fn [& _] nil)

@@ -28,11 +28,12 @@
   (let [w      (or (ws/read-ws project ws-id)
                    (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
         design (ws/plan-design project ws-id)
-        p      (phase/progress design (:entries w))]
-    (when-not (= :between-phases (get-in w [:closed :outcome]))
+        p      (phase/progress design (:entries w))
+        closed (ws/closure w)]
+    (when-not (= :between-phases (:outcome closed))
       (throw (ex-info (str ws-id " is not waiting on a gate — it is "
-                           (if-let [o (get-in w [:closed :outcome])] (str "closed " (name o)) "open"))
-                      {:ws-id ws-id :closed (:closed w)})))
+                           (if-let [o (:outcome closed)] (str "closed " (name o)) "open"))
+                      {:ws-id ws-id :closed closed})))
     (when (str/blank? evidence)
       (throw (ex-info "A gate is asserted with its evidence — say what was observed"
                       {:ws-id ws-id})))

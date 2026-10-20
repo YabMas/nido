@@ -56,7 +56,7 @@
   (let [token (notion/keychain-token)]
     (->> (ws/list-ids project)
          (keep #(ws/read-ws project %))
-         (filter #(and (nil? (:closed %)) (wsv/notion-ref %)))
+         (filter #(and (nil? (ws/closure %)) (wsv/notion-ref %)))
          (map #(refresh-ws! project (:id %) token))
          (filter some?)
          count)))

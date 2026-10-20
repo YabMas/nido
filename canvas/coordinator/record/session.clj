@@ -20,20 +20,14 @@
    SHAPELESS. The closed malli schema in the code is validated on every write, and a second copy
    here would be the copy nothing checks.")
 
-(Kind StageProjection
-  "Where a workstream stands and whether it is waiting on a person — derived, never stored."
-  [:map [:stage :keyword] [:needs-you :boolean]])
 
 (Module record-session
-  "The work episode: minting one, moving it through its phases, and projecting what a
-   workstream's sessions say about where it stands.
+  "The work episode: minting one and reading it back. Where a workstream stands is not a session's
+   to say — status derives it from the ledger, run records and held locks — so nothing here
+   projects one; `notion-stage` is the one pure reading left, the band a watched Notion page with
+   no workstream shows by its live status."
 
-   Two halves that do not mix. The record half reads and writes session.edn. The projection half
-   is PURE — `engagement-state`, `stage-projection`, `notion-stage` take what they need as
-   arguments and answer without touching disk, which is what makes a board's stage testable
-   without provisioning a session to test it with."
-
-  {:child [Session StageProjection]}
+  {:child [Session]}
   (Operation validate
     "The record, or a throw carrying malli's explanation of why it is not one."
     {:signature [:=> [:catn [:s Session]] Session]})
@@ -64,16 +58,6 @@
   (Operation autonomous?
     "Whether an agent is driving this episode rather than a person."
     {:signature [:=> [:catn [:s Session]] :boolean]})
-  (Operation parked?
-    "A live autonomous session waiting on a human answer."
-    {:signature [:=> [:catn [:s Session]] :boolean]
-     :delegates [live?]})
-  (Operation working?
-    "A live session doing actual work — a human's, or an autonomous one in flight. A queued or
-     parked autonomous session is not working, and conflating the two is how a board reports
-     progress that nobody is making."
-    {:signature [:=> [:catn [:s Session]] :boolean]
-     :delegates [live? autonomous?]})
   (Operation archive!
     "Flip a session to archived, recording when. Idempotent — archiving twice leaves one entry."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName]] Session]
@@ -101,53 +85,12 @@
     "Persist the conversation id an autonomous session resumes from."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:id [:maybe :string]]] Session]
      :delegates [write!]})
-  (Operation engagement-state
-    "What a workstream's sessions say about whether anyone is engaged with it. Pure."
-    {:signature [:=> [:catn [:closed :any] [:sessions [:sequential Session]]] :keyword]
-     :delegates [live? working? parked?]})
-  (Operation stage-projection
-    "Where a workstream stands and whether it needs a person, from its own sessions. Pure."
-    {:signature [:=> [:catn [:closed :any] [:ticket-status :any] [:sessions [:sequential Session]] [:stage-override :any]] StageProjection]})
   (Operation notion-stage
     "Board stage for a Notion-driven workstream, from the ticket's live status and whether it
      has been triaged locally. Pure."
     {:signature [:=> [:catn [:notion-status :any] [:triaged? :boolean]] :keyword]})
-  (Operation notion-stage-projection
-    "Stage and needs-you for a workstream whose ticket lives in a watched Notion view. Pure."
-    {:signature [:=> [:catn [:ctx :map]] StageProjection]
-     :delegates [notion-stage]})
   (Operation workstream-id-for
     "Which workstream holds the session with this name, or nil. A name two workstreams hold is
      refused naming both, never answered with one of them."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] [:maybe WorkstreamId]]
-     :delegates [state/workstreams-dir list-sessions]})
-  (Operation pending-session-for-trigger?
-    "Whether this workstream already has an in-flight autonomous session for this trigger — the
-     pre-spawn gate that stops a reconcile re-emit piling a duplicate run onto a ticket."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:trigger :keyword]] :boolean]
-     :delegates [list-sessions autonomous?]})
-  (Operation count-by-trigger
-    "Live autonomous sessions per trigger, counting only the phases asked for."
-    {:signature [:=> [:catn [:project ProjectName] [:phase-set :any]] [:map-of :keyword :int]]
-     :delegates [state/workstreams-dir list-sessions live? autonomous?]})
-  (Operation in-flight-by-trigger
-    "How much work is actually executing per trigger. Distinct from the scheduling count: a
-     parked session occupies a slot without doing anything."
-    {:signature [:=> [:catn [:project ProjectName]] [:map-of :keyword :int]]
-     :delegates [count-by-trigger]})
-  (Operation gating-count-by-trigger
-    "Scheduling backpressure per trigger — in-flight plus parked, because a parked session still
-     holds the slot it will resume into."
-    {:signature [:=> [:catn [:project ProjectName]] [:map-of :keyword :int]]
-     :delegates [count-by-trigger]})
-  (Operation ship-substate
-    "Where a shipping workstream is in the merge lane, from its live autonomous sessions."
-    {:signature [:=> [:catn [:sessions [:sequential Session]]] [:maybe :keyword]]
-     :delegates [live? autonomous?]})
-  (Operation doing
-    "Which single source says what this workstream is doing right now — a held activity claim,
-     the merge lane, or a live autonomous session — under a TOTAL precedence, so that exactly
-     one ever answers. That totality is the point: before it, a workstream could be described
-     two ways at once by callers that never met. Pure; the claim arrives as an argument."
-    {:signature [:=> [:catn [:opts :map]] [:maybe :map]]
-     :delegates [ship-substate working? autonomous?]}))
+     :delegates [state/workstreams-dir list-sessions]}))

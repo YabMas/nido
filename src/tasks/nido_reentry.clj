@@ -27,9 +27,9 @@
   [p]
   (->> (ws/list-ids p)
        sort
-       ;; NOT some->: `:closed` is nil on exactly the workstreams this wants, so
+       ;; NOT some->: the closure is nil on exactly the workstreams this wants, so
        ;; threading through it short-circuits and the filter keeps nothing.
-       (filter (fn [id] (when-let [w (ws/read-ws p id)] (nil? (:closed w)))))))
+       (filter (fn [id] (when-let [w (ws/read-ws p id)] (nil? (ws/closure w)))))))
 
 (defn ^{:malli/schema [:=> [:cat [:? :any]] [:vector :map]]}
   rows

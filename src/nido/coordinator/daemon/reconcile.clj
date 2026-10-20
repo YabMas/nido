@@ -85,7 +85,7 @@
         w  (when-not (str/blank? br) (cws/find-by-ref-id p br))
         v  (when w (standing/verdict p (:id w) w))]
     (cond
-      (or (= :dismissed (:outcome (when w (standing/closure p (:id w) w))))
+      (or (= :dismissed (:outcome (when w (cws/closure w))))
           (:accepted? v))                 {:state :done           :error nil}
       v                                   {:state :awaiting-review :error nil}
       (= :awaiting-review (:state run))   {:state :awaiting-review :error nil}
@@ -150,7 +150,7 @@
                            (cws/entries-of project workstream-id :blocker-answered))
             halted?  (some #(and (= :blocker (:kind %)) (not (answered (:seq %))))
                            (:entries w))]
-        (when (and (nil? (:closed w))
+        (when (and (nil? (cws/closure w))
                    (not halted?)
                    (some #(= proposal/improvement-adapter (:adapter %)) (:external-refs w)))
           (cws/close! project workstream-id :orphaned))))

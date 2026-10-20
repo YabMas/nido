@@ -20,8 +20,6 @@
    :named (set named) :settled (set settled)
    :runs (vec runs) :sessions (vec sessions)})
 
-(defn- session-in [phase] {:autonomy {:phase phase}})
-
 (defn- run [state ended-at]
   {:state state :state-history [{:at "2026-09-17T00:00:00Z" :state :queued}
                                 {:at ended-at :state state}]})
@@ -50,15 +48,16 @@
 ;; ── in flight ────────────────────────────────────────────────────────────────
 
 (deftest a-cause-is-held-while-any-recovery-of-it-is-in-flight
-  (testing "queued, preprocessing or running on any workstream of the cause, even a closed one"
-    (doseq [phase [:queued :preprocessing :running]]
-      (is (sf/in-flight? [(recovery "c" :closed {:at "t"} :sessions [(session-in phase)])] "c"))))
-  (testing "parked holds only on an open workstream — a person's close stopped it"
-    (is (sf/in-flight? [(recovery "c" :sessions [(session-in :parked)])] "c"))
-    (is (not (sf/in-flight? [(recovery "c" :closed {:at "t"} :sessions [(session-in :parked)])] "c"))))
-  (testing "finished sessions and other causes hold nothing"
-    (is (not (sf/in-flight? [(recovery "c" :sessions [(session-in :failed) (session-in :done)])] "c")))
-    (is (not (sf/in-flight? [(recovery "other" :sessions [(session-in :running)])] "c")))))
+  (testing "a recovery run queued, preprocessing or running on any workstream of the cause, even a
+            closed one"
+    (doseq [state [:queued :preprocessing :running]]
+      (is (sf/in-flight? [(recovery "c" :closed {:at "t"} :runs [(run state "t")])] "c"))))
+  (testing "parked for review holds only on an open workstream — a person's close stopped it"
+    (is (sf/in-flight? [(recovery "c" :runs [(run :awaiting-review "t")])] "c"))
+    (is (not (sf/in-flight? [(recovery "c" :closed {:at "t"} :runs [(run :awaiting-review "t")])] "c"))))
+  (testing "finished runs and other causes hold nothing"
+    (is (not (sf/in-flight? [(recovery "c" :runs [(run :failed "t") (run :done "t")])] "c")))
+    (is (not (sf/in-flight? [(recovery "other" :runs [(run :running "t")])] "c")))))
 
 ;; ── pacing ───────────────────────────────────────────────────────────────────
 
@@ -103,7 +102,7 @@
   (let [f     (kept "F1")
         cause (failure/cause f)
         now   (at "2026-09-17T10:00:30Z")]
-    (is (empty? (sf/recovery-events [f] [(recovery cause :sessions [(session-in :running)])] now pacing))
+    (is (empty? (sf/recovery-events [f] [(recovery cause :runs [(run :running "t")])] now pacing))
         "held: a recovery of the cause is in flight, whatever ref it carries")
     (is (empty? (sf/recovery-events [f] [(recovery cause :runs [(run :failed "2026-09-17T10:00:00Z")])]
                                     now pacing))

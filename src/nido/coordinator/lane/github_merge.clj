@@ -229,7 +229,7 @@
         w  (find-ws-by-github-id project id)]
     (cond
       (nil? w)      (warn (str "github-merge: merged PR " id " has no workstream; skipping"))
-      (:closed w)   nil                                   ; idempotent no-op
+      (ws/closure w) nil                                  ; idempotent no-op
       ;; A stack merges its layers into each other while it is being restacked,
       ;; and every one of those is a genuine `merged` PR carrying a ref this
       ;; workstream stamped. Only the merge into `base` shipped anything. Warn

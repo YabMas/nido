@@ -46,11 +46,15 @@
   (Operation why-not-decided
     "Why a standing is not decided, in words a person can act on. nil when it is."
     {:signature [:=> [:catn [:standing Standing]] [:maybe :string]]})
-  (Operation closure
-    "The newest :closed entry, unless a :reopened or a :phase-gate came after it — how the ledger
-     says a workstream stands settled, read off its entries and never off a stored field."
+  (Operation newest-choice
+    "The newest stage choice on the workstream, whatever has been recorded since."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:w :any]] [:maybe :map]]
      :delegates [workstream/entry-at-seq]})
+  (Operation ever-chose?
+    "Whether a stage was ever chosen for the workstream — what tells work started once from work
+     never started."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:stage :keyword]] :boolean]
+     :delegates [workstream/entries-of]})
   (Operation chosen-stage
     "The board stage a person or nido chose, while that choice still says where the work is: no
      record of the work is newer than it."

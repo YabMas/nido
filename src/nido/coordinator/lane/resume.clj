@@ -1,10 +1,10 @@
 (ns nido.coordinator.lane.resume
-  "Re-engage a PARKED autonomous session with the human's input by relaunching
-   its recorded claude conversation as one bounded headless turn
-   (`claude --resume <id> -p \"<input>\"`). The session phase is driven
-   :parked -> :running -> :parked directly (the gate inbox reads the session phase,
-   not a Run state — so this works whether the owning Run is :awaiting-review or
-   already terminal). This is the :reply resolver behind nido.coordinator.work/resolve-gate!."
+  "Re-engage an autonomous session waiting on a person with their input by relaunching its
+   recorded claude conversation as one bounded headless turn
+   (`claude --resume <id> -p \"<input>\"`). Which session waits is `waiting-session`'s answer —
+   run records, run locks, the executor and status — so this works whether the owning Run is
+   :awaiting-review or the workstream is held by a driver's blocker. This is the :reply resolver
+   behind nido.coordinator.work/resolve-gate!."
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
@@ -12,17 +12,35 @@
    [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.executor :as executor]
+   [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
    [nido.session.commit-gate :as commit-gate]
    [nido.session.state :as session-state]))
 
-(defn- parked-session
-  "The (first) parked autonomous session under a workstream, or nil."
+(defn- turn-key
+  "What a reply turn into session `s` is queued under: its owning run, or the session itself when
+   no run owns it."
+  [s run]
+  (or (:id run) (str "session-" (:name s))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Session]]}
+  waiting-session
+  "The first autonomous session under a workstream that waits on a person's reply, or nil: not
+   archived, no agent of its owning run running and no reply to it already queued, and either its
+   run parked for review or the workstream's status owing a person its next move — a driver's
+   blocker, which parks no run. Read off run records, run locks, the executor and status; no
+   stored phase says it."
   [project ws-id]
-  (->> (session/list-sessions project ws-id)
-       (filter session/parked?)
-       first))
+  (let [owed-person? (delay (= :person (:owed-by (pipeline/status project ws-id))))]
+    (->> (session/list-sessions project ws-id)
+         (filter #(and (session/autonomous? %) (session/live? %)))
+         (filter (fn [s]
+                   (let [run (runs/find-for-session project ws-id (:name s))]
+                     (and (not (and run (runs/live? (:id run))))
+                          (not (executor/turn-pending? (turn-key s run)))
+                          (or (= :awaiting-review (:state run)) @owed-person?)))))
+         first)))
 
 (defn- transcript-owner?
   "True when claude's transcript for `sid` lives under `cwd`'s project dir. claude
@@ -149,7 +167,7 @@
    substrate (ensure-session-home! / launch-context). Throws :no-claude-session
    only when BOTH the session and the run lack an id."
   [project ws-id input]
-  (let [s (parked-session project ws-id)]
+  (let [s (waiting-session project ws-id)]
     (when-not s
       (throw (ex-info "No parked session to resume"
                       {:reason :not-parked :project project :ws-id ws-id})))
@@ -213,7 +231,7 @@
             body #(run-turn! project ws-id (:name s) s run input)]
         (if (executor/driven?)
           (do (executor/submit-turn!
-               {:run-id        (or (:id run) (str "session-" (:name s)))
+               {:run-id        (turn-key s run)
                 :turn          turn
                 :trigger       (:trigger run)
                 :body          body})

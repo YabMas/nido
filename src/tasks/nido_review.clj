@@ -644,11 +644,8 @@
   [project ws-id]
   (try
     (when (and project ws-id)
-      (let [w (ws/read-ws (keyword (name project)) ws-id)]
-        (when-let [c (:closed w)]
-          (cond-> {:outcome (some-> (:outcome c) name)}
-            (some #(= :closed (:kind %)) (:entries w))
-            (assoc :seq (:seq (last (filter #(= :closed (:kind %)) (:entries w)))))))))
+      (when-let [c (ws/closure (ws/read-ws (keyword (name project)) ws-id))]
+        {:outcome (some-> (:outcome c) name) :seq (:seq c)}))
     (catch Exception _ nil)))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}

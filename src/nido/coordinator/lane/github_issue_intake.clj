@@ -14,6 +14,7 @@
   (:require
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.session :as session]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.source.state :as sstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.github.client :as gh]))
@@ -42,9 +43,10 @@
   (some #(when (= :github-issue (:adapter %)) (:id %)) (:external-refs w)))
 
 (defn- unpromoted?
-  "A github-issue workstream still in the queue: stage :ready and no sessions."
+  "A github-issue workstream still in the queue: open, never put in progress, and no sessions."
   [project w]
-  (and (= :ready (:stage w))
+  (and (nil? (ws/closure w))
+       (not (standing/ever-chose? project (:id w) :in-progress))
        (empty? (session/list-sessions project (:id w)))))
 
 (defn- upsert-issue!

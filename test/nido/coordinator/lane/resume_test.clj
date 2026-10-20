@@ -28,7 +28,10 @@
    :on-promote nil :phase :parked
    :phase-history [{:at "2026-06-18T00:00:00Z" :phase :parked}] :error nil})
 
-(defn- write-run! [id ws-id sname sid]
+(defn- write-run!
+  "The run owning session `sname`, parked for review — what makes a session wait on a reply —
+   registered with its workstream as create-run! does."
+  [id ws-id sname sid]
   (fs/create-dirs (cstate/run-dir id))
   (runs/write-run! {:id id :project :brian :trigger :triage-bug
                     :source {:type :manual} :event-payload {} :skill :triage-bug
@@ -37,7 +40,8 @@
                     :limits {:budget "30m"} :priority 0 :session-profile :full
                     :uncapped? false :state :awaiting-review
                     :state-history [{:at "2026-06-18T00:00:00Z" :state :queued}]
-                    :artifacts [] :error nil}))
+                    :artifacts [] :error nil})
+  (runs/register! id))
 
 ;; run-turn! is synchronous → unit-test the actual launch + re-park here.
 (deftest run-turn-launches-resume-and-reparks
@@ -128,7 +132,26 @@
       (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
         (is (thrown? clojure.lang.ExceptionInfo
                      (resume/resume! :brian (:id w) "go"))
-            "no parked session → no resume target")))))
+            "no parked session → no resume target")
+        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
+        (is (= :not-parked
+               (try (resume/resume! :brian (:id w) "go") nil
+                    (catch clojure.lang.ExceptionInfo e (:reason (ex-data e)))))
+            "nor is a session whose run nobody parked for review — no stored phase says it waits")))))
+
+(deftest a-queued-reply-is-not-queued-twice
+  (with-tmp
+    (fn []
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
+        (write-run! "r1" (:id w) "auto" "sid-1")
+        (is (= "auto" (:name (resume/waiting-session :brian (:id w)))))
+        (with-redefs [ex/turn-pending? #(= "r1" %)]
+          (is (nil? (resume/waiting-session :brian (:id w)))
+              "a reply already waiting for a slot leaves no session waiting on another"))
+        (with-redefs [runs/live? #(= "r1" %)]
+          (is (nil? (resume/waiting-session :brian (:id w)))
+              "nor does one whose agent is running"))))))
 
 (deftest resume!-throws-when-no-claude-session-id
   (with-tmp
@@ -136,7 +159,8 @@
       (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        ;; no run on disk → no recoverable claude-session-id
+        ;; the run holds no claude-session-id either → no recoverable conversation
+        (write-run! "r1" (:id w) "auto" nil)
         (is (thrown? clojure.lang.ExceptionInfo
                      (resume/resume! :brian (:id w) "go")))))))
 
@@ -145,7 +169,8 @@
     (fn []
       (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        ;; no run on disk → no recoverable claude-session-id
+        ;; the run holds no claude-session-id either → no recoverable conversation
+        (write-run! "r1" (:id w) "auto" nil)
         (is (thrown? clojure.lang.ExceptionInfo (resume/resume! :brian (:id w) "go")))
         (is (= :no-claude-session
                (-> (first (session/list-sessions :brian (:id w))) :autonomy :error :reason))
@@ -269,9 +294,9 @@
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-parked :claude-session-id nil)})
-        (with-redefs [runs/find-for-session (fn [& _] nil)]
-          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"No resumable conversation"
-                (resume/resume! :brian (:id w) "apply"))))))))
+        (write-run! "r1" (:id w) "auto" nil)
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"No resumable conversation"
+              (resume/resume! :brian (:id w) "apply")))))))
 
 (deftest resume-cwd-picks-the-transcript-owning-dir
   ;; Regression (the "No conversation found with session ID" strand): claude keys a
@@ -342,6 +367,7 @@
     (fn []
       (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
+        (write-run! "r1" (:id w) "auto" nil)
         (session/update-substrate! :brian (:id w) "auto"
                                    (constantly {:claude nil :dispatching {:token "T" :at "t" :bg-id "bg-1"}}))
         (is (= :session-unnamed

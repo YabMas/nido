@@ -459,7 +459,7 @@
                          :title  title}]
             (try
               (let [w (cws/read-ws project ws-id)]
-                (if (:closed w)
+                (if (cws/closure w)
                   (do (println (str "land:record ok · " ws-id " was already closed; a landing is recorded"
                                     " only before its close, so nothing was written"))
                       0)

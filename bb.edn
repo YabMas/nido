@@ -644,11 +644,6 @@
    :doc "Record as entries the status every workstream's records already hold — closes, one-offs, stages, findings resolutions, Notion statuses — and keep each index row beside its entry. Idempotent. :project <p>"
    :task (apply nido-workstream/status-backfill-cmd *command-line-args*)}
 
-  nido:status:audit
-  {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "Every open workstream on which status and the record projection it replaced disagree — band, needs-you, live — with both answers and the position. A reading: exits 0. :project <p>"
-   :task (apply nido-workstream/status-audit-cmd *command-line-args*)}
-
   nido:improvement:backfill-landings
   {:requires ([tasks.nido-workstream :as nido-workstream])
    :doc "One-shot: discharge every approval whose decision note already records the outcome, from before :improvement-landed existed. Idempotent. :project <p>"

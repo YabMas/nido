@@ -98,7 +98,7 @@
                   outcomes (mapcat :outcomes (ws/entries-of project ws-id :session-restored))]]
        {:ws-id    ws-id
         :cause    (cause-of-ref (:id ref))
-        :closed   (:closed w)
+        :closed   (ws/closure w)
         :named    (into (set (mapcat #(split-ids (-> % :event-payload :failures)) runs))
                         (map :failure) outcomes)
         :settled  (set (keep #(when (#{:restored :withdrawn} (:outcome %)) (:failure %)) outcomes))
@@ -136,18 +136,16 @@
 
 (defn ^{:malli/schema [:=> [:cat [:vector :map] :string] :boolean]}
   in-flight?
-  "Whether a recovery of `cause` is in flight: a recovery session queued,
-   preprocessing or running on any of the cause's workstreams, or parked on an
-   open one. A session parked on a workstream a person closed is not — the close
-   stopped it."
+  "Whether a recovery of `cause` is in flight: a recovery run queued, preprocessing or running on
+   any of the cause's workstreams, or parked for review on an open one. A run parked on a
+   workstream a person closed is not — the close stopped it."
   [recoveries cause]
   (boolean
-   (some (fn [{:keys [closed sessions] :as r}]
+   (some (fn [{:keys [closed runs] :as r}]
            (and (= cause (:cause r))
-                (some #(let [phase (get-in % [:autonomy :phase])]
-                         (or (#{:queued :preprocessing :running} phase)
-                             (and (= :parked phase) (not closed))))
-                      sessions)))
+                (some #(or (#{:queued :preprocessing :running} (:state %))
+                           (and (= :awaiting-review (:state %)) (not closed)))
+                      runs)))
          recoveries)))
 
 (defn- ended-at [run]

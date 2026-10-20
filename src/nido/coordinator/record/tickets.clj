@@ -133,7 +133,7 @@
           open   (into #{} (comp (filter #(and (open-run-states (:state %)) (not= except (:id %))))
                                  (map :skill))
                        (runs/runs-of project ws-id))
-          closed (standing/closure project ws-id w)
+          closed (cws/closure w)
           v      (standing/verdict project ws-id w)]
       (cond
         (= :dismissed (:outcome closed))                            :dismissed
@@ -242,7 +242,7 @@
   [project br-id]
   (when-not (blank-br? br-id)
     (let [w (cws/find-or-mint-by-ref! project br-id)]
-      (when-not (= :dismissed (:outcome (standing/closure project (:id w) w)))
+      (when-not (= :dismissed (:outcome (cws/closure w)))
         (cws/close! project (:id w) :dismissed nil :person))))
   (update-meta! project br-id
                 #(assoc (or % {:br-id br-id :entries []}) :status :dismissed)))

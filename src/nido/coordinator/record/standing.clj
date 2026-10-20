@@ -538,25 +538,19 @@
         (into #{} (comp (map :id) (remove resolved)) (:items round)))
       #{})))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:maybe :map]]}
-  closure
-  "How the ledger says the workstream stands settled: the newest :closed entry, unless a
-   :reopened or a :phase-gate came after it — then nil, since opening the next phase is a reopen
-   by definition. Nil for a workstream that does not exist.
-
-   The newest close is read by its :seq, and when it cannot be read the answer is still closed —
-   `{:seq n :unreadable? true}`, with no outcome — never an older close's payload, which would
-   report an outcome the workstream has since moved past."
-  [project ws-id w]
-  (let [newest (last (filter #(#{:closed :reopened :phase-gate} (:kind %)) (:entries w)))]
-    (when (= :closed (:kind newest))
-      (or (ws/entry-at-seq project ws-id (:seq newest))
-          {:seq (:seq newest) :unreadable? true}))))
-
 (def ^:private stage-carried-by
   "Per chosen stage, the kinds that record that choice being carried out rather than the work
    moving past it, so a choice and the act it starts are one stage."
   {:shipping #{:ship-submitted}})
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:maybe :map]]}
+  newest-choice
+  "The newest stage choice on the workstream — its :stage-set or :reopened — as
+   `{:seq n :stage s}`, or nil when none was made. Read by its :seq: one whose payload no longer
+   reads chooses nothing (:stage nil), rather than an older choice it replaced."
+  [project ws-id w]
+  (when-let [move (last (filter #(#{:stage-set :reopened} (:kind %)) (:entries w)))]
+    {:seq (:seq move) :stage (:stage (ws/entry-at-seq project ws-id (:seq move)))}))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:maybe :keyword]]}
   chosen-stage
@@ -569,11 +563,10 @@
    status entry, a record that carries the choice out (the ship lane chooses :shipping, then
    records the shipment it started), a :note (an account — notion-sync writes one to explain each
    stage it sets) or an :issue (where the work came from; the backfill appends it after a stage
-   chosen long before it). The newest move is read by its :seq: one whose payload no longer
-   reads chooses nothing, rather than an older choice it replaced."
+   chosen long before it). The choice is `newest-choice`."
   [project ws-id w]
-  (let [move    (last (filter #(#{:stage-set :reopened} (:kind %)) (:entries w)))
-        chosen  (when move (:stage (ws/entry-at-seq project ws-id (:seq move))))
+  (let [move    (newest-choice project ws-id w)
+        chosen  (:stage move)
         carries (get stage-carried-by chosen #{})
         worked  (:seq (last (remove #(or (ws/status-kinds (:kind %)) (carries (:kind %))
                                          (#{:note :issue} (:kind %)))
@@ -582,6 +575,16 @@
                (contains? session/lifecycle-stages chosen)
                (or (nil? worked) (> (:seq move) worked)))
       chosen)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :boolean]}
+  ever-chose?
+  "Whether a person or nido ever chose `stage` for the workstream — a :stage-set or :reopened
+   naming it, whatever came after. Where a choice still holds is `chosen-stage`; this is whether
+   it was ever made, which is what tells work that was started once from work never started."
+  [project ws-id stage]
+  (boolean (some #(= stage (:stage %))
+                 (concat (ws/entries-of project ws-id :stage-set)
+                         (ws/entries-of project ws-id :reopened)))))
 
 (def verdict-kinds
   "The reports a person accepts or dismisses: a Notion triage and a Slack proposal. Both are

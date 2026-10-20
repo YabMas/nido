@@ -12,11 +12,12 @@
    done at the task layer (tasks.nido-session) — the only place that sees both."
   (:require
    [nido.coordinator.record.session :as session]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as workstream]))
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] :boolean]}
   scratch?
-  "A one-off workstream: one carrying the `:scratch` stage `birth!` writes.
+  "A one-off workstream: one whose ledger holds the `:scratch` entry `birth!` appends.
 
    MARKED, not inferred. This used to read ref-lessness — Notion and GitHub
    workstreams both carry refs, so \"no refs\" stood in for \"disposable\" — and
@@ -28,7 +29,7 @@
 
    The marker was always the authored fact; the inference was the shortcut."
   [w]
-  (= :scratch (:stage w)))
+  (standing/born-scratch? w))
 
 (defn- reconcile-weight!
   "Rewrite an owned session's `:weight` when it disagrees with what is actually
@@ -49,38 +50,29 @@
   (let [w (workstream/read-ws project ws-id)]
     (cond
       (nil? w)     {:reason :no-such-workstream :ws-id ws-id}
-      (:closed w)  {:reason :closed :ws-id ws-id}
+      (workstream/closure w) {:reason :closed :ws-id ws-id}
       :else        (when-let [holder (session/workstream-id-for project session-name)]
                      (when (not= holder ws-id)
                        {:reason :name-held :ws-id ws-id :holder holder})))))
 
 (defn- mint-one-off!
-  "A fresh :scratch workstream holding a new human session named `session-name`, its birth
-   recorded as a :scratch entry — the ledger's mark that it may be discarded. When another
-   start takes the name first, create! refuses; the workstream minted for it is deleted and the
-   holder answered instead, so a lost race leaves no empty one-off behind."
+  "A fresh workstream holding a new human session named `session-name`, its birth recorded as a
+   :scratch entry — the ledger's mark that it may be discarded — before the session is created,
+   so no one-off ever stands without its mark. When another start takes the name first,
+   session/create! refuses; the workstream minted for it, holding nothing but its birth, is
+   deleted and the holder answered instead, so a lost race leaves no one-off behind."
   [project session-name weight]
   (let [w (workstream/create! project {:stage :scratch :external-refs []})]
     (try
-      (session/create! project (:id w) {:name session-name :weight (or weight :light) :autonomy nil})
-      ;; After the session, so a lost race deletes a workstream that holds nothing.
       (workstream/append-entry! project (:id w) {:kind :scratch}
                                 (pr-str {:format :scratch :session session-name}))
+      (session/create! project (:id w) {:name session-name :weight (or weight :light) :autonomy nil})
       (:id w)
       (catch clojure.lang.ExceptionInfo e
         (if (= :name-held (:reason (ex-data e)))
           (do (workstream/delete! project (:id w))
               (:holder (ex-data e)))
           (throw e))))))
-
-(defn- complete-birth!
-  "Append the :scratch birth entry a one-off holding `session-name` is missing — its session was
-   created and the append after it failed, so the start run again finishes the birth."
-  [project ws-id session-name]
-  (let [w (workstream/read-ws project ws-id)]
-    (when (and (scratch? w) (not-any? #(= :scratch (:kind %)) (:entries w)))
-      (workstream/append-entry! project ws-id {:kind :scratch}
-                                (pr-str {:format :scratch :session session-name})))))
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] :boolean]}
   bare?
@@ -105,8 +97,8 @@
    Without one: whichever workstream already holds the name keeps it, else a ref-less
    :scratch-stage one-off is minted for it. An unknown weight births :light, the conservative read.
 
-   Idempotent either way, and it still reconciles a stale `:weight` and completes a one-off's
-   missing :scratch entry, since this is the only point every path (manual up, TUI, the orphan sweep) re-runs against a live session."
+   Idempotent either way, and it still reconciles a stale `:weight`, since this is the only point
+   every path (manual up, TUI, the orphan sweep) re-runs against a live session."
   ([project session-name weight]
    (birth! project session-name weight nil))
   ([project session-name weight ws-id]
@@ -124,7 +116,6 @@
            ws-id))
      (if-let [held (session/workstream-id-for project session-name)]
        (do (reconcile-weight! project held session-name weight)
-           (complete-birth! project held session-name)
            held)
        (mint-one-off! project session-name weight)))))
 

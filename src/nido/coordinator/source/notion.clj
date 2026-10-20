@@ -222,7 +222,7 @@
   (into {}
         (for [id    (ws/list-ids project)
               :let  [w (ws/read-ws project id)]
-              :when (and w (nil? (:closed w))
+              :when (and w (nil? (ws/closure w))
                          (not-any? #(= :notion-status (:kind %)) (:entries w)))
               r     (:external-refs w)
               :let  [page-id (and (= :notion (:adapter r)) (:id r) (ref-page-id r))]
@@ -244,7 +244,7 @@
         (keep (fn [[page-id {:keys [br] :as prior}]]
                 (when (and br (not (contains? pages page-id)))
                   (let [w (ws/find-by-ref-id project br)]
-                    (if (or (nil? w) (:closed w))
+                    (if (or (nil? w) (ws/closure w))
                       [page-id (select-keys prior [:status :br])]
                       (let [p (notion/retrieve-page page-id token)]
                         (cond

@@ -12,6 +12,7 @@
    This lets tick! compute (cap - count-capped-in-flight) without
    iterating or annotating the combined map."
   (:require
+   [clojure.string :as str]
    [nido.coordinator.record.clock :as clock]))
 
 (defn- slot-cmp
@@ -135,10 +136,10 @@
    resume turn is ordinary agent work, and the reason to bound it is the reason
    to bound any of it.
 
-   It takes no per-trigger limit, and none is passed through: the session a turn
-   resumes is parked, and a parked session already holds its trigger's in-flight
-   slot (record.session/gating-phases), so the in-flight count tick! is handed
-   includes it. Gating the turn on that limit would count the session against
+   It takes no per-trigger limit, and none is passed through: the run a turn
+   resumes is parked, and a parked run already holds its trigger's in-flight
+   slot (runs/in-progress-count-by-trigger counts :awaiting-review), so the
+   in-flight count tick! is handed includes it. Gating the turn on that limit would count the session against
    itself, and a trigger at its limit could never take a reply."
   [{:keys [run-id turn priority trigger body]}]
   (submit! {:run-id        (turn-id run-id turn)
@@ -147,6 +148,19 @@
             :trigger       trigger
             :max-in-flight nil
             :body          body}))
+
+(defn ^{:malli/schema [:=> [:cat :RunId] :boolean]}
+  turn-pending?
+  "Whether a turn against `run-id` is queued or still running in THIS process's executor — the
+   one place a reply exists between being accepted and its agent starting, so what refuses a
+   second reply while the first is still waiting for a slot."
+  [run-id]
+  (let [prefix (str run-id "#turn-")
+        {:keys [queue in-flight-capped in-flight-uncapped]} @!state]
+    (boolean
+     (or (some #(str/starts-with? (str (:run-id %)) prefix) queue)
+         (some (fn [[rid f]] (and (str/starts-with? (str rid) prefix) (not (future-done? f))))
+               (merge in-flight-capped in-flight-uncapped))))))
 
 (defn- reap-done-map
   "Remove futures that have completed from a {run-id → future} map.

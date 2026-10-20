@@ -6,6 +6,7 @@
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
    [nido.coordinator.lane.drive :as drive]
+   [nido.coordinator.lane.resume :as resume]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.lane.pipeline :as pipeline]))
@@ -76,16 +77,17 @@
           (is (= "which way to cut phase three" (:needs e)))
           (is (= :disputed (:outcome (first (:tried e))))))))))
 
-(deftest parking-puts-a-live-autonomous-session-to-sleep
+(deftest parking-leaves-the-workstream-owed-by-a-person
+  ;; The halt is the whole park: status places a workstream holding an unanswered blocker at
+  ;; :blocked, owed by a person, and its autonomous session is the one a reply reaches.
   (with-tmp
     (fn []
       (let [id (a-ws)]
         (session/create! :brian id {:name "auto" :weight :heavy
                                     :autonomy a-running-agent})
-        (let [r (drive/park! :brian id {:stage :verify-baseline :outcome :disputed})]
-          (is (= "auto" (:parked r)))
-          (is (= :parked (get-in (first (session/list-sessions :brian id))
-                                 [:autonomy :phase]))))))))
+        (drive/park! :brian id {:stage :verify-baseline :outcome :disputed})
+        (is (= :person (:owed-by (pipeline/status :brian id))))
+        (is (= "auto" (:name (resume/waiting-session :brian id))))))))
 
 (deftest parking-still-records-when-there-is-no-session-to-park
   ;; A mechanical stage runs as a task, not an agent, so there is often nobody to
@@ -94,8 +96,7 @@
     (fn []
       (let [id (a-ws)
             r  (drive/park! :brian id {:stage :verify-baseline :outcome :disputed})]
-        (is (nil? (:parked r)))
-        (is (some? (:seq r)) "the ledger entry is the durable half")
+        (is (some? (:seq r)) "the ledger entry is the whole park")
         (is (some? (ws/latest-entry :brian id :blocker)))))))
 
 (deftest a-halt-the-ledger-would-refuse-is-refused-here-instead-of-thrown

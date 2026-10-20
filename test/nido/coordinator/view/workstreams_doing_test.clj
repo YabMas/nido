@@ -96,3 +96,67 @@
     (is (= "review round 3 · reviewing 2/3 · 1 finding"
            (wsv/doing-label {:source :claim :kind :diff-review :progress p}))
         "so a count of nothing yet is not read as a clean round")))
+
+;; ---------------------------------------------------------------------------
+;; doing — what is underway, from exactly one source
+;; ---------------------------------------------------------------------------
+
+(def ^:private claim
+  {:kind :diff-review :run-id "review-1" :report-path "/runs/review-1/report.json"
+   :started-at "2026-09-03T10:00:00Z" :pid 4242})
+
+(defn- a-run
+  "A run of the workstream in `state`, its agent holding its lock when `live?`."
+  ([state] (a-run state false))
+  ([state live?] {:id "r-1" :session-name "impl-1" :trigger :plan-bug :state state :live? live?}))
+
+(defn- a-merge [state] {:id "m-1" :session-name "impl-1" :trigger :merge :mode :merge :state state})
+
+(deftest nothing-underway-reads-as-nil
+  (is (nil? (wsv/doing {:runs []})))
+  (testing "a run with no agent holding its lock is not activity, whatever its state"
+    (is (nil? (wsv/doing {:runs [(a-run :running)]})))))
+
+(deftest a-closed-workstream-is-doing-nothing
+  (testing "closure outranks every source, including a claim some process still
+            holds — it is over, whatever any record still says"
+    (is (nil? (wsv/doing {:closed {:outcome :done}
+                          :runs [(a-run :running true)]
+                          :stage :shipping
+                          :claim claim})))
+    (is (nil? (wsv/doing {:stage :done :runs [(a-run :running true)]}))
+        "and so does a band of :done — a ticket settled in Notion under the work")))
+
+(deftest a-held-claim-answers-and-carries-its-payload
+  (let [d (wsv/doing {:runs [] :claim claim})]
+    (is (= :claim (:source d)))
+    (is (= :diff-review (:kind d)))
+    (is (= "review-1" (:run-id d)))
+    (is (= "/runs/review-1/report.json" (:report-path d))
+        "the report path is what makes a live run joinable, so it must survive")))
+
+(deftest the-claim-outranks-merge-and-session
+  (is (= :claim (:source (wsv/doing {:runs [(a-run :running true)] :stage :shipping :claim claim})))))
+
+(deftest merge-reads-the-merge-runs-state
+  (is (= {:source :merge :phase :driving}
+         (wsv/doing {:runs [(a-merge :running)] :stage :shipping})))
+  (is (= {:source :merge :phase :blocked}
+         (wsv/doing {:runs [(a-merge :awaiting-review)] :stage :shipping})))
+  (is (= {:source :merge :phase :awaiting-merge}
+         (wsv/doing {:runs [(a-merge :done)] :stage :shipping})))
+  (testing "a :shipping workstream with no merge run reads :queued rather than nil — the
+            lane takes one branch at a time, so waiting for it is a state the board keeps
+            saying"
+    (is (= {:source :merge :phase :queued} (wsv/doing {:runs [] :stage :shipping})))
+    (is (= {:source :merge :phase :queued}
+           (wsv/doing {:runs [(a-run :running true)] :stage :shipping}))
+        "and a run that is not the merge lane's says nothing about it")))
+
+(deftest an-agent-holding-its-runs-lock-answers-last
+  (let [d (wsv/doing {:runs [(a-run :running true)]})]
+    (is (= {:source :session :phase :running :session "impl-1"} d))))
+
+(deftest a-run-parked-for-review-is-a-gate-not-an-activity
+  (testing "calling it activity would say a workstream waiting on a person is busy"
+    (is (nil? (wsv/doing {:runs [(a-run :awaiting-review)]})))))

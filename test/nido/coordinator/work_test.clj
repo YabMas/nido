@@ -37,6 +37,30 @@
    [nido.session.state]
    [nido.coordinator.work :as work]))
 
+(defn- write-run!
+  "A run owning session `sname` on `ws-id`, registered with the workstream as create-run! does —
+   parked for review unless `state` says otherwise."
+  ([id ws-id sname sid] (write-run! id ws-id sname sid :awaiting-review))
+  ([id ws-id sname sid state]
+   (fs/create-dirs (cstate/run-dir id))
+   (runs/write-run! {:id id :project :brian :trigger :triage-bug :source {:type :manual}
+                     :event-payload {} :skill :triage-bug :first-message "/triage-bug"
+                     :agent :claude :session-name sname :workstream-id ws-id
+                     :claude-session-id sid :limits {:budget "30m"} :priority 0
+                     :session-profile :lite :uncapped? false :state state
+                     :state-history [{:at "2026-06-18T00:00:00Z" :state :queued}]
+                     :artifacts [] :error nil})
+   (runs/register! id)))
+
+(defn- one-off!
+  "A ref-less workstream born a one-off: its ledger holds the :scratch birth entry that
+   `scratch/birth!` appends as it mints one."
+  []
+  (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
+    (workstream/append-entry! :brian (:id w) {:kind :scratch} (pr-str {:format :scratch}))
+    (workstream/read-ws :brian (:id w))))
+
+
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
     (try
@@ -120,15 +144,23 @@
   ;; What put ten analyses in nido's Intake asking to establish intent: they
   ;; arrived through no source ws-source knew, fell to the :notion default, and
   ;; were projected as ordinary un-triaged tickets.
-  (is (= :analysed (:stage (@#'work/to-spine {:source :review-run :stage :triaging})))
-      "a review-run row folds off the board whatever stage it was stored at")
-  (is (= :dismissed (:stage (@#'work/to-spine {:source :review-run :stage :triaging
-                                               :dismissed? true})))
-      "a dismissed one still reads dismissed — that is a human's decision and it outranks
-       what kind of record this is")
-  (is (= :done (:stage (@#'work/to-spine {:source :review-run :stage :triaging
-                                          :engagement :settled})))
-      "and a closed one still reads done"))
+  (with-tmp
+    (fn [_]
+      (let [mk    #(:id (workstream/create! :brian {:stage :triaging
+                                                     :external-refs [{:adapter :review-run :id %}]}))
+            open  (mk "r1")
+            gone  (mk "r2")
+            done  (mk "r3")
+            stage #(:stage (first (filter (comp #{%} :ws-id) (work/list-workstreams :brian))))]
+        (work/dismiss! :brian gone)
+        (workstream/close! :brian done :done)
+        (is (= :analysed (stage open))
+            "a review-run row folds off the board")
+        (is (= :dismissed (stage gone))
+            "a dismissed one still reads dismissed — that is a human's decision and it outranks
+             what kind of record this is")
+        (is (= :done (stage done))
+            "and a closed one still reads done")))))
 
 (deftest winding-down-lists-closed-ws-with-live-sessions
   (with-tmp
@@ -201,7 +233,7 @@
       "a band with rows survives while its empty sibling is dropped"))
 
 (deftest classify-origin-delegates-to-source-classifier
-  (is (= :scratch (work/classify-origin {:stage :scratch :external-refs []})))
+  (is (= :scratch (work/classify-origin {:external-refs [] :entries [{:kind :scratch :seq 1}]})))
   (is (= :notion  (work/classify-origin {:stage :triaging
                                          :external-refs [{:adapter :notion :id "BR-1"}]})))
   (is (= :github  (work/classify-origin {:stage :ready
@@ -212,7 +244,7 @@
 (deftest list-workstreams-folds-scratch-into-in-progress
   (with-tmp
     (fn [_]
-      (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
+      (let [w (one-off!)]
         (session/create! :brian (:id w) {:name "poke" :weight :light :autonomy nil}))
       (let [row (first (work/list-workstreams :brian #{"poke"}))]
         (is (= :scratch (:origin row)) "origin preserved")
@@ -222,7 +254,7 @@
 (deftest list-workstreams-settled-scratch-reads-done
   (with-tmp
     (fn [_]
-      (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
+      (let [w (one-off!)]
         (session/create! :brian (:id w) {:name "poke" :weight :light :autonomy nil})
         (workstream/close! :brian (:id w) :done))
       (is (= :done (:stage (first (work/list-workstreams :brian))))
@@ -324,7 +356,7 @@
   (with-tmp
     (fn [_]
       ;; a scratch one-off
-      (let [s (workstream/create! :brian {:stage :scratch :external-refs []})]
+      (let [s (one-off!)]
         (session/create! :brian (:id s) {:name "poke" :weight :light :autonomy nil}))
       ;; a triaged notion ticket → :ready, which is NOT a board band (backlog
       ;; lives in Notion) — it doesn't appear in any group.
@@ -349,6 +381,7 @@
       (let [w (workstream/create! :brian {:stage :triaging
                                           :external-refs [{:adapter :notion :id "BR-5" :title "t"}]})]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-running})
+        (write-run! "r-auto" (:id w) "auto" nil :running)
         (session/create! :brian (:id w) {:name "me"   :weight :light :autonomy nil})
         (let [d  (work/workstream :brian (:id w))
               by (into {} (map (juxt :name identity)) (:sessions d))]
@@ -356,7 +389,7 @@
           (is (= :notion (:origin d)))
           (is (= :autonomous (:autonomy-level (by "auto"))))
           (is (= {:budget "30m"} (:brakes (by "auto"))) "brakes = the autonomy :limits")
-          (is (= :running (:status (by "auto"))))
+          (is (= :running (:status (by "auto"))) "an autonomous session reports its run's state")
           (is (= :interactive (:autonomy-level (by "me"))))
           (is (nil? (:brakes (by "me"))) "interactive sessions carry no brakes")
           (is (= :up (:status (by "me"))) "a live human session reads :up"))))))
@@ -367,8 +400,9 @@
       (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
         (session/create! :brian (:id w) {:name "gate" :weight :heavy
                                          :autonomy (assoc autonomy-running :phase :parked)})
+        (write-run! "r-gate" (:id w) "gate" "sid")
         (is (true? (:parked? (first (:sessions (work/workstream :brian (:id w))))))
-            "a parked autonomous session is at the HITL gate")))))
+            "a session whose run is parked for review, with no agent running, is at the HITL gate")))))
 
 (deftest workstream-detail-flags-the-current-ledger-entry
   (with-tmp
@@ -545,16 +579,6 @@
   {:skill :triage-bug :first-message "x" :agent :claude :claude-session-id "sid"
    :trigger :triage-bug :limits {} :priority 0 :uncapped? false :on-promote nil
    :phase :parked :phase-history [{:at "t" :phase :parked}] :error nil})
-
-(defn- write-run! [id ws-id sname sid]
-  (fs/create-dirs (cstate/run-dir id))
-  (runs/write-run! {:id id :project :brian :trigger :triage-bug :source {:type :manual}
-                    :event-payload {} :skill :triage-bug :first-message "/triage-bug"
-                    :agent :claude :session-name sname :workstream-id ws-id
-                    :claude-session-id sid :limits {:budget "30m"} :priority 0
-                    :session-profile :lite :uncapped? false :state :awaiting-review
-                    :state-history [{:at "2026-06-18T00:00:00Z" :state :queued}]
-                    :artifacts [] :error nil}))
 
 (deftest reclaimed?-true-when-run-home-absent
   (with-tmp
@@ -1516,7 +1540,7 @@
                 ;; minimal stubs so workstream's other projections don't throw:
                 nido.coordinator.record.session/list-sessions (fn [_ _] [])
                 nido.coordinator.view.workstreams/workstream-row (fn [_ _ & _] {:ws-id "ws-1" :stage :triage :label "BR-7" :source :notion})
-                nido.coordinator.record.standing/closure (constantly nil)
+                nido.coordinator.record.workstream/closure (constantly nil)
                 nido.coordinator.lane.pipeline/status (constantly {:position {:at :intake} :owed-by :agent
                                                                    :live false :stalled true})
                 nido.coordinator.record.standing/open-findings (constantly #{})
@@ -1582,7 +1606,7 @@
 (deftest latest-report-prefers-workstream-entries
   (with-tmp
     (fn [_]
-      (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
         (workstream/append-entry! :brian (:id w) {:kind :impl} "# First\n\none")
         (workstream/append-entry! :brian (:id w) {:kind :impl} "# Second\n\ntwo")
         (let [r (work/latest-report :brian (:id w))]
@@ -1603,7 +1627,7 @@
 (deftest active-ledger-empty-when-no-entries
   (with-tmp
     (fn [_]
-      (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
         (is (= [] (:entries (#'work/active-ledger :brian (:id w))))
             "no entries anywhere → empty vector")))))
 
@@ -1623,7 +1647,7 @@
 (deftest workstream-browses-entries-newest-first
   (with-tmp
     (fn [_]
-      (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+      (let [id (:id (workstream/create! :brian {:stage :triaging :external-refs []}))]
         (workstream/append-entry! :brian id {:kind :impl} "# One\n\nfirst")
         (workstream/append-entry! :brian id {:kind :impl} "# Two\n\nsecond")
         (workstream/append-entry! :brian id {:kind :impl} "# Three\n\nthird")
@@ -1707,7 +1731,7 @@
 (deftest workstream-index-leaves-an-unamended-ledger-unmarked
   (with-tmp
     (fn [_]
-      (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+      (let [id (:id (workstream/create! :brian {:stage :triaging :external-refs []}))]
         (workstream/append-entry! :brian id {:kind :impl} "# One\n\nfirst")
         (workstream/append-entry! :brian id {:kind :impl} "# Two\n\nsecond")
         (is (every? #(and (nil? (:supersedes %)) (nil? (:superseded-by %)))
@@ -1737,7 +1761,7 @@
 (deftest workstream-selects-requested-entry
   (with-tmp
     (fn [_]
-      (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+      (let [id (:id (workstream/create! :brian {:stage :triaging :external-refs []}))]
         (workstream/append-entry! :brian id {:kind :impl} "# One\n\nfirst")
         (workstream/append-entry! :brian id {:kind :impl} "# Two\n\nsecond")
         (let [picked (work/workstream :brian id 1)]
@@ -1752,7 +1776,7 @@
   ;; single-entry ledger that skipped it would be unreadable.
   (with-tmp
     (fn [_]
-      (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+      (let [id (:id (workstream/create! :brian {:stage :triaging :external-refs []}))]
         (workstream/append-entry! :brian id {:kind :impl} "# Solo\n\nonly")
         (is (= ["Solo"] (mapv :title (:entries (work/workstream :brian id)))))
         (is (str/includes? (:markdown (:report (work/workstream :brian id 1))) "only"))))))
@@ -1760,7 +1784,7 @@
 (deftest workstream-index-title-falls-back-to-first-line
   (with-tmp
     (fn [_]
-      (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+      (let [id (:id (workstream/create! :brian {:stage :triaging :external-refs []}))]
         (workstream/append-entry! :brian id {:kind :impl} "just prose no heading")
         (workstream/append-entry! :brian id {:kind :impl} "# Has heading\n\nx")
         (is (= ["Has heading" "just prose no heading"]
@@ -1770,7 +1794,7 @@
 (deftest workstream-index-title-uses-event-fields
   (with-tmp
     (fn [_]
-      (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+      (let [id (:id (workstream/create! :brian {:stage :triaging :external-refs []}))]
         (workstream/append-entry! :brian id {:kind :implementation-plan}
           (pr-str {:format :implementation-plan :summary "x" :direction "First direction" :effort :S}))
         (workstream/append-entry! :brian id {:kind :blocker}
@@ -1802,7 +1826,7 @@
   (with-tmp
     (fn [tmp]
       (let [path (str (fs/path tmp "report.json"))
-            id   (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+            id   (:id (workstream/create! :brian {:stage :triaging :external-refs []}))]
         (nido-io/write-json! path review-report-json)
         (workstream/append-entry! :brian id {:kind :review} (review-event path))
         (let [r (:report (work/workstream :brian id 1))]
@@ -1817,7 +1841,7 @@
   ;; Run dirs get cleaned; the event must still render its verdict.
   (with-tmp
     (fn [tmp]
-      (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+      (let [id (:id (workstream/create! :brian {:stage :triaging :external-refs []}))]
         (workstream/append-entry! :brian id {:kind :review}
                                   (review-event (str (fs/path tmp "gone.json"))))
         (let [r (:report (work/workstream :brian id 1))]
@@ -1830,7 +1854,7 @@
   (with-tmp
     (fn [tmp]
       (let [path (str (fs/path tmp "broken.json"))
-            id   (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+            id   (:id (workstream/create! :brian {:stage :triaging :external-refs []}))]
         (spit path "{not json")
         (workstream/append-entry! :brian id {:kind :impl} "# One\n\nx")
         (workstream/append-entry! :brian id {:kind :review} (review-event path))
@@ -2982,7 +3006,7 @@
                       nido.coordinator.lane.pickup/resolve-ref
                       (fn [_ input _] {:id "BR-9" :page-id input
                                        :url "https://notion.so/pg-bare" :title "Move Licences"})
-                      nido.coordinator.lane.spawn/ref-has-pending-session? (constantly false)
+                      nido.coordinator.lane.spawn/ref-has-pending-run? (constantly false)
                       nido.coordinator.lane.spawn/spawn-and-submit!
                       (fn [routed _] (reset! spawned routed))]
           (is (= {:decision :triaging} (work/start-triage-page! :brian "pg-bare")))
@@ -3013,7 +3037,7 @@
                     nido.notion.client/keychain-token (constantly "tok")
                     nido.coordinator.lane.pickup/resolve-ref
                     (fn [_ _ _] {:id "BR-9" :page-id "pg-bare" :url "u" :title "t"})
-                    nido.coordinator.lane.spawn/ref-has-pending-session? (constantly true)
+                    nido.coordinator.lane.spawn/ref-has-pending-run? (constantly true)
                     nido.coordinator.lane.spawn/spawn-and-submit!
                     (fn [_ _] (throw (ex-info "must not spawn" {})))]
         (is (= {:decision :already-in-flight}
@@ -3218,7 +3242,7 @@
 (deftest a-workstream-awaiting-a-person-is-a-gate
   (with-tmp
     (fn [_]
-      (let [id   (:id (workstream/create! :brian {:stage :scratch :external-refs []}))
+      (let [id   (:id (workstream/create! :brian {:stage :triaging :external-refs []}))
             add! (fn [kind record]
                    (workstream/append-entry! :brian id {:kind kind} (pr-str record))
                    (count (:entries (workstream/read-ws :brian id))))
@@ -3599,11 +3623,13 @@
                 _      (workstream/create! :nido {:stage :triaging :external-refs []})
                 _      (improvement-ws! :other "ws-q/1#0")]
             (session/create! :nido held {:name "s" :weight :light :autonomy nil})
-            (is (= [{:project "nido" :ws-id held :address "ws-p/1#0" :title "improve: ws-p/1#0"
-                     :state :working
-                     :started-at (:created-at (workstream/read-ws :nido held))}]
-                   (work/improvement-holds))
-                "only the open one, only where a sweep is declared, and a live session is working")))))))
+            ;; An agent holding its run's lock against the held workstream: live as status means it.
+            (with-redefs [runs/live-runs (fn [_ ws-id] (if (= held ws-id) ["r-1"] []))]
+              (is (= [{:project "nido" :ws-id held :address "ws-p/1#0" :title "improve: ws-p/1#0"
+                       :state :working
+                       :started-at (:created-at (workstream/read-ws :nido held))}]
+                     (work/improvement-holds))
+                  "only the open one, only where a sweep is declared, and a live agent is working"))))))))
 
 (deftest a-hold-no-live-session-works-on-is-stuck
   ;; The wedge this exists for: a claim session ended its turn without closing
@@ -3619,12 +3645,15 @@
                 archived (session/archive! :nido ended "e")
                 _       (session/create! :nido parked {:name "g" :weight :heavy
                                                        :autonomy parked-autonomy})
+                ;; What a parked improvement leaves: a halt only a person's answer clears.
+                _       (workstream/append-entry! :nido parked {:kind :blocker}
+                                                  (pr-str {:format :blocker :summary "s" :needs "n"}))
                 by-ws   (into {} (map (juxt :ws-id identity)) (work/improvement-holds))]
             (is (= :stuck (:state (by-ws ended))))
             (is (= (:at (last (:substrate-history archived))) (:ended-at (by-ws ended)))
                 "and says when its last session ended")
             (is (= :waiting-on-you (:state (by-ws parked)))
-                "a session parked at a gate is waiting on a person, not stuck")
+                "a workstream halted at a gate is waiting on a person, not stuck")
             (is (nil? (:ended-at (by-ws parked))))
             (is (= :stuck (:state (by-ws never))))
             (is (nil? (:ended-at (by-ws never))) "no session, so no end to report")))))))

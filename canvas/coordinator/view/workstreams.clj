@@ -56,20 +56,21 @@
     "The latest timestamp across the workstream and its sessions."
     {:signature [:=> [:catn [:ws Workstream] [:sessions :any]] [:maybe :string]]})
   (Operation workstream-row
-    "One display row, reading the workstream's sessions unless they are handed in.
-
-     A defaults chain — `[:?]` rather than three arities, because each form fills the next
-     argument in rather than being a different contract."
-    {:signature [:=> [:catn [:project ProjectName] [:ws Workstream]
-                            [:live-names [:? :any]] [:facts [:? :any]]] WorkstreamRow]
-     :delegates [label last-activity ws-source session/list-sessions session/stage-projection]})
+    "One display row: what the workstream is and where it came from. Where it sits on the board is
+     status's answer, added above this."
+    {:signature [:=> [:catn [:project ProjectName] [:ws Workstream] [:facts [:? :any]]] WorkstreamRow]
+     :delegates [label last-activity ws-source session/list-sessions]})
+  (Operation doing
+    "Which single source says what this workstream is doing right now — a held activity claim,
+     the merge run, or an agent holding its run's lock — under a TOTAL precedence, so that
+     exactly one ever answers. Pure; the claim and the runs' liveness arrive as arguments."
+    {:signature [:=> [:catn [:opts :map]] [:maybe :map]]})
   (Operation doing-at
     "What is underway in a workstream right now, at a closure and band the caller settled on —
-     the board passes status's band, so what is underway and where the row sits are one answer.
-     A defaults chain: the sessions are read unless they are handed in."
+     the board passes status's band, so what is underway and where the row sits are one answer."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:closed [:maybe :map]]
-                            [:stage [:maybe :keyword]] [:sessions [:? :any]]] [:maybe :map]]
-     :delegates [session/list-sessions]})
+                            [:stage [:maybe :keyword]]] [:maybe :map]]
+     :delegates [doing]})
   (Operation bare-row
     "A display row for a watched Notion page that has no workstream yet — what the board shows
      before anything local exists."
@@ -81,7 +82,7 @@
      :delegates [workstream/read-ws]})
   (Operation workstream-rows
     "Every display row for a project."
-    {:signature [:=> [:catn [:project ProjectName] [:live-names [:? :any]]] [:vector WorkstreamRow]]
+    {:signature [:=> [:catn [:project ProjectName]] [:vector WorkstreamRow]]
      :delegates [workstream/list-ids workstream/read-ws workstream-row]})
   (Operation grouped-by-stage
     "Rows partitioned by lifecycle stage."

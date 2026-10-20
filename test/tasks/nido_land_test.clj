@@ -69,7 +69,8 @@
                                                          :else nil))
                     cws/latest-entry (fn [& _] design)
                     standing/of-design (constantly standing)
-                    cws/read-ws (fn [& _] (or ws (cond-> {:id "ws-1"} closed? (assoc :closed {:outcome :done}))))
+                    cws/read-ws (fn [& _] (or ws {:id "ws-1"}))
+                    cws/closure (fn [_] (when closed? {:outcome :done}))
                     cws/close! (fn [& args] (swap! calls conj [:close args]) {})
                     cws/append-entry-once! (fn [_ _ entry content same?]
                                              (when append-fails? (throw (ex-info "disk full" {})))

@@ -5,6 +5,8 @@
   (:require
    [nido.coordinator.lane.facets :as facets]
    [nido.coordinator.lane.spawn :as spawn]
+   [nido.coordinator.record.session :as session]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as ws]
    [nido.notion.views :as views]))
 
@@ -24,8 +26,10 @@
         pen!     #(ws/append-entry! project % {:kind :stage-set}
                                     (pr-str {:format :stage-set :stage :incoming :by :nido}))]
     (if existing
-      (if (and (= :incoming (:stage existing))
-               (not-any? #(= :stage-set (:kind %)) (:entries existing)))
+      ;; A workstream an earlier fire minted for the pen and died before penning holds nothing:
+      ;; no entry and no session. Anything else was put somewhere already.
+      (if (and (empty? (:entries existing))
+               (empty? (session/list-sessions project (:id existing))))
         (do (pen! (:id existing)) (ws/read-ws project (:id existing)))
         existing)
       (let [w (ws/create! project
@@ -53,7 +57,7 @@
   [project max-age-ms now-ms]
   (->> (ws/list-ids project)
        (keep #(ws/read-ws project %))
-       (filter (fn [w] (and (= :incoming (:stage w))
-                            (nil? (:closed w))
+       (filter (fn [w] (and (nil? (ws/closure w))
+                            (= :incoming (standing/chosen-stage project (:id w) w))
                             (>= (iso-age-ms (:created-at w) now-ms) max-age-ms))))
        (mapv (fn [w] (ws/close! project (:id w) :dropped) (:id w)))))
