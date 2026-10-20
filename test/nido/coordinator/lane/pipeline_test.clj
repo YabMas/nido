@@ -75,7 +75,7 @@
    appends one entry and hands back the :seq the ledger gave it — read back
    rather than counted, so a test cannot drift from the store."
   []
-  (let [id (:id (ws/create! :brian {:stage :in-progress :external-refs []}))]
+  (let [id (:id (ws/create! :brian {:external-refs []}))]
     [id (fn [kind record]
           ;; A clearance is written at a position — the one way the ledger
           ;; takes one.

@@ -64,10 +64,9 @@
       (when-not (some #(= :issue (:kind %)) (:entries w))
         (entry (:id w))
         nil)
-      (let [w (ws/create! project {:stage :ready
-                                   :external-refs [(cond-> {:adapter :github-issue :id id}
-                                                     url   (assoc :url url)
-                                                     title (assoc :title title))]})]
+      (let [w (ws/create! project {:external-refs [(cond-> {:adapter :github-issue :id id}
+                                                      url   (assoc :url url)
+                                                      title (assoc :title title))]})]
         ;; How it arrived, on the ledger: the position reads the arrival by kind, never off refs.
         (entry (:id w))
         (ws/read-ws project (:id w))))))

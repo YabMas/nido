@@ -68,8 +68,7 @@
   (with-tmp
     (fn []
       (with-notion {:blocks [(para "the ticket body")] :comments []}
-        (let [w (ws/create! :brian {:stage :triaging
-                                    :external-refs [{:adapter :notion :id "BR-5099"}]})]
+        (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-5099"}]})]
           (testing "a pickup's empty ledger gets the ticket"
             (is (some? (brief/ensure-ticket-brief! :brian (:id w) tref "tok")))
             (let [entries (:entries (ws/read-ws :brian (:id w)))]
@@ -85,8 +84,7 @@
   (with-tmp
     (fn []
       (with-notion {:blocks [(para "body")] :comments []}
-        (let [w (ws/create! :brian {:stage :triaging
-                                    :external-refs [{:adapter :notion :id "BR-1"}]})]
+        (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-1"}]})]
           (ws/append-entry! :brian (:id w) {:kind :note} "a triage already read this")
           (is (nil? (brief/ensure-ticket-brief! :brian (:id w) tref "tok")))
           (is (= 1 (count (:entries (ws/read-ws :brian (:id w)))))))))))

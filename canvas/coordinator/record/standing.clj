@@ -46,10 +46,6 @@
   (Operation why-not-decided
     "Why a standing is not decided, in words a person can act on. nil when it is."
     {:signature [:=> [:catn [:standing Standing]] [:maybe :string]]})
-  (Operation newest-choice
-    "The newest stage choice on the workstream, whatever has been recorded since."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:w :any]] [:maybe :map]]
-     :delegates [workstream/entry-at-seq]})
   (Operation ever-chose?
     "Whether a stage was ever chosen for the workstream — what tells work started once from work
      never started."

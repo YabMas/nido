@@ -136,7 +136,7 @@
 (deftest pickup-does-not-regress-a-ticket-already-being-implemented
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-1"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-1"}]})]
         (ws/append-entry! :brian (:id w) {:kind :impl} "# work")
         (with-redefs [pickup/resolve-ref     (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
                       views/facet-properties (constantly nil)
@@ -208,10 +208,25 @@
           (is (false? (:continuing? r)))
           (is (nil? (:ws-id r))))))))
 
+(defn- held!
+  "A Slack workstream whose proposal was filed as BR-1 and nobody has accepted: the ledger shape
+   that holds the ticket for the gate."
+  []
+  (let [w (ws/create! :brian {:external-refs [{:adapter :slack-message :id "slack-C1-1.0" :title "msg"}
+                                              {:adapter :notion :id "BR-1" :page-id "pg-1" :url "u"}]})]
+    (ws/append-entry! :brian (:id w) {:kind :proposed-ticket}
+                      (pr-str {:format :proposed-ticket :title "t" :ticket-type "bug" :priority nil
+                               :source-url "https://myco.slack.com/archives/C1/p1"
+                               :problem "p" :root-cause "r" :fix "f" :app-domain "Teacher"
+                               :product {:where "w" :what-happens "h" :expected "e"
+                                         :who-is-affected "a"}}))
+    w))
+
 (deftest pickup-refuses-a-ticket-a-slack-proposal-holds
   (with-tmp
     (fn []
-      (tickets/hold-for-gate! :brian "BR-1" {:notion-page-id "pg-1" :url "u" :title "t"})
+      (held!)
+      (is (tickets/held-by-gate? :brian "BR-1"))
       (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
                     queue/enqueue!     (fn [_] (throw (ex-info "must not enqueue" {})))]
         (let [r (pickup/pickup! :brian "BR-1" "tok")]
@@ -222,9 +237,8 @@
 (deftest claim-and-drive-ends-the-hold
   (with-tmp
     (fn []
-      (tickets/hold-for-gate! :brian "BR-1" {:notion-page-id "pg-1" :url "u" :title "t"})
-      (with-redefs [ws/find-by-ref-id (fn [_ _] nil)
-                    queue/enqueue!    (fn [_] "/q/x.edn")]
+      (held!)
+      (with-redefs [queue/enqueue! (fn [_] "/q/x.edn")]
         (is (= :driving (:decision (pickup/claim-and-drive!
                                     :brian {:id "BR-1" :page-id "pg-1" :url "u" :title "t"}))))
         (is (= :planning (tickets/status :brian "BR-1")))

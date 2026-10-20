@@ -3361,7 +3361,7 @@
 (defn- surveyed-ledger!
   "A fresh ledger holding an intent at 1 and the baseline scoped for it at 2."
   []
-  (let [id (:id (ws/create! :brian {:stage :in-progress :external-refs []}))]
+  (let [id (:id (ws/create! :brian {:external-refs []}))]
     (ws/append-entry! :brian id {:kind :intent} (pr-str a-ledger-intent))
     (ws/append-entry! :brian id {:kind :baseline} (pr-str a-ledger-baseline))
     [:brian id]))

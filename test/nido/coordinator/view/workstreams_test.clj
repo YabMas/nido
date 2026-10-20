@@ -14,7 +14,7 @@
   "A ref-less workstream born a one-off: its ledger holds the :scratch birth entry that
    `scratch/birth!` appends as it mints one."
   []
-  (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
+  (let [w (workstream/create! :brian {:external-refs []})]
     (workstream/append-entry! :brian (:id w) {:kind :scratch} (pr-str {:format :scratch}))
     (workstream/read-ws :brian (:id w))))
 
@@ -323,11 +323,9 @@
   (with-tmp
     (fn [_]
       (let [slack-id "slack-C1-1781.000123"
-            w (workstream/create! :brian {:stage :triaging
-                                          :external-refs [{:adapter :slack-message
+            w (workstream/create! :brian {:external-refs [{:adapter :slack-message
                                                            :id slack-id :title "boom"}]})]
         (tickets/open! :brian slack-id {:title "boom"})
-        (tickets/set-status! :brian slack-id :awaiting-input)
         (let [row (wsv/workstream-row :brian (workstream/read-ws :brian (:id w)))]
           (is (= :slack (:source row)))
           (is (= slack-id (:br-id row)) "ledger key resolves from the slack ref")

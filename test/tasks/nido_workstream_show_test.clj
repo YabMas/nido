@@ -22,8 +22,7 @@
     (fn []
       (with-redefs [queue/enqueue! (fn [_] "/q/x.edn")]
         (tickets/open! :brian "BR-9" {:title "T" :url "u"})
-        (let [w (ws/create! :brian {:stage :in-progress
-                                    :external-refs [{:adapter :notion :id "BR-9"}]})]
+        (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-9"}]})]
           ;; prior own-entry → active ledger is the workstream's own entries.
           ;; :note is unregistered (freeform md), so it skips :review's EDN-schema
           ;; validation — we only need SOME prior own-entry here, not a real review.
@@ -39,7 +38,7 @@
 (deftest show-names-the-unindexed-entries-and-stays-quiet-about-gaps
   (with-tmp
     (fn []
-      (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w   (ws/create! :brian {:external-refs []})
             _   (ws/append-entry! :brian (:id w) {:kind :note} "one")
             dir (fs/path (cstate/workstream-dir :brian (:id w)) "entries")]
         ;; An interrupted append: the payload reached the disk, the index never

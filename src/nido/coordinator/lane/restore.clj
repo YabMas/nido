@@ -28,7 +28,7 @@
 (defn- closed-after?
   "Whether workstream `w` was closed after the moment `at`."
   [w at]
-  (when-let [closed-at (-> w :closed :at)]
+  (when-let [closed-at (:at (ws/closure w))]
     (pos? (compare (java.time.Instant/parse closed-at) (java.time.Instant/parse at)))))
 
 (defn ^{:malli/schema [:=> [:cat :map :map] :map]}

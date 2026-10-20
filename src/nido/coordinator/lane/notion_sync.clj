@@ -10,7 +10,6 @@
    [clojure.string :as str]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.source.state :as sstate]
-   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.platform.io :as io]
@@ -146,8 +145,8 @@
 (defn- current-stage
   "The stage newest chosen for `w`, whatever has been recorded since — what an advance moves it
    from, and what makes a second advance to the same stage a no-op."
-  [project w]
-  (:stage (standing/newest-choice project (:id w) w)))
+  [w]
+  (:stage (ws/newest-choice w)))
 
 (defn- action-desc
   "Human/ledger description of a resolved action for workstream `w`."
@@ -156,7 +155,7 @@
     :close-done    (str "notion-sync: closed :done — Notion status " status)
     :close-dropped (str "notion-sync: dropped — claimed by " (page-ballholder-name page me))
     :advance       (format "notion-sync: %s → %s — Notion status %s"
-                           (some-> (current-stage project w) name) (name (second action)) status)))
+                           (some-> (current-stage w) name) (name (second action)) status)))
 
 (defn- apply-action!
   "Effect one resolved action. dry? logs the would-do without mutating; otherwise
@@ -203,7 +202,7 @@
                                            :me             me
                                            :terminal       terminal
                                            :status->stage  status->stage
-                                           :current-stage  (current-stage project w)})]
+                                           :current-stage  (current-stage w)})]
                   (apply-action! project w action status page me dry-run?)))))
           (sstate/write-state!
             k (if @auth-failed?

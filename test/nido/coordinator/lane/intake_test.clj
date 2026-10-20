@@ -26,7 +26,7 @@
   (with-tmp
     (fn [_]
       (let [w (intake/enqueue-inbox! routed)]
-        (is (= :incoming (:stage w)))
+        (is (= :incoming (:stage (ws/newest-choice w))))
         (is (= :triage-slack-bugs (-> w :intake :trigger)))
         (is (= "it broke" (-> w :intake :payload :text)))
         (is (= {:adapter :slack-message :id "slack-C-1.0"}
@@ -80,7 +80,6 @@
         (let [now-ms  (+ (iso->ms t0) three-days 1000)     ; t0 + 3 days + 1s
               expired (intake/expire-stale! :brian three-days now-ms)]
           (is (= 1 (count expired)))
-          (is (= :dropped (-> (ws/find-by-ref :brian :slack-message "slack-C-1.0")
-                              :closed :outcome)))
-          (is (nil? (:closed (ws/find-by-ref :brian :slack-message "slack-C-2.0"))))
-          (is (nil? (:closed (ws/find-by-ref :brian :slack-message "slack-C-3.0")))))))))
+          (is (= :dropped (:outcome (ws/closure (ws/find-by-ref :brian :slack-message "slack-C-1.0")))))
+          (is (nil? (ws/closure (ws/find-by-ref :brian :slack-message "slack-C-2.0"))))
+          (is (nil? (ws/closure (ws/find-by-ref :brian :slack-message "slack-C-3.0")))))))))

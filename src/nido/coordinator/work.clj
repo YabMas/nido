@@ -771,15 +771,15 @@
      :error          (when auto (:error auto))}))
 
 (defn- ledger-summary
-  "Light ledger facet for the detail view: its key (BR-#### / slack id), status
-   (from the ticket status record), and report count (from the workstream
-   ledger — the single event store). nil when `k` is nil (the workstream
-   carries no ledger ref)."
+  "Light ledger facet for the detail view: its key (BR-#### / slack id), where its triage stands
+   (`tickets/status-of` the workstream carrying it), and report count (from that workstream's
+   ledger). nil when `k` is nil (the workstream carries no ledger ref)."
   [project k]
   (when k
-    {:key          k
-     :status       (:status (tickets/read-meta project k))
-     :report-count (count (:entries (cws/find-by-ref-id project k)))}))
+    (let [w (cws/find-by-ref-id project k)]
+      {:key          k
+       :status       (tickets/status-of project w)
+       :report-count (count (:entries w))})))
 
 ;; What a ledger entry and a proposal ARE now lives one band down, in
 ;; `record.proposal`, so the improvement source can ask the same question
@@ -1597,8 +1597,6 @@
     (if (= :between-phases (:outcome (cws/closure w)))
       {:decision :between-phases}
       (do
-        (when-let [br (:id (wsv/ledger-ref w))]
-          (tickets/clear-status! project br))
         (cws/reopen! project ws-id :triaging :person)
         {:decision :restored}))
     (if-let [covering (some->> (bare-row-br project ws-id) (cws/find-by-ref-id project))]
@@ -1695,7 +1693,8 @@
 (defn- ensure-filed!
   "File `proposal`'s product page for the Slack workstream `w` (at most once — see
    create-once!), unless it is already filed, and make sure its link is in the thread. Filing
-   holds the new ticket for the gate, so no triage or pickup starts on it before acceptance.
+   makes the page a ref of the workstream whose unaccepted proposal then holds it
+   (tickets/held-by-gate?), so no triage or pickup starts on it before acceptance.
    Returns {:decision :filed|:already-filed :br … :url … :link :posted|:already|:failed} or
    {:decision :error :error kw [:status n]}."
   [project ws-id proposal w]
@@ -1717,8 +1716,8 @@
                     :children    [(notion/callout-block (report/product-page proposal))]})]
         (if (:error page)
           (error-decision page)
-          (do (tickets/hold-for-gate! project (:br page) {:notion-page-id (:page-id page)
-                                                          :url (:url page) :title (:title proposal)})
+          (do (tickets/open! project (:br page) {:notion-page-id (:page-id page) :url (:url page)
+                                                  :title (:title proposal) :opened-by :slack-proposal})
               {:decision :filed :br (:br page) :url (:url page)
                :link (link-filed! project thread (:url page))}))))))
 
@@ -1745,9 +1744,9 @@
 
 (defn- apply-proposed!
   "Accept a Slack proposal: make sure its product page is filed, add the technical analysis
-   to that page's engineering notes, and only then claim the ticket and start its :plan-bug
-   drive; the acceptance apply! records once this returns is what lets the parked session sweep
-   to done. A failed
+   to that page's engineering notes, record the acceptance, and only then claim the ticket and
+   start its :plan-bug drive. The acceptance comes first because a claim is a stage choice, and
+   a record appended after a choice moves the work past it (standing/chosen-stage). A failed
    Notion write starts nothing and leaves the gate to retry; a doubt is refused, because
    overriding one means a revised proposal, not an accept.
    Returns {:decision :created :br …} | {:decision :error :error kw}."
@@ -1766,7 +1765,8 @@
                                              (notion/keychain-token))]
           (if (:error res)
             {:decision :error :error (:error res)}
-            (do (pickup/claim-and-drive! project {:id (:id page) :page-id (:page-id page)
+            (do (tickets/complete! project (:slack-id (slack-thread w')))
+                (pickup/claim-and-drive! project {:id (:id page) :page-id (:page-id page)
                                                   :url (:url page) :title (:title proposal)})
                 {:decision :created :br (:id page)})))))))
 
@@ -1974,8 +1974,11 @@
           ;; repeatable. An acceptance cites the report it accepted; on an empty
           ;; ledger the workstream's only content is its intake text
           ;; (latest-report's fallback), which has no :seq, and the acceptance
-          ;; cites nothing — the ticket accepted as reported.
-          (when (contains? #{:applied :created} (:decision outcome))
+          ;; cites nothing — the ticket accepted as reported. One already standing
+          ;; is not recorded twice: a Slack accept records its own before it
+          ;; claims the drive (apply-proposed!).
+          (when (and (contains? #{:applied :created} (:decision outcome))
+                     (not (:accepted? (standing/verdict project ws-id (cws/read-ws project ws-id)))))
             (cws/append-entry!
              project ws-id {:kind :triage-accepted}
              (pr-str (cond-> {:format :triage-accepted}

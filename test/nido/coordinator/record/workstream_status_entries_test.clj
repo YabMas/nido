@@ -17,7 +17,7 @@
         (f tmp))
       (finally (fs/delete-tree tmp)))))
 
-(defn- fresh [] (ws/create! :brian {:stage :triaging}))
+(defn- fresh [] (ws/create! :brian {}))
 
 (defn- kinds-of [w] (mapv :kind (:entries w)))
 
@@ -30,7 +30,7 @@
     (fn [_]
       (let [w (fresh)
             c (ws/close! :brian (:id w) :between-phases 3 :nido)]
-        (is (= {:outcome :between-phases :design {:seq 3}} (select-keys (:closed c) [:outcome :design])))
+        (is (= {:outcome :between-phases :design {:seq 3}} (select-keys (ws/closure c) [:outcome :design])))
         (is (= [:closed] (kinds-of c)))
         (is (= {:format :closed :outcome :between-phases :design {:seq 3} :by :nido}
                (entry c :closed)))))))
@@ -41,7 +41,7 @@
       (let [w (fresh)]
         (ws/close! :brian (:id w) :done)
         (let [r (ws/reopen! :brian (:id w) :in-progress :person)]
-          (is (nil? (:closed r)))
+          (is (nil? (ws/closure r)))
           (is (= [:closed :reopened] (kinds-of r)))
           (is (= {:format :reopened :stage :in-progress :by :person} (entry r :reopened))))
         (testing "reopening at the stage it is already open at writes nothing"
@@ -52,7 +52,7 @@
     (fn [_]
       (let [w (fresh)
             a (ws/advance-stage! :brian (:id w) :ready :person)]
-        (is (= :ready (:stage a)))
+        (is (= :ready (:stage (ws/newest-choice a))))
         (is (= {:format :stage-set :stage :ready :by :person} (entry a :stage-set)))
         (is (= [:stage-set] (kinds-of (ws/advance-stage! :brian (:id w) :ready))))
         (testing "nido is who decided, unless told otherwise"

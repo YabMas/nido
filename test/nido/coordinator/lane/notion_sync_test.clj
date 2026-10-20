@@ -122,13 +122,10 @@
 (deftest open-notion-workstreams-filters
   (with-tmp
     (fn [_]
-      (let [with-ref (ws/create! :brian {:stage :triage
-                                         :external-refs [{:adapter :notion :id "BR-1" :page-id "P1"}]})
-            _no-ref  (ws/create! :brian {:stage :triage :external-refs []})
-            closed   (ws/create! :brian {:stage :triage
-                                         :external-refs [{:adapter :notion :id "BR-2" :page-id "P2"}]})
-            done-open (ws/create! :brian {:stage :done
-                                          :external-refs [{:adapter :notion :id "BR-3" :page-id "P3"}]})]
+      (let [with-ref (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-1" :page-id "P1"}]})
+            _no-ref  (ws/create! :brian {:external-refs []})
+            closed   (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-2" :page-id "P2"}]})
+            done-open (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-3" :page-id "P3"}]})]
         (ws/close! :brian (:id closed) :done)
         (let [ids (set (map :id (ns-sync/open-notion-workstreams :brian)))]
           (is (contains? ids (:id with-ref)) "open + notion ref included")
@@ -143,8 +140,7 @@
    :dry-run? false})
 
 (defn- ws-with [project stage page-id]
-  (ws/create! project {:stage stage
-                       :external-refs [{:adapter :notion :id (str "BR-" page-id) :page-id page-id}]}))
+  (ws/create! project {:external-refs [{:adapter :notion :id (str "BR-" page-id) :page-id page-id}]}))
 
 (deftest poll-reacts-close-drop-advance
   (with-tmp
@@ -156,11 +152,11 @@
         (with-redefs [notion/keychain-token (constantly "tok")
                       notion/retrieve-page  (fn [pid _] (get pages pid))]
           (ns-sync/poll-and-react! :brian cfg))
-        (is (= :done (get-in (ws/read-ws :brian (:id done)) [:closed :outcome])))
-        (is (= :dropped (get-in (ws/read-ws :brian (:id claimed)) [:closed :outcome])))
+        (is (= :done (:outcome (ws/closure (ws/read-ws :brian (:id done))))))
+        (is (= :dropped (:outcome (ws/closure (ws/read-ws :brian (:id claimed))))))
         (let [w (ws/read-ws :brian (:id mine))]
-          (is (nil? (:closed w)))
-          (is (= :in-progress (:stage w)) "Code Review → :in-progress"))
+          (is (nil? (ws/closure w)))
+          (is (= :in-progress (:stage (ws/newest-choice w))) "Code Review → :in-progress"))
         (testing "actions leave an explanatory ledger entry"
           (is (pos? (count (:entries (ws/read-ws :brian (:id done)))))))))))
 
@@ -175,7 +171,7 @@
           (let [after-first (count (:entries (ws/read-ws :brian (:id mine))))]
             (ns-sync/poll-and-react! :brian cfg)
             (let [w (ws/read-ws :brian (:id mine))]
-              (is (= :in-progress (:stage w)))
+              (is (= :in-progress (:stage (ws/newest-choice w))))
               (is (= after-first (count (:entries w))) "second poll is a no-op, appends nothing"))))))))
 
 (deftest poll-dry-run-mutates-nothing
@@ -187,7 +183,7 @@
                       notion/retrieve-page  (fn [pid _] (get pages pid))]
           (ns-sync/poll-and-react! :brian (assoc cfg :dry-run? true)))
         (let [w (ws/read-ws :brian (:id mine))]
-          (is (= :triage (:stage w)) "dry-run leaves stage untouched")
+          (is (nil? (ws/newest-choice w)) "dry-run chooses no stage")
           (is (empty? (:entries w))))))))
 
 (deftest poll-read-error-skips-fail-safe
@@ -198,7 +194,7 @@
         (with-redefs [notion/keychain-token (constantly "tok")
                       notion/retrieve-page  (fn [pid _] (get pages pid))]
           (ns-sync/poll-and-react! :brian cfg))
-        (is (= :triage (:stage (ws/read-ws :brian (:id mine)))) "unreadable page → untouched")))))
+        (is (nil? (ws/newest-choice (ws/read-ws :brian (:id mine)))) "unreadable page → untouched")))))
 
 (deftest poll-auth-error-opens-breaker
   (with-tmp

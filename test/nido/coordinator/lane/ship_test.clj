@@ -30,13 +30,12 @@
 
 (deftest handle-ship-advances-stage-and-creates-one-merge-run
   (let [submitted (atom [])
-        w (ws/create! :brian {:stage :in-progress
-                              :external-refs [{:adapter :notion :id "BR-42"}]})]
+        w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-42"}]})]
     (with-redefs [ex/submit! (fn [& a] (swap! submitted conj a))]
       (let [run (sut/handle-ship! {:type :ship :project :brian
                                    :session "impl-br-42" :ws-id (:id w)})]
         ;; stage flipped
-        (is (= :shipping (:stage (ws/read-ws :brian (:id w)))))
+        (is (= :shipping (:stage (ws/newest-choice (ws/read-ws :brian (:id w))))))
         ;; one merge run, correct shape
         (is (= :merge      (:trigger run)))
         (is (= :drive-home (:skill run)))
@@ -50,8 +49,7 @@
           (is (true? uncapped?)) (is (= :merge trigger)) (is (= 1 mif)))))))
 
 (deftest handle-ship-marks-the-shipment-on-the-ledger
-  (let [w (ws/create! :brian {:stage :in-progress
-                              :external-refs [{:adapter :notion :id "BR-42"}]})]
+  (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-42"}]})]
     (with-redefs [ex/submit! (fn [& _] nil)]
       (let [run (sut/handle-ship! {:type :ship :project :brian
                                    :session "impl-br-42" :ws-id (:id w)})
@@ -66,8 +64,7 @@
   ;; A halted ship leaves :implementation-completed as the ledger's last entry.
   ;; Re-shipping appends :ship-submitted, so a drive-home that then files nothing
   ;; cannot inherit the previous attempt's success — it falls back to run-status.
-  (let [w (ws/create! :brian {:stage :in-progress
-                              :external-refs [{:adapter :notion :id "BR-42"}]})]
+  (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-42"}]})]
     (ws/append-entry! :brian (:id w) {:kind :implementation-completed}
                       (pr-str {:format :implementation-completed
                                :summary "landed" :artifacts []}))
@@ -80,8 +77,7 @@
           "after the re-ship the fingerprint is neutral and fail-safe wins"))))
 
 (deftest handle-ship-is-idempotent-while-in-flight
-  (let [w (ws/create! :brian {:stage :in-progress
-                              :external-refs [{:adapter :notion :id "BR-7"}]})]
+  (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-7"}]})]
     (with-redefs [ex/submit! (fn [& _] nil)]
       (let [r1 (sut/handle-ship! {:type :ship :project :brian :session "impl-br-7" :ws-id (:id w)})]
         ;; r1 run is :queued → not in-progress yet; force it in-flight:
@@ -90,8 +86,7 @@
           (is (nil? r2)))))))
 
 (deftest handle-ship-allows-second-call-while-queued
-  (let [w (ws/create! :brian {:stage :in-progress
-                              :external-refs [{:adapter :notion :id "BR-99"}]})]
+  (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-99"}]})]
     (with-redefs [ex/submit! (fn [& _] nil)]
       (sut/handle-ship! {:type :ship :project :brian :session "impl-br-99" :ws-id (:id w)})
       ;; r1 is still :queued (never transitioned in-progress) — second call must NOT return nil
@@ -99,8 +94,7 @@
         (is (some? r2))))))
 
 (deftest handle-ship-allows-re-ship-after-block
-  (let [w (ws/create! :brian {:stage :shipping
-                              :external-refs [{:adapter :notion :id "BR-88"}]})]
+  (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-88"}]})]
     (with-redefs [ex/submit! (fn [& _] nil)]
       (let [r1 (sut/handle-ship! {:project :brian :session "impl-br-88" :ws-id (:id w)})]
         ;; drive it to a parked/blocked terminal state
@@ -142,7 +136,7 @@
 
 (deftest settling-a-finished-drive-home-marks-done-no-teardown
   (let [torn (atom false)
-        w (ws/create! :brian {:stage :shipping :external-refs [{:adapter :notion :id "BR-9"}]})]
+        w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-9"}]})]
     (impl-session! (:id w) "impl-br-9" :parked)
     (let [run (sut/create-merge-run! :brian (:id w) "impl-br-9")]
       (runs/transition! (:id run) :running)
@@ -153,15 +147,14 @@
         (is (false? @torn))))))
 
 (deftest settling-a-blocked-drive-home-parks-with-error
-  (let [w (ws/create! :brian {:stage :shipping :external-refs [{:adapter :notion :id "BR-10"}]})]
+  (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-10"}]})]
     (impl-session! (:id w) "impl-br-10" :running)
     (let [run (sut/create-merge-run! :brian (:id w) "impl-br-10")]
       (runs/transition! (:id run) :running)
       (with-redefs [sut/classify-outcome (fn [& _] :blocked)]
         (sut/settle-drive-home! (:id run) {})
         (is (= :awaiting-review (:state (runs/read-run (:id run)))))
-        (let [s (session/read-session :brian (:id w) "impl-br-10")]
-          (is (= :parked (get-in s [:autonomy :phase])))   ; mirrored from :awaiting-review
+        (let [s (session/read-session :brian (:id w) "impl-br-10")]   ; mirrored from :awaiting-review
           (is (some?     (get-in s [:autonomy :error]))))))))
 
 (def ^:private facet
@@ -170,7 +163,7 @@
    :announced-blocked? false :recovered-boot nil})
 
 (defn- drive-home-with [facet-or-nil]
-  (let [w   (ws/create! :brian {:stage :shipping :external-refs [{:adapter :notion :id "BR-11"}]})
+  (let [w   (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-11"}]})
         nm  (str "impl-" (subs (str (random-uuid)) 0 8))
         _   (impl-session! (:id w) nm :parked)
         _   (cond

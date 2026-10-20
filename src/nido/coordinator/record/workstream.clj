@@ -35,46 +35,6 @@
    [:id            string?]
    [:project       keyword?]
    [:external-refs [:vector ExternalRef]]
-   ;; Deliberately looser than session/storable-stages, which create! and
-   ;; advance-stage! enforce. The vocabulary is closed at the SETTERS, not here,
-   ;; so a record that acquired a foreign stage some other way (a hand-edited
-   ;; edn, a pre-guard write) stays readable, closable and repairable instead of
-   ;; wedging every subsequent write! of it — including the advance-stage! back
-   ;; to a legal stage that fixes it. :stage-history is looser still, and stays
-   ;; that way: it is the record of what happened, mistakes included.
-   [:stage         keyword?]
-   [:stage-history [:vector [:map [:at string?] [:stage keyword?]]]]
-   ;; :dismissed is the nido-side veto (work/dismiss!). It is a distinct outcome
-   ;; rather than :dropped because it is the ONLY carrier of the veto on a
-   ;; workstream with no ledger ref — there is no ticket record to stamp, so
-   ;; without it the row folds to :done and leaves every board band. Widening is
-   ;; backward-compatible: stored records only ever carry :done/:dropped.
-   ;;
-   ;; :vetoed is the improvement sweep's, and it is distinct from :dropped for
-   ;; the same reason :dismissed is distinct — a reader of the owed set branches
-   ;; on it. A dropped claim was attempted and given up on, so its addresses are
-   ;; tried and stay out; a vetoed one was stopped by a decline it did not earn,
-   ;; so the addresses that carry no decline of their own return to the owed set
-   ;; and are grouped again. Folding the two would make one decline bury every
-   ;; proposal that happened to be claimed beside it.
-   ;;
-   ;; :orphaned is the improvement sweep's too: the Run working the claim ended
-   ;; without closing it (a restart, a usage-limit kill, a turn ended early), and
-   ;; the coordinator closed the workstream for it, because a close is the only
-   ;; thing that releases the sweep and a dead Run writes none. Read like
-   ;; :vetoed — nothing was tried to a conclusion, so the claim's addresses
-   ;; return to the owed set — and kept apart from it so a reader can tell a
-   ;; decline from a death.
-   ;;
-   ;; :between-phases is a landing of a phase that is not the plan's last. Closed,
-   ;; because nothing is in flight until a person has watched the running system;
-   ;; not :done, because the plan is not. `open-phase!` is its way forward.
-   [:closed        [:maybe [:map
-                            [:at      string?]
-                            [:outcome [:enum :done :dropped :dismissed :vetoed :orphaned :between-phases]]
-                            ;; A :between-phases close names the design whose plan it
-                            ;; paused, which governs until the gate opens (`plan-design`).
-                            [:design  {:optional true} [:map {:closed true} [:seq int?]]]]]]
    [:created-at    string?]
    [:entries       [:vector [:map-of keyword? any?]]]
    [:intake        {:optional true} [:maybe IntakePayload]]
@@ -84,8 +44,7 @@
    ;; that still describes the work from one whose source has since moved.
    [:title         {:optional true} [:map {:closed true}
                                      [:text  string?]
-                                     [:basis string?]]]
-   [:findings      {:optional true} [:maybe [:map-of keyword? any?]]]])
+                                     [:basis string?]]]])
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] :Workstream]}
   validate [w]
@@ -103,12 +62,17 @@
         suf  (subs (str (java.util.UUID/randomUUID)) 0 6)]
     (str "ws-" date "-" suf)))
 
-(defn- normalize-legacy-stage
-  "Back-compat: the holding-pen stage was renamed :inbox → :incoming. Records
-   persisted before the rename still carry :stage :inbox; map them on read so
-   every consumer sees the canonical :incoming."
+(def ^:private stored-status-keys
+  "Fields a workstream record carried before its ledger was the only place its status lived — a
+   stage, its history, a close, a findings tracker. The ledger records each as entries now
+   (`status-kinds`), and the status backfill turned every one these held into an entry."
+  #{:stage :stage-history :closed :findings})
+
+(defn- shed
+  "`w` without the stored status fields a record written before the ledger was the only place
+   its status lived still carries, so no reader can reach them and any rewrite drops them."
   [w]
-  (cond-> w (= :inbox (:stage w)) (assoc :stage :incoming)))
+  (apply dissoc w stored-status-keys))
 
 (def status-kinds
   "Entry kinds that record a decision about a workstream's status — settled, reopened, put at a
@@ -130,8 +94,8 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Workstream]]}
   read-ws
-  "Read a workstream.edn by project + id. Returns nil if absent. Normalizes the
-   legacy :inbox stage to :incoming (see normalize-legacy-stage).
+  "Read a workstream.edn by project + id. Returns nil if absent. Stored status fields a record
+   written before the ledger held them still carries are left out (`shed`).
 
    A record whose index is MISSING reads the index entries/ rebuilds. One that has an index reads
    its rows as entries/ holds them (`reconciled-index`), but never gains a row for a file the
@@ -141,25 +105,26 @@
    would skip both, so `index-drift` reports it instead."
   [project ws-id]
   (some-> (io/read-edn-cached (cstate/workstream-edn-path project ws-id))
-          normalize-legacy-stage
+          shed
           (as-> w (assoc w :entries (if (contains? w :entries)
                                       (reconciled-index project ws-id w)
                                       (rebuilt-index project ws-id w))))))
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] :Workstream]}
   write!
-  "Validate then write a Workstream record (atomic; parent dirs created)."
+  "Validate then write a Workstream record (atomic; parent dirs created), without any stored
+   status field it still carried (`shed`)."
   [w]
-  (validate w)
-  (io/write-edn! (cstate/workstream-edn-path (:project w) (:id w)) w)
-  w)
+  (let [w (validate (shed w))]
+    (io/write-edn! (cstate/workstream-edn-path (:project w) (:id w)) w)
+    w))
 
 (defn- check-stage!
   "Throw unless `stage` is in the closed vocabulary (session/storable-stages).
    The vocabulary has two tiers and only this check spans both, so it is the one
    place a stage the rest of nido cannot act on gets refused. Without it a stage
-   outside the set was written happily and then ignored by every projection: the
-   workstream simply stopped appearing where you put it."
+   outside the set would be recorded and then ignored: the workstream would simply
+   stop appearing where you put it."
   [stage where]
   (when-not (contains? session/storable-stages stage)
     (throw (ex-info (str "Unknown workstream stage " (pr-str stage)
@@ -173,47 +138,39 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :map] :Workstream]}
   create!
-  "Mint an id and persist a fresh workstream at the given stage. `base` may
-   carry :external-refs (default []), :intake {:trigger <kw> :payload <map>}
-   (default absent), :facets <map> (default absent), and must carry :stage."
-  [project {:keys [stage external-refs intake facets]}]
-  (check-stage! stage :create!)
-  (let [now (clock/now-iso)
-        w   (cond-> {:id            (mint-id)
-                     :project       project
-                     :external-refs (vec (or external-refs []))
-                     :stage         stage
-                     :stage-history [{:at now :stage stage}]
-                     :closed        nil
-                     :created-at    now
-                     :entries       []}
-              intake (assoc :intake intake)
-              (seq facets) (assoc :facets facets))]
+  "Mint an id and persist a fresh workstream. `base` may carry :external-refs (default []),
+   :intake {:trigger <kw> :payload <map>} (default absent) and :facets <map> (default absent).
+   It holds no status: where it is placed, chosen to be or settled is what its ledger comes to
+   record."
+  [project {:keys [external-refs intake facets]}]
+  (let [w (cond-> {:id            (mint-id)
+                   :project       project
+                   :external-refs (vec (or external-refs []))
+                   :created-at    (clock/now-iso)
+                   :entries       []}
+            intake       (assoc :intake intake)
+            (seq facets) (assoc :facets facets))]
     (write! w)))
 
-(declare record-status!)
+(declare record-status! closure newest-choice)
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword [:? [:enum :person :nido :backfill]]] :Workstream]}
   advance-stage!
-  "Move a workstream to `new-stage`, appending to :stage-history, and record the move as a
-   :stage-set entry in the same write. `by` is who decided it — a person, or nido itself (the
-   default). No-op (no history entry, no entry) when already at `new-stage` — except that a
-   person's choice is recorded as an entry even then, since status reads the choice off the
-   ledger, not the stored copy. Throws if the workstream is absent, or if `new-stage` is outside
-   session/storable-stages — checked ahead of the no-op, so re-setting a foreign stage is refused
-   rather than quietly accepted. Returns the updated record."
+  "Choose `new-stage` for a workstream: append a :stage-set entry naming it. `by` is who decided
+   it — a person, or nido itself (the default). No-op when the newest choice already names
+   `new-stage` (`newest-choice`) — except that a person's choice is recorded even then: it is a
+   decision, and one made after work moved past the earlier choice puts the work back. Throws if
+   the workstream is absent, or if `new-stage` is outside session/storable-stages — checked ahead
+   of the no-op, so re-choosing a foreign stage is refused rather than quietly accepted. Returns
+   the record."
   ([project ws-id new-stage] (advance-stage! project ws-id new-stage :nido))
   ([project ws-id new-stage by]
    (check-stage! new-stage :advance-stage!)
    (when-not (read-ws project ws-id)
      (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
    (record-status! project ws-id
-                   (fn [w] (when (or (= :person by) (not= new-stage (:stage w)))
-                             {:format :stage-set :stage new-stage :by by}))
-                   (fn [w] (cond-> w
-                             (not= new-stage (:stage w))
-                             (-> (assoc :stage new-stage)
-                                 (update :stage-history conj {:at (clock/now-iso) :stage new-stage})))))))
+                   (fn [w] (when (or (= :person by) (not= new-stage (:stage (newest-choice w))))
+                             {:format :stage-set :stage new-stage :by by})))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Workstream]}
   set-facets!
@@ -250,18 +207,27 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :Workstream]}
   close!
-  "Settle a workstream. `outcome` is :done, :dropped, :dismissed, :between-phases
-   — a phase landed and the plan has more — or, for a claim the improvement sweep
-   refused at reservation, :vetoed, which `proposal/owed` reads to return the
-   claim's undeclined addresses to the owed set rather than counting them as tried.
-   No consumer branches on the value — every reader tests :closed for presence
-   (engagement, the notion-sync/facets candidate sets) or renders (name outcome);
-   the one exception is workstreams-view/workstream-row, which reads :dismissed
-   as the board veto. Idempotent write of :closed. Returns the updated record.
+  "Settle a workstream: append a :closed entry naming `outcome`. What each outcome means to its
+   readers:
 
-   `design-seq`, given with :between-phases, names the design whose plan the landing
-   paused: it governs the workstream until its gate opens (`plan-design`). `by`, when given,
-   is who settled it, recorded on the :closed entry appended in the same write."
+     :done, :dropped  finished, or given up on.
+     :dismissed       the nido-side veto (work/dismiss!) — a ticket nobody should triage again,
+                      and the board's Dismissed band.
+     :vetoed          the improvement sweep's: a claim stopped by a decline it did not earn, so
+                      the addresses carrying no decline of their own return to the owed set
+                      (`proposal/owed`) rather than counting as tried.
+     :orphaned        the improvement sweep's too: the Run working the claim ended without
+                      closing it, and the coordinator closed it, since a close is the only thing
+                      that releases the sweep. Read like :vetoed, kept apart so a reader can tell
+                      a decline from a death.
+     :between-phases  a landing of a phase that is not the plan's last — closed, because nothing
+                      is in flight until a person has watched the running system; not :done,
+                      because the plan is not. `open-phase!` is its way forward.
+
+   `design-seq`, given with :between-phases, names the design whose plan the landing paused: it
+   governs the workstream until its gate opens (`plan-design`). `by`, when given, is who settled
+   it. Every call appends, so a workstream closed twice holds two closes and the newer outcome
+   stands (`closure`). Returns the record."
   ([project ws-id outcome] (close! project ws-id outcome nil))
   ([project ws-id outcome design-seq] (close! project ws-id outcome design-seq nil))
   ([project ws-id outcome design-seq by]
@@ -270,41 +236,21 @@
    (record-status! project ws-id
                    (fn [_] (cond-> {:format :closed :outcome outcome}
                              design-seq (assoc :design {:seq design-seq})
-                             by         (assoc :by by)))
-                   (fn [w] (assoc w :closed (cond-> {:at (clock/now-iso) :outcome outcome}
-                                              design-seq (assoc :design {:seq design-seq})))))))
-
-(defn- reopened
-  "`w` un-terminalized at `stage`: :closed cleared, and a stage-history entry marked :reopened."
-  [w stage]
-  (-> w
-      (assoc :closed nil)
-      (assoc :stage stage)
-      (update :stage-history (fnil conj [])
-              {:at (clock/now-iso) :stage stage :reopened true})))
+                             by         (assoc :by by))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :Workstream]}
   reopen!
-  "Un-terminalize a settled workstream: clear :closed, set :stage, record a stage-history entry
-   marked :reopened, and append a :reopened entry in the same write. No-op write when already
-   open at `stage`. Throws if the workstream is absent. Returns the record."
+  "Un-settle a workstream at `stage`: append a :reopened entry naming it — the close it follows
+   no longer stands (`closure`), and `stage` is the stage chosen for it (`newest-choice`). No-op
+   when it is already open with `stage` the newest choice. Throws if the workstream is absent.
+   Returns the record."
   ([project ws-id stage] (reopen! project ws-id stage nil))
   ([project ws-id stage by]
    (when-not (read-ws project ws-id)
      (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
    (record-status! project ws-id
-                   (fn [w] (when-not (and (nil? (:closed w)) (= stage (:stage w)))
-                             (cond-> {:format :reopened :stage stage} by (assoc :by by))))
-                   #(reopened % stage))))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :map]] :Workstream]}
-  set-findings!
-  "Overwrite the workstream's live findings tracker, or remove it when `tracker`
-   is nil/empty. Throws if the workstream is absent. Returns the record."
-  [project ws-id tracker]
-  (let [w (or (read-ws project ws-id)
-              (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
-    (write! (if (seq tracker) (assoc w :findings tracker) (dissoc w :findings)))))
+                   (fn [w] (when-not (and (nil? (closure w)) (= stage (:stage (newest-choice w))))
+                             (cond-> {:format :reopened :stage stage} by (assoc :by by)))))))
 
 (def ^:private parsed-entries
   "Entry file → its parsed payload, keyed on [path kind file-stamp].
@@ -357,6 +303,15 @@
     (when (= :closed (:kind newest))
       (or (read-entry-at w (:seq newest))
           {:seq (:seq newest) :unreadable? true}))))
+
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :map]]}
+  newest-choice
+  "The newest stage choice on `w` — its :stage-set or :reopened — as `{:seq n :stage s}`, or nil
+   when none was made. Read by its :seq: one whose payload no longer reads chooses nothing
+   (:stage nil), rather than an older choice it replaced."
+  [w]
+  (when-let [move (last (filter #(#{:stage-set :reopened} (:kind %)) (:entries w)))]
+    {:seq (:seq move) :stage (:stage (read-entry-at w (:seq move)))}))
 
 (defn- check-routes-total!
   "Every health observation on the cited `baseline` is routed exactly once by
@@ -1618,11 +1573,9 @@
 (defn- append-locked!
   "The append, for a caller already holding the append lock over `w`: number the entry off the
    disk, make every check, write the payload and then its index row. Returns the absolute path.
-
-   `f`, when given, is applied to the record in the same write as the index row, so a change
-   the entry implies lands with it or not at all — never an entry without its change."
-  ([project ws-id w entry content] (append-locked! project ws-id w entry content identity))
-  ([project ws-id w entry content f]
+   An entry implies no change to the record beside its index row: whatever it decides, the ledger
+   is where it is read from."
+  [project ws-id w entry content]
     (let [;; From the DISK, not from the index count. The two agree until an
           ;; append writes its payload and dies before updating the index, and
           ;; from then on every append computes a number the index says is
@@ -1638,23 +1591,21 @@
           row   (index-row entry seq-n payload rel)]
       (refuse-if-taken! abs seq-n)
       (write-entry-files! project ws-id row abs payload)
-      (write! (f (update w :entries (fnil conj []) row)))
-      abs)))
+      (write! (update w :entries (fnil conj []) row))
+      abs))
 
 (defn- record-status!
-  "Append the status entry `entry-of` makes of the record, and apply `change` to the record in the
-   same write — or neither, when `entry-of` answers nil because there is nothing to record.
-
-   Under the append lock, so the decision and its entry are one step: a status the record holds
-   that no entry records is the drift this ledger copy exists to end."
-  [project ws-id entry-of change]
+  "Append the status entry `entry-of` makes of the record, or nothing when it answers nil because
+   there is nothing to record. Under the append lock, so the decision and its entry are one step:
+   two closes, or a close and a reopen, cannot both decide from the same reading."
+  [project ws-id entry-of]
   (io/with-file-lock
     (append-lock-path project ws-id)
     (fn []
       (let [w (or (read-ws project ws-id)
                   (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
         (if-let [r (entry-of w)]
-          (do (append-locked! project ws-id w {:kind (:format r)} (pr-str r) change)
+          (do (append-locked! project ws-id w {:kind (:format r)} (pr-str r))
               (read-ws project ws-id))
           w)))))
 
@@ -1840,8 +1791,8 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Workstream]}
   open-phase!
-  "Append `gate` — a `:phase-gate` payload — and reopen the workstream at
-   :in-progress, the next phase's implementation owed. The kind's one writer.
+  "Append `gate` — a `:phase-gate` payload — which reopens the workstream (`closure` stops at a
+   gate), the next phase's implementation owed. The kind's one writer.
 
    Under the append lock, and every precondition read there, because each is a
    fact about the ledger an append could change: the workstream is closed
@@ -1853,7 +1804,7 @@
    path attempts its :merged before it closes, so none can follow the gate.
 
    Throws ex-info naming the precondition that failed; writes nothing then.
-   Returns the reopened record."
+   Returns the record."
   [project ws-id gate]
   (io/with-file-lock
     (append-lock-path project ws-id)
@@ -1893,10 +1844,7 @@
           (refuse (str "it opens phase " (:phase gate) ", and the next phase of the plan is "
                        (inc (:current p)))
                   {:phase (:phase gate) :next (inc (:current p))}))
-        ;; One write: a gate indexed on a record still closed :between-phases would read its
-        ;; phase as open and unlanded, and every retry would be refused on that.
-        (append-locked! project ws-id w {:kind :phase-gate} (pr-str gate)
-                        #(reopened % :in-progress))
+        (append-locked! project ws-id w {:kind :phase-gate} (pr-str gate))
         (read-ws project ws-id)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] [:maybe :LedgerEntry]]}
@@ -2123,8 +2071,7 @@
   [project external-id]
   (or (find-by-ref-id project external-id)
       (create! project
-               {:stage :triaging
-                :external-refs [{:adapter (if (str/starts-with? external-id "slack-")
+               {:external-refs [{:adapter (if (str/starts-with? external-id "slack-")
                                             :slack-message :notion)
                                  :id external-id}]})))
 

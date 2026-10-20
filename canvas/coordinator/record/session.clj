@@ -62,10 +62,6 @@
     "Flip a session to archived, recording when. Idempotent — archiving twice leaves one entry."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName]] Session]
      :delegates [write! clock/now-iso]})
-  (Operation set-phase!
-    "Move an autonomous session's phase, recording where it came from."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:new-phase :keyword]] Session]
-     :delegates [write! clock/now-iso]})
   (Operation set-error!
     "Record, or clear, why the last resume of an autonomous session failed."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:err [:maybe :map]]] Session]

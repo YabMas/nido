@@ -16,11 +16,8 @@
 (deftest workstream-row-carries-open-findings-count
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :in-progress})]
+      (let [w (ws/create! :brian {})]
         (is (= 0 (:open-findings (wsv/workstream-row :brian (ws/read-ws :brian (:id w))))))
-        (ws/set-findings! :brian (:id w) {:round 1 :open #{"f1" "f2"} :resolved {}})
-        (is (= 0 (:open-findings (wsv/workstream-row :brian (ws/read-ws :brian (:id w)))))
-            "the stored tracker is not what the badge counts")
         (ws/append-entry! :brian (:id w) {:kind :findings}
                           (pr-str {:format :findings :round 1
                                    :items [{:id "f1" :summary "s" :severity :tweak}

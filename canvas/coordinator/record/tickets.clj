@@ -53,16 +53,13 @@
      :delegates [ticket-dir]})
   (Operation update-meta!
     "Read a ticket's meta, apply a function to it, write the result back — as one locked
-     operation. Every mutation below goes through it.
+     operation, without the status fields a record written before its status was derived still
+     carries.
 
-     Not `io/update-edn!`, and the difference is the branch: `f` returning nil writes nothing,
-     which is how clear-status! declines to conjure a record for a ticket that never had one. An
-     update that may decline to write is not a function from the old value to the new one, and
-     moving that decision outside the lock is the race this exists to prevent.
-
-     The daemon reconciling a terminal Run and a person running `bb nido:ticket:*` are separate
-     processes writing this file, and :status is what the pre-spawn gate reads — a lost update
-     here is a ticket that re-triages when it should not, or one that never does."
+     Not `io/update-edn!`, and the difference is the branch: `f` returning nil writes nothing, so
+     an update can decline to conjure a record for a ticket that never had one. An update that may
+     decline to write is not a function from the old value to the new one, and moving that
+     decision outside the lock is the race this exists to prevent."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]
                             [:f [:=> [:cat :any] :any]]] [:maybe Ticket]]
      :delegates [ticket-dir io/with-file-lock io/lock-path-for]})
@@ -81,39 +78,25 @@
     "Create a ticket record, or refresh the descriptive fields of one that exists."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:base :map]] Ticket]
      :delegates [update-meta!]})
-  (Operation hold-for-gate!
-    "Open a ticket record held by an unaccepted Slack proposal, which the triage gate reads as owned."
-    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:base :map]] Ticket]
-     :delegates [update-meta!]})
-  (Operation held-by-gate? "Whether an unaccepted Slack proposal holds the ticket."
+  (Operation held-by-gate? "Whether an unaccepted Slack proposal holds the ticket, read off the ledger."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] :boolean]
-     :delegates [read-meta]})
+     :delegates [workstream/find-by-ref-id standing/verdict status-of]})
   (Operation mark! "Set one field on an existing ticket record."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:k :keyword] [:v :any]] [:maybe Ticket]]
      :delegates [update-meta!]})
   (Operation unmark! "Drop one field from an existing ticket record."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:k :keyword]] [:maybe Ticket]]
      :delegates [update-meta!]})
-  (Operation set-status!
-    "Move a ticket's triage status."
-    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:new-status :keyword]] Ticket]
-     :delegates [update-meta!]})
   (Operation complete!
     "Terminal completion of a triage verdict: an acceptance of the newest verdict on the ticket's
      workstream — or of the ticket as reported, when it holds none."
-    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:new-status :keyword] [:disposition :any]] Ticket]
-     :delegates [update-meta! clock/now-iso workstream/find-or-mint-by-ref! standing/verdict
-                 workstream/append-entry!]})
-  (Operation clear-status!
-    "Make a ticket re-triable by dropping its status — which is what puts it back through the
-     gate rather than around it."
-    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] [:maybe Ticket]]
-     :delegates [update-meta!]})
+    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] :any]
+     :delegates [workstream/find-or-mint-by-ref! standing/verdict workstream/append-entry!]})
   (Operation dismiss!
     "Take a ticket off the triage radar: settle the workstream carrying it :dismissed, minting one
      when none does."
-    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] Ticket]
-     :delegates [update-meta! workstream/find-or-mint-by-ref! workstream/closure workstream/close!]})
+    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] :any]
+     :delegates [workstream/find-or-mint-by-ref! workstream/closure workstream/close!]})
   (Operation latest-triage-report
     "The newest triage report on the workstream this ticket raised, or nil."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] [:maybe :map]]

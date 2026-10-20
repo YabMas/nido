@@ -38,8 +38,7 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  :external-refs [{:adapter :notion :id "BR-7" :page-id "PAGE7"}
+      (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-7" :page-id "PAGE7"}
                                                   {:adapter :github :id "brian-study/brian#2"}]})
             props (atom nil)]
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
@@ -48,7 +47,7 @@
                       notion/retrieve-page  (fn [_ _] {:properties {(keyword "Ball Holder") {:people [{:id "jaap"} {:id "other"}]}}})
                       notion/update-page-properties! (fn [pg p _] (reset! props {:page pg :props p}) {:ok true})]
           (gm/poll-and-react! :brian cfg)
-          (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome)) "workstream closed")
+          (is (= :done (:outcome (ws/closure (ws/read-ws :brian (:id w))))) "workstream closed")
           (is (= "PAGE7" (:page @props)))
           (is (= {:status {:name "Code Review"}} (get-in @props [:props "Status"])))
           (is (= {:people [{:id "other"}]} (get-in @props [:props "Ball Holder"]))
@@ -59,8 +58,7 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  :external-refs [{:adapter :github :id "brian-study/brian#5"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :github :id "brian-study/brian#5"}]})]
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
                                                   :prs [{:number 5 :url "https://gh/5"
                                                          :title "Fix rounding" :merged-at "2026-08-20T10:00:00Z" :base "main"}]})
@@ -109,7 +107,7 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [id   (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+      (let [id   (:id (ws/create! :brian {:external-refs []}))
             add! #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
         (add! :intent {:format    :intent
                        :goal      "Totals match the invoice."
@@ -137,7 +135,7 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [id   (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+      (let [id   (:id (ws/create! :brian {:external-refs []}))
             add! #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
         (add! :intent {:format    :intent
                        :goal      "Totals match the invoice."
@@ -169,7 +167,7 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [id   (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+      (let [id   (:id (ws/create! :brian {:external-refs []}))
             add! #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
         (add! :intent {:format    :intent
                        :goal      "Totals match the invoice."
@@ -187,7 +185,7 @@
                                                            :base "main"}]})
                         notion/keychain-token (constantly nil)]
             (binding [*err* (java.io.PrintWriter. sw true)] (gm/poll-and-react! :brian cfg)))
-          (is (= :done (-> (ws/read-ws :brian id) :closed :outcome)) "the close does not wait on a citation")
+          (is (= :done (:outcome (ws/closure (ws/read-ws :brian id)))) "the close does not wait on a citation")
           (is (nil? (ws/latest-entry :brian id :merged))
               "no :merged under D2, which nothing says the PR was made under")
           (is (re-find #"brian-study/brian#7 .* names no :design" (str sw))
@@ -199,8 +197,7 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  :external-refs [{:adapter :github :id "brian-study/brian#8"}
+      (let [w (ws/create! :brian {:external-refs [{:adapter :github :id "brian-study/brian#8"}
                                                   {:adapter :github :id "brian-study/brian#9"}]})]
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
                                                   :prs [{:number 8 :url "u8" :title "layer 1" :merged-at "z" :base "main"}
@@ -214,22 +211,20 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  :external-refs [{:adapter :github :id "brian-study/brian#6"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :github :id "brian-study/brian#6"}]})]
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
                                                   :prs [{:number 6 :url "u6" :title "t6" :merged-at "y" :base "main"}]})
                       notion/keychain-token (constantly nil)
                       ws/append-entry-once! (fn [& _] (throw (ex-info "disk full" {})))]
           (gm/poll-and-react! :brian cfg)
-          (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome))
+          (is (= :done (:outcome (ws/closure (ws/read-ws :brian (:id w)))))
               "the close is the important write; a failed append must not undo it"))))))
 
 (deftest already-closed-workstream-is-noop
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  :external-refs [{:adapter :github :id "brian-study/brian#3"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :github :id "brian-study/brian#3"}]})]
         (ws/close! :brian (:id w) :done)
         (let [calls (atom 0)]
           (with-redefs [gh/list-merged-prs (fn [_] {:status :ok :prs [{:number 3 :url "u" :title "t" :merged-at "z" :base "main"}]})
@@ -322,14 +317,13 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  ;; stored ref lower-cased ...
+      (let [w (ws/create! :brian {;; stored ref lower-cased ...
                                   :external-refs [{:adapter :github :id "brian-study/brian#5"}]})]
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok :prs [{:number 5 :url "u" :title "t" :merged-at "z" :base "main"}]})
                       notion/keychain-token (constantly nil)]   ; no notion work needed for this assertion
           ;; ... config repo is mixed-case; correlation must still match
           (gm/poll-and-react! :brian (assoc cfg :repo "Brian-Study/Brian"))
-          (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome))
+          (is (= :done (:outcome (ws/closure (ws/read-ws :brian (:id w)))))
               "merge correlates despite repo-slug case mismatch"))))))
 
 ;; ── the merge TARGET, not just the ref ───────────────────────────────────────
@@ -343,8 +337,7 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  :external-refs [{:adapter :notion :id "BR-5559" :page-id "PAGE"}
+      (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-5559" :page-id "PAGE"}
                                                   {:adapter :github :id "brian-study/brian#4693"}]})
             nudged (atom false)]
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
@@ -353,7 +346,7 @@
                                                          :base "impl-br-5559--enable-type-dropdown"}]})
                       notion/keychain-token (fn [] (reset! nudged true) "tok")]
           (gm/poll-and-react! :brian cfg)
-          (is (nil? (:closed (ws/read-ws :brian (:id w))))
+          (is (nil? (ws/closure (ws/read-ws :brian (:id w))))
               "a merge into the layer beneath ships nothing; the workstream stays open")
           (is (nil? (ws/latest-entry :brian (:id w) :merged))
               "and no :merged event claims otherwise in the ledger")
@@ -368,27 +361,25 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  :external-refs [{:adapter :github :id "brian-study/brian#11"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :github :id "brian-study/brian#11"}]})]
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
                                                   :prs [{:number 11 :url "u" :title "t" :merged-at "z"}]})
                       notion/keychain-token (constantly nil)]
           (gm/poll-and-react! :brian cfg)
-          (is (nil? (:closed (ws/read-ws :brian (:id w))))
+          (is (nil? (ws/closure (ws/read-ws :brian (:id w))))
               "no base reported ⇒ no close"))))))
 
 (deftest landing-branch-is-configurable
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  :external-refs [{:adapter :github :id "brian-study/brian#12"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :github :id "brian-study/brian#12"}]})]
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
                                                   :prs [{:number 12 :url "u" :title "t" :merged-at "z"
                                                          :base "master"}]})
                       notion/keychain-token (constantly nil)]
           (gm/poll-and-react! :brian (assoc cfg :base "master"))
-          (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome))
+          (is (= :done (:outcome (ws/closure (ws/read-ws :brian (:id w)))))
               "a repo whose default branch is master closes on a merge into master"))))))
 
 ;; ── resolving the ticket to nudge ────────────────────────────────────────────
@@ -424,8 +415,7 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  :external-refs [{:adapter :notion :id "BR-5477"}
+      (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-5477"}
                                                   {:adapter :github :id "brian-study/brian#21"}]})
             sw (java.io.StringWriter.)
             pw (java.io.PrintWriter. sw)]
@@ -437,7 +427,7 @@
           (binding [*err* pw]
             (gm/poll-and-react! :brian cfg)
             (.flush pw))
-          (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome))
+          (is (= :done (:outcome (ws/closure (ws/read-ws :brian (:id w)))))
               "the merge is real; the close stands")
           (is (re-find #"no resolvable page-id" (str sw))
               "and the skipped nudge is said out loud"))))))
@@ -446,8 +436,7 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  :external-refs [{:adapter :github-issue :id "brian-study/brian#99"}
+      (let [w (ws/create! :brian {:external-refs [{:adapter :github-issue :id "brian-study/brian#99"}
                                                   {:adapter :github :id "brian-study/brian#22"}]})
             sw (java.io.StringWriter.)
             pw (java.io.PrintWriter. sw)]
@@ -458,7 +447,7 @@
           (binding [*err* pw]
             (gm/poll-and-react! :brian cfg)
             (.flush pw))
-          (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome)))
+          (is (= :done (:outcome (ws/closure (ws/read-ws :brian (:id w))))))
           (is (nil? (re-find #"page-id" (str sw)))
               "a GitHub-issue workstream has no ticket to nudge; that is not a gap"))))))
 
@@ -474,8 +463,7 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (ws/create! :brian {:stage :in-progress
-                          :external-refs [{:adapter :notion :id "FU-4" :page-id "FUPAGE"}
+      (ws/create! :brian {:external-refs [{:adapter :notion :id "FU-4" :page-id "FUPAGE"}
                                           {:adapter :github :id "brian-study/brian#9"}]})
       (let [props (atom nil)]
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
@@ -494,8 +482,7 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  :external-refs [{:adapter :notion :id "FU-4" :page-id "FUPAGE"}
+      (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "FU-4" :page-id "FUPAGE"}
                                                   {:adapter :github :id "brian-study/brian#9"}]})
             called (atom false)]
         ;; :notion-status dropped (what brian's config becomes once its own
@@ -512,7 +499,7 @@
           ;; Asserted BEFORE the negative one: without it, a workstream that
           ;; failed to correlate would leave @called false and the test would
           ;; pass having exercised nothing.
-          (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome))
+          (is (= :done (:outcome (ws/closure (ws/read-ws :brian (:id w)))))
               "the merge did correlate and the workstream closed")
           (is (false? @called)
               "no property to write ⇒ no Notion request at all"))))))
@@ -529,8 +516,7 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [id    (:id (ws/create! :brian {:stage :in-progress
-                                           :external-refs [{:adapter :notion :id "BR-9" :page-id "PAGE9"}]}))
+      (let [id    (:id (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-9" :page-id "PAGE9"}]}))
             add!  #(ws/append-entry! :brian id {:kind %1} (pr-str %2))
             nudged (atom false)]
         (add! :intent {:format :intent :goal "g" :done-when ["d"]})
@@ -546,7 +532,7 @@
                       notion/update-page-properties! (fn [& _] (reset! nudged true) {:ok true})
                       notion/retrieve-page (fn [& _] {:properties {}})]
           (gm/poll-and-react! :brian cfg)
-          (is (= :between-phases (-> (ws/read-ws :brian id) :closed :outcome)))
+          (is (= :between-phases (:outcome (ws/closure (ws/read-ws :brian id)))))
           (is (ws/latest-entry :brian id :merged) "the landing is still recorded")
           (is (not @nudged) "phase 1 of 2 moves no ticket"))))))
 
@@ -557,8 +543,7 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [id    (:id (ws/create! :brian {:stage :in-progress
-                                           :external-refs [{:adapter :notion :id "BR-9" :page-id "PAGE9"}]}))
+      (let [id    (:id (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-9" :page-id "PAGE9"}]}))
             add!  #(ws/append-entry! :brian id {:kind %1} (pr-str %2))
             nudged (atom false)]
         (add! :intent {:format :intent :goal "g" :done-when ["d"]})
@@ -575,9 +560,9 @@
                       notion/update-page-properties! (fn [& _] (reset! nudged true) {:ok true})
                       notion/retrieve-page (fn [& _] {:properties {}})]
           (gm/poll-and-react! :brian cfg)
-          (is (= :between-phases (-> (ws/read-ws :brian id) :closed :outcome))
+          (is (= :between-phases (:outcome (ws/closure (ws/read-ws :brian id))))
               "D1's plan, which the landing is attributed to, decides — not D2")
-          (is (= {:seq 3} (-> (ws/read-ws :brian id) :closed :design))
+          (is (= {:seq 3} (:design (ws/closure (ws/read-ws :brian id))))
               "and the close names that plan, which governs until its gate opens")
           (is (not @nudged) "phase 1 of D1 moves no ticket"))))))
 
@@ -587,8 +572,7 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (let [w   (ws/create! :brian {:stage :in-progress
-                                    :external-refs [{:adapter :github :id "brian-study/brian#6"}]})
+      (let [w   (ws/create! :brian {:external-refs [{:adapter :github :id "brian-study/brian#6"}]})
             prs (fn [_] {:status :ok
                          :prs [{:number 6 :url "u6" :title "t6" :merged-at "y" :base "main"}]})]
         (with-redefs [gh/list-merged-prs prs
@@ -596,7 +580,7 @@
                       ws/append-entry-once! (fn [& _] (throw (ex-info "disk full" {})))]
           (binding [*err* (java.io.PrintWriter. (java.io.StringWriter.))]
             (gm/poll-and-react! :brian cfg)))
-        (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome)) "closed regardless")
+        (is (= :done (:outcome (ws/closure (ws/read-ws :brian (:id w))))) "closed regardless")
         (with-redefs [gh/list-merged-prs prs notion/keychain-token (constantly nil)]
           (gm/poll-and-react! :brian cfg))
         (is (nil? (ws/latest-entry :brian (:id w) :merged)) "and nothing retries the record")

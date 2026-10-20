@@ -233,7 +233,6 @@
                 updated       (-> run (assoc :state state :error error)
                                   (update :state-history conj history-entry))]
             (runs/write-run! updated)
-            (runs/mirror-run-phase! updated)
             ;; A requeued Run is not terminal: its session is left as it is
             ;; for the start the daemon resubmits it to, and
             ;; `session:up` converges the half-built session it finds.

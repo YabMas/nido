@@ -42,7 +42,7 @@ The **ticket key** is what goes in every `bb nido:ticket:*` call's `:br` argumen
   bb nido:ticket:open :project brian :br <slack-id> :url <url> :title "<title>" :opened-by <trigger-name>
   ```
 - **Report (Step 1.6 / Step 2):** there is no Notion owner to route to, so the report EDN's `:routing` field is `:routing nil` (see the schema in Step 2).
-- **Step 4 (apply):** skip the optimistic concurrency check and the `bb nido:ticket:apply` call (that's the Notion-run path, and it's what performs the Notion write). The verdict is already captured in the nido record (Step 1.6) — just `bb nido:ticket:complete … :status triaged :disposition applied`. There is no Notion mutation — the nido record is the audit trail.
+- **Step 4 (apply):** skip the optimistic concurrency check and the `bb nido:ticket:apply` call (that's the Notion-run path, and it's what performs the Notion write). The verdict is already captured in the nido record (Step 1.6) — just `bb nido:ticket:complete :project brian :br <slack-id>`. There is no Notion mutation — the nido record is the audit trail.
 - **Step 5 (dismiss):** dismiss is a Slack-only, nido-ledger action (Notion runs never dismiss) — just `bb nido:ticket:dismiss … :br <slack-id>`. No Notion write.
 
 Everything else is **identical** for both sources: the codebase investigation, the report format (§3 "Proposed Notion writes" is simply omitted for Slack — there are none), the HITL halt at `:awaiting-input`, the `bb nido:ticket:*` ledger writes, and the verb grammar. Wherever a step below says "fetch the page", "BR-####", or names a Notion-write command, a Slack run uses the payload brief, the slack `:id`, or skips the call, respectively.
@@ -163,21 +163,15 @@ uses it. On `apply` the nido record is marked `:triaged`, which takes the ticket
 nido's Intake radar even though a shallow route leaves the Notion status at "Needs
 verification".
 
-Triage state lives in the nido ticket record, keyed by `BR-####`. Set the record's status via `bb nido:ticket:status`; this is recorded in the ticket's `meta.edn` and is the durable triage state the coordinator's pre-spawn gate reads. Terminal completion goes through `bb nido:ticket:apply` (Notion run — writes Notion and completes the record) or `bb nido:ticket:complete` (Slack run, ledger-only) — or `bb nido:ticket:dismiss` (off-radar, Slack-only).
+Triage state is keyed by `BR-####` (or the Slack id), and you never set it. nido derives it from this run and the ticket's workstream ledger — the reports you append, a person's acceptance, a dismissal — and the coordinator's pre-spawn gate reads that. Terminal completion goes through `bb nido:ticket:apply` (Notion run — writes Notion and records the acceptance) or `bb nido:ticket:complete` (Slack run, ledger-only) — or `bb nido:ticket:dismiss` (off-radar, Slack-only).
 
-| Status | Set by | Means |
+| Status | Holds while | Means |
 |---|---|---|
-| `:investigating` | `bb nido:ticket:open` (Step 1), and `redo:` | Reading the report (Notion page or Slack brief), walking codebase, drafting report |
-| `:awaiting-input` | `bb nido:ticket:status … :status awaiting-input` | Draft written + appended to the record. Awaiting human reply in chat. |
-| `:triaged` | `bb nido:ticket:apply` (Notion run) or `bb nido:ticket:complete … :status triaged` (Slack run) | Verdict applied — Notion written and record completed by `bb nido:ticket:apply` (Notion run); ledger-only, no Notion (Slack run). Run done. |
+| `:investigating` | this run is open and no accepted verdict stands | Reading the report (Notion page or Slack brief), walking codebase, drafting report |
+| `:awaiting-input` | the triage report you appended waits for a person | Draft written + appended to the record. Awaiting human reply in chat. |
+| `:triaged` | a person accepted it — `bb nido:ticket:apply` (Notion run) or `bb nido:ticket:complete` (Slack run) | Verdict applied — Notion written by `bb nido:ticket:apply` (Notion run); ledger-only, no Notion (Slack run). Run done. |
 
 `:dismissed` (`bb nido:ticket:dismiss …`) remains a status, but it's **Slack-only** — off-radar, nido-only, no Notion write. A Notion run never reaches it.
-
-To set a non-terminal status mid-run:
-
-```bash
-bb nido:ticket:status :project brian :br <BR-####> :status awaiting-input
-```
 
 ## Step 1 — Investigate (autonomous)
 
@@ -244,7 +238,7 @@ video.
    (Derive `<session-id>` from the cwd / session name and `<run-id>` from the `./run-link/` symlink — it points at `~/.nido/coordinator/runs/<run-id>/`.)
 
    The append **validates** the EDN against nido's `TriageReport` schema and **rejects** a malformed report (non-zero exit + an explain dump) — fix and retry until it's accepted. Also print it into chat via `bb nido:ticket:report` (Step 2).
-7. Set status `:awaiting-input` (`bb nido:ticket:status :project brian :br <BR-####> :status awaiting-input`) and exit. The user will `nido enter` the session, read the report in chat, and reply.
+7. Exit — the appended report is what waits for the user (`:awaiting-input`). The user will `nido enter` the session, read the report in chat, and reply.
 
 ## Step 2 — Report schema (EDN)
 
@@ -308,7 +302,7 @@ When the session resumes (the user replied), the latest user message contains th
 | `apply: <override>` | Apply with overrides, e.g. `apply: effort=L, title="..."` |
 | `dismiss` | *(Slack runs only)* Execute §5 — take the ticket off the radar (nido-only). A Notion run has no `dismiss` — every report is routed. |
 | `redo: <correction>` | Re-run Step 1 + Step 2 with the correction in mind; new draft, re-halt at `:awaiting-input` |
-| `cancel` | Abort and exit. Leave Notion untouched and do NOT mark the record terminal — nido's run-termination hook clears the ticket status so it's re-triable |
+| `cancel` | Abort and exit. Leave Notion untouched and do NOT accept the report — it stays waiting for the person, who can apply or (Slack) dismiss it later |
 
 **For non-trivial overrides** (e.g. apply with a different effort or new title), confirm back to the user before executing:
 
@@ -320,7 +314,7 @@ If they say no, treat as redo or cancel.
 
 ## Step 4 — Apply (the only Notion-write step)
 
-> **Slack run:** this entire step is Notion-only. For a Slack run, `apply` does NOT touch Notion — the verdict already lives in the nido record (Step 1.6). Skip the concurrency check and the `bb nido:ticket:apply` call below; instead run `bb nido:ticket:complete :project brian :br <slack-id> :status triaged :disposition applied` directly. There is no Notion mutation. See "Source adapter".
+> **Slack run:** this entire step is Notion-only. For a Slack run, `apply` does NOT touch Notion — the verdict already lives in the nido record (Step 1.6). Skip the concurrency check and the `bb nido:ticket:apply` call below; instead run `bb nido:ticket:complete :project brian :br <slack-id>` directly. There is no Notion mutation. See "Source adapter".
 
 ### Optimistic concurrency check first
 
@@ -362,18 +356,17 @@ bb nido:ticket:dismiss :project brian :br <BR-####>
 If the user replied `redo: <correction>`:
 
 1. Read the correction text. Treat it as guidance for the next investigation pass — e.g. "look at the AI dialogue module instead", "check this specific file".
-2. Set status back to `:investigating` (`bb nido:ticket:status :project brian :br <BR-####> :status investigating`).
-3. Re-run Step 1 and Step 2 — fetch fresh page state, re-investigate with the correction in mind, write a fresh report and append it to the record (`bb nido:ticket:append … :kind triage …`).
-4. Set status `:awaiting-input` and exit. The user replies again.
+2. Re-run Step 1 and Step 2 — fetch fresh page state, re-investigate with the correction in mind, write a fresh report and append it to the record (`bb nido:ticket:append … :kind triage …`).
+3. Exit. The newest report is what waits for the user, who replies again.
 
-There's no hard limit on redo cycles, but the per-Run wall-clock budget (15m) caps the total. If the budget approaches and the user hasn't confirmed, the run dies; nido's run-termination hook clears the ticket's record status, so it re-enters the queue on the next poll. **That's correct behavior** — stale triage drafts shouldn't apply themselves later.
+There's no hard limit on redo cycles, but the per-Run wall-clock budget (15m) caps the total. If the budget runs out before the user confirms, the run dies and its newest report stays on the ticket waiting for a person — who can still apply or dismiss it from the gate. Nothing applies it on its own, and the ticket is not re-triaged behind their back.
 
 ## Step 7 — Cancel
 
 If the user replied `cancel`:
 
 1. Post a one-line acknowledgement to chat.
-2. Exit. Do NOT mark the record terminal (no `bb nido:ticket:complete`) and do NOT write anything to Notion. nido's run-termination hook clears the ticket's record status, making it re-triable on the next poll.
+2. Exit. Do NOT accept the report (no `bb nido:ticket:complete`) and do NOT write anything to Notion. The report stays on the ticket waiting for the person: nothing applies it, and the gate keeps offering it.
 
 ## Note on safety: no coordinator dry-run
 

@@ -17,9 +17,6 @@
    :project       :brian
    :external-refs [{:adapter :notion :id "BR-4659"
                     :page-id "p" :url "u" :title "Firefox loading"}]
-   :stage         :triaging
-   :stage-history [{:at "2026-06-05T09:00:00Z" :stage :triaging}]
-   :closed        nil
    :created-at    "2026-06-05T09:00:00Z"
    :entries       []})
 
@@ -30,62 +27,39 @@
         (f tmp))
       (finally (fs/delete-tree tmp)))))
 
+(defn- choices [ws-id]
+  (mapv #(select-keys % [:stage :by]) (ws/entries-of :brian ws-id :stage-set)))
+
 (deftest schema-accepts-valid-workstream
   (is (m/validate ws/Workstream example-ws)))
 
 (deftest schema-rejects-missing-id
   (is (not (m/validate ws/Workstream (dissoc example-ws :id)))))
 
-(deftest schema-leaves-stage-open-so-a-foreign-record-stays-repairable
-  ;; The vocabulary is closed at the SETTERS (create!/advance-stage!), not in the
-  ;; schema — so a record that acquired a foreign stage some other way can still
-  ;; be read, written and advanced back to a legal stage. Closing it here would
-  ;; wedge every write! of such a record, including the one that repairs it.
-  (is (m/validate ws/Workstream (assoc example-ws :stage :some-project-specific-stage))))
-
-(deftest create-rejects-a-stage-outside-the-vocabulary
-  (with-tmp
-    (fn [_]
-      ;; :implementing is a TICKET status, not a stage. It used to be written
-      ;; happily and then ignored by every projection.
-      (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unknown workstream stage"
-                                    (ws/create! :brian {:stage :implementing :external-refs []})))]
-        (is (= :implementing (:stage (ex-data e))))
-        (is (= :create! (:where (ex-data e))))))))
+(deftest schema-holds-no-stored-status
+  ;; Where a workstream is lives on its ledger; a record carrying a stage, a close or a findings
+  ;; tracker is one write! sheds them from rather than one it accepts.
+  (doseq [k [:stage :closed :findings :stage-history]]
+    (is (not (m/validate ws/Workstream (assoc example-ws k nil))) (str k " is not a field"))))
 
 (deftest advance-stage-rejects-a-stage-outside-the-vocabulary
   (with-tmp
     (fn [_]
       (ws/write! example-ws)
+      ;; :implementing is a TICKET status, not a stage. Recorded, it would be ignored by every
+      ;; reader, and the workstream would go missing from the board.
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unknown workstream stage"
                             (ws/advance-stage! :brian (:id example-ws) :implementing)))
-      (is (= :triaging (:stage (ws/read-ws :brian (:id example-ws))))
-          "the refused stage is not written"))))
+      (is (empty? (choices (:id example-ws))) "the refused stage is not recorded"))))
 
-(deftest advance-stage-refuses-a-foreign-stage-even-when-unchanged
-  ;; The guard runs ahead of the no-op check, so re-setting the stage a foreign
-  ;; record already carries is refused rather than quietly accepted.
-  (with-tmp
-    (fn [_]
-      (ws/write! (assoc example-ws :stage :implementing))
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unknown workstream stage"
-                            (ws/advance-stage! :brian (:id example-ws) :implementing))))))
-
-(deftest a-foreign-record-can-still-be-advanced-back-to-a-legal-stage
-  ;; The repair path the permissive schema exists for.
-  (with-tmp
-    (fn [_]
-      (ws/write! (assoc example-ws :stage :implementing))
-      (is (= :in-progress (:stage (ws/advance-stage! :brian (:id example-ws) :in-progress)))))))
-
-(deftest every-storable-stage-is-accepted-by-both-setters
+(deftest every-storable-stage-may-be-chosen
   (with-tmp
     (fn [_]
       (doseq [stage sess/storable-stages]
-        (let [w (ws/create! :brian {:stage stage :external-refs []})]
-          (is (= stage (:stage w)) (str "create! accepts " stage))
-          (is (= :triage (:stage (ws/advance-stage! :brian (:id w) :triage)))
-              (str "advance-stage! moves off " stage)))))))
+        (let [w (ws/create! :brian {:external-refs []})]
+          (ws/advance-stage! :brian (:id w) stage)
+          (is (= stage (:stage (ws/newest-choice (ws/read-ws :brian (:id w)))))
+              (str stage " may be chosen")))))))
 
 (deftest mint-id-has-ws-prefix-and-is-unique
   (with-redefs [clock/now-iso (constantly "2026-06-05T09:00:00Z")]
@@ -108,53 +82,45 @@
         (is (nil? (ws/read-ws :brian "nope"))))
       (finally (fs/delete-tree tmp)))))
 
-(deftest create-mints-id-and-seeds-stage-history
+(deftest create-mints-an-id-and-holds-no-status
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T09:00:00Z")]
-        (let [w (ws/create! :brian {:stage :triaging
-                                    :external-refs [{:adapter :notion :id "BR-1"}]})]
+        (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-1"}]})]
           (is (str/starts-with? (:id w) "ws-"))
-          (is (= :triaging (:stage w)))
-          (is (= [{:at "2026-06-05T09:00:00Z" :stage :triaging}] (:stage-history w)))
-          (is (nil? (:closed w)))
+          (is (= "2026-06-05T09:00:00Z" (:created-at w)))
           (is (= [] (:entries w)))
+          (is (nil? (ws/closure w)))
+          (is (nil? (ws/newest-choice w)))
           (is (= w (ws/read-ws :brian (:id w))))))
       (finally (fs/delete-tree tmp)))))
 
-(deftest advance-stage-appends-history-and-updates-stage
-  (let [tmp (fs/create-temp-dir)]
-    (try
-      (with-redefs [core/nido-root (constantly (str tmp))
-                    clock/now-iso (constantly "2026-06-05T10:00:00Z")]
-        (ws/write! example-ws)
-        (let [updated (ws/advance-stage! :brian (:id example-ws) :ready)]
-          (is (= :ready (:stage updated)))
-          (is (= 2 (count (:stage-history updated))))
-          (is (= {:at "2026-06-05T10:00:00Z" :stage :ready}
-                 (last (:stage-history updated))))
-          (is (= updated (ws/read-ws :brian (:id example-ws))))))
-      (finally (fs/delete-tree tmp)))))
+(deftest advance-stage-records-the-choice
+  (with-tmp
+    (fn [_]
+      (ws/write! example-ws)
+      (ws/advance-stage! :brian (:id example-ws) :ready)
+      (is (= [{:stage :ready :by :nido}] (choices (:id example-ws))))
+      (is (= :ready (:stage (ws/newest-choice (ws/read-ws :brian (:id example-ws)))))))))
 
-(deftest advance-stage-is-noop-when-stage-unchanged
-  (let [tmp (fs/create-temp-dir)]
-    (try
-      (with-redefs [core/nido-root (constantly (str tmp))]
-        (ws/write! example-ws)
-        (let [updated (ws/advance-stage! :brian (:id example-ws) :triaging)]
-          (is (= 1 (count (:stage-history updated))))))
-      (finally (fs/delete-tree tmp)))))
+(deftest advance-stage-records-nothing-when-the-choice-stands
+  (with-tmp
+    (fn [_]
+      (ws/write! example-ws)
+      (ws/advance-stage! :brian (:id example-ws) :ready)
+      (ws/advance-stage! :brian (:id example-ws) :ready)
+      (is (= 1 (count (choices (:id example-ws)))) "a repeated event does not litter the ledger")
+      (ws/advance-stage! :brian (:id example-ws) :ready :person)
+      (is (= 2 (count (choices (:id example-ws))))
+          "a person's choice is recorded even then — it is a decision"))))
 
-(deftest close-sets-closed-with-outcome
-  (let [tmp (fs/create-temp-dir)]
-    (try
-      (with-redefs [core/nido-root (constantly (str tmp))
-                    clock/now-iso (constantly "2026-06-05T11:00:00Z")]
-        (ws/write! example-ws)
-        (let [closed (ws/close! :brian (:id example-ws) :dropped)]
-          (is (= {:at "2026-06-05T11:00:00Z" :outcome :dropped} (:closed closed)))))
-      (finally (fs/delete-tree tmp)))))
+(deftest close-records-the-outcome
+  (with-tmp
+    (fn [_]
+      (ws/write! example-ws)
+      (ws/close! :brian (:id example-ws) :dropped)
+      (is (= :dropped (:outcome (ws/closure (ws/read-ws :brian (:id example-ws)))))))))
 
 (deftest append-entry-writes-file-and-indexes-it
   (let [tmp (fs/create-temp-dir)]
@@ -204,7 +170,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [w0 (ws/create! :brian {:stage :triaging :external-refs []})
+        (let [w0 (ws/create! :brian {:external-refs []})
               w1 (ws/add-ref! :brian (:id w0) {:adapter :notion :id "BR-9"})
               w2 (ws/add-ref! :brian (:id w0) {:adapter :notion :id "BR-9"})]
           (is (= 1 (count (:external-refs w1))))
@@ -215,10 +181,8 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [w (ws/create! :brian {:stage :triaging
-                                    :external-refs [{:adapter :notion :id "BR-42"}]})]
-          (ws/create! :brian {:stage :triaging
-                              :external-refs [{:adapter :notion :id "BR-99"}]})
+        (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-42"}]})]
+          (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-99"}]})
           (is (= (:id w) (:id (ws/find-by-ref :brian :notion "BR-42"))))
           (is (nil? (ws/find-by-ref :brian :notion "BR-nope")))))
       (finally (fs/delete-tree tmp)))))
@@ -227,11 +191,9 @@
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian
-                {:stage :incoming
-                 :external-refs [{:adapter :slack-message :id "slack-C-1.0"}]
+                {:external-refs [{:adapter :slack-message :id "slack-C-1.0"}]
                  :intake {:trigger :triage-slack-bugs
                           :payload {:id "slack-C-1.0" :text "it broke"}}})]
-        (is (= :incoming (:stage w)))
         (is (= :triage-slack-bugs (-> w :intake :trigger)))
         (is (= "it broke" (-> w :intake :payload :text)))
         ;; round-trips through validation on read
@@ -240,7 +202,7 @@
 (deftest create-without-intake-is-valid
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging})]
+      (let [w (ws/create! :brian {})]
         (is (nil? (:intake w)))
         (is (= w (ws/read-ws :brian (:id w))))))))
 
@@ -254,7 +216,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [w (ws/create! :brian {:stage :triaging :external-refs []
+        (let [w (ws/create! :brian {:external-refs []
                                     :facets {:type "bug"}})]
           (is (= {:type "bug"} (:facets (ws/read-ws :brian (:id w)))))))
       (finally (fs/delete-tree tmp)))))
@@ -263,7 +225,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (let [w (ws/create! :brian {:external-refs []})]
           (ws/set-facets! :brian (:id w) {:app-domain ["Teacher"]})
           (is (= {:app-domain ["Teacher"]} (:facets (ws/read-ws :brian (:id w)))))))
       (finally (fs/delete-tree tmp)))))
@@ -280,7 +242,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [w (ws/create! :brian {:stage :triaging :external-refs []
+        (let [w (ws/create! :brian {:external-refs []
                                     :facets {:type "bug"}})]
           (ws/set-facets! :brian (:id w) {})
           (is (nil? (:facets (ws/read-ws :brian (:id w)))))))
@@ -313,8 +275,7 @@
 (deftest append-to-ref-routes-to-existing-workstream
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging
-                                   :external-refs [{:adapter :notion :id "BR-1"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-1"}]})]
         (ws/append-to-ref! :brian "BR-1" {:kind :note} "hi")
         (let [w2 (ws/read-ws :brian (:id w))]
           (is (= (:id w) (:id (ws/find-by-ref-id :brian "BR-1"))) "found by ref id")
@@ -330,7 +291,6 @@
         (is (some? w) "a workstream was minted for the ref")
         (is (= "BR-9" (:id (first (:external-refs w)))))
         (is (= 1 (count (:entries w))))
-        (is (= :triaging (:stage w)) "minted workstream starts at :triaging")
         (is (= :notion (:adapter (first (:external-refs w))))
             "non-slack id infers a :notion adapter")))))
 
@@ -343,19 +303,6 @@
         (is (= "slack-C1-100.5" (:id (first (:external-refs w)))))
         (is (= :slack-message (:adapter (first (:external-refs w))))
             "slack- prefixed id infers a :slack-message adapter")))))
-
-(deftest read-ws-normalizes-legacy-inbox-stage
-  (let [tmp (fs/create-temp-dir)]
-    (try
-      (with-redefs [core/nido-root (constantly (str tmp))
-                    clock/now-iso (constantly "2026-06-05T09:00:00Z")]
-        ;; A record persisted before the rename carries the legacy :stage :inbox.
-        ;; Written directly: create! refuses it now — :inbox is read-legacy only,
-        ;; deliberately outside the storable vocabulary.
-        (let [w (ws/write! (assoc example-ws :stage :inbox))]
-          (is (= :incoming (:stage (ws/read-ws :brian (:id w))))
-              "legacy :inbox is mapped to :incoming on read")))
-      (finally (fs/delete-tree tmp)))))
 
 ;; ── A design's baseline ref has to resolve ─────────────────────────────────
 ;; The schema sees one record and cannot join it to the ledger, so this is the
@@ -440,7 +387,7 @@
   ;; refusals, so the two cannot disagree about a record.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (seed-baseline! w)
         (is (thrown-with-msg? Exception #"99"
                               (ws/check-entry :brian (:id w) {:kind :design}
@@ -454,7 +401,7 @@
 (deftest design-may-cite-a-real-baseline-on-the-same-workstream
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (seed-baseline! w)
         (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 2)))
         (is (= 2 (get-in (ws/latest-entry :brian (:id w) :design) [:baseline :seq])))
@@ -465,7 +412,7 @@
   ;; keep, and a child forked from the design would take a module that hides nothing into its baseline.
   (with-tmp
     (fn [_]
-      (let [w      (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w      (ws/create! :brian {:external-refs []})
             _      (seed-baseline! w)
             naming (fn [element]
                      (pr-str (assoc (design-citing 2) :model
@@ -485,7 +432,7 @@
 (deftest a-baseline-cites-the-intent-it-was-scoped-for
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
         (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
         (is (= 1 (get-in (ws/latest-entry :brian (:id w) :baseline) [:intent :seq]))
@@ -499,7 +446,7 @@
   ;; was not.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (ws/append-entry! :brian (:id w) {:kind :note} "just a note")
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"Baseline :intent cites entry 1"
@@ -513,7 +460,7 @@
   ;; holds them; a unit begins where somebody states what this change is for.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (ws/append-entry! :brian (:id w) {:kind :triage} (pr-str a-triage))
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"Baseline :intent cites entry 1"
@@ -523,7 +470,7 @@
 (deftest an-intent-may-supersede-an-earlier-one
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
         (is (some? (ws/append-entry!
                     :brian (:id w) {:kind :intent}
@@ -537,7 +484,7 @@
   ;; unseats it and it would stand on a goal nobody holds.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
         (ws/append-entry! :brian (:id w) {:kind :intent}
                           (pr-str (assoc an-intent :goal "a wider goal"
@@ -556,7 +503,7 @@
   ;; its own goal predates it, while the survey under it bounds another goal.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (seed-baseline! w)                                        ; 1 intent, 2 baseline
         (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 2)))
         (ws/append-entry! :brian (:id w) {:kind :intent}          ; 4 replaces 1
@@ -595,7 +542,7 @@
   ;; one edge per record, so a fork leaves it unable to say which goal is live.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
         (ws/append-entry! :brian (:id w) {:kind :intent}
                           (pr-str (assoc an-intent :supersedes {:seq 1 :why "first"})))
@@ -610,7 +557,7 @@
   ;; refused later, on the next design reaching both roots, while it stood.
   (with-tmp
     (fn [_]
-      (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w   (ws/create! :brian {:external-refs []})
             id  (:id w)
             add #(ws/append-entry! :brian id {:kind :intent} (pr-str %))]
         (is (thrown-with-msg?
@@ -649,7 +596,7 @@
   ;; a bare restatement after it would leave the retraction standing for good.
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (ws/append-entry! :brian id {:kind :intent} (pr-str an-intent))
         (ws/append-entry! :brian id {:kind :retraction}
@@ -666,7 +613,7 @@
   ;; refusal carries it so whoever prints the refusal can name the whole chain.
   (with-tmp
     (fn [_]
-      (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w   (ws/create! :brian {:external-refs []})
             id  (:id w)
             add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))
             now #(ws/goal-amendment (ws/read-ws :brian id) %)]
@@ -699,7 +646,7 @@
   ;; the unit its goal roots — never off whichever goal moved most recently.
   (with-tmp
     (fn [_]
-      (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w   (ws/create! :brian {:external-refs []})
             id  (:id w)
             add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))
             now #(ws/goal-amendment (ws/read-ws :brian id) %)]
@@ -718,7 +665,7 @@
   ;; reaching it — 11s on a real 200-entry ledger, paid on every board poll.
   (with-tmp
     (fn [_]
-      (let [w     (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w     (ws/create! :brian {:external-refs []})
             id    (:id w)
             add   #(ws/append-entry! :brian id {:kind %1} (pr-str %2))
             reads (atom 0)
@@ -742,7 +689,7 @@
 (deftest a-goal-amended-before-anything-was-built-on-it-owes-nothing
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (ws/append-entry! :brian id {:kind :intent} (pr-str an-intent))
         (ws/append-entry! :brian id {:kind :intent}
@@ -752,7 +699,7 @@
 (deftest design-citing-a-baseline-that-does-not-exist-is-refused
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (is (thrown? clojure.lang.ExceptionInfo
                      (ws/append-entry! :brian (:id w) {:kind :design}
                                        (pr-str (design-citing 4)))))
@@ -783,7 +730,7 @@
   [f]
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (seed-baseline! w a-baseline-with-health)
         (f w)))))
 
@@ -862,7 +809,7 @@
 (deftest a-baseline-with-no-health-routes-vacuously
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (seed-baseline! w)
         (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 2)))
         (is (ws/latest-entry :brian (:id w) :design)
@@ -874,7 +821,7 @@
   ;; can be stated can always be amended rather than only abandoned.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (seed-baseline! w)
         (ws/append-entry! :brian (:id w) {:kind :triage} (pr-str a-triage))
         (is (thrown-with-msg?
@@ -885,7 +832,7 @@
 (deftest a-design-citing-an-entry-that-states-no-intent-is-refused
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (seed-baseline! w)
         (ws/append-entry! :brian (:id w) {:kind :blocker}
                           (pr-str {:format :blocker :summary "s" :needs "n"}))
@@ -899,7 +846,7 @@
 (deftest a-design-citing-an-intent-that-does-not-exist-is-refused
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (seed-baseline! w)
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"not an :intent entry"
@@ -909,7 +856,7 @@
 (deftest design-citing-an-entry-that-is-not-a-baseline-is-refused
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
         (ws/append-entry! :brian (:id w) {:kind :note} "just a note")
         (is (thrown? clojure.lang.ExceptionInfo
@@ -954,7 +901,7 @@
 (deftest a-seam-may-name-a-phase-that-is-in-the-plan
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (seed-baseline! w)
         (ws/append-entry! :brian (:id w) {:kind :design}
                           (pr-str (phased-design-citing 2 "the old column is dropped")))
@@ -966,7 +913,7 @@
   ;; nothing schedules it. Same failure as a dangling :baseline :seq.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (seed-baseline! w)
         (is (thrown? clojure.lang.ExceptionInfo
                      (ws/append-entry! :brian (:id w) {:kind :design}
@@ -980,7 +927,7 @@
   ;; standing as a closure nobody scheduled.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (seed-baseline! w)
         (is (thrown? clojure.lang.ExceptionInfo
                      (ws/append-entry! :brian (:id w) {:kind :design}
@@ -994,7 +941,7 @@
   ;; getting this wrong is not an error — it is the design silently going absent.
   (with-tmp
     (fn [_]
-      (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w   (ws/create! :brian {:external-refs []})
             old {:format     :design
                  :summary    "Round on the total."
                  :shape      "One rounding boundary at the aggregate."
@@ -1018,7 +965,7 @@
   ;; yardstick its author never saw.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (seed-baseline! w)
         (ws/append-entry! :brian (:id w) {:kind :baseline}
                           (pr-str (assoc a-baseline :area "a second, wider baseline")))
@@ -1038,7 +985,7 @@
   ;; answer "no retraction found" rather than "this edge is broken".
   (with-tmp
     (fn [_]
-      (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w   (ws/create! :brian {:external-refs []})
             id  (:id w)
             add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
         (add :intent an-intent)                                       ; seq 1
@@ -1068,7 +1015,7 @@
   ;; at the retraction with no append that could ever release it.
   (with-tmp
     (fn [_]
-      (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w   (ws/create! :brian {:external-refs []})
             id  (:id w)
             add #(ws/append-entry! :brian id {:kind %1} %2)
             r   #(pr-str {:format :retraction :retracts {:seq %}
@@ -1087,7 +1034,7 @@
   ;; design turned down: :blocker-seq is not an edge standing follows.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (is (some? (ws/append-entry!
                     :brian (:id w) {:kind :blocker-answered}
                     (pr-str {:format :blocker-answered :blocker-seq 99
@@ -1110,7 +1057,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [id  (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+        (let [id  (:id (ws/create! :brian {:external-refs []}))
               n   12
               res (->> (range n)
                        (mapv (fn [i]
@@ -1145,7 +1092,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [id (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+        (let [id (:id (ws/create! :brian {:external-refs []}))
               _  (ws/append-entry! :brian id {:kind :note} "the question")
               n  8
               ;; every writer answers position 1, which is genuinely current
@@ -1175,7 +1122,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [id (:id (ws/create! :brian {:stage :in-progress :external-refs []}))]
+        (let [id (:id (ws/create! :brian {:external-refs []}))]
           (ws/append-entry! :brian id {:kind :note} "a")
           (is (= :stale (:refused (ws/append-entry-at! :brian id nil {:kind :note} "b"))))
           (is (= :stale (:refused (ws/append-entry-at! :brian id 99 {:kind :note} "b")))
@@ -1193,7 +1140,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [id  (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+        (let [id  (:id (ws/create! :brian {:external-refs []}))
               _   (ws/append-entry! :brian id {:kind :note} "one")
               dir (fs/path (cstate/workstream-dir :brian id) "entries")]
           ;; Simulate the crash: a payload on disk that the index never learned
@@ -1216,7 +1163,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [id  (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+        (let [id  (:id (ws/create! :brian {:external-refs []}))
               _   (ws/append-entry! :brian id {:kind :note} "one")
               dir (fs/path (cstate/workstream-dir :brian id) "entries")]
           (spit (str (fs/path dir "0002-note.md")) "already here")
@@ -1234,7 +1181,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [id (:id (ws/create! :brian {:stage :in-progress :external-refs []}))]
+        (let [id (:id (ws/create! :brian {:external-refs []}))]
           (ws/append-entry! :brian id {:kind :note} "one")
           (ws/append-entry! :brian id {:kind :note} "two")
           (is (nil? (ws/index-drift :brian id)))))
@@ -1250,7 +1197,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [id  (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+        (let [id  (:id (ws/create! :brian {:external-refs []}))
               _   (ws/append-entry! :brian id {:kind :note} "one")
               dir (fs/path (cstate/workstream-dir :brian id) "entries")]
           ;; The orphan that consumed 0002, since cleaned up: the number it took
@@ -1275,7 +1222,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [id   (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+        (let [id   (:id (ws/create! :brian {:external-refs []}))
               _    (ws/append-entry! :brian id {:kind :note} "one")
               _    (ws/append-entry! :brian id {:kind :note} "two")
               good (:entries (ws/read-ws :brian id))
@@ -1301,7 +1248,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [id     (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+        (let [id     (:id (ws/create! :brian {:external-refs []}))
               dir    (fs/path (cstate/workstream-dir :brian id) "entries")
               landed (fn [pr] {:format :merged :pr pr :url (str "https://x/" pr) :title "t"})
               once   (fn [pr] (ws/append-entry-once! :brian id {:kind :merged} (pr-str (landed pr))
@@ -1341,7 +1288,7 @@
 (deftest a-trail-record-names-the-design-it-was-made-under
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (seed-baseline! w)                                                     ; 1, 2
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
@@ -1364,7 +1311,7 @@
   ;; citation there would be inventing a generation to blame.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (is (some? (ws/append-entry! :brian (:id w) {:kind :implementation-completed}
                                      (pr-str an-implementation))))
         (is (nil? (:under (last (:entries (ws/read-ws :brian (:id w)))))))))))
@@ -1375,7 +1322,7 @@
   ;; `trail-standing`'s `>=` reads it as work done under that design.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo
              #"Implementation-completed :design cites entry 999, which is not on this workstream"
@@ -1393,7 +1340,7 @@
   ;; its publisher names.
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (seed-baseline! w)                                                     ; 1, 2
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
@@ -1426,7 +1373,7 @@
     (fn [_]
       (let [pr     {:adapter :github :id "o/r#1" :url "https://gh/1" :title "Round the total"}
             d1-d2! (fn [impl]
-                     (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+                     (let [w  (ws/create! :brian {:external-refs []})
                            id (:id w)]
                        (seed-baseline! w)                                                      ; 1, 2
                        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3 — D1
@@ -1456,7 +1403,7 @@
 (deftest a-trail-record-citing-something-that-is-not-a-design-is-refused
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (seed-baseline! w)
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))
@@ -1470,7 +1417,7 @@
 (deftest a-workstream-may-hold-two-units-and-every-record-is-in-one
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)
             add #(do (ws/append-entry! :brian id {:kind %1} (pr-str %2))
                      (count (:entries (ws/read-ws :brian id))))]
@@ -1495,7 +1442,7 @@
   ;; seated it in the unit its citation reaches would give one record two owners.
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (seed-baseline! w)                                                     ; 1, 2
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
@@ -1522,7 +1469,7 @@
   ;; one citation at a time.
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)
             add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
         (add :intent an-intent)                                          ; 1
@@ -1543,7 +1490,7 @@
    Entries 4 and 5 are written by hand: the append boundary refuses both, and
    live ledgers hold them anyway. Returns the workstream id."
   []
-  (let [w    (ws/create! :brian {:stage :in-progress :external-refs []})
+  (let [w    (ws/create! :brian {:external-refs []})
         id   (:id w)
         rel4 "entries/0004-intent.edn"
         rel  "entries/0005-design.edn"]
@@ -1614,7 +1561,7 @@
   ;; several possible units and belongs to the workstream that holds them.
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (ws/append-entry! :brian id {:kind :triage} (pr-str a-triage))
         (is (thrown-with-msg?
@@ -1636,7 +1583,7 @@
   ;; boundary rather than a leak: nothing new can be created inside it.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
         (ws/append-entry! :brian (:id w) {:kind :note} "beside the arc")
         (let [rec (ws/read-ws :brian (:id w))]
@@ -1651,14 +1598,14 @@
   ;; those enforces nothing and gets switched off.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (is (some? (ws/append-entry! :brian (:id w) {:kind :implementation-completed}
                                      (pr-str an-implementation))))))))
 
 (deftest a-design-nobody-granted-refuses-the-implementation-record
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (seed-baseline! w)                          ; intent 1, baseline 2
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
@@ -1673,7 +1620,7 @@
 (deftest a-grant-naming-the-live-design-lets-the-implementation-through
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (seed-baseline! w)
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))
@@ -1688,7 +1635,7 @@
   ;; replaced it would grant the one thing nobody looked at.
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (seed-baseline! w)
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))  ; 3
@@ -1733,7 +1680,7 @@
 (deftest a-clearance-lets-the-implementation-through-without-a-grant
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (seed-baseline! w)                                                      ; 1, 2
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
@@ -1748,7 +1695,7 @@
   ;; unguarded append would let anyone write one past the reading it stands for.
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (seed-baseline! w)
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))
@@ -1762,7 +1709,7 @@
 (deftest a-clearance-needs-a-proceeding-decision-on-its-design
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (seed-baseline! w)
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))  ; 3
@@ -1780,7 +1727,7 @@
 (deftest a-clearance-over-a-design-owing-a-person-is-refused
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (seed-baseline! w)
         (ws/append-entry! :brian id {:kind :design}                             ; 3
@@ -1796,7 +1743,7 @@
 (deftest a-clearance-must-name-a-design
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (seed-baseline! w)
         (is (thrown-with-msg?
@@ -1810,7 +1757,7 @@
   ;; every unit.
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (seed-baseline! w)                                                     ; 1, 2
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
@@ -1826,7 +1773,7 @@
   ;; D2 sits above it is a fact about D1.
   (with-tmp
     (fn [_]
-      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w  (ws/create! :brian {:external-refs []})
             id (:id w)]
         (seed-baseline! w)                                                     ; 1, 2
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
@@ -1850,7 +1797,7 @@
   ;; work recorded before any design would satisfy a design appended later.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"Implementation-completed :design cites entry 999"
              (ws/append-entry! :brian (:id w) {:kind :implementation-completed}
@@ -1862,7 +1809,7 @@
   "A workstream holding the two-phase design at seq 3, its first phase landed and
    the workstream closed :between-phases — the state `open-phase!` opens from."
   []
-  (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+  (let [w (ws/create! :brian {:external-refs []})]
     (seed-baseline! w)
     (ws/append-entry! :brian (:id w) {:kind :design}
                       (pr-str (phased-design-citing 2 "the old column is dropped")))
@@ -1881,27 +1828,9 @@
       (let [w  (landed-first-phase!)
             w' (ws/open-phase! :brian (:id w) second-phase)
             row (last (:entries w'))]
-        (is (nil? (:closed w')))
-        (is (= :in-progress (:stage w')))
+        (is (nil? (ws/closure w')) "the gate is what reopens it")
         (is (= [:phase-gate "the old column is dropped" 3] ((juxt :kind :opens :under) row))
             "the index row carries the phase it opens and the design it cites")))))
-
-(deftest an-interrupted-open-phase-leaves-nothing-a-retry-is-refused-on
-  ;; The gate and the reopen are one write. Were they two, dying between them would
-  ;; leave the next phase open and unlanded on a record still :between-phases —
-  ;; a state every retry refuses.
-  (with-tmp
-    (fn [_]
-      (let [w (landed-first-phase!)]
-        (with-redefs [ws/reopened (fn [& _] (throw (ex-info "killed mid-transition" {})))]
-          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"killed mid-transition"
-                                (ws/open-phase! :brian (:id w) second-phase))))
-        (let [w' (ws/read-ws :brian (:id w))]
-          (is (= :between-phases (get-in w' [:closed :outcome])))
-          (is (not-any? #(= :phase-gate (:kind %)) (:entries w')) "no gate indexed without its reopen"))
-        (let [w' (ws/open-phase! :brian (:id w) second-phase)]
-          (is (nil? (:closed w')) "the retry completes the transition")
-          (is (= 1 (count (filter #(= :phase-gate (:kind %)) (:entries w'))))))))))
 
 (deftest open-phase-refuses-a-workstream-not-between-phases
   (with-tmp
@@ -1928,12 +1857,12 @@
   ;; append failed strands nothing.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (seed-baseline! w)
         (ws/append-entry! :brian (:id w) {:kind :design}
                           (pr-str (phased-design-citing 2 "the old column is dropped")))
         (ws/close! :brian (:id w) :between-phases 3)
-        (is (nil? (:closed (ws/open-phase! :brian (:id w) second-phase))))))))
+        (is (nil? (ws/closure (ws/open-phase! :brian (:id w) second-phase))))))))
 
 (deftest open-phase-refuses-a-close-that-names-no-design
   (with-tmp

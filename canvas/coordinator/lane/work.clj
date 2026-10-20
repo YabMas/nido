@@ -86,10 +86,10 @@
   (Operation claim-and-drive!
     "Claim a resolved ticket as in flight and enqueue the leg that drives it."
     {:signature [:=> [:catn [:project ProjectName] [:ref :map]] :map]
-     :delegates [tickets/set-status!]})
+     :delegates [tickets/status tickets/open! workstream/advance-stage!]})
   (Operation pickup! "Resolve a reference and claim its ticket as in flight."
     {:signature [:=> [:catn [:project ProjectName] [:input :string] [:token NotionToken]] :map]
-     :delegates [resolve-ref claim-and-drive!]}))
+     :delegates [resolve-ref tickets/held-by-gate? claim-and-drive!]}))
 
 (Module lane-promote
   "Moving a triaged ticket forward into planning.
@@ -98,7 +98,7 @@
    re-emitted event promoting the same ticket twice."
   (Operation promote! "Promote a ticket to a planning run, or say why not."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] :map]
-     :delegates [tickets/promote-decision tickets/set-status!]})
+     :delegates [tickets/promote-decision workstream/advance-stage!]})
   (Operation start-triage! "Promote a queued incoming workstream by running its deferred triage."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
      :delegates [workstream/read-ws workstream/advance-stage!]})

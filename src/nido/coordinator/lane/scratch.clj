@@ -62,7 +62,7 @@
    session/create! refuses; the workstream minted for it, holding nothing but its birth, is
    deleted and the holder answered instead, so a lost race leaves no one-off behind."
   [project session-name weight]
-  (let [w (workstream/create! project {:stage :scratch :external-refs []})]
+  (let [w (workstream/create! project {:external-refs []})]
     (try
       (workstream/append-entry! project (:id w) {:kind :scratch}
                                 (pr-str {:format :scratch :session session-name}))

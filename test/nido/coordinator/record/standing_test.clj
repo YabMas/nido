@@ -46,7 +46,7 @@
   "A workstream with an intent at seq 1, then whatever `entries` says.
    Returns [ws-id (fn add [kind record] -> seq)]."
   []
-  (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+  (let [w  (ws/create! :brian {:external-refs []})
         id (:id w)]
     (ws/append-entry! :brian id {:kind :intent}
                       (pr-str {:format :intent :goal "g" :done-when ["d"]}))

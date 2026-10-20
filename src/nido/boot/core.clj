@@ -308,11 +308,12 @@
             (ship/settle-drive-home! (:id run) {})
             (settle-run! (:id run) run (#{:plan-bug :plan-github-issue} (:skill run))
                          {:exit-code 0 :result-text (:last-message event)}))
+          ;; A reply turn on a run parked for review ended cleanly: the run stays parked for the
+          ;; person, and the error a failed earlier reply left is cleared.
           :awaiting-review
           (let [s (session/read-session project ws-id session)]
             (when (session/autonomous? s)
-              (session/set-error! project ws-id session nil)
-              (session/set-phase! project ws-id session :parked)))
+              (session/set-error! project ws-id session nil)))
           nil))
       (catch Throwable t
         (binding [*err* *err*]

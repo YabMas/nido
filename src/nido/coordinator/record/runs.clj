@@ -259,8 +259,6 @@
   [from to]
   (contains? (get allowed-transitions from #{}) to))
 
-(declare mirror-run-phase!)
-
 (defn ^{:malli/schema [:=> [:cat :RunId :keyword] :Run]}
   transition!
   "Atomically update a Run's state with history. Throws ex-info if the
@@ -277,26 +275,7 @@
                       (update :state-history conj
                               {:at (clock/now-iso) :state new-state}))]
       (write-run! updated)
-      (mirror-run-phase! updated)
       updated)))
-
-(defn ^{:malli/schema [:=> [:cat :Run] :any]}
-  mirror-run-phase!
-  "Best-effort mirror of the execution-driver/substrate state onto the authoritative
-   session's autonomy phase (reconcile! is the authoritative repair). No-op when the
-   run has no :workstream-id (legacy / dry-run / test runs). Never throws — a
-   missing or human session is logged to stderr and swallowed so it can't re-fail a
-   transition."
-  [run]
-  (when-let [ws-id (:workstream-id run)]
-    (when-let [phase (state->phase (:state run))]
-      (try
-        (session/set-phase! (:project run) ws-id (:session-name run) phase)
-        (catch Exception e
-          (binding [*err* *err*]
-            (.println ^java.io.PrintWriter *err*
-                      (str "nido coordinator: phase mirror failed for "
-                           (:session-name run) " → " phase " — " (ex-message e)))))))))
 
 (defn- new-run-parts
   "Returns {:run-id ... :session-name ... :suffix ...} so callers don't have

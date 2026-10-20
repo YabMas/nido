@@ -43,8 +43,7 @@
 (defn- recovery-ws!
   "A recovery workstream for `f`'s cause, as the source's fire would make it."
   [f & {:keys [diagnosed?] :or {diagnosed? true}}]
-  (let [w (ws/create! :nido {:stage :triaging
-                             :external-refs [{:adapter :session-recovery
+  (let [w (ws/create! :nido {:external-refs [{:adapter :session-recovery
                                               :id (str (failure/cause f) "@" (:id f))}]})]
     (when diagnosed?
       (ws/append-entry! :nido (:id w) {:kind :session-diagnosis}
@@ -76,7 +75,7 @@
         (is (= {:kind :person :restoring (:id f)} (:origin (second (first @ups))))
             "a restore's own start says what it is restoring, so its failure is traceable")
         (is (empty? @enqueued) "a person's start continues nothing")
-        (is (some? (:closed (ws/read-ws :nido w))))
+        (is (some? (ws/closure (ws/read-ws :nido w))))
         (is (= :restored (-> (ws/latest-entry :nido w :session-restored) :outcomes first :outcome)))))))
 
 (deftest a-start-that-fails-again-is-not-restored-and-the-recovery-stays-open
@@ -91,13 +90,13 @@
             (is (= "F-again" (:failure-left (first outcomes)))
                 "the outcome names the failure its own attempt kept")
             (is (not closed?))
-            (is (nil? (:closed (ws/read-ws :nido w)))
+            (is (nil? (ws/closure (ws/read-ws :nido w)))
                 "closing now would settle a failure nobody brought back")))))))
 
 (deftest a-failed-run-continues-as-its-successor-with-its-session-already-up
   (with-tmp
     (fn [enqueued]
-      (let [origin-ws (ws/create! :brian {:stage :triaging :external-refs []})
+      (let [origin-ws (ws/create! :brian {:external-refs []})
             trigger   {:name :triage-new :source {:type :notion-view} :skill :triage-bug
                        :payload "{{event/id}}" :limits {:budget "1h"}}
             failed    (runs/create-run! {:project :brian :trigger trigger :payload {:id "BR-1"}
@@ -128,7 +127,7 @@
 (deftest a-failed-run-gets-one-successor-however-many-of-its-starts-failed
   (with-tmp
     (fn [enqueued]
-      (let [origin-ws (ws/create! :brian {:stage :triaging :external-refs []})
+      (let [origin-ws (ws/create! :brian {:external-refs []})
             trigger   {:name :triage-new :source {:type :notion-view} :skill :triage-bug
                        :payload "{{event/id}}" :limits {:budget "1h"}}
             failed    (runs/create-run! {:project :brian :trigger trigger :payload {:id "BR-1"}
@@ -167,7 +166,7 @@
 (deftest a-failure-whose-work-was-closed-is-withdrawn
   (with-tmp
     (fn [enqueued]
-      (let [origin-ws (ws/create! :brian {:stage :triaging :external-refs []})
+      (let [origin-ws (ws/create! :brian {:external-refs []})
             f         (keep-failure! {:origin {:kind :resume :project :brian :ws-id (:id origin-ws)
                                                :session "impl" :input "apply it"}}
                                      "Re-hydration failed")

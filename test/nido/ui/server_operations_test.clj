@@ -17,8 +17,7 @@
     (try
       (with-redefs [core/nido-root (constantly (str tmp))
                     server/read-rail-daemon (constantly {:state :up})]
-        (let [id (:id (ws/create! :nido {:stage :triaging
-                                         :external-refs [{:adapter :review-run :id "r" :title "t"}]}))]
+        (let [id (:id (ws/create! :nido {:external-refs [{:adapter :review-run :id "r" :title "t"}]}))]
           (ws/append-entry! :nido id {:kind :review-analysis}
                             (pr-str {:format :review-analysis :verdict :degraded :run-id "r"
                                      :status "clean" :rounds 1 :summary "the arc"

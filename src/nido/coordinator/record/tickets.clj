@@ -1,16 +1,13 @@
 (ns nido.coordinator.record.tickets
-  "Per-ticket status in nido. One directory per Notion ticket, keyed by
-   BR-#### (Notion's unique-id property). Holds machine-readable triage
-   status (meta.edn) — :status, :disposition, gate/promote decisions. Entry
-   writes AND reads (triage reports, findings, …) live on the workstream's
-   ledger (nido.coordinator.record.workstream/append-to-ref! / :entries), not here —
-   see the ledger-unification design; `latest-triage-report` routes to the
-   workstream by the BR-#### ref. See spec
-   docs/superpowers/specs/2026-06-04-triage-record-store-design.md."
+  "Per-ticket triage in nido. One directory per ticket, keyed by its id (BR-#### for Notion), whose
+   meta.edn holds what the ticket IS — its page, url, title, who opened it. Where its triage stands
+   is derived (`status-of`) from the ledger and runs of the workstream carrying it, where every
+   decision about it is an entry: a verdict, a person's acceptance, a dismissal, a stage choice.
+   Entry writes and reads live on that workstream's ledger
+   (nido.coordinator.record.workstream/append-to-ref!), never here."
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
-   [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
@@ -63,31 +60,34 @@
     (io/write-edn! (meta-path project br-id) m)
     m))
 
+(def ^:private stored-status-keys
+  "Fields a ticket's meta held before its status was derived — written by nothing now, and left
+   out of every write so a record written before carries them no further."
+  #{:status :disposition :triaged-at})
+
 (defn- ^{:malli/schema [:=> [:cat :ProjectName :TicketId [:=> [:cat :any] :any]]
                        [:maybe :Ticket]]}
   update-meta!
   "Read a ticket's meta, apply `f` to it (nil when there is no record yet), and
    write the result back — as one locked operation, sharing the lock
    `io/update-edn!` would take on the same file. `f` returning nil writes
-   nothing, which is how clear-status! declines to conjure a record for a ticket
-   that never had one.
+   nothing, so an update can decline to conjure a record for a ticket that
+   never had one.
 
    Written out rather than delegated to `io/update-edn!` for exactly that
    branch: an update that may decline to write is not a function from the old
    value to the new one, and moving the decision outside the lock is the race
    this exists to prevent.
 
-   The daemon reconciling a terminal Run and a human running `bb nido:ticket:*`
-   are separate processes writing this file, and :status is what the pre-spawn
-   gate reads — a lost update here is a ticket that re-triages when it should
-   not, or one that never does."
+   The daemon and a person running `bb nido:ticket:*` are separate processes
+   writing this file, and a lost update is a ticket whose page or title reverts."
   [project br-id f]
   (when-not (blank-br? br-id)
     (let [path (meta-path project br-id)]
       (io/with-file-lock
         (io/lock-path-for path)
         (fn []
-          (when-let [m' (f (io/read-edn path))]
+          (when-let [m' (some-> (f (io/read-edn path)) (as-> m (apply dissoc m stored-status-keys)))]
             (io/write-edn! path m')
             m'))))))
 
@@ -156,39 +156,31 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :map] :Ticket]}
   open!
-  "Create (or refresh the descriptive fields of) a ticket record and set status
-   :investigating. `base` carries {:notion-page-id :url :title :opened-by
-   :notion-last-edited-at}. Idempotent on re-open: preserves :entries."
+  "Create (or refresh the descriptive fields of) a ticket record. `base` carries
+   {:notion-page-id :url :title :opened-by :notion-last-edited-at}. Idempotent on re-open:
+   preserves :entries."
   [project br-id base]
   (update-meta! project br-id
                 (fn [prior]
                   (merge {:entries []}
                          prior
-                         {:br-id br-id :status :investigating}
+                         {:br-id br-id}
                          (select-keys base [:notion-page-id :url :title
                                             :opened-by :notion-last-edited-at])))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :map] :Ticket]}
-  hold-for-gate!
-  "Open (or refresh) a ticket record held by an unaccepted Slack proposal: status
-   :awaiting-input, opened by :slack-proposal. gate-decision reads :awaiting-input as
-   owned, so no triage spawns for the ticket while a person has yet to accept the proposal,
-   and `held-by-gate?` lets pickup refuse it. Accepting the proposal claims the ticket
-   :planning, which ends the hold. `base` is as for open!."
-  [project br-id base]
-  (update-meta! project br-id
-                (fn [prior]
-                  (merge {:entries []}
-                         prior
-                         {:br-id br-id :status :awaiting-input :opened-by :slack-proposal}
-                         (select-keys base [:notion-page-id :url :title])))))
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :boolean]}
   held-by-gate?
-  "Whether the ticket is held by an unaccepted Slack proposal (see hold-for-gate!)."
+  "Whether an unaccepted Slack proposal holds the ticket: the newest verdict on the workstream
+   carrying it is a :proposed-ticket nobody has accepted, and nothing has moved the ticket past
+   triage. Pickup refuses such a ticket — its technical analysis waits in the gate, and accepting
+   it there is what ends the hold. The triage gate needs no such check: the same ledger already
+   makes `status` :investigating or :awaiting-input, which it skips as owned."
   [project br-id]
-  (let [m (read-meta project br-id)]
-    (and (= :awaiting-input (:status m)) (= :slack-proposal (:opened-by m)))))
+  (boolean
+   (when-let [w (when-not (blank-br? br-id) (cws/find-by-ref-id project br-id))]
+     (let [v (standing/verdict project (:id w) w)]
+       (and (= :proposed-ticket (:kind v)) (not (:accepted? v))
+            (contains? #{:investigating :awaiting-input} (status-of project w)))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :keyword :any] [:maybe :Ticket]]}
   mark!
@@ -202,50 +194,32 @@
   [project br-id k]
   (update-meta! project br-id #(when % (dissoc % k))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :keyword] :Ticket]}
-  set-status! [project br-id new-status]
-  (update-meta! project br-id #(assoc % :status new-status)))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :keyword :any] :Ticket]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :any]}
   complete!
   "Terminal completion of a triage verdict: accept the newest verdict on the ticket's workstream
    — a :triage-accepted citing it, or citing nothing when the ledger holds no verdict, so the
-   ticket is accepted as reported — unless an acceptance already stands; then set status
-   :triaged, disposition, triaged-at. A ticket no workstream carries gets one by its ref.
-   (Off-radar tickets use dismiss!, not complete! — :skipped retired.)"
-  [project br-id new-status disposition]
+   ticket is accepted as reported — unless an acceptance already stands. A ticket no workstream
+   carries gets one by its ref. No-op for a nil/blank br-id. (Off-radar tickets use dismiss!.)"
+  [project br-id]
   (when-not (blank-br? br-id)
     (let [w (cws/find-or-mint-by-ref! project br-id)
           v (standing/verdict project (:id w) w)]
       (when-not (:accepted? v)
         (cws/append-entry! project (:id w) {:kind :triage-accepted}
                            (pr-str (cond-> {:format :triage-accepted}
-                                     (:seq v) (assoc :triage-seq (:seq v))))))))
-  (update-meta! project br-id
-                (fn [m]
-                  (assoc m :status new-status
-                           :disposition disposition
-                           :triaged-at (clock/now-iso)))))
+                                     (:seq v) (assoc :triage-seq (:seq v)))))))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] [:maybe :Ticket]]}
-  clear-status!
-  "Make the ticket re-triable: drop :status (the gate then returns :spawn)."
-  [project br-id]
-  (update-meta! project br-id #(when % (dissoc % :status))))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :Ticket]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :any]}
   dismiss!
   "Take a ticket off the triage radar: settle the workstream carrying it :dismissed — minting one
-   by its ref when none does, so a never-triaged ticket can be dismissed — and set status
-   :dismissed. The gate then skips it (no auto-re-triage). A workstream already standing
-   dismissed is left as it is. No-op for a nil/blank br-id."
+   by its ref when none does, so a never-triaged ticket can be dismissed. The gate then skips it
+   (no auto-re-triage). A workstream already standing dismissed is left as it is. No-op for a
+   nil/blank br-id."
   [project br-id]
   (when-not (blank-br? br-id)
     (let [w (cws/find-or-mint-by-ref! project br-id)]
       (when-not (= :dismissed (:outcome (cws/closure w)))
-        (cws/close! project (:id w) :dismissed nil :person))))
-  (update-meta! project br-id
-                #(assoc (or % {:br-id br-id :entries []}) :status :dismissed)))
+        (cws/close! project (:id w) :dismissed nil :person)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] [:maybe :map]]}
   latest-triage-report

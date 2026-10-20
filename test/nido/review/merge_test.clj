@@ -56,7 +56,7 @@
 (defn- parent-and-child
   "A parent whose design, entry 4, stands, and a child forked from it — whose baseline is entry 3."
   []
-  (let [p (:id (ws/create! :brian {:stage :in-progress :external-refs []}))]
+  (let [p (:id (ws/create! :brian {:external-refs []}))]
     (add! p :intent {:format :intent :goal "one summing path" :done-when ["totals agree"]})
     (add! p :baseline a-baseline)
     (add! p :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})

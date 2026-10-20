@@ -27,9 +27,10 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Session]]}
   waiting-session
   "The first autonomous session under a workstream that waits on a person's reply, or nil: not
-   archived, no agent of its owning run running and no reply to it already queued, and either its
-   run parked for review or the workstream's status owing a person its next move — a driver's
-   blocker, which parks no run. Read off run records, run locks, the executor and status; no
+   archived, no agent of its owning run running and no reply to it already queued (in the
+   executor, or as a background session's instruction conduct has not seen it Stop after), and
+   either its run parked for review or the workstream's status owing a person its next move — a
+   driver's blocker, which parks no run. Read off run records, run locks, the executor and status; no
    stored phase says it."
   [project ws-id]
   (let [owed-person? (delay (= :person (:owed-by (pipeline/status project ws-id))))]
@@ -39,6 +40,10 @@
                    (let [run (runs/find-for-session project ws-id (:name s))]
                      (and (not (and run (runs/live? (:id run))))
                           (not (executor/turn-pending? (turn-key s run)))
+                          ;; A background session's reply is an instruction conduct holds until
+                          ;; the session's Stop: one given or waiting is a reply in flight.
+                          (not (get-in s [:claude :pending]))
+                          (not (get-in s [:claude :queued]))
                           (or (= :awaiting-review (:state run)) @owed-person?)))))
          first)))
 
@@ -74,11 +79,12 @@
    was reclaimed (runs/ensure-session-home! — the transcript survives keyed by the
    home path, so re-provision at the same path re-anchors it). Then launches one
    bounded `claude --resume` turn, records the outcome on the session (`:error`
-   cleared on success / set on failure, logged to *err* for operators), and
-   re-parks for re-review regardless — stopping the session's services again
-   (runs/stop-session-for-parked-run!) once it is parked.
+   cleared on success / set on failure, logged to *err* for operators), and stops
+   the session's services again regardless (runs/stop-session-for-parked-run!) —
+   its run stays parked for review throughout, so the session waits on its person
+   again the moment the turn's agent exits.
 
-   `s` is the parked session map; `run` is the run record (may be nil for sessions
+   `s` is the waiting session map; `run` is the run record (may be nil for sessions
    not backed by a run.edn). Identity (`:claude-session-id`, `:budget`) is resolved
    from `s` first, with `run` as the fallback. The run is used only for the
    execution substrate (`ensure-session-home!` / `launch-context`), guarded for nil."
@@ -136,20 +142,19 @@
                            :reason  (or (:reason (ex-data t)) :resume-failed)
                            :message (ex-message t)}))
     (finally
-      (session/set-phase! project ws-id session-name :parked)
-      ;; Parked again, so stopped again: otherwise every session a reply ever
-      ;; reached would keep its JVM for good. The next reply re-provisions it
-      ;; through ensure-session-home!, above.
+      ;; The turn is over, so its services stop again: otherwise every session a reply ever
+      ;; reached would keep its JVM for good. The next reply re-provisions it through
+      ;; ensure-session-home!, above.
       (when run (runs/stop-session-for-parked-run! run)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string] :any]}
   resume!
-  "Re-engage a parked session under `ws-id` with `input`. Flips the session to
-   :running synchronously, then hands one turn to the executor, which runs it when
-   a slot frees. A session whose conversation is a background session (a :claude
-   facet) instead takes `input` as its next instruction through conduct, queued
-   when that turn is admitted, and answers :via :substrate; an instruction conduct
-   refuses parks the session again with the refusal as its error.
+  "Re-engage the session waiting on a person under `ws-id` (`waiting-session`) with `input`: hand
+   one turn to the executor, which runs it when a slot frees — and, queued there, the turn is what
+   stops a second reply being accepted for the same session. A session whose conversation is a
+   background session (a :claude facet) instead takes `input` as its next instruction through
+   conduct, queued when that turn is admitted, and answers :via :substrate; an instruction conduct
+   refuses is recorded as the session's error.
 
    Returns {:resumed <session-name> :queued? <bool>}, and :unaccounted? true in
    the one case where the turn ran outside the executor because nothing in this
@@ -175,7 +180,7 @@
     ;; instruction: conduct gives it when the session is ready, and the session's
     ;; own Stop re-parks it. No --print turn continues it. It is queued through
     ;; the executor like any turn, so the reply is admitted under the global cap
-    ;; before conduct may give it — its trigger's in-flight slot the parked session
+    ;; before conduct may give it — its trigger's in-flight slot the parked run
     ;; already holds (see executor/submit-turn!); once given, the session holds its
     ;; global slot while the substrate reports it working.
     (when (:dispatching s)
@@ -194,10 +199,8 @@
                          (session/set-error! project ws-id (:name s)
                                              {:at      (clock/now-iso)
                                               :reason  (or (:reason (ex-data t)) :resume-failed)
-                                              :message (ex-message t)})
-                         (session/set-phase! project ws-id (:name s) :parked)))]
+                                              :message (ex-message t)})))]
         (session/set-error! project ws-id (:name s) nil)
-        (session/set-phase! project ws-id (:name s) :running)
         (if (executor/driven?)
           (do (executor/submit-turn!
                {:run-id        (or (:id run) (str "session-" (:name s)))
@@ -217,7 +220,6 @@
                              :message "No resumable conversation — open the session in the terminal"})
         (throw (ex-info "No resumable conversation — open the session in the terminal"
                         {:reason :no-claude-session :project project :ws-id ws-id})))
-      (session/set-phase! project ws-id (:name s) :running)
       ;; Through the executor, so this turn takes a slot like every other agent
       ;; launch. It used to run on a bare `future` beside it, which meant the cap
       ;; bounded the sessions nido had STARTED rather than the agents it was

@@ -475,7 +475,7 @@
    `report/proceeds?` sat behind a green suite."
   ([standing] (clearance-ledger standing nil))
   ([standing decision]
-   (let [id   (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+   (let [id   (:id (ws/create! :brian {:external-refs []}))
          add! (fn [kind record]
                 (ws/append-entry! :brian id {:kind kind} (pr-str record))
                 (count (:entries (ws/read-ws :brian id))))

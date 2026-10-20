@@ -81,8 +81,7 @@
   (when-not (contains? driving-statuses (tickets/status project id))
     (tickets/open! project id {:notion-page-id page-id :url url :title title
                                :opened-by :pickup})
-    (let [w (spawn/ensure-workstream! project {:id id :page-id page-id :url url :title title}
-                                      :triaging)]
+    (let [w (spawn/ensure-workstream! project {:id id :page-id page-id :url url :title title})]
       (ws/advance-stage! project (:id w) :in-progress :person))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :map] :map]}

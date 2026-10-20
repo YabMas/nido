@@ -17,10 +17,10 @@ This command's only job is **continuity**: read the ledger, tell you *which stag
 
 Each ticket has a durable record at `~/.nido/projects/brian/tickets/<BR-####>/`:
 
-- `meta.edn` — `:status` (the current stage), `:title`, `:url`, `:disposition`, and `:entries` (an append-only log of every stage's output).
-- `entries/NNNN-<kind>.md` — one immutable file per stage (e.g. `0001-triage.md`). This is where a stage writes what it produced.
+- `meta.edn` — what the ticket is: `:title`, `:url`, the Notion page.
+- its workstream's ledger — one immutable entry per thing a stage produced or a person decided (a triage, an acceptance, an intent, a design). Where the ticket stands is read off it; nothing stores it.
 
-Read it with `bb nido:ticket:show :project brian :br <BR-####>`. Append to it with `bb nido:ticket:append`. Advance the stage marker with `bb nido:ticket:status`.
+Read it with `bb nido:ticket:show :project brian :br <BR-####>`. Append to it with `bb nido:ticket:append`.
 
 ## Step 1 — Resolve the ticket (BR-####)
 
@@ -94,15 +94,13 @@ inventing a stage. **An absent ledger is not that case**; it has its own row
 above, and routing a pickup to "check with the user" is how a ticket that was
 explicitly handed to nido to drive comes back unstarted.
 
-## Step 3 — Set the stage marker
+## Step 3 — Record the work
 
-Advance the ticket to the stage you're starting. This also tells nido's coordinator the ticket is no longer a parked review item, which frees the provisioning Run's in-flight slot:
+There is no stage marker to set. The first entry you append below — the `:intent` — is work
+recorded past triage, and that is what tells nido's coordinator the ticket is being worked: the
+provisioning Run is no longer a parked review item, and its in-flight slot is freed.
 
-```bash
-bb nido:ticket:status :project brian :br <BR-####> :status implementing
-```
-
-Then the ledger events this session owes before any code. **`/design` §7 owns
+The ledger events this session owes before any code. **`/design` §7 owns
 them and what goes in them — read it and follow it there.** Three appends, in
 order: `:intent`, then `:baseline`, then `:design`, each written to a temp file
 and appended with `bb nido:ticket:append :project brian :br <BR-####> :kind

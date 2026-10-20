@@ -66,7 +66,7 @@
         (is (nil? (tickets/write-meta! :brian br {:title "T"})))
         (is (nil? (tickets/open! :brian br {:notion-page-id "p" :url "u" :title "T"
                                             :opened-by :triage-new :notion-last-edited-at "t0"})))
-        (is (nil? (tickets/complete! :brian br :triaged :applied)))
+        (is (nil? (tickets/complete! :brian br)))
         (is (nil? (tickets/dismiss! :brian br)))))))
 
 (deftest open-records-the-tickets-descriptive-fields
@@ -154,9 +154,9 @@
   (with-tmp
     (fn [_]
       (let [n (verdict! "BR-4")]
-        (tickets/complete! :brian "BR-4" :triaged :applied)
+        (tickets/complete! :brian "BR-4")
         (is (= :triaged (tickets/status :brian "BR-4")))
-        (tickets/complete! :brian "BR-4" :triaged :applied)
+        (tickets/complete! :brian "BR-4")
         (is (= [n] (map :triage-seq (ws/entries-of :brian (:id (ws-of "BR-4")) :triage-accepted)))
             "an accepted verdict is not accepted again")))))
 

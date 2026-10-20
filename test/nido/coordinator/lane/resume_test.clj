@@ -47,11 +47,10 @@
 (deftest run-turn-launches-resume-and-reparks
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})
+      (let [w (ws/create! :brian {:external-refs []})
             calls (atom nil)]
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
         (with-redefs [runs/home-present? (fn [_] true)
                       agent/launch! (fn [opts] (reset! calls opts) {:exit-code 0 :num-turns 1})]
@@ -60,31 +59,25 @@
         (is (= "sid-9" (:claude-session-id @calls)))
         (is (true? (:resume? @calls)) "continues the recorded conversation")
         (is (= "do the fix" (:first-message @calls)))
-        (is (= "30m" (:budget @calls)) "the run's budget bounds the turn")
-        (is (= :parked (get-in (first (session/list-sessions :brian (:id w)))
-                               [:autonomy :phase]))
-            "the turn re-parks the session for re-review")))))
+        (is (= "30m" (:budget @calls)) "the run's budget bounds the turn")))))
 
 (deftest run-turn-reparks-when-launch-throws
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
         (with-redefs [runs/home-present? (fn [_] true)
                       agent/launch! (fn [_] (throw (ex-info "boom" {})))]
           (let [s (first (session/list-sessions :brian (:id w)))]
-            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "x")))
-        (is (= :parked (get-in (first (session/list-sessions :brian (:id w))) [:autonomy :phase]))
-            "re-parks even when the launch throws")))))
+            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "x")))))))
 
 (deftest resume!-flips-running-then-hands-the-turn-to-the-executor
   ;; The turn used to run on a bare future beside the executor, so the cap
   ;; bounded the sessions nido had STARTED rather than the agents it was running.
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})
+      (let [w (ws/create! :brian {:external-refs []})
             ran (atom nil)]
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy :autonomy autonomy-parked})
@@ -100,10 +93,7 @@
           (is (= 1 (:queued (ex/snapshot))))
           (ex/tick! (fn [_]) {})
           (Thread/sleep 250)
-          (is (some? @ran) "the executor ran it once a slot was free"))
-        ;; resume! sets :running synchronously before handing off to the turn.
-        (is (= :running (get-in (first (session/list-sessions :brian (:id w)))
-                                [:autonomy :phase])))))))
+          (is (some? @ran) "the executor ran it once a slot was free"))))))
 
 (deftest resume!-runs-inline-and-says-so-when-nothing-ticks-this-process
   ;; A standalone `bb nido:ui` starts the gate surface without the daemon. Queued
@@ -112,7 +102,7 @@
   ;; is not.
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})
+      (let [w (ws/create! :brian {:external-refs []})
             ran (atom nil)]
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy :autonomy autonomy-parked})
@@ -129,7 +119,7 @@
 (deftest resume!-throws-when-not-parked
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (is (thrown? clojure.lang.ExceptionInfo
                      (resume/resume! :brian (:id w) "go"))
             "no parked session → no resume target")
@@ -142,7 +132,7 @@
 (deftest a-queued-reply-is-not-queued-twice
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
         (write-run! "r1" (:id w) "auto" "sid-1")
         (is (= "auto" (:name (resume/waiting-session :brian (:id w)))))
@@ -156,7 +146,7 @@
 (deftest resume!-throws-when-no-claude-session-id
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy :autonomy autonomy-parked})
         ;; the run holds no claude-session-id either → no recoverable conversation
@@ -167,7 +157,7 @@
 (deftest resume!-records-error-when-no-claude-session
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
         ;; the run holds no claude-session-id either → no recoverable conversation
         (write-run! "r1" (:id w) "auto" nil)
@@ -179,10 +169,9 @@
 (deftest run-turn-skips-rehydrate-when-home-present
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})
+      (let [w (ws/create! :brian {:external-refs []})
             spawned (atom 0) launched (atom nil)]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
         (with-redefs [runs/home-present? (fn [_] true)
                       runs/spawn-session-for-run! (fn [& _] (swap! spawned inc))
@@ -190,16 +179,14 @@
           (let [s (first (session/list-sessions :brian (:id w)))]
             (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "apply")))
         (is (zero? @spawned) "home present → no re-provision")
-        (is (= "sid-9" (:claude-session-id @launched)) "launches --resume")
-        (is (= :parked (get-in (first (session/list-sessions :brian (:id w))) [:autonomy :phase])))))))
+        (is (= "sid-9" (:claude-session-id @launched)) "launches --resume")))))
 
 (deftest run-turn-rehydrates-when-home-absent
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})
+      (let [w (ws/create! :brian {:external-refs []})
             spawned (atom 0) launched (atom nil)]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
         (with-redefs [runs/home-present? (fn [_] false)
                       runs/spawn-session-for-run! (fn [& _] (swap! spawned inc))
@@ -207,15 +194,13 @@
           (let [s (first (session/list-sessions :brian (:id w)))]
             (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "apply")))
         (is (= 1 @spawned) "home absent → re-provision once")
-        (is (some? @launched) "then launches --resume")
-        (is (= :parked (get-in (first (session/list-sessions :brian (:id w))) [:autonomy :phase])))))))
+        (is (some? @launched) "then launches --resume")))))
 
 (deftest run-turn-records-error-on-failure
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
         (with-redefs [runs/home-present? (fn [_] true)
                       agent/launch! (fn [_] (throw (ex-info "boom" {})))]
@@ -223,15 +208,13 @@
             (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "apply")))
         (let [auto (:autonomy (first (session/list-sessions :brian (:id w))))]
           (is (= :resume-failed (-> auto :error :reason)) "failure recorded on the session")
-          (is (= "boom" (-> auto :error :message)))
-          (is (= :parked (:phase auto)) "still re-parks"))))))
+          (is (= "boom" (-> auto :error :message))))))))
 
 (deftest run-turn-rehydrate-failure-tagged
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
         (with-redefs [runs/home-present? (fn [_] false)
                       runs/spawn-session-for-run! (fn [& _] (throw (ex-info "no branch" {})))
@@ -245,11 +228,10 @@
 (deftest run-turn-clears-error-on-success
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-parked :error {:reason :resume-failed})})
-        (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
         (with-redefs [runs/home-present? (fn [_] true)
                       agent/launch! (fn [_] {:exit-code 0})]
@@ -266,12 +248,11 @@
   ;; Asserts the id came from the SESSION, not a run — the core claim of Task 3.4.
   (with-tmp
     (fn []
-      (let [w     (ws/create! :brian {:stage :triaging :external-refs []})
+      (let [w     (ws/create! :brian {:external-refs []})
             calls (atom nil)]
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-parked :claude-session-id "sid-on-session")})
-        (session/set-phase! :brian (:id w) "auto" :running)
         (with-redefs [agent/launch! (fn [opts] (reset! calls opts) {:exit-code 0})]
           (let [s (first (session/list-sessions :brian (:id w)))]
             ;; nil run — no run.edn on disk for this session
@@ -281,16 +262,13 @@
         (is (true? (:resume? @calls)) "continues the recorded conversation")
         (is (= "do the fix" (:first-message @calls)))
         (is (= "30m" (:budget @calls)) "budget from session :limits")
-        (is (some? (:settings @calls)) "the commit gate reaches the turn although no Run exists")
-        (is (= :parked (get-in (first (session/list-sessions :brian (:id w)))
-                               [:autonomy :phase]))
-            "re-parks after the turn")))))
+        (is (some? (:settings @calls)) "the commit gate reaches the turn although no Run exists")))))
 
 (deftest resume-errors-when-id-absent-from-both
   ;; Neither the session NOR the run carries a claude-session-id → :no-claude-session.
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-parked :claude-session-id nil)})
@@ -327,31 +305,30 @@
 
 ;; A turn re-parks the session, so it stops it again: otherwise every session a
 ;; reply ever reached would keep its JVM until someone remembered it.
-(deftest run-turn-stops-the-session-again-once-reparked
+(deftest run-turn-stops-the-session-again-once-the-turn-ends
   (with-tmp
     (fn []
-      (let [w       (ws/create! :brian {:stage :triaging :external-refs []})
+      (let [w       (ws/create! :brian {:external-refs []})
             phase   (atom nil)
             stopped (atom [])]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
         (with-redefs [runs/home-present? (fn [_] true)
                       agent/launch! (fn [_] {:exit-code 0 :num-turns 1})
                       runs/stop-session-for-parked-run!
                       (fn [r]
-                        (reset! phase (get-in (first (session/list-sessions :brian (:id w)))
-                                              [:autonomy :phase]))
+                        (reset! phase (:state (runs/read-run "r1")))
                         (swap! stopped conj (:id r)))]
           (let [s (first (session/list-sessions :brian (:id w)))]
             (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "x")))
         (is (= ["r1"] @stopped) "the run's session is stopped after the turn")
-        (is (= :parked @phase) "only once it is parked again")))))
+        (is (= :awaiting-review @phase)
+            "its run still parked for review, so the session waits on its person again")))))
 
 (deftest run-turn-stops-even-when-the-turn-fails
   (with-tmp
     (fn []
-      (let [w       (ws/create! :brian {:stage :triaging :external-refs []})
+      (let [w       (ws/create! :brian {:external-refs []})
             stopped (atom [])]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
         (write-run! "r1" (:id w) "auto" "sid-9")
@@ -365,7 +342,7 @@
 (deftest a-reply-to-a-session-nido-has-no-id-for-is-refused
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
         (write-run! "r1" (:id w) "auto" nil)
         (session/update-substrate! :brian (:id w) "auto"
@@ -375,7 +352,6 @@
                     (catch clojure.lang.ExceptionInfo e (:reason (ex-data e))))))
         (let [s (session/read-session :brian (:id w) "auto")]
           (is (nil? (get-in s [:claude :queued])) "nothing queued where it cannot be delivered")
-          (is (= :parked (get-in s [:autonomy :phase])))
           (is (= :session-unnamed (get-in s [:autonomy :error :reason]))))))))
 
 (deftest a-reply-to-a-background-session-is-its-next-instruction
@@ -383,7 +359,7 @@
   ;; reply when the session is ready, and the session's own Stop re-parks it.
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
         (session/update-claude! :brian (:id w) "auto"
                                 (constantly {:session-id "bg-1" :bg-id "bg-1" :origin :nido :driver :nido
@@ -397,7 +373,6 @@
         (with-redefs [resume/run-turn! (fn [& _] (throw (ex-info "no --print turn" {})))]
           (is (= {:resumed "auto" :queued? true :via :substrate}
                  (resume/resume! :brian (:id w) "use option B"))))
-        (is (= :running (get-in (session/read-session :brian (:id w) "auto") [:autonomy :phase])))
         (is (nil? (get-in (session/read-session :brian (:id w) "auto") [:claude :queued]))
             "not given to conduct while another working session fills the global cap")
         (ex/tick! (fn [_]) {} 0)                  ; the slot frees

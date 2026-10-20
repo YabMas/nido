@@ -33,8 +33,7 @@
         (do (pen! (:id existing)) (ws/read-ws project (:id existing)))
         existing)
       (let [w (ws/create! project
-                          {:stage         :incoming
-                           :external-refs (if ref [ref] [])
+                          {:external-refs (if ref [ref] [])
                            :facets        (facets/select-facets (views/facet-properties project) payload)
                            :intake        {:trigger (:name trigger) :payload payload}})]
         (pen! (:id w))

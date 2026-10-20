@@ -108,7 +108,7 @@
                             [:design [:? [:maybe :map]]]] [:maybe :string]]})
   (Operation park! "Stop a workstream and record why."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:halt :map]] :map]
-     :delegates [workstream/append-entry! session/set-phase!]})
+     :delegates [workstream/append-entry!]})
   (Operation park-on-escalate! "Park only when the outcome's disposition says to."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts :map]] :any]
      :delegates [park!]})
@@ -229,21 +229,3 @@
   (Operation execute! "Delete everything the plan lists. A missing path is not an error."
     {:signature [:=> [:catn [:plan [:vector :map]]] :any]}))
 
-(Module lane-migrate
-  "One-shot migration of the legacy ticket and run records into workstreams and sessions.
-
-   Best-effort and idempotent: it is repair, and repair that refuses to run twice cannot be run
-   at all when the first attempt half-finished."
-  (Operation ticket->workstream "A legacy ticket record as a workstream."
-    {:signature [:=> [:catn [:project ProjectName] [:ticket :map]] Workstream]})
-  (Operation run->session "A legacy run record as a workstream id and a session."
-    {:signature [:=> [:catn [:run :map]] :map]})
-  (Operation archive-orphaned-live! "Archive every session whose substrate is gone."
-    {:signature [:=> [:catn [:project ProjectName]] :any]
-     :delegates [session/list-sessions session/archive! workstream/list-ids]})
-  (Operation run-once! "Migrate one project's legacy records."
-    {:signature [:=> [:catn [:project ProjectName]] :any]
-     :delegates [ticket->workstream run->session workstream/write! session/write!]})
-  (Operation ledger->workstreams! "Migrate the legacy per-ticket ledgers."
-    {:signature [:=> [:catn [:project ProjectName]] :any]
-     :delegates [workstream/append-entry! tickets/list-ids tickets/read-meta]}))

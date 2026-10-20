@@ -156,7 +156,6 @@
       ;; parked run whose ticket is still awaiting review — must stay parked
       (tickets/open! :brian "BR-9" {:notion-page-id "p" :url "u" :title "T"
                                     :opened-by :triage-teacher-bugs :notion-last-edited-at "t"})
-      (tickets/set-status! :brian "BR-9" :awaiting-input)
       (mk-run "aw1" :awaiting-review {:id "BR-9"} :triage-bug)
       ;; orphaned running run — must be forced terminal
       (mk-run "r1" :running {} :triage-bug)
@@ -198,7 +197,7 @@
 (deftest reconcile-backfills-claude-session-id
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-running :claude-session-id nil)})
@@ -214,7 +213,7 @@
   (with-tmp
     (fn [_]
       (let [id "merge-r1"
-            w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            w  (ws/create! :brian {:external-refs []})
             _  (session/create! :brian (:id w)
                                 {:name "impl-x" :weight :heavy
                                  :autonomy (assoc autonomy-running
@@ -236,16 +235,14 @@
           (is (= :awaiting-review (:state r))
               "orphaned merge run should park as :awaiting-review, not :failed")
           (is (= :orphaned-from-restart (-> r :error :reason))
-              "error reason should be :orphaned-from-restart")
-          (is (= :parked (get-in s [:autonomy :phase]))
-              "session autonomy phase must mirror to :parked"))))))
+              "error reason should be :orphaned-from-restart"))))))
 
 (deftest a-restart-fails-a-recovery-that-never-diagnosed
   ;; The daemon fails a recovery that exits without its own diagnosis; a restart
   ;; mid-recovery must not let one through on a :complete status file instead.
   (with-tmp
     (fn [_]
-      (let [w   (ws/create! :test {:stage :triaging :external-refs []})
+      (let [w   (ws/create! :test {:external-refs []})
             run (assoc base-run
                        :id "2026-09-17-test-recovery-aaaaaaaa"
                        :source {:type :session-failure :fired-at "T" :fired-by "u"}
@@ -261,7 +258,7 @@
 (deftest a-restart-finishes-a-recovery-that-diagnosed
   (with-tmp
     (fn [_]
-      (let [w   (ws/create! :test {:stage :triaging :external-refs []})
+      (let [w   (ws/create! :test {:external-refs []})
             run (assoc base-run
                        :id "2026-09-17-test-recovery-bbbbbbbb"
                        :source {:type :session-failure :fired-at "T" :fired-by "u"}
@@ -291,7 +288,7 @@
    its autonomy facet (the Run's own by default, so the Run owns it). Returns
    the run as seeded."
   [run & {:keys [trigger] :or {trigger (:trigger run)} :as opts}]
-  (let [w   (ws/create! :test {:stage :triaging :external-refs []})
+  (let [w   (ws/create! :test {:external-refs []})
         run (assoc run :workstream-id (:id w))]
     (session/create! :test (:id w) {:name (:session-name run) :weight :light
                                     :autonomy (when-not (contains? opts :human?)
@@ -446,8 +443,7 @@
 ;; ── releasing the improvement sweep ──────────────────────────────────────────
 
 (defn- improvement-ws! [project ref-id]
-  (ws/create! project {:stage :triaging
-                       :external-refs [{:adapter :improvement :id ref-id :title "improve: x"}]}))
+  (ws/create! project {:external-refs [{:adapter :improvement :id ref-id :title "improve: x"}]}))
 
 (defn- claim-run [w]
   (assoc base-run :id "2026-09-29-test-improvement-claim-bbbbbbbb"
@@ -465,7 +461,7 @@
         (agent-started! (:id run))
         (reconcile/reconcile!)
         (is (= :orphaned-from-restart (-> (runs/read-run (:id run)) :error :reason)))
-        (is (= :orphaned (get-in (ws/read-ws :test (:id w)) [:closed :outcome])))))))
+        (is (= :orphaned (:outcome (ws/closure (ws/read-ws :test (:id w))))))))))
 
 (deftest a-requeued-claim-keeps-its-hold
   ;; Caught before its agent launched, the Run goes back in the queue and will
@@ -477,7 +473,7 @@
         (seed-run! run)
         (reconcile/reconcile!)
         (is (= :queued (:state (runs/read-run (:id run)))))
-        (is (nil? (:closed (ws/read-ws :test (:id w)))))))))
+        (is (nil? (ws/closure (ws/read-ws :test (:id w)))))))))
 
 (deftest a-claim-run-that-finished-without-closing-its-claim-releases-the-sweep
   ;; The 09-11 shape: the agent ended its turn early and the Run reads :done,
@@ -490,7 +486,7 @@
         (io/write-edn! (cstate/run-status-path (:id run)) {:phase :complete})
         (reconcile/reconcile!)
         (is (= :done (:state (runs/read-run (:id run)))))
-        (is (= :orphaned (get-in (ws/read-ws :test (:id w)) [:closed :outcome]))
+        (is (= :orphaned (:outcome (ws/closure (ws/read-ws :test (:id w)))))
             "a claim left open by a finished Run holds the sweep forever")))))
 
 (deftest a-claim-run-already-failed-releases-the-sweep-at-the-next-start
@@ -503,7 +499,7 @@
                        :error {:reason :usage-limited})]
         (seed-run! run)
         (reconcile/reconcile!)
-        (is (= :orphaned (get-in (ws/read-ws :test (:id w)) [:closed :outcome]))
+        (is (= :orphaned (:outcome (ws/closure (ws/read-ws :test (:id w)))))
             "a hold left by an already-resolved Run is cleared by a restart")))))
 
 (deftest a-halted-claim-keeps-its-hold
@@ -518,19 +514,19 @@
         (seed-run! run)
         (agent-started! (:id run))
         (reconcile/reconcile!)
-        (is (nil? (:closed (ws/read-ws :test (:id w))))
+        (is (nil? (ws/closure (ws/read-ws :test (:id w))))
             "releasing a halted claim would discard the question it parked for a person")))))
 
 (deftest an-orphan-on-a-workstream-that-is-not-the-sweeps-is-left-open
   (with-tmp
     (fn [_]
-      (let [w   (ws/create! :test {:stage :triaging :external-refs []})
+      (let [w   (ws/create! :test {:external-refs []})
             run (assoc (claim-run w) :event-payload {})]
         (seed-run! run)
         (agent-started! (:id run))
         (reconcile/reconcile!)
         (is (= :failed (:state (runs/read-run (:id run)))))
-        (is (nil? (:closed (ws/read-ws :test (:id w)))))))))
+        (is (nil? (ws/closure (ws/read-ws :test (:id w)))))))))
 
 (deftest a-claim-already-closed-keeps-its-own-close
   (with-tmp
@@ -541,7 +537,7 @@
         (seed-run! run)
         (agent-started! (:id run))
         (reconcile/reconcile!)
-        (is (= :done (get-in (ws/read-ws :test (:id w)) [:closed :outcome])))))))
+        (is (= :done (:outcome (ws/closure (ws/read-ws :test (:id w))))))))))
 
 (deftest reconcile!-leaves-a-run-whose-conversation-is-a-background-session
   ;; The session outlived the daemon; its own Stop settles the run. Nothing an exited process

@@ -39,12 +39,14 @@ The Run record lives at `./run-link/` (symlink to `~/.nido/coordinator/runs/<run
 
 Keyed by the **Slack event id** (`{{event/id}}`).
 
-| Status | Set by | Means |
-|---|---|---|
-| `:investigating` | `bb nido:ticket:status … :status investigating` (Step 1), and revision passes | Investigating, drafting the proposal |
-| `:awaiting-input` | `bb nido:ticket:status … :status awaiting-input` (Step 3) | Proposal concluded and appended. Parked for Jaap in the gate. |
+You never set a status. nido derives it from what this run and the ticket's ledger already say:
 
-`bb nido:ticket:status` **creates the record** on first call, and `conclude` needs that record — so Step 1's status call must come before Step 3.
+| Status | Holds while | Means |
+|---|---|---|
+| `:investigating` | this run is open and no proposal waits | Investigating, drafting the proposal |
+| `:awaiting-input` | a `:proposed-ticket` you appended waits for a person | Proposal concluded and appended. Parked for Jaap in the gate. |
+
+`bb nido:ticket:open` **creates the record**, and `conclude` needs that record — so Step 1's open must come before Step 3.
 
 ## Step 1 — Acknowledge, then investigate (autonomous)
 
@@ -53,7 +55,7 @@ Keyed by the **Slack event id** (`{{event/id}}`).
 
    ```bash
    bb nido:slack:react :channel <channel> :ts <ts> :name eyes
-   bb nido:ticket:status :project brian :br <slack-id> :status investigating
+   bb nido:ticket:open :project brian :br <slack-id> :url <url> :title "<first line of the message>" :opened-by <trigger-name>
    ```
 
    `<channel>` and `<ts>` come from `./run-link/run.edn` `:event-payload` (or split `<slack-id>`). `react` tolerates `already_reacted`; if it fails otherwise, carry on — the ack is a courtesy, not the work.
@@ -64,7 +66,7 @@ Keyed by the **Slack event id** (`{{event/id}}`).
    - Read 2–5 relevant files, ~500 lines total cap. Don't go deeper than needed.
    - If the report mentions a stack trace or specific error message, grep for it verbatim first.
    - Stop once you have enough to write a real, specific ticket — this is triage, not a fix.
-4. **Classify** the report as one of exactly two `:ticket-type` values:
+3. **Classify** the report as one of exactly two `:ticket-type` values:
    - **`"bug"`** — a defect: something is broken, regressed, or not working as intended.
    - **`"improvement"`** — a request for new or better behavior. Feature requests are `"improvement"`, not a third type.
    - When genuinely borderline, make the call and record the uncertainty in `:watch-out` rather than stalling on the label.
@@ -184,30 +186,23 @@ The schema is closed and `:ticket-type`-dispatched: only `"bug"` and `"improveme
 ```bash
 bb nido:ticket:append   :project brian :br <slack-id> :kind proposed-ticket :session <session-id> :run-id <run-id> :file <temp.edn>
 bb nido:ticket:conclude :project brian :br <slack-id>
-bb nido:ticket:status   :project brian :br <slack-id> :status awaiting-input
 ```
 
 (Derive `<session-id>` from the cwd / session name and `<run-id>` from the `./run-link/` symlink — it points at `~/.nido/coordinator/runs/<run-id>/`.)
 
-`conclude` prints what it did — `filed <url> (link posted)`, `already-filed`, or `doubted`. If it exits non-zero, **still park** (the status call) and say why in your final message; the gate's Apply retries filing, and nido never files twice:
+`conclude` prints what it did — `filed <url> (link posted)`, `already-filed`, or `doubted`. If it exits non-zero, **still park** (exit with the proposal appended) and say why in your final message; the gate's Apply retries filing, and nido never files twice:
 
 - `filing-interrupted` — an earlier filing may have created a page nido could not record. Do NOT retry; Jaap has to check Notion.
 - `auth` / `http` / `network` / `server` — Notion or Slack failed; Apply will retry.
 
-Then **exit**. Exiting right after `:awaiting-input` is the park mechanism — the coordinator maps it to `:awaiting-review` in the gate.
+Then **exit**. Exiting with a proposal nobody has answered is the park mechanism — the coordinator parks your run at `:awaiting-review`, and the gate shows Jaap the proposal.
 
 ## Resume behaviour (= revise)
 
 When the session is resumed (Jaap used **Reply** in the gate), the latest user message is revision feedback, not a fresh brief. Treat every resume as a **revise** cycle:
 
 1. Read the feedback. Treat it as guidance for another investigation pass.
-2. Set status back to `:investigating`:
-
-   ```bash
-   bb nido:ticket:status :project brian :br <slack-id> :status investigating
-   ```
-
-3. Re-investigate as needed (Step 1 — skip the react), compose a fresh proposal (Step 2), and run Step 3 again. The append is additive; the latest entry is what the gate reads.
+2. Re-investigate as needed (Step 1 — skip the react and the open), compose a fresh proposal (Step 2), and run Step 3 again. The append is additive; the latest entry is what the gate reads.
 
 What the revision can and cannot change:
 

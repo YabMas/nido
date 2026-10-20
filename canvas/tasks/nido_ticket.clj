@@ -17,9 +17,6 @@
   (Operation open-cmd
     "bb nido:ticket:open :project <p> :br BR-#### :page <id> :url <u> :title <t> :opened-by <kw>"
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
-  (Operation status-cmd
-    "bb nido:ticket:status :project <p> :br BR-#### :status <kw>"
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation complete-cmd
     "bb nido:ticket:complete :project <p> :br BR-#### :status triaged :disposition <kw>"
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

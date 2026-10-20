@@ -33,7 +33,9 @@
         (intake/poll-and-reconcile! :brian cfg)
         (is (= #{"o/r#1" "o/r#2"} (issue-ids :brian)))
         (let [w (ws/find-by-ref :brian :github-issue "o/r#1")]
-          (is (= :ready (:stage w)))
+          (is (nil? (ws/newest-choice w))
+              "nothing chosen: an issue waits in Ready by how it arrived, which its :issue entry says")
+          (is (some #(= :issue (:kind %)) (:entries w)))
           (is (= "a" (some #(when (= :github-issue (:adapter %)) (:title %)) (:external-refs w)))))))))
 
 (deftest re-poll-is-idempotent

@@ -16,7 +16,7 @@
   "A ref-less workstream born a one-off: its ledger holds the :scratch birth entry that
    `scratch/birth!` appends as it mints one."
   []
-  (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+  (let [w (ws/create! :brian {:external-refs []})]
     (ws/append-entry! :brian (:id w) {:kind :scratch} (pr-str {:format :scratch}))
     (ws/read-ws :brian (:id w))))
 
@@ -36,7 +36,7 @@
                               :title "Verdict" :summary "bug — reproduced."
                               :confidence {:level :high :reason "r"}
                               :routing nil :directions [] :notion-writes nil :trail []}))
-  (tickets/complete! :brian br :triaged :applied))
+  (tickets/complete! :brian br))
 
 (defn- queued-envelopes []
   (->> (fs/list-dir (cstate/queue-dir))
@@ -74,7 +74,7 @@
     (fn [_]
       (tickets/open! :brian "BR-7" {:notion-page-id "pg" :url "nu" :title "nt"
                                     :opened-by :triage-new :notion-last-edited-at "t"})
-      (let [w   (ws/create! :brian {:stage :ready :external-refs [{:adapter :notion :id "BR-7" :page-id "pg"}]})
+      (let [w   (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-7" :page-id "pg"}]})
             _   (triaged! "BR-7")
             res (promote/promote-workstream! :brian (:id w))]
         (is (= :promote (:decision res)))
@@ -85,14 +85,13 @@
 (deftest promote-workstream-github-enqueues-issue-leg-and-advances-stage
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :ready
-                                  :external-refs [{:adapter :github-issue :id "o/r#42" :url "iu" :title "it"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :github-issue :id "o/r#42" :url "iu" :title "it"}]})]
         (with-redefs [gh/view-issue (fn [repo n]
                                       (is (= "o/r" repo)) (is (= 42 n))
                                       {:status :ok :issue {:number 42 :url "iu" :title "it" :body "do it"}})]
           (let [res (promote/promote-workstream! :brian (:id w))]
             (is (= :promote (:decision res)))
-            (is (= :in-progress (:stage (ws/read-ws :brian (:id w)))))
+            (is (= :in-progress (:stage (ws/newest-choice (ws/read-ws :brian (:id w))))))
             (let [[env] (queued-envelopes)]
               (is (= {:project :brian :trigger :plan-github-issue} (:target env)))
               (is (= "o/r#42" (-> env :payload :id)))
@@ -101,7 +100,7 @@
 (deftest promote-workstream-github-refuses-when-already-promoted
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging :external-refs [{:adapter :github-issue :id "o/r#42"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :github-issue :id "o/r#42"}]})]
         ;; What promoting it records: a person's choice to put it in progress.
         (ws/advance-stage! :brian (:id w) :in-progress :person)
         (is (= :skip-active (:decision (promote/promote-workstream! :brian (:id w)))))
@@ -110,10 +109,10 @@
 (deftest promote-workstream-github-surfaces-a-fetch-error
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :ready :external-refs [{:adapter :github-issue :id "o/r#42"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :github-issue :id "o/r#42"}]})]
         (with-redefs [gh/view-issue (fn [_ _] {:error :auth})]
           (is (= :gh-error (:decision (promote/promote-workstream! :brian (:id w)))))
-          (is (= :ready (:stage (ws/read-ws :brian (:id w)))))
+          (is (nil? (ws/newest-choice (ws/read-ws :brian (:id w)))) "a failed fetch chooses nothing")
           (is (empty? (queued-envelopes))))))))
 
 (deftest promote-workstream-scratch-is-not-promotable
@@ -160,7 +159,7 @@
             w'  (ws/read-ws :brian (:id w))]
         (is (= :triaging (:decision res)))
         ;; advanced off :incoming and a triage session now exists on the SAME ws
-        (is (= :triaging (:stage w')))
+        (is (= :triaging (:stage (ws/newest-choice w'))))
         (is (= 1 (count (session/list-sessions :brian (:id w)))))
         ;; re-promote: no longer in the queue
         (is (= :skip-not-inbox
@@ -177,5 +176,5 @@
         (is (= :skip-no-trigger
                (:decision (promote/promote-workstream! :brian (:id w)))))
         ;; no session spawned, still in the queue
-        (is (= :incoming (:stage (ws/read-ws :brian (:id w)))))
+        (is (= :incoming (:stage (ws/newest-choice (ws/read-ws :brian (:id w))))))
         (is (empty? (session/list-sessions :brian (:id w))))))))

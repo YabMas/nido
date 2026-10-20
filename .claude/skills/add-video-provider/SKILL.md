@@ -106,7 +106,7 @@ clj-nrepl-eval -p <port> "(brian.model.video/detect-platform-by-url \"https://<d
 ```
 
 Non-nil ⇒ already in the allow-list. Reply `already-supported`, complete the ledger
-(`:status triaged :disposition already-supported`), and stop.
+(`bb nido:ticket:complete :project brian :br vp-<domain>`), and stop.
 
 ## Step 3 — Strict verification (fail-closed, via brian's own code)
 
@@ -206,7 +206,7 @@ cd worktree && gh pr ready
 Complete the ledger:
 
 ```bash
-bb nido:ticket:complete :project brian :br vp-<domain> :status triaged :disposition applied
+bb nido:ticket:complete :project brian :br vp-<domain>
 ```
 
 ## Step 7 — Report on Slack

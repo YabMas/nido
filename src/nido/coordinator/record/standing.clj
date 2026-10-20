@@ -543,15 +543,6 @@
    moving past it, so a choice and the act it starts are one stage."
   {:shipping #{:ship-submitted}})
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:maybe :map]]}
-  newest-choice
-  "The newest stage choice on the workstream — its :stage-set or :reopened — as
-   `{:seq n :stage s}`, or nil when none was made. Read by its :seq: one whose payload no longer
-   reads chooses nothing (:stage nil), rather than an older choice it replaced."
-  [project ws-id w]
-  (when-let [move (last (filter #(#{:stage-set :reopened} (:kind %)) (:entries w)))]
-    {:seq (:seq move) :stage (:stage (ws/entry-at-seq project ws-id (:seq move)))}))
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:maybe :keyword]]}
   chosen-stage
   "The board stage a person or nido chose for the workstream, while that choice still says where
@@ -563,9 +554,9 @@
    status entry, a record that carries the choice out (the ship lane chooses :shipping, then
    records the shipment it started), a :note (an account — notion-sync writes one to explain each
    stage it sets) or an :issue (where the work came from; the backfill appends it after a stage
-   chosen long before it). The choice is `newest-choice`."
-  [project ws-id w]
-  (let [move    (newest-choice project ws-id w)
+   chosen long before it). The choice is `ws/newest-choice`."
+  [_project _ws-id w]
+  (let [move    (ws/newest-choice w)
         chosen  (:stage move)
         carries (get stage-carried-by chosen #{})
         worked  (:seq (last (remove #(or (ws/status-kinds (:kind %)) (carries (:kind %))

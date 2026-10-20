@@ -434,25 +434,6 @@
           (is (re-matches #"run-brian-plan-bug-[0-9a-f]{8}" (:session-name run)))))
       (finally (fs/delete-tree tmp)))))
 
-(deftest mirror-run-phase-syncs-session-and-noops-without-ws
-  (let [tmp (fs/create-temp-dir)]
-    (try
-      (with-redefs [core/nido-root (constantly (str tmp))]
-        (cstate/ensure-dirs!)
-        ;; no :workstream-id → no-op, no throw
-        (is (nil? (runs/mirror-run-phase! {:project :p :session-name "s" :state :running})))
-        ;; with a real session, mirrors state→phase (awaiting-review → parked)
-        (let [w (workstream/create! :p {:stage :triaging})]
-          (session/create! :p (:id w) {:name "s1" :weight :light
-                                       :autonomy {:skill :k :first-message "m" :agent :claude
-                                                  :claude-session-id nil :trigger :t :limits {}
-                                                  :priority 0 :uncapped? false :on-promote nil
-                                                  :phase :queued :phase-history [] :error nil}})
-          (runs/mirror-run-phase! {:project :p :workstream-id (:id w)
-                                   :session-name "s1" :state :awaiting-review})
-          (is (= :parked (get-in (session/read-session :p (:id w) "s1") [:autonomy :phase])))))
-      (finally (fs/delete-tree tmp)))))
-
 (deftest teardown-skips-plan-bug-sessions-but-runs-for-triage
   ;; A provision-only impl (:plan-bug) session is the human's workspace and must
   ;; NOT be reclaimed when its run goes terminal; a triage (:triage-bug) lite
@@ -610,7 +591,7 @@
     (try
       (with-redefs [core/nido-root (constantly (str tmp))
                     nido.session.lifecycle/destroy! (fn [_ _] nil)]
-        (let [w (workstream/create! :brian {:stage :triaging})
+        (let [w (workstream/create! :brian {})
               _ (session/create! :brian (:id w) {:name "run-triage-1" :weight :light
                                                  :autonomy {:skill :triage-bug :first-message "m"
                                                             :agent :claude :claude-session-id nil
@@ -704,7 +685,7 @@
                     nido.coordinator.record.runs/park-settle-ms 0
                     nido.session.lifecycle/down!
                     (or down! (fn [n _] (swap! downed conj n)))]
-        (let [w (workstream/create! :brian {:stage :triaging})]
+        (let [w (workstream/create! :brian {})]
           (session/create! :brian (:id w) {:name "run-smoke-1" :weight :heavy :autonomy autonomy})
           (is (nil? (runs/stop-session-for-parked-run! (apply parked-run (:id w) (mapcat identity run-over))))
               "never returns anything a run's terminal path could trip on")
@@ -756,7 +737,7 @@
   ;; read as its owner, or reclaiming the old run tears down the retry.
   (with-tmp
     (fn [_]
-      (let [w     (workstream/create! :brian {:stage :triaging})
+      (let [w     (workstream/create! :brian {})
             run   (fn [id at state]
                     (let [r (assoc example-run :id id :state state :workstream-id (:id w)
                                    :session-name "recover-cause-1"

@@ -118,7 +118,7 @@
                         (refuse! (str "The child's first records would not be accepted: " (ex-message e)
                                       (some->> (:explain (ex-data e)) me/humanize pr-str (str " — ")))
                                  {:parent parent :explain (:explain (ex-data e))})))
-        child    (:id (ws/create! project {:stage :in-progress :external-refs []}))
+        child    (:id (ws/create! project {:external-refs []}))
         add!     (fn [kind record]
                    (ws/append-entry! project child {:kind kind} (pr-str record))
                    (:seq (ws/latest-entry project child kind)))

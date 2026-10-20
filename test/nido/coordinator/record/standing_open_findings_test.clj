@@ -26,7 +26,7 @@
 (deftest a-round-owes-its-items-until-each-is-resolved
   (with-tmp
     (fn []
-      (let [id (:id (ws/create! :brian {:stage :in-progress}))]
+      (let [id (:id (ws/create! :brian {}))]
         (is (= #{} (standing/open-findings :brian id)) "no round, nothing owed")
         (round! id 1 ["f1" "f2" "f3"])
         (is (= #{"f1" "f2" "f3"} (standing/open-findings :brian id)))
@@ -38,7 +38,7 @@
 (deftest only-the-newest-round-counts
   (with-tmp
     (fn []
-      (let [id (:id (ws/create! :brian {:stage :in-progress}))]
+      (let [id (:id (ws/create! :brian {}))]
         (round! id 1 ["a"])
         (round! id 2 ["b" "c"])
         (testing "a resolution naming the older round answers nothing in the newer"
@@ -48,7 +48,7 @@
 (deftest an-unreadable-newest-round-does-not-revive-the-older
   (with-tmp
     (fn []
-      (let [id (:id (ws/create! :brian {:stage :in-progress}))]
+      (let [id (:id (ws/create! :brian {}))]
         (round! id 1 ["a"])
         (round! id 2 ["b"])
         (let [n (:seq (last (filter #(= :findings (:kind %)) (:entries (ws/read-ws :brian id)))))]

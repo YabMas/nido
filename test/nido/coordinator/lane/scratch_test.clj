@@ -21,7 +21,7 @@
         (is (some? ws-id))
         (let [w (workstream/read-ws :brian ws-id)]
           (is (scratch/scratch? w) "no external refs")
-          (is (= :scratch (:stage w))))
+          (is (some #(= :scratch (:kind %)) (:entries w)) "born a one-off: its birth entry says so"))
         (let [ss (session/list-sessions :brian ws-id)]
           (is (= ["refshot"] (mapv :name ss)))
           (is (nil? (:autonomy (first ss))) "human session"))))))
@@ -71,7 +71,7 @@
 (deftest birth-onto-a-named-workstream-mints-nothing
   (with-tmp
     (fn [_]
-      (let [child (:id (workstream/create! :brian {:stage :in-progress :external-refs []}))]
+      (let [child (:id (workstream/create! :brian {:external-refs []}))]
         (is (= child (scratch/birth! :brian "child-work" nil child)))
         (is (= [child] (workstream/list-ids :brian)) "no one-off minted")
         (is (= child (session/workstream-id-for :brian "child-work")))
@@ -87,8 +87,8 @@
   (with-tmp
     (fn [_]
       (let [held-by (scratch/birth! :brian "taken" :light)
-            other   (:id (workstream/create! :brian {:stage :in-progress :external-refs []}))
-            closed  (:id (workstream/create! :brian {:stage :in-progress :external-refs []}))
+            other   (:id (workstream/create! :brian {:external-refs []}))
+            closed  (:id (workstream/create! :brian {:external-refs []}))
             refusal (fn [name ws-id]
                       (try (scratch/birth! :brian name nil ws-id) nil
                            (catch clojure.lang.ExceptionInfo e (ex-data e))))]
@@ -105,7 +105,7 @@
 (deftest a-one-off-that-loses-the-name-is-not-left-behind
   (with-tmp
     (fn [_]
-      (let [holder (:id (workstream/create! :brian {:stage :in-progress :external-refs []}))]
+      (let [holder (:id (workstream/create! :brian {:external-refs []}))]
         ;; The claim lands between birth!'s lookup and its create — as a named start's would.
         (with-redefs [session/workstream-id-for (fn [& _] nil)]
           (session/create! :brian holder {:name "raced" :weight :light :autonomy nil})

@@ -24,12 +24,11 @@
 (deftest ensure-workstream-dedups-on-ref
   (with-tmp
     (fn [_]
-      (let [a (spawn/ensure-workstream! :brian {:id "BR-9" :title "Nine"} :triaging)
-            b (spawn/ensure-workstream! :brian {:id "BR-9" :title "Nine"} :triaging)]
+      (let [a (spawn/ensure-workstream! :brian {:id "BR-9" :title "Nine"})
+            b (spawn/ensure-workstream! :brian {:id "BR-9" :title "Nine"})]
         (is (= (:id a) (:id b)))
-        (is (= 1 (count (ws/list-ids :brian))))
-        (is (= :triaging (:stage a))))
-      (let [c (spawn/ensure-workstream! :brian {} :incoming)]
+        (is (= 1 (count (ws/list-ids :brian)))))
+      (let [c (spawn/ensure-workstream! :brian {})]
         (is (= 2 (count (ws/list-ids :brian))))
         (is (empty? (:external-refs c)))))))
 
@@ -48,7 +47,6 @@
         (is (some? ws-id))
         (is (= "BR-7" (-> (ws/find-by-ref :brian :notion "BR-7") :external-refs first :id)))
         (is (= :light (:weight sess)))
-        (is (= :queued (get-in sess [:autonomy :phase])))
         (is (= :triage-bug (get-in sess [:autonomy :trigger])))
         (is (= :live (:substrate sess)))))))
 
@@ -73,7 +71,7 @@
   (with-tmp
     (fn [_]
       ;; pre-create the workstream so spawn dedups onto it; a later failure must NOT delete it
-      (let [pre (ws/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-KEEP"}]})
+      (let [pre (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-KEEP"}]})
             routed {:project :brian
                     :trigger {:name :triage-bug :skill :triage-bug :agent :claude
                               :payload "Triage {{event/title}}" :limits {} :source {:type :notion-view}}
@@ -90,7 +88,7 @@
   ;; dismissed workstream, which must reopen or the board vetoes the new session.
   (with-tmp
     (fn [_]
-      (let [pre    (ws/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-DIS"}]})
+      (let [pre    (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-DIS"}]})
             _      (ws/close! :brian (:id pre) :dismissed)
             routed {:project :brian
                     :trigger {:name :plan-bug :skill :plan-bug :agent :claude
@@ -100,13 +98,13 @@
             run    (spawn/spawn-records! routed {:fired-at "t" :fired-by "x"})
             w      (ws/read-ws :brian (:id pre))]
         (is (= (:id pre) (:workstream-id run)))
-        (is (nil? (:closed w)))
-        (is (= :triaging (:stage w)))))))
+        (is (nil? (ws/closure w)))
+        (is (= :triaging (:stage (ws/newest-choice w))))))))
 
 (deftest spawn-records-leaves-a-dismissed-workstream-closed-on-failure
   (with-tmp
     (fn [_]
-      (let [pre    (ws/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-DIS"}]})
+      (let [pre    (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-DIS"}]})
             _      (ws/close! :brian (:id pre) :dismissed)
             routed {:project :brian
                     :trigger {:name :plan-bug :skill :plan-bug :agent :claude
@@ -116,7 +114,7 @@
         (with-redefs [spawn/create-session-for-run!
                       (fn [& _] (throw (ex-info "boom" {})))]
           (is (thrown? clojure.lang.ExceptionInfo (spawn/spawn-records! routed {:fired-at "t" :fired-by "x"}))))
-        (is (= :dismissed (get-in (ws/read-ws :brian (:id pre)) [:closed :outcome])))))))
+        (is (= :dismissed (:outcome (ws/closure (ws/read-ws :brian (:id pre))))))))))
 
 (deftest external-ref-defaults-to-notion-when-no-adapter
   ;; Regression pin: existing Notion payloads (no :adapter) stay :notion.
@@ -131,8 +129,8 @@
   (with-tmp
     (fn [_]
       (let [p {:adapter :slack-message :id "slack-C1-1.0" :title "broken"}
-            a (spawn/ensure-workstream! :brian p :triaging)
-            b (spawn/ensure-workstream! :brian p :triaging)]
+            a (spawn/ensure-workstream! :brian p)
+            b (spawn/ensure-workstream! :brian p)]
         (is (= (:id a) (:id b)) "same Slack message must not mint two workstreams")
         (is (= 1 (count (ws/list-ids :brian))))
         (is (= :slack-message (-> (ws/read-ws :brian (:id a)) :external-refs first :adapter)))))))
@@ -158,7 +156,7 @@
       (with-redefs [views/facet-properties (constantly ["App Domain" "Type"])]
         (let [payload {:adapter :notion :id "BR-1" :page-id "p"
                        :app-domain ["Teacher"] :type "bug"}
-              w (spawn/ensure-workstream! :brian payload :triaging)]
+              w (spawn/ensure-workstream! :brian payload)]
           (is (= {:app-domain ["Teacher"] :type "bug"} (:facets w))))))))
 
 (def ^:private teacher-routed

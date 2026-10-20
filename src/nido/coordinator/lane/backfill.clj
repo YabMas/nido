@@ -10,10 +10,19 @@
    [nido.coordinator.lane.pickup :as pickup]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
+   [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.view.workstreams :as wsv]
    [nido.coordinator.record.workstream :as ws]
-   [nido.coordinator.source.notion-cache :as notion-cache]))
+   [nido.coordinator.source.notion-cache :as notion-cache]
+   [nido.platform.io :as io]))
+
+(defn- stored
+  "The workstream record as the file holds it, the stored status fields a record written before
+   the ledger held them still carries included — which `ws/read-ws` leaves out, and which are
+   what this records."
+  [project ws-id]
+  (io/read-edn (cstate/workstream-edn-path project ws-id)))
 
 (defn- newest [project ws-id kinds]
   (last (filter #(kinds (:kind %)) (:entries (ws/read-ws project ws-id)))))
@@ -67,7 +76,8 @@
    - an :issue for a workstream raised from a GitHub issue that records no arrival"
   [project ws-id facts]
   (ws/freeze-index! project ws-id)
-  (let [w        (ws/read-ws project ws-id)
+  (let [w        (merge (ws/read-ws project ws-id)
+                        (select-keys (stored project ws-id) [:stage :closed :findings]))
         id       ws-id
         appended (volatile! [])
         add!     #(vswap! appended conj (append! project id %))]
@@ -94,7 +104,7 @@
       (let [st (:status (tickets/read-meta project br))]
         (when-let [n (and (taken st) (unaccepted-triage project id))]
           (add! {:format :triage-accepted :triage-seq n}))
-        (when (and (= :dismissed st) (nil? (:closed (ws/read-ws project id)))
+        (when (and (= :dismissed st) (nil? (:closed w))
                    (not= :closed (:kind (newest project id #{:closed :reopened}))))
           (add! {:format :closed :outcome :dismissed :by :backfill}))))
     (when-let [ref (some #(when (= :github-issue (:adapter %)) %) (:external-refs w))]

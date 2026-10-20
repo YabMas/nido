@@ -359,7 +359,7 @@
     (try
       (with-redefs [core/nido-root (constantly (str tmp))
                     queue/enqueue! (constantly "/q/1.edn")]
-        (let [ws-id (:id (ws/create! :brian {:stage :in-progress :external-refs []}))]
+        (let [ws-id (:id (ws/create! :brian {:external-refs []}))]
           (with-redefs [lifecycle/session-from-cwd (constantly {:project :brian
                                                                 :session "fix-thing"})
                         csession/workstream-id-for (constantly ws-id)]

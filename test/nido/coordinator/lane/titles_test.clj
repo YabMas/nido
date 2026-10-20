@@ -9,8 +9,7 @@
    [nido.session.state :as session-state]))
 
 (defn- notion-ws! [title]
-  (ws/create! :brian {:stage :triaging
-                      :external-refs [{:adapter :notion :id "BR-1" :title title}]}))
+  (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-1" :title title}]}))
 
 (deftest refresh-titles-a-workstream-from-its-basis
   (let [tmp (fs/create-temp-dir)]
@@ -48,7 +47,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (let [w (ws/create! :brian {:external-refs []})]
           (ws/set-title! :brian (:id w) "Invented title" "review-analysis-x-4caea003-9378-4ffa")
           (is (= 1 (titles/refresh-project! :brian (constantly "unused"))))
           (is (nil? (:title (ws/read-ws :brian (:id w)))))))

@@ -65,17 +65,17 @@
     {:signature [:=> [:catn [:w Workstream]] Workstream]
      :delegates [validate state/workstream-edn-path]})
   (Operation create!
-    "Mint an id and persist a fresh workstream at the given stage."
+    "Mint an id and persist a fresh workstream, holding no status — where it is placed, chosen to
+     be or settled is what its ledger comes to record."
     {:signature [:=> [:catn [:project ProjectName] [:base :map]] Workstream]
      :delegates [mint-id write! clock/now-iso]})
   (Operation advance-stage!
-    "Move a workstream to a new stage, recording where it came from and appending the move as a
-     :stage-set entry naming who decided it. A no-op when it is already there, so a repeated
-     event does not litter the history — save that a person's choice is recorded as an entry even
-     then, validated like any other move."
+    "Choose a stage for a workstream: append a :stage-set entry naming it and who decided. A no-op
+     when the newest choice already names it, so a repeated event does not litter the ledger —
+     save that a person's choice is recorded even then, validated like any other."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:new-stage :keyword]
                       [:by [:? [:enum :person :nido :backfill]]]] Workstream]
-     :delegates [read-ws write! clock/now-iso append-lock-path]})
+     :delegates [read-ws newest-choice append-lock-path]})
   (Operation set-facets!
     "Overwrite a workstream's classification facets."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:facets :map]] Workstream]
@@ -90,19 +90,14 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Workstream]
      :delegates [read-ws write!]})
   (Operation close!
-    "Settle a workstream terminally — done, dropped or dismissed — and append the close as a
-     :closed entry in the same write."
+    "Settle a workstream: append a :closed entry naming the outcome."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:outcome :keyword]] Workstream]
-     :delegates [read-ws write! clock/now-iso]})
+     :delegates [read-ws append-lock-path]})
   (Operation reopen!
-    "Un-settle a workstream: clear its outcome, put it back on a stage, and append a :reopened
-     entry in the same write."
+    "Un-settle a workstream: append a :reopened entry naming the stage chosen for it, after which
+     its close no longer stands."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:stage :keyword]] Workstream]
-     :delegates [read-ws write! clock/now-iso]})
-  (Operation set-findings!
-    "Overwrite the live findings tracker, or remove it."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:tracker [:maybe :map]]] Workstream]
-     :delegates [read-ws write!]})
+     :delegates [read-ws closure newest-choice append-lock-path]})
   (Operation append-lock-path
     "The lock serialising appends to ONE workstream — per workstream, so two unrelated ones
      never queue behind each other."
@@ -223,6 +218,9 @@
     "The workstream carrying this external id, whichever adapter raised it."
     {:signature [:=> [:catn [:project ProjectName] [:external-id :string]] [:maybe Workstream]]
      :delegates [list-ids read-ws]})
+  (Operation newest-choice
+    "The newest stage choice on a workstream, whatever has been recorded since."
+    {:signature [:=> [:catn [:w :any]] [:maybe :map]]})
   (Operation closure
     "The newest :closed entry, unless a :reopened or a :phase-gate came after it — how the ledger
      says a workstream stands settled, read off its entries and never off a stored field."

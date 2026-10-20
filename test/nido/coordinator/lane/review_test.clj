@@ -54,7 +54,7 @@
     (fn [_]
       ;; its verdict accepted → swept to :done
       (verdict! "BR-1")
-      (tickets/complete! :brian "BR-1" :triaged :applied)
+      (tickets/complete! :brian "BR-1")
       (mk-run "r1" :awaiting-review {:id "BR-1"} :triage-bug)
       ;; a verdict still awaiting the human → left parked
       (verdict! "BR-2")
@@ -104,7 +104,7 @@
   (with-tmp
     (fn [_]
       (let [w (verdict! "BR-9")]
-        (tickets/complete! :brian "BR-9" :triaged :applied)
+        (tickets/complete! :brian "BR-9")
         (ws/advance-stage! :brian (:id w) :in-progress :person)
         (mk-run "plan-9" :awaiting-review {:id "BR-9"} :plan-bug)
         (is (= 0 (review/sweep-resolved!)) "while the choice to plan it holds, the plan run is needed")

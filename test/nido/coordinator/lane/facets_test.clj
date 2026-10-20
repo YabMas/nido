@@ -45,8 +45,7 @@
     (fn []
       (with-redefs [views/facet-properties (constantly ["App Domain" "Type"])
                     notion/retrieve-page   (fn [_pid _tok] raw-page)]
-        (let [w (ws/create! :brian {:stage :triaging
-                                    :external-refs [{:adapter :notion :id "BR-1" :page-id "p1"}]})]
+        (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-1" :page-id "p1"}]})]
           (facets/refresh-ws! :brian (:id w) "tok")
           (is (= {:app-domain ["Teacher"] :type "bug"}
                  (:facets (ws/read-ws :brian (:id w))))))))))
@@ -54,7 +53,7 @@
 (deftest refresh-ws-noop-for-refless
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (is (nil? (facets/refresh-ws! :brian (:id w) "tok")))
         (is (nil? (:facets (ws/read-ws :brian (:id w)))))))))
 
@@ -63,8 +62,7 @@
     (fn []
       (with-redefs [views/facet-properties (constantly ["Type"])
                     notion/retrieve-page   (fn [_ _] {:error :network})]
-        (let [w (ws/create! :brian {:stage :triaging
-                                    :external-refs [{:adapter :notion :id "BR-1" :page-id "p1"}]
+        (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-1" :page-id "p1"}]
                                     :facets {:type "old"}})]
           (facets/refresh-ws! :brian (:id w) "tok")
           (is (= {:type "old"} (:facets (ws/read-ws :brian (:id w)))) "facets untouched on error"))))))
@@ -75,8 +73,7 @@
       (with-redefs [views/facet-properties (constantly ["Type"])
                     notion/retrieve-page   (fn [_ _] raw-page)
                     notion/keychain-token  (constantly "tok")]
-        (let [w (ws/create! :brian {:stage :triaging
-                                    :external-refs [{:adapter :notion :id "BR-1" :page-id "p1"}]})]
+        (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-1" :page-id "p1"}]})]
           (facets/refresh-for-ticket! :brian "BR-1")
           (is (= "bug" (-> (ws/read-ws :brian (:id w)) :facets :type))))))))
 

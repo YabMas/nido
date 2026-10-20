@@ -271,7 +271,7 @@
   "A verdict on `br` a person accepted: the ticket reads :triaged."
   [br]
   (verdict! br)
-  (tickets/complete! :brian br :triaged :applied))
+  (tickets/complete! :brian br))
 
 (defn- promoted!
   "A triaged `br` a person chose to plan: the ticket reads :planning until work is recorded."
@@ -340,8 +340,7 @@
   ;; status gate drops this re-emit first; the dedup is what holds for any trigger.)
   (gate-with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging
-                                  :external-refs [{:adapter :notion :id "BR-5236"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-5236"}]})]
         (runs/write-run! {:id "rq" :project :brian :trigger :triage-new
                           :source {:type :notion-view} :event-payload {:id "BR-5236"}
                           :skill :triage-bug :first-message "m" :agent :claude
@@ -773,8 +772,7 @@
   ;; run-blocking-fails-cleanly-when-session-spawn-throws.)
   (gate-with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging
-                                  :external-refs [{:adapter :notion :id "BR-13"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-13"}]})]
         (session/create! :brian (:id w)
                          {:name "impl-br-13" :weight :heavy
                           :autonomy (assoc autonomy-parked :skill :plan-bug :phase :running)})
@@ -820,7 +818,7 @@
           (let [ids (ws/list-ids :brian)]
             (is (= 1 (count ids)))
             (let [w (ws/read-ws :brian (first ids))]
-              (is (= :incoming (:stage w)))
+              (is (= :incoming (:stage (ws/newest-choice w))))
               (is (= "it broke" (-> w :intake :payload :text)))
               (is (empty? (session/list-sessions :brian (:id w))))))
           ;; nothing was spawned as a run
@@ -845,8 +843,7 @@
             (#'nido.boot.core/maybe-expire-inbox!
               (+ (.toEpochMilli (java.time.Instant/parse "2026-06-01T00:00:00Z"))
                  (* 10 24 60 60 1000)))))
-        (is (= :dropped (-> (ws/find-by-ref :brian :slack-message "slack-C-1.0")
-                            :closed :outcome))))
+        (is (= :dropped (:outcome (ws/closure (ws/find-by-ref :brian :slack-message "slack-C-1.0"))))))
       (finally (fs/delete-tree tmp)))))
 
 ;; ---------------------------------------------------------------------------
@@ -856,7 +853,7 @@
 (deftest mirror-claude-session-id-onto-session
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-parked :phase :running)})
@@ -990,7 +987,7 @@
 (deftest a-recovery-that-exits-without-its-own-diagnosis-fails
   (gate-with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (recovery-run! "rrec" (:id w))
         (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
                       core/skill-resolvable?      (constantly true)
@@ -1006,7 +1003,7 @@
 (deftest a-recovery-that-diagnosed-while-running-finishes
   (gate-with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (recovery-run! "rdiag" (:id w))
         (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
                       core/skill-resolvable?      (constantly true)
@@ -1024,7 +1021,7 @@
 (deftest a-failed-recovery-charges-no-brake
   (gate-with-tmp
     (fn [_]
-      (let [w        (ws/create! :brian {:stage :triaging :external-refs []})
+      (let [w        (ws/create! :brian {:external-refs []})
             window   (atom [])
             breakers (atom [])]
         (recovery-run! "rfail" (:id w))
@@ -1138,7 +1135,7 @@
 (deftest a-restores-continuation-reaches-the-executor-not-the-spawn-path
   (gate-with-tmp
     (fn [_]
-      (let [w         (ws/create! :brian {:stage :triaging :external-refs []})
+      (let [w         (ws/create! :brian {:external-refs []})
             submitted (atom [])
             spawns    (atom [])]
         (runs/write-run! {:id "rcont" :project :brian :trigger :triage-new
@@ -1192,16 +1189,14 @@
         (#'core/settle-turn-ends! {:turn-ends [(ended "s-rt" {:event :stop :last-message "asked"})]}))
       (is (= :awaiting-review (:state (runs/read-run "rt")))))))
 
-(deftest a-reply-turns-end-parks-the-session-again
+(deftest a-reply-turns-end-leaves-its-run-parked
   (gate-with-tmp
     (fn [_]
       (running-run! "rp" "ws-1" "s-rp" :investigate-bug)
       (runs/transition! "rp" :awaiting-review)
       (session/create! :brian "ws-1" {:name "s-rp" :weight :light :autonomy autonomy-parked})
-      (session/set-phase! :brian "ws-1" "s-rp" :running)
       (#'core/settle-turn-ends! {:turn-ends [(ended "s-rp" {} (clock/now-iso))]})
-      (is (= :awaiting-review (:state (runs/read-run "rp"))) "the run was not settled again")
-      (is (= :parked (get-in (session/read-session :brian "ws-1" "s-rp") [:autonomy :phase]))))))
+      (is (= :awaiting-review (:state (runs/read-run "rp"))) "the run was not settled again"))))
 
 (deftest a-merge-runs-turn-end-is-settled-by-the-ship-lane
   (gate-with-tmp

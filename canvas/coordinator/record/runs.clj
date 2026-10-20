@@ -82,11 +82,6 @@
     "The runs launched against a workstream whose agent is alive right now."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:vector RunId]]
      :delegates [live? state/workstream-runs-dir]})
-  (Operation mirror-run-phase!
-    "Best-effort mirror of the run's state onto the session that carries it, so the work record
-     and the execution record agree without either owning the other."
-    {:signature [:=> [:catn [:run Run]] :any]
-     :delegates [session/set-phase!]})
   (Operation create-run!
     "Build a queued run from a fire request and persist it, stamping the workstream's declared
      design scope onto it so the session it spawns can be briefed with the part of the design

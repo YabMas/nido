@@ -31,7 +31,7 @@
    :read ["src/a.clj"]})
 
 (defn- a-ws []
-  (:id (ws/create! :brian {:stage :in-progress :external-refs []})))
+  (:id (ws/create! :brian {:external-refs []})))
 
 (defn- baselined! [id]
   (ws/append-entry! :brian id {:kind :intent}

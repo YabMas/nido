@@ -26,23 +26,22 @@
 (deftest entry-add-stage-advance-close
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging
-                                  :external-refs [{:adapter :notion :id "BR-3"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-3"}]})]
         (task/entry-add* {:project "brian" :ref "BR-3" :kind "note" :content "found a bug"})
         (let [w2 (ws/read-ws :brian (:id w))]
           (is (= 1 (count (:entries w2))))
           (is (= :note (-> w2 :entries first :kind))))
         (task/stage-advance* {:project "brian" :ref "BR-3" :stage "ready"})
-        (is (= :ready (:stage (ws/read-ws :brian (:id w)))))
+        (is (= :ready (:stage (ws/newest-choice (ws/read-ws :brian (:id w))))))
         (task/close* {:project "brian" :ref "BR-3" :outcome "done"})
-        (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome)))))))
+        (is (= :done (:outcome (ws/closure (ws/read-ws :brian (:id w))))))))))
 
 (deftest an-intent-amending-a-built-on-goal-is-followed-by-what-it-owes
   ;; The append that starts an amendment is the first moment its author can be
   ;; told the whole chain, rather than learning it one refusal at a time.
   (with-tmp
     (fn [_]
-      (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w   (ws/create! :brian {:external-refs []})
             add #(task/entry-add* {:project "brian" :ws-id (:id w) :kind %1 :content (pr-str %2)})]
         (add "intent" {:format :intent :goal "g" :done-when ["d"]})
         (add "baseline" {:format :baseline :strata [] :intent {:seq 1}
@@ -68,20 +67,19 @@
 (deftest stage-advance-refuses-a-stage-outside-the-vocabulary
   (with-tmp
     (fn [_]
-      (ws/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-3"}]})
+      (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-3"}]})
       ;; :implementing is a ticket status. The CLI keywordizes whatever you type,
       ;; so this is the surface a stage nothing projects arrived through.
       (is (thrown-with-msg?
             clojure.lang.ExceptionInfo #"Unknown workstream stage"
             (task/stage-advance* {:project "brian" :ref "BR-3" :stage "implementing"})))
-      (is (= :triaging (:stage (ws/read-ws :brian (:id (ws/find-by-ref :brian :notion "BR-3")))))
-          "the refused stage is not written"))))
+      (is (nil? (ws/newest-choice (ws/read-ws :brian (:id (ws/find-by-ref :brian :notion "BR-3")))))
+          "the refused stage is not recorded"))))
 
 (deftest ref-add-stamps-github-ref
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  :external-refs [{:adapter :notion :id "BR-9"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-9"}]})]
         (task/ref-add* {:project "brian" :ref "BR-9"
                         :adapter "github" :id "brian-study/brian#412"
                         :url "https://github.com/brian-study/brian/pull/412"
@@ -100,8 +98,7 @@
 (deftest ref-add-files-the-pr-opened-event
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  :external-refs [{:adapter :notion :id "BR-9"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-9"}]})]
         (task/ref-add* {:project "brian" :ref "BR-9"
                         :adapter "github" :id "brian-study/brian#412"
                         :url "https://gh/412" :title "Fix X"
@@ -122,8 +119,7 @@
   ;; needs, so a malformed event must never cost the ref.
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  :external-refs [{:adapter :notion :id "BR-9"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-9"}]})]
         (task/ref-add* {:project "brian" :ref "BR-9"
                         :adapter "github" :id "brian-study/brian#414"})
         (let [w' (ws/read-ws :brian (:id w))]
@@ -133,7 +129,7 @@
 (deftest ref-add-notion-files-nothing
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (task/ref-add* {:project "brian" :ws-id (:id w)
                         :adapter "notion" :id "BR-9" :url "https://notion/9" :title "t"})
         (is (empty? (:entries (ws/read-ws :brian (:id w)))))))))
@@ -155,7 +151,7 @@
 (deftest entry-add-keeps-a-typed-body-intact-through-the-arg-path
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (task/entry-add ":project" "brian" ":ws-id" (:id w)
                         ":kind" "blocker" ":content" (pr-str a-typed-event))
         (is (= a-typed-event (dissoc (ws/latest-entry :brian (:id w) :blocker) :seq :at))
@@ -164,7 +160,7 @@
 (deftest entry-add-reads-a-typed-body-from-file
   (with-tmp
     (fn [tmp]
-      (let [w    (ws/create! :brian {:stage :in-progress :external-refs []})
+      (let [w    (ws/create! :brian {:external-refs []})
             path (str (fs/path tmp "blocker.edn"))]
         (spit path (pr-str a-typed-event))
         (task/entry-add ":project" "brian" ":ws-id" (:id w)
@@ -175,7 +171,7 @@
 (deftest entry-add-still-appends-a-freeform-note
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (task/entry-add ":project" "brian" ":ws-id" (:id w)
                         ":kind" "note" ":content" "found a bug in the parser")
         (let [e (first (:entries (ws/read-ws :brian (:id w))))]
@@ -187,8 +183,7 @@
 (deftest ref-add-keeps-a-stack-pr-title-verbatim
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  :external-refs [{:adapter :notion :id "BR-77"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-77"}]})]
         ;; Through the CLI arg path, not ref-add* — the bug was in parsing.
         ;; "[2/2] …" read as EDN is a vector holding the ratio 2/2, i.e. [1],
         ;; and the Workstream schema then rejects the whole record. Every stack
@@ -207,8 +202,7 @@
 (deftest ref-add-keeps-a-summary-that-opens-with-a-number
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :in-progress
-                                  :external-refs [{:adapter :notion :id "BR-78"}]})]
+      (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-78"}]})]
         ;; The symbol carve-out rescues prose starting with a letter; a summary
         ;; opening on a digit is read as a number and everything after it lost.
         (task/ref-add ":project" "brian" ":ref" "BR-78"

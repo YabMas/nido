@@ -18,8 +18,7 @@
 
 (defn- shipped-ticket-ws []
   (tickets/open! :brian "BR-7" {:title "T" :url "u"})
-  (let [w (ws/create! :brian {:stage :in-progress
-                              :external-refs [{:adapter :notion :id "BR-7"}]})]
+  (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-7"}]})]
     (ws/close! :brian (:id w) :done)
     w))
 
@@ -47,7 +46,7 @@
 (deftest file-refuses-on-non-settled-workstream
   (with-tmp
     (fn []
-      (let [w (ws/create! :brian {:stage :in-progress})]
+      (let [w (ws/create! :brian {})]
         (is (thrown? clojure.lang.ExceptionInfo
                      (findings/file! :brian (:id w)
                                      {:items [{:summary "A" :severity :tweak}]})))))))
@@ -87,7 +86,7 @@
     (fn []
       (let [enq (atom 0)]
         (with-redefs [queue/enqueue! (fn [_] (swap! enq inc) "/q/x.edn")]
-          (let [w (ws/create! :brian {:stage :in-progress})]   ; ref-less, non-Notion
+          (let [w (ws/create! :brian {})]   ; ref-less, non-Notion
             (ws/close! :brian (:id w) :done)
             (let [res (findings/file! :brian (:id w) {:items [{:summary "A" :severity :tweak}]})]
               ;; no provisioning envelope for a non-Notion ws …
@@ -102,8 +101,7 @@
     (fn []
       (with-redefs [queue/enqueue! (fn [_] "/q/x.edn")]
         (tickets/open! :brian "BR-8" {:title "T" :url "u"})
-        (let [w (ws/create! :brian {:stage :in-progress
-                                    :external-refs [{:adapter :notion :id "BR-8"}]})]
+        (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-8"}]})]
           ;; a prior own-entry (mirrors notion-sync / review appending to the ws)
           (ws/append-entry! :brian (:id w) {:kind :note} "prior note")
           (ws/close! :brian (:id w) :done)

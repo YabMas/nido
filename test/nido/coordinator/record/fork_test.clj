@@ -52,7 +52,7 @@
    Returns its id; `approve?` false leaves the design ungranted."
   ([] (parent true))
   ([approve?]
-   (let [id  (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+   (let [id  (:id (ws/create! :brian {:external-refs []}))
          add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
      (add :intent {:format :intent :goal "one summing path" :done-when ["totals agree"]})
      (add :baseline a-baseline)
@@ -208,7 +208,7 @@
                                                              :design {:seq d}}}))
                          nil
                          (catch clojure.lang.ExceptionInfo e (ex-message e))))
-            fresh (:id (ws/create! :brian {:stage :in-progress :external-refs []}))]
+            fresh (:id (ws/create! :brian {:external-refs []}))]
         (is (str/includes? (fork child p 2 4) "already a fork") "a unit has one origin")
         (is (str/includes? (fork fresh fresh 2 4) "is this one") "a fork's parent is another workstream")
         (is (str/includes? (fork fresh p 3 4) "expected a :baseline") "the cited baseline is one")

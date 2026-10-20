@@ -39,33 +39,31 @@
 
    The find-then-create is not atomic, but the coordinator processes envelopes
    single-threaded within a tick, so two fires for the same ref can't race here."
-  [project payload stage]
+  [project payload]
   (let [facets (facets/select-facets (views/facet-properties project) payload)]
     (if-let [ref (external-ref payload)]
       (or (ws/find-by-ref project (:adapter ref) (:id ref))
-          (ws/create! project {:stage stage :external-refs [ref] :facets facets}))
-      (ws/create! project {:stage stage :external-refs [] :facets facets}))))
+          (ws/create! project {:external-refs [ref] :facets facets}))
+      (ws/create! project {:external-refs [] :facets facets}))))
 
 (defn- weight-of [session-profile]
   (if (= :lite session-profile) :light :heavy))
 
 (defn ^{:malli/schema [:=> [:cat :Run] :map]}
   autonomy-from
-  "Build a session :autonomy map from a freshly-created run, seeded at :queued."
+  "Build a session :autonomy map from a freshly-created run: what the session resumes from and
+   is limited by. Where its agent is lives on the run."
   [run]
-  (let [now (clock/now-iso)]
-    {:skill             (:skill run)
-     :first-message     (:first-message run)
-     :agent             (or (:agent run) :claude)
-     :claude-session-id (:claude-session-id run)
-     :trigger           (:trigger run)
-     :limits            (or (:limits run) {})
-     :priority          (or (:priority run) 0)
-     :uncapped?         (boolean (:uncapped? run))
-     :on-promote        (:on-promote run)
-     :phase             :queued
-     :phase-history     [{:at now :phase :queued}]
-     :error             nil}))
+  {:skill             (:skill run)
+   :first-message     (:first-message run)
+   :agent             (or (:agent run) :claude)
+   :claude-session-id (:claude-session-id run)
+   :trigger           (:trigger run)
+   :limits            (or (:limits run) {})
+   :priority          (or (:priority run) 0)
+   :uncapped?         (boolean (:uncapped? run))
+   :on-promote        (:on-promote run)
+   :error             nil})
 
 (defn ^{:malli/schema [:=> [:cat :Run :WorkstreamId] :Session]}
   create-session-for-run!
@@ -77,7 +75,8 @@
                     :autonomy (autonomy-from run)}))
 
 (defn- initial-stage
-  "Per-trigger :workstream-stage, defaulting to :triaging."
+  "Per-trigger :workstream-stage, defaulting to :triaging — a stage that places nothing, so the
+   workstream's band is wherever status places it."
   [routed]
   (or (-> routed :trigger :workstream-stage) :triaging))
 
@@ -98,11 +97,15 @@
   (let [project (:project routed)
         ref     (external-ref (:payload routed))
         pre     (when ref (ws/find-by-ref project (:adapter ref) (:id ref)))
-        w       (ensure-workstream! project (:payload routed) (initial-stage routed))
+        w       (ensure-workstream! project (:payload routed))
         minted? (nil? pre)]
     (try
       (let [run (runs/create-run! (assoc routed :workstream-id (:id w)) meta)]
         (create-session-for-run! run (:id w))
+        ;; A trigger that births its work at a board stage — the described-intent leg, which
+        ;; is no triage — records that as nido's choice, which is what places it there.
+        (when (and minted? (contains? session/lifecycle-stages (initial-stage routed)))
+          (ws/advance-stage! project (:id w) (initial-stage routed)))
         (when (ws/closure w)
           (ws/reopen! project (:id w) (initial-stage routed)))
         run)

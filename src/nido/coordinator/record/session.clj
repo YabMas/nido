@@ -15,9 +15,6 @@
    [nido.coordinator.record.state :as cstate]
    [nido.platform.io :as io]))
 
-(def phases
-  #{:queued :preprocessing :running :parked :done :failed :halted})
-
 (def Autonomy
   [:map {:closed true}
    [:skill             keyword?]
@@ -29,8 +26,6 @@
    [:priority          int?]
    [:uncapped?         boolean?]
    [:on-promote        [:maybe [:map-of keyword? any?]]]
-   [:phase             (into [:enum] phases)]
-   [:phase-history     [:vector [:map [:at string?] [:phase (into [:enum] phases)]]]]
    [:error             [:maybe [:map-of keyword? any?]]]])
 
 (def Claude
@@ -90,6 +85,12 @@
                                                  [:bg-id {:optional true} [:maybe string?]]]]]
    [:created-at        string?]])
 
+(defn- shed
+  "`s` without the burst phase records written before a run's state was the only answer to where
+   its agent is — so any rewrite of such a record leaves it holding no copy of what the run says."
+  [s]
+  (cond-> s (:autonomy s) (update :autonomy dissoc :phase :phase-history)))
+
 (defn ^{:malli/schema [:=> [:cat :Session] :Session]}
   validate [s]
   (if (m/validate Session s)
@@ -145,11 +146,11 @@
    naming the holder — while another workstream of the project holds a session of that name:
    a name has one workstream, so workstream-id-for has one answer. The check and the write are
    one step under the project's names lock, so two creations of a name cannot both find it free.
-   A write over a record that already exists — a phase, a weight, a substrate changing — is not
+   A write over a record that already exists — a weight, a substrate, an error changing — is not
    a creation and takes no lock."
   [s]
-  (validate s)
-  (let [{:keys [project workstream-id]} s
+  (let [s (validate (shed s))
+        {:keys [project workstream-id]} s
         n    (:name s)
         path (cstate/session-edn-path project workstream-id n)]
     (if (fs/exists? path)
@@ -202,7 +203,7 @@
                         (throw (ex-info "Session not found"
                                         {:project project :ws-id ws-id :session session-name})))
                       (let [{:keys [claude dispatching]} (f (select-keys s [:claude :dispatching]))]
-                        (validate (assoc s :claude claude :dispatching dispatching)))))))
+                        (validate (shed (assoc s :claude claude :dispatching dispatching))))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:=> [:cat [:maybe :map]] [:maybe :map]]] :Session]}
   update-claude!
@@ -229,21 +230,6 @@
                   (assoc :substrate :archived)
                   (update :substrate-history conj
                           {:at (clock/now-iso) :substrate :archived}))))))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName :keyword] :Session]}
-  set-phase!
-  "Move an autonomous session's burst phase, appending phase-history. Throws if
-   the session has no autonomy facet (a human session has no phase). Returns
-   updated record."
-  [project ws-id session-name new-phase]
-  (let [s (load! project ws-id session-name)]
-    (when-not (autonomous? s)
-      (throw (ex-info "Cannot set phase on a human session"
-                      {:project project :ws-id ws-id :session session-name})))
-    (write! (-> s
-                (assoc-in [:autonomy :phase] new-phase)
-                (update-in [:autonomy :phase-history] conj
-                           {:at (clock/now-iso) :phase new-phase})))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:maybe :map]] :Session]}
   set-error!
@@ -293,9 +279,8 @@
    stage is legal but places nothing, so the two sets must not be conflated.
    Anything outside this set would be silently accepted and then silently ignored —
    a workstream set to, say, :implementing (a TICKET status, not a stage) would land
-   back in the triage queue with no indication anything had gone wrong. :inbox is absent by design: it is
-   legacy-on-read only (workstream/normalize-legacy-stage maps it to :incoming),
-   never something new code may write."
+   back in the triage queue with no indication anything had gone wrong. :inbox — the
+   pen's name before it was :incoming — is absent by design: nothing may choose it."
   (into lifecycle-stages marker-stages))
 
 (def notion-terminal-statuses

@@ -42,7 +42,7 @@
     sup (assoc :supersedes {:seq sup :why "the cut moved"})))
 
 (defn- ledger []
-  (let [id (:id (ws/create! :brian {:stage :in-progress :external-refs []}))]
+  (let [id (:id (ws/create! :brian {:external-refs []}))]
     (ws/append-entry! :brian id {:kind :intent}
                       (pr-str {:format :intent :goal "g" :done-when ["d"]}))
     [id (fn [kind record]

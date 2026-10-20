@@ -52,7 +52,7 @@
    The intent goes on first because the baseline cites it, and a citation can
    only name an entry already on the ledger."
   [project scope]
-  (let [w (ws/create! project {:stage :triaging})]
+  (let [w (ws/create! project {})]
     (ws/append-entry! project (:id w) {:kind :intent}
                       (pr-str {:format :intent :goal "advance a workstream"
                                :done-when ["a lane moves it to the next stage"]}))
@@ -113,7 +113,7 @@
             chain may invent a scope, and every hop must stay valid without one"
     (with-nido-root
       (fn [_]
-        (let [ws-id   (:id (ws/create! :p {:stage :triaging}))
+        (let [ws-id   (:id (ws/create! :p {}))
               run     (a-run! :p ws-id)
               run-dir (cstate/run-dir (:id run))
               ctx     (#'launcher/run-workstream-context :run-dir run-dir)]

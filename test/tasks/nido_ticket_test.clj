@@ -9,13 +9,14 @@
 
 (deftest complete-refreshes-facets-after-completing
   (let [calls (atom [])]
-    (with-redefs [tickets/complete!         (fn [p br st disp] (swap! calls conj [:complete p br st disp]))
+    (with-redefs [tickets/complete!         (fn [p br] (swap! calls conj [:complete p br]))
                   facets/refresh-for-ticket! (fn [p br] (swap! calls conj [:refresh p br]))]
       (t/complete-cmd ":project" "brian" ":br" "BR-1" ":status" "triaged" ":disposition" "real-bug")
-      (is (= [[:complete :brian "BR-1" :triaged :real-bug]
+      (is (= [[:complete :brian "BR-1"]
               [:refresh :brian "BR-1"]]
              @calls)
-          "complete! first, then a single facet refresh"))))
+          "complete! first, then a single facet refresh — an older caller's :status and
+           :disposition are ignored"))))
 
 (deftest append-cmd-routes-to-the-workstream-ledger
   ;; Ledger unification Task 2: nido:ticket:append no longer writes to the

@@ -218,18 +218,21 @@
             (b! "third")
             (is (thrown? Exception (t/blocker-answer* {:project "brian" :ws-id id :answer " "})))))))))
 
-(defn- raw-set! [id f]
-  ;; A record as it stood before decisions were recorded: change it without an entry.
-  (ws/write! (f (ws/read-ws :brian id))))
+(defn- raw-set!
+  "A record as it stood before decisions were recorded: change the file itself, stored status
+   fields and all, past the record's own write — which keeps none."
+  [id f]
+  (let [path (cstate/workstream-edn-path :brian id)]
+    (nido.platform.io/write-edn! path (f (nido.platform.io/read-edn path)))))
 
 (deftest the-backfill-records-what-the-records-hold-once
   (with-tmp
     (fn []
-      (let [closed  (:id (ws/create! :brian {:stage :triaging}))
-            oneoff  (:id (ws/create! :brian {:stage :scratch}))
-            staged  (:id (ws/create! :brian {:stage :triaging
-                                             :external-refs [{:adapter :notion :id "BR-2" :page-id "p2"}]}))
+      (let [closed  (:id (ws/create! :brian {}))
+            oneoff  (:id (ws/create! :brian {}))
+            staged  (:id (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-2" :page-id "p2"}]}))
             facts   {"p2" {:status "In progress"}}]
+        (raw-set! oneoff #(assoc % :stage :scratch))
         (raw-set! closed #(assoc % :closed {:at "t" :outcome :between-phases :design {:seq 4}}))
         (raw-set! staged #(assoc % :stage :ready))
         (raw-set! staged #(assoc % :findings {:round 1 :open #{"f2"} :resolved {"f1" {:by "x" :at "t"}}}))
@@ -252,9 +255,10 @@
             (is (= [:notion-status]
                    (backfill/backfill-workstream! :brian legacy {"p3" {:status "Review" :br "BR-3"}})))
             (is (= "p3" (:page-id (last (ws/entries-of :brian legacy :notion-status)))))))
-        (testing "a workstream reopened since its close is not closed again"
+        (testing "a workstream reopened since its close is not closed again — and its reopen is
+                  its stage choice, so nothing is owed"
           (ws/reopen! :brian closed :in-progress)
-          (is (= [:stage-set] (backfill/backfill-workstream! :brian closed facts))))))))
+          (is (= [] (backfill/backfill-workstream! :brian closed facts))))))))
 
 (deftest the-backfill-records-a-taken-verdict-and-a-ticket-only-dismissal-once
   (with-tmp

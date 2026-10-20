@@ -33,7 +33,7 @@
              :undo {:how :none :why "gone"}}]})
 
 (defn- between-phases []
-  (let [id   (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+  (let [id   (:id (ws/create! :brian {:external-refs []}))
         add! #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
     (add! :intent {:format :intent :goal "g" :done-when ["d"]})
     (add! :baseline a-baseline)
@@ -49,7 +49,7 @@
         (is (= {:opened "the old path is removed" :phase 2 :of 2}
                (lphase/advance! :brian id {:evidence "error rate flat for a week"})))
         (let [w (ws/read-ws :brian id)]
-          (is (nil? (:closed w)))
+          (is (nil? (ws/closure w)))
           (is (= {:format :phase-gate :design {:seq 3} :phase 2 :opens "the old path is removed"
                   :evidence "error rate flat for a week"}
                  (dissoc (ws/latest-entry :brian id :phase-gate) :seq :at)))
@@ -93,7 +93,7 @@
 (deftest advance-opens-a-phase-whose-merged-was-never-written
   (with-tmp
     (fn []
-      (let [id   (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+      (let [id   (:id (ws/create! :brian {:external-refs []}))
             add! #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
         (add! :intent {:format :intent :goal "g" :done-when ["d"]})
         (add! :baseline a-baseline)

@@ -41,9 +41,6 @@
                     :priority 0
                     :uncapped? false
                     :on-promote nil
-                    :phase :running
-                    :phase-history [{:at "2026-06-05T09:00:00Z" :phase :queued}
-                                    {:at "2026-06-05T09:01:00Z" :phase :running}]
                     :error nil}))
 
 (deftest schema-accepts-human-and-autonomous
@@ -106,25 +103,17 @@
                  (last (:substrate-history a))))))
       (finally (fs/delete-tree tmp)))))
 
-(deftest set-phase-updates-autonomy-and-history
-  (let [tmp (fs/create-temp-dir)]
-    (try
-      (with-redefs [core/nido-root (constantly (str tmp))
-                    clock/now-iso (constantly "2026-06-05T13:30:00Z")]
-        (sess/write! autonomous-session)
-        (let [p (sess/set-phase! :brian "ws-1" "run-triage-x" :parked)]
-          (is (= :parked (get-in p [:autonomy :phase])))
-          (is (= {:at "2026-06-05T13:30:00Z" :phase :parked}
-                 (last (get-in p [:autonomy :phase-history]))))))
-      (finally (fs/delete-tree tmp)))))
-
-(deftest set-phase-throws-on-human-session
+(deftest a-session-written-with-a-burst-phase-sheds-it
+  ;; Where a session's agent is lives on its run; a record written before that keeps no copy
+  ;; once anything rewrites it.
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [core/nido-root (constantly (str tmp))]
-        (sess/write! human-session)
-        (is (thrown? clojure.lang.ExceptionInfo
-                     (sess/set-phase! :brian "ws-1" "explore-firefox" :parked))))
+        (sess/write! (update autonomous-session :autonomy assoc
+                             :phase :parked :phase-history [{:at "t" :phase :parked}]))
+        (let [s (sess/read-session :brian "ws-1" "run-triage-x")]
+          (is (not (contains? (:autonomy s) :phase)))
+          (is (not (contains? (:autonomy s) :phase-history)))))
       (finally (fs/delete-tree tmp)))))
 
 (deftest predicates
@@ -149,7 +138,7 @@
 (deftest list-sessions-round-trips-a-slash-containing-name
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (sess/create! :brian (:id w)
                       {:name "feat/course-materials-tab" :weight :light :autonomy nil})
         (is (= ["feat/course-materials-tab"]
@@ -159,14 +148,14 @@
 (deftest list-sessions-still-handles-flat-names
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (sess/create! :brian (:id w) {:name "refshot" :weight :light :autonomy nil})
         (is (= ["refshot"] (mapv :name (sess/list-sessions :brian (:id w)))))))))
 
 (deftest set-error-sets-and-clears-autonomy-error
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (sess/create! :brian (:id w)
                       {:name "auto" :weight :heavy
                        :autonomy {:skill :triage-bug :first-message "x" :agent :claude
@@ -181,7 +170,7 @@
 (deftest set-error-throws-on-human-session
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [w (ws/create! :brian {:external-refs []})]
         (sess/create! :brian (:id w) {:name "me" :weight :light :autonomy nil})
         (is (thrown? clojure.lang.ExceptionInfo
                      (sess/set-error! :brian (:id w) "me" {:reason :x})))))))
@@ -205,8 +194,8 @@
 (deftest workstream-id-for-finds-the-owning-ws
   (with-tmp
     (fn [_]
-      (let [ws1 (ws/create! :brian {:stage :triaging :external-refs []})
-            ws2 (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [ws1 (ws/create! :brian {:external-refs []})
+            ws2 (ws/create! :brian {:external-refs []})]
         (sess/create! :brian (:id ws1) {:name "impl-br-1" :weight :heavy :autonomy nil})
         (sess/create! :brian (:id ws2) {:name "impl-br-2" :weight :heavy :autonomy nil})
         (is (= (:id ws2) (sess/workstream-id-for :brian "impl-br-2")))
@@ -222,8 +211,8 @@
 (deftest create-refuses-a-name-another-workstream-holds
   (with-tmp
     (fn [_]
-      (let [ws1 (ws/create! :brian {:stage :triaging :external-refs []})
-            ws2 (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [ws1 (ws/create! :brian {:external-refs []})
+            ws2 (ws/create! :brian {:external-refs []})]
         (sess/create! :brian (:id ws1) {:name "shared" :weight :light :autonomy nil})
         (let [e (try (sess/create! :brian (:id ws2) {:name "shared" :weight :light :autonomy nil})
                      nil
@@ -236,15 +225,15 @@
 (deftest a-name-held-in-another-project-is-no-conflict
   (with-tmp
     (fn [_]
-      (let [a (ws/create! :brian {:stage :triaging :external-refs []})
-            b (ws/create! :nido {:stage :triaging :external-refs []})]
+      (let [a (ws/create! :brian {:external-refs []})
+            b (ws/create! :nido {:external-refs []})]
         (sess/create! :brian (:id a) {:name "same" :weight :light :autonomy nil})
         (is (some? (sess/create! :nido (:id b) {:name "same" :weight :light :autonomy nil})))))))
 
 (deftest rewriting-an-existing-record-is-not-a-creation
   (with-tmp
     (fn [_]
-      (let [w (ws/create! :brian {:stage :triaging :external-refs []})
+      (let [w (ws/create! :brian {:external-refs []})
             s (sess/create! :brian (:id w) {:name "x" :weight :light :autonomy nil})]
         (sess/write! (assoc s :weight :heavy))
         (is (= :heavy (:weight (sess/read-session :brian (:id w) "x"))))
@@ -254,7 +243,7 @@
 (deftest concurrent-creations-of-one-name-leave-one-holder
   (with-tmp
     (fn [_]
-      (let [ids (vec (repeatedly 6 #(:id (ws/create! :brian {:stage :triaging :external-refs []}))))
+      (let [ids (vec (repeatedly 6 #(:id (ws/create! :brian {:external-refs []}))))
             results (->> ids
                          (mapv (fn [id] (future (try (sess/create! :brian id {:name "race" :weight :light :autonomy nil})
                                                      :created
@@ -266,8 +255,8 @@
 (deftest workstream-id-for-refuses-a-name-held-twice
   (with-tmp
     (fn [_]
-      (let [ws1 (ws/create! :brian {:stage :triaging :external-refs []})
-            ws2 (ws/create! :brian {:stage :triaging :external-refs []})]
+      (let [ws1 (ws/create! :brian {:external-refs []})
+            ws2 (ws/create! :brian {:external-refs []})]
         (write-behind-the-rule! :brian (:id ws1) "dup")
         (write-behind-the-rule! :brian (:id ws2) "dup")
         (let [e (try (sess/workstream-id-for :brian "dup") nil

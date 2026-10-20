@@ -41,17 +41,11 @@
     (println "opened" (:br o))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  status-cmd
-  "bb nido:ticket:status :project <p> :br BR-#### :status <kw>"
-  [& args]
-  (let [[_ o] (task-args/split-args args)]
-    (tickets/set-status! (project-kw o) (str (:br o)) (keyword (:status o)))
-    (println "status" (:br o) "->" (:status o))))
-
-(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   complete-cmd
-  "bb nido:ticket:complete :project <p> :br BR-#### :status triaged :disposition <kw>
-   (Off-radar tickets use nido:ticket:dismiss — :skipped is retired.)
+  "bb nido:ticket:complete :project <p> :br BR-#### — accept the ticket's newest verdict, or the
+   ticket as reported when it has none. A :status or :disposition passed by an older caller is
+   ignored: what the person decided is the acceptance. (Off-radar tickets use
+   nido:ticket:dismiss.)
    Refreshes the workstream's classification facets from Notion right after the
    verdict lands — triage is where a ticket gets its right Type / App Domain."
   [& args]
@@ -60,8 +54,7 @@
         br      (str (:br o))]
     ;; A verdict a person took in the session is accepted as surely as one taken at the gate:
     ;; complete! records the acceptance on the ticket's ledger.
-    (tickets/complete! project br
-                       (keyword (:status o)) (some-> (:disposition o) keyword))
+    (tickets/complete! project br)
     (facets/refresh-for-ticket! project br)
     (println "completed" br (:status o))))
 
