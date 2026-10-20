@@ -51,7 +51,8 @@
     "One-shot: discharge every approval whose note already records the outcome."
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
   (Operation layer-complete*
-    "Record a finished stack layer under the workstream's newest design."
+    "Record a finished stack layer under the design it was built under, within its seat when it
+     names one."
     {:signature [:=> [:catn [:opts :map]] :string]})
   (Operation blocker-answer*
     "Record a person's answer to a blocker, in their words — the newest unanswered one unless named."

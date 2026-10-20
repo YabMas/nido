@@ -29,6 +29,7 @@
    later entry, so a stored copy would be wrong exactly when it mattered."
   (:require
    [clojure.string :as str]
+   [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as ws]))
 
@@ -286,7 +287,7 @@
    path should use `of*` with what it already has."
   [project ws-id]
   (when-let [w (ws/read-ws project ws-id)]
-    (let [d (ws/latest-entry project ws-id :design)
+    (let [d (standing/governing-design project ws-id)
           b (ws/latest-entry project ws-id :baseline)]
-      (of* w d (when d (standing/of-design project ws-id d))
+      (of* (update w :entries generation/current-span) d (when d (standing/of-design project ws-id d))
            (when b (standing/of-baseline project ws-id b))))))

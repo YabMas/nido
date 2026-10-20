@@ -1352,6 +1352,56 @@
             (is (not= :implementing (:at r)) "no grant and no clearance: the layer does not place it")
             (is (not= :implement (get-in r [:next :stage])))))))))
 
+(deftest seats-layers-are-counted-within-each-seat
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (add! :baseline a-baseline)
+        (add! :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})
+        (let [d     (add! :design (a-design 2))
+              layer (fn [seat n of] (add! :layer-completed {:format :layer-completed :design {:seq d}
+                                                             :seat seat :layer n :of of}))]
+          (add! :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+          (layer "ledger" 1 2)
+          (layer "seats" 1 3)
+          (is (= {:done 2 :of 5} (:layers (p/of :brian id)))
+              "two seats' layers at one position are two layers, of the two seats' counts")
+          (layer "ledger" 2 2)
+          (layer "ledger" 2 2)
+          (is (= {:done 3 :of 5} (:layers (p/of :brian id))) "a seat's layer recorded twice is one"))))))
+
+(deftest a-new-generation-re-enters-at-the-design-round
+  ;; A re-cut changes the design, never the goal or the survey: the trail the first generation
+  ;; built places nothing in the second, and its first owed stage is a design.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (add! :baseline a-baseline)
+        (add! :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})
+        (let [marked (assoc-in (a-design 2) [:model :elements 0 :defines-generation] true)
+              d1     (add! :design marked)
+              stamp  (fn [r] (ws/append-stamped! :brian id r) (count (:entries (ws/read-ws :brian id))))]
+          (add! :design-approved {:format :design-approved :design {:seq d1} :at-seq d1})
+          (add! :layer-completed {:format :layer-completed :design {:seq d1} :layer 1 :of 2})
+          (add! :implementation-completed {:format :implementation-completed :summary "s" :artifacts []
+                                           :design {:seq d1}})
+          (is (= :implemented (:at (p/of :brian id))))
+          (let [r (stamp {:format :recut :by {:as :person} :ids ["agg"] :why "two secrets"})]
+            (is (= :implemented (:at (p/of :brian id))) "a proposed re-cut moves nothing")
+            (ws/open-generation! :brian id {:format :generation :recut {:seq r} :words "split it"
+                                            :ids ["agg"] :base-rev "abc"}))
+          (let [r (p/of :brian id)]
+            (is (= :baseline-verified (:at r)))
+            (is (= :design (:stage (:next r))))
+            (is (nil? (:layers r)) "the first generation's layers are not this one's progress"))
+          (let [d2 (add! :design (assoc marked :supersedes {:seq d1 :why "re-cut"}))]
+            (is (= :designed (:at (p/of :brian id))))
+            (add! :design-approved {:format :design-approved :design {:seq d2} :at-seq d2})
+            (is (= :design-approved (:at (p/of :brian id)))
+                "and its own approval, not the first generation's, lets it be built")))))))
+
 (deftest closure-is-read-off-the-ledger
   (with-tmp
     (fn [_]

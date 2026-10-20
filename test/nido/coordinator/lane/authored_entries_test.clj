@@ -197,6 +197,25 @@
             (is (= {:design {:seq d1} :layer 2 :of 3} (done))
                 "a layer finished under the earlier design is recorded under it")))))))
 
+(deftest a-seats-layer-is-recorded-within-its-seat
+  (with-tmp
+    (fn []
+      (let [id    (:id (ws/create! :brian {:stage :in-progress}))
+            add!  (fn [kind record]
+                    (ws/append-entry! :brian id {:kind kind} (pr-str record))
+                    (:seq (last (:entries (ws/read-ws :brian id)))))
+            _     (add! :intent {:format :intent :goal "g" :done-when ["d"]})
+            d     (add! :design (a-design (add! :baseline a-baseline)))
+            layer #(t/layer-complete* (merge {:project "brian" :ws-id id :layer 1 :of 2} %))
+            seats #(mapv (juxt :seat :layer) (ws/entries-of :brian id :layer-completed))]
+        (layer {:seat "canvas.strata/ledger"})
+        (layer {:seat "canvas.strata/seats"})
+        (is (= [["canvas.strata/ledger" 1] ["canvas.strata/seats" 1]] (seats))
+            "one position in two seats is two layers")
+        (layer {:seat "canvas.strata/ledger"})
+        (is (= 2 (count (seats))) "recording a seat's layer again appends nothing")
+        (is (= {:seq d} (:design (last (ws/entries-of :brian id :layer-completed)))))))))
+
 (deftest a-worded-answer-names-the-newest-unanswered-blocker
   (with-tmp
     (fn []

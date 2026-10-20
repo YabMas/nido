@@ -295,9 +295,10 @@
   "Record that layer :layer of :of is finished under the design it was built under — :design
    <seq>, else the workstream's only design. NEVER the newest of several: a design appended while
    the layer was being built is one it was never built under, so with more than one the caller
-   names it. Recording it again under the same design appends nothing and answers the entry
-   already there."
-  [{:keys [layer of bookmark commit] :as opts}]
+   names it. A seat's layer names its :seat, and :layer and :of are then its position and count
+   within that seat. Recording it again under the same design and seat appends nothing and
+   answers the entry already there."
+  [{:keys [layer of bookmark commit seat] :as opts}]
   (let [[p id]  (here opts)
         designs (filterv #(= :design (:kind %)) (:entries (ws/read-ws p id)))
         n       (some-> (:design opts) str parse-long)
@@ -318,8 +319,10 @@
                (pr-str (cond-> {:format :layer-completed :design {:seq (:seq design)}
                                 :layer layer :of of}
                          bookmark (assoc :bookmark (str bookmark))
-                         commit   (assoc :commit (str commit))))
-               #(and (= (:seq design) (-> % :design :seq)) (= layer (:layer %)))))))
+                         commit   (assoc :commit (str commit))
+                         seat     (assoc :seat (str seat))))
+               #(and (= (:seq design) (-> % :design :seq)) (= layer (:layer %))
+                     (= (some-> seat str) (:seat %)))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   generation-open*
@@ -371,7 +374,7 @@
                       (pr-str {:format :blocker-answered :blocker-seq n :summary (str answer)}))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  layer-complete-cmd [& args] (run* layer-complete* args #{:bookmark :commit}))
+  layer-complete-cmd [& args] (run* layer-complete* args #{:bookmark :commit :seat}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   blocker-answer-cmd [& args] (run* blocker-answer* args #{:answer}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}

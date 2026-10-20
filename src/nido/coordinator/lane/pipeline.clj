@@ -30,6 +30,7 @@
    [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.reentry :as reentry]
    [nido.coordinator.record.activity :as activity]
+   [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.standing :as standing]
@@ -447,7 +448,9 @@
 
 (defn- layer-progress
   "{:done :of} for the layers finished under `design` after entry `since`, or nil when none.
-   Done counts distinct layer indices; :of is what the earliest of them planned.
+   Counted per seat and summed: within a seat, done counts distinct layer indices and :of is what
+   the earliest of its layers planned, so two seats' layers at one position are two layers. Layers
+   naming no seat are one seat's.
 
    `since` is 0 for the progress a workstream reports — every layer citing the design, whatever
    came after it — and the newest :phase-gate for placement: a new phase starts its layers afresh.
@@ -459,8 +462,9 @@
                       (filter #(and (= (:seq design) (get-in % [:design :seq]))
                                     (> (:seq %) since))))]
       (when (seq layers)
-        {:done (count (into #{} (map :layer) layers))
-         :of   (:of (first layers))}))))
+        (let [seats (vals (group-by :seat layers))]
+          {:done (transduce (map #(count (into #{} (map :layer) %))) + seats)
+           :of   (transduce (map #(:of (first %))) + seats)})))))
 
 (def ^:private post-layer-kinds
   "Kinds that record the work under a design past its layers: implemented, reviewed, published."
@@ -535,7 +539,7 @@
    all, so a round that answered :recut showed a button that would grant the
    design it had just sent back."
   [project ws-id]
-  (when-let [d (ws/latest-entry project ws-id :design)]
+  (when-let [d (standing/governing-design project ws-id)]
     (standing/proceeding? project ws-id (:seq d))))
 
 ;; ── The fold ────────────────────────────────────────────────────────────────
@@ -1058,9 +1062,13 @@
    input to anything downstream — a caller that branched on it would be making
    this a fifth vocabulary rather than the function that relates the four."
   [project ws-id]
-  (if-let [w (ws/read-ws project ws-id)]
-    (let [ks     (kinds w)
-          design (ws/latest-entry project ws-id :design)
+  (if-let [whole (ws/read-ws project ws-id)]
+    ;; The arc is placed over the current generation's span: a re-cut's new generation re-enters
+    ;; at the design round, and the trail its predecessor built places nothing. Status — a close,
+    ;; a blocker, a Notion settlement — and how the work came in are read off the whole ledger.
+    (let [w      (update whole :entries generation/current-span)
+          ks     (kinds w)
+          design (standing/governing-design project ws-id)
           st     (when design (standing/of-design project ws-id design))
           ;; The newest baseline's own standing: whether it is verified, and
           ;; whether the goal it was scoped for has moved. Read once, and both
@@ -1076,13 +1084,13 @@
           ;; the two most expensive things on this path, and the board runs this
           ;; once per rendered row.
           re     (reentry/of* w design st bst)
-          closed (ws/closure w)
-          blocker (unanswered-blocker project ws-id w)
+          closed (ws/closure whole)
+          blocker (unanswered-blocker project ws-id whole)
           ;; A ticket a person settled in Notion is settled here too: placed where a close is,
           ;; owing nobody, so the board's band and the pane's owed-by are one answer. Not over an
           ;; unanswered blocker: only an answer naming its seq clears one, and a Notion status
           ;; names none.
-          settled (when-not (or closed blocker) (notion-settlement project ws-id w))
+          settled (when-not (or closed blocker) (notion-settlement project ws-id whole))
           layers (layer-progress project ws-id w design 0)
           facts  {:closed?        (some? (or closed settled))
                          :closed-outcome (:outcome closed)
@@ -1101,7 +1109,7 @@
                                                                       (> (:seq %) (max gate (:seq design))))
                                                                 (:entries w)))
                                              (layer-progress project ws-id w design gate)))
-                         :triage-unaccepted? (triage-unaccepted? project ws-id w)
+                         :triage-unaccepted? (triage-unaccepted? project ws-id whole)
                          :blocker-seq    blocker
                          :retraction     (retracted-position
                                           (reentry/current-standing st bst ist))
@@ -1121,7 +1129,7 @@
                          ;; already in hand rather than a second closure.
                          :verified?      (boolean (:verified? bst))}
           pos    (place facts)
-          kind   (intake-kind w ks)
+          kind   (intake-kind whole (kinds whole))
           next-of (fn [p]
                     (if (and (= :design-decided p)
                              (:decidable? st)
