@@ -6,7 +6,9 @@
    idleness, and nothing pinned down which way each signal is allowed to fail."
   (:require
    [clojure.test :refer [deftest is testing]]
-   [nido.session.fleet :as sut]))
+   [nido.platform.process]
+   [nido.session.fleet :as sut]
+   [nido.session.state]))
 
 (def ^:private hour (* 60 60 1000))
 
@@ -93,10 +95,10 @@
 (def ^:private gb (* 1024 1024 1024))
 
 (deftest typical-is-the-median-of-the-same-project
-  (let [rows [{:project "brian" :bytes (* 2 gb)}
-              {:project "brian" :bytes (* 4 gb)}
-              {:project "brian" :bytes (* 3 gb)}
-              {:project "nido"  :bytes (* 30 1024 1024)}]]
+  (let [rows [{:instance-id "a" :project "brian" :runtime-bytes (* 2 gb)}
+              {:instance-id "b" :project "brian" :runtime-bytes (* 4 gb)}
+              {:instance-id "c" :project "brian" :runtime-bytes (* 3 gb)}
+              {:instance-id "d" :project "nido"  :runtime-bytes (* 30 1024 1024)}]]
     (is (= (* 3 gb) (:typical (sut/totals rows "brian")))
         "median of brian's rows, unaffected by the tiny nido session")
     (is (= 4 (:sessions (sut/totals rows "brian"))))
@@ -104,9 +106,29 @@
         "fleet total spans every project")))
 
 (deftest typical-is-nil-below-two-samples
-  (is (nil? (:typical (sut/totals [{:project "brian" :bytes (* 2 gb)}] "brian")))
+  (is (nil? (:typical (sut/totals [{:instance-id "a" :project "brian" :runtime-bytes (* 2 gb)}] "brian")))
       "one sample is not a median")
   (is (nil? (:typical (sut/totals [] "brian")))))
+
+(deftest a-shared-runtime-is-counted-once
+  (let [entry (fn [dir session] {:instance-id "brian-ws" :project-name "brian" :project-dir dir
+                                 :session-name session :repl-pid 4242 :nrepl-port 7000})
+        rows  (with-redefs [nido.session.state/read-registry
+                            (constantly {"/w/a" (entry "/w/a" "a")
+                                         "/w/b" (entry "/w/b" "b")
+                                         "/w/c" (entry "/w/c" "c")})
+                            nido.platform.process/process-alive? (constantly true)
+                            sut/session-homes          (constantly {})
+                            sut/transcripts-available? (constantly false)
+                            sut/cwd-index              (constantly [])
+                            sut/socket-index           (constantly [])
+                            sut/rss-index              (constantly {"4242" (* 4 gb)})]
+                (sut/snapshot))]
+    (is (= (* 4 gb) (:fleet (sut/totals rows "brian")))
+        "three sessions on one 4 GB JVM hold 4 GB, not 12")
+    (is (= 3 (:sessions (sut/totals rows "brian"))))
+    (is (every? zero? (map :bytes rows))
+        "stopping one of several sessions on a runtime releases nothing")))
 
 (deftest over-budget-projects-the-incoming-session
   (let [machine (* 48 gb)]

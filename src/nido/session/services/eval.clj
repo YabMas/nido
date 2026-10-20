@@ -16,18 +16,16 @@
    [nido.session.state :as state]))
 
 (defn- friendly-host
-  "Build a per-instance hostname under *.localhost so each session gets its
+  "Build a per-runtime hostname under *.localhost so each runtime gets its
    own browser cookie jar and a recognizable URL.
      - main checkout : <project-name>.localhost
-     - worktree      : <session-name>.<project-name>.localhost
+     - otherwise     : <runtime-key>.<project-name>.localhost, a `/` in the key written `-`
    `*.localhost` resolves to 127.0.0.1 automatically (RFC 6761) on macOS
    and modern browsers, so no /etc/hosts entry is needed."
-  [project-name instance-id]
+  [project-name runtime-key]
   (cond
-    (and instance-id project-name
-         (str/starts-with? instance-id (str project-name "--")))
-    (str (subs instance-id (count (str project-name "--")))
-         "." project-name ".localhost")
+    (and runtime-key project-name)
+    (str (str/replace runtime-key "/" "-") "." project-name ".localhost")
 
     project-name
     (str project-name ".localhost")
@@ -158,7 +156,7 @@
    content that looks like a thrown exception — with the first
    meaningful error line attached as :error-msg so callers can surface
    it on the :failed state."
-  [instance-id nrepl-port timeout-ms form]
+  [instance-id project-name nrepl-port timeout-ms form]
   (let [result (shell {:continue true :out :string :err :string}
                       "clj-nrepl-eval"
                       "-p" (str nrepl-port)
@@ -201,8 +199,7 @@
                          :error err
                          :error-msg msg}))))
     (when (nrepl-eval-error? output)
-      (let [project-name (some-> instance-id (str/split #"--") first)
-            divergence   (flyway-divergence-message output project-name)
+      (let [divergence   (flyway-divergence-message output project-name)
             detail       (first-meaningful-line output)
             ;; Self-describing message: a recognised divergence gives the exact
             ;; remedy; otherwise weave the actual cause into the message itself
@@ -297,7 +294,8 @@
             resolved-start-form (ctx/substitute-value local-ctx start-form)]
         (core/log-step (str "Starting app on " host ":" app-port " (via nREPL eval)..."))
         (try
-          (eval-on-repl! instance-id nrepl-port eval-timeout-ms resolved-start-form)
+          (eval-on-repl! instance-id (get-in session-ctx [:session :project-name])
+                         nrepl-port eval-timeout-ms resolved-start-form)
           (catch clojure.lang.ExceptionInfo e
             (let [project-dir (get-in session-ctx [:session :project-dir])]
               (throw (if (stale-working-copy? project-dir)
@@ -336,7 +334,7 @@
       (let [instance-id (:instance-id saved-state)]
         (core/log-step (str "Stopping app on " host ":" app-port " (via nREPL eval)..."))
         (try
-          (eval-on-repl! instance-id nrepl-port 30000 stop-form)
+          (eval-on-repl! instance-id (:project-name saved-state) nrepl-port 30000 stop-form)
           (catch Exception e
             (println "warning: could not stop app via nREPL:" (ex-message e))))))))
 
@@ -362,10 +360,10 @@
                        (proc/find-available-port preferred-port (- high low))))
         project-name (get-in session-ctx [:session :project-name])
         instance-id (get-in session-ctx [:session :instance-id])
-        host (friendly-host project-name instance-id)
+        host (friendly-host project-name (get-in session-ctx [:session :runtime-key]))
         url (str "http://" host ":" app-port)
         saved-state {:app-port app-port :nrepl-port repl-port :host host
-                     :instance-id instance-id}]
+                     :instance-id instance-id :project-name project-name}]
     (core/log-step (str "App port reserved on " host ":" app-port " — starting app"))
     ;; Session lifecycle is now single-phase: init always boots the app.
     ;; Any exception here propagates → whole session start fails → engine

@@ -30,10 +30,14 @@
   (Operation worktree-link "The link from a session home back to its worktree."
     {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string]] Path]
      :delegates [sstate/session-home-dir]})
+  (Operation session-mcp-path
+    "A session's rendered MCP config — a launch input, keyed by the session, not its runtime."
+    {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string]] Path]
+     :delegates [sstate/session-key]})
   (Operation write-session-mcp! "Render and write a session's MCP config."
-    {:signature [:=> [:catn [:instance-id InstanceId] [:project-name ProjectName] [:worktree Path]
+    {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string] [:worktree Path]
                             [:pg-svc :any] [:pg-port :any]] [:maybe Path]]
-     :delegates [sstate/session-mcp-path]})
+     :delegates [session-mcp-path]})
   (Operation read-project-briefing
     "A project's own briefing markdown, spliced in verbatim. Kept to domain rules nido's generic
      briefing cannot state."
@@ -63,7 +67,7 @@
      :delegates [sstate/read-session]})
   (Operation session-briefing "The briefing text, from persisted state and live readings."
     {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string]
-                            [:instance-id InstanceId]] :string]
+                            [:instance-id [:maybe InstanceId]]] :string]
      :delegates [read-project-briefing design/describe]})
   (Operation rerender-briefing!
     "Re-render only the briefing files — for when what it should say changed without the session

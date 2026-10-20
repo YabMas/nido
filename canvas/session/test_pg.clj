@@ -39,6 +39,11 @@
      existing database is left as the session last left it."
     {:signature [:=> [:catn [:project-name ProjectName] [:opts :map]] :map]
      :delegates [ensure-ready! session-db-name]})
+  (Operation member-context
+    "The test database a session sharing a runtime is handed: its own, keyed by the session rather
+     than the runtime, created from the template when missing."
+    {:signature [:=> [:catn [:service-def :map] [:ctx :map] [:session-key :string]] :map]
+     :delegates [ensure-session-db!]})
   (Operation drop-session-db!
     "Bring the project's test cluster up and drop a session's test database if it exists. A
      cluster that is down cannot drop anything, and its databases would be back when it next

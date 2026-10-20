@@ -200,11 +200,12 @@
       ;; and stops, rather than throwing a task error at someone who said no.
       (do (println "Aborted — no session started.") nil)
       (do
-        (when ws-id (scratch/birth! p session nil ws-id))
-        (lifecycle/up! session opts)
+        ;; The workstream is settled BEFORE up!, so the session comes up on its runtime at once.
         ;; Weight is read back AFTER up! — up! persists the resolved profile, so
         ;; the record describes what was really provisioned, not what was asked for.
-        (scratch/birth! p session (lifecycle/session-weight session opts) ws-id)
+        (let [held-by (scratch/birth! p session nil ws-id)]
+          (lifecycle/up! session (assoc opts :runtime-key held-by))
+          (scratch/birth! p session (lifecycle/session-weight session opts) held-by))
         (let [home (state/session-home-dir project session)]
           (println)
           (println (str "Session ready: " project "/" session
@@ -337,6 +338,8 @@
     :else
     (println (str "    " session ": cd " (:cwd conversation) " && " (resume-command conversation)))))
 
+(declare on-its-workstream)
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   revive
   "Bring back the sessions that died with the host: plan from the casualty records, bring the
@@ -396,7 +399,8 @@
               (try
                 (when (= :revive row)
                   (println (str "  ↑ " (get-in facts [:casualty :project]) "/" s))
-                  (lifecycle/up! s {:project (get-in facts [:casualty :project])}))
+                  (let [project (get-in facts [:casualty :project])]
+                    (lifecycle/up! s (on-its-workstream project s {:project project}))))
                 (reopen! s (:conversation facts) running)
                 (casualties/settle! [(:casualty facts)])
                 (catch Exception e
@@ -505,6 +509,16 @@
           (println (str "  Not in Warp: open a terminal and run  " by-hand)))
         home))))
 
+(defn- on-its-workstream
+  "`opts` naming, as the runtime key, the workstream holding `session` — so a verb that starts its
+   services brings it up on that workstream's runtime even while it is down. Unchanged for a
+   session no workstream holds, or when the caller named a key."
+  [project session opts]
+  (if-let [ws-id (and (not (:runtime-key opts))
+                      (csession/workstream-id-for (keyword project) session))]
+    (assoc opts :runtime-key ws-id)
+    opts))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   down
   "Stop the named session. Worktree and on-disk state are preserved."
@@ -522,9 +536,9 @@
    bad state."
   [& args]
   (let [[pos opts] (task-args/split-args args)
-        _project (require-project opts)
+        project (require-project opts)
         session (require-session-name pos)]
-    (lifecycle/reset! session opts)))
+    (lifecycle/reset! session (on-its-workstream project session opts))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   destroy
@@ -558,9 +572,9 @@
    the on-disk worktree exists."
   [& args]
   (let [[pos opts] (task-args/split-args args)
-        _project   (require-project opts)
+        project    (require-project opts)
         session    (require-session-name pos)
-        opts'      (cond-> opts
+        opts'      (cond-> (on-its-workstream project session opts)
                      (contains? opts :auto-up) (-> (assoc :auto-up? (:auto-up opts))
                                                    (dissoc :auto-up)))]
     (lifecycle/enter! session opts')))
@@ -590,9 +604,9 @@
    Usage: bb nido:session:isolate :project <p> <session>"
   [& args]
   (let [[pos opts] (task-args/split-args args)
-        _project (require-project opts)
+        project (require-project opts)
         session (require-session-name pos)]
-    (lifecycle/isolate! session opts)))
+    (lifecycle/isolate! session (on-its-workstream project session opts))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   share
@@ -600,9 +614,9 @@
    clone. Usage: bb nido:session:share :project <p> <session>"
   [& args]
   (let [[pos opts] (task-args/split-args args)
-        _project (require-project opts)
+        project (require-project opts)
         session (require-session-name pos)]
-    (lifecycle/share! session opts)))
+    (lifecycle/share! session (on-its-workstream project session opts))))
 
 (defn- session-ws!
   "The workstream holding `session` in `project`, or a refusal naming the session."

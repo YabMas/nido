@@ -12,4 +12,8 @@
   "The shim that lets a Run's session be re-entered: a link back to the run, written into the
    session home so a resume finds its way without resolving anything."
   (Operation write! "Write the shim and the run link into a session home."
-    {:signature [:=> [:catn [:session-home Path] [:run-dir Path]] :any]}))
+    {:signature [:=> [:catn [:session-home Path] [:run-dir Path]] :any]})
+  (Operation run-dir
+    "The Run directory a session home is linked to, or nil when it has none — what a restart
+     carries across the stop that removes the home."
+    {:signature [:=> [:catn [:session-home Path]] [:maybe :string]]}))

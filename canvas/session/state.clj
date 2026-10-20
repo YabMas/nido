@@ -26,6 +26,26 @@
    A layout with one root would make reclaiming an instance a question of which files to spare."
   {:child [InstanceId]}
   (Operation state-dir "The per-instance state root." {:signature [:=> [:catn] Path]})
+  (Operation keyed-id
+    "`<project>--<key>`, with `/` written `~` so the id is one path segment — the one spelling of a
+     key-derived id: a runtime's instance id, and a session's own key."
+    {:signature [:=> [:catn [:project-name ProjectName] [:key :string]] :string]})
+  (Operation session-key "One session's key, whatever runtime it is on: what its links are kept under."
+    {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string]] :string]
+     :delegates [keyed-id]})
+  (Operation session-profile-path
+    "Where the profile one session was brought up with is kept: under its own key, never its
+     runtime's, because sessions sharing a runtime may each have created their working copy
+     differently. Outside every instance's state directory, so neither a shared runtime nor
+     reclaim replaces it."
+    {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string]] Path]
+     :delegates [session-key]})
+  (Operation read-session-profile
+    "The profile one session was brought up with, or nil — read where `session-profile-path` keeps
+     it, else where a session that predates it had its runtime to itself, copied to its own place
+     on that first read so it outlives the runtime it left."
+    {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string]] [:maybe :any]]
+     :delegates [session-profile-path session-key instance-state-dir]})
   (Operation instance-state-dir "One instance's state directory."
     {:signature [:=> [:catn [:instance-id InstanceId]] Path] :delegates [state-dir]})
   (Operation session-mcp-path "A session's rendered MCP config — a launch input."

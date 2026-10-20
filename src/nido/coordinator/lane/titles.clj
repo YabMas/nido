@@ -96,9 +96,9 @@
    workstream's board label. Tabs and paths are what a shell matches on, so a title
    carrying either is flattened to spaces."
   [project]
-  (let [worktrees (into {} (for [[dir {:keys [instance-id]}] (session-state/read-registry)
-                                 :when instance-id]
-                             [instance-id dir]))]
+  (let [worktrees (into {} (for [[dir {:keys [project-name session-name]}] (session-state/read-registry)
+                                 :when session-name]
+                             [[project-name session-name] dir]))]
     (into []
           (for [w     (keep #(ws/read-ws project %) (ws/list-ids project))
                 :when (not (ws/closure w))
@@ -108,7 +108,7 @@
                 :let  [sname (:name s)]
                 :when (seq sname)
                 dir   (cons (session-state/session-home-dir (name project) sname)
-                            (some-> (get worktrees (str (name project) "--" sname)) list))]
+                            (some-> (get worktrees [(name project) sname]) list))]
             [(str dir) title]))))
 
 (defn ^{:malli/schema [:=> [:cat [:sequential :ProjectName]] :boolean]}

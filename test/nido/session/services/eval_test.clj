@@ -64,7 +64,7 @@
 (deftest eval-on-repl!-surfaces-flyway-remediation-as-the-thrown-message
   (with-redefs [babashka.process/shell
                 (fn [_opts & _args] {:exit 0 :out flyway-out :err ""})]
-    (let [ex (try (#'eval/eval-on-repl! "brian--feat-x" 12345 1000 "(start)")
+    (let [ex (try (#'eval/eval-on-repl! "brian--feat-x" "brian" 12345 1000 "(start)")
                   nil
                   (catch clojure.lang.ExceptionInfo e e))]
       (is ex "a flyway-divergence eval result must throw")
@@ -83,7 +83,7 @@
 (deftest eval-on-repl!-surfaces-the-cause-for-non-flyway-eval-errors
   (with-redefs [babashka.process/shell
                 (fn [_opts & _args] {:exit 0 :out "Execution error (NullPointerException)." :err ""})]
-    (let [ex (try (#'eval/eval-on-repl! "brian--feat-x" 12345 1000 "(start)")
+    (let [ex (try (#'eval/eval-on-repl! "brian--feat-x" "brian" 12345 1000 "(start)")
                   nil
                   (catch clojure.lang.ExceptionInfo e e))]
       (is ex "a non-flyway eval error still throws")
@@ -102,7 +102,7 @@
   (with-redefs [babashka.process/shell
                 (fn [_opts & _args]
                   {:exit 1 :out "" :err "Connection refused to nREPL on port 12345"})]
-    (let [ex (try (#'eval/eval-on-repl! "brian--feat-x" 12345 1000 "(start)")
+    (let [ex (try (#'eval/eval-on-repl! "brian--feat-x" "brian" 12345 1000 "(start)")
                   nil
                   (catch clojure.lang.ExceptionInfo e e))]
       (is ex "a shell failure throws")
@@ -160,7 +160,7 @@
 (deftest eval-on-repl!-reads-a-thrown-exception-from-stderr
   (with-redefs [babashka.process/shell
                 (fn [_opts & _args] {:exit 0 :out boot-log-out :err flyway-err})]
-    (let [ex (try (#'eval/eval-on-repl! "brian--feat-x" 12345 1000 "(start)")
+    (let [ex (try (#'eval/eval-on-repl! "brian--feat-x" "brian" 12345 1000 "(start)")
                   nil
                   (catch clojure.lang.ExceptionInfo e e))]
       (is ex "an exception on stderr is a failed eval, whatever the exit code")
@@ -175,7 +175,7 @@
                   {:exit 0
                    :out ":started"
                    :err "WARNING: A terminally deprecated method in sun.misc.Unsafe has been called\n"})]
-    (is (= ":started" (#'eval/eval-on-repl! "brian--feat-x" 12345 1000 "(start)"))
+    (is (= ":started" (#'eval/eval-on-repl! "brian--feat-x" "brian" 12345 1000 "(start)"))
         "stderr without a failure signature is not a failure")))
 
 ;; What clj-nrepl-eval returns when its --timeout elapses mid-boot: exit 0, the
@@ -192,7 +192,7 @@
 (deftest eval-on-repl!-fails-an-eval-its-timeout-interrupted
   (with-redefs [babashka.process/shell
                 (fn [_opts & _args] {:exit 0 :out timed-out-out :err ""})]
-    (let [ex (try (#'eval/eval-on-repl! "brian--feat-x" 12345 180000 "(start)")
+    (let [ex (try (#'eval/eval-on-repl! "brian--feat-x" "brian" 12345 180000 "(start)")
                   nil
                   (catch clojure.lang.ExceptionInfo e e))]
       (is ex "an interrupted eval is a failed eval, whatever the exit code")

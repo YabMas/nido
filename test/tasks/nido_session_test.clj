@@ -17,12 +17,12 @@
     (with-redefs [lifecycle/up!            (fn [s o] (swap! calls conj [:up s o]))
                   state/session-home-dir   (fn [_ _] "/tmp/home")
                   lifecycle/session-weight (fn [s _] (swap! calls conj [:weight s]) :heavy)
-                  scratch/birth!           (fn [p s w & _] (swap! calls conj [:birth p s w]))]
+                  scratch/birth!           (fn [p s w & _] (swap! calls conj [:birth p s w]) "ws-loose")]
       (task/up ":project" "brian" "refshot")
       (is (some #(= "refshot" (second %)) (filter #(= :up (first %)) @calls)) "lifecycle up still runs")
       (is (some #(= [:birth :brian "refshot" :heavy] %) @calls)
           "loose workstream born carrying the provisioned weight")
-      (is (< (.indexOf @calls [:up "refshot" {:project "brian"}])
+      (is (< (.indexOf @calls [:up "refshot" {:project "brian" :runtime-key "ws-loose"}])
              (.indexOf @calls [:weight "refshot"]))
           "weight is read AFTER up! — up! is what persists the profile it reads"))))
 
@@ -32,13 +32,13 @@
                   state/session-home-dir   (fn [_ _] "/tmp/home")
                   lifecycle/session-weight (fn [_ _] :heavy)
                   scratch/joinable         (fn [& _] nil)
-                  scratch/birth!           (fn [p s w ws] (swap! calls conj [:birth p s w ws]))]
+                  scratch/birth!           (fn [p s w ws] (swap! calls conj [:birth p s w ws]) ws)]
       (task/up ":project" "brian" "child-work" ":ws-id" "ws-child")
       (is (= [[:birth :brian "child-work" nil "ws-child"]
-              [:up "child-work" {:project "brian"}]
+              [:up "child-work" {:project "brian" :runtime-key "ws-child"}]
               [:birth :brian "child-work" :heavy "ws-child"]]
              @calls)
-          "the record is written on the named workstream first, :ws-id never reaches up!, and the weight is reconciled after"))))
+          "the record is written on the named workstream first, up! comes up on that workstream's runtime rather than seeing :ws-id, and the weight is reconciled after"))))
 
 (deftest up-refuses-an-unjoinable-workstream-before-anything-starts
   (let [calls (atom [])]
@@ -168,7 +168,7 @@
                   lifecycle/spawn-tab!                  (fn [s o] (swap! calls conj [:tab s (:cd o) (:command o)]))
                   state/session-home-dir                (fn [_ _] "/tmp/home")
                   scratch/joinable                      (or joinable (fn [& _] nil))
-                  scratch/birth!                        (fn [p s _w ws] (swap! calls conj [:birth p s ws]))
+                  scratch/birth!                        (fn [p s _w ws] (swap! calls conj [:birth p s ws]) ws)
                   task/exit!                            (fn [c] (throw (ex-info (str "exit " c) {})))]
       (let [out (with-out-str
                   (try (apply task/spawn (concat [":project" "nido" "kid" ":parent-agent" "parent-a1"
@@ -286,3 +286,26 @@
     (is (str/includes? out "already running in /running"))
     (is (= #{["brian--quiz"] ["brian--conflicted"]}
            (set (map second (filter #(= :settle (first %)) @calls)))))))
+
+(deftest revive-brings-a-held-session-back-on-its-workstream
+  (let [calls (atom [])
+        keys  (atom [])]
+    (with-redefs [nido.coordinator.record.session/workstream-id-for
+                  (fn [p s] (when (= [:brian "quiz"] [p s]) "ws-9"))]
+      (revive-world calls
+                    #(with-redefs [lifecycle/up! (fn [_ o] (swap! keys conj (:runtime-key o)))]
+                       (with-out-str (task/revive)))))
+    (is (= ["ws-9"] @keys) "a revived session rejoins its workstream's runtime")))
+
+(deftest recovery-verbs-bring-a-held-session-back-on-its-workstream
+  (doseq [[verb v] [[task/reset 'reset!] [task/isolate 'isolate!] [task/share 'share!]]]
+    (let [seen (atom nil)]
+      (with-redefs [lifecycle/reset!   (fn [_ o] (reset! seen o))
+                    lifecycle/isolate! (fn [_ o] (reset! seen o))
+                    lifecycle/share!   (fn [_ o] (reset! seen o))
+                    nido.coordinator.record.session/workstream-id-for
+                    (fn [p s] (when (= [:brian "held"] [p s]) "ws-7"))]
+        (verb ":project" "brian" "held")
+        (is (= "ws-7" (:runtime-key @seen)) (str v " starts it on its workstream's runtime"))
+        (verb ":project" "brian" "loose")
+        (is (nil? (:runtime-key @seen)) (str v " leaves a session no workstream holds on its own"))))))

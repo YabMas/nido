@@ -13,7 +13,6 @@
   (:require
    [babashka.fs :as fs]
    [clojure.set :as set]
-   [clojure.string :as str]
    [nido.coordinator.view.runs :as runs-view]
    [nido.coordinator.record.state :as cstate]
    [nido.session.state :as sstate]))
@@ -79,21 +78,6 @@
       (and project sess)
       (conj (sstate/session-home-dir project sess)))))
 
-(defn- instance-state-dirs-for
-  "Best-effort glob for the session's state dir under ~/.nido/state/.
-   Instance IDs follow the pattern '<project>--<session-name>', so we prefix-
-   match on that. Returns a (possibly empty) seq of path strings."
-  [run]
-  (let [project (some-> run :project name)
-        sess    (:session-name run)]
-    (when (and project sess)
-      (let [prefix     (str project "--" sess)
-            state-root (sstate/state-dir)]
-        (when (fs/exists? state-root)
-          (->> (fs/list-dir state-root)
-               (map str)
-               (filter #(str/starts-with? (str (fs/file-name %)) prefix))))))))
-
 ;; ---------------------------------------------------------------------------
 ;; Public API
 ;; ---------------------------------------------------------------------------
@@ -129,8 +113,7 @@
                          all-runs)]
     (mapv (fn [r]
             {:run   r
-             :paths (vec (concat (run-paths r)
-                                 (instance-state-dirs-for r)))})
+             :paths (vec (run-paths r))})
           matching)))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :map]] :any]}

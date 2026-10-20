@@ -173,6 +173,12 @@
      :delegates [session/list-sessions lifecycle/down!]})
   (Operation orphan-live-sessions "The live sessions no workstream owns. Pure."
     {:signature [:=> [:catn [:live :any] [:owned :any]] :any]})
+  (Operation start!
+    "Bring a session up on the workstream holding it — a fresh one-off when none does — and on that
+     workstream's runtime. The workstream is settled first so the session comes up on its runtime
+     at once. Idempotent on a live session. Returns the ws-id."
+    {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName] [:opts :map]] :any]
+     :delegates [lanes/birth! lifecycle/up!]})
   (Operation adopt-orphans!
     "Enforce the invariant that every live session is reachable from a workstream — an orphan is
      a session doing work the board cannot show — and report every session name two workstreams

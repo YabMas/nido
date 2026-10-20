@@ -60,6 +60,11 @@
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]})
   (Operation restart! "Stop then start, worktree untouched."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]})
+  (Operation with-runtime-to-itself
+    "Run a verb that alters or measures a runtime as a whole under the locks of every runtime the
+     session touches, refusing while any other session is on one."
+    {:signature [:=> [:catn [:verb :keyword] [:name :string] [:opts :map] [:f :any]] :any]
+     :delegates [session-coords]})
   (Operation reset!
     "Recovery for a session in a bad state: stop it, clear what can be rebuilt, bring it back."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]})
@@ -71,10 +76,15 @@
   (Operation share! "Move a session back onto the shared cluster."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]
      :delegates [sstate/clear-pg-mode-override!]})
-  (Operation destroy! "Bring a session down and remove its worktree and state. The one that does not preserve — except the state of a process the stop could not show was gone, which is its only record.
-     Drops the session's test database itself: the service protocol has no destroy, and stop keeps it."
+  (Operation destroy! "Bring a session down and remove its worktree and state. The one that does not preserve — except the state of a process the stop could not show was gone, which is its only record, and a runtime other sessions are still on.
+     Drops the runtime's test database itself once no other session is on it: the service protocol has no destroy, and stop keeps it."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]
      :delegates [tpg/drop-session-db!]})
+  (Operation runtime-of
+    "The runtime a named session is up on, with the key it was started under, or nil when it is
+     down. The key is nil for a runtime started before runtimes recorded one."
+    {:signature [:=> [:catn [:name :string] [:opts :map]]
+                 [:maybe [:map [:instance-id :string] [:key [:maybe :string]]]]]})
   (Operation status "What state a named session is in."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]})
   (Operation cd-target-file

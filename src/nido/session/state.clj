@@ -1,18 +1,41 @@
 (ns nido.session.state
   (:require
    [babashka.fs :as fs]
+   [clojure.string]
    [nido.platform.core :as core]
    [nido.platform.io :as io]))
 
 ;; ---------------------------------------------------------------------------
 ;; Path helpers — all session state lives under ~/.nido/state/<instance-id>/
 ;;
-;; instance-id identifies a single running session. For the main checkout it
-;; equals the project name (e.g. "brian"); for a worktree-based session it is
-;; "<project-name>--<wt-name>" (e.g. "brian--feat-auth"). This keeps state
-;; isolated per running session while keeping config (session.edn, templates)
-;; shared per project.
+;; instance-id identifies a runtime — one JVM, app and database, which every
+;; session of a workstream shares. For the main checkout it equals the project
+;; name (e.g. "brian"); otherwise it is `keyed-id` of the key the runtime was
+;; started under (e.g. "brian--ws-20261019-412858"). Config (session.edn,
+;; templates) stays shared per project.
 ;; ---------------------------------------------------------------------------
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] :string]}
+  keyed-id
+  "`<project>--<key>`, a `/` in `key` written `~` so the id is one path segment. The one spelling
+   of a key-derived id: a runtime's instance id, and a session's own key."
+  [project-name key]
+  (str project-name "--" (clojure.string/replace (str key) "/" "~")))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] :string]}
+  session-key
+  "The key of one session, whatever runtime it is on: what its links are kept under."
+  [project-name session-name]
+  (keyed-id project-name session-name))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] :Path]}
+  session-profile-path
+  "Where the profile the session `session-name` was brought up with is kept:
+   ~/.nido/profiles/<session-key>.edn. Keyed by the session, not the runtime it is on —
+   sessions sharing a runtime each created their own working copy — and outside the state
+   directory, which reclaim removes."
+  [project-name session-name]
+  (str (fs/path (core/nido-home) "profiles" (str (session-key project-name session-name) ".edn"))))
 
 (defn ^{:malli/schema [:=> [:cat] :Path]}
   state-dir
@@ -88,6 +111,24 @@
 ;; owned by nido). Same session is reachable via both paths until the migration
 ;; off instance-state-dir is complete.
 ;; ---------------------------------------------------------------------------
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] [:maybe :any]]}
+  read-session-profile
+  "The profile the session `session-name` was brought up with, or nil. A session brought up
+   before profiles were kept by session has its profile in the state directory of the runtime it
+   had to itself, which its own key names; the first read copies it to the session's own
+   `session-profile-path`, so it outlives that runtime's directory, which reclaim removes once
+   the session has moved off it."
+  [project-name session-name]
+  (let [own (session-profile-path project-name session-name)]
+    (if (fs/exists? own)
+      (io/read-edn own)
+      (let [legacy (str (fs/path (instance-state-dir (session-key project-name session-name))
+                                 "profile.edn"))]
+        (when (fs/exists? legacy)
+          (let [profile (io/read-edn legacy)]
+            (io/write-edn! own profile)
+            profile))))))
 
 (defn ^{:malli/schema [:=> [:cat] :Path]}
   sessions-root

@@ -617,42 +617,82 @@
               (is (= "npx" (get-in servers [:chiasmus :command])))))))
       (finally (fs/delete-tree tmp)))))
 
-(deftest write-session-mcp-writes-to-state-dir
+(deftest write-session-mcp-writes-to-the-sessions-own-path
   (let [tmp (str (fs/create-temp-dir))]
-    (with-redefs [state/instance-state-dir (fn [_id] tmp)]
-      (with-registry
-        {}
-        (fn []
-          (let [path (launcher/write-session-mcp!
-                      "proj--sess" "brian" "/nonexistent-wt"
-                      {:db-name "d" :db-user "u" :db-password "p"} 5599)]
-            (is (= (state/session-mcp-path "proj--sess") path))
-            (is (fs/exists? path))
-            (let [cfg  (json/parse-string (slurp path) keyword)
-                  conn (-> cfg :mcpServers :postgres :args last)]
-              (is (re-find #"localhost:5599/d" conn)))))))))
+    (try
+      (with-redefs [core/nido-home (constantly tmp)]
+        (with-registry
+          {}
+          (fn []
+            (let [path (launcher/write-session-mcp!
+                        "brian" "sess" "/nonexistent-wt"
+                        {:db-name "d" :db-user "u" :db-password "p"} 5599)]
+              (is (= (launcher/session-mcp-path "brian" "sess") path))
+              (is (fs/exists? path))
+              (let [cfg  (json/parse-string (slurp path) keyword)
+                    conn (-> cfg :mcpServers :postgres :args last)]
+                (is (re-find #"localhost:5599/d" conn)))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest sessions-sharing-a-runtime-keep-their-own-mcp-config
+  ;; Two sessions on one runtime share its database, but each worktree commits
+  ;; its own servers: neither session's launch input may overwrite the other's.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [wt-a (write-worktree-mcp! (fs/path tmp "a") {:only-a {:command "a"}})
+            wt-b (write-worktree-mcp! (fs/path tmp "b") {:only-b {:command "b"}})
+            pg   {:db-name "d" :db-user "u" :db-password "p"}]
+        (with-redefs [core/nido-home (constantly (str tmp))]
+          (with-registry
+            {}
+            (fn []
+              (let [pa (launcher/write-session-mcp! "brian" "a" wt-a pg 5599)
+                    pb (launcher/write-session-mcp! "brian" "b" wt-b pg 5599)
+                    servers #(set (keys (:mcpServers (json/parse-string (slurp %) keyword))))]
+                (is (not= pa pb))
+                (is (= #{:only-a :postgres} (servers pa)))
+                (is (= #{:only-b :postgres} (servers pb))))))))
+      (finally (fs/delete-tree tmp)))))
 
 (deftest write-session-mcp-writes-registry-servers-without-pg
   (let [tmp (str (fs/create-temp-dir))]
-    (with-redefs [state/instance-state-dir (fn [_id] tmp)]
-      (with-registry
-        {:mcp-servers chiasmus-entry}
-        (fn []
-          (let [path (launcher/write-session-mcp!
-                      "proj--sess" "brian" "/nonexistent-wt" nil nil)]
-            (is (some? path) "a DB-less session still needs its other servers")
-            (let [cfg (json/parse-string (slurp path) keyword)]
-              (is (contains? (:mcpServers cfg) :chiasmus)))))))))
+    (try
+      (with-redefs [core/nido-home (constantly tmp)]
+        (with-registry
+          {:mcp-servers chiasmus-entry}
+          (fn []
+            (let [path (launcher/write-session-mcp!
+                        "brian" "sess" "/nonexistent-wt" nil nil)]
+              (is (some? path) "a DB-less session still needs its other servers")
+              (let [cfg (json/parse-string (slurp path) keyword)]
+                (is (contains? (:mcpServers cfg) :chiasmus)))))))
+      (finally (fs/delete-tree tmp)))))
 
 (deftest write-session-mcp-noop-when-nothing-to-write
-  (with-redefs [state/instance-state-dir (fn [_id] "/never")]
+  (with-redefs [core/nido-home (constantly "/never")]
     (with-registry
       {}
       (fn []
         (is (nil? (launcher/write-session-mcp!
-                   "x--y" "brian" "/nonexistent-wt" nil nil)))
+                   "brian" "y" "/nonexistent-wt" nil nil)))
         (is (nil? (launcher/write-session-mcp!
-                   "x--y" "brian" "/nonexistent-wt" {:db-name "d"} nil)))))))
+                   "brian" "y" "/nonexistent-wt" {:db-name "d"} nil)))))))
+
+(deftest a-session-left-with-no-server-keeps-no-mcp-config
+  ;; Written while its runtime had a database; restarted lite, it names no server. The config the
+  ;; launches read must go, not keep the database the runtime no longer provides.
+  (let [tmp (str (fs/create-temp-dir))]
+    (try
+      (with-redefs [core/nido-home (constantly tmp)]
+        (with-registry
+          {}
+          (fn []
+            (let [path (launcher/write-session-mcp! "brian" "s" "/nonexistent-wt"
+                                                    {:db-name "d" :db-user "u" :db-password "p"} 5599)]
+              (is (fs/exists? path))
+              (is (nil? (launcher/write-session-mcp! "brian" "s" "/nonexistent-wt" nil nil)))
+              (is (not (fs/exists? path)))))))
+      (finally (fs/delete-tree tmp)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Worktree-native briefing prose + session-briefing extraction
@@ -708,6 +748,25 @@
                 links/read-links          (fn [_id] [])
                 launcher/read-project-briefing (fn [_] nil)]
     (is (string? (launcher/session-briefing "brian" "fix/x" "brian--x")))))
+
+(deftest a-joiner-is-told-to-load-its-changes-from-its-own-working-copy
+  ;; b joined the runtime a started: the JVM's classpath is a's working copy, so a `:reload` would
+  ;; load a's file. b's briefing says how to load its own; a's, whose copy the JVM runs, does not.
+  (let [rt {:project-dir "/wt-a" :members {"/wt-a" "a" "/wt-b" "b"}
+            :context {:session {:project-dir "/wt-a"} :repl {:port 5000}}}]
+    (with-redefs [state/read-session             (fn [_id] rt)
+                  links/read-links               (fn [_id] [])
+                  launcher/read-project-briefing (fn [_] nil)]
+      (let [b (launcher/session-briefing "brian" "b" "brian--ws")
+            a (launcher/session-briefing "brian" "a" "brian--ws")]
+        (is (str/includes? b "(load-file \"/wt-b/"))
+        (is (str/includes? b "started in /wt-a"))
+        (is (not (str/includes? a "Loading your changes"))))
+      (testing "a worktree-cwd launch on the shared runtime is told too"
+        (is (str/includes? (launcher/live-services-prompt "brian--ws") "(load-file"))))
+    (with-redefs [state/read-session (fn [_id] (assoc rt :members {"/wt-a" "a"}))]
+      (is (not (str/includes? (launcher/live-services-prompt "brian--ws") "load-file"))
+          "nothing to say while the JVM's own working copy is the only one on it"))))
 
 (deftest rerender-briefing-writes-claude-and-agents-files
   (let [tmp  (fs/create-temp-dir)

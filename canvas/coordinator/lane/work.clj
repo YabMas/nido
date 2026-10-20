@@ -167,6 +167,11 @@
                  [:=> [:catn [:project ProjectName] [:session-name SessionName] [:weight [:maybe :keyword]]] :any]
                  [:=> [:catn [:project ProjectName] [:session-name SessionName] [:weight [:maybe :keyword]] [:ws-id [:maybe WorkstreamId]]] :any]]
      :delegates [joinable workstream/create! workstream/list-ids]})
+  (Operation settle-runtimes!
+    "Move each live session a workstream holds onto that workstream's runtime, so every session a
+     workstream holds runs on it. Sessions no workstream holds are left alone. Returns the names
+     it moved."
+    {:signature [:=> [:catn [:project ProjectName] [:live [:set SessionName]]] [:vector SessionName]]})
   (Operation reap!
     "Delete the one-off workstream owning a session — sparing every unmarked one, and every
      marked one that has since acquired an external ref. Two facts, not one: the marker says

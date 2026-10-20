@@ -3,9 +3,10 @@
    [babashka.fs :as fs]
    [babashka.process]
    [clojure.string :as str]
-   [clojure.test :refer [deftest is]]
+   [clojure.test :refer [deftest is testing]]
    [nido.platform.core]
    [nido.session.engine :as engine]
+   [nido.session.failure]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.profiles :as profiles]
    [nido.session.state]))
@@ -465,11 +466,16 @@
 (deftest session-coords-resolves-wt-path-and-canonical-instance-id
   (with-redefs [lifecycle/resolve-project (fn [_] ["brian" {:directory "/Code/brian"}])
                 lifecycle/worktrees-dir   (fn [_ _] "/Code/brian/.worktrees")
-                engine/resolve-instance-id
-                (fn [wt] (str "brian--" (last (clojure.string/split wt #"/"))))]
-    (is (= {:wt-path "/Code/brian/.worktrees/feat/screen-capture"
-            :instance-id "brian--screen-capture"}
-           (lifecycle/session-coords "feat/screen-capture" {:project "brian"})))))
+                engine/runtime-key-of     (constantly nil)
+                engine/resolve-instance-id (constantly nil)]
+    (testing "a session that is down names the runtime its own name keys"
+      (is (= {:wt-path "/Code/brian/.worktrees/feat/screen-capture"
+              :instance-id "brian--feat~screen-capture"}
+             (lifecycle/session-coords "feat/screen-capture" {:project "brian"}))))
+    (testing "a session that is up names the runtime it is on"
+      (with-redefs [engine/resolve-instance-id (constantly "brian--ws-7")]
+        (is (= "brian--ws-7"
+               (:instance-id (lifecycle/session-coords "feat/screen-capture" {:project "brian"}))))))))
 
 (deftest session-weight-reads-what-was-actually-provisioned
   ;; The weight stamped on a session record must describe the environment that
@@ -484,11 +490,12 @@
           (is (nil? (lifecycle/session-weight "impl-x" {:project "brian"}))
               "no profile.edn and no worktree ⇒ unknown")
           (fs/create-dirs wt)
+          (nido.session.state/upsert-registry! wt {:instance-id "brian--impl-x"})
           (engine/write-profile-for-session!
-           wt {:services :all :worktree {:strategy :git-worktree}})
+           "brian" "impl-x" {:services :all :worktree {:strategy :git-worktree}})
           (is (= :heavy (lifecycle/session-weight "impl-x" {:project "brian"})))
           (engine/write-profile-for-session!
-           wt {:services [] :worktree {:strategy :symlink :target "/tmp/x"}})
+           "brian" "impl-x" {:services [] :worktree {:strategy :symlink :target "/tmp/x"}})
           (is (= :light (lifecycle/session-weight "impl-x" {:project "brian"})))))
       (finally (fs/delete-tree tmp)))))
 
@@ -585,8 +592,10 @@
     (try
       (with-redefs [nido.platform.core/nido-home            (constantly (str tmp))
                     nido.platform.core/log-step             (constantly nil)
-                    lifecycle/with-context                  (fn [_ _] {:project-dir (str tmp) :wt-path (str tmp "/wt") :branch "b"})
-                    engine/resolve-instance-id              (constantly "p--s")
+                    lifecycle/resolve-project               (constantly ["p" {}])
+                    lifecycle/with-context                  (fn [_ _] {:project-dir (str tmp) :project-name "p" :wt-path (str tmp "/wt")
+                                                                       :branch "b" :instance-id "p--s"})
+                    engine/refuse-backing-worktree!         (fn [& _] nil)
                     engine/read-profile-for-session         (constantly {:worktree {:strategy :symlink}})
                     lifecycle/remove-symlink-worktree!      (fn [_] nil)
                     nido.session.links/delete-links!        (fn [_] nil)]
@@ -600,3 +609,40 @@
 (deftest destroy-keeps-the-state-of-a-process-its-stop-left-running
   (is (true? (destroy-with-pid-left! ["repl"])) "the pid file and its dir stay")
   (is (false? (destroy-with-pid-left! [])) "with nothing left on record, the dir goes"))
+
+(deftest destroy-leaves-the-test-database-of-a-runtime-others-are-on
+  ;; The runtime's test database is the one its REPL reads, so a sibling on it is still using it.
+  (let [tmp     (fs/create-temp-dir)
+        dropped (atom [])]
+    (try
+      (with-redefs [nido.platform.core/nido-home            (constantly (str tmp))
+                    nido.platform.core/log-step             (constantly nil)
+                    lifecycle/resolve-project               (constantly ["p" {}])
+                    lifecycle/with-context                  (fn [_ _] {:project-dir (str tmp) :project-name "p" :wt-path (str tmp "/wt")
+                                                                       :branch "b" :instance-id "p--ws-1"})
+                    engine/refuse-backing-worktree!         (fn [& _] nil)
+                    engine/read-profile-for-session         (constantly {:worktree {:strategy :symlink}})
+                    engine/read-session-edn                 (constantly {:services [{:name :test-db :type :test-pg}]})
+                    nido.session.test-pg/drop-session-db!   (fn [_ m] (swap! dropped conj (:instance-id m)))
+                    lifecycle/remove-symlink-worktree!      (fn [_] nil)
+                    nido.session.links/delete-links!        (fn [_] nil)]
+        (with-redefs [engine/sessions-on (constantly ["other"])]
+          (lifecycle/destroy! "s" {})
+          (is (= ["p--s"] @dropped)
+              "its own test database goes; a sibling still on the runtime keeps the runtime's"))
+        (reset! dropped [])
+        (with-redefs [engine/sessions-on (constantly [])]
+          (lifecycle/destroy! "s" {})
+          (is (= ["p--s" "p--ws-1"] @dropped) "the last session off the runtime drops the runtime's too")))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest a-kept-failure-keeps-no-runtime-key
+  ;; Whoever restores a failed start asks nido which workstream holds the session then; a key kept
+  ;; from the failed start could name a workstream that has since let it go.
+  (let [kept (atom nil)]
+    (with-redefs [nido.session.failure/record! (fn [m _] (reset! kept m) {:id "f1"})]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (#'lifecycle/keeping-failure :up "s" {:project "p" :runtime-key "ws-1" :base "main"}
+                                                {:project-name "p" :instance-id "p--ws-1"} true
+                                                #(throw (ex-info "boom" {}))))))
+    (is (= {:project "p" :base "main"} (:opts @kept)))))

@@ -105,16 +105,25 @@
       pending-kw {:state pending-kw :error-msg (when (map? pending) (:error-msg pending))}
       :else      {:state :down})))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :any [:? :map]] :map]}
+(defn- coords
+  "The session's worktree and the runtime it is on — or, while it is down, the one it comes up on:
+   that of `ws-id`, the workstream holding it, else its own. Every read and write of a session's
+   dev state here goes through this, so a start, the probe after it and the state the board shows
+   all name the runtime the start used."
+  [project session ws-id]
+  (lifecycle/session-coords session (cond-> {:project project}
+                                      ws-id (assoc :runtime-key ws-id))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName [:maybe :string] :any [:? :map]] :map]}
   session-dev-state
-  "Derived dev-resource state for one session of `project`. The 2-arity reads
-   the live registry; the 3-arity reuses a pre-read registry so batch callers
+  "Derived dev-resource state for one session of `project`, held by workstream `ws-id`. The
+   3-arity reads the live registry; the 4-arity reuses a pre-read registry so batch callers
    (a whole workstream's sessions) read the registry once, not per session.
-   Resolves worktree path + canonical instance-id via lifecycle/session-coords
-   (so slash-namespaced names resolve correctly), then derives via dev-state-for."
-  ([project session] (session-dev-state project session (state/read-registry)))
-  ([project session registry]
-   (let [{:keys [wt-path instance-id]} (lifecycle/session-coords session {:project project})]
+   Resolves worktree path + the runtime it is on, or comes up on, via `coords`, then derives
+   via dev-state-for."
+  ([project ws-id session] (session-dev-state project ws-id session (state/read-registry)))
+  ([project ws-id session registry]
+   (let [{:keys [wt-path instance-id]} (coords project session ws-id)]
      (dev-state-for wt-path instance-id registry proc/tcp-open? current-app-state))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :map] :map]}
@@ -128,7 +137,7 @@
       {}
       (let [registry (state/read-registry)]
         (into {} (for [{:keys [name]} sessions]
-                   [name (session-dev-state project name registry)]))))))
+                   [name (session-dev-state project (:ws-id ws) name registry)]))))))
 
 (defn ^{:malli/schema [:=> [:cat :any] [:maybe :int]]}
   app-port-for-instance
@@ -156,8 +165,8 @@
    single idle session whose siblings may be in use. Anything acting on one
    session belongs here."
   [project session]
-  (let [{:keys [wt-path instance-id]} (lifecycle/session-coords session {:project project})
-        profile (engine/read-profile-for-session wt-path)
+  (let [{:keys [instance-id]} (coords project session nil)
+        profile (engine/read-profile-for-session (name project) session)
         opts    (cond-> {:project project} profile (assoc :profile profile))]
     (set-app-state! instance-id :stopping)
     (future
@@ -175,9 +184,9 @@
    work/ensure-open! before up!, and reuses the session's persisted profile
    (so a :lite session doesn't get all services). `stop` brings it down."
   [project ws-id session action]
-  (let [{:keys [wt-path instance-id]} (lifecycle/session-coords session {:project project})
-        profile (engine/read-profile-for-session wt-path)
-        opts    (cond-> {:project project} profile (assoc :profile profile))
+  (let [{:keys [instance-id]} (coords project session ws-id)
+        profile (engine/read-profile-for-session (name project) session)
+        opts    (cond-> {:project project :runtime-key ws-id} profile (assoc :profile profile))
         pending (case action "start" :starting "stop" :stopping "restart" :restarting nil)]
     (when pending (set-app-state! instance-id pending))
     (future
@@ -186,10 +195,12 @@
           "start"
           (do (work/ensure-open! project ws-id session)
               (lifecycle/up! session opts)
-              (let [port (app-port-for-instance instance-id)]
-                (if (and (pos-int? port) (proc/tcp-open? port))
-                  (clear-app-state! instance-id)
-                  (set-app-state! instance-id :failed
+              ;; Probe the runtime the start put it on, which the board now reads too.
+              (let [on   (:instance-id (coords project session ws-id))
+                    port (app-port-for-instance on)]
+                (clear-app-state! instance-id)
+                (when-not (and (pos-int? port) (proc/tcp-open? port))
+                  (set-app-state! on :failed
                                   "App did not open its port within the timeout — see eval log"))))
           "stop"
           (stop-session-blocking! session opts instance-id)

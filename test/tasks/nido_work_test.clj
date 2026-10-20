@@ -5,7 +5,6 @@
    [babashka.fs :as fs]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.launcher :as launcher]
-   [nido.session.state :as state]
    [tasks.nido-work :as work]))
 
 (deftest builds-claude-invocation-with-injected-flags
@@ -15,7 +14,7 @@
                           :worktree "/Code/brian/.worktrees/fix/x"
                           :instance-id "brian--x"})
                   launcher/session-briefing (fn [_p _s _i] "BRIEF")
-                  state/session-mcp-path    (fn [_i] mcp)
+                  launcher/session-mcp-path (fn [_p _s] mcp)
                   launcher/nido-add-dirs    (fn [] ["/opt/nido"])]
       (let [{:keys [cmd dir]} (work/work-cmd* {:claude-bin "claude"})]
         (is (= "/Code/brian/.worktrees/fix/x" dir))
@@ -32,7 +31,7 @@
                 (fn [] {:project "brian" :session "fix/x"
                         :worktree "/wt" :instance-id "brian--x"})
                 launcher/session-briefing (fn [_ _ _] "B")
-                state/session-mcp-path    (fn [_] "/does/not/exist.json")
+                launcher/session-mcp-path (fn [_ _] "/does/not/exist.json")
                 launcher/nido-add-dirs    (fn [] ["/opt/nido"])]
     (is (not (some #{"--mcp-config"} (:cmd (work/work-cmd* {:claude-bin "claude"})))))))
 
@@ -45,7 +44,7 @@
                     (fn [] {:project "brian" :session "fix/x"
                             :worktree "/Code/brian/.worktrees/fix/x"
                             :instance-id "brian--x"})
-                    state/session-mcp-path (fn [_i] mcp)
+                    launcher/session-mcp-path (fn [_p _s] mcp)
                     launcher/nido-add-dirs (fn [] ["/opt/nido"])]
         (let [{:keys [cmd dir]} (work/work-cmd* {:agent :codex :codex-bin "codex"})]
           (is (= "/Code/brian/.worktrees/fix/x" dir))
@@ -75,7 +74,7 @@
                     (fn [] {:project "brian" :session "fix/x"
                             :worktree "/Code/brian/.worktrees/fix/x"
                             :instance-id "brian--x"})
-                    state/session-mcp-path (fn [_i] mcp)
+                    launcher/session-mcp-path (fn [_p _s] mcp)
                     launcher/nido-add-dirs (fn [] ["/opt/nido"])]
         (let [{:keys [cmd]} (work/work-cmd* {:agent :codex :codex-bin "codex"})]
           (is (some #{"mcp_servers.chiasmus.command=\"npx\""} cmd)
@@ -91,7 +90,7 @@
     (with-redefs [lifecycle/session-from-cwd
                   (fn [] {:project "nido" :session "kid" :worktree "/wt" :instance-id "nido--kid"})
                   launcher/session-briefing (fn [_ _ _] "B")
-                  state/session-mcp-path    (fn [_] "/does/not/exist.json")
+                  launcher/session-mcp-path (fn [_ _] "/does/not/exist.json")
                   launcher/nido-add-dirs    (fn [] ["/opt/nido"])]
       (let [{:keys [cmd]} (work/work-cmd* {:claude-bin "claude" :name "kid" :prompt-file prompt})]
         (is (= ["claude" "Do the thing.\nThen report."] (take 2 cmd))
@@ -102,7 +101,7 @@
   (with-redefs [lifecycle/session-from-cwd
                 (fn [] {:project "nido" :session "kid" :worktree "/wt" :instance-id "nido--kid"})
                 launcher/session-briefing (fn [_ _ _] "B")
-                state/session-mcp-path    (fn [_] "/does/not/exist.json")
+                launcher/session-mcp-path (fn [_ _] "/does/not/exist.json")
                 launcher/nido-add-dirs    (fn [] ["/opt/nido"])]
     (is (= ["claude" "--dangerously-skip-permissions" "--append-system-prompt" "B" "--add-dir" "/opt/nido"]
            (:cmd (work/work-cmd* {:claude-bin "claude"})))
@@ -112,7 +111,7 @@
   (with-redefs [lifecycle/session-from-cwd
                 (fn [] {:project "nido" :session "kid" :worktree "/wt" :instance-id "nido--kid"})
                 launcher/session-briefing (fn [_ _ _] "B")
-                state/session-mcp-path    (fn [_] "/does/not/exist.json")
+                launcher/session-mcp-path (fn [_ _] "/does/not/exist.json")
                 launcher/nido-add-dirs    (fn [] ["/opt/nido"])]
     (let [cmd (:cmd (work/work-cmd* {:claude-bin "claude" :permission-mode "default"}))]
       (is (some #{"--dangerously-skip-permissions"} cmd)
@@ -123,7 +122,7 @@
   (with-redefs [lifecycle/session-from-cwd
                 (fn [] {:project "nido" :session "kid" :worktree "/wt" :instance-id "nido--kid"})
                 launcher/session-briefing (fn [_ _ _] "B")
-                state/session-mcp-path    (fn [_] "/does/not/exist.json")
+                launcher/session-mcp-path (fn [_ _] "/does/not/exist.json")
                 launcher/nido-add-dirs    (fn [] ["/opt/nido"])]
     (is (= ["--model" "claude-opus-5-5"]
            (->> (:cmd (work/work-cmd* {:claude-bin "claude" :model "claude-opus-5-5"}))

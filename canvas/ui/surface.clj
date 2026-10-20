@@ -192,7 +192,8 @@
     {:signature [:=> [:catn [:wt-path :any] [:instance-id :any] [:registry :map] [:probe :any]
                             [:app-state-fn :any]] :map]})
   (Operation session-dev-state "The derived dev state for one session."
-    {:signature [:=> [:catn [:project ProjectName] [:session :any] [:registry [:? :map]]] :map]
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id [:maybe :string]] [:session :any]
+                            [:registry [:? :map]]] :map]
      :delegates [dev-state-for]})
   (Operation ws-session-dev-states "Dev state for every session of a workstream."
     {:signature [:=> [:catn [:project ProjectName] [:ws :map]] :map] :delegates [session-dev-state]})

@@ -286,14 +286,13 @@
   (Thread/sleep (long settle-ms))
   (snapshot pid))
 
-(defn- run-boot-lever!
-  [{:keys [project-name session-name worktree-dir session-edn-defaults
-           settle-ms]
-    :or {settle-ms default-settle-ms}} lever]
+(defn- run-boot!
+  "Patch the deps for `lever`, boot the session with `opts` and snapshot it; the deps and the
+   session are put back whatever happens."
+  [{:keys [session-name worktree-dir settle-ms]
+    :or {settle-ms default-settle-ms}} lever opts]
   (let [deps-path (str (fs/path worktree-dir "deps.edn"))
-        backup-path (str (fs/path worktree-dir "deps.edn.bench-backup"))
-        opts (-> (resolve-opts session-edn-defaults lever)
-                 (assoc :project project-name))]
+        backup-path (str (fs/path worktree-dir "deps.edn.bench-backup"))]
     (backup-deps! deps-path backup-path)
     (try
       (apply-deps-patch! deps-path (select-keys lever [:remove-deps :remove-alias-deps]))
@@ -318,6 +317,16 @@
         (try (lifecycle/down! session-name opts) (catch Exception _))
         (restore-deps! deps-path backup-path)))))
 
+(defn- run-boot-lever!
+  [{:keys [project-name session-name session-edn-defaults runtime-key] :as ctx} lever]
+  (let [opts (cond-> (-> (resolve-opts session-edn-defaults lever)
+                         (assoc :project project-name))
+               runtime-key (assoc :runtime-key runtime-key))]
+    ;; A boot is measured only on a runtime the session has to itself: with another session on it,
+    ;; the down/up would leave and rejoin a JVM the lever never touched. Refused before any file is
+    ;; patched; the down/up inside keep the hold.
+    (lifecycle/with-runtime-to-itself :bench session-name opts (fn [_] (run-boot! ctx lever opts)))))
+
 (defn- run-cp-lever!
   [{:keys [worktree-dir session-edn-defaults]} lever]
   (let [deps-path (str (fs/path worktree-dir "deps.edn"))
@@ -340,7 +349,7 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- ensure-worktree!
-  [project-name session-name]
+  [project-name session-name runtime-key]
   (let [[_ {:keys [directory]}] (or (find (config/read-projects) project-name)
                                     (throw (ex-info "unknown project"
                                                     {:project-name project-name})))
@@ -349,7 +358,8 @@
       (core/log-step (str "Creating bench worktree at " wt-path))
       ;; up! creates the worktree and starts the session. We immediately
       ;; bring it down so subsequent levers start from a clean slate.
-      (lifecycle/up! session-name {:project project-name})
+      (lifecycle/up! session-name (cond-> {:project project-name}
+                                    runtime-key (assoc :runtime-key runtime-key)))
       (try (lifecycle/down! session-name {:project project-name}) (catch Exception _)))
     wt-path))
 
@@ -401,15 +411,19 @@
      :settle-ms     ms to wait after up! before snapshot (default 5000).
                     Raise this when testing slow-boot levers — the snapshot
                     then reflects steady-state rather than still-ramping-up
-                    background thread pools."
-  [project-name & {:keys [session-name levers settle-ms]
+                    background thread pools.
+     :runtime-key   the key every start of the session comes up under — the
+                    workstream holding it, which only the caller can name;
+                    absent, the session's own."
+  [project-name & {:keys [session-name levers settle-ms runtime-key]
                    :or {session-name "perf-bench"
                         settle-ms default-settle-ms}}]
   (let [session-edn (engine/load-session-edn project-name)
         defaults (:defaults session-edn)
-        worktree-dir (ensure-worktree! project-name session-name)
+        worktree-dir (ensure-worktree! project-name session-name runtime-key)
         ctx {:project-name project-name
              :session-name session-name
+             :runtime-key runtime-key
              :worktree-dir worktree-dir
              :session-edn-defaults defaults
              :settle-ms settle-ms}

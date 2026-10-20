@@ -486,7 +486,8 @@
         (with-redefs [nido.session.lifecycle/up! (fn [n opts] (swap! ups conj [n opts]) nil)]
           (let [ws-id (work/new! :brian "spike-thing")]
             (is (string? ws-id))
-            (is (= [["spike-thing" {:project "brian"}]] @ups) "session brought up via lifecycle")
+            (is (= [["spike-thing" {:project "brian" :runtime-key ws-id}]] @ups)
+                "session brought up via lifecycle, on its workstream's runtime")
             (let [w (workstream/read-ws :brian ws-id)]
               (is (= :scratch (work/classify-origin w)) "ref-less scratch workstream")
               (is (= ["spike-thing"]

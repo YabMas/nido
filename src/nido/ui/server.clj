@@ -127,7 +127,13 @@
                                      (fn [rows]
                                        (mapv (fn [row]
                                                (let [facts (work/machine-facts project (:sessions row))
+                                                     ;; One row per runtime: a workstream's
+                                                     ;; sessions share one, on one app port.
                                                      total (->> (vals facts)
+                                                                (filter :live?)
+                                                                (map (juxt :app-port identity))
+                                                                (into {})
+                                                                vals
                                                                 (mapcat (juxt :repl-rss :pg-rss))
                                                                 (remove nil?)
                                                                 (reduce + 0))

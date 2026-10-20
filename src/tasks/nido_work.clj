@@ -65,7 +65,7 @@
   [{:keys [project session worktree instance-id]}
    {:keys [claude-bin name prompt-file model] :or {claude-bin "claude"}}]
   (let [briefing (launcher/session-briefing project session instance-id)
-        mcp      (state/session-mcp-path instance-id)
+        mcp      (launcher/session-mcp-path project session)
         cmd      (cond-> [claude-bin]
                    prompt-file      (conj (slurp (str prompt-file)))
                    :always          (conj "--dangerously-skip-permissions")
@@ -78,8 +78,8 @@
     {:cmd cmd :dir worktree :home (str (state/session-home-dir project session))}))
 
 (defn- codex-cmd
-  [{:keys [worktree instance-id]} {:keys [codex-bin] :or {codex-bin "codex"}}]
-  (let [mcp (state/session-mcp-path instance-id)]
+  [{:keys [project session worktree]} {:keys [codex-bin] :or {codex-bin "codex"}}]
+  (let [mcp (launcher/session-mcp-path project session)]
     {:cmd (into [codex-bin
                  "--cd" worktree
                  "--sandbox" "workspace-write"]

@@ -65,7 +65,9 @@
                     core/nido-home              (constantly (str tmp))
                     session/list-sessions       (fn [_ _] [{:name "rag-raptor-index"}])
                     session-state/read-registry (constantly {"/wt/rag-raptor-index"
-                                                             {:instance-id "brian--rag-raptor-index"}})]
+                                                             {:instance-id  "brian--ws-1"
+                                                              :project-name "brian"
+                                                              :session-name "rag-raptor-index"}})]
         (let [w (notion-ws! "fix the drift")]
           (ws/set-title! :brian (:id w) "Drift in\tthe index" "fix the drift")
           (is (= [[(str tmp "/sessions/brian/rag-raptor-index") "Drift in the index"]

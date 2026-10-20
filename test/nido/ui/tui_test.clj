@@ -33,18 +33,26 @@
   (let [calls (atom [])]
     (with-redefs [lifecycle/up!            (fn [sn opts] (swap! calls conj [:up sn opts]))
                   lifecycle/session-weight (constantly :heavy)
-                  scratch/birth!           (fn [p sn w] (swap! calls conj [:birth p sn w]))]
+                  scratch/birth!           (fn [p sn w & [ws]]
+                                             (swap! calls conj [:birth p sn w])
+                                             (or ws "ws-1"))]
       (#'tui/run-session-action! :add "brian" "refshot")
-      (is (= [[:up "refshot" {:project "brian"}] [:birth :brian "refshot" :heavy]] @calls)
-          "up! first, then a keyword-project birth! carrying the provisioned weight"))))
+      (is (= [[:birth :brian "refshot" nil]
+              [:up "refshot" {:project "brian" :runtime-key "ws-1"}]
+              [:birth :brian "refshot" :heavy]] @calls)
+          "the workstream is settled first, up! comes up on its runtime, and birth! then carries the provisioned weight"))))
 
 (deftest up-births-a-scratch-workstream
   (let [calls (atom [])]
     (with-redefs [lifecycle/up!            (fn [sn opts] (swap! calls conj [:up sn opts]))
                   lifecycle/session-weight (constantly :heavy)
-                  scratch/birth!           (fn [p sn w] (swap! calls conj [:birth p sn w]))]
+                  scratch/birth!           (fn [p sn w & [ws]]
+                                             (swap! calls conj [:birth p sn w])
+                                             (or ws "ws-1"))]
       (#'tui/run-session-action! :up "brian" "refshot")
-      (is (= [[:up "refshot" {:project "brian"}] [:birth :brian "refshot" :heavy]] @calls)))))
+      (is (= [[:birth :brian "refshot" nil]
+              [:up "refshot" {:project "brian" :runtime-key "ws-1"}]
+              [:birth :brian "refshot" :heavy]] @calls)))))
 
 (deftest destroy-reaps-the-scratch-workstream
   (let [calls (atom [])]
@@ -314,7 +322,7 @@
 (deftest workstream-o-opens-browser-when-running
   (let [opened (atom nil)]
     (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1"})
-                  nido.ui.dev/session-dev-state (fn [_ _] {:state :running :url "http://localhost:3100"})
+                  nido.ui.dev/session-dev-state (fn [& _] {:state :running :url "http://localhost:3100"})
                   nido.ui.tui/open-browser! (fn [url] (reset! opened url))]
       (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
             [s' _] (#'tui/update-workstream st (msg/key-press "o"))]
@@ -324,7 +332,7 @@
 (deftest workstream-o-hints-when-no-url
   (let [opened (atom :not-called)]
     (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1"})
-                  nido.ui.dev/session-dev-state (fn [_ _] {:state :down})
+                  nido.ui.dev/session-dev-state (fn [& _] {:state :down})
                   nido.ui.tui/open-browser! (fn [url] (reset! opened url))]
       (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
             [s' _] (#'tui/update-workstream st (msg/key-press "o"))]
@@ -370,12 +378,12 @@
 
 (deftest environment-block-renders-resolved-session-facts
   (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1" :weight :heavy})
-                nido.ui.dev/session-dev-state (fn [_ _] {:state :running :url "http://localhost:3100"})
+                nido.ui.dev/session-dev-state (fn [& _] {:state :running :url "http://localhost:3100"})
                 nido.session.lifecycle/list-all-data
                 (fn [_] {:sessions [{:name "impl-br-1" :app-port 3100 :pg-port 5500
                                      :nrepl-port 6100 :worktree "/wt/impl-br-1"}]})
                 nido.session.state/session-home-dir (fn [_ _] "/home/brian/impl-br-1")
-                nido.ui.tui/session-link-entries (fn [_] [])]
+                nido.ui.tui/session-link-entries (fn [_ _] [])]
     (let [block (#'tui/environment-block "brian" "w")]
       (is (str/includes? block "running") "live dev-state status shown")
       (is (str/includes? block "http://localhost:3100") "dev URL shown")
@@ -391,7 +399,7 @@
   ;; missed: dev URL, ports, session home, worktree.
   (with-redefs [nido.session.state/session-home-dir (fn [_ _] "/home/brian/impl-br-1")
                 nido.ui.tui/session-link-entries
-                (fn [_] [{:type :notion :url "https://notion.so/BR-1" :title "BR-1"}])
+                (fn [_ _] [{:type :notion :url "https://notion.so/BR-1" :title "BR-1"}])
                 nido.session.links/group-by-type (fn [es] {:notion es})
                 nido.session.links/display-labels (fn [_ _] "Notion")]
     (let [body (#'tui/session-info-body "brian" "impl-br-1"

@@ -206,3 +206,16 @@
             (is closed? "nothing is left owed, so the recovery closes")))
         (is (zero? @ups) "restoring it could only be refused again")
         (is (empty? @enqueued))))))
+
+(deftest a-persons-session-comes-back-on-the-workstream-holding-it
+  (with-tmp
+    (fn [_]
+      (let [f   (keep-failure! {} "Timed out waiting for .nrepl-port")
+            w   (recovery-ws! f)
+            ups (atom [])]
+        (with-redefs [lifecycle/up! (fn [name opts] (swap! ups conj [name opts]) :up)
+                      nido.coordinator.record.session/workstream-id-for
+                      (fn [p s] (when (= [:brian "feat"] [p s]) "ws-9"))]
+          (restore/restore! :nido w))
+        (is (= "ws-9" (:runtime-key (second (first @ups))))
+            "a failure kept with no key comes back on its workstream's runtime, not one of its own")))))

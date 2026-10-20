@@ -18,6 +18,7 @@
    [nido.coordinator.lane.spawn :as spawn]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.runs :as runs]
+   [nido.coordinator.record.session :as session]
    [nido.coordinator.record.triggers :as triggers]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.source.queue :as queue]
@@ -160,9 +161,16 @@
         (let [handed
               (case (:kind cont)
                 :none
-                (do (lifecycle/up! (:session f) (assoc (:opts f)
-                                                       :project (:project f)
-                                                       :origin origin))
+                ;; On the runtime of the workstream holding it now, else one of its own: a
+                ;; kept failure carries no key, since who holds the session may have
+                ;; changed since it failed.
+                (do (lifecycle/up! (:session f)
+                                   (let [held-by (session/workstream-id-for
+                                                  (keyword (name (:project f))) (:session f))]
+                                     (cond-> (assoc (:opts f)
+                                                    :project (:project f)
+                                                    :origin origin)
+                                       held-by (assoc :runtime-key held-by))))
                     {:kind :none})
 
                 :execute

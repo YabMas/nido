@@ -12,6 +12,7 @@
    done at the task layer (tasks.nido-session) — the only place that sees both."
   (:require
    [nido.coordinator.record.session :as session]
+   [nido.session.lifecycle :as lifecycle]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as workstream]))
 
@@ -74,12 +75,56 @@
               (:holder (ex-data e)))
           (throw e))))))
 
+(defn- settle-runtime!
+  "Move the session onto workstream `ws-id`'s runtime when it is up on another one — including one
+   started before runtimes recorded their key — restarting its services there while its Claude
+   session and working copy carry on. No-op for a session that is down: its next start comes up on
+   the workstream's runtime. Returns true when it moved the session."
+  [project session-name ws-id]
+  (let [opts {:project (name project)}
+        on   (try (lifecycle/runtime-of session-name opts) (catch Exception _ nil))]
+    (when (and on (not= (:key on) ws-id))
+      (lifecycle/restart! session-name (assoc opts :runtime-key ws-id))
+      true)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName [:set :SessionName]] [:vector :SessionName]]}
+  settle-runtimes!
+  "Move each of the `live` sessions a workstream holds onto that workstream's runtime, so every
+   session a workstream holds runs on it — the ones that were up before the rule existed too.
+   Sessions no workstream holds are left alone. Returns the names it moved."
+  [project live]
+  (into []
+        (filter (fn [n]
+                  (when-let [ws-id (session/workstream-id-for project n)]
+                    (settle-runtime! project n ws-id))))
+        (sort live)))
+
 (defn ^{:malli/schema [:=> [:cat :Workstream] :boolean]}
   bare?
   "Whether a workstream holds nothing but its own birth: no entry other than its :scratch mark.
    Discarding it then loses nothing — the birth entry is the record that it could be discarded."
   [w]
   (every? #(= :scratch (:kind %)) (:entries w)))
+
+(defn- birth*
+  "The workstream `birth!` puts the session on, recording it there."
+  [project session-name weight ws-id]
+  (if ws-id
+    (if-let [why (joinable project session-name ws-id)]
+      (throw (ex-info (str "Cannot start " session-name " on " ws-id " — "
+                           (case (:reason why)
+                             :no-such-workstream "no such workstream"
+                             :closed             "that workstream is closed"
+                             :name-held          (str "the name already belongs to " (:holder why))))
+                      (assoc why :refused :join :session session-name :project project)))
+      (do (if (session/read-session project ws-id session-name)
+            (reconcile-weight! project ws-id session-name weight)
+            (session/create! project ws-id {:name session-name :weight (or weight :light) :autonomy nil}))
+          ws-id))
+    (if-let [held (session/workstream-id-for project session-name)]
+      (do (reconcile-weight! project held session-name weight)
+          held)
+      (mint-one-off! project session-name weight))))
 
 (defn ^{:malli/schema [:function
                        [:=> [:cat :ProjectName :SessionName [:maybe :keyword]] :any]
@@ -97,27 +142,16 @@
    Without one: whichever workstream already holds the name keeps it, else a ref-less
    :scratch-stage one-off is minted for it. An unknown weight births :light, the conservative read.
 
-   Idempotent either way, and it still reconciles a stale `:weight`, since this is the only point
-   every path (manual up, TUI, the orphan sweep) re-runs against a live session."
+   Idempotent either way, and it still reconciles a stale `:weight` and moves a session that is up
+   on another runtime onto the workstream's, since this is the only point every path (manual up,
+   TUI, the orphan sweep) re-runs against a live session. A start that knows the workstream before
+   it brings the session up should pass it as `:runtime-key`, so the move is never a restart."
   ([project session-name weight]
    (birth! project session-name weight nil))
   ([project session-name weight ws-id]
-   (if ws-id
-     (if-let [why (joinable project session-name ws-id)]
-       (throw (ex-info (str "Cannot start " session-name " on " ws-id " — "
-                            (case (:reason why)
-                              :no-such-workstream "no such workstream"
-                              :closed             "that workstream is closed"
-                              :name-held          (str "the name already belongs to " (:holder why))))
-                       (assoc why :refused :join :session session-name :project project)))
-       (do (if (session/read-session project ws-id session-name)
-             (reconcile-weight! project ws-id session-name weight)
-             (session/create! project ws-id {:name session-name :weight (or weight :light) :autonomy nil}))
-           ws-id))
-     (if-let [held (session/workstream-id-for project session-name)]
-       (do (reconcile-weight! project held session-name weight)
-           held)
-       (mint-one-off! project session-name weight)))))
+   (let [held-by (birth* project session-name weight ws-id)]
+     (settle-runtime! project session-name held-by)
+     held-by)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] :any]}
   reap!

@@ -419,20 +419,22 @@
    here and writes the resume shim + run-link via nido.session.resume-shim — that
    directory is what marks the session as this Run's. After session-up, also writes
    the reverse `<run-dir>/session-home` symlink the coordinator uses to locate the
-   worktree (per spec §Runs / Identity & storage). Returns whatever
-   session-lifecycle/up! returns.
+   worktree (per spec §Runs / Identity & storage). The session comes up on its workstream's
+   runtime. Returns whatever session-lifecycle/up! returns.
 
    `origin` is what a failed start keeps as its reason for running; the Run's own
    origin unless a caller starting it for something else — a reply, a restore —
    says so."
   ([run] (spawn-session-for-run! run (run-origin run)))
   ([run origin]
-  (let [{:keys [project session-name id session-profile]} run
+  (let [{:keys [project session-name id session-profile workstream-id]} run
+        ws-id        (or workstream-id (session/workstream-id-for project session-name))
         result       (session-lifecycle/up! session-name
-                                            {:project         project
-                                             :run-dir         (cstate/run-dir id)
-                                             :session-profile session-profile
-                                             :origin          origin})
+                                            (cond-> {:project         project
+                                                     :run-dir         (cstate/run-dir id)
+                                                     :session-profile session-profile
+                                                     :origin          origin}
+                                              ws-id (assoc :runtime-key ws-id)))
         session-home (session-state/session-home-dir (name project) session-name)
         link-path    (cstate/run-session-home-link id)]
     (when (fs/exists? link-path) (fs/delete link-path))
@@ -570,7 +572,8 @@
     nil)))
 
 (defn- run-worktree
-  "The worktree `run`'s session lives in, and that session's instance id."
+  "The worktree `run`'s session lives in, and the instance id of the runtime it is on — nil while
+   it is down."
   [run]
   (let [pname       (name (:project run))
         project-dir (:directory (get (config/read-projects) pname))
@@ -658,7 +661,7 @@
     (try
       (when (and (not (provision-only-skills skill)) (owns-session? run))
         (let [{:keys [worktree instance-id]} (run-worktree run)
-              states (vals (:service-states (session-state/read-session instance-id)))
+              states (vals (:service-states (some-> instance-id session-state/read-session)))
               pids   (into #{} (comp (keep :pid) (filter proc/process-alive?)) states)]
           (when (seq pids)
             ;; :pid with :port is the repl JVM and only ever that: a private
@@ -697,7 +700,7 @@
   (let [{:keys [project session-name id]} run
         pname       (name project)
         {:keys [worktree instance-id]} (run-worktree run)
-        mcp         (let [p (session-state/session-mcp-path instance-id)]
+        mcp         (let [p (launcher/session-mcp-path pname session-name)]
                       (when (fs/exists? p) p))]
     {:cwd        worktree
      :briefing   (launcher/session-briefing pname session-name instance-id)

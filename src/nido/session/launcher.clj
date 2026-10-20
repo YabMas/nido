@@ -58,19 +58,11 @@
        (filter #(= :postgresql (:type %)))
        first))
 
-(defn- profile-path
-  "Path to the persisted profile for a session. Mirrors the logic in
-   engine.clj but kept local to avoid a circular require."
-  [instance-id]
-  (str (fs/path (state/instance-state-dir instance-id) "profile.edn")))
-
 (defn- read-profile-for-session
-  "Return the resolved profile persisted at session-up time. nil if absent
+  "Return the resolved profile the session `session-name` was brought up with. nil if absent
    (e.g. legacy sessions predating this feature)."
-  [instance-id]
-  (let [path (profile-path instance-id)]
-    (when (fs/exists? path)
-      (io/read-edn path))))
+  [project-name session-name]
+  (state/read-session-profile project-name session-name))
 
 (defn- jj-source-repo?
   "True if `dir` is a jj-colocated source repo. The source's `.jj/repo`
@@ -190,16 +182,37 @@
     (when (seq servers)
       {:mcpServers servers})))
 
-(defn ^{:malli/schema [:=> [:cat :InstanceId :ProjectName :Path :any :any] [:maybe :Path]]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] :Path]}
+  session-mcp-path
+  "Path to a session's rendered MCP config, a launch input passed as
+   `--mcp-config`. Keyed by the session, not the runtime it is on: sessions
+   sharing a runtime share its database but each carries its own worktree's
+   servers. Outside the state dir, which reclaim removes."
+  [project-name session-name]
+  (str (fs/path (core/nido-home) "session-mcp"
+                (str (state/session-key project-name session-name) ".json"))))
+
+(defn- put-mcp!
+  "Make the MCP config at `path` say `doc`, the current `mcp-config`: written when it names a
+   server, removed when it names none, so a config from an earlier runtime never outlives it.
+   Every MCP artifact a session is launched with is written through here. Returns the path when
+   written, else nil."
+  [path doc]
+  (if doc
+    (do (fs/create-dirs (fs/parent path))
+        (io/write-json! path doc)
+        path)
+    (do (fs/delete-if-exists path)
+        nil)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string :Path :any :any] [:maybe :Path]]}
   write-session-mcp!
-  "Render the session's MCP config and write it to the instance-state dir as a
-   launch input. Returns the path, or nil when no server is configured."
-  [instance-id project-name worktree pg-svc pg-port]
-  (when-let [doc (mcp-config project-name worktree pg-svc pg-port)]
-    (let [path (state/session-mcp-path instance-id)]
-      (fs/create-dirs (fs/parent path))
-      (io/write-json! path doc)
-      path)))
+  "Render the session's MCP config and write it to `session-mcp-path` as a
+   launch input — or remove it when no server is configured. Returns the path, or nil when no
+   server is configured."
+  [project-name session-name worktree pg-svc pg-port]
+  (put-mcp! (session-mcp-path project-name session-name)
+            (mcp-config project-name worktree pg-svc pg-port)))
 
 (defn- render-link-line
   "One bullet for a link: '- <url>' or '- <url> — <title>'."
@@ -755,8 +768,41 @@
          (when (seq br-id) (str " (" br-id ")"))
          "\n")))
 
+(defn- render-code-loading
+  "How a session loads what it changed into a JVM another working copy started: the JVM's
+   classpath is `runtime-dir`, so a `:reload` reads that copy's files and never this session's
+   edits; `load-file` by absolute path reads its own. `worktree` is the session's own, or nil
+   when the reader is told only that its working directory is it. The one place either briefing
+   says how to load code into a shared JVM."
+  [worktree runtime-dir]
+  (let [own (or worktree "<your working copy>")]
+    (str
+     "## Loading your changes into the shared JVM\n"
+     "\n"
+     "The JVM was started in " runtime-dir ", and its classpath is that working copy"
+     (if worktree
+       (str " — not yours, " worktree)
+       ", which is not yours when your working directory is another")
+     ". `(require 'some.ns :reload)` reads a namespace from that classpath, so it loads\n"
+     "the other session's file and silently drops your edit. Load what you changed from\n"
+     "your own working copy, by absolute path:\n"
+     "\n"
+     "    (load-file \"" own "/<path/to/changed_file.clj>\")\n"
+     "\n"
+     "This takes precedence over any instruction to reload with `:reload`. Load a namespace\n"
+     "before the ones that require it. Resources (EDN, templates) are still read from the\n"
+     "classpath, the other working copy's.\n"
+     "\n")))
+
+(defn- other-working-copy?
+  "Does the JVM of the runtime run out of a working copy other than `worktree`?"
+  [worktree runtime-dir]
+  (and worktree runtime-dir
+       (not= (str (fs/normalize (fs/absolutize worktree)))
+             (str (fs/normalize (fs/absolutize runtime-dir))))))
+
 (defn- render-context
-  [{:keys [project-name session-name worktree source-dir
+  [{:keys [project-name session-name worktree source-dir runtime-dir
            app-port app-url nrepl-port pg-port
            profile links project-briefing
            workstream-id br-id design-scope]}]
@@ -779,6 +825,8 @@
        "## Services are already running\n\nThe REPL, app server, and database for this worktree are managed by\nnido. Don't run project-local scripts that spin up a REPL/app/DB —\nconnect to what's already live. The postgres MCP is preconfigured to\nthis session's DB.\n\n"
        "## Lite session\n\nThis is a lite session with no background services. The worktree is a\nread-only symlink to the project source directory.\n\n")
      (when-not (str/blank? project-briefing) (str project-briefing "\n"))
+     (when (and nrepl-port (other-working-copy? worktree runtime-dir))
+       (render-code-loading worktree runtime-dir))
      (render-design-section project-name worktree design-scope)
      shipping-doctrine-instructions
      "\n"
@@ -1133,13 +1181,17 @@
                :hint (str "This session was started before the session-home "
                           "migration. Run `bb nido:session:down` then `:up` "
                           "to rebuild it.")})))
-    (let [profile      (read-profile-for-session instance-id)
+    (let [profile      (read-profile-for-session project-name session-name)
           home         (state/session-home-dir project-name session-name)
-          link-entries (when instance-id (links/read-links instance-id))
+          link-entries (links/read-links (state/session-key project-name session-name))
           ws-ctx       (when run-dir (run-workstream-context :run-dir run-dir))
           ctx-doc      (render-context (merge {:session-name     session-name
                                                :project-name     project-name
                                                :worktree         worktree
+                                               ;; Where the JVM runs out of; the runtime record is
+                                               ;; written before any member is briefed.
+                                               :runtime-dir      (some-> instance-id state/read-session
+                                                                         :project-dir)
                                                :source-dir       (project-source-dir project-name)
                                                :app-port         (get-in ctx [:app :port])
                                                :app-url          (get-in ctx [:app :url])
@@ -1151,12 +1203,10 @@
                                               ws-ctx))
           mcp-doc      (mcp-config project-name worktree pg-svc pg-port)]
       (fs/create-dirs home)
-      (when mcp-doc
-        (let [path (mcp-path project-name session-name)]
-          (io/write-json! path mcp-doc)
-          (core/log-step (str "Wrote " path))))
-      (when-let [svc-mcp-path (write-session-mcp! (get-in ctx [:session :instance-id])
-                                                 project-name worktree pg-svc pg-port)]
+      (when-let [path (put-mcp! (mcp-path project-name session-name) mcp-doc)]
+        (core/log-step (str "Wrote " path)))
+      (when-let [svc-mcp-path (write-session-mcp! project-name session-name
+                                                 worktree pg-svc pg-port)]
         (core/log-step (str "Wrote " svc-mcp-path)))
       (doseq [path [(claude-md-path project-name session-name)
                     (agents-md-path project-name session-name)]]
@@ -1228,7 +1278,9 @@
    down), because then there is nothing to connect to and the block would be
    three headings over an empty fact list."
   [instance-id]
-  (let [ctx        (:context (some-> instance-id state/read-session))
+  (let [session    (some-> instance-id state/read-session)
+        ctx        (:context session)
+        runtime-dir (get-in ctx [:session :project-dir])
         nrepl-port (get-in ctx [:repl :port])
         app-port   (get-in ctx [:app :port])
         app-url    (get-in ctx [:app :url])
@@ -1241,7 +1293,7 @@
        "managed by nido. The rules here override any conflicting instruction in\n"
        "this project's CLAUDE.md or AGENTS.md.\n"
        "\n"
-       "- worktree: " (get-in ctx [:session :project-dir]) "\n"
+       "- JVM started in: " runtime-dir "\n"
        (when nrepl-port (str "- nrepl port: " nrepl-port "\n"))
        (when app-url    (str "- app: " app-url "\n"))
        (when app-port   (str "- app port: " app-port "\n"))
@@ -1265,25 +1317,38 @@
               "of your code runs. Reach for one only for what the warm JVM cannot answer,\n"
               "and where this project's own guidance names a path for full suites, follow\n"
               "that: this rule is about not starting a JVM the session already has, not\n"
-              "about how this project runs its tests.\n"))))))
+              "about how this project runs its tests.\n"
+              ;; The reader's worktree is its cwd, which this cannot see: told whenever the
+              ;; runtime carries a session working elsewhere than where its JVM started.
+              (when (some #(other-working-copy? % runtime-dir) (keys (:members session)))
+                (str "\n" (render-code-loading nil runtime-dir)))))))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :string :InstanceId] :string]}
+(defn- member-worktree
+  "The worktree of `session-name` on the runtime `session`: its own when the runtime records its
+   members, else the worktree the runtime started in."
+  [session session-name]
+  (or (some (fn [[dir n]] (when (= n session-name) dir)) (:members session))
+      (get-in session [:context :session :project-dir])))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string [:maybe :InstanceId]] :string]}
   session-briefing
   "Render the session briefing string from persisted state + links. Reusable as a
    launch input (claude --append-system-prompt). Source of truth for the home
-   CLAUDE.md and AGENTS.md."
+   CLAUDE.md and AGENTS.md. `instance-id` is the runtime the session is on; nil while it is
+   down, when the briefing carries no ports."
   [project-name session-name instance-id]
   (let [home         (state/session-home-dir project-name session-name)
         session      (some-> instance-id state/read-session)
         ctx          (:context session)
-        worktree     (get-in ctx [:session :project-dir])
-        profile      (read-profile-for-session instance-id)
-        link-entries (links/read-links instance-id)
+        worktree     (member-worktree session session-name)
+        profile      (read-profile-for-session project-name session-name)
+        link-entries (links/read-links (state/session-key project-name session-name))
         ws-ctx       (run-workstream-context :session-home home)]
     (render-context
      (merge {:session-name     session-name
              :project-name     project-name
              :worktree         worktree
+             :runtime-dir      (get-in ctx [:session :project-dir])
              :source-dir       (project-source-dir project-name)
              :app-port         (get-in ctx [:app :port])
              :app-url          (get-in ctx [:app :url])
@@ -1313,7 +1378,7 @@
           (io/write-text! path briefing))
         (try
           (agent-guidance/write-codex-override!
-           (get-in ctx [:session :project-dir])
+           (member-worktree session session-name)
            briefing)
           (catch Exception e
             (core/log-step (str "warning: worktree AGENTS.override.md: "

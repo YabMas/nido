@@ -33,7 +33,6 @@
    [nido.platform.project :as project]
    [nido.coordinator.work :as work]
    [nido.ui.dev :as dev]
-   [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.links :as links]
    [nido.session.state :as state]))
@@ -564,7 +563,6 @@
 ;; belongs to one), destroy reaps it (spares ref-carrying workstreams).
 ;; `:add` uses create-workstream! which delegates to work/new! (already bundles
 ;; lifecycle/up! + scratch/birth!) — no :after needed for that verb.
-(defn- birth-scratch!   [p sn] (work/session-started! p sn))
 (defn- reap-scratch!    [p sn] (work/session-destroyed! p sn))
 
 (defn- create-workstream!
@@ -579,8 +577,14 @@
   [sn {:keys [project]}]
   (create-workstream! project sn))
 
+(defn- start-session-action!
+  "Adapter from action-defs calling convention [sn {:project p}] to work/start!, which settles the
+   session's workstream before the start so it comes up on that workstream's runtime."
+  [sn {:keys [project] :as opts}]
+  (work/start! project sn opts))
+
 (def ^:private action-defs
-  {:up      {:fn #'lifecycle/up!              :after birth-scratch! :gerund "Starting"   :past "Started"   :failed "start"}
+  {:up      {:fn #'start-session-action!                            :gerund "Starting"   :past "Started"   :failed "start"}
    :down    {:fn #'lifecycle/down!                                  :gerund "Stopping"   :past "Stopped"   :failed "stop"}
    :destroy {:fn #'destroy-session!           :after reap-scratch!  :gerund "Destroying" :past "Destroyed" :failed "destroy"}
    :add     {:fn #'create-workstream-action!                        :gerund "Creating"   :past "Created"   :failed "create"}
@@ -1125,8 +1129,8 @@
     (with-environment state (fn [s p _ sn] (enter-session s p sn :worktree)))
     (msg/key-match? msg "o")
     (with-environment state
-      (fn [s p _ sn]
-        (if-let [url (:url (dev/session-dev-state p sn))]
+      (fn [s p ws-id sn]
+        (if-let [url (:url (dev/session-dev-state p ws-id sn))]
           (do (open-browser! url)
               [(assoc s :status (str "opening " sn " in browser…")) nil])
           [(assoc s :status "(no app URL yet — start it first)") nil])))
@@ -1433,14 +1437,12 @@
   (str (style/render label-style (format "%-13s" label)) " " value))
 
 (defn- session-link-entries
-  "Read the highlighted session's links by deriving instance-id from
-   worktree. Returns [] when worktree is nil or any error escapes —
+  "Read the highlighted session's links. Returns [] when any error escapes —
    the panel must never throw."
-  [worktree]
-  (when worktree
-    (try
-      (links/read-links (engine/resolve-instance-id worktree))
-      (catch Exception _ []))))
+  [project session]
+  (try
+    (links/read-links (state/session-key (name project) session))
+    (catch Exception _ [])))
 
 (def ^:private link-indent "              ")
 
@@ -1469,7 +1471,7 @@
         dash      "—"
         dev-url   (if app-port (str "http://localhost:" app-port) dash)
         home      (state/session-home-dir project session)
-        entries   (session-link-entries worktree)
+        entries   (session-link-entries project session)
         link-rows (render-link-rows entries)]
     (str/join "\n"
               (concat
@@ -1489,7 +1491,7 @@
    version yet. Reads dev-state + lifecycle facts; the view calls it each render."
   [project ws-id]
   (if-let [sname (:name (work/environment project ws-id))]
-    (let [st    (dev/session-dev-state project sname)
+    (let [st    (dev/session-dev-state project ws-id sname)
           glyph (case (:state st)
                   :running                          "●"
                   (:starting :stopping :restarting) "◐"

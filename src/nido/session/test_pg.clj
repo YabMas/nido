@@ -271,13 +271,25 @@
             :source-repo ((requiring-resolve 'nido.session.engine/source-project-root)
                           project-dir)})))
 
-(defmethod service/start-service! :test-pg
-  [{:keys [db-user db-password] :or {db-user "user" db-password "password"} :as service-def}
-   ctx _opts]
+(defn- start-db! [{:keys [db-user db-password] :or {db-user "user" db-password "password"} :as service-def}
+                  ctx]
   (let [project-name (get-in ctx [:session :project-name])
         {:keys [port db-name]} (ensure-session-db! project-name (service-opts service-def ctx))]
     {:state {:project-name project-name :port port :db-name db-name}
      :context {:port port :db-name db-name :db-user db-user :db-password db-password}}))
+
+(defmethod service/start-service! :test-pg
+  [service-def ctx _opts]
+  (start-db! service-def ctx))
+
+(defn ^{:malli/schema [:=> [:cat :map :map :string] :map]}
+  member-context
+  "The context `service-def` hands a session that shares a runtime it does not run out of: a test
+   database of its own, keyed by `session-key` rather than by the runtime, created from the
+   template when missing. `ctx` is the runtime's. Sessions sharing a runtime share its dev
+   database; the runtime's test database is the one its own REPL reads."
+  [service-def ctx session-key]
+  (:context (start-db! service-def (assoc-in ctx [:session :instance-id] session-key))))
 
 (defmethod service/stop-service! :test-pg
   [_service-def _saved-state]

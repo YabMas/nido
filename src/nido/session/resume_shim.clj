@@ -83,3 +83,12 @@ exec claude \"$@\"
     (fs/set-posix-file-permissions shim-path "rwxr-xr-x")
     (when (fs/exists? link-path) (fs/delete link-path))
     (fs/create-sym-link link-path run-dir)))
+
+(defn ^{:malli/schema [:=> [:cat :Path] [:maybe :string]]}
+  run-dir
+  "The Run directory the session home `session-home` is linked to, or nil when it has no run
+   link. Read before anything removes the home, so a restart can write the link back."
+  [session-home]
+  (let [link-path (fs/path session-home "run-link")]
+    (when (fs/sym-link? link-path)
+      (str (fs/read-link link-path)))))

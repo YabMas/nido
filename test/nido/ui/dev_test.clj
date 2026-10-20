@@ -38,3 +38,29 @@
            (dev/failed-ws-errors)))
     (finally
       (doseq [k ["p/ws1" "p/ws2" "p/ws3" "plain-instance"]] (dev/clear-app-state! k)))))
+
+(deftest a-dashboard-start-is-probed-on-the-workstreams-runtime
+  ;; A stopped session the workstream holds comes up on the workstream's runtime; the probe
+  ;; after the start and the state the board reads must name that runtime, not its own.
+  (let [up (atom nil)]
+    (with-redefs [nido.session.lifecycle/session-coords
+                  (fn [s o] {:wt-path (str "/wt/" s) :instance-id (str "p--" (or (:runtime-key o) s))})
+                  nido.session.engine/read-profile-for-session     (constantly nil)
+                  nido.coordinator.work/ensure-open!                (fn [& _] nil)
+                  nido.session.lifecycle/up!                        (fn [_ o] (reset! up o))
+                  dev/app-port-for-instance                         (fn [iid] (when (= "p--ws-1" iid) 4100))
+                  nido.platform.process/tcp-open?                   (constantly true)]
+      @(dev/dev-action! "p" "ws-1" "feat" "start"))
+    (try
+      (is (= "ws-1" (:runtime-key @up)))
+      (is (nil? (dev/current-app-state "p--ws-1")) "the start is seen to have opened its port")
+      (is (nil? (dev/current-app-state "p--feat")) "no failure is left under the session's own key")
+      (finally (doseq [k ["p--ws-1" "p--feat"]] (dev/clear-app-state! k))))))
+
+(deftest a-workstreams-sessions-are-read-on-its-runtime
+  (let [asked (atom [])]
+    (with-redefs [nido.session.lifecycle/session-coords
+                  (fn [s o] (swap! asked conj (:runtime-key o)) {:wt-path (str "/wt/" s) :instance-id "x"})
+                  nido.session.state/read-registry (constantly {})]
+      (dev/ws-session-dev-states "p" {:ws-id "ws-1" :sessions [{:name "a"} {:name "b"}]}))
+    (is (= ["ws-1" "ws-1"] @asked) "a stopped session's state is read where its start would put it")))

@@ -485,7 +485,7 @@
                     (str "WARN: registry prune threw — " (ex-message t))))))
     (doseq [project (registered-projects)]
       (try
-        (let [{:keys [adopted yielded held-twice]} (work/adopt-orphans! project)]
+        (let [{:keys [adopted yielded held-twice moved]} (work/adopt-orphans! project)]
           (doseq [{:keys [session holders]} held-twice]
             (binding [*err* *err*]
               (.println ^java.io.PrintWriter *err*
@@ -499,7 +499,11 @@
                           (str/join ", " adopted))))
           (when (seq yielded)
             (println (str "nido coordinator: yielded " (count yielded)
-                          " scratch workstream(s) in " (name project)))))
+                          " scratch workstream(s) in " (name project))))
+          (when (seq moved)
+            (println (str "nido coordinator: moved " (count moved)
+                          " session(s) onto their workstream's runtime in " (name project) ": "
+                          (str/join ", " moved)))))
         (catch Throwable t
           (binding [*err* *err*]
             (.println ^java.io.PrintWriter *err*

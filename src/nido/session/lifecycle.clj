@@ -3,8 +3,8 @@
    starts an isolated nido session against it, and the inverse tears it
    all down. Sessions are named (the name is the git branch / jj bookmark
    and the leaf path under the project's worktrees directory by default).
-   State isolation relies on the engine's instance-id derivation (see
-   `nido.session.engine/resolve-instance-id`).
+   Which runtime a session is on is the engine's: it is keyed by the key a caller passes, else
+   the one the session is up under, else the session's own name (see `with-context`).
 
    Worktree backend depends on the source VCS:
    - jj-colocated source (has `.jj/repo/`) → `jj workspace add` produces a
@@ -38,6 +38,7 @@
    [nido.session.launcher :as launcher]
    [nido.session.links :as links]
    [nido.session.profiles :as profiles]
+   [nido.session.resume-shim :as resume-shim]
    [nido.session.services.postgresql :as pg]
    [nido.session.state :as state]
    [nido.session.test-pg :as test-pg]))
@@ -515,20 +516,26 @@
                                                   (str/replace #"^[^a-z0-9]+|[/.-]+$" ""))))
                       {:reason :invalid-session-name :session name :value s})))))
 
-(defn- with-context [name opts]
+(defn- with-context
+  "Where the session `name` lives and which runtime it is on. `:runtime-key` is the key it comes up
+   under: the caller's `:runtime-key`, else the one it is up under, else its own whole name.
+   `:instance-id` is that runtime's; `:on` is the runtime it is on now, nil when it is down."
+  [name opts]
   (let [[project-name {:keys [directory]}] (resolve-project opts)
         wt-path (or (some-> (:path opts) str fs/expand-home str)
                     (worktree-path project-name directory name))
         branch (or (:branch opts) name)
         base   (or (:base opts) "origin/main")
-        instance-id (engine/resolve-instance-id wt-path)]
+        runtime-key (or (:runtime-key opts) (engine/runtime-key-of wt-path) name)]
     {:project-name project-name
      :project-dir  directory
      :name name
      :wt-path wt-path
      :branch branch
      :base base
-     :instance-id instance-id}))
+     :runtime-key runtime-key
+     :instance-id (engine/runtime-instance-id wt-path project-name runtime-key)
+     :on (engine/resolve-instance-id wt-path)}))
 
 (defn- effective-profile
   "The resolved session profile: an explicit pre-resolved :profile in opts wins;
@@ -542,7 +549,9 @@
 (def ^:private kept-opts
   "The options a failed start keeps, so a restore can start it again the same
    way. Plain data only: a resolved :profile is kept too, because a session
-   brought up with its persisted profile must come back with it."
+   brought up with its persisted profile must come back with it. Never the
+   :runtime-key: which workstream holds a session is nido's to say when it is
+   started again, and may have changed — or ended — since the start failed."
   [:project :session-profile :profile :run-dir :base :branch :path])
 
 (defn- keeping-failure
@@ -628,14 +637,44 @@
           f))
       (finally (.unlock l)))))
 
+(defn- with-lifecycle-locks
+  "Run `(f ctx)` holding every lifecycle lock a verb on the session `name` needs, taken in one
+   order by every verb: the session's own lock first, then — `ctx` read under it, so the runtime
+   the session is on is not chosen by a verb that has not waited — the locks of the runtime it is
+   on and the one it comes up on, sorted by id. One session's verbs therefore run one at a time
+   whatever runtime keys their callers pass, and two verbs moving sessions between the same two
+   runtimes in opposite directions take those locks in the same order."
+  [name opts verb f]
+  (let [[project-name _] (resolve-project opts)]
+    (with-session-lock
+     (str "member-" (state/session-key project-name name)) verb
+     (fn []
+       (let [{:keys [instance-id on wt-path] :as ctx} (with-context name opts)]
+         ((reduce (fn [inner rt] #(with-session-lock rt verb inner))
+                  (fn []
+                    ;; Before the verb's first stop: a start refused after it would leave the
+                    ;; session down and detached.
+                    (when-not (#{:down :destroy} verb)
+                      (engine/refuse-start-in-backing-worktree! name wt-path instance-id))
+                    (f ctx))
+                  (reverse (sort (distinct (remove nil? [on instance-id])))))))))))
+
 (defn ^{:malli/schema [:=> [:cat :string :map] :map]}
   session-coords
-  "Resolve {:wt-path :instance-id} for a named session. The instance-id is the
-   canonical one (engine/resolve-instance-id over the worktree path), so it
-   matches the registry + lifecycle state even for slash-namespaced names."
+  "Resolve {:wt-path :instance-id} for a named session: its worktree, and the runtime it is on —
+   or, while it is down, the one it would come up on."
   [name opts]
-  (let [{:keys [wt-path instance-id]} (with-context name opts)]
-    {:wt-path wt-path :instance-id instance-id}))
+  (let [{:keys [wt-path instance-id on]} (with-context name opts)]
+    {:wt-path wt-path :instance-id (or on instance-id)}))
+
+(defn ^{:malli/schema [:=> [:cat :string :map] [:maybe [:map [:instance-id :string] [:key [:maybe :string]]]]]}
+  runtime-of
+  "The runtime the named session is up on, as {:instance-id :key}, or nil when it is down. `:key`
+   is nil for a runtime started before runtimes recorded the key they were started under."
+  [name opts]
+  (let [{:keys [wt-path on]} (with-context name opts)]
+    (when on
+      {:instance-id on :key (engine/runtime-key-of wt-path)})))
 
 (defn- weight-from-worktree
   "Fallback reading of provisioned weight for a session whose profile snapshot
@@ -666,10 +705,11 @@
    display detail wrong."
   [name opts]
   (try
-    (let [{:keys [wt-path]} (session-coords name opts)]
-      (or (profiles/profile-weight (engine/read-profile-for-session wt-path))
+    (let [{:keys [wt-path project-name]} (with-context name opts)]
+      (or (profiles/profile-weight (engine/read-profile-for-session project-name name))
           (weight-from-worktree wt-path)))
     (catch Exception _ nil)))
+
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   up!
@@ -680,20 +720,22 @@
    Worktree creation routes by source-repo VCS: jj-colocated → `jj
    workspace add`; plain git → `git worktree add`."
   [name opts]
-  (let [{:keys [project-name project-dir wt-path branch base instance-id] :as ctx}
-        (with-context name opts)
+  (let [{:keys [project-name project-dir branch base]} (with-context name opts)
         _       (refuse-unnameable! name branch)
         profile (effective-profile project-name opts)]
-    (with-session-lock
-     instance-id :up
-     (fn []
+    (with-lifecycle-locks
+     name opts :up
+     (fn [{:keys [wt-path runtime-key] :as ctx}]
        ;; Read under the lock: a verb we waited for may have just created it.
-       (let [existed? (fs/exists? wt-path)]
+       (let [existed?  (fs/exists? wt-path)
+             poisoned? (and existed? (jj-worktree-poisoned? wt-path))]
+         ;; A refusal, so before the start that keeps a failure: recreating removes the worktree.
+         (when poisoned? (engine/refuse-backing-worktree! :recreate name wt-path nil))
          (keeping-failure
           :up name opts ctx existed?
           (fn []
             (cond
-              (and existed? (jj-worktree-poisoned? wt-path))
+              poisoned?
               (do
                 (core/log-step (str "Worktree at " wt-path " is poisoned (empty working copy, @ on the root commit) — recreating."))
                 (remove-jj-workspace! project-dir wt-path branch branch false) ; forget + rm dir; KEEP the bookmark (it's correctly placed)
@@ -710,16 +752,31 @@
 
               :else
               (create-git-worktree! project-dir wt-path branch base))
-            (engine/start-session! wt-path (assoc opts :session-name name :profile profile)))))))))
+            ;; The one write over a recorded profile: this start made the working copy it describes.
+            (when-not existed?
+              (engine/write-profile-for-session! project-name name profile))
+            (engine/start-session! wt-path (assoc opts :session-name name :profile profile
+                                                  :runtime-key runtime-key)))))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   down!
   "Stop the named session. Worktree and on-disk state are preserved."
   [name opts]
-  (let [{:keys [wt-path instance-id]} (with-context name opts)]
+  (let [{:keys [wt-path]} (with-context name opts)]
     (when-not (fs/exists? wt-path)
       (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
-    (with-session-lock instance-id :down #(engine/stop-session! wt-path))))
+    (with-lifecycle-locks name opts :down (fn [_] (engine/stop-session! wt-path)))))
+
+(defn- carried-across-stop
+  "`opts` carrying what the session `name` was started with and a restart would lose: the
+   Run directory its home is linked to, which the stop removes with the home, and the profile it
+   came up with, which a start with none replaces by every service. Read before the stop, so the
+   start that follows restores both."
+  [opts project-name name]
+  (assoc opts
+         :run-dir (or (:run-dir opts)
+                      (resume-shim/run-dir (state/session-home-dir project-name name)))
+         :profile (or (:profile opts) (engine/read-profile-for-session project-name name))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   restart!
@@ -727,13 +784,15 @@
    Used by the dashboard's restart button. Not exposed as a bb task —
    `bb nido:session:down` followed by `:up` covers the CLI case."
   [name opts]
-  (let [{:keys [wt-path instance-id] :as ctx} (with-context name opts)]
-    (with-session-lock
-     instance-id :restart
-     (fn []
-       (down! name opts)
-       (keeping-failure :restart name opts ctx true
-                        #(engine/start-session! wt-path (assoc opts :session-name name)))))))
+  (let [{:keys [wt-path project-name]} (with-context name opts)]
+    (with-lifecycle-locks
+     name opts :restart
+     (fn [{:keys [runtime-key] :as ctx}]
+       (let [opts (carried-across-stop opts project-name name)]
+         (down! name opts)
+         (keeping-failure :restart name opts ctx true
+                          #(engine/start-session! wt-path (assoc opts :session-name name
+                                                                :runtime-key runtime-key))))))))
 
 (defn- effective-pg-mode
   "Resolved PG mode for a session: the per-session override if set, else the
@@ -744,6 +803,27 @@
                      (filter #(= :postgresql (:type %)))
                      first)]
         (pg/resolve-pg-mode (or svc {})))))
+
+(defn ^{:malli/schema [:=> [:cat :keyword :string :map :any] :any]}
+  with-runtime-to-itself
+  "Run `(f ctx)`, a verb that alters or measures a runtime as a whole — resets or re-provisions its
+   database, reboots it to time the boot — holding the lifecycle lock of every runtime the session
+   `name` touches — the one it comes up on and the one it is on now — and refusing, under those
+   locks, while any other session is on either: the verb would do it under all of them. Read under
+   the lock, so a session joining meanwhile is waited for, not missed. The verbs `f` runs on the
+   same session keep the hold."
+  [verb name opts f]
+  (with-lifecycle-locks
+   name opts verb
+   (fn [{:keys [instance-id on] :as ctx}]
+     (doseq [rt (distinct (remove nil? [instance-id on]))
+             :let [others (remove #{name} (engine/sessions-on rt))]
+             :when (seq others)]
+       (throw (ex-info (str "Refusing " (clojure.core/name verb) " of " name " — its runtime " rt
+                            " is shared with " (str/join ", " others)
+                            "; bring those down first.")
+                       {:reason :runtime-shared :verb verb :session name :with (vec others)})))
+     (f ctx))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   reset!
@@ -757,7 +837,8 @@
    Refuses for sessions on the shared cluster — a per-session reset there
    would reset the DB for every session. Use `bb nido:shared:pg:reset`."
   [name opts]
-  (let [{:keys [wt-path project-name instance-id] :as ctx} (with-context name opts)]
+  (let [{:keys [wt-path project-name instance-id]} (with-context name opts)
+        opts        (carried-across-stop opts project-name name)]
     (when (= :shared (effective-pg-mode project-name instance-id))
       (throw (ex-info (str "This session uses the shared cluster — a per-session "
                            "reset would reset the shared DB for every session. Use "
@@ -766,9 +847,10 @@
                       {:project-name project-name :session name})))
     (when-not (fs/exists? wt-path)
       (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
-    (with-session-lock
-     instance-id :reset
-     #(keeping-failure
+    (with-runtime-to-itself
+     :reset name opts
+     (fn [{:keys [instance-id runtime-key] :as ctx}]
+      (keeping-failure
        :reset name opts ctx true
        (fn []
          (try (engine/stop-session! wt-path)
@@ -778,7 +860,7 @@
            (when (fs/exists? pg-data)
              (core/log-step (str "Dropping PGDATA at " pg-data))
              (fs/delete-tree pg-data)))
-         (engine/start-session! wt-path (assoc opts :session-name name)))))))
+         (engine/start-session! wt-path (assoc opts :session-name name :runtime-key runtime-key))))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   isolate!
@@ -786,12 +868,13 @@
    per-session :isolated override, then stop+start so it re-provisions its own
    PGDATA from the template. Other sessions are unaffected. Reverse with `share!`."
   [name opts]
-  (let [{:keys [wt-path instance-id] :as ctx} (with-context name opts)]
+  (let [{:keys [wt-path project-name]} (with-context name opts)
+        opts        (carried-across-stop opts project-name name)]
     (when-not (fs/exists? wt-path)
       (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
-    (with-session-lock
-     instance-id :isolate
-     (fn []
+    (with-runtime-to-itself
+     :isolate name opts
+     (fn [{:keys [instance-id runtime-key] :as ctx}]
        (state/write-pg-mode-override! instance-id :isolated)
        (keeping-failure
         :isolate name opts ctx true
@@ -799,7 +882,7 @@
           (try (engine/stop-session! wt-path)
                (catch Exception e
                  (core/log-step (str "warning: stop during isolate: " (ex-message e)))))
-          (engine/start-session! wt-path (assoc opts :session-name name))))))))
+          (engine/start-session! wt-path (assoc opts :session-name name :runtime-key runtime-key))))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   share!
@@ -807,12 +890,13 @@
    drop its private PGDATA, then stop+start so it re-provisions against the
    shared cluster. Safe to call on an already-shared session."
   [name opts]
-  (let [{:keys [wt-path instance-id] :as ctx} (with-context name opts)]
+  (let [{:keys [wt-path project-name]} (with-context name opts)
+        opts        (carried-across-stop opts project-name name)]
     (when-not (fs/exists? wt-path)
       (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
-    (with-session-lock
-     instance-id :share
-     (fn []
+    (with-runtime-to-itself
+     :share name opts
+     (fn [{:keys [instance-id runtime-key] :as ctx}]
        (state/clear-pg-mode-override! instance-id)
        (keeping-failure
         :share name opts ctx true
@@ -824,19 +908,20 @@
             (when (fs/exists? pg-data)
               (core/log-step (str "Dropping private PGDATA at " pg-data))
               (fs/delete-tree pg-data)))
-          (engine/start-session! wt-path (assoc opts :session-name name))))))))
+          (engine/start-session! wt-path (assoc opts :session-name name :runtime-key runtime-key))))))))
 
 (defn- drop-test-databases!
-  "Drop the session's database in each test cluster its project declares. Stop
-   keeps a test database and the service protocol has no destroy, so this is
-   the one place a session's test database ends."
-  [project-name instance-id]
+  "Drop the test database keyed by `db-key` — a runtime's instance id, or a session's own key for
+   the one it was handed on a runtime it did not run out of — in each test cluster the project
+   declares. Stop keeps a test database and the service protocol has no destroy, so this is the
+   one place a test database ends."
+  [project-name db-key]
   (try
     (doseq [svc (:services (engine/read-session-edn project-name))
             :when (= :test-pg (:type svc))]
       (test-pg/drop-session-db! project-name
                                 (assoc (select-keys svc [:db-user :max-connections :settings :locale :db-stem])
-                                       :instance-id instance-id)))
+                                       :instance-id db-key)))
     (catch Exception e
       (core/log-step (str "warning: dropping test database: " (ex-message e))))))
 
@@ -857,37 +942,47 @@
    that became jj-colocated after some sessions were already created with
    `git worktree`) tear down on the same path they were created with."
   [name opts]
-  (let [{:keys [project-name project-dir wt-path branch]} (with-context name opts)
-        delete-branch? (boolean (or (:delete-branch? opts) (:delete-branch opts)))
-        instance-id (engine/resolve-instance-id wt-path)]
-    (with-session-lock
-     instance-id :destroy
-     (fn []
-       ;; Read persisted profile BEFORE dropping state-dir (profile lives inside it).
-       (let [profile (engine/read-profile-for-session wt-path)]
+  (let [{:keys [project-dir project-name wt-path branch]} (with-context name opts)
+        delete-branch? (boolean (or (:delete-branch? opts) (:delete-branch opts)))]
+    (with-lifecycle-locks
+     name opts :destroy
+     (fn [{:keys [on] :as ctx}]
+      (let [instance-id (or on (:instance-id ctx))
+            profile     (engine/read-profile-for-session project-name name)]
          (try
            (when (fs/exists? wt-path)
              (engine/stop-session! wt-path))
            (catch Exception e
              (core/log-step (str "warning: stop-session error: " (ex-message e)))))
-         (drop-test-databases! project-name instance-id)
-         (let [state-dir (state/instance-state-dir instance-id)
-               survivors (state/pid-files instance-id)]
-           (cond
-             ;; A pid file the stop left names a process it could not show was
-             ;; gone; the state dir is its only record, and reclaim keeps it
-             ;; and reports it while that process runs.
-             (seq survivors)
-             (core/log-step (str "warning: keeping " state-dir " — a process it records is still"
-                                 " running (" (str/join ", " survivors) ")"))
+         ;; After the stop, which takes the session off a runtime others are still on — its
+         ;; membership, registry entry and home go with it — and before anything is removed: a
+         ;; refusal here leaves the session detached and its worktree where the runtime needs it.
+         (engine/refuse-backing-worktree! :destroy name wt-path nil)
+         ;; The test database it was handed on a runtime it did not run out of is its own.
+         (let [own (state/session-key project-name name)]
+           (when (not= own instance-id) (drop-test-databases! project-name own)))
+         ;; A runtime other sessions are still on keeps its state and its test database.
+         (when (empty? (engine/sessions-on instance-id))
+           (drop-test-databases! project-name instance-id)
+           (let [state-dir (state/instance-state-dir instance-id)
+                 survivors (state/pid-files instance-id)]
+             (cond
+               ;; A pid file the stop left names a process it could not show was
+               ;; gone; the state dir is its only record, and reclaim keeps it
+               ;; and reports it while that process runs.
+               (seq survivors)
+               (core/log-step (str "warning: keeping " state-dir " — a process it records is still"
+                                   " running (" (str/join ", " survivors) ")"))
 
-             (fs/exists? state-dir)
-             (do (core/log-step (str "Dropping instance state-dir at " state-dir))
-                 (fs/delete-tree state-dir))))
-         ;; Links live outside the state-dir (they have to survive reclaim, which
-         ;; eats it an hour after `down`), so destroy is the one verb that has to say
-         ;; so out loud. Without this they would outlive the session that owned them.
-         (links/delete-links! instance-id)
+               (fs/exists? state-dir)
+               (do (core/log-step (str "Dropping instance state-dir at " state-dir))
+                   (fs/delete-tree state-dir)))))
+         ;; Links, the profile and the MCP config live outside the state-dir (they have to survive
+         ;; reclaim, which eats it an hour after `down`), so destroy is the one verb that has to
+         ;; say so out loud. Without this they would outlive the session that owned them.
+         (links/delete-links! (state/session-key project-name name))
+         (fs/delete-if-exists (state/session-profile-path project-name name))
+         (fs/delete-if-exists (launcher/session-mcp-path project-name name))
          (cond
            (= :symlink (-> profile :worktree :strategy))
            (remove-symlink-worktree! wt-path)
@@ -1206,7 +1301,7 @@
            (worktree-path project directory session))))))
 
 (defn- resolve-link-coords
-  "Resolve [project-name session-name instance-id worktree] for a link
+  "Resolve [project-name session-name links-key worktree] for a link
    command. Order of project/session resolution:
      1. explicit :project + positional <session>
      2. cwd inside a worktree (registry) → session-from-cwd
@@ -1228,9 +1323,8 @@
         (throw (ex-info (str "Unknown project: " project-name)
                         {:registered (vec (keys projects))}))))
     (let [{:keys [directory]} (get (config/read-projects) project-name)
-          worktree    (worktree-path project-name directory session-name)
-          instance-id (engine/resolve-instance-id worktree)]
-      [project-name session-name instance-id worktree])))
+          worktree    (worktree-path project-name directory session-name)]
+      [project-name session-name (state/session-key project-name session-name) worktree])))
 
 (defn ^{:malli/schema [:=> [:cat :any :map] :any]}
   link-add!
@@ -1238,9 +1332,9 @@
    :type and :url; :title is optional. project + session may be passed
    explicitly or auto-resolved from cwd."
   [session-arg opts]
-  (let [[project session instance-id _] (resolve-link-coords opts session-arg)]
-    (links/add! instance-id (select-keys opts [:type :url :title]))
-    (try (launcher/rerender-briefing! project session instance-id)
+  (let [[project session links-key worktree] (resolve-link-coords opts session-arg)]
+    (links/add! links-key (select-keys opts [:type :url :title]))
+    (try (launcher/rerender-briefing! project session (engine/resolve-instance-id worktree))
          (catch Exception e
            (core/log-step (str "warning: briefing rerender: " (ex-message e)))))
     (println (str "Added link to " project "/" session
@@ -1250,12 +1344,12 @@
   link-remove!
   "Drop the link with matching :url from the resolved session."
   [session-arg opts]
-  (let [[project session instance-id _] (resolve-link-coords opts session-arg)
+  (let [[project session links-key worktree] (resolve-link-coords opts session-arg)
         url (:url opts)]
     (when-not url
       (throw (ex-info "Missing :url" {:hint "Pass :url <url-to-remove>"})))
-    (links/remove-by-url! instance-id url)
-    (try (launcher/rerender-briefing! project session instance-id)
+    (links/remove-by-url! links-key url)
+    (try (launcher/rerender-briefing! project session (engine/resolve-instance-id worktree))
          (catch Exception e
            (core/log-step (str "warning: briefing rerender: " (ex-message e)))))
     (println (str "Removed link from " project "/" session " (" url ")"))))
@@ -1265,8 +1359,8 @@
   "Print the resolved session's links grouped by type. No-op message
    when empty."
   [session-arg opts]
-  (let [[project session instance-id _] (resolve-link-coords opts session-arg)
-        entries (links/read-links instance-id)]
+  (let [[project session links-key _] (resolve-link-coords opts session-arg)
+        entries (links/read-links links-key)]
     (println (str "links for " project "/" session ":"))
     (if (empty? entries)
       (println "  (none)")

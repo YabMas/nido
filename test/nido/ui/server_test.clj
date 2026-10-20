@@ -367,7 +367,7 @@
                 (fn [] {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}})
                 nido.platform.process/tcp-open? (fn [_] true)]
     (is (= {:state :running :url "http://x.localhost:3142"}
-           (dev/session-dev-state "brian" "feat/x")))))
+           (dev/session-dev-state "brian" nil "feat/x")))))
 
 (deftest session-dev-state-3-arity-uses-passed-registry
   (with-redefs [nido.session.lifecycle/session-coords
@@ -376,7 +376,7 @@
                 (fn [] (throw (ex-info "should not read registry in 3-arity" {})))
                 nido.platform.process/tcp-open? (fn [_] true)]
     (is (= {:state :running :url "http://x.localhost:3142"}
-           (dev/session-dev-state "brian" "feat/x"
+           (dev/session-dev-state "brian" nil "feat/x"
                                   {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}})))))
 
 (deftest fragment-workstream-route-is-sse-and-renders-environment
@@ -400,7 +400,7 @@
   (let [calls (atom [])]
     (with-redefs [nido.session.lifecycle/session-coords
                   (fn [s _] {:wt-path (str "/wt/" s) :instance-id (str "brian--" s)})
-                  nido.session.engine/read-profile-for-session (fn [_] {:services []})
+                  nido.session.engine/read-profile-for-session (fn [_ _] {:services []})
                   nido.coordinator.work/ensure-open! (fn [& _] false)
                   nido.session.lifecycle/up! (fn [s opts] (swap! calls conj [:up s (:profile opts)]))
                   nido.platform.process/tcp-open? (fn [_] true)
@@ -421,7 +421,7 @@
   (let [calls (atom [])]
     (with-redefs [nido.session.lifecycle/session-coords
                   (fn [s _] {:wt-path (str "/wt/" s) :instance-id (str "brian--" s)})
-                  nido.session.engine/read-profile-for-session (fn [_] nil)
+                  nido.session.engine/read-profile-for-session (fn [_ _] nil)
                   nido.session.lifecycle/down! (fn [s _] (swap! calls conj [:down s]))
                   nido.coordinator.work/workstream
                   (fn [_ _ & _] {:project "brian" :ws-id "ws-1" :origin :notion

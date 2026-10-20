@@ -29,18 +29,55 @@
     {:signature [:=> [:catn [:project-name ProjectName]] :map] :delegates [session-edn-path]})
   (Operation resolve-project-name "A directory's registered project name, falling back to its leaf."
     {:signature [:=> [:catn [:project-dir Path]] ProjectName]})
-  (Operation resolve-instance-id "A directory's instance identifier."
-    {:signature [:=> [:catn [:project-dir Path]] InstanceId]})
+  (Operation resolve-instance-id
+    "The instance id of the runtime a worktree's session is on: the one recorded when it came up,
+     else the project name for the project's own checkout — nil for a worktree with no session up,
+     whose runtime is never guessed from its path."
+    {:signature [:=> [:catn [:project-dir Path]] [:maybe InstanceId]]})
+  (Operation instance-id-for-key
+    "The instance id of a project's runtime keyed by the caller's key. The key is taken whole;
+     nothing here derives one from a path."
+    {:signature [:=> [:catn [:project-name ProjectName] [:runtime-key :string]] InstanceId]
+     :delegates [sstate/keyed-id]})
+  (Operation runtime-key-of "The runtime key a worktree's session came up under, or nil when none is up there."
+    {:signature [:=> [:catn [:project-dir Path]] [:maybe :string]]})
+  (Operation runtime-instance-id
+    "The instance id a worktree's session comes up on for a runtime key: the project name for the
+     project's own checkout, else the key's. Refuses a worktree given no key."
+    {:signature [:=> [:catn [:project-dir Path] [:project-name ProjectName] [:runtime-key [:maybe :string]]] InstanceId]
+     :delegates [instance-id-for-key]})
+  (Operation sessions-backed-by
+    "The other sessions on a runtime, other than one excepted, that runs out of a worktree — the
+     one its starter brought it up in, whose JVM, classpath and config live there whether or not
+     the starter is still on it."
+    {:signature [:=> [:catn [:project-dir Path] [:except [:maybe InstanceId]]] [:sequential :string]]
+     :delegates [sstate/read-session sstate/state-dir]})
+  (Operation refuse-backing-worktree!
+    "Refuse removing a worktree, or starting another runtime in it, while it backs a runtime other
+     sessions are on — the one guard both go through."
+    {:signature [:=> [:catn [:verb :keyword] [:name [:maybe :string]] [:project-dir Path]
+                            [:except [:maybe InstanceId]]] :nil]
+     :delegates [sessions-backed-by]})
+  (Operation refuse-start-in-backing-worktree!
+    "Refuse a start that would bring a runtime up in a worktree backing another runtime others
+     are on — asked by every verb before it stops the session it would start."
+    {:signature [:=> [:catn [:name [:maybe :string]] [:project-dir Path] [:instance-id InstanceId]] :nil]
+     :delegates [refuse-backing-worktree! sstate/read-session]})
+  (Operation sessions-on "The sessions on one runtime; empty when it is not up."
+    {:signature [:=> [:catn [:instance-id InstanceId]] [:sequential :string]]
+     :delegates [sstate/read-session]})
   (Operation filter-services "A session's services narrowed to an allowlist."
     {:signature [:=> [:catn [:services :any] [:allowlist :any]] :any]})
-  (Operation write-profile-for-session! "Persist the profile a session was brought up with."
-    {:signature [:=> [:catn [:wt-path Path] [:profile :any]] :any]
-     :delegates [resolve-instance-id sstate/instance-state-dir]})
+  (Operation write-profile-for-session!
+    "Persist the profile a session was brought up with, under the session's own key: sessions
+     sharing a runtime each created their working copy their own way."
+    {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string] [:profile :any]] :any]
+     :delegates [sstate/session-profile-path]})
   (Operation read-profile-for-session
     "The profile a session was brought up with. Persisted rather than re-resolved, so a session
      keeps the shape it was started with even if the project's profiles change under it."
-    {:signature [:=> [:catn [:wt-path Path]] [:maybe :any]]
-     :delegates [resolve-instance-id sstate/instance-state-dir]})
+    {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string]] [:maybe :any]]
+     :delegates [sstate/read-session-profile]})
   (Operation run-setup-step!
     "Run one declared setup step. POLYMORPHIC on the step's `:type` — a project declares the
      steps its worktree needs and each type is a method, so adding a kind of setup adds a method

@@ -194,7 +194,8 @@
                 lifecycle/worktree-path
                 (fn [_p _d s] (str "/Code/brian/.worktrees/" s))
                 engine/resolve-instance-id (fn [_] "brian--ordering")]
-    ;; resolve-link-coords is private; exercise via the var.
-    (is (= ["brian" "fix/ordering" "brian--ordering"
+    ;; resolve-link-coords is private; exercise via the var. Links are kept under the
+    ;; session's own key — its whole name — whatever runtime it is on.
+    (is (= ["brian" "fix/ordering" "brian--fix~ordering"
             "/Code/brian/.worktrees/fix/ordering"]
            (#'lifecycle/resolve-link-coords {} nil)))))

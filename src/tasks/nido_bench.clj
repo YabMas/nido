@@ -7,7 +7,8 @@
      bb nido:bench:memory:levers"
   (:require
    [clojure.edn :as edn]
-   [nido.bench.memory :as bench]))
+   [nido.bench.memory :as bench]
+   [nido.coordinator.record.session :as csession]))
 
 (defn- parse-opts [args]
   (if (empty? args)
@@ -33,7 +34,11 @@
         session-name (or (some-> (:session opts) name) "perf-bench")
         levers (:levers opts)
         settle-ms (:settle-ms opts)
+        ;; The benchmark stops and starts the session; a workstream holding it keeps it on the
+        ;; workstream's runtime, which only nido can say.
+        ws-id (csession/workstream-id-for (keyword project-name) session-name)
         kwargs (cond-> {:session-name session-name}
+                 ws-id (assoc :runtime-key ws-id)
                  levers (assoc :levers levers)
                  settle-ms (assoc :settle-ms settle-ms))]
     (apply bench/run-all! project-name (mapcat identity kwargs))))

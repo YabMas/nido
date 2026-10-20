@@ -247,8 +247,12 @@
   snapshot
   "Every live session with what it costs and what has touched it lately.
 
-   Rows: :instance-id :project :session :worktree :home :bytes :foreign
-         :nrepl? :agent-seen-ms :idle-ms :candidate?
+   Rows: :instance-id :project :session :worktree :home :bytes :runtime-bytes
+         :foreign :nrepl? :agent-seen-ms :idle-ms :candidate?
+
+   `:runtime-bytes` is what the session's runtime holds, which every session on
+   that runtime shares; `:bytes` is what stopping this session releases — the
+   runtime's when it is the runtime's only live session, else nothing.
 
    Sessions whose repl pid is gone are dropped — a stale registry entry costs
    no memory, and naming it as a candidate would be noise. Each probe runs
@@ -265,18 +269,21 @@
         seen?   (:transcripts? signals)
         now     (System/currentTimeMillis)
         entries (->> (state/read-registry) vals (filter :repl-pid))
-        own     (into #{} (map (comp str :repl-pid)) entries)]
-    (->> entries
-         (filter #(process/process-alive? (:repl-pid %)))
-         (map (fn [{:keys [instance-id project-name project-dir repl-pid nrepl-port]}]
+        own     (into #{} (map (comp str :repl-pid)) entries)
+        live    (filter #(process/process-alive? (:repl-pid %)) entries)
+        on      (frequencies (map :instance-id live))]
+    (->> live
+         (map (fn [{:keys [instance-id project-name project-dir repl-pid nrepl-port session-name]}]
                 (let [home (get homes project-dir)
                       seen (when seen? (agent-last-seen project-dir home))
+                      held (get rss (str repl-pid))
                       row  {:instance-id   instance-id
                             :project       project-name
-                            :session       (some-> instance-id (str/replace #"^[^-]*--" ""))
+                            :session       session-name
                             :worktree      project-dir
                             :home          home
-                            :bytes         (get rss (str repl-pid))
+                            :bytes         (if (< 1 (on instance-id 0)) 0 held)
+                            :runtime-bytes held
                             :foreign       (foreign-count cwds own project-dir home)
                             :nrepl?        (established-on? socks nrepl-port)
                             :agent-seen-ms seen
@@ -295,11 +302,14 @@
    `:typical` is the median of the same-project rows rather than a constant —
    the spread within one project is wide (1.6–4.1 GB on brian for an identical
    -Xmx2g) and the median self-calibrates as the fleet changes. It is nil
-   below two samples, where a median is a guess wearing a number's clothes."
+   below two samples, where a median is a guess wearing a number's clothes.
+
+   Both count each runtime once, however many sessions share it."
   [rows project]
-  (let [same (->> rows (filter #(= project (:project %))) (keep :bytes) sort vec)]
+  (let [runtimes (vals (into {} (map (juxt :instance-id identity)) rows))
+        same     (->> runtimes (filter #(= project (:project %))) (keep :runtime-bytes) sort vec)]
     {:sessions (count rows)
-     :fleet    (reduce + 0 (keep :bytes rows))
+     :fleet    (reduce + 0 (keep :runtime-bytes runtimes))
      :in-use   (in-use-bytes)
      :machine  (machine-bytes)
      :typical  (when (>= (count same) 2)

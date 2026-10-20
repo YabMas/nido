@@ -6,7 +6,8 @@
    [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.state :as cstate]
-   [nido.coordinator.record.workstream :as workstream]))
+   [nido.coordinator.record.workstream :as workstream]
+   [nido.session.lifecycle :as lifecycle]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
@@ -168,3 +169,48 @@
             b (scratch/birth! :brian "feat/x" :light)]
         (is (= a b) "slash-named session: same ws-id, no duplicate workstream")
         (is (= 1 (count (workstream/list-ids :brian))))))))
+
+;; ---------------------------------------------------------------------------
+;; Every session a workstream holds runs on the workstream's runtime.
+
+(defn- restarts-with
+  "Run `f` with each session's runtime given by `on` (name -> {:key ..} or nil when down), and
+   return the [name runtime-key] pairs it restarted."
+  [on f]
+  (let [restarts (atom [])]
+    (with-redefs [lifecycle/runtime-of (fn [n _] (get on n))
+                  lifecycle/restart!   (fn [n opts] (swap! restarts conj [n (:runtime-key opts)]))]
+      (f))
+    @restarts))
+
+(deftest a-held-session-up-on-another-runtime-is-moved-onto-its-workstreams
+  (with-tmp
+    (fn [_]
+      (let [ws-id (scratch/birth! :brian "old" :heavy)
+            moved (atom nil)]
+        (is (= [["old" ws-id]]
+               (restarts-with {"old" {:instance-id "brian--old" :key nil}}
+                              #(reset! moved (scratch/settle-runtimes! :brian #{"old"}))))
+            "a runtime started before keys were recorded counts as another runtime")
+        (is (= ["old"] @moved))))))
+
+(deftest a-session-already-on-its-workstreams-runtime-is-left-alone
+  (with-tmp
+    (fn [_]
+      (let [ws-id (scratch/birth! :brian "settled" :heavy)]
+        (is (= [] (restarts-with {"settled" {:instance-id (str "brian--" ws-id) :key ws-id}}
+                                 #(scratch/settle-runtimes! :brian #{"settled"}))))))))
+
+(deftest a-session-no-workstream-holds-is-not-moved
+  (with-tmp
+    (fn [_]
+      (is (= [] (restarts-with {"loose" {:instance-id "brian--loose" :key "loose"}}
+                               #(scratch/settle-runtimes! :brian #{"loose"})))))))
+
+(deftest a-birth-moves-a-session-that-is-already-up
+  (with-tmp
+    (fn [_]
+      (let [ws-id (atom nil)
+            restarts (restarts-with {"up-early" {:instance-id "brian--up-early" :key "up-early"}}
+                                    #(reset! ws-id (scratch/birth! :brian "up-early" :heavy)))]
+        (is (= [["up-early" @ws-id]] restarts))))))

@@ -2557,18 +2557,26 @@
        :assert-gate  (advance-phase! project ws-id payload)
        (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id}))))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName :map] :any]}
+  start!
+  "Bring the session `session-name` up on the workstream holding it — a fresh one-off when none
+   does — and on that workstream's runtime. Heavy and slow: surfaces wrap it in their own progress
+   UI. The workstream is settled first so the session comes up on its runtime at once; its weight
+   is read back after, from what was provisioned. Idempotent on a live session. Returns the ws-id.
+   `project` may be a keyword or string; `opts` are lifecycle/up!'s."
+  [project session-name opts]
+  (let [p     (keyword (name project))
+        opts  (assoc opts :project (name project))
+        ws-id (scratch/birth! p session-name nil)]
+    (lifecycle/up! session-name (assoc opts :runtime-key ws-id))
+    (scratch/birth! p session-name (lifecycle/session-weight session-name opts) ws-id)))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] :any]}
   new!
-  "Birth a scratch workstream and bring its session up. Mirrors the proven add
-   path: lifecycle/up! creates the worktree + services (it is heavy and slow —
-   surfaces wrap this in their own progress UI); scratch/birth! births the
-   ref-less workstream + human session. Idempotent on an existing session name.
-   Returns the ws-id. `project` may be a keyword or string."
+  "Birth a scratch workstream and bring its session up — `start!` with no options. Idempotent on
+   an existing session name. Returns the ws-id. `project` may be a keyword or string."
   [project session-name]
-  (let [opts {:project (name project)}]
-    (lifecycle/up! session-name opts)
-    (scratch/birth! (keyword (name project)) session-name
-                    (lifecycle/session-weight session-name opts))))
+  (start! project session-name {}))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:sequential :map]]}
   workstream-listing
@@ -2892,23 +2900,22 @@
    A name still held twice after that is reported under :held-twice, naming its
    holders, and left alone: record-session refuses every write that would make
    one, so any found is a record from before that rule and needs a person to
-   say which holder is right. Returns {:adopted [names] :yielded [ws-ids]
-   :held-twice [{:session :holders}]}."
+   say which holder is right.
+
+   Then every live session is moved onto its workstream's runtime when it is on another — the
+   sessions that were up before workstreams owned runtimes, chiefly. Returns {:adopted [names]
+   :yielded [ws-ids] :held-twice [{:session :holders}] :moved [names]}."
   [project]
-  (let [orphans (sort (orphan-live-sessions (live-session-names project)
-                                            (owned-session-names project)))]
+  (let [p       (keyword (name project))
+        live    (live-session-names project)
+        orphans (sort (orphan-live-sessions live (owned-session-names project)))]
     (doseq [n orphans]
-      (scratch/birth! (keyword (name project)) n
-                      (lifecycle/session-weight n {:project (name project)})))
+      (scratch/birth! p n (lifecycle/session-weight n {:project (name project)})))
     (let [yielded (yield-duplicate-scratch! project)]
       {:adopted    (vec orphans)
        :yielded    yielded
-       :held-twice (held-twice project)})))
-
-(defn- instance-id-for [project-name session-name]
-  (if (= project-name session-name)
-    project-name
-    (str project-name "--" session-name)))
+       :held-twice (held-twice project)
+       :moved      (scratch/settle-runtimes! p live)})))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :Path] [:vector :map]]}
   machine-rows
@@ -2927,10 +2934,10 @@
                         entry    (get registry wt-path)
                         port     (:app-port entry)
                         live?    (and (pos-int? port) (proc/tcp-open? port))
-                        iid      (instance-id-for project-name nm)
+                        iid      (:instance-id entry)
                         repl-rss (when (and live? (:repl-pid entry))
                                    (proc/rss-bytes (:repl-pid entry)))
-                        session  (when live? (sstate/read-session iid))
+                        session  (when (and live? iid) (sstate/read-session iid))
                         pg-pid   (when session
                                    (get-in session [:service-states :pg :pg-pid]))
                         pg-rss   (when (and live? pg-pid) (proc/rss-bytes pg-pid))

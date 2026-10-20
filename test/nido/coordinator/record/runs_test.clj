@@ -611,7 +611,7 @@
                 nido.session.engine/resolve-instance-id (fn [_] "brian--x")
                 nido.session.launcher/session-briefing (fn [_p _s _i] "BRIEF")
                 nido.session.launcher/nido-add-dirs (fn [] ["/opt/nido"])
-                nido.session.state/session-mcp-path (fn [_] "/does/not/exist.json")]
+                nido.session.launcher/session-mcp-path (fn [_ _] "/does/not/exist.json")]
     (let [lc (runs/launch-context {:project "brian" :session-name "fix/x" :id "r1"})]
       (is (= "/wt/fix/x" (:cwd lc)))
       (is (= "BRIEF" (:briefing lc)))
