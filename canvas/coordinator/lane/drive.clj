@@ -53,13 +53,12 @@
   (Operation design-decided?
     "Whether a decision round let the newest design PROCEED.
 
-     Only a decision `report/proceeds?` counts — `:proceed`, or one whose only broken check is
-     the advisory one; a round that answered `:recut` or `:amend` over any other check judged
-     the record rather than whether to build it. Public because the gate asks it too: a grant
-     offered on any decision at all is a one-click approval of the design its own round sent
-     back."
+     Standing's answer, `standing/proceeding?`, never re-derived: a round that answered
+     `:recut` or `:amend` over any check but the advisory one judged the record rather than
+     whether to build it. Public because the gate asks it too: a grant offered on any decision
+     at all is a one-click approval of the design its own round sent back."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :boolean]
-     :delegates [workstream/entries-of]})
+     :delegates [workstream/latest-entry standing/proceeding?]})
   (Operation next-action "The stage to run next and the mode it runs in, or nil at a terminus."
     {:signature [:=> [:catn [:position :any] [:kind :keyword]] [:maybe :map]]})
   (Operation amendment-owed

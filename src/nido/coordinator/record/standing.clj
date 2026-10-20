@@ -380,8 +380,22 @@
                      ;; What the arc asks: nothing blocks it, and something said
                      ;; it may be built — a grant, or a round that owed nobody.
                      :cleared?    (and (nil? blocked)
-                                       (or (some? approval) (some? clearance)))}
+                                       (or (some? approval) (some? clearance)))
+                     ;; What the design's own declarations owe: a person's grant before
+                     ;; it is built, whatever any round answers.
+                     :owes-person? (report/owes-a-person? design)}
               blocked (assoc :blocked blocked))))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int] :boolean]}
+  proceeding?
+  "Whether the newest decision round naming design `design-seq` lets it proceed — a :proceed,
+   or a sendback over the advisory check alone. The NEWEST, not any: a design told to proceed
+   and later sent back against code that moved is sent back. False when no round named it."
+  [project ws-id design-seq]
+  (boolean (some->> (ws/entries-of project ws-id :design-decision)
+                    (filter #(= design-seq (:design-seq %)))
+                    last
+                    report/proceeds?)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   of-baseline

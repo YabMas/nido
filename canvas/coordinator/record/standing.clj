@@ -14,7 +14,8 @@
   [:map [:decided? :boolean]
         [:decidable? :boolean]
         [:blocked [:maybe :any]]
-        [:approved-by [:maybe :any]]])
+        [:approved-by [:maybe :any]]
+        [:owes-person? {:optional true} :boolean]])
 
 (Module record-standing
   "Whether a design or baseline record still stands, derived from the ledger's own citations.
@@ -27,6 +28,11 @@
   (Operation of-design
     "Whether a stamped design record still holds, and what its standing rests on."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design :map]] Standing]
+     :delegates [workstream/entries-of]})
+  (Operation proceeding?
+    "Whether the newest decision round naming a design lets it proceed — the round's answer as
+     it stands now, so a later sendback retracts an earlier proceed."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design-seq :int]] :boolean]
      :delegates [workstream/entries-of]})
   (Operation of-baseline
     "Whether a stamped baseline is still footing a design may be written on: found sufficient at

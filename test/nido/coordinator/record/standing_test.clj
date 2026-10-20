@@ -641,3 +641,31 @@
         (is (= :premise-unverified (:reason (:blocked st))) "one reading still does not verify it")
         (is (str/includes? (:detail (:blocked st))
                            (str "the review at entry " r " found sufficient on one reading — second reading owed")))))))
+
+(deftest proceeding-is-the-newest-decision-naming-the-design
+  (let [decisions (atom [])]
+    (with-redefs [ws/entries-of (fn [_ _ kind]
+                                  (when (= :design-decision kind) @decisions))]
+      (is (false? (standing/proceeding? :brian "ws-1" 5)) "no round named it")
+      (reset! decisions [{:design-seq 5 :recommend :proceed}])
+      (is (true? (standing/proceeding? :brian "ws-1" 5)))
+      (is (false? (standing/proceeding? :brian "ws-1" 4)) "a decision on another design says nothing")
+      (swap! decisions conj {:design-seq 5 :recommend :recut})
+      (is (false? (standing/proceeding? :brian "ws-1" 5))
+          "a later sendback retracts the proceed before it"))))
+
+(deftest a-revisit-owes-a-person-and-a-design-within-does-not
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b  (add :baseline a-baseline)
+            _  (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                      :baseline-seq b :reason "ok"})
+            d  (add :design (a-design b))
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (false? (:owes-person? st)))
+        (is (true? (:owes-person? (standing/of-design
+                                   :brian id
+                                   (assoc (ws/entry-at-seq :brian id d)
+                                          :baseline {:seq b :relation :revisit
+                                                     :breaks ["c1"] :note "n"})))))))))

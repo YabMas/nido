@@ -29,7 +29,6 @@
    [clojure.string :as str]
    [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.reentry :as reentry]
-   [nido.coordinator.report :as report]
    [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as csession]
@@ -523,7 +522,7 @@
   design-decided?
   "True when a decision round let the newest design proceed.
 
-   Only a decision `report/proceeds?` counts: :proceed, or one whose only broken
+   Only a decision `standing/proceeding?` counts: :proceed, or one whose only broken
    check is the advisory one, which the round itself treats as proceeding. A
    round that answered :recut or :amend over any other check reached a judgement
    about the record, not about whether to build it, and treating one as a
@@ -537,15 +536,7 @@
    design it had just sent back."
   [project ws-id]
   (when-let [d (ws/latest-entry project ws-id :design)]
-    ;; The LATEST decision naming this design, not any of them. A design can be
-    ;; judged more than once — told to proceed, then sent back when a later round
-    ;; reads it against code that has since moved — and `some` answered yes for
-    ;; ever after the first :proceed. That made "decided" unretractable by the
-    ;; only mechanism that decides it.
-    (boolean (some->> (ws/entries-of project ws-id :design-decision)
-                      (filter #(= (:seq d) (:design-seq %)))
-                      last
-                      report/proceeds?))))
+    (standing/proceeding? project ws-id (:seq d))))
 
 ;; ── The fold ────────────────────────────────────────────────────────────────
 
@@ -774,7 +765,7 @@
    the unit of its newest survey's goal, a refusal the unit of the goal the refused record
    reached — so two callers asking about one unit cannot get two chains. Which records still
    stand on the replaced goal is the ledger's reading; which verdict verifies or decides is
-   standing's and `report/proceeds?`'s, never re-derived here. Here rather than in the ledger
+   standing's, never re-derived here. Here rather than in the ledger
    because a review and a decision are stages of the arc. Stages and seqs, no wording: a
    surface says them in its own terms. A seq a stage would cite that is not yet on the ledger
    is nil."
@@ -786,10 +777,7 @@
                                                  (standing/of-baseline project ws-id)
                                                  :verified?))
                     :decided?  (boolean (when design
-                                          (some->> (ws/entries-of project ws-id :design-decision)
-                                                   (filter #(= design (:design-seq %)))
-                                                   last
-                                                   report/proceeds?)))})
+                                          (standing/proceeding? project ws-id design)))})
       [])))
 
 ;; The positions the record arc places whose next stage is an amendment's own rung. A
@@ -1135,7 +1123,7 @@
           next-of (fn [p]
                     (if (and (= :design-decided p)
                              (:decidable? st)
-                             (not (report/owes-a-person? design)))
+                             (not (:owes-person? st)))
                       clearance
                       (next-action p kind)))
           ;; What an amendment of the newest survey's goal still owes, carried beside the
