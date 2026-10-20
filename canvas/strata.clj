@@ -10,6 +10,7 @@
             [canvas.coordinator.record.standing :refer [record-standing]]
             [canvas.coordinator.record.workstream :refer [record-workstream]]
             [canvas.coordinator.record.generation :refer [record-generation]]
+            [canvas.coordinator.record.seats :refer [record-seats]]
             [canvas.coordinator.lane.drive :refer [lane-pipeline]]
             [canvas.coordinator.lane.reentry :refer [lane-reentry]]
             [canvas.review.core :refer [review-analysis review-cache review-conformance review-loop
@@ -55,6 +56,14 @@
    the locks working processes hold. What the board, attach and the driver are written in."
   {:provided-by [lane-pipeline lane-reentry]
    :rests-on    [record-status ledger record-vocabulary]})
+
+(Stratum seats
+  "A workstream as the seats that carry it: the current generation's governing design's
+   generation-defining elements, each embodied by a session, with the interface it guards, the tensions
+   open against it and the accords that settled others; the generation it belongs to and what that
+   generation inherited. What occupancy and every embodiment are written in."
+  {:provided-by [record-seats]
+   :rests-on    [record-status ledger record-model record-vocabulary]})
 
 ;; ── the review machinery, floor first ────────────────────────────────────────
 ;;
