@@ -228,17 +228,36 @@
          (throw (ex-info "Timed out waiting for PostgreSQL" {:port pg-port}))
          :else (do (Thread/sleep 250) (recur)))))))
 
+(def ^:private stop-wait-secs
+  "How long each `pg_ctl stop` waits for the postmaster to exit. pg_ctl's own
+   default is 60s, and a fast shutdown's checkpoint on a large dev cluster
+   routinely runs past it."
+  180)
+
+(defn- pg-ctl-stop-mode!
+  "Run `pg_ctl stop -m <mode>` and wait for the postmaster to exit. True iff it did."
+  [bin-dir data-dir mode]
+  (zero? (:exit (shell {:continue true :out :string :err :string}
+                       (pg-cmd bin-dir "pg_ctl")
+                       "stop" "-D" data-dir "-m" mode "-w" "-t" (str stop-wait-secs)))))
+
 (defn ^{:malli/schema [:=> [:cat :Path] :boolean]}
   pg-ctl-stop!
-  "Stop a Postgres cluster. Returns true on clean shutdown."
+  "Stop a Postgres cluster. Returns true when pg_ctl saw the postmaster exit.
+
+   A fast stop that outlasts its wait escalates to an immediate stop, never
+   straight to a raw kill: SIGKILLing a postmaster mid-shutdown orphans its
+   checkpointer, which keeps the shared-memory segment, and the next start
+   on this PGDATA dies on 'pre-existing shared memory block is still in use'.
+   The raw kill below is for when pg_ctl itself is unavailable or failed both."
   [data-dir]
   (when (and data-dir (fs/exists? data-dir))
     (core/log-step (str "Stopping PostgreSQL at " data-dir))
     (let [bin-dir (try (find-pg-bin-dir) (catch Exception _ nil))
           stopped? (when bin-dir
-                     (zero? (:exit (shell {:continue true :out :string :err :string}
-                                          (pg-cmd bin-dir "pg_ctl")
-                                          "stop" "-D" data-dir "-m" "fast" "-w"))))]
+                     (or (pg-ctl-stop-mode! bin-dir data-dir "fast")
+                         (do (core/log-step "Fast stop did not complete; escalating to immediate")
+                             (pg-ctl-stop-mode! bin-dir data-dir "immediate"))))]
       (when-not stopped?
         (let [pid-file (str (fs/path data-dir "postmaster.pid"))]
           (when (fs/exists? pid-file)
