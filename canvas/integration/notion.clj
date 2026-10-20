@@ -82,9 +82,21 @@
     {:signature [:=> [:catn [:data-source-id :string] [:token NotionToken] [:properties :map]
                             [:description [:maybe :string]]] :map]
      :delegates [http-request paragraph-blocks]})
+  (Operation section-blocks "Titled sections as heading, paragraph and numbered-item blocks."
+    {:signature [:=> [:catn [:sections [:sequential :map]]] [:vector :map]] :delegates [rich-text-runs]})
+  (Operation callout-block "One callout: icon, bold title, nested sections, optional link."
+    {:signature [:=> [:catn [:callout :map]] :map] :delegates [section-blocks]})
+  (Operation toggle-block "A toggle holding titled sections."
+    {:signature [:=> [:catn [:title :string] [:sections [:sequential :map]]] :map]
+     :delegates [section-blocks]})
+  (Operation create-page-with-children!
+    "Create a page from a prebuilt property payload and prebuilt body blocks."
+    {:signature [:=> [:catn [:data-source-id :string] [:token NotionToken] [:properties :map]
+                            [:children [:vector :map]]] :map]
+     :delegates [http-request normalise-page]})
   (Operation create-page! "Create a task page from semantic fields."
     {:signature [:=> [:catn [:data-source-id :string] [:token NotionToken] [:fields :map]] :map]
-     :delegates [create-page-with-properties!]})
+     :delegates [create-page-with-children! paragraph-blocks]})
   (Operation retrieve-block-children "One page of a block's children."
     {:signature [:=> [:catn [:block-id :string] [:token NotionToken] [:opts :map]] :map]
      :delegates [http-request]})
@@ -93,6 +105,14 @@
   (Operation prepend-block-children! "Insert children at the top of a page."
     {:signature [:=> [:catn [:page-id :string] [:children [:vector :map]] [:token NotionToken]] :map]
      :delegates [http-request]})
+  (Operation append-block-children! "Append children at the end of a block."
+    {:signature [:=> [:catn [:block-id :string] [:children [:vector :map]] [:token NotionToken]] :map]
+     :delegates [http-request]})
+  (Operation append-to-toggle!
+    "Put sections into the page's top-level toggle of a title, creating it at the bottom when absent."
+    {:signature [:=> [:catn [:page-id :string] [:title :string] [:sections [:sequential :map]]
+                            [:token NotionToken]] :map]
+     :delegates [retrieve-block-children append-block-children! toggle-block section-blocks]})
   (Operation walk-blocks
     "A page's whole block tree, bounded by depth and total. Both bounds exist because a page can
      nest arbitrarily and a walk without them is a request to fetch someone's entire wiki."

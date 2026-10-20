@@ -85,33 +85,48 @@
                                :opened-by :pickup})
     (tickets/set-status! project id :planning)))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :string :NotionToken] :map]}
-  pickup!
-  "Resolve `input` and, on success, claim the ticket as in-flight and enqueue the
-   :plan-bug envelope to drive it (the daemon find-or-creates the workstream by its
-   Notion ref → the shared Phase-B ledger). Reports whether an existing workstream
-   ledger will be continued (`:continuing?` + `:ws-id`) so the caller can say which
-   path the daemon will take.
-   Returns {:decision :driving :ref … :continuing? … :ws-id … :queued …} or
-   {:decision :unresolved :error …}.
+(defn ^{:malli/schema [:=> [:cat :ProjectName :map] :map]}
+  claim-and-drive!
+  "Claim the resolved ticket `r` ({:id :page-id :url :title}) as in flight and enqueue the
+   :plan-bug envelope to drive it (the daemon find-or-creates the workstream by its Notion
+   ref → the shared Phase-B ledger). Reports whether an existing workstream ledger will be
+   continued (`:continuing?` + `:ws-id`) so the caller can say which path the daemon will
+   take. Returns {:decision :driving :ref … :continuing? … :ws-id … :queued …}.
+
+   Checks no gate: a caller reaching this has already decided the ticket may be driven.
 
    The payload carries the page id under BOTH keys on purpose: notify/on-plan-spawn!
    reads :notion-page-id, spawn/external-ref reads :page-id. Emitting only the
    former left a freshly-minted workstream ref without a page id, and a Notion ref
    with no page id can never be matched against the board's page cache — so the
    workstream stayed blind to its own ticket's Notion status for good."
+  [project r]
+  (let [existing (ws/find-by-ref-id project (:id r))]
+    (claim! project r)
+    {:decision    :driving
+     :ref         r
+     :continuing? (some? existing)
+     :ws-id       (:id existing)
+     :queued      (queue/enqueue!
+                    {:target  {:project (keyword (name project)) :trigger trigger}
+                     :payload {:id (:id r) :page-id (:page-id r)
+                               :notion-page-id (:page-id r)
+                               :url (:url r) :title (:title r)}})}))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string :NotionToken] :map]}
+  pickup!
+  "Resolve `input` and, on success, claim-and-drive! it. Returns claim-and-drive!'s
+   {:decision :driving …}, or {:decision :unresolved :error …} — :awaiting-gate when an
+   unaccepted Slack proposal holds the ticket: its technical analysis waits in the gate, and
+   only accepting it there starts the drive."
   [project input token]
   (let [r (resolve-ref project input token)]
-    (if (:error r)
+    (cond
+      (:error r)
       {:decision :unresolved :error (:error r)}
-      (let [existing (ws/find-by-ref-id project (:id r))]
-        (claim! project r)
-        {:decision    :driving
-         :ref         r
-         :continuing? (some? existing)
-         :ws-id       (:id existing)
-         :queued      (queue/enqueue!
-                        {:target  {:project (keyword (name project)) :trigger trigger}
-                         :payload {:id (:id r) :page-id (:page-id r)
-                                   :notion-page-id (:page-id r)
-                                   :url (:url r) :title (:title r)}})}))))
+
+      (tickets/held-by-gate? project (:id r))
+      {:decision :unresolved :error :awaiting-gate :ref r}
+
+      :else
+      (claim-and-drive! project r))))

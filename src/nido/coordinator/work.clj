@@ -1731,47 +1731,182 @@
   (when-let [[_ channel ts] (re-matches #"^slack-(.+)-([0-9.]+)$" (str slack-id))]
     {:channel channel :ts ts}))
 
-(defn- apply-proposed!
-  "Approve a Slack-originated proposal: create the Notion page at \"Not started\",
-   associate the new BR-#### with THIS workstream (one ledger across the backlog
-   gap), post the ticket link back to the Slack thread, and complete the slack-id
-   ticket record so the parked session sweeps to :done. On a create error, leaves
-   the ws parked & re-approvable. Returns {:decision :created :br …} |
-   {:decision :error :error :kw}.
+(def ^:private slack-ticket-owner
+  "Who a Slack-born ticket is handed to: its Ball Holder, and who a doubt is put to."
+  :jaap)
 
-   Ordering is load-bearing: ledger-ref = (or notion-ref slack-ref), so once the
-   :notion BR is add-ref!'d it becomes the ledger key. Capture the slack-id BEFORE
-   add-ref!, and complete! the SLACK-id record — that is the id the run's
-   event-payload carries, so completing it is what lets sweep-resolved! settle the
-   parked session."
-  [project ws-id proposal w]
-  (let [slack-id (:id (slack-ref-of w))
-        parsed   (parse-slack-id slack-id)]
-    (if (or (str/blank? slack-id) (nil? parsed))
-      {:decision :error :error :no-slack-ref}
-      (let [{:keys [channel ts]} parsed
-            db                   (:database (views/load-registry project))
-            ntok                 (notion/keychain-token)
-            ds                   (notion/resolve-data-source-id db ntok)
-            created              (notion/create-page! ds ntok
-                                   {:title       (:title proposal)
-                                    :description (report/report->markdown proposal)
-                                    :type        (:ticket-type proposal)
-                                    :status      "Not started"
-                                    :priority    (:priority proposal)})]
+(def ^:private engineering-notes
+  "The toggle an accepted proposal's technical analysis goes into. The QA-brief step folds a
+   page's engineering record into a toggle of this title too, so both writers share one."
+  "Engineering notes & history")
+
+(defn- slack-thread
+  "{:slack-id :channel :ts} of the workstream's originating Slack message, or nil."
+  [w]
+  (let [slack-id (:id (slack-ref-of w))]
+    (when-let [parsed (parse-slack-id slack-id)]
+      (assoc parsed :slack-id slack-id))))
+
+(defn- post-in-thread!
+  "Post `text` as a reply in the Slack thread. Returns true on {:ok true}; never throws —
+   a Slack write acknowledges work and must not fail it."
+  [{:keys [channel ts]} text]
+  (boolean (:ok (try (slack/post-message channel (slack/keychain-token)
+                                         {:text text :thread-ts ts})
+                     (catch Throwable _ nil)))))
+
+(defn- link-filed!
+  "Post the filed page's URL in the thread unless the slack-keyed record says it already is,
+   recording it once Slack confirms. Returns :posted, :already or :failed; a :failed link is
+   posted by the next conclude! or apply!."
+  [project {:keys [slack-id] :as thread} url]
+  (cond
+    (:link-posted-at (tickets/read-meta project slack-id)) :already
+    (post-in-thread! thread (str "Ticket filed: " url))
+    (do (tickets/mark! project slack-id :link-posted-at (clock/now-iso)) :posted)
+    :else :failed))
+
+(defn- outcome-unknown?
+  "Whether a failed create may still have made the page: the request never got a definite
+   answer (:network, which covers a timeout) or Notion failed on its side (:server). An :auth
+   or :http error is Notion refusing the request, so nothing was created."
+  [error]
+  (contains? #{:network :server} error))
+
+(defn- create-once!
+  "Create the workstream's one Notion page with `fields` and add it as the :notion ref, guarded
+   so no workstream ever gets two: a :filing-started-at mark goes on the slack-keyed record
+   BEFORE the create and is cleared only by a definite refusal, so a mark with no :notion ref
+   means a create that may have made a page nobody recorded — that refuses rather than risk a
+   second one, and a person has to check Notion. The caller has already checked for a ref.
+   Returns {:br … :page-id … :url …} or {:error kw [:status n]}."
+  [project ws-id slack-id fields]
+  (let [record (tickets/read-meta project slack-id)]
+    (cond
+      (nil? record)               {:error :no-ticket-record}
+      (:filing-started-at record) {:error :filing-interrupted}
+      :else
+      (let [ntok    (notion/keychain-token)
+            ds      (notion/resolve-data-source-id (:database (views/load-registry project)) ntok)
+            _       (tickets/mark! project slack-id :filing-started-at (clock/now-iso))
+            created (notion/create-page! ds ntok fields)]
         (if (:error created)
-          ;; Carry :status through — an :http error is only actionable with the code
-          ;; (a 400 is a payload we built wrong; a 404 is a sharing/permission problem).
-          (cond-> {:decision :error :error (:error created)}
-            (:status created) (assoc :status (:status created)))
-          (let [br (:id created)]
-            (cws/add-ref! project ws-id {:adapter :notion :id br
-                                         :page-id (:page-id created) :url (:url created)})
-            (try (slack/post-message channel (slack/keychain-token)
-                   {:text (str "Ticket created: " (:url created)) :thread-ts ts})
-                 (catch Throwable _ nil))   ; link-back is best-effort; the ticket already stands
-            (tickets/complete! project slack-id :triaged :applied)
-            {:decision :created :br br}))))))
+          (do (when-not (outcome-unknown? (:error created))
+                (tickets/unmark! project slack-id :filing-started-at))
+              (select-keys created [:error :status]))
+          (do (cws/add-ref! project ws-id {:adapter :notion :id (:id created)
+                                           :page-id (:page-id created) :url (:url created)})
+              {:br (:id created) :page-id (:page-id created) :url (:url created)}))))))
+
+(defn- error-decision
+  "A create-once! error as a verb's decision. Carries :status through — an :http error is only
+   actionable with the code (a 400 is a payload we built wrong; a 404 a sharing problem)."
+  [{:keys [error status]}]
+  (cond-> {:decision :error :error error}
+    status (assoc :status status)))
+
+(defn- ensure-filed!
+  "File `proposal`'s product page for the Slack workstream `w` (at most once — see
+   create-once!), unless it is already filed, and make sure its link is in the thread. Filing
+   holds the new ticket for the gate, so no triage or pickup starts on it before acceptance.
+   Returns {:decision :filed|:already-filed :br … :url … :link :posted|:already|:failed} or
+   {:decision :error :error kw [:status n]}."
+  [project ws-id proposal w]
+  (let [{:keys [slack-id] :as thread} (slack-thread w)
+        filed (wsv/notion-ref w)]
+    (cond
+      (nil? thread) {:decision :error :error :no-slack-ref}
+      filed         {:decision :already-filed :br (:id filed) :url (:url filed)
+                     :link (link-filed! project thread (:url filed))}
+      :else
+      (let [page (create-once! project ws-id slack-id
+                   {:title       (:title proposal)
+                    :type        (:ticket-type proposal)
+                    :priority    (:priority proposal)
+                    :status      "Needs verification"
+                    :lifecycle   "Development"
+                    :app-domain  (:app-domain proposal)
+                    :ball-holder (report/owner->user-id slack-ticket-owner)
+                    :children    [(notion/callout-block (report/product-page proposal))]})]
+        (if (:error page)
+          (error-decision page)
+          (do (tickets/hold-for-gate! project (:br page) {:notion-page-id (:page-id page)
+                                                          :url (:url page) :title (:title proposal)})
+              {:decision :filed :br (:br page) :url (:url page)
+               :link (link-filed! project thread (:url page))}))))))
+
+(defn- file-legacy-proposal!
+  "Accept a proposal written before :product/:doubt existed, as such proposals were accepted
+   when written: one page at Not started carrying the gate card, linked in the thread — filed at
+   most once, like every Slack page (create-once!)."
+  [project ws-id proposal w]
+  (let [{:keys [slack-id] :as thread} (slack-thread w)
+        filed (wsv/notion-ref w)
+        page  (cond
+                (nil? thread) {:error :no-slack-ref}
+                filed         {:br (:id filed) :url (:url filed)}
+                :else         (create-once! project ws-id slack-id
+                                {:title       (:title proposal)
+                                 :description (report/report->markdown proposal)
+                                 :type        (:ticket-type proposal)
+                                 :status      "Not started"
+                                 :priority    (:priority proposal)}))]
+    (if (:error page)
+      (error-decision page)
+      (do (link-filed! project thread (:url page))
+          (tickets/complete! project slack-id :triaged :applied)
+          {:decision :created :br (:br page)}))))
+
+(defn- apply-proposed!
+  "Accept a Slack proposal: make sure its product page is filed, add the technical analysis
+   to that page's engineering notes, complete the slack-keyed record so the parked session
+   sweeps to done, and only then claim the ticket and start its :plan-bug drive. A failed
+   Notion write starts nothing and leaves the gate to retry; a doubt is refused, because
+   overriding one means a revised proposal, not an accept.
+   Returns {:decision :created :br …} | {:decision :error :error kw}."
+  [project ws-id proposal w]
+  (cond
+    (:doubt proposal)          {:decision :error :error :doubted}
+    (nil? (:product proposal)) (file-legacy-proposal! project ws-id proposal w)
+    :else
+    (let [filed (ensure-filed! project ws-id proposal w)]
+      (if (= :error (:decision filed))
+        filed
+        (let [w'   (cws/read-ws project ws-id)
+              page (wsv/notion-ref w')
+              res  (notion/append-to-toggle! (:page-id page) engineering-notes
+                                             (report/analysis-sections proposal)
+                                             (notion/keychain-token))]
+          (if (:error res)
+            {:decision :error :error (:error res)}
+            (do (tickets/complete! project (:slack-id (slack-thread w')) :triaged :applied)
+                (pickup/claim-and-drive! project {:id (:id page) :page-id (:page-id page)
+                                                  :url (:url page) :title (:title proposal)})
+                {:decision :created :br (:id page)})))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
+  conclude!
+  "Carry the workstream's concluded Slack proposal out before anyone accepts it. A :doubt is
+   put to the owner as a thread reply mentioning them, and nothing is filed. A :product is
+   filed for verification and linked in the thread (see ensure-filed!); on a workstream already
+   filed it only retries a link that failed. Never starts a drive — that is apply!'s, after a
+   person has read the analysis.
+   Returns {:decision :doubted|:filed|:already-filed …} or {:decision :error :error kw}."
+  [project ws-id]
+  (if-let [w (cws/read-ws project ws-id)]
+    (let [proposal (latest-report project ws-id)]
+      (cond
+        (not= :proposed-ticket (:format proposal)) {:decision :error :error :no-proposal}
+        (:doubt proposal)
+        (if-let [thread (slack-thread w)]
+          (if (post-in-thread! thread (str (report/slack-mention slack-ticket-owner) " "
+                                           (:doubt proposal)))
+            {:decision :doubted}
+            {:decision :error :error :slack-failed})
+          {:decision :error :error :no-slack-ref})
+        (:product proposal) (ensure-filed! project ws-id proposal w)
+        :else               {:decision :error :error :no-conclusion}))
+    {:decision :error :error :no-workstream}))
 
 (defn- triage-notion-props
   "Notion :properties map for a routed :triage-report. Ball Holder replaces; App Domain
@@ -1897,8 +2032,9 @@
 (defn- execute-report!
   "Write `report` out and finalize the ticket. Three paths:
 
-   • Slack proposal (`:proposed-ticket`, no :notion ref yet) → create the Notion page
-     (apply-proposed!). Returns {:decision :created …} | {:decision :error …}.
+   • Slack proposal (`:proposed-ticket`) → file its page if conclude! has not, add the
+     technical analysis, start the drive (apply-proposed!). Returns {:decision :created …}
+     | {:decision :error …}.
    • Routed Notion triage (`:triage-report` with :routing, on a :notion-backed ws) →
      execute the routing outcome to Notion (apply-routed!): Ball Holder + App Domain,
      deep properties, deep callout. Returns {:decision :applied [:callout :warn]} or
@@ -1907,7 +2043,7 @@
      :triaged/:applied nido-side only. Returns {:decision :applied}."
   [project ws-id report w]
   (cond
-    (and (= :proposed-ticket (:format report)) (nil? (wsv/notion-ref w)))
+    (= :proposed-ticket (:format report))
     (apply-proposed! project ws-id report w)
 
     (and (= :triage-report (:format report)) (:routing report) (wsv/notion-ref w))

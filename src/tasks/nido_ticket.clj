@@ -159,6 +159,26 @@
           (exit! 1)))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  conclude-cmd
+  "bb nido:ticket:conclude :project <p> :br <slack-id> — carry out the workstream's concluded
+   Slack proposal (work/conclude!): file its product page for verification and link it in the
+   thread, or post its doubt to the owner. The triage-slack skill's last step before parking.
+   Prints the decision; exits non-zero on an error so the skill can report it."
+  [& args]
+  (let [[_ o] (task-args/split-args args)
+        project (project-kw o)
+        br      (str (:br o))]
+    (if-let [w (workstream/find-by-ref-id project br)]
+      (let [{:keys [decision error url link]} (work/conclude! project (:id w))]
+        (println "conclude" br "->" (name decision)
+                 (str (when url (str " " url)) (when link (str " (link " (name link) ")"))))
+        (when (= :error decision)
+          (binding [*out* *err*] (println "conclude failed:" (some-> error name)))
+          (exit! 1)))
+      (do (binding [*out* *err*] (println "no workstream for" br))
+          (exit! 1)))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   promote-cmd
   "bb nido:ticket:promote :project <p> :br BR-#### (or positional BR-####)
    Gate a triaged ticket → enqueue a :plan-bug planning Run. Exits non-zero

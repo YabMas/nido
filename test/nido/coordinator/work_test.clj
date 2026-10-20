@@ -13,10 +13,12 @@
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.lane.resume :as resume]
    [nido.coordinator.record.standing :as standing]
+   [nido.coordinator.report :as report]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.session-events :as session-events]
    [nido.coordinator.lane.conduct :as conduct]
+   [nido.coordinator.source.queue :as queue]
    [nido.coordinator.source.state]
    [nido.coordinator.lane.spawn]
    [nido.coordinator.record.state :as cstate]
@@ -1945,8 +1947,24 @@
         "a dismissed row offers Restore whether or not a session is still parked")
     (is (= restore (work/gate-actions :dismissed false :notion)))))
 
+(def ^:private product-proposal
+  {:format      :proposed-ticket
+   :title       "Long links run past the chat bubble"
+   :ticket-type "bug"
+   :priority    "3 - Could"
+   :source-url  "https://myco.slack.com/archives/C1/p100"
+   :problem     "Message text overflows the bubble."
+   :root-cause  "The body paragraph has no break-words; verified live in REPL."
+   :fix         "Add break-words at chat.clj:477. Small."
+   :app-domain  "Teacher"
+   :product     {:where           "The Teaching Assistant chat, as a teacher."
+                 :what-happens    "Long links run past the right edge of the bubble."
+                 :expected        "Text wraps inside the bubble."
+                 :who-is-affected "Any teacher using the chat."}})
+
 (def ^:private proposed-ticket-edn
-  "Valid ProposedTicket EDN for the Slack-approval path."
+  "A ProposedTicket as written before :product/:doubt — no longer writable, still on disk in
+   ledgers, and still accepted the way it was when written. Plant it with `legacy-append!`."
   (pr-str {:format :proposed-ticket
            :title "Logo bug on the pricing page"
            :ticket-type "bug"
@@ -1962,6 +1980,12 @@
       "id is slack-<channel>-<ts>: channel dashless, ts digits+dot")
   (is (= {:channel "C1" :ts "100.0"} (#'work/parse-slack-id "slack-C1-100.0"))))
 
+(defn- legacy-append!
+  "Append `edn` as an old-era entry: what the write contract accepted when it was written."
+  [ref edn]
+  (with-redefs [report/validate-event (fn [_kind r] r)]
+    (workstream/append-to-ref! :brian ref {:kind :proposed-ticket} edn)))
+
 (deftest apply-proposed-creates-ticket-associates-ref-and-posts-link
   (with-tmp
     (fn [_]
@@ -1972,8 +1996,7 @@
             captured (atom nil)]
         (tickets/open! :brian "slack-C1-100.0" {:title "msg"})
         (tickets/set-status! :brian "slack-C1-100.0" :awaiting-input)
-        (workstream/append-to-ref! :brian "slack-C1-100.0" {:kind :proposed-ticket}
-                                   proposed-ticket-edn)
+        (legacy-append! "slack-C1-100.0" proposed-ticket-edn)
         (with-redefs [views/load-registry (fn [_] {:database "db-1"})
                       notion-client/keychain-token (fn [] "ntok")
                       notion-client/resolve-data-source-id (fn [_ _] "ds-1")
@@ -1997,6 +2020,26 @@
             (is (= :triaged (tickets/status :brian "slack-C1-100.0"))
                 "the slack-id ticket record completes → parked session sweeps to :done")))))))
 
+(deftest apply-legacy-proposal-files-at-most-once
+  (with-tmp
+    (fn [_]
+      (let [ws      (workstream/create! :brian {:stage :triaging
+                                                :external-refs [{:adapter :slack-message
+                                                                 :id "slack-C1-100.0" :title "msg"}]})
+            creates (atom 0)]
+        (tickets/open! :brian "slack-C1-100.0" {:title "msg"})
+        (legacy-append! "slack-C1-100.0" proposed-ticket-edn)
+        (with-redefs [views/load-registry (fn [_] {:database "db-1"})
+                      notion-client/keychain-token (fn [] "ntok")
+                      notion-client/resolve-data-source-id (fn [_ _] "ds-1")
+                      notion-client/create-page! (fn [& _] (swap! creates inc) {:error :network})
+                      slack-client/keychain-token (fn [] "stok")
+                      slack-client/post-message (fn [& _] {:ok true})]
+          (is (= :network (:error (work/apply! :brian (:id ws)))))
+          (is (= {:decision :error :error :filing-interrupted} (work/apply! :brian (:id ws)))
+              "an Apply whose create may have landed is not retried blind")
+          (is (= 1 @creates)))))))
+
 (deftest apply-proposed-error-leaves-ws-parked
   (with-tmp
     (fn [_]
@@ -2007,7 +2050,7 @@
         (tickets/open! :brian "slack-C1-100.0" {:title "msg"})
         (tickets/set-status! :brian "slack-C1-100.0" :awaiting-input)
         (workstream/append-to-ref! :brian "slack-C1-100.0" {:kind :proposed-ticket}
-                                   proposed-ticket-edn)
+                                   (pr-str product-proposal))
         (with-redefs [views/load-registry (fn [_] {:database "db-1"})
                       notion-client/keychain-token (fn [] "ntok")
                       notion-client/resolve-data-source-id (fn [_ _] "ds-1")
@@ -2030,13 +2073,153 @@
   (with-tmp
     (fn [_]
       (let [ws (workstream/create! :brian {:stage :triaging :external-refs []})]
-        (workstream/append-entry! :brian (:id ws) {:kind :proposed-ticket} proposed-ticket-edn)
+        (workstream/append-entry! :brian (:id ws) {:kind :proposed-ticket} (pr-str product-proposal))
         (with-redefs [notion-client/create-page!
                       (fn [& _] (throw (ex-info "create-page! must not be called" {})))]
           (let [r (work/apply! :brian (:id ws))]
             (is (= {:decision :error :error :no-slack-ref} r))
             (is (nil? (workstream/find-by-ref-id :brian "BR-4900"))
                 "no notion ref added")))))))
+
+;; ── Slack proposals concluded before acceptance ─────────────────────────────
+
+(defn- slack-proposal-ws!
+  "A triaging Slack workstream whose skill has recorded its ticket and appended `proposal`."
+  [proposal]
+  (let [ws (workstream/create! :brian {:stage :triaging
+                                       :external-refs [{:adapter :slack-message
+                                                        :id "slack-C1-100.0" :title "msg"}]})]
+    (tickets/open! :brian "slack-C1-100.0" {:title "msg"})
+    (tickets/set-status! :brian "slack-C1-100.0" :awaiting-input)
+    (workstream/append-to-ref! :brian "slack-C1-100.0" {:kind :proposed-ticket} (pr-str proposal))
+    ws))
+
+(defn- with-slack-stubs
+  "Run `f` with Notion and Slack stubbed. `opts`: :create (fn [fields] result), :post (fn
+   [opts] result), :toggle (fn [page-id title sections] result). Returns what was called:
+   {:created [fields …] :posted [opts …] :toggled [[page title sections] …] :queued [env …]}."
+  [{:keys [create post toggle]} f]
+  (let [calls (atom {:created [] :posted [] :toggled [] :queued []})]
+    (with-redefs [views/load-registry                  (fn [_] {:database "db-1"})
+                  notion-client/keychain-token         (fn [] "ntok")
+                  notion-client/resolve-data-source-id (fn [_ _] "ds-1")
+                  notion-client/create-page!
+                  (fn [_ds _tok fields]
+                    (swap! calls update :created conj fields)
+                    ((or create (constantly {:id "BR-4900" :page-id "pg" :url "https://notion/pg"}))
+                     fields))
+                  notion-client/append-to-toggle!
+                  (fn [page-id title sections _tok]
+                    (swap! calls update :toggled conj [page-id title sections])
+                    ((or toggle (constantly {:ok true})) page-id title sections))
+                  slack-client/keychain-token          (fn [] "stok")
+                  slack-client/post-message
+                  (fn [_ch _tok opts]
+                    (swap! calls update :posted conj opts)
+                    ((or post (constantly {:ok true})) opts))
+                  queue/enqueue!                       (fn [env] (swap! calls update :queued conj env) "q.edn")]
+      (f)
+      @calls)))
+
+(deftest conclude-files-the-product-page-for-verification
+  (with-tmp
+    (fn [_]
+      (let [ws (slack-proposal-ws! product-proposal)
+            r  (atom nil)
+            c  (with-slack-stubs {} #(reset! r (work/conclude! :brian (:id ws))))
+            fields (first (:created c))]
+        (is (= :filed (:decision @r)))
+        (is (= :posted (:link @r)))
+        (is (= {:status "Needs verification" :lifecycle "Development" :app-domain "Teacher"
+                :ball-holder "169d872b-594c-8160-b432-000250f98e86"}
+               (select-keys fields [:status :lifecycle :app-domain :ball-holder])))
+        (let [body (pr-str (:children fields))]
+          (is (= 1 (count (:children fields))) "the body is one callout")
+          (is (= "callout" (:type (first (:children fields)))))
+          (is (str/includes? body "Long links run past the right edge"))
+          (is (not (str/includes? body "break-words")) "no technical text on the page")
+          (is (not (str/includes? body "3 - Could")) "no property restated in the body"))
+        (is (= (:id ws) (:id (workstream/find-by-ref-id :brian "BR-4900"))))
+        (is (= "100.0" (:thread-ts (first (:posted c)))))
+        (is (str/includes? (:text (first (:posted c))) "https://notion/pg"))
+        (is (empty? (:queued c)) "conclude never starts a drive")
+        (is (tickets/held-by-gate? :brian "BR-4900"))
+        (is (= :skip-active (tickets/gate-decision :brian "BR-4900"))
+            "the Notion-side triage stands down for the filed page")))))
+
+(deftest conclude-files-once-and-retries-a-failed-link
+  (with-tmp
+    (fn [_]
+      (let [ws (slack-proposal-ws! product-proposal)
+            c1 (with-slack-stubs {:post (constantly {:error :network})}
+                 #(is (= :failed (:link (work/conclude! :brian (:id ws))))))
+            r  (atom nil)
+            c2 (with-slack-stubs {} #(reset! r (work/conclude! :brian (:id ws))))]
+        (is (= 1 (count (:created c1))))
+        (is (= :already-filed (:decision @r)))
+        (is (empty? (:created c2)) "a filed workstream is never filed again")
+        (is (= :posted (:link @r)) "the link that failed is posted on the next call")
+        (let [c3 (with-slack-stubs {} #(reset! r (work/conclude! :brian (:id ws))))]
+          (is (= :already (:link @r)))
+          (is (empty? (:posted c3)) "a link Slack confirmed is not posted twice"))))))
+
+(deftest conclude-mark-refuses-an-interrupted-filing
+  (with-tmp
+    (fn [_]
+      (let [ws (slack-proposal-ws! product-proposal)]
+        (with-slack-stubs {:create (constantly {:error :http :status 400})}
+          #(is (= :http (:error (work/conclude! :brian (:id ws))))))
+        (is (nil? (:filing-started-at (tickets/read-meta :brian "slack-C1-100.0")))
+            "a definite refusal created nothing, so the mark is cleared and filing may retry")
+        (with-slack-stubs {:create (constantly {:error :network})}
+          #(is (= :network (:error (work/conclude! :brian (:id ws))))))
+        (let [c (with-slack-stubs {}
+                  #(is (= {:decision :error :error :filing-interrupted}
+                          (work/conclude! :brian (:id ws)))))]
+          (is (empty? (:created c)) "an unknown outcome is never retried blind"))))))
+
+(deftest conclude-doubt-mentions-the-owner-and-files-nothing
+  (with-tmp
+    (fn [_]
+      (let [doubt (-> product-proposal (dissoc :product :app-domain)
+                      (assoc :doubt "Works as designed at normal zoom."))
+            ws    (slack-proposal-ws! doubt)
+            c     (with-slack-stubs {}
+                    #(is (= {:decision :doubted} (work/conclude! :brian (:id ws)))))]
+        (is (empty? (:created c)))
+        (is (= "<@U08720YNAT1> Works as designed at normal zoom." (:text (first (:posted c)))))
+        (is (= "100.0" (:thread-ts (first (:posted c)))))
+        (with-slack-stubs {}
+          #(is (= {:decision :error :error :doubted} (work/apply! :brian (:id ws)))
+               "a doubt is overridden by a revised proposal, never accepted"))))))
+
+(deftest apply-writes-the-analysis-then-starts-the-drive
+  (with-tmp
+    (fn [_]
+      (let [ws (slack-proposal-ws! product-proposal)
+            _  (with-slack-stubs {} #(work/conclude! :brian (:id ws)))
+            r  (atom nil)
+            c  (with-slack-stubs {} #(reset! r (work/apply! :brian (:id ws))))
+            [page title sections] (first (:toggled c))]
+        (is (= {:decision :created :br "BR-4900"} @r))
+        (is (empty? (:created c)) "apply after conclude files nothing more")
+        (is (= ["pg" "Engineering notes & history"] [page title]))
+        (is (= ["Problem" "Root cause" "Fix"] (map :heading sections)))
+        (is (= :plan-bug (get-in (first (:queued c)) [:target :trigger])))
+        (is (= "BR-4900" (get-in (first (:queued c)) [:payload :id])))
+        (is (= :planning (tickets/status :brian "BR-4900")))
+        (is (= :triaged (tickets/status :brian "slack-C1-100.0"))
+            "the parked triage session sweeps to done")))))
+
+(deftest apply-starts-nothing-when-the-analysis-write-fails
+  (with-tmp
+    (fn [_]
+      (let [ws (slack-proposal-ws! product-proposal)
+            c  (with-slack-stubs {:toggle (constantly {:error :server})}
+                 #(is (= {:decision :error :error :server} (work/apply! :brian (:id ws)))))]
+        (is (= 1 (count (:created c))) "an unfiled proposal is filed first")
+        (is (empty? (:queued c)))
+        (is (tickets/held-by-gate? :brian "BR-4900") "the gate keeps holding the ticket")))))
 
 (deftest apply-non-proposal-still-finalizes-nido-side
   ;; Regression: the proposal branch must not disturb the legacy nido-only apply.

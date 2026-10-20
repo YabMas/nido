@@ -204,3 +204,25 @@
           (is (= :driving (:decision r)))
           (is (false? (:continuing? r)))
           (is (nil? (:ws-id r))))))))
+
+(deftest pickup-refuses-a-ticket-a-slack-proposal-holds
+  (with-tmp
+    (fn []
+      (tickets/hold-for-gate! :brian "BR-1" {:notion-page-id "pg-1" :url "u" :title "t"})
+      (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
+                    queue/enqueue!     (fn [_] (throw (ex-info "must not enqueue" {})))]
+        (let [r (pickup/pickup! :brian "BR-1" "tok")]
+          (is (= :awaiting-gate (:error r)))
+          (is (= :awaiting-input (tickets/status :brian "BR-1"))
+              "the hold is untouched — only accepting the proposal ends it"))))))
+
+(deftest claim-and-drive-ends-the-hold
+  (with-tmp
+    (fn []
+      (tickets/hold-for-gate! :brian "BR-1" {:notion-page-id "pg-1" :url "u" :title "t"})
+      (with-redefs [ws/find-by-ref-id (fn [_ _] nil)
+                    queue/enqueue!    (fn [_] "/q/x.edn")]
+        (is (= :driving (:decision (pickup/claim-and-drive!
+                                    :brian {:id "BR-1" :page-id "pg-1" :url "u" :title "t"}))))
+        (is (= :planning (tickets/status :brian "BR-1")))
+        (is (not (tickets/held-by-gate? :brian "BR-1")))))))

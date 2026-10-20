@@ -82,9 +82,13 @@
   (Operation resolve-ref "What a pasted reference resolves to."
     {:signature [:=> [:catn [:project ProjectName] [:input :string] [:token NotionToken]] :map]
      :delegates [extract-page-id notion/retrieve-page notion/normalise-page]})
+  (Operation claim-and-drive!
+    "Claim a resolved ticket as in flight and enqueue the leg that drives it."
+    {:signature [:=> [:catn [:project ProjectName] [:ref :map]] :map]
+     :delegates [tickets/set-status!]})
   (Operation pickup! "Resolve a reference and claim its ticket as in flight."
     {:signature [:=> [:catn [:project ProjectName] [:input :string] [:token NotionToken]] :map]
-     :delegates [resolve-ref]}))
+     :delegates [resolve-ref claim-and-drive!]}))
 
 (Module lane-promote
   "Moving a triaged ticket forward into planning.

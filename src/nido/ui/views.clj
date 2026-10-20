@@ -2554,6 +2554,7 @@
           (:not-found
            :not-a-ticket)     (h/raw "Couldn't find that ticket.")
           :unrecognized-input "Paste a Notion URL, page id, or BR-####."
+          :awaiting-gate      "Its technical analysis is waiting in the gate — accept it there to start."
           "Notion lookup failed — try again.")]
        (let [{:keys [continuing? ws-id ref]} result
              {:keys [id title]} ref]

@@ -41,6 +41,9 @@
   (Operation apply-cmd
     "bb nido:ticket:apply :project <p> :br BR-#### — execute a parked triage's verdict via"
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation conclude-cmd
+    "bb nido:ticket:conclude :project <p> :br <slack-id> — file or doubt a concluded proposal"
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation promote-cmd
     "bb nido:ticket:promote :project <p> :br BR-#### (or positional BR-####)"
     {:signature [:=> [:catn [:args [:* :any]]] :any]}))

@@ -434,6 +434,11 @@
    :doc "Execute a parked triage verdict via nido (writes Notion from the typed report)."
    :task (apply nido-ticket/apply-cmd *command-line-args*)}
 
+  nido:ticket:conclude
+  {:requires ([tasks.nido-ticket :as nido-ticket])
+   :doc "Carry out a concluded Slack proposal: file it for verification and link it, or post its doubt."
+   :task (apply nido-ticket/conclude-cmd *command-line-args*)}
+
   nido:ticket:dismiss
   {:requires ([tasks.nido-ticket :as nido-ticket])
    :doc "Take a ticket off the triage radar (:dismissed); skipped by auto-re-triage."

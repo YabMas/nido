@@ -116,11 +116,15 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]
      :delegates [workstream/reopen!]})
   (Operation apply!
-    "Accept a triage verdict — execute it, then record the acceptance on the ledger. Resumes
-     nobody. `opts` is what a gate click carries and a CLI apply does not: the ledger position
+    "Accept a triage verdict — execute its writes, then record the acceptance on the ledger,
+     and only then start any drive the verdict begins. Resumes nobody. `opts` is what a gate click carries and a CLI apply does not: the ledger position
      the button was rendered at, which a stale click is refused against, and the index of the
      solution direction the human chose."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts [:? :map]]] :any]})
+  (Operation conclude!
+    "Carry a concluded Slack proposal out before anyone accepts it: file the product ticket and
+     link it in the thread, or post the doubt mentioning its owner. Never starts a drive."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]})
   (Operation start-triage-page! "Force a triage for a watched row that has no workstream yet."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]})
   (Operation option-input "What choosing one of a blocker's options resumes the agent with."

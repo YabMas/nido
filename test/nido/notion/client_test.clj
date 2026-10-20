@@ -416,3 +416,60 @@
       (is (= 1 (count (get-in @captured [:body :children]))))))
   (with-redefs [notion/http-request (fn [_ _ _] {:status 500 :body ""})]
     (is (= :server (:error (notion/prepend-block-children! "p" [] "t"))))))
+(deftest section-blocks-lays-out-headed-text-and-numbered-items
+  (let [blocks (notion/section-blocks [{:heading "Where" :text "The chat."}
+                                       {:heading "Steps" :items ["Open it." "Ask."]}])]
+    (is (= ["heading_3" "paragraph" "heading_3" "numbered_list_item" "numbered_list_item"]
+           (mapv :type blocks)))
+    (is (= "Ask." (get-in (last blocks) [:numbered_list_item :rich_text 0 :text :content])))))
+
+(deftest callout-block-nests-sections-under-a-bold-title-and-ends-with-the-link
+  (let [b (notion/callout-block {:icon "🐞" :title "Bug report"
+                                 :sections [{:heading "Where" :text "The chat."}]
+                                 :link {:text "Reported in Slack" :url "https://s/1"}})]
+    (is (= "callout" (:type b)))
+    (is (= {:type "emoji" :emoji "🐞"} (get-in b [:callout :icon])))
+    (is (true? (get-in b [:callout :rich_text 0 :annotations :bold])))
+    (is (= ["heading_3" "paragraph" "paragraph"] (mapv :type (get-in b [:callout :children]))))
+    (is (= "https://s/1" (get-in b [:callout :children 2 :paragraph :rich_text 0 :text :link :url])))))
+
+(deftest create-page-sends-the-extra-task-properties-and-prebuilt-children
+  (let [captured (atom nil)]
+    (with-redefs [notion/http-request
+                  (fn [_m _url opts]
+                    (reset! captured (cheshire.core/parse-string (:body opts) false))
+                    {:status 200 :body (cheshire.core/generate-string {:id "pg" :properties {}})})]
+      (notion/create-page! "ds-1" "tok" {:title "t" :type "bug" :status "Needs verification"
+                                         :lifecycle "Development" :app-domain "Teacher"
+                                         :ball-holder "user-1"
+                                         :children [{:object "block" :type "divider" :divider {}}]})
+      (let [props (get @captured "properties")]
+        (is (= {"name" "Development"} (get-in props ["Lifecycle" "select"])))
+        (is (= [{"name" "Teacher"}] (get-in props ["App Domain" "multi_select"])))
+        (is (= [{"id" "user-1"}] (get-in props ["Ball Holder" "people"]))))
+      (is (= ["divider"] (mapv #(get % "type") (get @captured "children")))))))
+
+(deftest append-to-toggle-joins-an-existing-toggle-rather-than-doubling-it
+  (let [writes (atom [])]
+    (with-redefs [notion/retrieve-block-children
+                  (fn [_ _ _] {:status 200 :has_more false
+                               :results [{:id "t-1" :type "toggle"
+                                          :toggle {:rich_text [{:plain_text "Engineering notes & history"}]}}]})
+                  notion/append-block-children! (fn [id children _] (swap! writes conj [id children]) {:ok true})]
+      (is (= {:ok true} (notion/append-to-toggle! "pg" "Engineering notes & history"
+                                                  [{:heading "Fix" :text "f"}] "tok")))
+      (is (= "t-1" (ffirst @writes)) "appended inside the existing toggle")
+      (is (= ["heading_3" "paragraph"] (mapv :type (second (first @writes))))))))
+
+(deftest append-to-toggle-creates-the-toggle-when-the-page-has-none
+  (let [writes (atom [])]
+    (with-redefs [notion/retrieve-block-children (fn [_ _ _] {:status 200 :has_more false :results []})
+                  notion/append-block-children! (fn [id children _] (swap! writes conj [id children]) {:ok true})]
+      (notion/append-to-toggle! "pg" "Engineering notes & history" [{:heading "Fix" :text "f"}] "tok")
+      (is (= "pg" (ffirst @writes)))
+      (is (= "toggle" (:type (first (second (first @writes)))))))))
+
+(deftest append-to-toggle-writes-nothing-when-the-page-cannot-be-read
+  (with-redefs [notion/retrieve-block-children (fn [_ _ _] {:status 0 :error :network})
+                notion/append-block-children! (fn [& _] (throw (ex-info "must not write" {})))]
+    (is (= :network (:error (notion/append-to-toggle! "pg" "x" [] "tok"))))))

@@ -739,8 +739,17 @@
     (is (= "edn" ext))
     (is (= :review-report (:format (edn/read-string payload))))))
 
+(def ^:private a-product
+  "A conclusion every fixture proposal carries, so the write contract accepts it."
+  {:where           "The pricing page, on a phone."
+   :what-happens    "The logo is missing from the header."
+   :expected        "The logo shows as it does on a desktop."
+   :who-is-affected "Every visitor on a phone."})
+
 (def ^:private valid-proposed-ticket
   {:format :proposed-ticket
+   :app-domain "Misc"
+   :product a-product
    :title "Logo bug on the pricing page"
    :ticket-type "bug"
    :priority "2 - Should"
@@ -778,6 +787,62 @@
     (is (= "edn" ext))
     (is (= :proposed-ticket (:format (edn/read-string payload))))))
 
+;; ── how a proposal concludes ────────────────────────────────────────────────
+
+(deftest proposed-ticket-concludes-exactly-one-way
+  (let [bare (dissoc valid-proposed-ticket :product :app-domain)]
+    (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :proposed-ticket bare))
+        "a proposal must conclude")
+    (is (report/validate-event :proposed-ticket (assoc bare :doubt "Works as designed.")))
+    (is (thrown? clojure.lang.ExceptionInfo
+          (report/validate-event :proposed-ticket (assoc valid-proposed-ticket :doubt "x")))
+        "not both")
+    (is (thrown? clojure.lang.ExceptionInfo
+          (report/validate-event :proposed-ticket (dissoc valid-proposed-ticket :app-domain)))
+        "a ticket says which app domain it concerns")
+    (is (thrown? clojure.lang.ExceptionInfo
+          (report/validate-event :proposed-ticket (assoc bare :doubt "x" :app-domain "Misc")))
+        "a doubt files nothing, so it has no app domain")))
+
+(deftest product-text-refuses-code-references
+  (doseq [bad ["see `header`" "fix in header.css" "the bug is at header.clj:42" "views/header:12"]]
+    (is (thrown? clojure.lang.ExceptionInfo
+          (report/validate-event :proposed-ticket
+            (assoc-in valid-proposed-ticket [:product :what-happens] bad)))
+        bad))
+  (doseq [ok ["It breaks at 10:30 every morning." "Version 2.4 shows it too." "Step 1: open the page."]]
+    (is (report/validate-event :proposed-ticket
+          (assoc-in valid-proposed-ticket [:product :what-happens] ok))
+        ok)))
+
+(deftest a-proposal-written-before-conclusions-still-reads
+  (let [old (dissoc valid-proposed-ticket :product :app-domain)]
+    (is (= old (report/parse-event :proposed-ticket old)))))
+
+(deftest product-page-carries-sections-and-the-source-not-properties
+  (let [page (report/product-page (assoc valid-proposed-ticket
+                                         :product (assoc a-product :steps ["Open the page."])))]
+    (is (= "🐞" (:icon page)))
+    (is (= ["Where" "What happens" "Expected" "Steps to reproduce" "Who is affected"]
+           (map :heading (:sections page))))
+    (is (= {:text "Reported in Slack" :url "https://myco.slack.com/archives/C123/p456"} (:link page)))
+    (is (not (str/includes? (pr-str page) "2 - Should")) "priority is a property, not body text")
+    (is (not (str/includes? (pr-str page) "media query")) "the cause stays out of the page")))
+
+(deftest gate-card-shows-both-texts
+  (let [md (report/report->markdown valid-proposed-ticket)]
+    (is (str/includes? md "## Ticket text"))
+    (is (str/includes? md "The logo is missing from the header."))
+    (is (str/includes? md "## Technical analysis"))
+    (is (str/includes? md "**Root cause**")))
+  (let [md (report/report->markdown (-> valid-proposed-ticket (dissoc :product :app-domain)
+                                        (assoc :doubt "Works as designed.")))]
+    (is (str/includes? md "## Doubt"))
+    (is (not (str/includes? md "## Ticket text")))))
+
+(deftest slack-mention-resolves-through-the-owner-map
+  (is (= "<@U08720YNAT1>" (report/slack-mention :jaap))))
+
 (deftest report->markdown-proposed-ticket-has-title-and-source
   (let [md (report/report->markdown valid-proposed-ticket)]
     (is (str/includes? md "Logo bug on the pricing page"))
@@ -793,7 +858,9 @@
    :problem "Admin courses tab lost the per-course active-students count."
    :root-cause "Collateral from PR #3802 (bea3fac); verified live in REPL."
    :fix "Restore the column on the admin tab only. courses.clj:913, admin.clj:684."
-   :watch-out "Confirm the reporter means the admin tab, not the Org detail page."})
+   :watch-out "Confirm the reporter means the admin tab, not the Org detail page."
+   :app-domain "Backend"
+   :product a-product})
 
 (deftest proposed-ticket-compact-schema
   (is (= compact-proposal (report/validate-event :proposed-ticket compact-proposal)))
@@ -827,7 +894,9 @@
    :request "No way to export the admin courses list; staff copy rows by hand."
    :proposed-change "Add an Export CSV toolbar action reusing export/csv. admin.clj:684, handlers/export.clj:20."
    :rationale "Recurring manual toil for ops; data + CSV helper already exist."
-   :watch-out "Confirm filtered view vs all courses."})
+   :watch-out "Confirm filtered view vs all courses."
+   :app-domain "Backend"
+   :product a-product})
 
 (deftest proposed-ticket-multi-schema-dispatches-on-type
   ;; improvement validates against ChangeProposal

@@ -107,6 +107,40 @@
                          (select-keys base [:notion-page-id :url :title
                                             :opened-by :notion-last-edited-at])))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :map] :Ticket]}
+  hold-for-gate!
+  "Open (or refresh) a ticket record held by an unaccepted Slack proposal: status
+   :awaiting-input, opened by :slack-proposal. gate-decision reads :awaiting-input as
+   owned, so no triage spawns for the ticket while a person has yet to accept the proposal,
+   and `held-by-gate?` lets pickup refuse it. Accepting the proposal claims the ticket
+   :planning, which ends the hold. `base` is as for open!."
+  [project br-id base]
+  (update-meta! project br-id
+                (fn [prior]
+                  (merge {:entries []}
+                         prior
+                         {:br-id br-id :status :awaiting-input :opened-by :slack-proposal}
+                         (select-keys base [:notion-page-id :url :title])))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :boolean]}
+  held-by-gate?
+  "Whether the ticket is held by an unaccepted Slack proposal (see hold-for-gate!)."
+  [project br-id]
+  (let [m (read-meta project br-id)]
+    (and (= :awaiting-input (:status m)) (= :slack-proposal (:opened-by m)))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :keyword :any] [:maybe :Ticket]]}
+  mark!
+  "Set one field on an EXISTING ticket record; a ticket with no record is left without one."
+  [project br-id k v]
+  (update-meta! project br-id #(when % (assoc % k v))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :keyword] [:maybe :Ticket]]}
+  unmark!
+  "Drop one field from an existing ticket record."
+  [project br-id k]
+  (update-meta! project br-id #(when % (dissoc % k))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :keyword] :Ticket]}
   set-status! [project br-id new-status]
   (update-meta! project br-id #(assoc % :status new-status)))

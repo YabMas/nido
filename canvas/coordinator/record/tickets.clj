@@ -67,6 +67,19 @@
     "Create a ticket record, or refresh the descriptive fields of one that exists."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:base :map]] Ticket]
      :delegates [update-meta!]})
+  (Operation hold-for-gate!
+    "Open a ticket record held by an unaccepted Slack proposal, which the triage gate reads as owned."
+    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:base :map]] Ticket]
+     :delegates [update-meta!]})
+  (Operation held-by-gate? "Whether an unaccepted Slack proposal holds the ticket."
+    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] :boolean]
+     :delegates [read-meta]})
+  (Operation mark! "Set one field on an existing ticket record."
+    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:k :keyword] [:v :any]] [:maybe Ticket]]
+     :delegates [update-meta!]})
+  (Operation unmark! "Drop one field from an existing ticket record."
+    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:k :keyword]] [:maybe Ticket]]
+     :delegates [update-meta!]})
   (Operation set-status!
     "Move a ticket's triage status."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:new-status :keyword]] Ticket]

@@ -152,6 +152,14 @@
     "Index title for the typed events carrying no top-level `:title`. nil otherwise, where the
      caller falls back to the event's own."
     {:signature [:=> [:catn [:report LedgerEvent]] [:maybe :string]]})
+  (Operation slack-mention "The Slack mention of an owner, resolved through owner->slack-id."
+    {:signature [:=> [:catn [:owner :keyword]] :string]})
+  (Operation product-sections "A proposal's product text as titled sections."
+    {:signature [:=> [:catn [:proposal :map]] [:vector :map]]})
+  (Operation analysis-sections "A proposal's technical text as titled sections."
+    {:signature [:=> [:catn [:proposal :map]] [:vector :map]]})
+  (Operation product-page "What a filed proposal's page body says: callout icon, title, sections, source link."
+    {:signature [:=> [:catn [:proposal :map]] :map] :delegates [product-sections]})
   (Operation report->markdown
     "Render a `:format`-tagged payload to markdown: each event type to its own headed section,
      `:markdown` to its body, anything unknown to the empty string."

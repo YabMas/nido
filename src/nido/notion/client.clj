@@ -356,23 +356,65 @@
              :paragraph {:rich_text [{:text {:content chunk}}]}})
           (if (seq chunks) chunks [""]))))
 
-(defn ^{:malli/schema [:=> [:cat :string :NotionToken :map [:maybe :string]] :map]}
-  create-page-with-properties!
+(defn- text-paragraph [text]
+  {:object "block" :type "paragraph" :paragraph {:rich_text (rich-text-runs text)}})
+
+(defn ^{:malli/schema [:=> [:cat [:sequential :map]] [:vector :map]]}
+  section-blocks
+  "Titled sections as Notion blocks: each `{:heading s :text s}` becomes a heading_3 and a
+   paragraph, each `{:heading s :items [s …]}` a heading_3 and one numbered item per entry.
+   Nothing here knows what the sections mean — the caller decides which there are."
+  [sections]
+  (into []
+        (mapcat (fn [{:keys [heading text items]}]
+                  (cons {:object "block" :type "heading_3"
+                         :heading_3 {:rich_text (rich-text-runs heading)}}
+                        (if items
+                          (map (fn [item] {:object "block" :type "numbered_list_item"
+                                           :numbered_list_item {:rich_text (rich-text-runs item)}})
+                               items)
+                          [(text-paragraph text)]))))
+        sections))
+
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  callout-block
+  "One callout: `icon` (an emoji), a bold `title` line, the `sections` nested inside it, and
+   an optional trailing `link` {:text s :url s}. The QA-brief shape, so a page reads the same
+   whichever writer made it."
+  [{:keys [icon title sections link]}]
+  {:object "block" :type "callout"
+   :callout {:icon      {:type "emoji" :emoji icon}
+             :rich_text [{:type "text" :text {:content title} :annotations {:bold true}}]
+             :children  (cond-> (section-blocks sections)
+                          link (conj {:object "block" :type "paragraph"
+                                      :paragraph {:rich_text [{:type "text"
+                                                               :text {:content (:text link)
+                                                                      :link {:url (:url link)}}}]}}))}})
+
+(defn ^{:malli/schema [:=> [:cat :string [:sequential :map]] :map]}
+  toggle-block
+  "A toggle titled `title` holding `sections`. Notion renders a toggle collapsed."
+  [title sections]
+  {:object "block" :type "toggle"
+   :toggle {:rich_text (rich-text-runs title)
+            :children  (section-blocks sections)}})
+
+(defn ^{:malli/schema [:=> [:cat :string :NotionToken :map [:vector :map]] :map]}
+  create-page-with-children!
   "POST /v1/pages creating a page in the data source `data-source-id` from an
    already-built Notion `properties` payload (display-name → typed value map,
-   exactly as the API expects it) plus `description` rendered as paragraph
-   blocks (see `paragraph-blocks` — one block per source paragraph, each under
-   Notion's 2000-char rich_text cap).
+   exactly as the API expects it) and its body as prebuilt `children` blocks.
 
    Property display-names are the *caller's* concern: this fn is shared by
    databases with different schemas, so nothing about a particular DB's naming
    is encoded here. Returns the created page via `normalise-page` (so the caller
    reads back :id = the DB's auto-assigned unique-id, :page-id, :url), or
-   {:error :kw} on failure; never throws."
-  [data-source-id token properties description]
+   {:error :kw} on failure; never throws. :network means the outcome is unknown —
+   the request may have created the page; every other error means it did not."
+  [data-source-id token properties children]
   (let [body  {:parent     {:type "data_source_id" :data_source_id data-source-id}
                :properties properties
-               :children   (paragraph-blocks description)}
+               :children   children}
         resp  (try
                 (http-request
                   :post "https://api.notion.com/v1/pages"
@@ -390,19 +432,35 @@
       (= status 0)   {:error :network}
       :else          {:error :http :status status})))
 
+(defn ^{:malli/schema [:=> [:cat :string :NotionToken :map [:maybe :string]] :map]}
+  create-page-with-properties!
+  "`create-page-with-children!` with the body given as `description` text, rendered as
+   paragraph blocks (see `paragraph-blocks` — one block per source paragraph, each under
+   Notion's 2000-char rich_text cap)."
+  [data-source-id token properties description]
+  (create-page-with-children! data-source-id token properties (paragraph-blocks description)))
+
 (defn ^{:malli/schema [:=> [:cat :string :NotionToken :map] :map]}
   create-page!
   "Create a page in brian's Task DB. `fields`:
-     {:title s :description s :type s :status s :priority s-or-nil}
-   Builds that DB's property payload (title = \"Task result\", status = \"Status\",
-   type = \"Type\", priority = \"Priority\" when non-blank) and delegates to
-   `create-page-with-properties!`. Returns {:error :kw} on failure; never throws."
-  [data-source-id token {:keys [title description type status priority]}]
+     {:title s :type s :status s :priority s-or-nil
+      :lifecycle s-or-nil :app-domain s-or-nil :ball-holder notion-user-id-or-nil
+      :description s | :children [block …]}
+   Builds that DB's property payload (title = \"Task result\", \"Status\", \"Type\", and
+   \"Priority\", \"Lifecycle\", \"App Domain\", \"Ball Holder\" when given). The body is
+   `:children` when given, else `:description` as paragraphs. Returns {:error :kw} on failure
+   (see `create-page-with-children!` for which errors leave the outcome unknown); never throws."
+  [data-source-id token {:keys [title description children type status priority
+                                lifecycle app-domain ball-holder]}]
   (let [props (cond-> {"Task result" {:title [{:text {:content title}}]}
                        "Status"      {:status {:name status}}
                        "Type"        {:select {:name type}}}
-                (not (str/blank? priority)) (assoc "Priority" {:select {:name priority}}))]
-    (create-page-with-properties! data-source-id token props description)))
+                (not (str/blank? priority))   (assoc "Priority" {:select {:name priority}})
+                (not (str/blank? lifecycle))  (assoc "Lifecycle" {:select {:name lifecycle}})
+                (not (str/blank? app-domain)) (assoc "App Domain" {:multi_select [{:name app-domain}]})
+                ball-holder                   (assoc "Ball Holder" {:people [{:id ball-holder}]}))]
+    (create-page-with-children! data-source-id token props
+                                (or children (paragraph-blocks description)))))
 
 (defn ^{:malli/schema [:=> [:cat :string :NotionToken :map] :map]}
   retrieve-block-children
@@ -469,6 +527,41 @@
                     :body    (json/generate-string {:children children :position {:type "start"}})
                     :timeout 10000})
      (catch Exception e {:status 0 :exception e}))))
+
+(defn ^{:malli/schema [:=> [:cat :string [:vector :map] :NotionToken] :map]}
+  append-block-children!
+  "PATCH /v1/blocks/<block-id>/children appending `children` at the end. Returns
+   {:ok true} | {:error :kw}."
+  [block-id children token]
+  (block-write-result
+   (try
+     (http-request :patch (str "https://api.notion.com/v1/blocks/" block-id "/children")
+                   {:headers {"Authorization"  (str "Bearer " token)
+                              "Notion-Version" notion-api-version
+                              "Content-Type"   "application/json"}
+                    :body    (json/generate-string {:children children})
+                    :timeout 10000})
+     (catch Exception e {:status 0 :exception e}))))
+
+(defn- block-text [block]
+  (apply str (map :plain_text (get-in block [(keyword (:type block)) :rich_text]))))
+
+(defn ^{:malli/schema [:=> [:cat :string :string [:sequential :map] :NotionToken] :map]}
+  append-to-toggle!
+  "Put `sections` into the page's top-level toggle titled `title`: appended inside it when the
+   page has one, else as a new toggle at the bottom — so a page never carries two toggles of one
+   title. Returns {:ok true} | {:error :kw}; a failed read of the page writes nothing."
+  [page-id title sections token]
+  (loop [cursor nil]
+    (let [resp (retrieve-block-children page-id token {:start-cursor cursor})]
+      (if (:error resp)
+        (select-keys resp [:error :status])
+        (if-let [toggle (some #(when (and (= "toggle" (:type %)) (= title (block-text %))) %)
+                              (:results resp))]
+          (append-block-children! (:id toggle) (section-blocks sections) token)
+          (if (and (:has_more resp) (:next_cursor resp))
+            (recur (:next_cursor resp))
+            (append-block-children! page-id [(toggle-block title sections)] token)))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :NotionToken :map] [:vector :map]]}
   walk-blocks

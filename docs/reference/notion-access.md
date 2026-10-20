@@ -89,7 +89,9 @@ brian's Task Database is `124fca9f-403c-80d4-896f-fc857e105e35`; ticket IDs are 
 In the triage and ticket flows, **skills read and nido writes.** `/triage-bug`
 and `/triage-slack` gather context with the commands above and park a verdict;
 the Notion mutation happens deterministically in nido's apply path
-(`bb nido:ticket:apply`, `nido.work/apply!`). If you find yourself
+(`bb nido:ticket:apply`, `nido.work/apply!`) — or, for `/triage-slack`'s
+product-terms ticket, in `bb nido:ticket:conclude` (`nido.work/conclude!`),
+which files it before anyone accepts. If you find yourself
 composing a Notion write inside one of those skills, the design has drifted.
 
 Outside those flows — `/prepare-draft-pr` stamping a PR URL onto a ticket,

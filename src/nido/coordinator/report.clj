@@ -94,6 +94,18 @@
    :eric    "955b4c25-7bce-4ca2-ab5e-d99acbcd423a"
    :jaap    "169d872b-594c-8160-b432-000250f98e86"})
 
+(def owner->slack-id
+  "Owner → Slack member id, beside owner->user-id so an owner's identities live in one place.
+   Every mention nido posts resolves through `slack-mention`; an owner absent here has no
+   Slack identity and cannot be mentioned."
+  {:jaap "U08720YNAT1"})
+
+(defn ^{:malli/schema [:=> [:cat :keyword] :string]}
+  slack-mention
+  "The Slack mrkdwn that mentions `owner`, e.g. \"<@U08720YNAT1>\"."
+  [owner]
+  (str "<@" (owner->slack-id owner) ">"))
+
 (def Routing
   "Where triage routed the report. nil on a TriageReport means no routing (Slack,
    or a legacy pre-routing report). :depth :shallow = Ball Holder + App Domain only
@@ -212,16 +224,59 @@
                  [:rationale       :string]
                  [:watch-out       {:optional true} [:maybe :string]]])))
 
-(def ProposedTicket
-  "A grounded ticket the triage-slack skill proposes for human approval. The
-   template is chosen by :ticket-type — \"bug\" (problem/root-cause/fix) or
-   \"improvement\" (request/proposed-change/rationale). No default: an unlisted
-   type is rejected, forcing the skill to classify. Rendered by
-   proposed-ticket->markdown; the render is BOTH the gate card and the created
-   Notion ticket body (compact everywhere)."
+(def ^:private code-reference
+  "What a product section may not hold: a backtick, a path with a source-file extension, or a
+   name:number coordinate. These are the marks of text written for an engineer, and a product
+   section is read by someone who never opens the code. A clock time (10:30) is not a coordinate:
+   the name must contain a letter."
+  #"`|[\w./-]+\.(?:cljs|cljc|clj|edn|js|jsx|ts|tsx|css|scss|sql|py|rb|html|json|ya?ml)\b|\b[\w./-]*[A-Za-z][\w./-]*:\d+\b")
+
+(def ^:private ProductText
+  [:and :string
+   [:fn {:error/message "product text names code — no backticks, source-file paths or name:line"}
+    #(not (re-find code-reference %))]])
+
+(def ProductSections
+  "The reader-facing description of a Slack report, in product terms: what someone using brian
+   meets and expects. Filed as the Notion page body; never carries a cause or a code name."
+  [:map {:closed true}
+   [:where           ProductText]
+   [:what-happens    ProductText]
+   [:expected        ProductText]
+   [:steps           {:optional true} [:vector {:min 1} ProductText]]
+   [:who-is-affected ProductText]])
+
+(def ^:private proposal-conclusion
+  "Fields saying how triage concluded: a :product to file (with the :app-domain it concerns), or
+   a :doubt to put to the owner instead. Optional here so the read-era schema can share them;
+   `one-conclusion` is what makes exactly one of the two required on write."
+  [[:product    {:optional true} ProductSections]
+   [:app-domain {:optional true} AppDomain]
+   [:doubt      {:optional true} :string]])
+
+(def ^:private ProposedTicketAny
+  "Every proposal ever written, including those from before :product/:doubt existed."
   [:multi {:dispatch :ticket-type}
-   ["bug"         BugProposal]
-   ["improvement" ChangeProposal]])
+   ["bug"         (into BugProposal proposal-conclusion)]
+   ["improvement" (into ChangeProposal proposal-conclusion)]])
+
+(defn- one-conclusion?
+  [{:keys [product doubt app-domain]}]
+  (if product
+    (and (nil? doubt) (some? app-domain))
+    (and (string? doubt) (nil? app-domain))))
+
+(def ProposedTicket
+  "A grounded ticket the triage-slack skill proposes. The template is chosen by :ticket-type —
+   \"bug\" (problem/root-cause/fix) or \"improvement\" (request/proposed-change/rationale); no
+   default, so the skill has to classify.
+
+   It carries two texts for two readers. The technical fields are for whoever reviews the gate;
+   exactly one of :product (filed as the Notion page, with its :app-domain) or :doubt (put to the
+   owner in the Slack thread, nothing filed) says how triage concluded. The gate card shows both
+   texts (proposed-ticket->markdown); the page shows only `product-page`."
+  [:and ProposedTicketAny
+   [:fn {:error/message "exactly one of :product (with :app-domain) or :doubt"} one-conclusion?]])
 
 (def ^:private standing-principles
   [:principles {:optional true} [:vector string?]])
@@ -3694,7 +3749,10 @@
    ;; removed — and `:defects-settled`, which is, joined it as required. Every
    ;; :review entry written before that rename is in the old shape, and they are
    ;; the run history of every branch the loop has ever reviewed.
-   :review ReviewReportAny})
+   :review ReviewReportAny
+   ;; :product/:doubt became one-required. Every proposal written before that
+   ;; carries neither, and is still the gate's card for its workstream.
+   :proposed-ticket ProposedTicketAny})
 
 (def ^:private compiled-schemas
   "[contract kind] → a delay of the compiled schema that pair validates under,
@@ -4779,23 +4837,67 @@
         (when priority (str "  ·  **Priority:** " priority)))
    ""])
 
+(defn ^{:malli/schema [:=> [:cat :map] [:vector :map]]}
+  product-sections
+  "The :product of a proposal as titled sections — {:heading s :text s} or {:heading s
+   :items [s]} — in the order a reader of the ticket meets them. [] for a doubt."
+  [{:keys [product]}]
+  (let [{:keys [where what-happens expected steps who-is-affected]} product]
+    (if-not product
+      []
+      (cond-> [{:heading "Where" :text where}
+               {:heading "What happens" :text what-happens}
+               {:heading "Expected" :text expected}]
+        (seq steps) (conj {:heading "Steps to reproduce" :items steps})
+        true        (conj {:heading "Who is affected" :text who-is-affected})))))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:vector :map]]}
+  analysis-sections
+  "The technical half of a proposal as titled sections, for the engineering notes an accepted
+   proposal adds to its page. :watch-out only when present."
+  [{:keys [ticket-type problem root-cause fix request proposed-change rationale watch-out]}]
+  (cond-> (if (= "improvement" ticket-type)
+            [{:heading "Request" :text request}
+             {:heading "Proposed change" :text proposed-change}
+             {:heading "Rationale" :text rationale}]
+            [{:heading "Problem" :text problem}
+             {:heading "Root cause" :text root-cause}
+             {:heading "Fix" :text fix}])
+    (not (str/blank? watch-out)) (conj {:heading "Watch out" :text watch-out})))
+
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  product-page
+  "What a filed proposal's page body says: the callout's icon and title and its sections, plus
+   the report's source link. Holds nothing the page also carries as a property — title, type,
+   priority, app domain — because a reader sees those above the body."
+  [{:keys [ticket-type source-url] :as proposal}]
+  {:icon     (if (= "improvement" ticket-type) "💡" "🐞")
+   :title    (if (= "improvement" ticket-type) "Improvement request" "Bug report")
+   :sections (product-sections proposal)
+   :link     {:text "Reported in Slack" :url source-url}})
+
+(defn- sections->markdown [sections]
+  (mapcat (fn [{:keys [heading text items]}]
+            (if items
+              (cons (str "**" heading "**") (map-indexed #(str (inc %1) ". " %2) items))
+              [(str "**" heading "** — " text)]))
+          sections))
+
 (defn- proposed-ticket->markdown
-  [{:keys [ticket-type source-url problem root-cause fix
-           request proposed-change rationale watch-out] :as report}]
+  "The gate card: both texts, so the reviewer sees what was filed and why."
+  [{:keys [app-domain doubt source-url] :as report}]
   (str/join "\n"
-    (remove nil?
-      (concat
-        (proposed-ticket-head report)
-        (if (= "improvement" ticket-type)
-          [(str "**Request** — " request)
-           (str "**Proposed change** — " proposed-change)
-           (str "**Rationale** — " rationale)]
-          [(str "**Problem** — " problem)
-           (str "**Root cause** — " root-cause)
-           (str "**Fix** — " fix)])
-        [(when-not (str/blank? watch-out) (str "**Watch out** — " watch-out))
-         ""
-         (str "Source: " source-url)]))))
+    (concat
+      (proposed-ticket-head report)
+      (cond
+        doubt      ["## Doubt" doubt ""]
+        (:product report) (concat [(str "## Ticket text" (when app-domain (str "  ·  " app-domain)))]
+                                  (sections->markdown (product-sections report))
+                                  [""])
+        :else      [])
+      ["## Technical analysis"]
+      (sections->markdown (analysis-sections report))
+      ["" (str "Source: " source-url)])))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :LedgerEvent]] :string]}
   report->markdown

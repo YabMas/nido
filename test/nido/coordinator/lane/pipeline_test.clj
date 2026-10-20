@@ -386,7 +386,7 @@
           (add! :proposed-ticket
                 {:format :proposed-ticket :title "t" :ticket-type "bug"
                  :source-url "https://slack.test/1" :problem "p"
-                 :root-cause "rc" :fix "src/a.clj:1"})
+                 :root-cause "rc" :fix "src/a.clj:1" :doubt "d"})
           (is (= :proposal (:intake (p/of :brian id))))
           (is (= :triage-awaiting (:at (p/of :brian id)))
               "an unaccepted proposal owes a person the acceptance, as a triage does")
