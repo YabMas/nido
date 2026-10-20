@@ -41,6 +41,7 @@
    ledger's job is to hold entries and resolve numbers."
   (:require
    [nido.coordinator.report :as report]
+   [nido.coordinator.record.session :as session]
    [nido.coordinator.record.workstream :as ws]))
 
 (defn- indexed-count
@@ -536,6 +537,117 @@
                            rs)]
         (into #{} (comp (map :id) (remove resolved)) (:items round)))
       #{})))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:maybe :map]]}
+  closure
+  "How the ledger says the workstream stands settled: the newest :closed entry, unless a
+   :reopened or a :phase-gate came after it — then nil, since opening the next phase is a reopen
+   by definition. Nil for a workstream that does not exist.
+
+   The newest close is read by its :seq, and when it cannot be read the answer is still closed —
+   `{:seq n :unreadable? true}`, with no outcome — never an older close's payload, which would
+   report an outcome the workstream has since moved past."
+  [project ws-id w]
+  (let [newest (last (filter #(#{:closed :reopened :phase-gate} (:kind %)) (:entries w)))]
+    (when (= :closed (:kind newest))
+      (or (ws/entry-at-seq project ws-id (:seq newest))
+          {:seq (:seq newest) :unreadable? true}))))
+
+(def ^:private stage-carried-by
+  "Per chosen stage, the kinds that record that choice being carried out rather than the work
+   moving past it, so a choice and the act it starts are one stage."
+  {:shipping #{:ship-submitted}})
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:maybe :keyword]]}
+  chosen-stage
+  "The board stage a person or nido chose for the workstream, while that choice still says where
+   the work is; nil when none was chosen, the choice names no board stage (a marker stage hands
+   the answer back to the position), or work has been recorded since.
+
+   A choice says where the work stood WHEN it was made, so work recorded after it moves it on: a
+   workstream put at :ready that has since been blocked or published is not Ready. Not work: a
+   status entry, a record that carries the choice out (the ship lane chooses :shipping, then
+   records the shipment it started), a :note (an account — notion-sync writes one to explain each
+   stage it sets) or an :issue (where the work came from; the backfill appends it after a stage
+   chosen long before it). The newest move is read by its :seq: one whose payload no longer
+   reads chooses nothing, rather than an older choice it replaced."
+  [project ws-id w]
+  (let [move    (last (filter #(#{:stage-set :reopened} (:kind %)) (:entries w)))
+        chosen  (when move (:stage (ws/entry-at-seq project ws-id (:seq move))))
+        carries (get stage-carried-by chosen #{})
+        worked  (:seq (last (remove #(or (ws/status-kinds (:kind %)) (carries (:kind %))
+                                         (#{:note :issue} (:kind %)))
+                                    (:entries w))))]
+    (when (and move
+               (contains? session/lifecycle-stages chosen)
+               (or (nil? worked) (> (:seq move) worked)))
+      chosen)))
+
+(def verdict-kinds
+  "The reports a person accepts or dismisses: a Notion triage and a Slack proposal. Both are
+   answered by the same :triage-accepted, which cites the report's :seq whatever its kind."
+  #{:triage :proposed-ticket})
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] :int]}
+  restored-at
+  "The :seq of the newest :reopened that undid a dismissal, or 0: what was recorded before it
+   was set aside by the person who dismissed it, and restoring returns the ticket to triage as it
+   was before anyone looked at it. A reopen undoes a dismissal when the close it follows was a
+   :dismissed; read by :seq, so an unreadable close undoes nothing."
+  [project ws-id w]
+  (or (->> (:entries w)
+           (filter #(#{:closed :reopened} (:kind %)))
+           (partition 2 1)
+           (keep (fn [[c r]]
+                   (when (and (= :closed (:kind c)) (= :reopened (:kind r))
+                              (= :dismissed (:outcome (ws/entry-at-seq project ws-id (:seq c)))))
+                     (:seq r))))
+           last)
+      0))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:maybe :map]]}
+  verdict
+  "The newest verdict report on the workstream as `{:seq n :kind k :accepted? bool}` — accepted
+   when a :triage-accepted cites that :seq — or nil when it holds none that stands and nobody
+   accepted the ticket. A ticket accepted as reported, by an acceptance citing no report, with no
+   report written since, is `{:accepted? true}` with no :seq.
+
+   A verdict or acceptance recorded before a dismissal that was later restored does not stand
+   (`restored-at`): the next triage writes the one that counts.
+
+   Found on the index rather than by parsing: a triage written as markdown before reports were
+   typed parses as nothing, and its number is still what an acceptance would have cited."
+  [project ws-id w]
+  (let [since    (restored-at project ws-id w)
+        newest   (last (filter #(and (verdict-kinds (:kind %)) (> (:seq %) since)) (:entries w)))
+        accepted (filter #(> (:seq %) since) (ws/entries-of project ws-id :triage-accepted))]
+    (cond
+      newest
+      {:seq       (:seq newest)
+       :kind      (:kind newest)
+       :accepted? (boolean (some #(= (:seq newest) (:triage-seq %)) accepted))}
+
+      (some #(nil? (:triage-seq %)) accepted)
+      {:accepted? true})))
+
+(defn ^{:malli/schema [:=> [:cat :any] :boolean]}
+  born-scratch?
+  "Whether the workstream was born a one-off: its ledger holds the :scratch entry birth appends.
+   A ref-less workstream without one — a described intent waiting for its agent — was not."
+  [w]
+  (boolean (some #(= :scratch (:kind %)) (:entries w))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:maybe :map]]}
+  newest-findings
+  "The newest findings round filed on the workstream, as written, or nil when none was. Throws,
+   :reason :unreadable-ledger, when the index claims a round that cannot be read — the round
+   number and the phase it belongs to are what its next round and its settling are derived from."
+  [project ws-id w]
+  (let [rounds (readable project ws-id w :findings)]
+    (when (= ::unreadable rounds)
+      (throw (ex-info (str "a findings entry could not be read on " ws-id)
+                      {:reason :unreadable-ledger :project project :ws-id ws-id})))
+    (last rounds)))
 
 (defn ^{:malli/schema [:=> [:cat :Standing] [:maybe :string]]}
   why-not-decided

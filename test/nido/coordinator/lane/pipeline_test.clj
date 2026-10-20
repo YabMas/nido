@@ -12,6 +12,7 @@
    [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as sess]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.lane.reentry :as reentry]
    [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.pipeline :as p]))
@@ -1373,7 +1374,7 @@
         (let [w      (ws/read-ws :brian id)
               newest (last (filter #(= :closed (:kind %)) (:entries w)))]
           (spit (str (fs/path (cstate/workstream-dir :brian id) (:file newest))) "{:not edn")
-          (let [c (p/closure :brian id (ws/read-ws :brian id))]
+          (let [c (standing/closure :brian id (ws/read-ws :brian id))]
             (is (= (:seq newest) (:seq c)))
             (is (nil? (:outcome c)) "the older :between-phases is not revived"))
           (is (= :shipped (:at (p/of :brian id))) "unreadable, and still closed"))))))

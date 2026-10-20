@@ -13,8 +13,8 @@
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.status-file :as status-file]
-   [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.workstream :as cws]))
 
 (def ^:private non-terminal-states
@@ -75,21 +75,21 @@
           (inc max-requeues))))
 
 (defn- triage-reconciled-state
-  "Reconciled state for a non-:queued triage run, derived from its ticket record.
-   Ticket status drives the decision; for runs still mid-investigation at restart
-   (no resolved ticket) the run state determines whether to park or fail."
+  "Reconciled state for a non-:queued triage run, from what its ticket's ledger holds — never
+   from the ticket's status, which this run, still open, would answer :investigating:
+   dismissed or its verdict accepted → :done; a verdict waiting for a person → parked for them;
+   no verdict yet → an orphan mid-investigation fails, unless it was already parked."
   [run]
   (let [br (some-> run :event-payload :id)
-        ts (when (and br (not (str/blank? br)))
-             (tickets/status (:project run) br))]
-    (case ts
-      (:triaged :dismissed) {:state :done           :error nil}
-      :awaiting-input       {:state :awaiting-review :error nil}
-      ;; :investigating / cleared / absent — orphan mid-investigation runs;
-      ;; a run already parked at :awaiting-review stays parked.
-      (if (= :awaiting-review (:state run))
-        {:state :awaiting-review :error nil}
-        {:state :failed :error {:reason :orphaned-from-restart}}))))
+        p  (:project run)
+        w  (when-not (str/blank? br) (cws/find-by-ref-id p br))
+        v  (when w (standing/verdict p (:id w) w))]
+    (cond
+      (or (= :dismissed (:outcome (when w (standing/closure p (:id w) w))))
+          (:accepted? v))                 {:state :done           :error nil}
+      v                                   {:state :awaiting-review :error nil}
+      (= :awaiting-review (:state run))   {:state :awaiting-review :error nil}
+      :else {:state :failed :error {:reason :orphaned-from-restart}})))
 
 (defn- live-owned?
   "Whether `run` owns its session and that session's record is still :live."
@@ -234,12 +234,10 @@
                                   (update :state-history conj history-entry))]
             (runs/write-run! updated)
             (runs/mirror-run-phase! updated)
-            ;; A requeued Run is not terminal: its session and ticket are left as
-            ;; they are for the start the daemon resubmits it to, and
+            ;; A requeued Run is not terminal: its session is left as it is
+            ;; for the start the daemon resubmits it to, and
             ;; `session:up` converges the half-built session it finds.
             (when-not (= :queued state)
-              ;; Keep the ticket record honest: an orphaned triage Run clears a stale :investigating.
-              (tickets/on-run-terminal! updated state)
               (settle-session! updated state (= :awaiting-review state))
               (when (resolved-states state)
                 (release-improvement-hold! updated)))))))))

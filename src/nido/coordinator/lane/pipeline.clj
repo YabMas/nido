@@ -419,21 +419,6 @@
            last
            :seq))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:maybe :map]]}
-  closure
-  "How the ledger says the workstream stands settled: the newest :closed entry, unless a
-   :reopened or a :phase-gate came after it — then nil, since opening the next phase is a reopen
-   by definition. Read off the entries, never off the record's :closed.
-
-   The newest close is read by its :seq, and when it cannot be read the answer is still closed —
-   `{:seq n :unreadable? true}`, with no outcome — never an older close's payload, which would
-   report an outcome the workstream has since moved past."
-  [project ws-id w]
-  (let [newest (last (filter #(#{:closed :reopened :phase-gate} (:kind %)) (:entries w)))]
-    (when (= :closed (:kind newest))
-      (or (ws/entry-at-seq project ws-id (:seq newest))
-          {:seq (:seq newest) :unreadable? true}))))
-
 (def ^:private notion-done
   "Notion statuses that are a person settling the ticket as far as nido is concerned. Review is
    among them: a ticket in human review has left nido's hands, and keeping it on the board until
@@ -456,20 +441,10 @@
     (when (and (contains? notion-done (:status seen)) (> (:seq seen) moved))
       seen)))
 
-(def ^:private verdict-kinds
-  "The reports a person accepts or dismisses: a Notion triage and a Slack proposal. Both are
-   answered by the same :triage-accepted, which cites the report's :seq whatever its kind, so
-   the gate is owed by either."
-  #{:triage :proposed-ticket})
-
 (defn- triage-unaccepted?
   "Whether the newest verdict report is one no :triage-accepted cites."
-  [project ws-id w ks]
-  (when (some verdict-kinds ks)
-    ;; Off the index: a triage written as markdown before reports were typed parses as nothing,
-    ;; and its number is still what an acceptance would have cited.
-    (let [newest (:seq (last (filter #(verdict-kinds (:kind %)) (:entries w))))]
-      (not-any? #(= newest (:triage-seq %)) (ws/entries-of project ws-id :triage-accepted)))))
+  [project ws-id w]
+  (when-let [v (standing/verdict project ws-id w)] (not (:accepted? v))))
 
 (defn- layer-progress
   "{:done :of} for the layers finished under `design` after entry `since`, or nil when none.
@@ -1111,7 +1086,7 @@
           ;; the two most expensive things on this path, and the board runs this
           ;; once per rendered row.
           re     (reentry/of* w design st bst)
-          closed (closure project ws-id w)
+          closed (standing/closure project ws-id w)
           blocker (unanswered-blocker project ws-id w)
           ;; A ticket a person settled in Notion is settled here too: placed where a close is,
           ;; owing nobody, so the board's band and the pane's owed-by are one answer. Not over an
@@ -1136,7 +1111,7 @@
                                                                       (> (:seq %) (max gate (:seq design))))
                                                                 (:entries w)))
                                              (layer-progress project ws-id w design gate)))
-                         :triage-unaccepted? (triage-unaccepted? project ws-id w ks)
+                         :triage-unaccepted? (triage-unaccepted? project ws-id w)
                          :blocker-seq    blocker
                          :retraction     (retracted-position
                                           (reentry/current-standing st bst ist))

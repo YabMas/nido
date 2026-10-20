@@ -3,6 +3,7 @@
    human can hand nido a backlog item to drive. Front-end over the :plan-bug leg."
   (:require
    [clojure.string :as str]
+   [nido.coordinator.lane.spawn :as spawn]
    [nido.coordinator.source.queue :as queue]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.workstream :as ws]
@@ -60,30 +61,29 @@
 
 (def ^:private driving-statuses
   "Ticket statuses that already mean nido is driving the ticket. Re-driving one
-   must not regress :implementing back to :planning — pickup is idempotent by
-   design (paste the same URL twice, get the same session)."
+   must not record a second choice to plan it — pickup is idempotent by design
+   (paste the same URL twice, get the same session)."
   #{:planning :implementing})
 
 (defn- claim!
-  "Mark the ticket as work in flight, the claim promote! makes when it hands the
-   same :plan-bug leg a triaged ticket — minus the triage gate, which is exactly
-   what pickup exists to bypass.
+  "Record the person's choice to drive the ticket — a :stage-set :in-progress by :person on its
+   workstream, minted here exactly as the daemon would mint it for the envelope — the claim
+   promote! makes when it hands the same :plan-bug leg a triaged ticket, minus the triage gate,
+   which is exactly what pickup exists to bypass.
 
-   Load-bearing, not bookkeeping. The board reads this status: without it
-   session/derive-stage sees no status at all and projects the ticket into the
-   :triage band (an un-triaged report), so a ticket you explicitly asked nido to
-   drive shows up in the Intake queue rather than under Active. Worse, the run
-   ends the same way — review/run-state-from-ticket maps a status-less exit to
-   :done instead of parking the provisioned impl session at :awaiting-review, so
-   the leg reads as finished the moment it is launched.
+   Load-bearing, not bookkeeping. The ticket reads :planning from that choice: without it the
+   board would project the ticket into the :triage band (an un-triaged report), so a ticket you
+   explicitly asked nido to drive would show up in the Intake queue rather than under Active.
 
-   Leaves an already-driving ticket alone; otherwise opens (or refreshes) the
-   record so the drive has one even when the ticket was never triaged in nido."
+   Leaves an already-driving ticket alone; otherwise opens (or refreshes) the ticket record so
+   the drive has one even when the ticket was never triaged in nido."
   [project {:keys [id page-id url title]}]
   (when-not (contains? driving-statuses (tickets/status project id))
     (tickets/open! project id {:notion-page-id page-id :url url :title title
                                :opened-by :pickup})
-    (tickets/set-status! project id :planning)))
+    (let [w (spawn/ensure-workstream! project {:id id :page-id page-id :url url :title title}
+                                      :triaging)]
+      (ws/advance-stage! project (:id w) :in-progress :person))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :map] :map]}
   claim-and-drive!

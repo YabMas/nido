@@ -1,5 +1,5 @@
 (ns nido.coordinator.lane.promote
-  "The shared promote action: gate a triaged ticket, mark it :planning, and
+  "The shared promote action: gate a triaged ticket, record a person's choice to plan it, and
    enqueue a direct-target envelope for the project's :plan-bug trigger. Used by
    the `bb nido:ticket:promote` task and — via the identical envelope shape — by
    the triage skill's in-chat `promote` command. See spec §The promote gesture."
@@ -27,7 +27,8 @@
   promote!
   "Attempt to promote a ticket to a planning Run.
    Returns {:decision <kw>}; on :promote also {:queued <envelope-path>}.
-   Side effects on :promote only: sets status :planning, enqueues the envelope."
+   Side effects on :promote only: records a :stage-set :in-progress by :person on the ticket's
+   workstream — which `tickets/status` reads as :planning — and enqueues the envelope."
   [project br-id]
   (let [decision (tickets/promote-decision project br-id)]
     (if (not= :promote decision)
@@ -39,7 +40,10 @@
                      :title          (:title m)
                      :report-path    (latest-entry-of-kind project br-id :triage)}]
         (cstate/ensure-dirs!)
-        (tickets/set-status! project br-id :planning)
+        ;; The person's choice to plan it is what makes the ticket :planning until its plan
+        ;; run is open, and what moves its row off Ready now rather than when that run starts.
+        (ws/advance-stage! project (:id (ws/find-or-mint-by-ref! project br-id)) :in-progress
+                           :person)
         {:decision :promote
          :queued   (queue/enqueue! {:target  {:project (keyword (name project)) :trigger :plan-bug}
                                     :payload payload})}))))

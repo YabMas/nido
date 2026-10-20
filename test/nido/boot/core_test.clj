@@ -257,13 +257,32 @@
                                :id       "BR-5236"
                                :title    "T"}}})
 
+(defn- verdict!
+  "A typed triage verdict on the workstream carrying `br`, minting it — a ticket whose verdict
+   waits for a person reads :awaiting-input."
+  [br]
+  (ws/append-to-ref! :brian br {:kind :triage}
+                     (pr-str {:format :triage-report :ticket-key br :determination :bug
+                              :title "Verdict" :summary "bug — reproduced."
+                              :confidence {:level :high :reason "r"}
+                              :routing nil :directions [] :notion-writes nil :trail []})))
+
+(defn- triaged!
+  "A verdict on `br` a person accepted: the ticket reads :triaged."
+  [br]
+  (verdict! br)
+  (tickets/complete! :brian br :triaged :applied))
+
+(defn- promoted!
+  "A triaged `br` a person chose to plan: the ticket reads :planning until work is recorded."
+  [br]
+  (triaged! br)
+  (ws/advance-stage! :brian (:id (ws/find-by-ref-id :brian br)) :in-progress :person))
+
 (deftest gate-skips-completed-triage-ticket
   (gate-with-tmp
     (fn [_]
-      (tickets/open! :brian "BR-5236"
-                     {:notion-page-id "pg" :url "u" :title "T"
-                      :opened-by :triage-new :notion-last-edited-at "t0"})
-      (tickets/complete! :brian "BR-5236" :triaged :applied)
+      (triaged! "BR-5236")
       (let [created (atom 0)]
         (with-redefs [runs/create-run! (fn [& _] (swap! created inc) {:id "x"})]
           (#'core/process-envelope!
@@ -274,10 +293,17 @@
 (deftest gate-skips-active-triage-ticket
   (gate-with-tmp
     (fn [_]
-      (tickets/open! :brian "BR-5236"
-                     {:notion-page-id "pg" :url "u" :title "T"
-                      :opened-by :triage-new :notion-last-edited-at "t0"})
-      ;; status is :investigating (the default after open!)
+      ;; an open triage run on its workstream: the ticket reads :investigating
+      (let [w (ws/find-or-mint-by-ref! :brian "BR-5236")]
+        (runs/write-run! {:id "rinv" :project :brian :trigger :triage-new
+                          :source {:type :notion-view} :event-payload {:id "BR-5236"}
+                          :skill :triage-bug :first-message "x" :agent :claude
+                          :session-name "run-rinv" :workstream-id (:id w)
+                          :claude-session-id nil :limits {}
+                          :priority 0 :session-profile :lite :uncapped? false
+                          :state :running :state-history [{:at "t" :state :running}]
+                          :artifacts [] :error nil})
+        (runs/register! "rinv"))
       (let [created (atom 0)]
         (with-redefs [runs/create-run! (fn [& _] (swap! created inc) {:id "x"})]
           (#'core/process-envelope!
@@ -647,9 +673,7 @@
                       anomaly/record-failure           (fn [det _] det)
                       breakers/record-failure!         (fn [& _] nil)]
           ;; (1) clean exit, no ticket ⇒ :done ⇒ torn down
-          (tickets/open! :brian "BR-D" {:notion-page-id "p" :url "u" :title "T"
-                                        :opened-by :triage-teacher-bugs :notion-last-edited-at "t"})
-          (tickets/complete! :brian "BR-D" :triaged :applied)  ; ⇒ :done
+          (triaged! "BR-D")  ; ⇒ :done
           (runs/write-run! {:id "rdone" :project :brian :trigger :triage-teacher-bugs
                             :source {:type :notion-view} :event-payload {:id "BR-D"}
                             :skill :triage-bug :first-message "x" :agent :claude
@@ -665,9 +689,7 @@
           (is (empty? @stopped) "a :done run is torn down, not merely stopped")
           ;; (2) parked at :awaiting-review ⇒ NOT torn down, services stopped
           (reset! torn [])
-          (tickets/open! :brian "BR-P" {:notion-page-id "p" :url "u" :title "T"
-                                        :opened-by :triage-teacher-bugs :notion-last-edited-at "t"})
-          (tickets/set-status! :brian "BR-P" :awaiting-input)
+          (verdict! "BR-P")
           (runs/write-run! {:id "rpark" :project :brian :trigger :triage-teacher-bugs
                             :source {:type :notion-view} :event-payload {:id "BR-P"}
                             :skill :triage-bug :first-message "x" :agent :claude
@@ -685,9 +707,7 @@
 (deftest run-blocking-parks-triage-run-from-ticket-status
   (gate-with-tmp
     (fn [_]
-      (tickets/open! :brian "BR-11" {:notion-page-id "p" :url "u" :title "T"
-                                     :opened-by :triage-teacher-bugs :notion-last-edited-at "t"})
-      (tickets/set-status! :brian "BR-11" :awaiting-input)   ; skill parked
+      (verdict! "BR-11")   ; skill parked with its verdict for a person
       (runs/write-run! {:id "rp" :project :brian :trigger :triage-teacher-bugs
                         :source {:type :notion-view} :event-payload {:id "BR-11"}
                         :skill :triage-bug :first-message "x" :agent :claude
@@ -703,7 +723,7 @@
                     breakers/record-failure!    (fn [& _] nil)]
         (run-to-turn-end! "rp")
         (is (= :awaiting-review (:state (runs/read-run "rp")))
-            "clean exit + ticket :awaiting-input ⇒ run parks at :awaiting-review, not :done")))))
+            "clean exit + a verdict waiting for a person ⇒ run parks at :awaiting-review, not :done")))))
 
 (deftest run-blocking-plan-bug-launches-continue-ticket-headlessly
   ;; Promote leg: brings the :full session up, flips Notion, then launches
@@ -716,10 +736,7 @@
     (fn [_]
       (let [notified  (atom nil)
             launch-of (atom nil)]
-        (tickets/open! :brian "BR-12" {:notion-page-id "PG12" :url "u" :title "T"
-                                       :opened-by :triage-new :notion-last-edited-at "t"})
-        (tickets/complete! :brian "BR-12" :triaged :applied)
-        (tickets/set-status! :brian "BR-12" :planning)   ; just promoted
+        (promoted! "BR-12")
         (runs/write-run! {:id "rplan" :project :brian :trigger :plan-bug
                           :source {:type :manual} :event-payload {:id "BR-12" :notion-page-id "PG12"}
                           :skill :plan-bug :first-message "/plan-bug x" :agent :claude
@@ -748,8 +765,8 @@
   ;; :plan-bug session fails to boot (canonically a shared-PG migration checksum
   ;; mismatch), run-blocking! must PARK the workstream as a blocked gate — ticket
   ;; stays :planning (board stays :in-progress), the blocker rides the session —
-  ;; NOT mark the run :failed. A :failed here runs on-run-terminal!, which reverts
-  ;; the ticket :planning→:triaged, bouncing the board back to :ready and hiding
+  ;; NOT mark the run :failed. A :failed run owns its ticket no longer, so the
+  ;; ticket would read :triaged again, bouncing the board back to :ready and hiding
   ;; the failure. (Triage runs are unaffected: they still :failed — see
   ;; run-blocking-fails-cleanly-when-session-spawn-throws.)
   (gate-with-tmp
@@ -759,10 +776,7 @@
         (session/create! :brian (:id w)
                          {:name "impl-br-13" :weight :heavy
                           :autonomy (assoc autonomy-parked :skill :plan-bug :phase :running)})
-        (tickets/open! :brian "BR-13" {:notion-page-id "PG13" :url "u" :title "T"
-                                       :opened-by :triage-new :notion-last-edited-at "t"})
-        (tickets/complete! :brian "BR-13" :triaged :applied)
-        (tickets/set-status! :brian "BR-13" :planning)   ; just promoted
+        (promoted! "BR-13")
         (runs/write-run! {:id "rblock" :project :brian :trigger :plan-bug
                           :source {:type :manual} :event-payload {:id "BR-13" :notion-page-id "PG13"}
                           :skill :plan-bug :first-message "/plan-bug x" :agent :claude

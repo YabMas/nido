@@ -11,6 +11,8 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [nido.coordinator.record.clock :as clock]
+   [nido.coordinator.record.runs :as runs]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as cws]
    [nido.platform.io :as io]))
@@ -89,9 +91,68 @@
             (io/write-edn! path m')
             m'))))))
 
+(def ^:private open-run-states
+  "Run states in which a run still owns its ticket: working, or parked for a person's review."
+  #{:queued :preprocessing :running :awaiting-review})
+
+(def ^:private investigating-skills
+  "The skills whose run investigates a ticket and leaves a verdict on it."
+  #{:triage-bug :triage-slack :investigate-bug :add-video-provider})
+
+(def ^:private triage-kinds
+  "The entry kinds a ticket's triage leaves: the report it arrived as, the verdict on it, a
+   person's acceptance, and an account of either. Any other record of work means the ticket is
+   being worked past its triage."
+  #{:ticket :issue :triage :triage-accepted :proposed-ticket :note})
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :any] [:maybe :keyword]]}
+  status-of
+  "Where triage of the ticket whose workstream is `w` stands, read off that workstream's ledger
+   and its runs — nothing stored says it. The first that holds:
+     :dismissed      — its standing close is a dismissal
+     :planning       — a plan run is open on it, or a person's choice to put it in
+                       progress still holds (`standing/chosen-stage`)
+     :implementing   — it is closed otherwise, or records work past its triage
+     :triaged        — a person accepted its newest verdict
+     :investigating  — a run investigating it is open
+     :awaiting-input — a verdict waits for a person
+     nil             — none of these: never triaged, or a triage that ended without a verdict,
+                       which is what makes a ticket re-triable.
+   A run is open from its minting until it ends, parked for review included.
+
+   Nothing recorded before a dismissal that was later restored counts, verdict or work
+   (`standing/restored-at`): restoring a dismissed ticket returns it to triage as it was before
+   anyone looked at it.
+
+   `except`, a run id, is left out of the runs read: the status the ticket would have without
+   that run, which is how a parked run asks whether its ticket still needs it."
+  ([project w] (status-of project w nil))
+  ([project w except]
+  (when w
+    (let [ws-id  (:id w)
+          open   (into #{} (comp (filter #(and (open-run-states (:state %)) (not= except (:id %))))
+                                 (map :skill))
+                       (runs/runs-of project ws-id))
+          closed (standing/closure project ws-id w)
+          v      (standing/verdict project ws-id w)]
+      (cond
+        (= :dismissed (:outcome closed))                            :dismissed
+        (or (open :plan-bug)
+            (= :in-progress (standing/chosen-stage project ws-id w)))   :planning
+        (or closed
+            (some #(not (or (triage-kinds (:kind %)) (cws/status-kinds (:kind %))
+                            (<= (:seq %) (standing/restored-at project ws-id w))))
+                  (:entries w)))                                    :implementing
+        (:accepted? v)                                              :triaged
+        (some investigating-skills open)                            :investigating
+        v                                                           :awaiting-input)))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] [:maybe :keyword]]}
-  status [project br-id]
-  (:status (read-meta project br-id)))
+  status
+  "`status-of` the workstream carrying `br-id` as a ref, or nil when none does. O(workstreams)."
+  [project br-id]
+  (when-not (blank-br? br-id)
+    (status-of project (cws/find-by-ref-id project br-id))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :map] :Ticket]}
   open!
@@ -147,9 +208,19 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :keyword :any] :Ticket]}
   complete!
-  "Terminal completion of a triage verdict: set status :triaged, disposition,
-   triaged-at. (Off-radar tickets use dismiss!, not complete! — :skipped retired.)"
+  "Terminal completion of a triage verdict: accept the newest verdict on the ticket's workstream
+   — a :triage-accepted citing it, or citing nothing when the ledger holds no verdict, so the
+   ticket is accepted as reported — unless an acceptance already stands; then set status
+   :triaged, disposition, triaged-at. A ticket no workstream carries gets one by its ref.
+   (Off-radar tickets use dismiss!, not complete! — :skipped retired.)"
   [project br-id new-status disposition]
+  (when-not (blank-br? br-id)
+    (let [w (cws/find-or-mint-by-ref! project br-id)
+          v (standing/verdict project (:id w) w)]
+      (when-not (:accepted? v)
+        (cws/append-entry! project (:id w) {:kind :triage-accepted}
+                           (pr-str (cond-> {:format :triage-accepted}
+                                     (:seq v) (assoc :triage-seq (:seq v))))))))
   (update-meta! project br-id
                 (fn [m]
                   (assoc m :status new-status
@@ -164,11 +235,15 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :Ticket]}
   dismiss!
-  "Take a ticket off the triage radar: set status :dismissed. Creates the record
-   if absent so a never-triaged ticket can be dismissed. The gate then skips it
-   (no auto-re-triage) and derive-stage projects it out of the triage queue.
-   No-op for a nil/blank br-id (inherits update-meta!'s chokepoint nil-safety)."
+  "Take a ticket off the triage radar: settle the workstream carrying it :dismissed — minting one
+   by its ref when none does, so a never-triaged ticket can be dismissed — and set status
+   :dismissed. The gate then skips it (no auto-re-triage). A workstream already standing
+   dismissed is left as it is. No-op for a nil/blank br-id."
   [project br-id]
+  (when-not (blank-br? br-id)
+    (let [w (cws/find-or-mint-by-ref! project br-id)]
+      (when-not (= :dismissed (:outcome (standing/closure project (:id w) w)))
+        (cws/close! project (:id w) :dismissed nil :person))))
   (update-meta! project br-id
                 #(assoc (or % {:br-id br-id :entries []}) :status :dismissed)))
 
@@ -185,14 +260,13 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :map]}
   gate-decision
-  "Decide the coordinator pre-spawn action by reading the ticket's meta status
-   from disk:
+  "Decide the coordinator pre-spawn action from the ticket's derived `status`:
      :skip-completed — terminally handled (:triaged | :dismissed)
-     :skip-active    — owned by a session or started elsewhere
-                       (:investigating | :awaiting-input | :planning | :implementing)
-     :spawn          — no record, or status cleared (re-triable)
-   Dismissed/in-progress tickets are skipped so reconcile-mode re-emits never
-   re-triage something already handled or started in a different state."
+     :skip-active    — a run owns it, its verdict waits for a person, or it is being
+                       worked past triage (:investigating | :awaiting-input | :planning |
+                       :implementing)
+     :spawn          — never triaged, or a triage that ended without a verdict
+   so a reconcile-mode re-emit never re-triages something already handled or underway."
   [project br-id]
   (case (status project br-id)
     (:triaged :dismissed)            :skip-completed
@@ -202,14 +276,14 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :map]}
   promote-decision
-  "Decide whether a ticket may be promoted to a planning Run, by reading its
-   meta status:
+  "Decide whether a ticket may be promoted to a planning Run, from its derived
+   `status`:
      :promote        — status :triaged (the only promotable state)
      :skip-active    — a plan Run already owns it (:planning)
      :skip-completed — dismissed (off-radar, nothing to promote)
-     :skip-no-record — never triaged (no record)
-     :skip-untriaged — mid-triage (:investigating / :awaiting-input) or any
-                       other non-:triaged status"
+     :skip-no-record — never triaged
+     :skip-untriaged — mid-triage (:investigating / :awaiting-input) or worked
+                       past it (:implementing)"
   [project br-id]
   (case (status project br-id)
     :triaged   :promote
@@ -217,29 +291,3 @@
     :dismissed :skip-completed
     nil        :skip-no-record
     :skip-untriaged))
-
-(defn ^{:malli/schema [:=> [:cat :map :keyword] :any]}
-  on-run-terminal!
-  "Reconcile a ticket's meta when its triage/plan Run reaches a terminal or
-   parked coordinator state. No-op for other skills and record-less tickets.
-   - run ended :awaiting-review        → leave (session parked)
-   - meta already :triaged/:dismissed  → leave (terminal disposition recorded)
-   - plan Run, ticket already advanced past :planning (e.g. the promote burst
-     drove it to :implementing) → leave: ownership handed off, the plan Run's
-     termination is not a failure of the work in flight.
-   - otherwise (abnormal/stale status):
-       :triage-bug → clear   (drop status → re-triable)
-       :plan-bug   → :triaged (revert → re-promotable, preserving triage)
-                     ONLY while the plan Run still owns the ticket (:planning)."
-  [run run-state]
-  (let [skill   (:skill run)
-        project (:project run)
-        br-id   (some-> run :event-payload :id)]
-    (when (and (#{:triage-bug :plan-bug} skill) br-id (not (str/blank? br-id)))
-      (when-let [m (read-meta project br-id)]
-        (cond
-          (= :awaiting-review run-state)        nil
-          (#{:triaged :dismissed} (:status m))  nil
-          (= :plan-bug skill)                (when (= :planning (:status m))
-                                               (set-status! project br-id :triaged))
-          :else                              (clear-status! project br-id))))))

@@ -740,12 +740,12 @@
   "True when a provision-only (:plan-bug / :plan-github-issue) run's launch failed
    in a way that should PARK the workstream as a blocked gate — surfacing the
    blocker to the human — rather than mark the Run :failed. A :failed provision Run
-   runs tickets/on-run-terminal!, which reverts the ticket :planning→:triaged and
-   bounces the board back to :ready, SILENTLY hiding the failure (the canonical
+   owns its ticket no longer, so the ticket reads :triaged again and the board
+   bounces back to :ready, SILENTLY hiding the failure (the canonical
    case: a shared-PG Flyway checksum mismatch blocks the session app boot, so the
    promote appears to undo itself minutes later). Parking mirrors the merge lane's
-   :blocked handling (ship/settle-drive-home!): the ticket stays :planning (board
-   stays :in-progress), the session parks, and set-error! carries the blocker into
+   :blocked handling (ship/settle-drive-home!): the parked run keeps the ticket
+   :planning (board stays :in-progress), the session parks, and set-error! carries the blocker into
    the gate inbox. Scoped to provision-only runs so the triage path's breaker-
    engaging :failed handling (the '36 sessions' no-op guard) is untouched."
   [provision-only? result]
@@ -1083,10 +1083,6 @@
           (session/set-error! (:project run) (:workstream-id run) (:session-name run)
                               {:at (clock/now-iso) :reason :promote-blocked :message note})
           (catch Throwable _ nil))))
-    ;; Keep the ticket record honest on terminal exit (spec §Lifecycle):
-    ;; clears a stale :investigating after an abnormal exit, leaves completed
-    ;; dispositions and parked :awaiting-input drafts alone.
-    (tickets/on-run-terminal! (runs/read-run run-id) next-state)
     ;; Breaker update on terminal state. Default max-failures is 3; the
     ;; trigger's :limits.max-failures (snapshotted onto the Run at create
     ;; time) overrides this.

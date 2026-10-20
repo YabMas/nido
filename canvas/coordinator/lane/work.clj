@@ -6,6 +6,7 @@
    them holds state, and that is what lets the driver run them in any order it likes."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
+            [canvas.coordinator.record.runs :as runs]
             [canvas.coordinator.record.state :refer [Path WorkstreamId SessionName]]
             [canvas.coordinator.record.tickets :as tickets :refer [TicketId]]
             [canvas.coordinator.record.workstream :as workstream :refer [Workstream]]
@@ -179,7 +180,20 @@
     "Bring one workstream's ledger level with its records; the kinds appended, in order."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:facts :map]] [:vector :keyword]]
      :delegates [workstream/freeze-index! workstream/append-entry!]})
+  (Operation backfill-orphan-tickets!
+    "Give every ticket whose record holds a status, and that no workstream carries, a workstream
+     closed as the record says it ended — so the status derived off a ledger is the one the
+     record held."
+    {:signature [:=> [:catn [:project ProjectName]] [:vector :keyword]]
+     :delegates [tickets/list-ids tickets/read-meta workstream/find-or-mint-by-ref!
+                 workstream/close!]})
+  (Operation register-runs!
+    "Register every run of a project with its workstream, so the runs minted before registration
+     are found from it."
+    {:signature [:=> [:catn [:project ProjectName]] :int]
+     :delegates [runs/register!]})
   (Operation backfill!
-    "Backfill every workstream of a project; counts appended by kind, and what failed."
+    "Give orphan tickets a workstream, register the project's runs, then backfill every
+     workstream; counts appended by kind, and what failed."
     {:signature [:=> [:catn [:project ProjectName]] :map]
-     :delegates [backfill-workstream!]}))
+     :delegates [backfill-orphan-tickets! register-runs! backfill-workstream!]}))

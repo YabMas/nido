@@ -223,11 +223,16 @@
     "The workstream carrying this external id, whichever adapter raised it."
     {:signature [:=> [:catn [:project ProjectName] [:external-id :string]] [:maybe Workstream]]
      :delegates [list-ids read-ws]})
+  (Operation find-or-mint-by-ref!
+    "The workstream carrying this external id, minting a minimal one when none does — the spine
+     every ticket-keyed write shares, so intake-triage and pickup-drive land on one workstream."
+    {:signature [:=> [:catn [:project ProjectName] [:external-id :string]] Workstream]
+     :delegates [find-by-ref-id create!]})
   (Operation append-to-ref!
-    "Append to whichever workstream carries this external id — how an inbound event reaches its
-     workstream without the caller knowing the id."
+    "Append to whichever workstream carries this external id, minting it when none does — how an
+     inbound event reaches its workstream without the caller knowing the id."
     {:signature [:=> [:catn [:project ProjectName] [:external-id :string] [:entry :map] [:content :string]] [:maybe Path]]
-     :delegates [find-by-ref-id append-entry!]})
+     :delegates [find-or-mint-by-ref! append-entry!]})
   (Operation add-ref!
     "Append an external ref, deduped on adapter and id.
 

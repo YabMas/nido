@@ -8,6 +8,7 @@
    second run appends nothing."
   (:require
    [nido.coordinator.lane.pickup :as pickup]
+   [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.view.workstreams :as wsv]
@@ -88,7 +89,9 @@
         (when (and round (seq owed))
           (add! {:format :findings-resolved :round round :items owed :by "backfill"}))))
     (when-let [br (:id (wsv/ledger-ref w))]
-      (let [st (tickets/status project br)]
+      ;; The status the ticket record STORED, which is what this records — never the status
+      ;; `tickets/status` derives from the ledger this is bringing level.
+      (let [st (:status (tickets/read-meta project br))]
         (when-let [n (and (taken st) (unaccepted-triage project id))]
           (add! {:format :triage-accepted :triage-seq n}))
         (when (and (= :dismissed st) (nil? (:closed (ws/read-ws project id)))
@@ -105,13 +108,42 @@
           (add! {:format :notion-status :page-id page-id :status status :by :backfill}))))
     @appended))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :keyword]]}
+  backfill-orphan-tickets!
+  "Give every ticket whose record holds a status, and that no workstream carries as a ref, a
+   workstream minted by its ref and closed as the record says it ended — :dismissed for a
+   dismissal, :done for any other status — so the status `tickets/status` derives off a ledger
+   is the one the record held. Returns the ids given one."
+  [project]
+  (into []
+        (keep (fn [br]
+                (let [st (:status (tickets/read-meta project br))]
+                  (when (and st (nil? (ws/find-by-ref-id project br)))
+                    (ws/close! project (:id (ws/find-or-mint-by-ref! project br))
+                               (if (= :dismissed st) :dismissed :done) nil :backfill)
+                    br))))
+        (tickets/list-ids project)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :int]}
+  register-runs!
+  "Register every run of `project` that names a workstream with that workstream, so
+   `runs/runs-of` finds runs minted before runs were registered at creation. Returns how many
+   runs it looked at."
+  [project]
+  (let [rs (filter #(= (name project) (some-> % :project name)) (keep runs/read-run (runs/list-run-ids)))]
+    (doseq [r rs] (runs/register! (:id r)))
+    (count rs)))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName] :map]}
   backfill!
-  "Run `backfill-workstream!` over every workstream of `project`. Returns
-   {:workstreams <n> :appended {<kind> <count>} :failed [{:ws-id :error}]} — one workstream that
-   cannot be read or written does not stop the rest."
+  "Give orphan tickets a workstream, register the project's runs, then run
+   `backfill-workstream!` over every workstream of `project`. Returns
+   {:workstreams <n> :appended {<kind> <count>} :failed [{:ws-id :error}] :orphan-tickets [<id>]
+    :runs <n>} — one workstream that cannot be read or written does not stop the rest."
   [project]
-  (let [facts (notion-cache/project-page-facts project)]
+  (let [facts   (notion-cache/project-page-facts project)
+        orphans (backfill-orphan-tickets! project)
+        n-runs  (register-runs! project)]
     (reduce (fn [acc id]
               (try
                 (-> acc
@@ -119,5 +151,5 @@
                     (update :appended #(merge-with + % (frequencies (backfill-workstream! project id facts)))))
                 (catch Exception e
                   (update acc :failed conj {:ws-id id :error (ex-message e)}))))
-            {:workstreams 0 :appended {} :failed []}
+            {:workstreams 0 :appended {} :failed [] :orphan-tickets orphans :runs n-runs}
             (ws/list-ids project))))

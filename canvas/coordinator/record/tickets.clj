@@ -4,6 +4,8 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.clock :as clock]
+            [canvas.coordinator.record.runs :as runs]
+            [canvas.coordinator.record.standing :as standing]
             [canvas.coordinator.record.state :as state :refer [Path]]
             [canvas.coordinator.record.workstream :as workstream]
             [canvas.platform.io :as io]
@@ -15,19 +17,23 @@
   :string)
 
 (Kind Ticket
-  "What nido knows about one external ticket: where it came from, what triage decided, and
-   whether it may be promoted.
+  "What nido knows about one external ticket: where it came from and what it is called. Where its
+   triage stands is not here — that is derived from the ticket's workstream (`status`).
 
    Distinct from the Workstream that answers it. A ticket is the OUTSIDE world's record and is
    keyed by the outside world's id; a workstream is nido's, and one may exist without the other.
    SHAPELESS — the shape lives with the code that writes it.")
 
 (Module record-tickets
-  "Per-ticket triage state: one directory per ticket, keyed by the external id.
+  "Per-ticket triage: one directory per ticket, keyed by the external id, and where its triage
+   stands — derived, never stored, from the ledger and runs of the workstream carrying the ticket.
 
    The gate lives here. `gate-decision` and `promote-decision` read the ticket's status and say
    what the coordinator may do next — which is why a re-emitted event does not spawn a second
-   triage run, and why a ticket nobody has triaged cannot be promoted straight to planning."
+   triage run, and why a ticket nobody has triaged cannot be promoted straight to planning.
+   DERIVED because what moves it is a run starting or ending and a person accepting or
+   dismissing, all of which the ledger and the run records already hold; a stored copy had to be
+   patched every time a run ended abnormally, and was wrong whenever the patch missed."
 
   {:child [Ticket TicketId]}
   (Operation ticket-dir
@@ -60,9 +66,17 @@
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]
                             [:f [:=> [:cat :any] :any]]] [:maybe Ticket]]
      :delegates [ticket-dir io/with-file-lock io/lock-path-for]})
+  (Operation status-of
+    "Where triage of the ticket a workstream carries stands — dismissed, planning, implementing,
+     triaged, investigating, awaiting input, or nil when it is re-triable — read off that
+     workstream's ledger and runs, optionally leaving one run out."
+    {:signature [:=> [:catn [:project ProjectName] [:w :any]] [:maybe :keyword]]
+     :delegates [runs/runs-of standing/closure standing/verdict standing/chosen-stage
+                 standing/restored-at]})
   (Operation status
-    "The ticket's triage status, or nil when it has none."
-    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] [:maybe :keyword]]})
+    "`status-of` the workstream carrying the ticket, or nil when none does."
+    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] [:maybe :keyword]]
+     :delegates [status-of workstream/find-by-ref-id]})
   (Operation open!
     "Create a ticket record, or refresh the descriptive fields of one that exists."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:base :map]] Ticket]
@@ -85,19 +99,21 @@
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:new-status :keyword]] Ticket]
      :delegates [update-meta!]})
   (Operation complete!
-    "Terminal completion of a triage verdict: the status, the disposition it settled on, and
-     when."
+    "Terminal completion of a triage verdict: an acceptance of the newest verdict on the ticket's
+     workstream — or of the ticket as reported, when it holds none."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:new-status :keyword] [:disposition :any]] Ticket]
-     :delegates [update-meta! clock/now-iso]})
+     :delegates [update-meta! clock/now-iso workstream/find-or-mint-by-ref! standing/verdict
+                 workstream/append-entry!]})
   (Operation clear-status!
     "Make a ticket re-triable by dropping its status — which is what puts it back through the
      gate rather than around it."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] [:maybe Ticket]]
      :delegates [update-meta!]})
   (Operation dismiss!
-    "Take a ticket off the triage radar."
+    "Take a ticket off the triage radar: settle the workstream carrying it :dismissed, minting one
+     when none does."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] Ticket]
-     :delegates [update-meta!]})
+     :delegates [update-meta! workstream/find-or-mint-by-ref! standing/closure workstream/close!]})
   (Operation latest-triage-report
     "The newest triage report on the workstream this ticket raised, or nil."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] [:maybe :map]]
@@ -108,8 +124,4 @@
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] :map]})
   (Operation promote-decision
     "Whether this ticket may be promoted to a planning run, and why not when it may not."
-    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] :map]})
-  (Operation on-run-terminal!
-    "Reconcile a ticket's record when the run triaging or planning it reaches a terminal state."
-    {:signature [:=> [:catn [:run :map] [:run-state :keyword]] :any]
-     :delegates [read-meta set-status!]}))
+    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] :map]}))

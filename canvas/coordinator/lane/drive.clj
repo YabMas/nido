@@ -77,11 +77,6 @@
   (Operation of "Where a workstream stands and what should happen to it next."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
      :delegates [workstream/read-ws intake-kind next-action baseline-verified?]})
-  (Operation closure
-    "The newest :closed entry, unless a :reopened or a :phase-gate came after it — how the ledger
-     says a workstream stands settled, read off its entries and never off the record's :closed."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:w :any]] [:maybe :map]]
-     :delegates [workstream/entries-of]})
   (Operation status
     "A workstream's position, who owes its next move, and whether anything is live — the one
      answer every surface renders. Stalled when an agent owes the move, nothing is live, and no

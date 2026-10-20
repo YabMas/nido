@@ -7,7 +7,9 @@
    [nido.platform.core :as core]
    [nido.coordinator.lane.backfill :as backfill]
    [nido.coordinator.lane.findings :as findings]
+   [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.source.notion :as notion-src]
    [nido.coordinator.source.queue :as queue]
@@ -238,7 +240,8 @@
                (backfill/backfill-workstream! :brian staged facts)))
         (is (= ["f1"] (:items (last (ws/entries-of :brian staged :findings-resolved)))))
         (testing "a second run appends nothing"
-          (is (= {:workstreams 3 :appended {} :failed []} (backfill/backfill! :brian))))
+          (is (= {:workstreams 3 :appended {} :failed [] :orphan-tickets [] :runs 0}
+                 (backfill/backfill! :brian))))
         (testing "a cached status never overwrites one the ledger already records"
           (is (= [] (backfill/backfill-workstream! :brian staged {"p2" {:status "Backlog"}})))
           (is (= ["In progress"] (mapv :status (ws/entries-of :brian staged :notion-status)))))
@@ -263,15 +266,43 @@
                              :title "V" :summary "s" :confidence {:level :high :reason "r"}
                              :routing nil :directions [] :notion-writes nil :trail []})]
         (ws/append-entry! :brian taken {:kind :triage} verdict)
-        (nido.coordinator.record.tickets/open! :brian "BR-3" {:title "t"})
-        (nido.coordinator.record.tickets/set-status! :brian "BR-3" :triaged)
-        (nido.coordinator.record.tickets/open! :brian "BR-4" {:title "t"})
-        (nido.coordinator.record.tickets/dismiss! :brian "BR-4")
+        ;; What ticket records hold from before the ledger recorded either decision.
+        (tickets/write-meta! :brian "BR-3" {:br-id "BR-3" :status :triaged})
+        (tickets/write-meta! :brian "BR-4" {:br-id "BR-4" :status :dismissed})
         (is (= [:triage-accepted] (backfill/backfill-workstream! :brian taken {})))
         (is (= [:closed] (backfill/backfill-workstream! :brian gone {})))
         (is (= :dismissed (:outcome (last (ws/entries-of :brian gone :closed)))))
-        (is (= {:workstreams 2 :appended {} :failed []} (backfill/backfill! :brian))
+        (is (= {:workstreams 2 :appended {} :failed [] :orphan-tickets [] :runs 0}
+               (backfill/backfill! :brian))
             "a second run appends nothing")))))
+
+(deftest the-backfill-gives-an-orphan-ticket-a-workstream-and-registers-runs
+  (with-tmp
+    (fn []
+      (do
+        (tickets/write-meta! :brian "BR-7" {:br-id "BR-7" :status :dismissed})
+        (tickets/write-meta! :brian "vp-x.de" {:br-id "vp-x.de" :status :triaged})
+        (tickets/write-meta! :brian "BR-8" {:br-id "BR-8"})
+        (let [w (ws/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-9"}]})]
+          (fs/create-dirs (cstate/run-dir "r9"))
+          (runs/write-run!
+           {:id "r9" :project :brian :trigger :t :source {:type :manual} :event-payload {:id "BR-9"}
+            :skill :triage-bug :first-message "x" :agent :claude :session-name "s"
+            :workstream-id (:id w) :claude-session-id nil :limits {} :priority 0
+            :session-profile :lite :uncapped? false :state :running
+            :state-history [{:at "t" :state :running}] :artifacts [] :error nil})
+          (let [r (backfill/backfill! :brian)]
+            (is (= #{"BR-7" "vp-x.de"} (set (:orphan-tickets r)))
+                "a ticket whose record holds a status gets the workstream that records it")
+            (is (= 1 (:runs r))))
+          (is (= ["r9"] (mapv :id (runs/runs-of :brian (:id w))))
+              "a run minted before registration is found from its workstream")
+          (is (= :investigating (tickets/status :brian "BR-9"))))
+        (is (= :dismissed (tickets/status :brian "BR-7")))
+        (is (= :implementing (tickets/status :brian "vp-x.de"))
+            "a ticket that ended any other way is closed, which the gate never re-triages")
+        (is (nil? (ws/find-by-ref-id :brian "BR-8")) "a record holding no status needs nothing")
+        (is (= [] (:orphan-tickets (backfill/backfill! :brian))) "and a second run mints nothing")))))
 
 (deftest the-backfill-records-an-issue-arrival-once
   (with-tmp

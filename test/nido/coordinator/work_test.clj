@@ -1413,7 +1413,7 @@
           (is (= [:brian (:id w) "do it"] @calls)))))))
 
 (deftest resolve-gate-apply-finalizes-the-ticket-nido-side
-  ;; Apply is a direct nido-side mutation (ticket:complete → :triaged/:applied), NOT a
+  ;; Apply is a direct nido-side mutation (an acceptance on the ledger), NOT a
   ;; claude resume — so it works for legacy pre-notion-cli reviews whose apply
   ;; conversation calls the removed Notion MCP tools (which stranded them in triage).
   (with-tmp
@@ -1428,8 +1428,7 @@
           (is (= {:decision :applied} (work/resolve-gate! :brian (:id w) :apply)))
           (is (false? @resumed) "Apply does NOT resume a conversation")
           (is (= :triaged (tickets/status :brian "BR-A9"))
-              "Apply finalizes the ticket :triaged nido-side ⇒ it leaves :triage")
-          (is (= :applied (:disposition (tickets/read-meta :brian "BR-A9")))))))))
+              "Apply finalizes the ticket :triaged nido-side ⇒ it leaves :triage"))))))
 
 (def ^:private notion-edn-report
   "Valid TriageReport EDN for notion triage ledger tests."
@@ -1517,7 +1516,7 @@
                 ;; minimal stubs so workstream's other projections don't throw:
                 nido.coordinator.record.session/list-sessions (fn [_ _] [])
                 nido.coordinator.view.workstreams/workstream-row (fn [_ _ & _] {:ws-id "ws-1" :stage :triage :label "BR-7" :source :notion})
-                nido.coordinator.lane.pipeline/closure (constantly nil)
+                nido.coordinator.record.standing/closure (constantly nil)
                 nido.coordinator.lane.pipeline/status (constantly {:position {:at :intake} :owed-by :agent
                                                                    :live false :stalled true})
                 nido.coordinator.record.standing/open-findings (constantly #{})
@@ -2476,8 +2475,11 @@
           (is (= {:decision :applied} (work/resolve-gate! :brian (:id w) :apply))
               "an empty ledger, a click with no position → applied")
           (is (= :triaged (tickets/status :brian "BR-L1")))
-          (is (empty? (:entries (workstream/read-ws :brian (:id w))))
-              "and no acceptance is appended — there is no report to cite one against"))))))
+          (is (= [{:format :triage-accepted}]
+                 (map #(select-keys % [:format :triage-seq])
+                      (workstream/entries-of :brian (:id w) :triage-accepted)))
+              "and the acceptance cites nothing — there is no report to cite — accepting the
+               ticket as reported"))))))
 
 (deftest the-cli-apply-carries-no-position-and-still-records
   ;; `bb nido:ticket:apply` is the agent executing its own verdict inside its own
@@ -2736,7 +2738,7 @@
 
         (is (= {:decision :restored} (work/restore! :brian (:id w))))
         (is (nil? (tickets/status :brian "BR-77"))
-            "status cleared → the auto-triage gate treats it as never-triaged")
+            "the auto-triage gate treats it as never-triaged")
         (is (nil? (:closed (workstream/read-ws :brian (:id w))))
             "workstream reopened")
         (is (= :triaging (:stage (workstream/read-ws :brian (:id w))))
@@ -2769,13 +2771,12 @@
     (fn [_]
       (is (= {:decision :no-workstream} (work/restore! :brian "nope"))))))
 
-(deftest restore-clears-the-ticket-status-of-a-bare-watched-view-row
-  ;; bare-row stamps :dismissed?, so a ticket dismissed via `bb nido:ticket:dismiss`
-  ;; with no covering workstream lands in the band and renders Restore. That click
-  ;; has to actually restore it — reporting "✓ Restored" while nothing happened is
-  ;; the band lying about the one guarantee it exists to make. A bare row's
-  ;; synthetic ws-id IS its Notion page-id, so the BR is recoverable from the
-  ;; watched-view cache the row was synthesized from.
+(deftest restore-by-page-id-restores-the-workstream-a-ticket-dismissal-minted
+  ;; A ticket dismissed via `bb nido:ticket:dismiss` with no workstream gets one, which lands in
+  ;; the band and renders Restore. A click carrying the page's id — a bare row's synthetic ws-id
+  ;; IS its Notion page-id — has to actually restore it: reporting "✓ Restored" while nothing
+  ;; happened is the band lying about the one guarantee it exists to make. The BR is recoverable
+  ;; from the watched-view cache the row was synthesized from.
   (with-tmp
     (fn [_]
       (nido.coordinator.source.state/write-state! "v1"
@@ -2788,7 +2789,7 @@
           "the orphan ticket is visible in the band")
       (is (= {:decision :restored} (work/resolve-gate! :brian "pg-orphan" :restore)))
       (is (nil? (tickets/status :brian "BR-500"))
-          "status cleared → re-triable, which is the whole undo for a bare row")
+          "re-triable, which is the whole undo")
       (is (= [:triage] (map :stage (work/list-workstreams :brian)))
           "and the row leaves the band"))))
 
@@ -2881,17 +2882,16 @@
         (is (= (:id w) (:ws-id d)) "resolves to the real workstream, not the page-id")
         (is (not (:bare? d)) "and it is no longer a bare pane")))))
 
-(deftest dismiss-a-bare-row-stamps-the-ticket-status
+(deftest dismiss-a-bare-row-dismisses-its-ticket
   (with-tmp
     (fn [_]
-      ;; No workstream to close, so the ticket stamp IS the whole veto. bare-row
-      ;; reads :dismissed? off ticket status, which moves the row to the
-      ;; Dismissed band where Restore (already bare-aware) undoes it.
+      ;; No workstream to close, so dismissing the ticket mints the one that carries the veto;
+      ;; it covers the page, which moves the row to the Dismissed band where Restore undoes it.
       (seed-page! {"pg-bare" {:status "Needs verification" :priority 1 :ball-ids #{}
                               :title "Move Licences" :br "BR-9"}})
       (is (= {:decision :dismissed} (work/dismiss! :brian "pg-bare")))
       (is (= :dismissed (tickets/status :brian "BR-9"))
-          "ticket record created and stamped, though it never existed before"))))
+          "the ticket is dismissed, though it had no record and no workstream before"))))
 
 (deftest dismiss-refuses-a-page-with-no-br
   (with-tmp
@@ -2908,7 +2908,7 @@
                               :title "Move Licences" :br "BR-9"}})
       (work/dismiss! :brian "pg-bare")
       (is (= {:decision :restored} (work/restore! :brian "pg-bare")))
-      (is (nil? (tickets/status :brian "BR-9")) "status cleared — re-triable again"))))
+      (is (nil? (tickets/status :brian "BR-9")) "re-triable again"))))
 
 (deftest resolve-gate-lets-dismiss-past-the-workstream-less-guard
   (with-tmp
@@ -2943,28 +2943,26 @@
   (is (= [:promote :drop] (mapv :id (work/gate-actions :ready false nil)))
       "the non-bare 3-arity is unaffected — this narrows only the bare path"))
 
-;; Fix: bare-pane used to read bare-row's raw :stage instead of routing it
-;; through to-spine (the fold both list-workstreams and work/workstream apply),
-;; so a dismissed bare row's PANE still said :triage — offering Dismiss and
-;; Start-triage again and no Restore — while the board LIST already said
-;; :dismissed. Assert the two can never disagree, which is the invariant.
-(deftest dismissed-bare-row-pane-agrees-with-the-board-list
+(deftest a-dismissed-bare-row-becomes-a-dismissed-workstream-pane-and-list-agree-on
+  ;; Dismissing a bare row mints the workstream that carries its ticket's dismissal, and that
+  ;; workstream covers the page by its BR — so the page is no longer bare, and selecting it by
+  ;; page-id resolves to the workstream. Pane and list must agree it is dismissed, and the pane
+  ;; offers Restore rather than a re-hidden Dismiss/Start-triage.
   (with-tmp
     (fn [_]
       (seed-page! {"pg-bare" {:status "Needs verification" :priority 1 :ball-ids #{}
                               :title "Move Licences" :br "BR-9"}})
       (work/dismiss! :brian "pg-bare")
       (let [pane     (work/workstream :brian "pg-bare")
-            list-row (first (filter #(= "pg-bare" (:ws-id %))
+            list-row (first (filter #(= (:ws-id pane) (:ws-id %))
                                     (work/list-workstreams :brian)))]
-        (is (true? (:bare? pane)))
+        (is (not (:bare? pane)))
         (is (= :dismissed (:stage pane))
             "the pane must show the same :dismissed the board list shows")
         (is (= (:stage list-row) (:stage pane))
             "pane and list must never disagree about stage")
-        (is (= [:restore]
-               (mapv :id (work/gate-actions (:stage pane) false nil {:bare? true})))
-            "a dismissed bare pane offers Restore, not a re-hidden Dismiss/Start-triage")))))
+        (is (empty? (filter #(= "pg-bare" (:ws-id %)) (work/list-workstreams :brian)))
+            "and no bare row stands beside it")))))
 
 (deftest start-triage-page-refuses-a-project-with-no-triage-trigger
   (with-tmp

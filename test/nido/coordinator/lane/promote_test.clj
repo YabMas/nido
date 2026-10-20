@@ -18,6 +18,17 @@
            (cstate/ensure-dirs!) (f tmp))
          (finally (fs/delete-tree tmp)))))
 
+(defn- triaged!
+  "A typed verdict on the workstream carrying `br` — minting it when none does — that a person
+   accepted: what makes a ticket :triaged, the one promotable status."
+  [br]
+  (ws/append-to-ref! :brian br {:kind :triage}
+                     (pr-str {:format :triage-report :ticket-key br :determination :bug
+                              :title "Verdict" :summary "bug — reproduced."
+                              :confidence {:level :high :reason "r"}
+                              :routing nil :directions [] :notion-writes nil :trail []}))
+  (tickets/complete! :brian br :triaged :applied))
+
 (defn- queued-envelopes []
   (->> (fs/list-dir (cstate/queue-dir))
        (filter #(re-matches #".*\.edn$" (str (fs/file-name %))))
@@ -29,22 +40,23 @@
       (is (= {:decision :skip-no-record} (promote/promote! :brian "BR-NONE")))
       (is (empty? (queued-envelopes))))))
 
-(deftest promote-enqueues-direct-target-and-marks-planning
+(deftest promote-enqueues-direct-target-and-records-the-choice
   (with-tmp
     (fn [_]
       (tickets/open! :brian "BR-7" {:notion-page-id "PG7" :url "U7" :title "T7"
                                     :opened-by :triage-new :notion-last-edited-at "t"})
-      (tickets/complete! :brian "BR-7" :triaged :applied)
+      (triaged! "BR-7")
       (let [res (promote/promote! :brian "BR-7")]
         (is (= :promote (:decision res)))
         (is (string? (:queued res)))
-        (is (= :planning (tickets/status :brian "BR-7")) "gate flips to :planning")
+        (is (= :planning (tickets/status :brian "BR-7"))
+            "the person's choice to plan it reads as :planning before its plan run is open")
         (let [[env] (queued-envelopes)]
           (is (= {:project :brian :trigger :plan-bug} (:target env)))
           (is (= "BR-7"  (-> env :payload :id)))
           (is (= "PG7"   (-> env :payload :notion-page-id)))
           (is (= "T7"    (-> env :payload :title)))))
-      ;; second promote now refused (already :planning) and enqueues nothing more
+      ;; second promote refused (already :planning) and enqueues nothing more
       (is (= {:decision :skip-active} (promote/promote! :brian "BR-7")))
       (is (= 1 (count (queued-envelopes)))))))
 
@@ -53,8 +65,8 @@
     (fn [_]
       (tickets/open! :brian "BR-7" {:notion-page-id "pg" :url "nu" :title "nt"
                                     :opened-by :triage-new :notion-last-edited-at "t"})
-      (tickets/complete! :brian "BR-7" :triaged :applied)
       (let [w   (ws/create! :brian {:stage :ready :external-refs [{:adapter :notion :id "BR-7" :page-id "pg"}]})
+            _   (triaged! "BR-7")
             res (promote/promote-workstream! :brian (:id w))]
         (is (= :promote (:decision res)))
         (let [[env] (queued-envelopes)]
@@ -104,7 +116,7 @@
     (fn [_]
       (tickets/open! :brian "BR-9" {:notion-page-id "PG9" :url "U9" :title "t"
                                     :opened-by :triage-new :notion-last-edited-at "t"})
-      (tickets/complete! :brian "BR-9" :triaged :applied)
+      (triaged! "BR-9")
       (let [res (promote/promote! "brian" "BR-9")]   ;; STRING project, as the web passes
         (is (= :promote (:decision res)))
         (let [[env] (queued-envelopes)]

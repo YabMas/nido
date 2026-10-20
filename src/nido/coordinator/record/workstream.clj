@@ -2097,20 +2097,26 @@
        (keep #(read-ws project %))
        (some (fn [w] (when (some #(= external-id (:id %)) (:external-refs w)) w)))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] :Workstream]}
+  find-or-mint-by-ref!
+  "The workstream carrying `external-id` as a ref, minting a minimal one when none does — the
+   spine every ticket-keyed write shares, so intake-triage and pickup-drive land on one
+   workstream. The adapter is inferred from the id: a `slack-` id is a Slack message, anything
+   else a Notion ticket."
+  [project external-id]
+  (or (find-by-ref-id project external-id)
+      (create! project
+               {:stage :triaging
+                :external-refs [{:adapter (if (str/starts-with? external-id "slack-")
+                                            :slack-message :notion)
+                                 :id external-id}]})))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string :map :string] [:maybe :Path]]}
   append-to-ref!
-  "Append a ledger entry to the workstream carrying `external-id`, found-or-created
-   by ref (the spine: intake-triage and pickup-drive share one workstream). A minimal
-   workstream is minted when none exists (adapter inferred from the id). Returns the
-   entry file path."
+  "Append a ledger entry to the workstream carrying `external-id`, found or minted by
+   `find-or-mint-by-ref!`. Returns the entry file path."
   [project external-id entry content]
-  (let [w (or (find-by-ref-id project external-id)
-              (create! project
-                       {:stage :triaging
-                        :external-refs [{:adapter (if (str/starts-with? external-id "slack-")
-                                                    :slack-message :notion)
-                                         :id external-id}]}))]
-    (append-entry! project (:id w) entry content)))
+  (append-entry! project (:id (find-or-mint-by-ref! project external-id)) entry content))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :keyword]}
   engagement

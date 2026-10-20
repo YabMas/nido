@@ -283,7 +283,9 @@
    (let [sessions       (session/list-sessions project (:id ws))
          eng-sessions   (if live-names (mapv #(reconcile-liveness live-names %) sessions) sessions)
          br-id          (:id (ledger-ref ws))
-         local-status   (when br-id (tickets/status project br-id))
+         ;; The status the ticket record STORED: this row is the stored copies' projection,
+         ;; which status's derivation replaced and the audit compares against.
+         local-status   (when br-id (:status (tickets/read-meta project br-id)))
          page-id        (:page-id (notion-ref ws))
          notion-backed? (some? (notion-ref ws))
          in-cache?      (boolean (and page-id (contains? facts page-id)))

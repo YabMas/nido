@@ -68,6 +68,16 @@
      a lock when its holder dies, so a dead run cannot read live."
     {:signature [:=> [:catn [:run-id RunId]] :boolean]
      :delegates [state/run-locks-dir]})
+  (Operation register!
+    "Name a run in its workstream's runs directory, so a reader of the workstream finds its runs
+     without opening every run on disk. Idempotent; done when the run is minted and again by each
+     agent it launches."
+    {:signature [:=> [:catn [:run-id RunId]] :any]
+     :delegates [state/workstream-runs-dir]})
+  (Operation runs-of
+    "Every run its workstream's runs directory names."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:vector Run]]
+     :delegates [state/workstream-runs-dir read-run]})
   (Operation live-runs
     "The runs launched against a workstream whose agent is alive right now."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:vector RunId]]
@@ -82,7 +92,7 @@
      design scope onto it so the session it spawns can be briefed with the part of the design
      that governs its area."
     {:signature [:=> [:catn [:request :map] [:meta :map]] Run]
-     :delegates [write-run! triggers/render-payload workstream/latest-entry state/run-dir]})
+     :delegates [write-run! register! triggers/render-payload workstream/latest-entry state/run-dir]})
   (Operation recovery?
     "Whether a run recovers failed session starts. Its brakes and terminal state differ, and its
      own failed start is never recovered."

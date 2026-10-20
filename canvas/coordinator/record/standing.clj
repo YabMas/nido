@@ -45,4 +45,32 @@
      :delegates [workstream/entries-of]})
   (Operation why-not-decided
     "Why a standing is not decided, in words a person can act on. nil when it is."
-    {:signature [:=> [:catn [:standing Standing]] [:maybe :string]]}))
+    {:signature [:=> [:catn [:standing Standing]] [:maybe :string]]})
+  (Operation closure
+    "The newest :closed entry, unless a :reopened or a :phase-gate came after it — how the ledger
+     says a workstream stands settled, read off its entries and never off a stored field."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:w :any]] [:maybe :map]]
+     :delegates [workstream/entry-at-seq]})
+  (Operation chosen-stage
+    "The board stage a person or nido chose, while that choice still says where the work is: no
+     record of the work is newer than it."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:w :any]] [:maybe :keyword]]
+     :delegates [workstream/entry-at-seq]})
+  (Operation restored-at
+    "The number of the newest reopen that undid a dismissal, or 0: what was recorded before it
+     no longer counts toward where the ticket's triage stands."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:w :any]] :int]
+     :delegates [workstream/entry-at-seq]})
+  (Operation verdict
+    "The newest verdict a person accepts or dismisses, and whether one did — or that the ticket
+     was accepted as reported, with no verdict to cite."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:w :any]] [:maybe :map]]
+     :delegates [restored-at workstream/entries-of]})
+  (Operation born-scratch?
+    "Whether the workstream was born a one-off: its ledger holds the birth entry."
+    {:signature [:=> [:catn [:w :any]] :boolean]})
+  (Operation newest-findings
+    "The newest findings round as written — its number and the phase it belongs to are what the
+     next round and its settling derive from. Fails closed on a round that cannot be read."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:w :any]] [:maybe :map]]
+     :delegates [workstream/entries-of]}))

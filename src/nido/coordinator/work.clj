@@ -569,11 +569,6 @@
 
 (declare live-session-names resuming?)
 
-(def ^:private stage-carried-by
-  "Per chosen stage, the kinds that record that choice being carried out rather than the work
-   moving past it — read by `band-of`, so a choice and the act it starts are one band."
-  {:shipping #{:ship-submitted}})
-
 (defn- band-of
   "The board band of an OPEN workstream, read off its ledger: in progress while status places it
    at an unanswered blocker; an analysis's own band; settled when status's position says a person
@@ -581,30 +576,7 @@
    is newer than it — the intake pen among them, which queueing a report records; a one-off's own band;
    else where its position says the work is."
   [project ws-id origin position]
-  (let [;; A stage chosen since it was minted — a recorded choice, never the stage it was minted
-        ;; at: that is a stored copy no entry records, and a row grouped by it would stand apart
-        ;; from the position status gives it.
-        ;; A reopen at a stage is a stage decision too, and a marker stage it names hands the band
-        ;; back to the position. The newest move is found on the index and read by its :seq: one
-        ;; whose payload no longer reads chooses nothing, rather than an older choice it replaced.
-        w      (cws/read-ws project ws-id)
-        move   (last (filter #(#{:stage-set :reopened} (:kind %)) (:entries w)))
-        chosen (when move (:stage (cws/entry-at-seq project ws-id (:seq move))))
-        ;; A stage choice says where the work stood WHEN it was made. Work recorded since moves
-        ;; it on, so the position — not the choice — says where it is now: a workstream put at
-        ;; :ready that has since been blocked or published is not Ready. A record that carries
-        ;; the choice OUT is not such work: the ship lane chooses :shipping and then records the
-        ;; shipment it started, and that record is the choice being acted on, not the work moving
-        ;; past it. Nor is a :note: it is an account, never work, and notion-sync writes one to explain
-        ;; each stage it sets. Nor is an :issue: it records where the work came from, and the
-        ;; backfill appends it after a stage chosen long before it.
-        carries (get stage-carried-by chosen #{})
-        worked (:seq (last (remove #(or (cws/status-kinds (:kind %)) (carries (:kind %))
-                                        (#{:note :issue} (:kind %)))
-                                   (:entries w))))
-        holds? (and move
-                    (contains? csession/lifecycle-stages chosen)
-                    (or (nil? worked) (> (:seq move) worked)))
+  (let [chosen   (standing/chosen-stage project ws-id (cws/read-ws project ws-id))
         ;; Status places a ticket settled in Notion since its last stage choice; read off the
         ;; position, never off the entry, so the band and the pane's owed-by are one answer.
         settled? (some? (:settled-in-notion position))]
@@ -619,7 +591,7 @@
       ;; it keeps the band its records gave it rather than being moved by a default.
       (= :unplaceable (:at position))                nil
       settled?                                       :done
-      holds?                                         chosen
+      chosen                                         chosen
       (= :scratch origin)                            :in-progress
       (= :triage-awaiting (:at position))            :triage
       (= :intake (:at position))                     (if (= :triaged (:intake position)) :ready :triage)
@@ -652,7 +624,7 @@
     (to-spine row)
     (let [ws-id   (:ws-id row)
           w       (cws/read-ws project ws-id)
-          closed  (pipeline/closure project ws-id w)
+          closed  (standing/closure project ws-id w)
           outcome (:outcome closed)
           spine   (to-spine row)
           origin  (:origin spine)]
@@ -1645,77 +1617,54 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
   dismiss!
-  "Take a workstream off the triage radar: record a :dismissed disposition on its
-   ticket (so auto-re-triage skips it) and settle the workstream :dismissed (which
-   frees its trigger's in-flight slot and removes it from the queue).
+  "Take a workstream off the triage radar: settle it :dismissed — which frees its trigger's
+   in-flight slot, removes it from the queue and is what makes its ticket read :dismissed, so
+   auto-re-triage skips it — then dismiss its ticket, if it has one.
 
-   BOTH writes carry the veto, because neither alone covers every row. The ticket
-   record needs a ledger ref (notion-or-slack), which a ref-less coordinator
-   workstream has not got; the :closed outcome is ignored outright by the
-   notion-driven projection. Closing :dismissed rather than :dropped is safe
-   because nothing branches on the outcome value — every other reader tests
-   :closed for presence or renders (name outcome).
-
-   A workstream-less ws-id is a bare watched-view row: the ticket stamp alone
-   carries the veto there, and only a page with no BR is a genuine no-op
+   A workstream-less ws-id is a bare watched-view row: dismissing its ticket mints the workstream
+   that carries the dismissal, and only a page with no BR is a genuine no-op
    ({:decision :no-workstream}). Returns {:decision :dismissed} otherwise."
   [project ws-id]
   (if-let [w (cws/read-ws project ws-id)]
     (do
+      (cws/close! project ws-id :dismissed nil :person)
       (when-let [br (:id (wsv/ledger-ref w))]
         (tickets/dismiss! project br))
-      (cws/close! project ws-id :dismissed nil :person)
       {:decision :dismissed})
-    ;; Bare watched-view row: no workstream to close, so the ticket stamp IS the
-    ;; whole veto — bare-row reads :dismissed? straight off ticket status, which
-    ;; lands the row in the Dismissed band where Restore already works.
-    ;; tickets/dismiss! creates the record when absent, so a never-triaged page
-    ;; is dismissable. Exactly mirrors restore!'s bare branch. Only a page with
-    ;; no BR is a genuine no-op.
     (if-let [br (bare-row-br project ws-id)]
       (do (tickets/dismiss! project br) {:decision :dismissed})
       {:decision :no-workstream})))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
   restore!
-  "Undo a dismiss: clear the ticket's status so it is re-triable and reopen the
-   workstream. The inverse of dismiss!, with one deliberate asymmetry — the
-   pre-dismiss status is NOT restored. Dismiss lets the daemon sweep tear the
-   parked triage session down, so putting :awaiting-input back would name a
-   conversation that no longer exists; a status-less ticket is honest and lets the
-   auto-triage gate pick it up fresh. The ledger (and its triage report) survive
-   untouched.
+  "Undo a dismiss: reopen the workstream, by a person. The reopen is what returns its ticket to
+   triage — nothing recorded before the dismissal counts toward the ticket's status any more
+   (`standing/restored-at`), so the auto-triage gate treats it as never triaged and the row lands
+   in the triage queue. Dismiss lets the daemon sweep tear the parked triage session down, so the
+   verdict it left is deliberately not revived: it would name a conversation that no longer
+   exists.
 
-   Reopens at :triaging, NOT :triage, even though :triage is where the row lands.
-   :triage is a member of session/lifecycle-stages, so storing it makes
-   stage-projection treat it as a manual override on the now-open workstream and
-   stop deriving from the ticket status forever — the row would pin at :triage,
-   never reach :ready, never be promotable again. :triaging is the create! default,
-   deliberately absent from lifecycle-stages precisely so it never overrides, and
-   derive-stage on the status-less ticket yields :triage anyway. Do not 'correct'
-   this to :triage.
+   Reopens at :triaging, which names no board stage, so the reopen chooses none and the row's band
+   comes from where its ledger places it.
 
-   A ws-id with no workstream is a bare watched-view row: its Restore button is
-   real (bare-row stamps :dismissed?, so a `bb nido:ticket:dismiss` orphan lands in
-   the band), and clearing the ticket status IS the whole undo there — the row has
-   no nido state beyond it. Only a row whose page carries no BR is a genuine no-op:
-   {:decision :no-workstream}.
+   A ws-id with no workstream is a bare watched-view row's page-id: dismissing one minted the
+   workstream that carries its ticket, so the restore is that workstream's. A page whose ticket no
+   workstream carries has nothing to restore: {:decision :no-workstream}.
 
-   A workstream closed :between-phases is refused, {:decision :between-phases}: it
-   was never dismissed, and reopening it would start its next phase with no gate
-   asserted. Its ways back are a findings round and advance-phase!."
+   A workstream closed :between-phases is refused, {:decision :between-phases}: it was never
+   dismissed, and reopening it would start its next phase with no gate asserted. Its ways back
+   are a findings round and advance-phase!."
   [project ws-id]
   (if-let [w (cws/read-ws project ws-id)]
-    (if (= :between-phases (get-in w [:closed :outcome]))
+    (if (= :between-phases (:outcome (standing/closure project ws-id w)))
       {:decision :between-phases}
       (do
         (when-let [br (:id (wsv/ledger-ref w))]
           (tickets/clear-status! project br))
         (cws/reopen! project ws-id :triaging :person)
         {:decision :restored}))
-    (if-let [br (bare-row-br project ws-id)]
-      (do (tickets/clear-status! project br)
-          {:decision :restored})
+    (if-let [covering (some->> (bare-row-br project ws-id) (cws/find-by-ref-id project))]
+      (restore! project (:id covering))
       {:decision :no-workstream})))
 
 (defn- slack-ref-of
@@ -1854,13 +1803,13 @@
     (if (:error page)
       (error-decision page)
       (do (link-filed! project thread (:url page))
-          (tickets/complete! project slack-id :triaged :applied)
           {:decision :created :br (:br page)}))))
 
 (defn- apply-proposed!
   "Accept a Slack proposal: make sure its product page is filed, add the technical analysis
-   to that page's engineering notes, complete the slack-keyed record so the parked session
-   sweeps to done, and only then claim the ticket and start its :plan-bug drive. A failed
+   to that page's engineering notes, and only then claim the ticket and start its :plan-bug
+   drive; the acceptance apply! records once this returns is what lets the parked session sweep
+   to done. A failed
    Notion write starts nothing and leaves the gate to retry; a doubt is refused, because
    overriding one means a revised proposal, not an accept.
    Returns {:decision :created :br …} | {:decision :error :error kw}."
@@ -1879,8 +1828,7 @@
                                              (notion/keychain-token))]
           (if (:error res)
             {:decision :error :error (:error res)}
-            (do (tickets/complete! project (:slack-id (slack-thread w')) :triaged :applied)
-                (pickup/claim-and-drive! project {:id (:id page) :page-id (:page-id page)
+            (do (pickup/claim-and-drive! project {:id (:id page) :page-id (:page-id page)
                                                   :url (:url page) :title (:title proposal)})
                 {:decision :created :br (:id page)})))))))
 
@@ -1985,7 +1933,6 @@
               (let [callout (when-let [desc (get-in report [:notion-writes :description-prepend])]
                               (prepend-enriched-callout! page-id br desc token))]
                 (when br
-                  (tickets/complete! project br :triaged :applied)
                   (try (facets/refresh-for-ticket! project br) (catch Throwable _ nil)))
                 (cond-> {:decision :applied}
                   (= :warn callout) (assoc :callout :warn))))))))))
@@ -2052,7 +1999,6 @@
     :else
     (do
       (when-let [br (:id (wsv/ledger-ref w))]
-        (tickets/complete! project br :triaged :applied)
         (try (facets/refresh-for-ticket! project br)
              (catch Throwable _ nil)))
       {:decision :applied})))
@@ -2087,15 +2033,15 @@
         (let [outcome (execute-report! project ws-id (accepted-report report branch) w)]
           ;; Only what landed is recorded. :notion-failed and :error leave the
           ;; gate exactly as they found it, which is what keeps the click
-          ;; repeatable. The :seq guard is the empty-ledger case: an acceptance
-          ;; is a citation, and there is nothing to cite when the workstream's
-          ;; only content is its intake text (latest-report's fallback).
-          (when (and (int? (:seq report))
-                     (contains? #{:applied :created} (:decision outcome)))
+          ;; repeatable. An acceptance cites the report it accepted; on an empty
+          ;; ledger the workstream's only content is its intake text
+          ;; (latest-report's fallback), which has no :seq, and the acceptance
+          ;; cites nothing — the ticket accepted as reported.
+          (when (contains? #{:applied :created} (:decision outcome))
             (cws/append-entry!
              project ws-id {:kind :triage-accepted}
-             (pr-str (cond-> {:format     :triage-accepted
-                              :triage-seq (:seq report)}
+             (pr-str (cond-> {:format :triage-accepted}
+                       (int? (:seq report)) (assoc :triage-seq (:seq report))
                        branch (assoc :direction
                                      {:letter (report/option-letter direction)
                                       :label  (:label branch)

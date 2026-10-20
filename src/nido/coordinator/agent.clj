@@ -4,12 +4,12 @@
    See spec §Agent launch."
   (:require
    [babashka.fs :as fs]
-   [nido.platform.io :as io]
    [nido.platform.process :as nprocess]
    [babashka.process :as p]
    [cheshire.core :as json]
    [clojure.java.io :as jio]
    [clojure.string :as str]
+   [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.state :as cstate]))
 
 (defn- parse-event [^String line]
@@ -107,19 +107,6 @@
        "fcntl.lockf(fd,fcntl.LOCK_EX|fcntl.LOCK_NB,1,0)\n"
        "os.set_inheritable(fd,True)\n"
        "os.execvp(sys.argv[2],sys.argv[2:])\n"))
-
-(defn- register-run!
-  "Leave a file named by the run in its workstream's runs directory, when the run has one, so a
-   reader of that workstream finds the lock without opening every run on disk. Written before the
-   agent starts and never removed: a run whose lock nobody holds is simply not live."
-  [run-id]
-  (let [{:keys [project workstream-id]} (io/read-edn (cstate/run-edn-path run-id))]
-    (when (and project workstream-id)
-      (let [f (fs/path (cstate/workstream-runs-dir project workstream-id) run-id)]
-        (fs/create-dirs (fs/parent f))
-        ;; Created, not checked-then-created: agents launched together under one run race here.
-        (try (fs/create-file f)
-             (catch java.nio.file.FileAlreadyExistsException _ nil))))))
 
 (defn- holding-run-lock
   "`cmd` run by the wrapper that holds `lock-path` for the life of the process `cmd` becomes."
@@ -257,7 +244,7 @@
         ;; claude already running and no timer to stop it, which is the exact
         ;; state being refused, now with an orphan attached.
         budget-ms (parse-budget-ms budget)
-        _         (register-run! run-id)
+        _         (runs/register! run-id)
         log-path  (or out-file (cstate/run-agent-log run-id))
         lock-path (str (fs/path (cstate/run-locks-dir run-id) (str (random-uuid) ".lock")))
         _         (fs/create-dirs (cstate/run-locks-dir run-id))

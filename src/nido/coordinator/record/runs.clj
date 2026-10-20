@@ -203,6 +203,32 @@
       (into [] (comp (map (comp str fs/file-name)) (filter live?)) (sort (fs/list-dir dir)))
       [])))
 
+(defn ^{:malli/schema [:=> [:cat :RunId] :any]}
+  register!
+  "Leave a file named by the run in its workstream's runs directory, when the run has one, so a
+   reader of that workstream finds its runs — and their locks — without opening every run on disk.
+   Idempotent: written when the run is minted and again by each agent it launches, and never
+   removed."
+  [run-id]
+  (let [{:keys [project workstream-id]} (io/read-edn (cstate/run-edn-path run-id))]
+    (when (and project workstream-id)
+      (let [f (fs/path (cstate/workstream-runs-dir project workstream-id) run-id)]
+        (fs/create-dirs (fs/parent f))
+        ;; Created, not checked-then-created: agents launched together under one run race here.
+        (try (fs/create-file f)
+             (catch java.nio.file.FileAlreadyExistsException _ nil))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:vector :Run]]}
+  runs-of
+  "Every run launched against a workstream that its runs directory names, oldest id first. A run
+   minted before runs were registered at creation is named only once `nido:status:backfill` has
+   registered it."
+  [project ws-id]
+  (let [dir (cstate/workstream-runs-dir project ws-id)]
+    (if (fs/exists? dir)
+      (into [] (comp (map (comp str fs/file-name)) (keep read-run)) (sort (fs/list-dir dir)))
+      [])))
+
 (def allowed-transitions
   "Map of from-state → set of to-states.
    See spec §Runs / Lifecycle. Terminal states have no entries.
@@ -359,7 +385,9 @@
     (warn-payload-problems! trigger payload run-id)
     (fs/create-dirs (cstate/run-dir run-id))
     (fs/create-dirs (cstate/run-artifacts-dir run-id))
-    (write-run! run)))
+    (write-run! run)
+    (register! run-id)
+    run))
 
 (defn ^{:malli/schema [:=> [:cat :Run] :boolean]}
   recovery?

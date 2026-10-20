@@ -120,12 +120,14 @@
 (deftest pickup-claims-the-ticket-so-the-board-reads-it-as-active
   (with-tmp
     (fn []
-      (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
-                    ws/find-by-ref-id  (fn [_ _] nil)
-                    queue/enqueue!     (fn [_env] "/q/x.edn")]
+      (with-redefs [pickup/resolve-ref         (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
+                    views/facet-properties     (constantly nil)
+                    queue/enqueue!             (fn [_env] "/q/x.edn")]
         (pickup/pickup! :brian "https://notion.so/x" "tok")
         (is (= :planning (tickets/status :brian "BR-1"))
             "without the claim the board projects the drive into the :triage band")
+        (is (= "pg-1" (:page-id (first (:external-refs (ws/find-by-ref-id :brian "BR-1")))))
+            "the workstream is minted with the page id the daemon's dedup would have given it")
         (let [m (tickets/read-meta :brian "BR-1")]
           (is (= "pg-1" (:notion-page-id m)))
           (is (= "t" (:title m)))
@@ -134,22 +136,23 @@
 (deftest pickup-does-not-regress-a-ticket-already-being-implemented
   (with-tmp
     (fn []
-      (tickets/open! :brian "BR-1" {:notion-page-id "pg-1" :url "u" :title "t"
-                                    :opened-by :triage-new})
-      (tickets/set-status! :brian "BR-1" :implementing)
-      (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
-                    ws/find-by-ref-id  (fn [_ _] nil)
-                    queue/enqueue!     (fn [_env] "/q/x.edn")]
-        (is (= :driving (:decision (pickup/pickup! :brian "https://notion.so/x" "tok"))))
-        (is (= :implementing (tickets/status :brian "BR-1"))
-            "re-driving a live ticket must not pull it back to :planning")))))
+      (let [w (ws/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-1"}]})]
+        (ws/append-entry! :brian (:id w) {:kind :impl} "# work")
+        (with-redefs [pickup/resolve-ref     (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
+                      views/facet-properties (constantly nil)
+                      queue/enqueue!         (fn [_env] "/q/x.edn")]
+          (is (= :driving (:decision (pickup/pickup! :brian "https://notion.so/x" "tok"))))
+          (is (= :implementing (tickets/status :brian "BR-1"))
+              "re-driving a live ticket must not pull it back to :planning")
+          (is (empty? (ws/entries-of :brian (:id w) :stage-set))
+              "and records no second choice to plan it"))))))
 
 (deftest pickup-claims-a-ticket-that-was-never-triaged-in-nido
   (with-tmp
     (fn []
-      (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "FU-15" :page-id "pg-9" :url "u" :title "t"})
-                    ws/find-by-ref-id  (fn [_ _] nil)
-                    queue/enqueue!     (fn [_env] "/q/x.edn")]
+      (with-redefs [pickup/resolve-ref     (fn [_ _ _] {:id "FU-15" :page-id "pg-9" :url "u" :title "t"})
+                    views/facet-properties (constantly nil)
+                    queue/enqueue!         (fn [_env] "/q/x.edn")]
         (is (nil? (tickets/read-meta :brian "FU-15")) "no record to start from")
         (pickup/pickup! :brian "https://notion.so/x" "tok")
         (is (= :planning (tickets/status :brian "FU-15"))

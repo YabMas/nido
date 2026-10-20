@@ -1803,8 +1803,10 @@
    [:format     [:= :triage-accepted]]
    ;; The report accepted, by position. What was on screen, not what is latest —
    ;; the two are the same at the moment of a click that was allowed through, and
-   ;; naming it is what lets a reader pair the two entries afterwards.
-   [:triage-seq int?]
+   ;; naming it is what lets a reader pair the two entries afterwards. Absent when
+   ;; the ledger held no report to cite: the ticket was accepted as reported, from
+   ;; its intake text alone.
+   [:triage-seq {:optional true} int?]
    [:direction  {:optional true}
     [:map {:closed true}
      [:letter string?]
@@ -3133,14 +3135,16 @@
 
 (def FindingsRound
   "One staging-review findings round, filed by a human after reviewing the
-   deployed staging build. Immutable snapshot; live per-item resolution status
-   is tracked on the workstream record (:findings). `:at` is stamped by the
-   ledger at read time."
+   deployed staging build. Immutable snapshot; each item's resolution is a
+   later :findings-resolved entry. `:at` is stamped by the ledger at read time."
   [:map {:closed true}
    [:format      [:= :findings]]
    [:round       int?]                        ; 1-based; increments per round on this workstream
    [:staging-ref {:optional true} string?]    ; where it was reviewed (URL / build / env)
    [:note        {:optional true} string?]    ; overall reviewer note
+   ;; The design whose phase landed, when the round was filed on a workstream closed between
+   ;; phases: resolving the round's last item returns it to that phase's gate.
+   [:between-phases {:optional true} pos-int?]
    [:items       [:vector FindingItem]]])
 
 (def ReviewObservation
