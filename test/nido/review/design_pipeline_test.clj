@@ -156,6 +156,39 @@
                                        :sort :fukan.common.vocab.code.module/Module}]))))
     (is (= 1 @launched) "the control: every subject declared, and the judge is reached")))
 
+(deftest a-baseline-claim-the-design-breaks-is-not-owed-a-subject
+  ;; A revisit deletes code its baseline's claims were about. Those claims are the ones it names in
+  ;; :breaks, so holding the design to their subjects would stop every round on exactly the change
+  ;; it declared.
+  (let [launched (atom 0)
+        baseline {:format :baseline :seq 1
+                  :model {:elements [{:id "canvas.order/legacy" :sort :module}]
+                          :claims   [{:id "legacy-rounds" :about ["canvas.order/legacy"]
+                                      :statement "the legacy path rounds"
+                                      :falsified-by "it does not" :evidence {:by :round}}]}}
+        run (fn [breaks]
+              (reset! launched 0)
+              (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                            ws/latest-entry (fn [_ _ k]
+                                              (when (= :design k)
+                                                (assoc-in a-model-design [:baseline :breaks] breaks)))
+                            standing/of-design (constantly {:decidable? true})
+                            stages/read-stance (constantly nil)
+                            stages/cited-baseline (constantly baseline)
+                            record/discover-intent (constantly nil)
+                            design-check/elements (fn [_ _]
+                                                    {:status :listed
+                                                     :elements [{:id "canvas.order/aggregate"
+                                                                 :sort :fukan.common.vocab.code.module/Module}]})
+                            record/run-round! (fn [_] (swap! launched inc)
+                                                {:outcome :no-output :detail "stub"})]
+                (record/design-decision! {:cwd "/w" :code-cwd "/tree" :run-id "r1" :label "l"})))]
+    (let [out (run ["p"])]
+      (is (= :subjects-undeclared (:outcome out)) "the control: a kept baseline claim is still owed")
+      (is (str/includes? (:detail out) "canvas.order/legacy")))
+    (is (= :no-output (:outcome (run ["p" "legacy-rounds"]))))
+    (is (= 1 @launched))))
+
 (deftest a-design-declaring-it-moves-nothing-still-reaches-the-round
   ;; The declarations decide whether a person's grant is additionally owed,
   ;; never whether the round runs — and only a proceeding round writes the

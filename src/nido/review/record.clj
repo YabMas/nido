@@ -3782,11 +3782,18 @@
    subjects and roles over. A design restates nothing it keeps, so a role it carries unchanged from
    its baseline is still one its claims bind, and a declaration playing that role otherwise has to
    stop the round as surely as one playing a restated role. The design as written when either
-   record carries no model. `ledger` is the `[project ws-id]` the design is on."
+   record carries no model. `ledger` is the `[project ws-id]` the design is on.
+
+   What it does not keep is what its `:baseline :breaks` names: a revisit says which of the
+   baseline's claims cannot survive it, and a claim the design removes — about code the change may
+   well delete — is no part of what holds once it lands, nor a subject the declaration still owes."
   [ledger design]
-  (let [baseline (stages/cited-baseline ledger design)]
+  (let [baseline (stages/cited-baseline ledger design)
+        broken   (set (get-in design [:baseline :breaks]))]
     (if (and (:model design) (:model baseline))
-      (assoc design :model (model/overlay (:model baseline) (:model design)))
+      (assoc design :model (model/overlay (update (:model baseline) :claims
+                                                  #(vec (remove (comp broken :id) %)))
+                                          (:model design)))
       design)))
 
 (defn- stratum-row? [row] (= "stratum" (some-> (:sort row) name str/lower-case)))
