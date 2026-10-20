@@ -12,12 +12,13 @@
   (:require
    [clojure.string :as str]
    [nido.coordinator.record.phase :as phase]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as ws]))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   advance!
   "Assert the current phase's gate with `(:evidence opts)` and open the next phase
-   of the design whose plan waits on it (`ws/plan-design` — the one the close names).
+   of the design whose plan waits on it (`standing/governing-design` — the one the close names).
    Returns {:opened <claim> :phase n :of m}.
 
    Throws ex-info, writing nothing, when the workstream is not settled between
@@ -27,7 +28,7 @@
   [project ws-id {:keys [evidence]}]
   (let [w      (or (ws/read-ws project ws-id)
                    (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
-        design (ws/plan-design project ws-id)
+        design (standing/governing-design project ws-id)
         p      (phase/progress design (:entries w))
         closed (ws/closure w)]
     (when-not (= :between-phases (:outcome closed))

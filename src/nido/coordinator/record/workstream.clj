@@ -242,7 +242,7 @@
                       because the plan is not. `open-phase!` is its way forward.
 
    `design-seq`, given with :between-phases, names the design whose plan the landing paused: it
-   governs the workstream until its gate opens (`plan-design`). `by`, when given, is who settled
+   governs the workstream until its gate opens (`generation/current-design`). `by`, when given, is who settled
    it. Every call appends, so a workstream closed twice holds two closes and the newer outcome
    stands (`closure`). Returns the record."
   ([project ws-id outcome] (close! project ws-id outcome nil))
@@ -305,6 +305,13 @@
       (try (-> (parse-entry-file (:kind e) f)
                (assoc :seq (:seq e) :at (:at e)))
            (catch Throwable _ nil)))))
+
+(defn- span-of
+  "The index rows of `kind` in the current generation's span of `w`, in ledger order — the one
+   place the ledger's own checks and readings take designs and their decisions from. A retired
+   generation's are neither the design a check is about nor evidence for or against it."
+  [w kind]
+  (filter #(= kind (:kind %)) (generation/current-span (:entries w))))
 
 (defn ^{:malli/schema [:=> [:cat :any] [:maybe :map]]}
   closure
@@ -836,7 +843,7 @@
    landing and every earlier one stays in the ledger for ever."
   [w kind payload]
   (when (contains? trail-kinds kind)
-    (let [designs (filter #(= :design (:kind %)) (generation/current-span (:entries w)))
+    (let [designs (span-of w :design)
           r       (edn/read-string payload)]
       (when (and (seq designs) (nil? (get-in r [:design :seq])))
         (throw (ex-info (str "A " (name kind) " must name the design it was made"
@@ -1022,15 +1029,13 @@
    naming it trusts this record, so one written with no round behind it, or
    over a design that owes a person the grant, is work nobody judged.
 
-   Fails closed on a decision nobody can parse, since the one unread may be the
-   latest and may not proceed."
+   Fails closed on a decision of the current generation nobody can parse, since the one unread may
+   be the latest and may not proceed; a retired generation's decide nothing here."
   [w kind payload]
   (when (= :design-cleared kind)
     (let [n         (get-in (edn/read-string payload) [:design :seq])
           design    (read-entry-at w n)
-          decisions (->> (:entries w)
-                         (filter #(= :design-decision (:kind %)))
-                         (mapv #(read-entry-at w (:seq %))))
+          decisions (mapv #(read-entry-at w (:seq %)) (span-of w :design-decision))
           decision  (->> decisions (filter #(= n (:design-seq %))) last)
           refuse!   (fn [why] (throw (ex-info (str "Clearance names the design at entry "
                                                    n ", " why)
@@ -1100,9 +1105,8 @@
     ;; be a workstream holding no design at all.
     (when-let [design (let [n (or (get-in (edn/read-string payload) [:design :seq])
                                   (generation/current-design w))]
-                        (->> (:entries w) (filter #(= n (:seq %))) first))]
-      (let [named   (fn [k] (->> (:entries w)
-                                 (filter #(= k (:kind %)))
+                        (->> (span-of w :design) (filter #(= n (:seq %))) first))]
+      (let [named   (fn [k] (->> (span-of w k)
                                  (keep #(get-in (read-entry-at w (:seq %)) [:design :seq]))
                                  set))
             granted (named :design-approved)
@@ -1192,8 +1196,7 @@
   (when (= :design-cleared kind)
     (let [r        (edn/read-string payload)
           n        (get-in r [:design :seq])
-          proceeds (->> (:entries w)
-                        (filter #(= :design-decision (:kind %)))
+          proceeds (->> (span-of w :design-decision)
                         (map #(read-entry-at w (:seq %)))
                         (some #(and (= n (:design-seq %))
                                     (report/proceeds? %))))
@@ -1346,8 +1349,10 @@
       (let [memo    (volatile! {})
             root    (roots-at w goal memo)
             in-unit (fn [kind]
-                      (filterv #(and (= kind (:kind %)) (= root (roots-at w (:seq %) memo)))
-                               (:entries w)))
+                      (filterv #(= root (roots-at w (:seq %) memo))
+                               (if (= :design kind)
+                                 (span-of w :design)
+                                 (filter #(= kind (:kind %)) (:entries w)))))
             stale?  (fn [kind n] (boolean (some replaced (goals-reached w kind (read-entry-at w n)))))
             bls     (in-unit :baseline)
             dss     (in-unit :design)]
@@ -1364,7 +1369,8 @@
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] :boolean]}
   holds-design?
-  "Does `w` hold a :design at all?
+  "Does the current generation of `w` hold a :design at all? — the span `check-trail-attribution!`
+   requires a citation over, so a writer skips exactly where the append would refuse.
 
    A PRESENCE CHECK, and never a citation source. Every trail record records
    work and cites the design that work named: a PR the one its publisher names,
@@ -1379,7 +1385,7 @@
 
    Off the INDEX, so it parses nothing."
   [w]
-  (boolean (some #(= :design (:kind %)) (:entries w))))
+  (boolean (seq (span-of w :design))))
 
 (defn- index-row
   "The index row for an entry: what `entry` carried, plus the ledger's own
@@ -1567,16 +1573,17 @@
 ;; ── Generations ──────────────────────────────────────────────────────────────
 
 (defn- cited-seqs
-  "Every entry of this ledger `record` cites: each `{:seq n}`, and each `…-seq`, `:reasks` or
-   `:carried-from` number. A citation that may name another ledger — one carrying a `:ws-id`, a
-   fork's `:parent`, a merge's `:merges` — is not one of this ledger's and is left out."
-  [record]
+  "Every entry of the ledger of workstream `ws-id` its `record` cites: each `{:seq n}`, and each
+   `…-seq`, `:reasks`, `:carried-from` or `:between-phases` number. A citation naming another
+   ledger — one carrying another workstream's `:ws-id`, a fork's `:parent`, a merge's `:merges` —
+   is not one of this ledger's and is left out; one carrying this workstream's own is."
+  [ws-id record]
   (letfn [(walk [x]
             (cond
-              (map? x)  (when-not (contains? x :ws-id)
+              (map? x)  (when (= ws-id (:ws-id x ws-id))
                           (mapcat (fn [[k v]]
                                     (cond (#{:parent :merges} k) nil
-                                          (and (int? v) (or (#{:seq :reasks :carried-from} k)
+                                          (and (int? v) (or (#{:seq :reasks :carried-from :between-phases} k)
                                                             (str/ends-with? (name k) "-seq")))
                                           [v]
                                           :else (walk v)))
@@ -1599,13 +1606,13 @@
           cur     (generation/current entries)
           own     (if (= :generation kind) (inc cur) cur)
           opened  (generation/opened-by entries)
-          first?  (not-any? #(= :design (:kind %)) (generation/current-span entries))
+          first?  (empty? (span-of w :design))
           allowed (cond-> #{}
                     (= :generation kind)
-                    (into (keep #(when (= :recut (:kind %)) (:seq %)) (generation/current-span entries)))
+                    (into (map :seq) (span-of w :recut))
                     (and (= :design kind) first?)
                     (into (keep identity [(generation/closed-design w (:seq opened))])))]
-      (doseq [n (cited-seqs record)
+      (doseq [n (cited-seqs (:id w) record)
               :let [g (generation/generation-of entries n)]
               :when (and g (not= g own) (not (allowed n)))]
         (throw (ex-info (str "A " (name kind) " of generation " own " cites entry " n
@@ -1635,7 +1642,7 @@
   [w kind payload]
   (when (= :design kind)
     (when-let [opened (generation/opened-by (:entries w))]
-      (when (not-any? #(= :design (:kind %)) (generation/current-span (:entries w)))
+      (when (empty? (span-of w :design))
         (when-let [closed (generation/closed-design w (:seq opened))]
           (let [n (get-in (edn/read-string payload) [:supersedes :seq])]
             (when-not (= closed n)
@@ -1859,18 +1866,6 @@
           {:existing (abs indexed)}
           {:appended (append-locked! project ws-id w entry content)})))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
-  plan-design
-  "The design whose plan governs the workstream, or nil — the entry at
-   `generation/current-design`, read whole.
-
-   What every reader of phase progress passes `record.phase/progress`, so the gate a
-   person is shown is the gate that opens and the phase it opens is the one every
-   reader then reports."
-  [project ws-id]
-  (when-let [w (read-ws project ws-id)]
-    (some->> (generation/current-design w) (read-entry-at w))))
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Workstream]}
   open-phase!
   "Append `gate` — a `:phase-gate` payload — which reopens the workstream (`closure` stops at a
@@ -1930,6 +1925,21 @@
         (read-ws project ws-id)))))
 
 
+(def ^:private falsifications
+  "Every kind of entry belonging to a generation that records a claim of its design falsified, and
+   how to read its falsifications as `{:claim <id> :by <what falsified it>}` — the one place a
+   generation's falsified claims are read from, so a kind recording them is added here or is not
+   inherited. A design decision's finding naming a claim (a question put to the person excepted);
+   a design verdict's broken invariant or load-bearing property. Not a verdict's unmet invariant:
+   the design holds it and the code falls short, so no claim of the design is falsified. Nor a
+   baseline review's refutation: a baseline belongs to no generation, and is read in every one."
+  {:design-decision (fn [r] (keep (fn [{:keys [claim-id claim for-person]}]
+                                    (when (and claim-id (not for-person))
+                                      {:claim claim-id :by claim}))
+                                  (:findings r)))
+   :design-verdict  (fn [r] (map (fn [{:keys [invariant finding]}] {:claim invariant :by finding})
+                                 (concat (:invariants-broken r) (:load-bearing-broken r))))})
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Workstream]}
   open-generation!
   "Append `gen` — a `:generation` payload a person gives — opening the next generation of the
@@ -1937,10 +1947,11 @@
 
    Under the append lock, and every precondition read there: the workstream is not waiting between
    phases, no review run of it is live (`activity/held?`), and `gen` cites a `:recut` of the
-   generation it closes. The tensions that re-cut names as its cause are carried by value from
-   the ledger, replacing any `gen` holds, so the new generation inherits what was raised rather
-   than what its opener retold. Throws naming the precondition that failed and writes nothing
-   then. Returns the record."
+   generation it closes. The tensions that re-cut names as its cause, and the claims the closing
+   generation's records found falsified — read through `falsifications`, as each claim's id and
+   what falsified it — are carried by value from the ledger, replacing any `gen` holds, so the new
+   generation inherits what was raised rather than what its opener retold. Throws naming the
+   precondition that failed and writes nothing then. Returns the record."
   [project ws-id gen]
   (io/with-file-lock
     (append-lock-path project ws-id)
@@ -1974,12 +1985,19 @@
           (refuse (str "the re-cut at entry " n " is of generation "
                        (generation/generation-of (:entries w) n) ", and the one open is " cur)
                   {:recut n :current cur}))
-        (let [caused (->> (:tensions (read-entry-at w n))
-                          (keep #(some-> (read-entry-at w (:seq %))
-                                         (select-keys [:by :to :about :statement])))
-                          vec)]
+        (let [caused    (->> (:tensions (read-entry-at w n))
+                             (keep #(some-> (read-entry-at w (:seq %))
+                                            (select-keys [:by :to :about :statement])))
+                             vec)
+              falsified (->> falsifications
+                             (mapcat (fn [[kind of]]
+                                       (mapcat #(of (read-entry-at w (:seq %))) (span-of w kind))))
+                             distinct
+                             vec)]
           (append-locked! project ws-id w {:kind :generation}
-                          (pr-str (if (seq caused) (assoc gen :tensions caused) (dissoc gen :tensions)))))
+                          (pr-str (cond-> (dissoc gen :tensions :falsified)
+                                    (seq caused)    (assoc :tensions caused)
+                                    (seq falsified) (assoc :falsified falsified)))))
         (read-ws project ws-id)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Path]}

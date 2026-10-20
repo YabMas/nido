@@ -2627,17 +2627,23 @@
   ;; an entry with its port numbers intact forever. Liveness therefore has to be
   ;; measured, not read.
   (with-redefs [nido.session.lifecycle/list-all-data
-                (fn [_] {:sessions [{:name "app-up"    :app-port 3101 :nrepl-port nil  :pg-port nil}
-                                    {:name "repl-up"   :app-port nil  :nrepl-port 5601 :pg-port nil}
-                                    {:name "crashed"   :app-port 3102 :nrepl-port 5602 :pg-port nil}
-                                    {:name "shared-pg" :app-port nil  :nrepl-port nil  :pg-port 6145}
-                                    {:name "down"      :app-port nil  :nrepl-port nil  :pg-port nil}]})
+                (fn [_] {:sessions (mapv (fn [n] {:name n :worktree (str "/w/" n)})
+                                         ["app-up" "repl-up" "crashed" "shared-pg" "lite" "down"])})
+                nido.session.state/read-registry
+                (constantly {"/w/app-up"    {:instance-id "i1" :app-port 3101}
+                             "/w/repl-up"   {:instance-id "i2" :nrepl-port 5601}
+                             "/w/crashed"   {:instance-id "i3" :app-port 3102 :nrepl-port 5602}
+                             "/w/shared-pg" {:instance-id "i4" :app-port 3103 :pg-port 6145}
+                             "/w/lite"      {:instance-id "i5"}})
                 nido.platform.process/tcp-open? (fn [port] (contains? #{3101 5601 6145} port))]
-    (is (= #{"app-up" "repl-up"} (work/live-session-names "p")))
+    (is (= #{"app-up" "repl-up" "lite"} (work/live-session-names "p"))
+        "a session recording no app/nREPL port — a :lite one — is up while its entry stands")
     (is (not (contains? (work/live-session-names "p") "crashed"))
         "recorded ports that no longer answer are not liveness")
     (is (not (contains? (work/live-session-names "p") "shared-pg"))
-        "pg is never a signal — the shared cluster answers for every session at once")))
+        "pg is never a signal — the shared cluster answers for every session at once")
+    (is (not (contains? (work/live-session-names "p") "down"))
+        "a session the registry holds no entry for is down")))
 
 (deftest session-live?-reads-app-or-nrepl-only
   (with-redefs [nido.platform.process/tcp-open? (fn [port] (= 4000 port))]
@@ -2646,7 +2652,11 @@
     (is (false? (work/session-live? {:app-port 4001 :nrepl-port 4002})))
     (is (false? (work/session-live? {:pg-port 4000}))  "pg excluded")
     (is (false? (work/session-live? {:repl-pid 12345})) "pid excluded — PIDs get recycled")
-    (is (false? (work/session-live? {})))))
+    (is (false? (work/session-live? {})))
+    (is (false? (work/session-live? nil)) "no entry is a session that is down")
+    (is (true?  (work/session-live? {:instance-id "i"})) "a :lite entry records no port")
+    (is (false? (work/session-live? {:instance-id "i" :app-port 4001}))
+        "a recorded port is probed, whatever else the entry holds")))
 
 (deftest machine-facts-keyed-by-session-name
   (with-redefs [work/machine-rows
@@ -2657,8 +2667,25 @@
     (let [facts (work/machine-facts "p" ["a"])]
       (is (= ["a"] (keys facts)))
       (is (= {:live? true :url "u" :pg-port 5501 :nrepl-port nil :app-port 3101
+              :runtime nil :pg-pid nil
               :repl-rss 1024 :pg-rss 2048 :heap-max "2g"}
              (get facts "a"))))))
+
+(deftest machine-rows-name-the-runtime-their-rss-was-read-from
+  (let [base (fs/create-temp-dir)]
+    (try
+      (doseq [n ["a" "b"]] (fs/create-dirs (fs/path base n)))
+      (let [rt  {:instance-id "p--ws" :app-port 3101 :repl-pid 11}
+            reg {(str (fs/path base "a")) rt (str (fs/path base "b")) rt}]
+        (with-redefs [nido.session.lifecycle/worktrees-dir (constantly (str base))
+                      nido.session.state/read-registry   (constantly reg)
+                      nido.session.state/read-session    (constantly {:service-states {:pg {:pg-pid 22}}})
+                      nido.platform.process/tcp-open?    (constantly true)
+                      nido.platform.process/rss-bytes    (constantly 100)]
+          (let [rows (work/machine-rows "p" "/x")]
+            (is (= [["a" "p--ws" 22] ["b" "p--ws" 22]] (mapv (juxt :name :runtime :pg-pid) rows))
+                "two sessions on one runtime say so, so a sum counts its RSS once"))))
+      (finally (fs/delete-tree base)))))
 
 (deftest all-machine-rows-aggregates-and-sorts-live-first
   (let [rows-fn  (fn [pname _dir]

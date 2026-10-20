@@ -211,3 +211,81 @@
         (spit edn-path (pr-str (update (read-string (slurp edn-path)) :entries #(mapv strip %))))
         (is (= 2 (:retracts (some #(when (= x (:seq %)) %) (:entries (w))))))
         (is (nil? (generation/generation-of (:entries (w)) x)))))))
+
+(deftest a-citation-naming-its-own-workstream-is-held-to-the-generation
+  (with-tmp
+    (fn []
+      (let [[id add stamped w] (ledger)
+            d1 (add :design (a-design 2 ["agg"]))
+            r  (recut! stamped ["agg" "split"])
+            _  (ws/open-generation! :brian id {:format :generation :recut {:seq r} :words "split it"
+                                               :ids ["agg" "split"] :base-rev "abc"})
+            check #(#'ws/check-generation-citations! (w) %1 (pr-str %2))]
+        (is (thrown-with-msg? Exception #"cites entry .*, of generation 1"
+                              (check :design-decision {:overturns [{:id "c1" :seq d1 :ws-id id}]}))
+            "a reference carrying this workstream's own :ws-id is one of this ledger's")
+        (is (nil? (check :design-decision {:overturns [{:id "c1" :seq d1 :ws-id "another-ws"}]}))
+            "one carrying another workstream's names another ledger")
+        (is (thrown-with-msg? Exception #"cites entry .*, of generation 1"
+                              (check :findings {:format :findings :round 1 :between-phases d1 :items []}))
+            "the design a findings round names under :between-phases is a citation")))))
+
+(deftest opening-a-generation-carries-what-its-decisions-falsified
+  (with-tmp
+    (fn []
+      (let [[id add stamped] (ledger)
+            d1 (add :design (a-design 2 ["agg"]))
+            _  (add :design-decision {:format :design-decision :recommend :recut :design-seq d1
+                                      :reason "r" :asks "worth it?"
+                                      :checks [{:check :relation-honest :status :held :note "n"}]
+                                      :findings [{:cites ["one-summing-path"] :claim-id "one-summing-path"
+                                                  :claim "a second path sums the lines"}
+                                                 {:cites ["one-summing-path"] :claim-id "one-summing-path"
+                                                  :claim "is a second path wanted?" :for-person true}
+                                                 {:cites ["agg"] :claim "names no claim"}]})
+            r  (recut! stamped ["agg"])
+            g  (:entries (ws/open-generation! :brian id {:format :generation :recut {:seq r} :words "w"
+                                                         :ids ["agg"] :base-rev "r"
+                                                         :falsified [{:claim "retold" :by "the opener"}]}))]
+        (is (= [{:claim "one-summing-path" :by "a second path sums the lines"}]
+               (:falsified (ws/entry-at-seq :brian id (count g))))
+            "the claims the closing span's decisions found falsified, from the ledger, not the opener")))))
+
+(deftest a-retired-generations-decisions-do-not-hold-up-a-clearance
+  (with-tmp
+    (fn []
+      (let [[id add stamped w] (ledger)
+            decide (fn [d] (add :design-decision {:format :design-decision :recommend :proceed
+                                                  :design-seq d :reason "r" :asks "worth it?"
+                                                  :checks [{:check :relation-honest :status :held :note "n"}]}))
+            d1 (add :design (a-design 2 ["agg"]))
+            x1 (decide d1)
+            r  (recut! stamped ["agg"])
+            _  (ws/open-generation! :brian id {:format :generation :recut {:seq r} :words "w"
+                                              :ids ["agg"] :base-rev "r"})
+            d2 (add :design (a-design 2 ["agg"] :supersedes {:seq d1 :why "re-cut"}))
+            _  (decide d2)
+            row (some #(when (= x1 (:seq %)) %) (:entries (w)))]
+        (spit (str (fs/path (cstate/workstream-dir :brian id) (:file row))) "{:not")
+        (is (nil? (#'ws/check-clearance-owed! (w) :design-cleared
+                                              (pr-str {:format :design-cleared :design {:seq d2}})))
+            "an unreadable decision of the generation before is not one this clearance rests on")))))
+
+(deftest opening-a-generation-carries-what-its-verdicts-found-broken
+  (with-tmp
+    (fn []
+      (let [[id add stamped] (ledger)
+            d1 (add :design (a-design 2 ["agg"]))
+            _  (add :design-verdict {:format :design-verdict :verdict :invalidated :round 1
+                                     :design-seq d1 :reason "a second path sums lines"
+                                     :invariants-broken [{:invariant "one-summing-path"
+                                                          :finding "the invoice renderer sums independently"}]
+                                     :invariants-unmet [{:invariant "agg"
+                                                         :finding "the code falls short of it"}]
+                                     :needs "redesign the totalling seam"})
+            r  (recut! stamped ["agg"])
+            g  (:entries (ws/open-generation! :brian id {:format :generation :recut {:seq r} :words "w"
+                                                         :ids ["agg"] :base-rev "r"}))]
+        (is (= [{:claim "one-summing-path" :by "the invoice renderer sums independently"}]
+               (:falsified (ws/entry-at-seq :brian id (count g))))
+            "a verdict's broken invariant crosses by value; an unmet one falsifies no claim")))))

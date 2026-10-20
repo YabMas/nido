@@ -112,7 +112,7 @@
   (with-tmp
     (fn [_]
       (let [p (parent)]
-        (with-redefs [ws/latest-entry     (fn [_ _ _] {:seq 9 :format :design :baseline {:seq 2}
+        (with-redefs [standing/governing-design (fn [_ _] {:seq 9 :format :design :baseline {:seq 2}
                                                        :invariants ["a total is rounded once"]})
                       standing/of-design (fn [& _] {:cleared? true})]
           (let [e (try (fork/fork! :brian p goal) nil
@@ -130,7 +130,7 @@
                                  (catch clojure.lang.ExceptionInfo e e)))]
         (testing "a baseline role with no players, even where the design supplies them"
           (with-redefs [ws/entry-at-seq    (fn [_ _ _] (update-in a-baseline [:model :elements] conj unplayed))
-                        ws/latest-entry    (fn [_ _ _] (-> (a-design 2)
+                        standing/governing-design (fn [_ _] (-> (a-design 2)
                                                            (assoc :seq 4)
                                                            (update-in [:model :elements] conj
                                                                       (assoc unplayed :plays ["agg"]))))
@@ -141,7 +141,7 @@
               (is (str/includes? (ex-message e) "baseline at entry 2"))
               (is (str/includes? (ex-message e) "before a role named its players")))))
         (testing "a design role with no players"
-          (with-redefs [ws/latest-entry    (fn [_ _ _] (-> (a-design 2)
+          (with-redefs [standing/governing-design (fn [_ _] (-> (a-design 2)
                                                            (assoc :seq 9)
                                                            (update-in [:model :elements] conj unplayed)))
                         standing/of-design (fn [& _] {:cleared? true})]
@@ -156,7 +156,7 @@
   (with-tmp
     (fn [_]
       (let [p (parent)]
-        (with-redefs [ws/latest-entry    (fn [_ _ _] (-> (a-design 2)
+        (with-redefs [standing/governing-design (fn [_ _] (-> (a-design 2)
                                                          (assoc :seq 9)
                                                          (update-in [:model :elements] conj
                                                                     {:id "ledger" :sort :module})))
@@ -172,7 +172,7 @@
   (with-tmp
     (fn [_]
       (let [p (parent)]
-        (with-redefs [ws/latest-entry    (fn [_ _ _] (-> (a-design 2)
+        (with-redefs [standing/governing-design (fn [_ _] (-> (a-design 2)
                                                          (assoc :seq 9)
                                                          (update-in [:model :elements] conj
                                                                     {:id "ledger" :sort :stratum})))

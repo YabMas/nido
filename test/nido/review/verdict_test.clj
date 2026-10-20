@@ -7,6 +7,7 @@
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.report :as report]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as ws]
    [nido.platform.core :as core]
    [nido.review.report]
@@ -1152,7 +1153,7 @@
     (with-redefs [stages/discover-design-record (fn [_] phased)
                   ws/latest-entry (fn [_ _ kind]
                                     (when (= :design-verdict kind) (assoc standing :seq 12)))
-                  ws/plan-design (fn [_ _] phased)
+                  standing/governing-design (fn [_ _] phased)
                   stages/discover-baseline (fn [_ _] nil)
                   stages/read-stance (fn [_] nil)
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])

@@ -38,16 +38,28 @@
 
    Lives beside the ledger rather than inside it. The store must not know which
    review verdicts count as verification — that is this module's secret, and the
-   ledger's job is to hold entries and resolve numbers."
+   ledger's job is to hold entries and resolve numbers.
+
+   Reads the current generation's span and nothing before it: a verdict, an approval or a
+   retraction of an earlier generation's design says nothing about this one's. Intents and
+   baselines belong to no generation, so what unseats them is read whatever generation it was
+   written in. Which design governs is read here too, the one reading every reader of it takes."
   (:require
    [nido.coordinator.report :as report]
+   [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.workstream :as ws]))
 
+(defn- in-span
+  "The seqs of the current generation's span on `w`."
+  [w]
+  (into #{} (map :seq) (generation/current-span (:entries w))))
+
 (defn- indexed-count
-  "How many entries of `kind` the workstream's index claims."
+  "How many entries of `kind` the workstream's index claims in the current span."
   [w kind]
-  (count (filter #(= kind (:kind %)) (:entries w))))
+  (let [span (in-span w)]
+    (count (filter #(and (= kind (:kind %)) (span (:seq %))) (:entries w)))))
 
 (defn- readable
   "Every parsed entry of `kind`, or ::unreadable when the index claims more than
@@ -61,7 +73,8 @@
    missing entry of a kind standing depends on makes standing indeterminate,
    and an indeterminate standing blocks rather than waves through."
   [project ws-id w kind]
-  (let [parsed (ws/entries-of project ws-id kind)]
+  (let [span   (in-span w)
+        parsed (filterv #(span (:seq %)) (ws/entries-of project ws-id kind))]
     (if (< (count parsed) (indexed-count w kind)) ::unreadable parsed)))
 
 (defn- retraction-index
@@ -385,6 +398,22 @@
                      ;; it is built, whatever any round answers.
                      :owes-person? (report/owes-a-person? design)}
               blocked (assoc :blocked blocked))))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
+  governing-design
+  "The design that governs the workstream, stamped as `ws/entry-at-seq` gives it — the one
+   `generation/current-design` names over the current span — or nil when the span holds none.
+   Every reader of the governing design takes it from here or from `governing`, never from the
+   newest :design entry, which a paused plan or a re-cut makes a different answer."
+  [project ws-id]
+  (some->> (ws/read-ws project ws-id) generation/current-design (ws/entry-at-seq project ws-id)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe [:map [:design :map] [:standing :Standing]]]]}
+  governing
+  "The governing design with its standing, or nil when none governs."
+  [project ws-id]
+  (when-let [d (governing-design project ws-id)]
+    {:design d :standing (of-design project ws-id d)}))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int] :boolean]}
   proceeding?

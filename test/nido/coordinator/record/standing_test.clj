@@ -669,3 +669,31 @@
                                    (assoc (ws/entry-at-seq :brian id d)
                                           :baseline {:seq b :relation :revisit
                                                      :breaks ["c1"] :note "n"})))))))))
+
+(deftest a-new-generation-is-governed-only-by-its-own-designs
+  ;; A re-cut opens a span the earlier generation's approval does not reach: the design that
+  ;; governs is read over the current span, and its standing from what that span holds.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b  (add :baseline a-baseline)
+            _  (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                      :baseline-seq b :reason "ok"})
+            marked #(assoc-in % [:model :elements 0 :defines-generation] true)
+            d1 (add :design (marked (a-design b)))
+            _  (add :design-approved {:format :design-approved :design {:seq d1} :at-seq d1})
+            _  (is (= d1 (:seq (standing/governing-design :brian id))))
+            _  (is (true? (:decided? (:standing (standing/governing :brian id)))))
+            _  (ws/append-stamped! :brian id {:format :recut :by {:as :person} :ids ["agg"]
+                                              :why "the summing order is two secrets"})
+            r  (count (:entries (ws/read-ws :brian id)))]
+        (ws/open-generation! :brian id {:format :generation :recut {:seq r} :words "split it"
+                                        :ids ["agg"] :base-rev "abc"})
+        (is (nil? (standing/governing-design :brian id))
+            "a span holding no design has none governing, however the last one stood")
+        (is (nil? (standing/governing :brian id)))
+        (let [d2 (add :design (marked (assoc (a-design b) :supersedes {:seq d1 :why "re-cut"})))
+              {:keys [design standing]} (standing/governing :brian id)]
+          (is (= d2 (:seq design)))
+          (is (true? (:decidable? standing)) "the baseline's review belongs to every generation")
+          (is (false? (:decided? standing)) "the first generation's approval decides nothing here"))))))

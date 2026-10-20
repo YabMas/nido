@@ -290,12 +290,12 @@
             :runs   (mapv #(assoc % :live? (runs/live? (:id %))) (runs/runs-of project ws-id))})))
 
 (defn- standing-design
-  "The design whose plan governs the workstream (`workstream/plan-design` — the one
+  "The design whose plan governs the workstream (`standing/governing-design` — the one
    its gate opens under) when it stands — cleared, as landing asks — or nil. Only a
    phased one is asked, so an unphased row pays no standing read: it has no progress
    whether or not its design stands."
   [project ws-id]
-  (when-let [d (workstream/plan-design project ws-id)]
+  (when-let [d (standing/governing-design project ws-id)]
     (when (and (seq (:phases d))
                (:cleared? (standing/of-design project ws-id d)))
       d)))

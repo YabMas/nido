@@ -76,7 +76,7 @@
    ledger would not accept, with why. All of it is decided before the child is minted, so a refused
    fork leaves no workstream behind."
   [project parent {:keys [goal done-when context]}]
-  (let [design   (or (ws/latest-entry project parent :design)
+  (let [design   (or (standing/governing-design project parent)
                      (refuse! (str "Workstream " parent " holds no design to fork") {:parent parent}))
         st       (standing/of-design project parent design)
         _        (when-not (:cleared? st)

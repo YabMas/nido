@@ -27,6 +27,7 @@
       (with-redefs [lifecycle/worktree-from-cwd (fn [g] g)
                     stages/project+ws-from-cwd (fn [_] (when session? [:nido "ws-1"]))
                     cws/latest-entry (fn [& _] design)
+                    standing/governing-design (fn [& _] design)
                     standing/of-design (constantly standing)
                     nido-design/coords (fn [_] (when structure [:nido "/wt"]))
                     ;; :files rides on the result — the check resolved the config to run, so
@@ -68,6 +69,7 @@
                                                          held? rev
                                                          :else nil))
                     cws/latest-entry (fn [& _] design)
+                    standing/governing-design (fn [& _] design)
                     standing/of-design (constantly standing)
                     cws/read-ws (fn [& _] (or ws {:id "ws-1"}))
                     cws/closure (fn [_] (when closed? {:outcome :done}))

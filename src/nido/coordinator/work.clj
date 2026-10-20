@@ -668,7 +668,7 @@
    So: offered implies accepted, for a click made against the position it was rendered at."
   [project ws-id]
   (boolean (and (pipeline/design-decided? project ws-id)
-                (when-let [d (cws/latest-entry project ws-id :design)]
+                (when-let [d (standing/governing-design project ws-id)]
                   (:decidable? (standing/of-design project ws-id d))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :map]]}
@@ -1206,7 +1206,7 @@
                    [:intent i]
                    [:triage (cws/latest-entry project ws-id :triage)])
         baseline (cws/latest-entry project ws-id :baseline)
-        design  (cws/latest-entry project ws-id :design)
+        design  (standing/governing-design project ws-id)
         st      (when design (standing/of-design project ws-id design))]
     (cond-> {}
       intent (assoc :intent {:seq (:seq intent) :at (:at intent)
@@ -1233,7 +1233,7 @@
                              :record design}))))
 
 (defn- plan
-  "Where the workstream stands in the plan that governs it (`cws/plan-design`), phase by
+  "Where the workstream stands in the plan that governs it (`standing/governing-design`), phase by
    phase, or nil for an unphased one: {:current n :of m :waiting? :owed-gate <exit> :phases
    [{:n :claim :habitable :exit :undo :state :opened-by} …]}.
 
@@ -1243,7 +1243,7 @@
    phase a gate is shown against is the phase it opened. `:owed-gate` is the landed phase's exit while the
    workstream waits between phases, the gate a person asserts."
   [project ws-id w]
-  (when-let [d (cws/plan-design project ws-id)]
+  (when-let [d (standing/governing-design project ws-id)]
     (when-let [p (phase/progress d (:entries w))]
       (let [phases   (vec (:phases d))
             opened   (let [rows (into {} (map (juxt :seq identity))
@@ -2258,7 +2258,7 @@
    rather than granted, and no approval is ever written for a premise that is
    already gone."
   [project ws-id entry-seq]
-  (let [design (cws/latest-entry project ws-id :design)]
+  (let [design (standing/governing-design project ws-id)]
     (cond
       (nil? design) {:decision :no-design}
 
@@ -2324,7 +2324,7 @@
    :already-granted, so an agent repeating the command does not stack grants. Resumes nobody —
    the caller IS the session."
   [project ws-id design-seq note {:keys [over-sendback?]}]
-  (let [design   (cws/latest-entry project ws-id :design)
+  (let [design   (standing/governing-design project ws-id)
         refused  (fn [reason detail] {:decision :approval-refused
                                       :because {:reason reason :detail detail}})
         st       (when design (standing/of-design project ws-id design))
@@ -2386,9 +2386,11 @@
   [project ws-id]
   (let [pos (pipeline/of project ws-id)]
     (when (= :design-invalidated (:at pos))
-      (when-let [d (cws/latest-entry project ws-id :design)]
+      (when-let [d (standing/governing-design project ws-id)]
         {:design d
-         :verdict (cws/latest-entry project ws-id :design-verdict)
+         :verdict (->> (cws/entries-of project ws-id :design-verdict)
+                       (filter #(= (:seq d) (:design-seq %)))
+                       last)
          :seq (get-in pos [:re-entry :because :seq])}))))
 
 (defn- retraction-evidence
@@ -2484,10 +2486,10 @@
    answer a person reads, not a failure of the click."
   [project ws-id evidence]
   (try
-    ;; The plan whose gate this is — the one the close names (`cws/plan-design`),
+    ;; The plan whose gate this is — the one the close names (`standing/governing-design`),
     ;; the same one the board showed — and only while it still stands: a
     ;; retracted design supplies no gate to open.
-    (when-let [d (cws/plan-design project ws-id)]
+    (when-let [d (standing/governing-design project ws-id)]
       (when-not (:cleared? (standing/of-design project ws-id d))
         (throw (ex-info (str "the design at entry " (:seq d) " no longer stands")
                         {:ws-id ws-id}))))
@@ -2712,31 +2714,38 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :boolean]}
   session-live?
-  "Does this registry-shaped session map hold a port RIGHT NOW? Probes the
-   recorded app/nREPL ports rather than trusting that they were recorded — the
-   registry is only cleaned on a graceful `down!` (engine/stop-session! →
-   state/remove-from-registry!), so a reboot, a JVM crash or a `kill` leaves an
-   entry with its port numbers intact indefinitely.
+  "Is the session this registry entry records up RIGHT NOW? THE predicate for whether a session
+   is up, which every reader of it asks.
+
+   A session that recorded an app/nREPL port is up while one answers: probed rather than trusted,
+   since the registry is only cleaned on a graceful `down!` (engine/stop-session! →
+   state/remove-from-registry!), so a reboot, a JVM crash or a `kill` leaves an entry with its
+   port numbers intact indefinitely. A `:lite` session (`:services []`) records no port and is in
+   use without one, so it is up while its entry stands — nil, or a map naming no instance, is a
+   session that is down.
 
    `:pg-port` is deliberately not a signal: most sessions point at the project's
    SHARED cluster, which answers whenever any one session is up. `:repl-pid` is
    not a signal either: PIDs are recycled, so a months-old entry whose PID was
    reused would read as live forever."
   [s]
-  (boolean (or (and (pos-int? (:app-port s))   (proc/tcp-open? (:app-port s)))
-               (and (pos-int? (:nrepl-port s)) (proc/tcp-open? (:nrepl-port s))))))
+  (boolean (if (or (pos-int? (:app-port s)) (pos-int? (:nrepl-port s)))
+             (or (and (pos-int? (:app-port s))   (proc/tcp-open? (:app-port s)))
+                 (and (pos-int? (:nrepl-port s)) (proc/tcp-open? (:nrepl-port s))))
+             (:instance-id s))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
   live-session-names
-  "Set of session names for `project` that are actually up — i.e. hold an open
-   app/nREPL port right now. THE liveness oracle: the TUI board, the web
-   grouping, the adopter, and the winding-down band all read this one fn."
+  "Set of session names for `project` that are actually up, as `session-live?` reads each one's
+   registry entry — a `:lite` session included. THE liveness oracle: the TUI board, the web
+   grouping, the adopter, the runtime migration and the winding-down band all read this one fn."
   [project]
-  (->> (lifecycle/list-all-data {:project (name project)})
-       :sessions
-       (filter session-live?)
-       (map :name)
-       set))
+  (let [registry (sstate/read-registry)]
+    (->> (lifecycle/list-all-data {:project (name project)})
+         :sessions
+         (filter #(session-live? (get registry (:worktree %))))
+         (map :name)
+         set)))
 
 (def ^:private registry-prune-grace-ms
   "Never prune an entry younger than this. `:created-at` is restamped on every
@@ -2756,7 +2765,7 @@
 (defn- prunable?
   "Only an entry that once recorded a probeable port is a prune candidate. An
    entry that never had one — a `:lite` session (`:services []`, so the engine
-   records :app-port/:nrepl-port nil) — was never `live` under session-live?'s
+   records :app-port/:nrepl-port nil) — is live while its entry stands, under session-live?'s
    definition, so judging it dead on liveness grounds is a category error: it
    would be pruned while in active use, and reclaim/orphan-instance-dirs would
    then delete its state dir."
@@ -2793,10 +2802,10 @@
 
    Two extra guards keep this DELETE path safe, distinct from session-live?'s
    ORACLE contract (a false `live` there is the expensive mistake — see
-   session-live?'s docstring; that fn is untouched):
+   session-live?'s docstring):
      prunable?    — an entry with no recorded port (a `:lite` session) is never
-                    a candidate; it was never `live` and judging it dead would
-                    be a category error, not a liveness result.
+                    a candidate; it is live while its entry stands, and judging
+                    it dead would be a category error, not a liveness result.
      prune-veto?  — an entry whose :repl-pid is still running is kept even
                     though its ports don't answer; a false `dead` here costs a
                     PGDATA via reclaim, so the JVM's liveness (not just its
@@ -2919,9 +2928,13 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :Path] [:vector :map]]}
   machine-rows
-  "Machine facts for every worktree of one project: registry entry, TCP liveness,
+  "Machine facts for every worktree of one project: registry entry, liveness as `session-live?` reads it,
    RSS for the repl JVM + PG, and the configured heap ceiling. No UI-optimistic
-   state — that is a surface concern injected by callers that need it."
+   state — that is a surface concern injected by callers that need it.
+
+   The RSS is the runtime's, which every session on it shares, and the PG's, which in shared mode
+   every session of the project shares: :runtime and :pg-pid name what each was read from, so a
+   sum across rows counts each once."
   [project-name project-dir]
   (let [base     (lifecycle/worktrees-dir project-name project-dir)
         registry (sstate/read-registry)]
@@ -2932,8 +2945,7 @@
                   (let [nm       (str (fs/file-name d))
                         wt-path  (str d)
                         entry    (get registry wt-path)
-                        port     (:app-port entry)
-                        live?    (and (pos-int? port) (proc/tcp-open? port))
+                        live?    (session-live? entry)
                         iid      (:instance-id entry)
                         repl-rss (when (and live? (:repl-pid entry))
                                    (proc/rss-bytes (:repl-pid entry)))
@@ -2944,6 +2956,7 @@
                         heap-max (when session
                                    (get-in session [:context :session :jvm :heap-max]))]
                     {:name nm :wt-path wt-path :entry entry :live? live?
+                     :runtime iid :pg-pid pg-pid
                      :repl-rss repl-rss :pg-rss pg-rss :heap-max heap-max})))
            (sort-by :name)))))
 
@@ -2955,12 +2968,12 @@
   (let [dir  (:directory (get (project/list-projects) (name project)))
         keep (set names)]
     (into {}
-          (for [{:keys [name entry live? repl-rss pg-rss heap-max]}
+          (for [{:keys [name entry live? runtime pg-pid repl-rss pg-rss heap-max]}
                 (machine-rows (clojure.core/name project) dir)
                 :when (contains? keep name)]
             [name {:live? live? :url (:url entry)
                    :pg-port (:pg-port entry) :nrepl-port (:nrepl-port entry)
-                   :app-port (:app-port entry)
+                   :app-port (:app-port entry) :runtime runtime :pg-pid pg-pid
                    :repl-rss repl-rss :pg-rss pg-rss :heap-max heap-max}]))))
 
 (defn ^{:malli/schema [:=> [:cat [:? :any] [:? :any]] [:vector :map]]}

@@ -153,7 +153,7 @@
    this is for."
   [cwd]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
-    (if-let [design (cws/latest-entry project ws-id :design)]
+    (if-let [design (standing/governing-design project ws-id)]
       (let [st (standing/of-design project ws-id design)]
         (if (:cleared? st)
           (do (println (str "land:check ok · design at entry " (:seq design)
@@ -315,7 +315,7 @@
   [cwd]
   (if-let [[project worktree] (nido-design/coords cwd)]
     (let [[p ws-id] (stages/project+ws-from-cwd cwd)
-          design    (when ws-id (cws/latest-entry p ws-id :design))
+          design    (when ws-id (standing/governing-design p ws-id))
           held      (try {:design (when design (held-to p ws-id design))}
                          (catch clojure.lang.ExceptionInfo e {:error (ex-message e)}))
           judged    (judged-claims (:design held))
@@ -428,7 +428,7 @@
             ;; a push leaves an empty working copy on top of what it pushed.
             tip    (layers/resolve-rev cwd "heads(::@ ~ empty())")
             landed (when tip (layers/resolve-rev cwd (str tip " & ::main@origin")))
-            design (cws/latest-entry project ws-id :design)
+            design (standing/governing-design project ws-id)
             st     (when design (standing/of-design project ws-id design))]
         (cond
           ;; A stale main@origin would read as a tip nobody pushed, and send the way out to a push

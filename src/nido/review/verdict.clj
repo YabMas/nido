@@ -17,6 +17,7 @@
    [nido.coordinator.report :as report]
    [nido.coordinator.report.model :as claim-model]
    [nido.coordinator.record.phase :as phase]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.review.stages :as stages]))
@@ -1688,7 +1689,7 @@
     (catch Exception _ nil)))
 
 (defn- plan-progress
-  "Where the workstream at `cwd` is in the plan that governs it (`ws/plan-design` —
+  "Where the workstream at `cwd` is in the plan that governs it (`standing/governing-design` —
    the plan the board shows and the gate opens), or nil when it is unphased or its
    ledger could not be read. `ws/read-ws` throws on a malformed or unreadable
    ledger, and an unread position is a prompt the pass can still answer — not a
@@ -1697,7 +1698,7 @@
   (try
     (when-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
       (when-let [w (ws/read-ws project ws-id)]
-        (phase/progress (ws/plan-design project ws-id) (:entries w))))
+        (phase/progress (standing/governing-design project ws-id) (:entries w))))
     (catch Exception _ nil)))
 
 (defn- amended-carry

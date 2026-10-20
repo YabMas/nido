@@ -3,6 +3,7 @@
   (:require [fukan.common.vocab.code.kind :refer [Kind]]
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
+            [canvas.coordinator.record.generation :as generation]
             [canvas.coordinator.record.state :refer [WorkstreamId]]
             [canvas.coordinator.record.workstream :as workstream]
             [canvas.platform.project :refer [ProjectName]]
@@ -29,6 +30,16 @@
     "Whether a stamped design record still holds, and what its standing rests on."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design :map]] Standing]
      :delegates [workstream/entries-of]})
+  (Operation governing-design
+    "The design that governs a workstream — the one record-generation's current-design names over
+     the current span — read whole, or nil. Every reader of the governing design takes it from
+     here or from `governing`, never from the newest :design entry."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
+     :delegates [workstream/read-ws workstream/entry-at-seq generation/current-design]})
+  (Operation governing
+    "The governing design with its standing, or nil when none governs."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe [:map [:design :map] [:standing Standing]]]]
+     :delegates [governing-design of-design]})
   (Operation proceeding?
     "Whether the newest decision round naming a design lets it proceed — the round's answer as
      it stands now, so a later sendback retracts an earlier proceed."

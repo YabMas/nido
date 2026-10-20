@@ -8,6 +8,7 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.runs :as runs]
             [canvas.coordinator.record.session :refer [Session]]
+            [canvas.coordinator.record.standing :as standing]
             [canvas.coordinator.record.state :refer [Path WorkstreamId SessionName]]
             [canvas.coordinator.record.tickets :as tickets :refer [TicketId]]
             [canvas.coordinator.record.workstream :as workstream :refer [Workstream]]
@@ -118,7 +119,7 @@
      to work on the next phase of the plan its close names. Refused unless the workstream is
      settled between phases, and refused on blank evidence."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts :map]] :map]
-     :delegates [workstream/read-ws workstream/plan-design workstream/open-phase!]}))
+     :delegates [workstream/read-ws standing/governing-design workstream/open-phase!]}))
 
 (Module lane-resume
   "Re-engaging a session waiting on a person with their answer. Which session waits is read off

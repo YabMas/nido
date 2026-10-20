@@ -10,7 +10,9 @@
             [canvas.coordinator.lane.reentry :refer [lane-reentry]]
             [canvas.coordinator.lane.work :refer [advance! file! resolve!]]
             [canvas.coordinator.record.phase :refer [landing-outcome progress]]
-            [canvas.coordinator.record.workstream :refer [append-entry! open-phase! plan-design reopen!]]
+            [canvas.coordinator.record.generation :refer [current-design]]
+            [canvas.coordinator.record.standing :refer [governing-design]]
+            [canvas.coordinator.record.workstream :refer [append-entry! open-phase! reopen!]]
             [canvas.coordinator.view.workstreams :refer [workstream-rows]]
             [canvas.coordinator.work :refer [advance-phase! board-bands restore!]]
             [canvas.review.passes :refer [build-prompt]]
@@ -54,5 +56,5 @@
   {:about [build-prompt] :evidence "round"})
 
 (Claim plan-governed-by-its-close
-  "record-workstream/plan-design answers which design's plan governs a workstream: the one its :between-phases close names while it waits on a gate; once a gate opens, the one that :phase-gate cites, until a :design is appended after it; and its newest design when no gate or close applies. The ledger refuses to append a :design to a workstream closed :between-phases, so no design is written while it waits, and a design written before the gate governs only if the gate cites it. advance!, the rows the board draws, the facade's gate and the verdict prompt read phase progress over that design and no other, so the gate a person is shown is the gate that opens, and the phase it opens is the phase every reader then reports as current."
-  {:about [plan-design advance! workstream-rows advance-phase! build-prompt append-entry!] :evidence "round"})
+  "record-generation/current-design answers which design's plan governs a workstream, over its current generation's span: the one its :between-phases close names while it waits on a gate; once a gate opens, the one that :phase-gate cites, until a :design is appended after it; and the span's newest design when no gate or close applies. record-standing/governing-design reads the design it names. The ledger refuses to append a :design to a workstream closed :between-phases, so no design is written while it waits, and a design written before the gate governs only if the gate cites it. advance!, the rows the board draws, the facade's gate and the verdict prompt read phase progress over that design and no other, so the gate a person is shown is the gate that opens, and the phase it opens is the phase every reader then reports as current."
+  {:about [current-design governing-design advance! workstream-rows advance-phase! build-prompt append-entry!] :evidence "round"})

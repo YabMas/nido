@@ -7,6 +7,7 @@
    [nido.platform.core :as core]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.session :as sess]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.platform.io :as io]))
@@ -1894,12 +1895,12 @@
     (fn [_]
       (let [w  (landed-first-phase!)
             id (:id w)]
-        (is (= 3 (:seq (ws/plan-design :brian id))) "waiting: the design the close names")
+        (is (= 3 (:seq (standing/governing-design :brian id))) "waiting: the design the close names")
         (ws/open-phase! :brian id second-phase)
-        (is (= 3 (:seq (ws/plan-design :brian id))) "opened: the design the gate cites")
+        (is (= 3 (:seq (standing/governing-design :brian id))) "opened: the design the gate cites")
         (ws/append-entry! :brian id {:kind :design}
                           (pr-str (phased-design-citing 2 "the old column is dropped")))
-        (is (= (count (:entries (ws/read-ws :brian id))) (:seq (ws/plan-design :brian id)))
+        (is (= (count (:entries (ws/read-ws :brian id))) (:seq (standing/governing-design :brian id)))
             "a design written after the gate takes over")))))
 
 (deftest the-generic-appends-refuse-a-phase-gate

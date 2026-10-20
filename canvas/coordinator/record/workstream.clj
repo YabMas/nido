@@ -129,12 +129,6 @@
     "Append an immutable entry and record it in the index, under the workstream's lock."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:entry :map] [:content :string]] Path]
      :delegates [append-lock-path read-ws write! report/entry-payload]})
-  (Operation plan-design
-    "The design whose plan governs a workstream, read whole: the entry at the current generation's
-     current design, or nil. What every reader of phase progress passes record-phase, so the gate
-     shown is the gate that opens."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
-     :delegates [read-ws generation/current-design]})
   (Operation open-generation!
     "Append a :generation a person gives, opening the next generation of the design — the kind's
      one writer, under the workstream's lock. Refused while the workstream waits between phases,
