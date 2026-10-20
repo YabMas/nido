@@ -8,7 +8,9 @@
    [clojure.edn :as edn]
    [clojure.string :as str]
    [malli.core :as m]
+   [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.clock :as clock]
+   [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.phase :as phase]
    [nido.coordinator.report :as report]
    [nido.coordinator.report.model :as report-model]
@@ -92,6 +94,22 @@
 
 (declare rebuilt-index reconciled-index)
 
+(defn- with-retraction-targets
+  "`rows` with the target of every retraction row that does not mirror one read from its entry
+   file. A row written before retractions mirrored their target holds none, and
+   `record.generation` reads the target off the row to tell a retraction belonging to no
+   generation from one that does; without it that retraction would be placed in a generation.
+   A file that does not parse leaves its row as it was."
+  [project ws-id rows]
+  (let [dir (cstate/workstream-dir project ws-id)]
+    (mapv (fn [row]
+            (if (and (= :retraction (:kind row)) (not (contains? row :retracts)) (:file row))
+              (let [body (try (edn/read-string (slurp (str (fs/path dir (:file row)))))
+                              (catch Exception _ nil))]
+                (cond-> row (map? body) (assoc :retracts (get-in body [:retracts :seq]))))
+              row))
+          rows)))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Workstream]]}
   read-ws
   "Read a workstream.edn by project + id. Returns nil if absent. Stored status fields a record
@@ -99,13 +117,15 @@
 
    A record whose index is MISSING reads the index entries/ rebuilds. One that has an index reads
    it as entries/ holds it (`reconciled-index`) — an entry an append wrote and died before
-   indexing included."
+   indexing included. Every retraction row carries its target (`with-retraction-targets`)."
   [project ws-id]
   (some-> (io/read-edn-cached (cstate/workstream-edn-path project ws-id))
           shed
-          (as-> w (assoc w :entries (if (contains? w :entries)
-                                      (reconciled-index project ws-id w)
-                                      (rebuilt-index project ws-id w))))))
+          (as-> w (assoc w :entries (with-retraction-targets
+                                      project ws-id
+                                      (if (contains? w :entries)
+                                        (reconciled-index project ws-id w)
+                                        (rebuilt-index project ws-id w)))))))
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] :Workstream]}
   write!
@@ -554,8 +574,13 @@
               _       (when-not (= (:id w) (get-in forked [:parent :ws-id]))
                         (refuse (str child-ws " is no fork of " (:id w)
                                      ", so it is no child to merge here")))
-              current (some->> (:entries w) (filter #(= :design (:kind %))) (sort-by :seq) last :seq
-                               (read-entry-at w))
+              current (some->> (generation/current-design w) (read-entry-at w))
+              base-g  (generation/generation-of (:entries w) (get-in forked [:parent :design :seq]))
+              _       (when-not (= base-g (generation/current (:entries w)))
+                        (refuse (str child-ws " was forked from the design at entry "
+                                     (get-in forked [:parent :design :seq]) ", of generation " base-g
+                                     " — it cannot merge into generation "
+                                     (generation/current (:entries w)) " of " (:id w))))
               [fb fd pd cd]
               [(read-entry-at w (get-in forked [:parent :baseline :seq]))
                (read-entry-at w (get-in forked [:parent :design :seq]))
@@ -811,7 +836,7 @@
    landing and every earlier one stays in the ledger for ever."
   [w kind payload]
   (when (contains? trail-kinds kind)
-    (let [designs (filter #(= :design (:kind %)) (:entries w))
+    (let [designs (filter #(= :design (:kind %)) (generation/current-span (:entries w)))
           r       (edn/read-string payload)]
       (when (and (seq designs) (nil? (get-in r [:design :seq])))
         (throw (ex-info (str "A " (name kind) " must name the design it was made"
@@ -1073,10 +1098,9 @@
     ;; fact about D1, so asking D2's clearance would refuse the truth and admit
     ;; the lie. Falls back to the newest for a record citing none, which can only
     ;; be a workstream holding no design at all.
-    (when-let [design (let [n (get-in (edn/read-string payload) [:design :seq])]
-                        (if n
-                          (->> (:entries w) (filter #(= n (:seq %))) first)
-                          (->> (:entries w) (filter #(= :design (:kind %))) last)))]
+    (when-let [design (let [n (or (get-in (edn/read-string payload) [:design :seq])
+                                  (generation/current-design w))]
+                        (->> (:entries w) (filter #(= n (:seq %))) first))]
       (let [named   (fn [k] (->> (:entries w)
                                  (filter #(= k (:kind %)))
                                  (keep #(get-in (read-entry-at w (:seq %)) [:design :seq]))
@@ -1106,17 +1130,29 @@
     (throw (ex-info "A :design-cleared is appended only through append-entry-at!"
                     {:kind kind}))))
 
-(defn- refuse-unguarded-gate!
-  "A `:phase-gate` goes through `open-phase!` and nowhere else.
+(def ^:private stamped-kinds
+  "Kinds whose writer the appending verb stamps from where it runs: the talk of the seats and the
+   conductor, and a re-cut proposal. Appended only through `append-stamped!`, which the verb that
+   stamps them calls."
+  #{:tension :accord :withdrawal :recut})
 
-   A gate opens the next phase, and whether it may is a question about the
-   workstream — settled between phases, its current phase landed, this the next
-   phase of the plan — that only the writer asking it under the lock can answer.
-   Admitted through a generic append it would move the plan with no one asking."
+(defn- refuse-unguarded-gate!
+  "A `:phase-gate` goes through `open-phase!`, a `:generation` through `open-generation!`, and a
+   stamped kind through `append-stamped!` — none through a generic append.
+
+   A gate opens the next phase and a generation the next cut of the design, and whether either
+   may is a question about the workstream that only the writer asking it under the lock can
+   answer. Admitted through a generic append it would move the plan with no one asking. A stamped
+   kind's writer is stamped by the verb that appends it; a generic append would take it on the
+   writer's word."
   [kind]
-  (when (= :phase-gate kind)
-    (throw (ex-info "A :phase-gate is appended only through open-phase!"
-                    {:kind kind}))))
+  (case kind
+    :phase-gate (throw (ex-info "A :phase-gate is appended only through open-phase!" {:kind kind}))
+    :generation (throw (ex-info "A :generation is appended only through open-generation!" {:kind kind}))
+    (when (contains? stamped-kinds kind)
+      (throw (ex-info (str "A " kind " is appended only through append-stamped!, its writer stamped"
+                           " by the verb that calls it")
+                      {:kind kind})))))
 
 (defn- refuse-design-between-phases!
   "No :design joins a workstream closed :between-phases. Its plan is paused under the
@@ -1359,15 +1395,19 @@
    that. Absent on rows written before the citation existed, where
    `reentry/generation` is still the answer."
   [entry seq-n payload rel]
-  (let [gate? (= :phase-gate (:kind entry))
-        body  (when (or gate? (contains? trail-kinds (:kind entry))) (edn/read-string payload))
-        under (get-in body [:design :seq])]
+  (let [gate?    (= :phase-gate (:kind entry))
+        retract? (= :retraction (:kind entry))
+        body     (when (or gate? retract? (contains? trail-kinds (:kind entry))) (edn/read-string payload))
+        under    (get-in body [:design :seq])]
     (cond-> (assoc entry :seq seq-n :at (clock/now-iso) :file rel)
       under (assoc :under under)
       ;; A gate's phase is mirrored for the same reason: `record.phase/progress`
       ;; reads the index it is handed and parses nothing.
       gate? (assoc :opens (:opens body))
-      (and gate? (:phase body)) (assoc :phase (:phase body)))))
+      (and gate? (:phase body)) (assoc :phase (:phase body))
+      ;; And a retraction's target, which `record.generation` reads to tell a retraction that
+      ;; belongs to no generation — of a baseline or an intent — from one that does.
+      retract? (assoc :retracts (get-in body [:retracts :seq])))))
 
 (defn- meta-rel
   "Where the index row of the entry numbered `seq-n` is kept beside the ledger.
@@ -1388,17 +1428,19 @@
 
 (defn- implied-row
   "The row an entry file's name implies when nothing kept or held one, with what `index-row`
-   mirrors out of the payload — `:under`, and a gate's `:opens` and `:phase` — read back out of it, since a
+   mirrors out of the payload — `:under`, a gate's `:opens` and `:phase`, a retraction's `:retracts` — read back out of it, since a
    reader of the index parses nothing. A payload that does not parse mirrors nothing."
   [dir rel seq-n kind]
-  (let [gate? (= :phase-gate kind)
-        body  (when (or gate? (contains? trail-kinds kind))
-                (try (edn/read-string (slurp (str (fs/path dir rel)))) (catch Exception _ nil)))
-        under (when (map? body) (get-in body [:design :seq]))]
+  (let [gate?    (= :phase-gate kind)
+        retract? (= :retraction kind)
+        body     (when (or gate? retract? (contains? trail-kinds kind))
+                   (try (edn/read-string (slurp (str (fs/path dir rel)))) (catch Exception _ nil)))
+        under    (when (map? body) (get-in body [:design :seq]))]
     (cond-> {:kind kind :seq seq-n :file rel}
       under                    (assoc :under under)
       (and gate? (map? body))  (assoc :opens (:opens body))
-      (and gate? (map? body) (:phase body)) (assoc :phase (:phase body)))))
+      (and gate? (map? body) (:phase body)) (assoc :phase (:phase body))
+      (and retract? (map? body)) (assoc :retracts (get-in body [:retracts :seq])))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:vector :map]]}
   rebuilt-index
@@ -1521,6 +1563,98 @@
         (read-ws project ws-id)
         (count (filter #(fs/exists? (path %)) missing))))))
 
+
+;; ── Generations ──────────────────────────────────────────────────────────────
+
+(defn- cited-seqs
+  "Every entry of this ledger `record` cites: each `{:seq n}`, and each `…-seq`, `:reasks` or
+   `:carried-from` number. A citation that may name another ledger — one carrying a `:ws-id`, a
+   fork's `:parent`, a merge's `:merges` — is not one of this ledger's and is left out."
+  [record]
+  (letfn [(walk [x]
+            (cond
+              (map? x)  (when-not (contains? x :ws-id)
+                          (mapcat (fn [[k v]]
+                                    (cond (#{:parent :merges} k) nil
+                                          (and (int? v) (or (#{:seq :reasks :carried-from} k)
+                                                            (str/ends-with? (name k) "-seq")))
+                                          [v]
+                                          :else (walk v)))
+                                  x))
+              (coll? x) (mapcat walk x)))]
+    (distinct (walk record))))
+
+(defn- check-generation-citations!
+  "A record cites, beyond what belongs to no generation, only entries of its own generation — but
+   for three crossings: a `:generation` cites the `:recut` of the generation it closes; a record
+   cites the `:generation` that opened its own, which is of its own already; and the first design
+   of a generation supersedes the design that governed the one before it.
+
+   Asked only of a ledger a generation has been opened on: on any other every entry is the first
+   generation's, and the walk would find nothing to refuse."
+  [w kind payload]
+  (when (and (generation/opened-by (:entries w)) (contains? report/event-schemas kind))
+    (let [entries (:entries w)
+          record  (edn/read-string payload)
+          cur     (generation/current entries)
+          own     (if (= :generation kind) (inc cur) cur)
+          opened  (generation/opened-by entries)
+          first?  (not-any? #(= :design (:kind %)) (generation/current-span entries))
+          allowed (cond-> #{}
+                    (= :generation kind)
+                    (into (keep #(when (= :recut (:kind %)) (:seq %)) (generation/current-span entries)))
+                    (and (= :design kind) first?)
+                    (into (keep identity [(generation/closed-design w (:seq opened))])))]
+      (doseq [n (cited-seqs record)
+              :let [g (generation/generation-of entries n)]
+              :when (and g (not= g own) (not (allowed n)))]
+        (throw (ex-info (str "A " (name kind) " of generation " own " cites entry " n
+                             ", of generation " g " — a record cites only its own generation's"
+                             " entries, besides what belongs to none")
+                        {:kind kind :seq n :generation g :own own}))))))
+
+(defn- check-generation-ids!
+  "A design is held to the generation-defining ids its generation fixed: those the `:generation`
+   opening it carries, or in a first generation those of the first design marking any element to
+   be cleared or approved. Before any is fixed nothing is held."
+  [w kind payload]
+  (when (= :design kind)
+    (when-let [fixed (generation/fixed-ids w)]
+      (let [marked (generation/defining-ids (edn/read-string payload))]
+        (when-not (= fixed marked)
+          (throw (ex-info (str "This generation fixed its generation-defining ids as "
+                               (str/join ", " (sort fixed)) ", and the design marks "
+                               (if (seq marked) (str/join ", " (sort marked)) "none")
+                               " — changing them is a re-cut, which a person opens as a generation")
+                          {:fixed (vec (sort fixed)) :marked (vec (sort marked))})))))))
+
+(defn- check-first-design-supersedes!
+  "The first design of a re-cut generation supersedes the design that governed the generation it
+   closes — which is how that design's claims, rejected alternatives and grants carry forward
+   without a new intent or baseline."
+  [w kind payload]
+  (when (= :design kind)
+    (when-let [opened (generation/opened-by (:entries w))]
+      (when (not-any? #(= :design (:kind %)) (generation/current-span (:entries w)))
+        (when-let [closed (generation/closed-design w (:seq opened))]
+          (let [n (get-in (edn/read-string payload) [:supersedes :seq])]
+            (when-not (= closed n)
+              (throw (ex-info (str "The first design of generation "
+                                   (generation/current (:entries w)) " supersedes the design that"
+                                   " governed the generation before it, entry " closed
+                                   (when n (str " — not entry " n)))
+                              {:closed closed :supersedes n})))))))))
+
+(defn- check-stamped-citations!
+  "An accord and a withdrawal name a tension, and a re-cut the tensions it was raised from."
+  [w kind payload]
+  (when (#{:accord :withdrawal :recut} kind)
+    (let [r (edn/read-string payload)]
+      (case kind
+        (:accord :withdrawal) (cites! w r [:tension :seq] #{:tension} (str/capitalize (name kind)))
+        :recut (doseq [i (range (count (:tensions r)))]
+                 (cites! w r [:tensions i :seq] #{:tension} "Re-cut"))))))
+
 (defn- check-append!
   "Every refusal an append makes of `payload` joining `w`, in the order `append-entry!` asks them.
    Shared by the two writes that give an entry its index row — a new entry, and one an interrupted
@@ -1537,7 +1671,11 @@
   (check-trail-attribution! w kind payload)
   (check-one-root! w kind payload)
   (check-seam-phase-ref! kind payload)
-  (check-implementation-approved! w kind payload))
+  (check-implementation-approved! w kind payload)
+  (check-generation-citations! w kind payload)
+  (check-generation-ids! w kind payload)
+  (check-first-design-supersedes! w kind payload)
+  (check-stamped-citations! w kind payload))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string] :nil]}
   check-entry
@@ -1680,6 +1818,9 @@
                 _     (check-one-root! w (:kind entry) payload)
                 _     (check-seam-phase-ref! (:kind entry) payload)
                 _     (check-implementation-approved! w (:kind entry) payload)
+                _     (check-generation-citations! w (:kind entry) payload)
+                _     (check-generation-ids! w (:kind entry) payload)
+                _     (check-first-design-supersedes! w (:kind entry) payload)
                 _     (check-clearance-earned! w (:kind entry) payload latest)
                 fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
                 rel   (str "entries/" fname)
@@ -1720,26 +1861,15 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
   plan-design
-  "The design whose plan governs the workstream, or nil: the one its :between-phases
-   close names while it waits on a gate; once a gate opens, the one that
-   :phase-gate cites, until a :design is appended after it; else its newest design.
+  "The design whose plan governs the workstream, or nil — the entry at
+   `generation/current-design`, read whole.
 
    What every reader of phase progress passes `record.phase/progress`, so the gate a
    person is shown is the gate that opens and the phase it opens is the one every
-   reader then reports. A :design cannot be appended while the workstream waits
-   (`refuse-design-between-phases!`), so a newer design takes over only by being
-   written after the gate."
+   reader then reports."
   [project ws-id]
   (when-let [w (read-ws project ws-id)]
-    (let [closed    (closure w)
-          close-seq (when (= :between-phases (:outcome closed))
-                      (get-in closed [:design :seq]))
-          gate      (->> (:entries w) (filter #(= :phase-gate (:kind %))) (sort-by :seq) last)
-          newest    (->> (:entries w) (filter #(= :design (:kind %))) (map :seq) (reduce max 0))
-          n         (cond close-seq                            close-seq
-                          (and gate (> (:seq gate) newest))    (:under gate)
-                          (pos? newest)                        newest)]
-      (when n (read-entry-at w n)))))
+    (some->> (generation/current-design w) (read-entry-at w))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Workstream]}
   open-phase!
@@ -1798,6 +1928,79 @@
                   {:phase (:phase gate) :next (inc (:current p))}))
         (append-locked! project ws-id w {:kind :phase-gate} (pr-str gate))
         (read-ws project ws-id)))))
+
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Workstream]}
+  open-generation!
+  "Append `gen` — a `:generation` payload a person gives — opening the next generation of the
+   workstream's design. The kind's one writer.
+
+   Under the append lock, and every precondition read there: the workstream is not waiting between
+   phases, no review run of it is live (`activity/held?`), and `gen` cites a `:recut` of the
+   generation it closes. The tensions that re-cut names as its cause are carried by value from
+   the ledger, replacing any `gen` holds, so the new generation inherits what was raised rather
+   than what its opener retold. Throws naming the precondition that failed and writes nothing
+   then. Returns the record."
+  [project ws-id gen]
+  (io/with-file-lock
+    (append-lock-path project ws-id)
+    (fn []
+      (let [w      (or (read-ws project ws-id)
+                       (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+            n      (get-in gen [:recut :seq])
+            recut  (some #(when (= n (:seq %)) %) (:entries w))
+            cur    (generation/current (:entries w))
+            refuse (fn [why data]
+                     (throw (ex-info (str "Cannot open a generation on " ws-id ": " why)
+                                     (merge {:ws-id ws-id} data))))]
+        (cond
+          (= :between-phases (:outcome (closure w)))
+          (refuse "it is waiting between phases" {})
+
+          ;; A review run reads the ledger as it stood when it began; opening a generation under
+          ;; it would leave the run judging a generation that has closed.
+          (activity/held? project ws-id)
+          (let [run (:run-id (activity/read-live project ws-id))]
+            (refuse (str "a review run of it is live" (when run (str " — " run))
+                         "; let it finish first")
+                    {:run run}))
+
+          (not= :recut (:kind recut))
+          (refuse (str "entry " n " is " (if recut (str "a " (:kind recut)) "not on it")
+                       " — a generation opens from a :recut")
+                  {:recut n})
+
+          (not= cur (generation/generation-of (:entries w) n))
+          (refuse (str "the re-cut at entry " n " is of generation "
+                       (generation/generation-of (:entries w) n) ", and the one open is " cur)
+                  {:recut n :current cur}))
+        (let [caused (->> (:tensions (read-entry-at w n))
+                          (keep #(some-> (read-entry-at w (:seq %))
+                                         (select-keys [:by :to :about :statement])))
+                          vec)]
+          (append-locked! project ws-id w {:kind :generation}
+                          (pr-str (if (seq caused) (assoc gen :tensions caused) (dissoc gen :tensions)))))
+        (read-ws project ws-id)))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Path]}
+  append-stamped!
+  "Append a `:tension`, `:accord`, `:withdrawal` or `:recut` whose `:by` the caller stamped from
+   where it runs. The ledger cannot tell where that was; the one caller is the verb that can, and
+   the generic appends refuse these kinds so nothing else takes a writer on its word. Every other
+   check an append makes holds. Returns the absolute path."
+  [project ws-id payload]
+  (let [kind (:format payload)]
+    (when-not (contains? stamped-kinds kind)
+      (throw (ex-info (str "append-stamped! takes " (str/join ", " (sort stamped-kinds))
+                           ", not " kind)
+                      {:kind kind})))
+    (io/with-file-lock
+      (append-lock-path project ws-id)
+      (fn []
+        (append-locked! project ws-id
+                        (or (read-ws project ws-id)
+                            (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+                        {:kind kind} (pr-str payload))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] [:maybe :LedgerEntry]]}
   latest-entry

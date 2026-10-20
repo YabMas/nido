@@ -185,3 +185,24 @@
             "a merge names a child of this workstream")
         (is (nil? (append (merged c3-about-total {:ws-id c :design {:seq 4}})))
             "and a design whose effective model is the combination is accepted — restating nothing it keeps")))))
+
+(deftest a-child-forked-before-a-re-cut-does-not-merge-into-the-new-generation
+  (with-tmp
+    (fn [_]
+      (let [[p c] (parent-and-child)
+            _     (child-designs! c c3-about-total)
+            seat  {:as :seat :seat "agg" :session "s"}
+            t     (do (ws/append-stamped! :brian p {:format :tension :by seat :to :conductor
+                                                    :about ["agg"] :statement "two secrets"})
+                      (:seq (ws/latest-entry :brian p :tension)))
+            r     (do (ws/append-stamped! :brian p {:format :recut :by {:as :person} :ids ["agg"]
+                                                    :why "split" :tensions [{:seq t}]})
+                      (:seq (ws/latest-entry :brian p :recut)))]
+        (ws/open-generation! :brian p {:format :generation :recut {:seq r} :words "re-cut"
+                                       :ids ["agg"] :base-rev "abc"})
+        (add! p :design (a-design 2 {:elements [(assoc (dissoc agg :hides :interface)
+                                                       :defines-generation true)]
+                                     :claims [c1]}
+                                  :supersedes {:seq 4 :why "re-cut"}))
+        (is (thrown-with-msg? Exception #"of generation 1 — it cannot merge into generation 2"
+                              (unit-merge/merge! :brian c "/w" authored)))))))

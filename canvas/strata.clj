@@ -9,6 +9,7 @@
             [canvas.coordinator.report.model :refer [report-model]]
             [canvas.coordinator.record.standing :refer [record-standing]]
             [canvas.coordinator.record.workstream :refer [record-workstream]]
+            [canvas.coordinator.record.generation :refer [record-generation]]
             [canvas.coordinator.lane.drive :refer [lane-pipeline]]
             [canvas.coordinator.lane.reentry :refer [lane-reentry]]
             [canvas.review.core :refer [review-analysis review-cache review-conformance review-loop
@@ -36,7 +37,7 @@
 (Stratum ledger
   "A workstream's entries, appended only when the cross-record checks hold — the baseline a design
    cites, every health observation routed, a seam's phase planned — and read back by kind."
-  {:provided-by [record-workstream]
+  {:provided-by [record-workstream record-generation]
    :rests-on    [record-model record-vocabulary]})
 
 ;; ── what the records mean, above the ledger ─────────────────────────────────

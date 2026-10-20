@@ -4,6 +4,7 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.clock :as clock]
+            [canvas.coordinator.record.generation :as generation]
             [canvas.coordinator.record.session :as session]
             [canvas.coordinator.record.phase :as phase]
             [canvas.coordinator.record.state :as state :refer [Path WorkstreamId]]
@@ -129,12 +130,24 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:entry :map] [:content :string]] Path]
      :delegates [append-lock-path read-ws write! report/entry-payload]})
   (Operation plan-design
-    "The design whose plan governs a workstream: the one its :between-phases close names while
-     it waits on a gate; once a gate opens, the one it cites until a design is appended after it;
-     else its newest design, or nil. What every reader of phase progress passes record-phase, so
-     the gate shown is the gate that opens."
+    "The design whose plan governs a workstream, read whole: the entry at the current generation's
+     current design, or nil. What every reader of phase progress passes record-phase, so the gate
+     shown is the gate that opens."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
-     :delegates [read-ws latest-entry entry-at-seq]})
+     :delegates [read-ws generation/current-design]})
+  (Operation open-generation!
+    "Append a :generation a person gives, opening the next generation of the design — the kind's
+     one writer, under the workstream's lock. Refused while the workstream waits between phases,
+     or unless it cites a :recut of the generation it closes. The tensions that re-cut names are
+     carried on it by value from the ledger."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:gen :map]] Workstream]
+     :delegates [append-lock-path read-ws generation/current generation/generation-of]})
+  (Operation append-stamped!
+    "Append a :tension, :accord, :withdrawal or :recut whose writer its caller stamped — the one
+     path these kinds join a ledger by, which the generic appends refuse. Every other check an
+     append makes holds."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:payload :map]] Path]
+     :delegates [append-lock-path read-ws]})
   (Operation open-phase!
     "Append a :phase-gate and reopen the workstream, under its lock and in one write of the
      record — the kind's one writer. Refused unless the workstream is closed :between-phases, the evidence is not blank, and the

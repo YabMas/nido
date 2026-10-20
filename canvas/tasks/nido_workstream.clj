@@ -56,6 +56,12 @@
   (Operation blocker-answer*
     "Record a person's answer to a blocker, in their words — the newest unanswered one unless named."
     {:signature [:=> [:catn [:opts :map]] :string]})
+  (Operation generation-open*
+    "Open the next generation of the design from a re-cut, in a person's words, from a base revision."
+    {:signature [:=> [:catn [:opts :map]] :map]})
+  (Operation generation-open-cmd
+    "bb nido:workstream:generation:open — the entry point for `generation-open*`."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation layer-complete-cmd
     "bb nido:workstream:layer:complete — the entry point for `layer-complete*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

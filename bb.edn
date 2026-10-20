@@ -634,6 +634,11 @@
    :doc "Record a finished stack layer under the design it was built under: :layer <n> :of <m> [:design <seq> — required when the workstream holds more than one] [:bookmark <name>] [:commit <id>]. Resolves the workstream from cwd, or :project with :ws-id/:ref."
    :task (apply nido-workstream/layer-complete-cmd *command-line-args*)}
 
+  nido:workstream:generation:open
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "Open the next generation of a workstream's design from a re-cut — a person's verb: :recut <seq> :words \"…\" :base-rev <rev> [:ids a,b — default: the re-cut's] [:falsified-file <edn>]. Resolves the workstream from cwd, or :project with :ws-id/:ref."
+   :task (apply nido-workstream/generation-open-cmd *command-line-args*)}
+
   nido:workstream:blocker:answer
   {:requires ([tasks.nido-workstream :as nido-workstream])
    :doc "Record a person's answer to a blocker, in their words: :answer \"…\" [:blocker-seq <n>] (default: the newest unanswered). Resolves the workstream from cwd, or :project with :ws-id/:ref."

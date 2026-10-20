@@ -321,6 +321,30 @@
                          commit   (assoc :commit (str commit))))
                #(and (= (:seq design) (-> % :design :seq)) (= layer (:layer %)))))))
 
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  generation-open*
+  "Open the next generation of the workstream's design from the re-cut at :recut, in the person's
+   :words, building from :base-rev. The generation-defining ids are :ids (comma-separated), else
+   the ones the re-cut proposes. :falsified-file is an EDN vector of {:claim :by} — the claims the
+   closing generation saw falsified and what falsified each."
+  [{:keys [recut words base-rev ids falsified-file] :as opts}]
+  (let [[p id] (here opts)
+        n      (some-> recut str parse-long)
+        w      (ws/read-ws p id)
+        _      (when-not (some #(and (= n (:seq %)) (= :recut (:kind %))) (:entries w))
+                 (throw (ex-info "Pass :recut <seq> — the re-cut the generation opens from"
+                                 {:ws-id id :recut recut})))
+        ids    (if ids
+                 (mapv str/trim (str/split (str ids) #","))
+                 (:ids (ws/entry-at-seq p id n)))]
+    (when (str/blank? (str words))
+      (throw (ex-info "A generation is opened in the person's words — pass :words \"…\"" {:ws-id id})))
+    (when (str/blank? (str base-rev))
+      (throw (ex-info "Pass :base-rev — the revision the new generation builds from" {:ws-id id})))
+    (ws/open-generation! p id (cond-> {:format :generation :recut {:seq n} :words (str words)
+                                       :ids ids :base-rev (str base-rev)}
+                                falsified-file (assoc :falsified (edn/read-string (slurp (str falsified-file))))))))
+
 (defn- unanswered-blockers
   "The seqs of this workstream's blockers no :blocker-answered names, oldest first — off the
    index, so a blocker whose payload no longer reads is still one to answer."
@@ -350,6 +374,8 @@
   layer-complete-cmd [& args] (run* layer-complete* args #{:bookmark :commit}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   blocker-answer-cmd [& args] (run* blocker-answer* args #{:answer}))
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  generation-open-cmd [& args] (run* generation-open* args #{:words :base-rev :ids :falsified-file}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   status-backfill-cmd [& args]
   (let [[_ opts] (task-args/split-args args)]
