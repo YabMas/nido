@@ -22,7 +22,9 @@
       (is (= "dontAsk" (flag-value args "--permission-mode"))
           "anything not allowlisted is denied, not left waiting for a person")
       (is (not (some #{"--dangerously-skip-permissions"} args))
-          "the fixer's launch flag is the one thing a reviewer must never carry"))
+          "the fixer's launch flag is the one thing a reviewer must never carry")
+      (is (= "user,project" (flag-value args "--setting-sources"))
+          "a worktree's settings.local.json carries the session baseline, not for a one-shot call"))
     (testing "the only shell it gets is the two jj reads the review prompt names, and grep"
       (is (= "Bash,Read,Grep,Glob" (flag-value args "--tools")))
       (is (= ["Bash(jj --ignore-working-copy diff:*)"

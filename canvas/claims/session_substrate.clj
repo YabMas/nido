@@ -26,7 +26,7 @@
   {:about [dispatch! lane-conduct] :evidence "round"})
 
 (Claim one-shot-calls-stay-calls
-  "A one-shot agent call is a claude process that code in nido.review or nido.vsdd starts and waits on for a value its loop consumes — the review reviewers, warden, fixer and amender, the design-verdict judge and vsdd's agents among them. It runs as that process, never as a session dispatched to the substrate; only the loop that started it may continue it, as a review run resumes its fixer across its repair rounds, and conduct never drives it. Its command line limits the settings it loads to the user and project sources, so no settings.local.json — and with it neither nido's session event hook nor the supervisor briefing — reaches it, whatever directory it runs in."
+  "A one-shot agent call is a claude process that code in nido.review or nido.vsdd starts and waits on for a value its loop consumes — the review reviewers, warden, fixer and amender, the design-verdict judge and vsdd's agents among them — or that the board-title generator in nido.coordinator.lane.titles starts and waits on for a title. It runs as that process, never as a session dispatched to the substrate; only the loop that started it may continue it, as a review run resumes its fixer across its repair rounds, and conduct never drives it. Its command line limits the settings it loads to the user and project sources, so no settings.local.json — and with it neither nido's session event hook nor the supervisor briefing — reaches it, whatever directory it runs in."
   {:about [launch!] :evidence "round"})
 
 (Claim driver-is-recorded-not-inferred
@@ -38,7 +38,7 @@
   {:about [send! wake! conduct!] :evidence "round"})
 
 (Claim sends-only-when-driving-and-done
-  "nido delivers an instruction to a session with a :claude facet only when the facet says nido drives it, no hold stands, and no earlier instruction to it is outstanding — given, and not yet followed by that session's Stop. It sends a message only to one with a live process that the substrate reports done with no work of its own still running, and wakes only one the listing shows without a live process whose latest recorded event is its Stop."
+  "nido delivers an instruction to a session with a :claude facet only when the facet says nido drives it, no hold stands, and no earlier instruction to it is outstanding — given, and not yet followed by that session's Stop. It sends a message only to one with a live process that the substrate reports done, or blocked with its Stop as its latest recorded event, with no work of its own still running, and wakes only one the listing shows without a live process whose latest recorded event is its Stop. A session's latest recorded event, here and in every claim that names it, is its latest event other than a notification: Claude Code sends one to a session sitting idle after its Stop, and it reports neither a permission mode nor a turn."
   {:about [conduct!] :evidence "round"})
 
 (Claim a-person-speaking-takes-over
@@ -58,7 +58,7 @@
   {:about [dispatch! adopt! conduct! session-launcher] :evidence "round"})
 
 (Claim needs-a-person-is-blocked
-  "A session with a :claude facet that needs a person is one the substrate reports blocked, and nido sends it nothing while blocked. nido learns an entry into blocked from the needs-a-person notification event the session's hooks record, or from the listing showing it blocked when no such event was recorded; it marks the entry announced in the session's :claude facet until the session leaves blocked, so each entry raises at most one notification of its own — none if the post fails or nido stops between marking and posting — never folded into an overflow banner. Every auto-mode denial the session's hooks record while nido drives it is shown in the gate inbox."
+  "A session with a :claude facet that needs a person is one the substrate reports blocked, and nido sends it nothing while it is blocked mid-turn — while its latest recorded event is not its Stop. Blocked after its Stop, it is waiting on its next instruction, and nido gives it one queued for it as sends-only-when-driving-and-done states. nido learns an entry into blocked from the needs-a-person notification event the session's hooks record, or from the listing showing it blocked when no such event was recorded; it marks the entry announced in the session's :claude facet until the session leaves blocked, so each entry raises at most one notification of its own — none if the post fails or nido stops between marking and posting — never folded into an overflow banner. Every auto-mode denial the session's hooks record while nido drives it is shown in the gate inbox."
   {:about [conduct! boot-attention record-session-events] :evidence "round"})
 
 (Claim liveness-from-the-substrate

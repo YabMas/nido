@@ -46,9 +46,12 @@
   baseline-shown
   "What a session's recorded events show of the launch baseline: whether nido's hook recorded a
    start for it and the directory its latest recorded start was in, the permission mode its
-   latest event itself reports (nil when that event reports none), and that latest event."
+   latest event itself reports (nil when that event reports none), and that latest event.
+   Notifications are not counted as its latest event: Claude Code sends one to a session sitting
+   idle after its Stop, and it carries no permission mode — counted, every session idle past a
+   minute would read as off the baseline and as no longer stopped."
   [session-id]
-  (let [evs   (:events (events/events-since session-id nil))
+  (let [evs   (remove #(= :notification (:event %)) (:events (events/events-since session-id nil)))
         start (last (filter #(= :session-start (:event %)) evs))]
     {:started?  (some? start)
      :start-cwd (:cwd start)
@@ -145,8 +148,9 @@
    recorded prompt carried, nil for a turn it did not give — [:denial event], [:held because], [:notify-blocked],
    [:refused why] when only the baseline keeps a queued instruction back, and at most one of
    [:send tagged-text token text] / [:wake tagged-text token text] — whose token the returned
-   facet already holds as pending, so it is recorded before anything is delivered. A wake goes
-   only to a session whose latest recorded event is its Stop."
+   facet already holds as pending, so it is recorded before anything is delivered. Only a session
+   the listing shows done, or blocked with its Stop as its latest recorded event, is given
+   anything; a wake goes only to a session whose latest recorded event is its Stop."
   [facet row evs {:keys [now token hold-sends? baseline latest]}]
   (let [{f :facet acts :actions} (reduce read-event {:facet facet :actions []} evs)
         listed-turn? (and (= :nido (:driver f)) (nil? (:hold f)) (nil? (:pending f))
@@ -161,10 +165,14 @@
         f         (cond-> (assoc f :announced-blocked? blocked?)
                     idle? (assoc :idle-seen :listed))
         via       (when row (if (:pid row) :send :wake))
+        stopped?  (= :stop (:event latest))
+        ;; Blocked after its Stop, a session is waiting on the answer a person queued for it;
+        ;; blocked mid-turn, it is waiting on something a message would not answer.
+        ready-state? (or (= "done" (:state row)) (and blocked? stopped?))
         gated?    (and (= :nido (:driver f)) (nil? (:hold f)) (nil? (:pending f))
-                       (:queued f) row (= "done" (:state row)) (not (:own-work? f))
+                       (:queued f) row ready-state? (not (:own-work? f))
                        (not hold-sends?)
-                       (or (= :send via) (= :stop (:event latest))))
+                       (or (= :send via) stopped?))
         ready?    (and gated? (= :shown baseline))]
     {:facet   (cond-> f
                 ready? (assoc :pending {:token token :at now :via via :seen? false}

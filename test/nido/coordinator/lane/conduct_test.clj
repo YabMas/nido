@@ -38,13 +38,18 @@
                            ["a person drives"  (assoc driving :queued "x" :driver :person) done-row]
                            ["one outstanding"  (assoc driving :queued "x" :pending {:token "P" :at "t" :via :send :seen? true}) done-row]
                            ["working"          (assoc driving :queued "x") (assoc done-row :state "working")]
-                           ["blocked"          (assoc driving :queued "x") (assoc done-row :state "blocked")]
+                           ["blocked mid-turn" (assoc driving :queued "x") (assoc done-row :state "blocked")]
                            ["failed"           (assoc driving :queued "x") (assoc done-row :state "failed")]
                            ["own work running" (assoc driving :queued "x" :own-work? true) done-row]
                            ["not listed"       (assoc driving :queued "x") nil]
                            ["nothing queued"   driving done-row]]]
     (testing why
-      (is (not-any? #{:send :wake} (kinds (conduct/decide facet row [] ctx)))))))
+      (is (not-any? #{:send :wake} (kinds (conduct/decide facet row [] (assoc ctx :latest {:event :prompt}))))))))
+
+(deftest a-session-blocked-after-its-stop-is-given-the-answer-queued-for-it
+  (let [blocked (assoc done-row :state "blocked")]
+    (is (= [:notify-blocked :send] (kinds (conduct/decide (assoc driving :queued "x") blocked [] ctx))))
+    (is (= [:notify-blocked :wake] (kinds (conduct/decide (assoc driving :queued "x") (dissoc blocked :pid) [] ctx))))))
 
 (deftest a-wake-needs-the-session-s-stop-as-its-latest-event
   (is (not-any? #{:wake} (kinds (conduct/decide (assoc driving :queued "x") (dissoc done-row :pid) []
@@ -186,9 +191,10 @@
           (is (= :started-elsewhere (reason)) "a start naming no directory shows none")
           (events/append! "s" {:event :session-start :cwd "/home/kid"})
           (events/append! "s" {:event :prompt :permission-mode "default"})
-          (is (= :not-auto (reason)))
-          (events/append! "s" {:event :prompt :permission-mode "auto"})
           (events/append! "s" {:event :notification})
+          (is (= :not-auto (reason)) "a notification, which reports no mode, does not hide the one before it")
+          (events/append! "s" {:event :prompt :permission-mode "auto"})
+          (events/append! "s" {:event :stop})
           (is (= :not-auto (reason)) "the latest event itself must show auto")
           (is (nil? (facet)) "a refusal writes nothing")))
       (with-redefs [substrate/listing (constantly [{:sessionId "s" :kind "interactive"}])]
@@ -450,6 +456,20 @@
                       substrate/wake!   (fn [sid _ opts] (reset! woke [sid (:cwd opts)]) {:woke? true})]
           (is (= 1 (count (:delivered (conduct/conduct! {:projects [:nido]}))))))
         (is (= ["s" "/home/kid"] @woke))))))
+
+(deftest conduct-wakes-a-session-left-blocked-and-idle-after-its-stop
+  (with-tmp
+    (fn []
+      (auto-baseline!)
+      (events/append! "s" {:event :notification :notification-type "idle_prompt"})
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :queued "reproduce it" :cursor 3)))
+      (let [woke (atom nil)]
+        (with-redefs [substrate/listing (constantly [(assoc (dissoc done-row :pid) :state "blocked")])
+                      substrate/wake!   (fn [sid text _] (reset! woke [sid text]) {:woke? true})]
+          (let [r (conduct/conduct! {:projects [:nido]})]
+            (is (empty? (:refused r)) "the idle notification is not read as leaving the baseline")
+            (is (= 1 (count (:delivered r))))))
+        (is (= "s" (first @woke)))))))
 
 (deftest a-wake-that-left-a-copy-running-is-reported-not-retried
   (with-tmp

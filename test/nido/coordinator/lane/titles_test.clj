@@ -78,3 +78,9 @@
                       "/wt/rag-raptor-index\tDrift in the index\n")
                  (slurp (titles/tab-titles-path))))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest generation-is-a-one-shot-call-that-loads-no-local-settings
+  (let [argv (atom nil)]
+    (with-redefs [babashka.process/process (fn [_opts & args] (reset! argv (vec args)) (doto (promise) (deliver {:exit 0 :out "A title"})))]
+      (is (= "A title" (titles/generate "basis"))))
+    (is (= "user,project" (second (drop-while #(not= "--setting-sources" %) @argv))))))

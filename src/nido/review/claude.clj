@@ -60,6 +60,9 @@
          "--verbose" "--output-format=stream-json"
          "--model" (or model default-model)
          "--restricted" "--strict-mcp-config" "--no-session-persistence"
+         ;; A review run's cwd is often a nido worktree: its settings.local.json carries the session
+         ;; baseline, whose hooks and briefing are for sessions nido drives, not for a one-shot call.
+         "--setting-sources" "user,project"
          "--permission-mode" "dontAsk"
          "--tools" "Bash,Read,Grep,Glob"
          "--json-schema" schema

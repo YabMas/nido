@@ -45,7 +45,8 @@
     (let [proc (p/process {:env (dissoc (into {} (System/getenv)) "CLAUDECODE")
                            :in "" :out :string :err :string}
                           "claude" "-p" (prompt basis)
-                          "--model" "haiku" "--tools" "" "--output-format" "text")
+                          "--model" "haiku" "--tools" "" "--output-format" "text"
+                          "--setting-sources" "user,project")
           res  (deref proc timeout-ms ::timeout)]
       (if (= ::timeout res)
         (do (p/destroy-tree proc) nil)
