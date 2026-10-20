@@ -1147,8 +1147,8 @@
           ;; about. The index still says 1; the directory says 2.
           (spit (str (fs/path dir "0002-note.md")) "the lost append")
           (is (= 2 (ws/highest-seq-on-disk :brian id)))
-          (is (= ["0002-note.md"] (ws/index-drift :brian id))
-              "and the drift names the file, which is what a reader has to open")
+          (is (= [1 2] (mapv :seq (:entries (ws/read-ws :brian id))))
+              "and a read holds the entry the index never learned about")
           (let [abs (ws/append-entry! :brian id {:kind :note} "three")]
             (is (str/includes? abs "0003-note")
                 "the next append steps over the orphan rather than onto it")
@@ -1166,25 +1166,15 @@
         (let [id  (:id (ws/create! :brian {:external-refs []}))
               _   (ws/append-entry! :brian id {:kind :note} "one")
               dir (fs/path (cstate/workstream-dir :brian id) "entries")]
-          (spit (str (fs/path dir "0002-note.md")) "already here")
-          ;; Forced back to the old derivation, which reads the index count and
-          ;; so computes 2 — a number the directory says is taken.
+          ;; A gap: 0002 was stepped over, 0003 is on disk. Two entries, so the old derivation off
+          ;; the entry count computes 3 — a number the directory says is taken.
+          (spit (str (fs/path dir "0003-note.md")) "already here")
           (with-redefs [ws/highest-seq-on-disk (constantly 0)]
             (is (thrown-with-msg? clojure.lang.ExceptionInfo
                                   #"Refusing to overwrite"
                                   (ws/append-entry! :brian id {:kind :note} "again"))))
-          (is (= "already here" (slurp (str (fs/path dir "0002-note.md"))))
+          (is (= "already here" (slurp (str (fs/path dir "0003-note.md"))))
               "and it really did not write")))
-      (finally (fs/delete-tree tmp)))))
-
-(deftest an-index-that-matches-the-disk-reports-no-drift
-  (let [tmp (fs/create-temp-dir)]
-    (try
-      (with-redefs [core/nido-root (constantly (str tmp))]
-        (let [id (:id (ws/create! :brian {:external-refs []}))]
-          (ws/append-entry! :brian id {:kind :note} "one")
-          (ws/append-entry! :brian id {:kind :note} "two")
-          (is (nil? (ws/index-drift :brian id)))))
       (finally (fs/delete-tree tmp)))))
 
 (deftest a-gap-in-the-seq-sequence-is-not-drift
@@ -1211,9 +1201,7 @@
           (is (= 3 (ws/highest-seq-on-disk :brian id))
               "the gap is permanent: the next append still numbers past it")
           (is (= 2 (count (:entries (ws/read-ws :brian id))))
-              "more numbers than files, which is the normal state, not a defect")
-          (is (nil? (ws/index-drift :brian id))
-              "every entry file is named by an index row, so the listing hides nothing")))
+              "more numbers than files, which is the normal state, not a defect")))
       (finally (fs/delete-tree tmp)))))
 
 (deftest an-index-whose-rows-disagree-with-the-files-reads-as-the-files-have-it
@@ -1236,10 +1224,10 @@
               "the misnamed row reads as the file its :seq holds, and the phantom is gone")
           (spit (str (fs/path (cstate/workstream-dir :brian id) "entries" "0003-note.md")) "lost")
           (io/write-edn! path (assoc raw :entries [(first good) (first good) (second good)]))
-          (is (= good (:entries (ws/read-ws :brian id)))
-              "a repeated row reads once")
-          (is (= ["0003-note.md"] (ws/index-drift :brian id))
-              "and a file no row names is still the interrupted append it was")))
+          (is (= (conj good {:kind :note :seq 3 :file "entries/0003-note.md"})
+                 (:entries (ws/read-ws :brian id)))
+              "a repeated row reads once, and a file no row names reads as the interrupted append it
+               was — indexed at its :seq")))
       (finally (fs/delete-tree tmp)))))
 
 (deftest an-append-identified-by-what-it-records-happens-once
@@ -1258,10 +1246,9 @@
           (is (= 1 (count (:entries (ws/read-ws :brian id)))))
           ;; The crash: the second landing's payload on disk, and no index row for it.
           (spit (str (fs/path dir "0002-merged.edn")) (pr-str (landed "o/r#2")))
-          (is (= (str (fs/path dir "0002-merged.edn")) (:indexed (once "o/r#2")))
-              "the interrupted append is completed where it lies, not written again")
+          (is (= (str (fs/path dir "0002-merged.edn")) (:existing (once "o/r#2")))
+              "the interrupted append is read where it lies, not written again")
           (is (= [1 2] (mapv :seq (:entries (ws/read-ws :brian id)))))
-          (is (nil? (ws/index-drift :brian id)))
           (is (= "o/r#2" (:pr (ws/latest-entry :brian id :merged))))
           (is (= (:entries (ws/read-ws :brian id)) (ws/rebuilt-index :brian id {:entries []}))
               "the row it gave the entry is kept beside it, so a rebuild answers the same")
@@ -1273,7 +1260,7 @@
           (let [side {:kind :merged :seq 5 :at "2026-01-01T00:00:00Z" :file "entries/0005-merged.edn"}]
             (spit (str (fs/path (cstate/workstream-dir :brian id) "entries.meta" "0005.edn")) (pr-str side))
             (spit (str (fs/path dir "0005-merged.edn")) (pr-str (landed "o/r#5")))
-            (is (contains? (once "o/r#5") :indexed))
+            (is (contains? (once "o/r#5") :existing))
             (is (= side (last (:entries (ws/read-ws :brian id)))))
             (is (= side (last (ws/rebuilt-index :brian id {:entries []})))))))
       (finally (fs/delete-tree tmp)))))

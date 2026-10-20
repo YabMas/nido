@@ -98,11 +98,8 @@
    written before the ledger held them still carries are left out (`shed`).
 
    A record whose index is MISSING reads the index entries/ rebuilds. One that has an index reads
-   its rows as entries/ holds them (`reconciled-index`), but never gains a row for a file the
-   index lacks: an append that died between its entry and its index row left an entry whose
-   paired record change — a phase gate's reopen — never happened, and whose completion
-   `append-entry-once!` makes only after re-running the append's checks. Reading it as indexed
-   would skip both, so `index-drift` reports it instead."
+   it as entries/ holds it (`reconciled-index`) — an entry an append wrote and died before
+   indexing included."
   [project ws-id]
   (some-> (io/read-edn-cached (cstate/workstream-edn-path project ws-id))
           shed
@@ -1260,27 +1257,6 @@
        (keep #(some-> (re-find entry-file-pattern %) second parse-long))
        (reduce max 0)))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe [:vector :string]]]}
-  index-drift
-  "The entry files under entries/ that no index row names, in :seq order, or nil
-   when the index names every one of them. Surfaced by `bb nido:workstream:show`,
-   which reads its listing off the index and so cannot otherwise say what it is
-   not showing.
-
-   Set against set, and never the highest :seq on disk against the number of
-   index rows. The :seq sequence is SPARSE by design: `append-entry!` numbers
-   from (inc (max rows highest)), so it steps over a number it cannot claim
-   rather than onto it, and a ledger that has done that once has more numbers
-   than files from then on. Comparing the two measures an ordinal against a
-   cardinality, which reports drift on an intact ledger — telling every reader,
-   the review warden included, that the record it is judging against may be
-   stale."
-  [project ws-id]
-  (let [indexed (into #{} (keep #(some-> (:file %) fs/file-name))
-                      (:entries (read-ws project ws-id)))]
-    (when-let [unindexed (seq (remove indexed (entry-filenames project ws-id)))]
-      (vec unindexed))))
-
 (defn ^{:malli/schema [:=> [:cat :Workstream :int] [:maybe :int]]}
   unit-of
   "The unit the entry at `seq-n` belongs to, addressed by its root goal's :seq —
@@ -1469,16 +1445,24 @@
                     (if (= rel (:file s))
                       s
                       (let [[seq-n kind] (files rel)] (implied-row dir rel seq-n kind)))))]
-    (:rows (reduce (fn [{:keys [seen] :as acc} row]
-                     (let [n (:seq row)]
-                       (cond
-                         (nil? (:file row)) (update acc :rows conj row)
-                         (seen n)           acc
-                         (sound? row)       (-> acc (update :rows conj (kept row)) (update :seen conj n))
-                         (by-seq n)         (-> acc (update :rows conj (implied n)) (update :seen conj n))
-                         :else              acc)))
-                   {:rows [] :seen #{}}
-                   (:entries w)))))
+    (let [{:keys [rows seen]}
+          (reduce (fn [{:keys [seen] :as acc} row]
+                    (let [n (:seq row)]
+                      (cond
+                        (nil? (:file row)) (update acc :rows conj row)
+                        (seen n)           acc
+                        (sound? row)       (-> acc (update :rows conj (kept row)) (update :seen conj n))
+                        (by-seq n)         (-> acc (update :rows conj (implied n)) (update :seen conj n))
+                        :else              acc)))
+                  {:rows [] :seen #{}}
+                  (:entries w))
+          ;; An entry file no row names is an append that died after writing it and before its
+          ;; row reached the index. It passed every check the append makes before its payload was
+          ;; written, and nothing beside its index row was owed with it, so it reads as indexed.
+          adopted (for [n (sort (keys by-seq)) :when (not (seen n))] (implied n))]
+      (if (seq adopted)
+        (vec (sort-by :seq (concat rows adopted)))
+        rows))))
 
 (defonce ^:private reconciled (atom {}))
 
@@ -1490,8 +1474,9 @@
    :seq does name, else the row that file's name implies; dropped when no file carries that :seq,
    as is a second row naming a :seq an earlier one did. A row that names no file is kept as it is.
 
-   Files no row names stay unnamed: that gap is an interrupted append, which `index-drift`
-   reports and `append-entry-once!` completes after the checks an append makes.
+   A file no row names — an append that died between its entry and its index row — reads as the
+   row kept beside it, else the row its name implies, at its :seq: it passed the append's checks
+   before it was written, and an entry implies no change to the record besides its row.
 
    Memoised per workstream on the stamps of its record and of both directories: every write to
    either directory renames a file into it, which moves the directory's stamp. The board reads
@@ -1705,24 +1690,16 @@
             (write! (update w :entries (fnil conj []) row))
             abs))))))
 
-(def ^:private entry-file-name
-  "An entry file's name in its parts: the :seq, then the kind `append-entry!` wrote it as."
-  #"^(\d{4})-(.+)\.[a-z]+$")
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string :any] :map]}
   append-entry-once!
   "Append an entry of `entry`'s kind only when no entry of that kind is already the one `same?`
-   identifies, and complete an interrupted append of it rather than write a second. Returns
-   `{:appended path}` for a new entry, `{:indexed path}` for an entry file it gave the index row an
-   interrupted append never wrote, or `{:existing path}` when an indexed entry already matches.
+   identifies. Returns `{:appended path}` for a new entry, or `{:existing path}` when one already
+   matches — an append that died before indexing the entry it wrote included, since a read holds
+   it (`reconciled-index`), so a retry never writes a second copy.
 
    `same?` is the caller's identity for the record: a predicate over an entry parsed through the
-   read contract, so only a kind whose entries are EDN can ever match. An interrupted append leaves
-   its payload under entries/ with no index row; no reader of the index sees it, and a retry of the
-   same append writes a second copy beside it. So, under the append lock, the indexed entries of
-   the kind are asked first and then the entry files no row names. A match among those is indexed
-   at the :seq its file name carries, after the checks an append makes, and is never rewritten or
-   renumbered; a file that does not parse matches nothing and is left as it is."
+   read contract, so only a kind whose entries are EDN can ever match. Asked under the append
+   lock."
   [project ws-id entry content same?]
   (refuse-unguarded-gate! (:kind entry))
   (io/with-file-lock
@@ -1736,34 +1713,9 @@
             match?  (fn [rel]
                       (try (boolean (same? (report/parse-event kind (io/read-edn (abs rel)))))
                            (catch Throwable _ false)))
-            indexed (->> (:entries w) (filter #(= kind (:kind %))) (map :file) (filter match?) first)
-            orphan  (when-not indexed
-                      (some (fn [fname]
-                              (let [[_ n k] (re-find entry-file-name fname)
-                                    rel     (str "entries/" fname)]
-                                (when (and (= (name kind) k) (match? rel))
-                                  [rel (parse-long n)])))
-                            (index-drift project ws-id)))]
-        (cond
-          indexed
+            indexed (->> (:entries w) (filter #(= kind (:kind %))) (map :file) (filter match?) first)]
+        (if indexed
           {:existing (abs indexed)}
-
-          orphan
-          (let [[rel seq-n] orphan
-                payload     (slurp (abs rel))
-                side-path   (abs (meta-rel seq-n))
-                side        (io/read-edn side-path)]
-            (check-append! project w kind payload)
-            ;; The row the interrupted append kept beside its entry, so the index and a rebuild of
-            ;; it agree; a fresh one, kept beside it first, when it died before writing that.
-            (let [row (if (= rel (:file side))
-                        side
-                        (doto (index-row entry seq-n payload rel) (->> (io/write-edn! side-path))))]
-              ;; Placed by :seq, since readers take a kind's newest entry as the last row of it.
-              (write! (update w :entries #(vec (sort-by :seq (conj (vec %) row))))))
-            {:indexed (abs rel)})
-
-          :else
           {:appended (append-locked! project ws-id w entry content)})))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}

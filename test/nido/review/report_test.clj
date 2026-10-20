@@ -1004,19 +1004,17 @@
   ;; It read `clean` off its verdict, over a review no ledger entry holds.
   (let [refused {:message "Baseline-review stands on the goal at entry 1, which a later intent has replaced"
                  :reason  :goal-superseded}
-        drift   {:unindexed ["0019-baseline-review.edn"] :indexed ["0019-baseline-review.edn"]}
         r  (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
                (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
                (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
                                     :ctx {:record {:verdict :sufficient} :findings []
-                                          :append-refused refused :index-drift drift}} nil)
+                                          :append-refused refused}} nil)
                (report/apply-event {:event :run-finalized :status :goal-superseded :ctx {} :at "t3"} nil))
         rd (first (:rounds r))
         ph (last (:phases rd))]
     (is (= "judge-refused" (:status rd)) "a verdict the ledger did not take banked nothing")
     (is (= refused (:append-refused ph)) "the report keeps why, which is nowhere else once the run ends")
-    (is (= "refused" (:status ph)) "and the phase is not the ✓ its verdict would draw")
-    (is (= drift (:index-drift ph)) "and what the index lacked as the round began")))
+    (is (= "refused" (:status ph)) "and the phase is not the ✓ its verdict would draw")))
 
 (deftest a-record-round-whose-amendment-the-ledger-refused-says-so
   ;; It read `continued` with an amend phase `ok`, so a reader saw the checks

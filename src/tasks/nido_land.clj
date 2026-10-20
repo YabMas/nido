@@ -476,7 +476,6 @@
                                   (name outcome) ", and its landing at "
                                   (subs tip 0 (min 12 (count tip))) " is "
                                   (cond (:appended result) "recorded"
-                                        (:indexed result)  "recorded, completing an interrupted run"
                                         (:existing result) "already on the ledger"
                                         :else              "not recorded")))
                     0)))

@@ -4217,20 +4217,20 @@
 
 (defn- write-record!
   "Append `record` as an entry of its :format, answering the :seq it was given. When the append
-   throws and the ledger's index names fewer files than entries/ holds, the throw may have come
-   after the entry was written: `ws/append-entry-once!` then indexes the file that is this record,
-   after the checks an append makes, or appends it afresh when none is — never a second copy.
-   Throws what the ledger refused."
+   throws, the throw may have come after the entry was written — which a read of the ledger then
+   holds — so the :seq of an entry this append wrote, one numbered past what the ledger held when
+   it began that is this record, answers instead, and only when there is none is what the ledger
+   refused thrown."
   [project ws-id record]
-  (let [kind (:format record)]
+  (let [kind   (:format record)
+        before (ws/highest-seq-on-disk project ws-id)]
     (try
       (ws/seq-of-path (ws/append-entry! project ws-id {:kind kind} (pr-str record)))
       (catch Exception e
-        (if (seq (ws/index-drift project ws-id))
-          (let [mine (entry-as-read kind record)
-                res  (ws/append-entry-once! project ws-id {:kind kind} (pr-str record) #(= mine %))]
-            (ws/seq-of-path (some res [:indexed :appended :existing])))
-          (throw e))))))
+        (let [mine (entry-as-read kind record)]
+          (or (some #(when (and (> (:seq %) before) (= mine (dissoc % :seq :at))) (:seq %))
+                    (ws/entries-of project ws-id kind))
+              (throw e)))))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe [:tuple :keyword :string]] :map] :any]}
   append!
@@ -6417,44 +6417,6 @@
   [record]
   (boolean (some #(contains? (:incomplete-clauses record) %) (:unruled record))))
 
-(defn- reconcile-drift!
-  "Index the `kind` judgements an interrupted append left in `ledger`'s entries/ with no index row,
-   before a judge stage reads the ledger, and say the drift on stderr. Every reading a round makes of
-   its lineage — refutation counts, pairings, settlement, prior findings — is off the index, so an
-   unindexed judgement is one the round is not told about, and the ledger reads as having judged
-   less than it did.
-
-   Completed through `ws/append-entry-once!`, after the checks an append makes, rather than read
-   past the index: `ws/read-ws` leaves such a file unindexed because nothing has checked it. Only
-   `kind`, the judgement the loop itself writes; drift of any other kind is said and left for its
-   writer, whose append may have owed the record a change no completion here would make.
-
-   nil when the index names every file; else `{:unindexed [file …]}`, with `:indexed`, the files it
-   completed, and `:refused`, `{:file :message}` for each the ledger would not take."
-  [[project ws-id] kind]
-  (when-let [drift (when project (seq (ws/index-drift project ws-id)))]
-    (let [dir     (cstate/workstream-dir project ws-id)
-          mine?   #(= (name kind) (second (re-find #"^\d{4}-(.+)\.[a-z]+$" %)))
-          results (for [f (filter mine? drift)]
-                    (try
-                      (let [content (slurp (str (fs/path dir "entries" f)))
-                            entry   (report/parse-event kind (edn/read-string content))]
-                        (ws/append-entry-once! project ws-id {:kind kind} content #(= entry %))
-                        {:indexed f})
-                      (catch Exception e {:refused {:file f :message (or (ex-message e) (str (class e)))}})))
-          indexed (vec (keep :indexed results))
-          refused (vec (keep :refused results))]
-      (binding [*out* *err*]
-        (println (str "ledger " (name project) "/" ws-id ": the index names no row for "
-                      (str/join ", " drift)
-                      (when (seq indexed) (str " — indexed " (str/join ", " indexed)))
-                      (when (seq refused)
-                        (str " — refused " (str/join ", " (map #(str (:file %) " (" (:message %) ")")
-                                                               refused)))))))
-      (cond-> {:unindexed (vec drift)}
-        (seq indexed) (assoc :indexed indexed)
-        (seq refused) (assoc :refused refused)))))
-
 (defn- judge-inputs
   "What a judge stage reads off the ledgers for `subject`, a `kind` of record, at `reading`, before
    it launches a judge:
@@ -7032,7 +6994,6 @@
         ;; keyed on the id alone — and this run's own earlier reviews are on the
         ;; ledger too, at a tree that does not move within a run.
         [project ws-id :as ledger] (ledger-of (:config ctx))
-        drift   (reconcile-drift! ledger :baseline-review)
         subject (or target (when project (ws/latest-entry project ws-id :baseline)))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) subject)
         ;; A re-survey's trigger (`resurvey-refutations`), while the record it refuted is the one
@@ -7104,7 +7065,6 @@
                       (when (:seq subject) {:judged-seq (:seq subject)})
                       (when-let [m (:tree-moved judged)] {:tree-moved m})
                       (when again {:rejudged again})
-                      (when drift {:index-drift drift})
                       (when-let [c (seq (continues run-id (:iter ctx) standing running lineage))]
                         (merge {:continues (vec c)}
                                (when-let [h (by-hand ledger :baseline :baseline-seq subject c lineage)]
@@ -8531,7 +8491,6 @@
         ;; are the effective model's, as the round resolves them: a role kept from the baseline
         ;; is not restated, and its players are still what a claim about it rests on.
         [project ws-id :as ledger] (ledger-of (:config ctx))
-        drift   (reconcile-drift! ledger :design-decision)
         design  (when project (ws/latest-entry project ws-id :design))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) design)
         {:keys [standing single settled knock-ons prior]}
@@ -8608,7 +8567,6 @@
                       (when (:seq design) {:judged-seq (:seq design)})
                       (when-let [m (:tree-moved judged)] {:tree-moved m})
                       (when again {:rejudged again})
-                      (when drift {:index-drift drift})
                       (when-let [c (seq (continues run-id (:iter ctx) standing running lineage))]
                         (merge {:continues (vec c)}
                                (when-let [h (by-hand ledger :design :design-seq design c lineage)]

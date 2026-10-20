@@ -3403,24 +3403,18 @@
   (let [[_ id :as ledger] (surveyed-ledger!)
         answer (interrupting-the-index #(record/append! ledger a-ledger-review))]
     (is (= {:seq 3} answer) "the round names the entry it wrote, as if the index had not failed")
-    (is (empty? (ws/index-drift :brian id)) "the file the failed write left is the one indexed")
     (is (= [3] (map :seq (ws/entries-of :brian id :baseline-review)))
         "and only once: completing an append never writes a second copy")))
 
-(deftest a-judge-stage-indexes-the-judgement-an-earlier-run-left-unindexed
+(deftest a-judgement-an-earlier-run-left-unindexed-is-read
   ;; Watched: entry 19, the previous run's last review, sat on disk with its meta row but no index
-  ;; row; every lineage read is off the index, so the run after it counted one refutation too few.
-  (let [[_ id :as ledger] (surveyed-ledger!)]
+  ;; row; every lineage read was off the index, so the run after it counted one refutation too few.
+  ;; A read now holds it.
+  (let [[_ id] (surveyed-ledger!)]
     (interrupting-the-index #(try (ws/append-entry! :brian id {:kind :baseline-review} (pr-str a-ledger-review))
                                   (catch Exception _ nil)))
-    (is (seq (ws/index-drift :brian id)) "the setup leaves the judgement unindexed")
-    (let [drift (binding [*err* (java.io.StringWriter.)]
-                  (#'record/reconcile-drift! ledger :baseline-review))]
-      (is (= ["0003-baseline-review.edn"] (:unindexed drift)) "the round says what the index lacked")
-      (is (= ["0003-baseline-review.edn"] (:indexed drift)))
-      (is (= [3] (map :seq (ws/entries-of :brian id :baseline-review)))
-          "so the judge inputs read after it see the judgement"))
-    (is (nil? (#'record/reconcile-drift! ledger :baseline-review)) "an intact index is no drift")))
+    (is (= [3] (map :seq (ws/entries-of :brian id :baseline-review)))
+        "so the judge inputs read the judgement")))
 
 (deftest a-round-whose-goal-moved-ends-saying-so
   ;; A sufficient judgement the ledger refused because its intent was superseded mid-round was

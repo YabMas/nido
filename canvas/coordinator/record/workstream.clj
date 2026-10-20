@@ -52,12 +52,13 @@
     {:signature [:=> [:catn] WorkstreamId]
      :delegates [clock/now-iso]})
   (Operation read-ws
-    "One workstream by id, or nil. Normalises what older records spelled differently, and reads
+    "One workstream by id, or nil, without the stored status fields older records carry. Reads
      its index as the entries directory has it: an absent index rebuilt, a row naming a file the
      directory does not hold under that :seq and kind replaced or dropped, and every other row
      read as the row kept beside its entry — kept there by this read when none was, which freezes
-     the facts only the index held. Files no row names are the one gap left — an interrupted
-     append, which `index-drift` reports."
+     the facts only the index held. A file no row names — an append that died before indexing
+     it, having passed the append's checks and owing the record nothing else — reads as indexed
+     at its :seq."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe Workstream]]
      :delegates [state/workstream-edn-path]})
   (Operation write!
@@ -153,16 +154,6 @@
      Which entry an append wrote is answered by what it returned. The ledger's newest entry,
      reread once the lock is released, may be another writer's."
     {:signature [:=> [:catn [:path :any]] [:maybe :int]]})
-  (Operation index-drift
-    "The entry files under entries/ that no index row names, or nil when the index names every
-     one of them. What a reader is shown, because every other reader here trusts the index.
-
-     Set against set, and never the highest `:seq` on disk against the number of index rows.
-     `append-entry!` steps OVER a number it cannot claim rather than onto it, so the sequence is
-     sparse by design and the highest number on disk is not the count of files. Comparing the two
-     measures an ordinal against a cardinality and reports drift on an intact ledger."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe [:vector :string]]]
-     :delegates [read-ws]})
   (Operation check-entry
     "Throw what an append of this entry would throw now, and write nothing — for an author checking
      a record before handing it over, never a guard in place of the append's own."
@@ -174,11 +165,10 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:expected-seq :int] [:entry :map] [:content :string]] :map]
      :delegates [append-lock-path read-ws write! report/entry-payload]})
   (Operation append-entry-once!
-    "Append an entry only when none of its kind is already the one the caller's identity names, and
-     complete an append an earlier run was interrupted in — indexing its entry file at the :seq the
-     file carries, after the checks an append makes — rather than write a second."
+    "Append an entry only when none of its kind is already the one the caller's identity names — an
+     entry an interrupted append wrote included, which a read holds — rather than write a second."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:entry :map] [:content :string] [:same? :any]] :map]
-     :delegates [append-lock-path read-ws write! index-drift report/entry-payload report/parse-event]})
+     :delegates [append-lock-path read-ws report/parse-event]})
   (Operation latest-entry
     "The most recent entry of a kind, parsed through the READ contract. nil when there is none,
      and nil when the one that is there no longer parses."

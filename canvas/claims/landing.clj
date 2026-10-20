@@ -19,7 +19,7 @@
   {:about [nido-land] :evidence "round"})
 
 (Claim interrupted-append-completed-once
-  "`append-entry-once!` writes an entry of a kind only when no entry of that kind satisfying the caller's identity exists on the workstream, whether indexed or written by an interrupted append and never indexed. Under the append lock it writes nothing over an indexed match, indexes an unindexed match at the :seq its file name carries — parsed through the read contract and admitted by the checks an append makes, and never rewritten or renumbered — and otherwise appends as `append-entry!` does. An unindexed file that does not parse through the read contract satisfies no identity and is left as it is."
+  "`append-entry-once!` writes an entry of a kind only when no entry of that kind satisfying the caller's identity exists on the workstream, whether indexed or written by an interrupted append and never indexed — which a read holds at the :seq its file name carries. Under the append lock it writes nothing over a match and otherwise appends as `append-entry!` does. A file that does not parse through the read contract satisfies no identity and is left as it is."
   {:about [record-workstream] :evidence "round"})
 
 (Claim landing-recipe-runs-the-recording

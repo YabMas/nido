@@ -8,15 +8,16 @@
             [canvas.coordinator.lane.drive :refer [ensure-workstream! intake-kind lane-pipeline of status]]
             [canvas.coordinator.lane.github-issue-intake :refer [poll-and-reconcile!]]
             [canvas.coordinator.lane.notion-sync :refer [lane-notion-sync]]
-            [canvas.coordinator.lane.work :refer [birth! reap! scratch?]]
+            [canvas.coordinator.lane.work :refer [birth! reap! scratch? waiting-session]]
             [canvas.coordinator.record.activity :refer [read-live]]
             [canvas.coordinator.record.runs :refer [live? record-runs]]
             [canvas.coordinator.record.session :refer [record-session]]
             [canvas.coordinator.record.standing :refer [open-findings]]
+            [canvas.coordinator.record.tickets :refer [status-of]]
             [canvas.coordinator.record.workstream :refer [record-workstream]]
             [canvas.coordinator.report :refer [coordinator-report]]
             [canvas.coordinator.view.workstreams :refer [workstream-row ws-source]]
-            [canvas.coordinator.work :refer [adopt-orphans!]]))
+            [canvas.coordinator.work :refer [adopt-orphans! list-workstreams]]))
 
 (Claim one-status
   "Every surface's position, owed-by and live for a workstream come from status; no row, pane or TUI line decides any of the three from session phase, ticket status, a stored :stage or a cached Notion status."
@@ -39,11 +40,11 @@
   {:about [record-workstream] :evidence "round"})
 
 (Claim notion-edits-are-entries
-  "A status change a person makes in Notion reaches a workstream only as a ledger entry the Notion poller appends, naming the status it saw; status reads no Notion cache."
+  "A status change a person makes in Notion reaches a workstream only as a ledger entry: one naming the status seen — appended by the Notion poller, or, for a status cached before the poller recorded entries, once by the status backfill — or the close or stage choice the Notion sync sweep records for it; status reads no Notion cache."
   {:about [lane-notion-sync status] :evidence "round"})
 
 (Claim layers-are-entries
-  "A finished stack layer is a ledger entry citing the design it was built under and naming its index and the count planned. :implementing is a trail position, placed where the fold places the trail: every clause ahead of the trail outranks it — closure, open findings, an unanswered blocker, a retraction, an invalidated design, a superseded goal — exactly as each outranks every other arc position. Beneath those, a workstream whose current design has layer entries and no implementation, review or draft-PR entry under it is at :implementing, owing :implement in :working-copy mode; once any of those exists, layer entries are read for progress alone and move nothing. The position carries progress: done is the number of distinct indices among the layer entries citing that design, planned the count the earliest of them names, so recording a finished layer twice changes nothing."
+  "A finished stack layer is a ledger entry citing the design it was built under and naming its index and the count planned. :implementing is a trail position, placed where the fold places the trail: every clause ahead of the trail outranks it — closure, open findings, an unanswered blocker, a retraction, an invalidated design, a superseded goal — exactly as each outranks every other arc position. Beneath those, a workstream whose current design still stands and was approved or cleared, and has layer entries recorded since its newest phase gate with no implementation, review or draft-PR entry under it recorded since that gate, is at :implementing, owing :implement in :working-copy mode. A layer under a design not yet approved or cleared places nothing, and once any of those records exists in the phase, layer entries move nothing until the next gate. The position carries progress: done is the number of distinct indices among all the layer entries citing that design, in any phase, planned the count the earliest of them names, so recording a finished layer twice changes nothing."
   {:about [coordinator-report of] :evidence "round"})
 
 (Claim findings-from-ledger
@@ -51,11 +52,11 @@
   {:about [open-findings] :evidence "round"})
 
 (Claim no-stored-status
-  "No mutable record holds a value status derives: a session has no autonomy phase, a workstream no stored :stage, findings tracker or :closed, and ticket status is no input to where a workstream is; close, reopen and a person's choice of stage are entries. The one fact the stored :stage carried that status does not derive — that a one-off was born disposable — is the :scratch entry its birth appends, so retiring the field loses no answer the record gave."
+  "No mutable record holds a value status derives: a session has no autonomy phase, a workstream no stored :stage, findings tracker or :closed, and a ticket no :status; close, reopen, a person's choice of stage, and a ticket's acceptance or dismissal are entries. The one fact the stored :stage carried that status does not derive — that a one-off was born disposable — is the :scratch entry its birth appends, so retiring the field loses no answer the record gave."
   {:about [record-workstream record-session] :evidence "round"})
 
 (Claim scratch-is-a-birth-entry
-  "A one-off's disposability is a :scratch entry, a registered kind birth! appends as it mints the workstream — the ledger's record that it was born with no ticket and may be discarded with its session, as :fork records how a child arrived. birth! is the marker's one writer: ensure-workstream! births a fire's workstream unmarked whatever its trigger says, and no other path appends the kind. The position vocabulary reads the kind as an intake record: :scratch is one more member of the kinds of tells an empty ledger from an illegible one by, belonging to the intent stage as :ticket and :triage do, and it carries no position of its own — so a one-off whose only entry is its birth places at :intake, as an empty ledger does, and is never :unplaceable. scratch? answers from the kind; reap! and the orphan sweep's yield discard a one-off only while it is marked, holds no external ref, holds no entry but its birth and owns no other session; intake-kind answers :scratch from the kind, as it answers :triaged and :proposal, and ws-source buckets a workstream :scratch from the same kind, so a described-intent workstream — ref-less, unmarked, entry-less until its agent writes the intent — is kept by both reapers and buckets as it does today."
+  "A one-off's disposability is a :scratch entry, a registered kind birth! appends as it mints the workstream — the ledger's record that it was born with no ticket and may be discarded with its session, as :fork records how a child arrived. birth! is the marker's one writer: ensure-workstream! births a fire's workstream unmarked whatever its trigger says, and no other path appends the kind but the one-time status backfill, which marks a one-off its stored :stage recorded as :scratch before births were entries. The position vocabulary reads the kind as an intake record: :scratch is one more member of the kinds of tells an empty ledger from an illegible one by, belonging to the intent stage as :ticket and :triage do, and it carries no position of its own — so a one-off whose only entry is its birth places at :intake, as an empty ledger does, and is never :unplaceable. scratch? answers from the kind; reap! and the orphan sweep's yield discard a one-off only while it is marked, holds no external ref, holds no entry but its birth and owns no other session; intake-kind answers :scratch from the kind, as it answers :triaged and :proposal, and ws-source buckets a workstream :scratch from the same kind, so a described-intent workstream — ref-less, unmarked, entry-less until its agent writes the intent — is kept by both reapers and buckets as it does today."
   {:about [birth! scratch? reap! adopt-orphans! intake-kind ensure-workstream! of ws-source coordinator-report] :evidence "round"})
 
 (Claim issue-is-an-intake-entry
@@ -65,3 +66,15 @@
 (Claim control-reads-runs
   "The coordinator's control decisions — the trigger budget, resume's precondition, the review sweep, the driver's park — read run records and status, never a session phase."
   {:about [record-runs status] :evidence "round"})
+
+(Claim ticket-status-derived
+  "A ticket's triage status is derived, never stored: status-of reads the workstream carrying it — dismissed while a dismissal stands; planning while a plan run is open or a choice to put it in progress holds; implementing once it is closed otherwise or records work past its triage; triaged once a person accepted its newest verdict, or the ticket as reported; investigating while an investigating run is open; awaiting input while a verdict waits — and nil otherwise, which is what makes it re-triable. A reopen that undoes a dismissal sets aside everything recorded before it."
+  {:about [status-of] :evidence "round"})
+
+(Claim a-reply-waits-on-runs
+  "A session waits on a person's reply exactly when it is autonomous and not archived, no agent of its owning run holds that run's lock, no reply to it is queued in the executor or held as a background session's pending instruction, and its run is parked for review or the workstream's status owes a person its next move; resume and the gate's Reply read waiting-session and nothing stored."
+  {:about [waiting-session] :evidence "round"})
+
+(Claim board-stage-from-records
+  "A non-bare board row's needs-you and engagement are read off its ledger closure and status. A row whose ledger closure settles it — any outcome but :between-phases — has needs-you off and engagement :settled; on any other non-bare row needs-you is whether status says a person owes the next move, and engagement is read off status."
+  {:about [workstream-row list-workstreams status] :evidence "round"})
