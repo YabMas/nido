@@ -57,6 +57,48 @@
   (with-redefs [jj/jj! (fn [& _] {:exit 1 :out "" :err "not a workspace"})]
     (is (= [] (layers/stack "/w" "sess" "main")))))
 
+(defn- stub-branch
+  "jj/jj! stub answering the `log` of the range with `rows` and each commit's description from
+   `messages` — a commit missing from it is one jj could not read."
+  [rows messages]
+  (fn [_dir & args]
+    (if (some #{"description"} args)
+      (if-let [m (get messages (nth args 2))]
+        {:exit 0 :out m :err ""}
+        {:exit 1 :out "" :err "no such revision"})
+      {:exit 0 :out (log-out rows) :err ""})))
+
+(deftest commit-briefs-reads-a-branch-no-layer-owns
+  ;; A branch with no session bookmark is reviewed whole; its commits' briefs are read all the
+  ;; same, unowned.
+  (with-redefs [jj/jj! (stub-branch [["c1" "ch1" ""]] {"c1" "One commit\n\nStratum: unknown\n"})]
+    (is (= [{:label nil :commit "c1" :stratum "unknown"}]
+           (map #(-> % (assoc :stratum (-> % :brief :stratum)) (dissoc :brief))
+                (layers/commit-briefs "/w" "sess" "main"))))))
+
+(deftest commit-briefs-labels-each-commit-by-the-layer-owning-it
+  (with-redefs [jj/jj! (stub-branch [["c1" "ch1" ""] ["c2" "ch2" "sess--a"] ["c3" "ch3" ""]]
+                                    {"c1" "fixup" "c2" "a\n\nStratum: record\n" "c3" "wip"})]
+    (is (= [["a" "c1"] ["a" "c2"] ["unbookmarked" "c3"]]
+           (map (juxt :label :commit) (layers/commit-briefs "/w" "sess" "main"))))
+    (is (= "record" (-> (layers/commit-briefs "/w" "sess" "main") second :brief :stratum)))))
+
+(deftest commit-briefs-reads-an-empty-layer-tip-too
+  (with-redefs [jj/jj! (fn [_dir & args]
+                         (if (some #{"description"} args)
+                           {:exit 0 :out "a\n\nStratum: x\n" :err ""}
+                           {:exit 0 :out "c1\tch1\tsess--a\tempty\n" :err ""}))]
+    (is (= [["a" "x"]] (map (juxt :label (comp :stratum :brief))
+                            (layers/commit-briefs "/w" "sess" "main"))))))
+
+(deftest commit-briefs-throws-on-what-jj-cannot-read
+  (with-redefs [jj/jj! (stub-branch [["c1" "ch1" ""]] {})]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"message of c1"
+                          (layers/commit-briefs "/w" "sess" "main"))))
+  (with-redefs [jj/jj! (fn [& _] {:exit 1 :out "" :err "not a workspace"})]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"could not read main\.\.@"
+                          (layers/commit-briefs "/w" "sess" "main")))))
+
 (deftest stack-asks-for-the-base-to-head-revset-reversed
   (let [calls (atom [])]
     (with-redefs [jj/jj! (stub-log "" calls)]
@@ -279,6 +321,10 @@
     (is (= "the rename is uniform across all 40 call sites." (:claims b)))
     (is (= "lane-malli" (:lane b)))
     (is (= "refactor(pay): fold the rounding into the aggregate" (:subject b)))))
+
+(deftest parse-brief-reads-the-stratum-a-layer-is-written-in
+  (is (= "record, lane" (:stratum (layers/parse-brief "Subject\n\nLayer: behavioral\nStratum: record, lane\n"))))
+  (is (nil? (:stratum (layers/parse-brief "Subject\n\nLayer: behavioral\n")))))
 
 (deftest parse-brief-joins-a-fields-indented-continuation-lines
   (let [b (layers/parse-brief layer-message)]

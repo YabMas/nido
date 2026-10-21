@@ -266,6 +266,11 @@
     {:signature [:=> [:catn [:description :string]] :map]})
   (Operation brief "A layer's review brief."
     {:signature [:=> [:catn [:cwd Path] [:rev :any]] :map] :delegates [description parse-brief]})
+  (Operation commit-briefs
+    "Every commit of the branch, empty or not, with its brief and the layer owning it — none on a branch no layer
+     owns. Throws on what jj cannot read, where `stack` and `brief` read it as nothing there."
+    {:signature [:=> [:catn [:cwd Path] [:session :any] [:base :any]] [:vector :map]]
+     :delegates [description parse-brief]})
   (Operation deviation-line "One deviation as its layer's commit message carries it."
     {:signature [:=> [:catn [:finding :map]] [:maybe :string]]})
   (Operation with-deviations

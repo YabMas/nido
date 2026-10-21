@@ -35,8 +35,8 @@
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as ws]
-   [nido.platform.process :as proc]
-   [nido.session.lifecycle :as lifecycle]))
+   [nido.session.lifecycle :as lifecycle]
+   [nido.session.state :as sstate]))
 
 ;; ── The vocabulary ──────────────────────────────────────────────────────────
 
@@ -524,7 +524,7 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :boolean]}
   design-decided?
-  "True when a decision round let the newest design proceed.
+  "True when a decision round let the governing design proceed.
 
    Only a decision `standing/proceeding?` counts: :proceed, or one whose only broken
    check is the advisory one, which the round itself treats as proceeding. A
@@ -774,7 +774,9 @@
    surface says them in its own terms. A seq a stage would cite that is not yet on the ledger
    is nil."
   [project ws-id goal-seq]
-  (let [w (ws/read-ws project ws-id)]
+  ;; Over the current generation's span, as the fold places the arc: a design an earlier
+  ;; generation built on the replaced goal is no record this one still owes a stage over.
+  (let [w (some-> (ws/read-ws project ws-id) (update :entries generation/current-span))]
     (if-let [{:keys [baseline design] :as reading} (when w (ws/goal-amendment w goal-seq))]
       (owed-stages reading
                    {:verified? (boolean (some->> baseline (ws/entry-at-seq project ws-id)
@@ -941,6 +943,9 @@
    ;; that changes anything, and it is cheap here: the run stopped before it
    ;; spent a reviewer.
    :stack-conflicted     :escalate
+   ;; A layer names a stratum the design does not declare. Only a design
+   ;; amendment or a corrected brief changes that, and both are a person's.
+   :stratum-undeclared   :escalate
    ;; Every repair was refused by the rebase and put back, so the branch is
    ;; clean and a retry would produce the same refusal against the same code.
    ;; What is wanted is a human deciding whether the layers are in the right
@@ -1064,8 +1069,10 @@
   [project ws-id]
   (if-let [whole (ws/read-ws project ws-id)]
     ;; The arc is placed over the current generation's span: a re-cut's new generation re-enters
-    ;; at the design round, and the trail its predecessor built places nothing. Status — a close,
-    ;; a blocker, a Notion settlement — and how the work came in are read off the whole ledger.
+    ;; at the design round, and the trail its predecessor built places nothing, a blocker it left
+    ;; unanswered included: an answer may not cite across the boundary, so one carried forward
+    ;; would halt the new generation for good. Status — a close, a Notion settlement — and how the
+    ;; work came in are read off the whole ledger.
     (let [w      (update whole :entries generation/current-span)
           ks     (kinds w)
           design (standing/governing-design project ws-id)
@@ -1085,7 +1092,7 @@
           ;; once per rendered row.
           re     (reentry/of* w design st bst)
           closed (ws/closure whole)
-          blocker (unanswered-blocker project ws-id whole)
+          blocker (unanswered-blocker project ws-id w)
           ;; A ticket a person settled in Notion is settled here too: placed where a close is,
           ;; owing nobody, so the board's band and the pane's owed-by are one answer. Not over an
           ;; unanswered blocker: only an answer naming its seq clears one, and a Notion status
@@ -1190,15 +1197,16 @@
 ;; ── What every surface shows ───────────────────────────────────────────────
 
 (defn- observed-live-names
-  "The names of `project`'s sessions holding an open app or nREPL port right now — the probe
-   `nido.coordinator.work/live-session-names` makes, for a caller of `status` that made none."
+  "The names of `project`'s sessions that are up right now, as `sstate/session-live?` reads each
+   one's registry entry — a lite session included — for a caller of `status` that made no probe.
+   The probe `nido.coordinator.work/live-session-names` makes, through the same predicate."
   [project]
-  (->> (lifecycle/list-all-data {:project (name project)})
-       :sessions
-       (filter (fn [s] (or (and (pos-int? (:app-port s))   (proc/tcp-open? (:app-port s)))
-                           (and (pos-int? (:nrepl-port s)) (proc/tcp-open? (:nrepl-port s))))))
-       (map :name)
-       set))
+  (let [registry (sstate/read-registry)]
+    (->> (lifecycle/list-all-data {:project (name project)})
+         :sessions
+         (filter #(sstate/session-live? (get registry (:worktree %))))
+         (map :name)
+         set)))
 
 (def ^:private owed-by-mode
   "Who owes a move, by the mode it runs in."
@@ -1213,7 +1221,7 @@
    move, the machine for a :mechanical one, an agent for an authoring or working-copy one,
    nobody when no move is owed. :live is observed, never stored: a held activity claim, a run
    whose agent holds its lock, a background session the substrate lists with a live process,
-   or a person's session whose ports answer — `live-names` when the
+   or a person's session that is up (`sstate/session-live?`) — `live-names` when the
    caller observed them, else observed here. :stalled is an agent owing the move with nothing live: the work
    stopped, and no question was recorded to say why."
   ([project ws-id] (status project ws-id nil))
@@ -1223,7 +1231,7 @@
                     (owed-by-mode mode :nobody)
                     :nobody)
          sessions (csession/list-sessions project ws-id)
-         ;; A person's session is live when its ports answer — observed, never a stored phase.
+         ;; A person's session is live while it is up — observed, never a stored phase.
          ;; Absent the caller's observation, make one, and only when there is a person's session
          ;; to ask about: a board passes the set it read once for every row.
          humans   (filter #(nil? (:autonomy %)) sessions)

@@ -239,7 +239,7 @@
                       {:reason :held}))
 
       :else
-      (do (when (= :nobody (:driver facet))
+      (do (when (#{:nobody :retired} (:driver facet))
             ;; The person's own `nido ship` is the hand-back: they asked nido to drive it.
             (conduct/adopt! {:project project :ws-id ws-id :session-name session-name
                              :session-id (:session-id facet)}))

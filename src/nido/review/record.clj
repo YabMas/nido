@@ -50,6 +50,7 @@
    [nido.coordinator.agent :as agent]
    [nido.coordinator.report :as report]
    [nido.coordinator.report.model :as model]
+   [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
@@ -481,8 +482,10 @@
               "them. A module is what it HIDES; its interface is what is depended on from outside,\n"
               "ruled as WHAT AN :interface STATES says below:\n"
               (str/join "\n"
-                        (map (fn [{:keys [id sort hides interface plays readings read-at]}]
+                        (map (fn [{:keys [id sort hides interface plays readings read-at defines-generation]}]
                                (str "- [" id "] (" (name sort) ")"
+                                    (when defines-generation
+                                      "\n    DEFINES THE GENERATION — what it hides is fixed within it")
                                     (when (seq plays) (str "\n    played by: " (str/join ", " plays)))
                                     (when hides (str "\n    hides:     " hides))
                                     (when interface (str "\n    interface: " interface))
@@ -1560,6 +1563,23 @@
 
 (declare lineage-of loop-why-prefix hot-areas lineage-entries)
 
+(defn- in-span
+  "`entries` the current generation's span (`generation/current-span`) holds — every intent,
+   baseline and baseline review among them, which belong to none. A ledger that cannot be read
+   holds no generation to cut by, so `entries` are kept whole. Every reader here that must not
+   see an earlier generation's designs or decisions cuts through this."
+  [project ws-id entries]
+  (if-let [span (try (some-> (ws/read-ws project ws-id) :entries generation/current-span)
+                     (catch Exception _ nil))]
+    (let [seqs (into #{} (map :seq) span)]
+      (filterv #(contains? seqs (:seq %)) entries))
+    (vec entries)))
+
+(defn- in-current-generation
+  "`entry` when the current generation's span holds it (`in-span`), else nil. nil `entry` is nil."
+  [project ws-id entry]
+  (when entry (first (in-span project ws-id [entry]))))
+
 (defn- written-by-person?
   "Whether the design `d` was written by somebody other than a review loop's amender — a person, or
    a session acting for one. `amended` is `ws/amended-seqs` of its ledger.
@@ -1645,8 +1665,13 @@
                        (recur (some->> (get-in d [:supersedes :seq]) (ws/entry-at-seq project ws-id))
                               (conj seen (:seq d)) (conj acc d))))
          premise   (juxt #(get-in % [:intent :seq]) #(get-in % [:baseline :seq]))
-         approvals (ws/entries-of project ws-id :design-approved)
-         approved  (into {} (map (juxt #(get-in % [:design :seq]) identity)) approvals)
+         ;; The grants, and what each answered, are the one reading that follows the chain into
+         ;; an earlier generation. Every question, reply and filing put to the judge as still open
+         ;; is this generation's: an earlier one's crosses only as a grant answered it.
+         this-gen  (partial in-span project ws-id)
+         every-approval (ws/entries-of project ws-id :design-approved)
+         approvals (this-gen every-approval)
+         approved  (into {} (map (juxt #(get-in % [:design :seq]) identity)) every-approval)
          grants    (filterv #(or (approved (:seq %))
                                  (and (person? %) (get-in % [:supersedes :granted])))
                             (take-while #(= (premise design) (premise %)) chain))
@@ -1657,9 +1682,10 @@
          note      (note-of granted)
          own-read? #(and run-id (= run-id (:run-id %))
                          (or (seq (:read-once %)) (:amendment-read-once %)))
-         decisions (into [] (remove own-read?) (ws/entries-of project ws-id :design-decision))
+         every-decision (into [] (remove own-read?) (ws/entries-of project ws-id :design-decision))
+         decisions (this-gen every-decision)
          asks?     #(not (str/blank? (:asks %)))
-         answers   (fn [g] (grant-answered g (approved (:seq g)) decisions))
+         answers   (fn [g] (grant-answered g (approved (:seq g)) every-decision))
          earlier   (mapv #(cond-> {:seq (:seq %)}
                             (note-of %) (assoc :note (note-of %))
                             (not (approved (:seq %))) (assoc :carried? true)
@@ -1668,7 +1694,7 @@
          ;; The intent is no amender's to write: a review loop amends baselines and designs.
          intent    (some->> (get-in design [:intent :seq]) (ws/entry-at-seq project ws-id))
          reply     (fn [kind r] {:seq (:seq r) :kind kind :why (get-in r [:supersedes :why])})
-         written   (filterv #(and (:seq %) (person? %) (get-in % [:supersedes :why])) chain)
+         written   (this-gen (filterv #(and (:seq %) (person? %) (get-in % [:supersedes :why])) chain))
          replies   (sort-by :seq (cond-> (mapv #(reply :design %) written)
                                    (and (:seq intent) (get-in intent [:supersedes :why]))
                                    (conj (reply :intent intent))))
@@ -1684,7 +1710,7 @@
          asked-for (let [from (long (or (:seq granted) (:seq (peek chain)) 0))]
                      (into [] (comp (filter #(> (long (or (:seq %) 0)) from))
                                     (map #(select-keys % [:seq :round :note :items])))
-                           (ws/entries-of project ws-id :findings)))
+                           (this-gen (ws/entries-of project ws-id :findings))))
          carried   (set (keys (settled/subjects design)))
          asked-of  (reduce (fn [acc {n :seq :as d}]
                              (let [grant (some #(when (> (long (or (:seq %) 0)) (long n)) %) approvals)
@@ -1955,14 +1981,32 @@
        "whatever the code does: report it under goal-served, quoting both. A line no\n"
        "clause discharges is under-serving, a goal-served finding too.\n"))
 
+(defn- fixed-block
+  "What the generation's defining elements hide as the design that fixed them states it (`fixed`,
+   `generation-fixed`'s), and what the judge does about one this design moves: nothing derives that
+   by comparing text, so the judge reads both and rules — and a moved secret is a :recut, which no
+   amendment within the generation repairs. Empty when nothing is fixed."
+  [{n :seq :keys [elements]}]
+  (when (seq elements)
+    (str "\nFIXED IN THIS GENERATION — the elements marked as defining it, and what each hid\n"
+         "in the design that fixed them (entry " n "):\n"
+         (str/join (for [{:keys [id hides]} elements]
+                     (str "- [" id "] hid: " (or hides "(nothing stated)") "\n")))
+         "Within a generation these hold: an element may grow its interface by an operation or\n"
+         "a data type, but what it HIDES may not move. Read each against what this design says it\n"
+         "hides. Where one now hides a different secret, recommend recut, name it in\n"
+         "secrets_moved with what moved, and file the finding — no amendment of this design\n"
+         "repairs it; the generation has to be re-cut. Leave secrets_moved empty otherwise.\n")))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   design-prompt
   "The decision prompt. Derives what can be derived; hands the rest over.
 
    `:relation-prior` is `relation-prior`'s: the last decision's rulings, shown beside the ids to rule
-   on with whether the record moved under each since."
+   on with whether the record moved under each since. `:fixed` is `generation-fixed`'s: the
+   generation's defining elements as the design that fixed them hid them (`fixed-block`)."
   [{:keys [design baseline stance intent disputes settled levels prior answers relation-prior stale
-           executed hot]}]
+           executed hot fixed]}]
   (let [owes?        (report/owes-a-person? design)
         checked      (into #{} (map :id) (get-in (checks-of design (set (keys settled))) [:model :claims]))
         design       (judged-alone design)
@@ -1998,6 +2042,7 @@
    (if (contains? design :model)
      (str "Claims — what this design commits to, by id:"
           (model-block (:model (checks-of design (set (keys settled)))) (:holds design))
+          (fixed-block fixed)
           (settled-block settled design))
      (str "Invariants:\n" (invariant-lines (:invariants design)) "\n"))
    "Declared against the stance: " (name (get-in design [:standing :relation]))
@@ -2881,7 +2926,9 @@
    routing-coherent's (`routing-attributed`). A finding under a check the same answer rules held is
    made check-less (`off-held-checks`). A :recut with no decomposition check broken is an :amend,
    the judge's word kept as :judge-recommended: an amender told the decomposition is wrong when
-   only the goal broke redraws the strata to repair what a record edit would.
+   only the goal broke redraws the strata to repair what a record edit would. An answer naming a
+   generation-defining element under `secrets_moved` is a :recut whatever it recommended, each named
+   kept as :secrets-moved: a design moving what a fixed element hides is not cleared (`fixed-block`).
 
    `intent` is the intent the round's prompt stated. On an :ask it and the answer's `asks_about`
    mark findings for the person where the judge did not mark them derivable (`person-marked`), and
@@ -2916,11 +2963,20 @@
                                           (normalize-findings (:findings m) asked))
                                     checks)
           said     (keyword (str (:recommend m)))
-          r        (if (and (= :recut said)
-                            (not-any? #(and (decomposition-checks (:check %)) (= :broken (:status %)))
-                                      checks))
+          moved    (into [] (keep (fn [{:keys [id because]}]
+                                    (let [id (slug id) because (str/trim (str because))]
+                                      (when-not (or (str/blank? id) (str/blank? because))
+                                        {:id id :because because}))))
+                         (when (sequential? (:secrets_moved m)) (:secrets_moved m)))
+          ;; A fixed element's secret moved is a re-cut whatever the checks say: within its
+          ;; generation no amendment may move it (`fixed-block`).
+          r        (cond
+                     (seq moved) :recut
+                     (and (= :recut said)
+                          (not-any? #(and (decomposition-checks (:check %)) (= :broken (:status %)))
+                                    checks))
                      :amend
-                     said)
+                     :else said)
           rulings  (parse-rulings (:relation_rulings m))
           asks     (str/trim (str (:asks m)))
           posed    (into [] (keep (fn [q] (let [t (str/trim (str (:text q)))]
@@ -2969,7 +3025,8 @@
           (and (= :ask r) (seq about))           (assoc :asks-about (vec (sort about)))
           (seq rulings)                          (assoc :relation-rulings rulings)
           (seq unasked)                          (assoc :unasked-checks unasked)
-          (not= said r)                          (assoc :judge-recommended said)
+          (seq moved)                            (assoc :secrets-moved moved)
+          (and (= :recut said) (not= said r))    (assoc :judge-recommended said)
           (seq stepped)                          (assoc :step-back stepped))))
     (catch Exception e {:refused :parse-error :message (or (ex-message e) (str (class e)))})))
 
@@ -3034,13 +3091,14 @@
                                    (not= (contains? now-in id) (= :breaks ruling)))))}]))))
 
 (defn- relation-prior!
-  "`relation-prior` for `design`, ruled on against `baseline`, from the newest decision on the
-   workstream and the design it read. nil when there is none, or it ruled on no id."
+  "`relation-prior` for `design`, ruled on against `baseline`, from the newest decision of the
+   current generation and the design it read. nil when there is none, or it ruled on no id: a
+   decision of an earlier generation ruled on a design this generation's re-cut replaced."
   [project ws-id design baseline]
-  (let [last (ws/latest-entry project ws-id :design-decision)
-        then (when-let [n (:design-seq last)] (ws/entry-at-seq project ws-id n))]
-    (when (and then (seq (:relation-rulings last)))
-      (relation-prior (:relation-rulings last)
+  (let [prior (in-current-generation project ws-id (ws/latest-entry project ws-id :design-decision))
+        then  (when-let [n (:design-seq prior)] (ws/entry-at-seq project ws-id n))]
+    (when (and then (seq (:relation-rulings prior)))
+      (relation-prior (:relation-rulings prior)
                       [then (stages/cited-baseline [project ws-id] then)]
                       [design baseline]))))
 
@@ -3388,6 +3446,31 @@
                            "\". Make them one statement, in whichever of the two is wrong.")
             :cites    []}))))
 
+(defn- generation-fixed
+  "The current generation's defining elements as the design that fixed them states them —
+   `{:seq <that design> :elements [{:id :hides}]}` — read within the span (`generation/fixing-design`,
+   `generation/fixed-ids`); nil when nothing is fixed yet, when `design` is the fixing design itself,
+   or when the ledger cannot be read. What `design` is judged against for a moved secret."
+  [project ws-id design]
+  (try
+    (let [w     (ws/read-ws project ws-id)
+          n     (some-> w generation/fixing-design)
+          ids   (some-> w generation/fixed-ids)
+          fixer (when (and n (seq ids) (not= n (:seq design))) (ws/entry-at-seq project ws-id n))]
+      (when fixer
+        {:seq      n
+         :elements (into [] (comp (filter #(ids (:id %))) (map #(select-keys % [:id :hides])))
+                         (get-in fixer [:model :elements]))}))
+    (catch Throwable _ nil)))
+
+(defn- newest-design
+  "The newest :design of the current generation's span, read whole, or nil — the design a round
+   reviews when none is named. Never one of an earlier generation: a re-cut's first round has
+   nothing to review until its generation holds a design. Not the governing design, which a plan
+   paused between phases holds at the design its close names while an amendment is reviewed."
+  [project ws-id]
+  (in-current-generation project ws-id (ws/latest-entry project ws-id :design)))
+
 (defn- undeclared-subjects
   "Why a round over `record` launches no judge because of what its claims are about, or nil when
    nothing stops it. A claim about something the design does not declare is not one a judge can
@@ -3400,14 +3483,16 @@
    Two outcomes, kept apart for the reason every outcome here is tagged: a subject the listing does
    not hold says something about the record, and a listing fukan could not produce says nothing
    about it. A record with no subject to resolve — every record from before the shared model —
-   asks fukan nothing, so a round over one starts no JVM to learn nothing.
+   asks fukan nothing, so a round over one starts no JVM to learn nothing. The strata a record
+   names are subjects whether or not any claim carries an :about, so a design naming a stratum the
+   declaration lacks stops its round before any judge launches.
 
    A role the declaration plays differently stops the round under the first outcome, named apart
    from an undeclared subject: both say the record describes what the design does not declare.
 
    `listing` is the one a stage already read at this tree, when it read one; nil reads it here."
   [project worktree record listing]
-  (when (seq (mapcat :about (get-in record [:model :claims])))
+  (when (or (seq (mapcat :about (get-in record [:model :claims]))) (seq (:strata record)))
     (let [listing (or listing (design-check/elements project worktree))]
       (case (:status listing)
         :unmodelled nil
@@ -3547,7 +3632,7 @@
       (try
         (when-let [[project ws-id] (ledger-of (:config final))]
           (let [judged (ws/entry-at-seq project ws-id (:design-seq record))
-                newest (ws/latest-entry project ws-id :design)
+                newest (newest-design project ws-id)
                 cited  #(select-keys (:baseline %) [:relation :breaks])]
             (when (and judged newest
                        (not= (get-in judged [:baseline :relation]) (get-in newest [:baseline :relation])))
@@ -3608,7 +3693,7 @@
                   settled  (or settled {})
                   asked    (owed-rulings baseline settled)
                   verified (when (and (seq settled) (empty? asked))
-                             (some-> (settled/ledger project ws-id) last-verified))]
+                             (some->> (settled/ledger project ws-id) last-verified))]
               (if (and verified (:seq baseline)
                        (= (provenance-free baseline) (provenance-free (:baseline verified))))
                 (carried-review baseline verified)
@@ -3946,7 +4031,7 @@
   [{:keys [cwd code-cwd run-id label disputes design settled listing subject-identities
            reviewer prior stale executed] :as opts}]
   (if-let [[project ws-id :as ledger] (ledger-of opts)]
-    (if-let [design (or design (ws/latest-entry project ws-id :design))]
+    (if-let [design (or design (newest-design project ws-id))]
       (or (unverified-premise project ws-id design)
           (undeclared-subjects project (or code-cwd cwd) (effective-design ledger design) listing)
           (let [code-cwd  (or code-cwd cwd)
@@ -3977,7 +4062,8 @@
                           :levels   levels
                           :answers  (answered project ws-id design run-id)
                           :relation-prior prior-rs
-                          :hot      (hot-areas design (lineage-entries project ws-id design))}
+                          :hot      (hot-areas design (lineage-entries project ws-id design))
+                          :fixed    (generation-fixed project ws-id design)}
                 round    {:cwd code-cwd :run-id run-id :kind :design-decision
                           :label label :reviewer reviewer
                           :schema (design-decision-schema design relation
@@ -4019,7 +4105,7 @@
                   (and one-tree (seq kept)) (assoc :subject-identities kept)
                   moved                     (assoc :tree-moved moved)
                   again                     (assoc :reasks again))))))
-      {:outcome :no-record :detail "this workstream has no :design entry"})
+      {:outcome :no-record :detail "this workstream's current generation holds no :design entry — nothing to review"})
     {:outcome :no-workstream :detail (str "cwd resolves to no nido session: " cwd)}))
 
 (defn- cleared?
@@ -4207,8 +4293,8 @@
        approve their own words again. Written with the note word for word.
      - a grant of a design this one replaces, whose declared move is unchanged (`move-granted`):
        the round's judge was told the proceed clears it (`answered-block`), so whatever else
-       changed was its to ask about. Written with :from naming the granted design, and its note
-       when it had one.
+       changed was its to ask about. Written with :from naming the granted design when it is of
+       the current generation, and its note when it had one.
    Each is written with :carried, and only while the design stands (`standing/of-design`
    :decidable?), the premise an Approve would be refused on."
   [project ws-id design at-seq]
@@ -4224,7 +4310,11 @@
                                                   :at-seq  at-seq
                                                   :carried true}
                                            (not (str/blank? (:note g))) (assoc :note (:note g))
-                                           from (assoc :from {:seq (:seq from)})))))))
+                                           ;; A grant of an earlier generation's design crosses
+                                           ;; by the supersession reading alone; citing it would
+                                           ;; cross the boundary no record of this one may.
+                                           (in-current-generation project ws-id from)
+                                           (assoc :from {:seq (:seq from)})))))))
     (catch Exception _ false)))
 
 (defn- proceeding-status
@@ -4277,7 +4367,7 @@
    reading of it says where."
   [cwd]
   (if-let [[project ws-id :as ledger] (stages/project+ws-from-cwd cwd)]
-    (let [design   (ws/latest-entry project ws-id :design)
+    (let [design   (newest-design project ws-id)
           decision (some->> (ws/entries-of project ws-id :design-decision)
                             (filter #(= (:seq design) (:design-seq %)))
                             last)]
@@ -4569,7 +4659,8 @@
   "The judgements of `judged` — `:baseline-review`s or `:design-decision`s on `ws-id`, keyed back to
    what they judged by `seq-key` — whose judged record is `subject`'s own lineage: reachable from it
    through :supersedes, or citing the same :intent. Every other record on the workstream is another
-   area or another goal, whatever ids it shares."
+   area or another goal, whatever ids it shares. Within the current generation: a judgement an
+   earlier generation made of a design its re-cut replaced counts no reading of this one's."
   [project ws-id judged seq-key subject]
   (let [kind   (case judged :baseline-review :baseline :design-decision :design)
         intent (get-in subject [:intent :seq])
@@ -4581,7 +4672,7 @@
         seqs   (into chain (when intent
                              (keep #(when (= intent (get-in % [:intent :seq])) (:seq %))
                                    (ws/entries-of project ws-id kind))))]
-    (filterv (comp seqs seq-key) (ws/entries-of project ws-id judged))))
+    (in-span project ws-id (filterv (comp seqs seq-key) (ws/entries-of project ws-id judged)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Hot areas — where findings keep landing across a design's rounds and runs
@@ -6588,7 +6679,8 @@
    (`settled/knock-ons`); and :prior, what earlier runs found against its subjects and nothing has
    answered since. `effective` as `settled/settled` takes it."
   [project ws-id kind subject reading effective run-id stale]
-  (let [ls       (when (and project subject) (settled/ledgers project ws-id subject))
+  (let [ls       (when (and project subject)
+                   (settled/ledgers project ws-id subject))
         standing (if (and project subject) (settled/settled ls subject reading effective) {})
         single   (if (and project subject) (settled/single-readings ls subject reading effective) #{})]
     {:standing  standing
@@ -7795,12 +7887,12 @@
    what it started on."
   [[project ws-id] kind named]
   (when project
-    (let [newest  (ws/latest-entry project ws-id kind)
+    (let [newest  (if (= :design kind) (newest-design project ws-id) (ws/latest-entry project ws-id kind))
           subject (or named newest)]
       (when (:seq subject)
         (let [s      (long (:seq subject))
               n      (long (or (:seq newest) s))
-              design (when (= :baseline kind) (ws/latest-entry project ws-id :design))
+              design (when (= :baseline kind) (newest-design project ws-id))
               cites  (get-in design [:baseline :seq])]
           (cond-> {:seq s :named? (some? named) :newest-at-start n}
             (> n s) (assoc :skipped {:seq n
@@ -8421,19 +8513,30 @@
    does hand it, `[{:id :clauses}]`, :clauses the text of each clause the question named when it
    named clauses: it repairs one without changing those, or — named whole — only beside a
    :standing-ask on it (`asked-moves`). `:by-hand` is the :seq of the design under repair when a
-   person wrote it, superseding another (`interface-block`)."
+   person wrote it, superseding another (`interface-block`). `:secrets-moved` is the decision's: on a
+   :recut naming a fixed element's moved secret the amender is told no amendment may move it, not
+   that the decomposition is wrong."
   [{:keys [design baseline recommend reason asks asks-about asks-repaired raised findings rulings out-path declared?
-           check-cmd settled refuted-running resurvey-outcome intent refuted-with by-hand restated]}]
+           check-cmd settled refuted-running resurvey-outcome intent refuted-with by-hand restated secrets-moved]}]
   (let [in-area (into #{} (mapcat #(cons (:area %) (:claims %))) restated)
         spent   (design-spent raised refuted-running)]
   (str
    "A read-only judge derived what could be derived about this DESIGN record,\n"
    "before any code is written, and it did not come out clean.\n\n"
    (case recommend
-     :recut (if (strata-era? design)
+     :recut (cond
+              (seq secrets-moved)
+              (str "It says this design moves what an element FIXED IN THIS GENERATION hides:\n"
+                   (str/join (for [{:keys [id because]} secrets-moved] (str "- [" id "] " because "\n")))
+                   "Within a generation no amendment may move that. Where the change can be made\n"
+                   "with each keeping what it hid, repair the design so it does. Where it cannot,\n"
+                   "the generation has to be re-cut — a person opens one from a :recut proposal —\n"
+                   "and restating the design here will not get it past the round.\n\n")
+              (strata-era? design)
               (str "It says the DECOMPOSITION does not hold. Re-place it. The claims may be\n"
                    "right; which strata the change sits in, or what it adds to them, is what\n"
                    "is wrong, and restating the claims will not fix it.\n\n")
+              :else
               (str "It says the DECOMPOSITION does not hold. Re-cut it. The claims may be\n"
                    "right; how the change is split into layers or phases is what is wrong,\n"
                    "and restating the claims will not fix it.\n\n"))
@@ -8652,7 +8755,7 @@
         ;; are the effective model's, as the round resolves them: a role kept from the baseline
         ;; is not restated, and its players are still what a claim about it rests on.
         [project ws-id :as ledger] (ledger-of (:config ctx))
-        design  (when project (ws/latest-entry project ws-id :design))
+        design  (when project (newest-design project ws-id))
         {:keys [listing reading]} (reading-for project (or code-cwd cwd) design)
         {:keys [standing single settled knock-ons prior]}
         (judge-inputs project ws-id :design design reading (when design (effective-design ledger design)) run-id
@@ -8705,7 +8808,7 @@
                     (mapv #(assoc % :claim-ids [(:claim-id %)])
                           (concat (unsettled-findings record
                                                       (unchecked-running
-                                                       (conj (vec (ws/entries-of project ws-id :design-decision))
+                                                       (conj (in-span project ws-id (ws/entries-of project ws-id :design-decision))
                                                              record)))
                                   (when listing (drifted-statements design listing))))
                     [])
@@ -9010,7 +9113,7 @@
         ;; narrow follow-up written beside the broad baseline it came out of — and
         ;; repairing the newest instead would leave the cited one untouched
         ;; however many rounds it ran.
-        cited (stages/cited-baseline [project ws-id] (ws/latest-entry project ws-id :design))
+        cited (stages/cited-baseline [project ws-id] (newest-design project ws-id))
         ;; Not the design round's tree: that one carries the design's declaration,
         ;; which a baseline describing the area before the change must not be
         ;; judged against. A tree the caller named is read as given.
@@ -9276,6 +9379,7 @@
                       withheld? #(let [ids (refuted-ids %)] (and spent (seq ids) (every? spent ids)))]
                   (vec (remove #(or (:for-person %) (withheld? %)) (get-in ctx [:record :findings]))))
       :rulings (get-in ctx [:record :relation-rulings])
+      :secrets-moved (get-in ctx [:record :secrets-moved])
       :out-path out-path
       :check-cmd (when (and project ws-id) (amend-check-cmd project ws-id :design out-path))
       :settled (:settled ctx)
@@ -9298,7 +9402,7 @@
   (let [{:keys [cwd run-id]} (:config ctx)
         code-cwd (or (:code-cwd (:config ctx)) cwd)
         [project ws-id] (ledger-of (:config ctx))
-        prev     (ws/latest-entry project ws-id :design)
+        prev     (newest-design project ws-id)
         dir      (cstate/run-dir run-id)
         out-path (str (fs/path dir (str "design-amend-round-" (:iter ctx) ".edn")))
         declared (design-check/design-of project code-cwd)
@@ -9474,7 +9578,7 @@
       :else
       (amend-design! ctx recommend
                      (stages/cited-baseline
-                      ledger (ws/latest-entry project ws-id :design))))))
+                      ledger (newest-design project ws-id))))))
 
 (def design-amend-stage
   "Repair whatever the recommendation named — the record, the cut, or the
@@ -9602,8 +9706,8 @@
             message  (if design?
                        (let [[project ws-id :as ledger] (ledger-of (:config final))]
                          (design-amend-message
-                          final (ws/latest-entry project ws-id :design) (:recommend record)
-                          (stages/cited-baseline ledger (ws/latest-entry project ws-id :design))
+                          final (newest-design project ws-id) (:recommend record)
+                          (stages/cited-baseline ledger (newest-design project ws-id))
                           out-path
                           (some? (design-check/design-of project (or (get-in final [:config :code-cwd]) cwd)))))
                        (baseline-amend-message final (under-repair final) out-path))]

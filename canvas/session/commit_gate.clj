@@ -16,11 +16,20 @@
    FAILING OPEN IS THE CONTRACT. Anything it cannot read or run lets the command through: it is
    installed in every session of every project, and one that blocked what it could not reason
    about would be worse than none."
+  (Operation publications
+    "What a Bash command would publish: each `jj git push` with its targets, each titled `gh pr
+     create`/`edit` with its title, the directory each runs in — and each publication the gate
+     cannot read, named as such: a part decided by a substitution, a directory a `cd` left
+     unknown, one run through a wrapper or a shell, a PR created with no title, a push or PR
+     write made around jj. What it recognises is one list of publication verbs, which the
+     installed hook's prefilter is read off too."
+    {:signature [:=> [:catn [:command :string] [:cwd :string]] [:vector :map]]})
   (Operation checks
     "What a Bash command would publish that the project's hook should judge: each `jj git push`
      with its targets, each titled `gh pr create`/`edit` with its title, and the directory each
      runs in. A part decided by a substitution contributes nothing."
-    {:signature [:=> [:catn [:command :string] [:cwd :string]] [:vector :map]]})
+    {:signature [:=> [:catn [:command :string] [:cwd :string]] [:vector :map]]
+     :delegates [publications]})
   (Operation push-range
     "The described commits a `jj git push` would publish: reachable from a ref jj reports it would
      add or move when the same arguments are run with --dry-run, and from no remote ref. Nil when

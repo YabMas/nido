@@ -142,6 +142,16 @@
   (str (fs/path (workstream-dir project ws-id) "activity.lock")))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
+  append-lock-path
+  "The lock that serialises appends to one workstream. Per workstream rather than
+   global: two ledgers have no sequence to contend over, and a global lock would
+   queue every writer in nido behind whichever one is slowest. Here rather than
+   in the ledger because taking an activity claim is serialised under it too —
+   see nido.coordinator.record.activity/with-claim."
+  [project ws-id]
+  (str (fs/path (workstream-dir project ws-id) ".append.lock")))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
   activity-path
   "What the current activity says about itself — kind, run, report path. Written
    by atomic rename while the claim is held; meaningless unless

@@ -276,6 +276,16 @@
         (is (str/includes? (:detail r) "declares other players for the roles: canvas.order/summers"))
         (is (not (str/includes? (:detail r) "holds no element")))))))
 
+(deftest a-record-naming-only-strata-still-asks-the-declaration
+  ;; Its claims name no subject, so nothing but the strata would send it to the declaration — and a
+  ;; stratum the declaration lacks is one no seat could embody.
+  (let [record {:strata ["canvas.order/levels"]
+                :model  {:elements [{:id "canvas.order/levels" :sort :stratum}] :claims []}}]
+    (with-redefs [design-check/elements (fn [_ _] (listing aggregate-row))]
+      (let [r (#'record/undeclared-subjects :nido "/w" record nil)]
+        (is (= :subjects-undeclared (:outcome r)))
+        (is (str/includes? (:detail r) "canvas.order/levels"))))))
+
 (deftest a-baseline-round-launches-no-judge-while-a-subject-is-undeclared
   (let [launched (atom 0)
         seen     (atom nil)

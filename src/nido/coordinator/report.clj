@@ -2029,6 +2029,11 @@
                                ;; same repair from a human and say different
                                ;; things about what put it there.
                                :stack-conflicted
+                               ;; A layer's brief names a stratum the governing
+                               ;; design does not declare, refused before a
+                               ;; reviewer read a line. `:stratum-undeclared`
+                               ;; names the layers and the strata.
+                               :stratum-undeclared
                                ;; codex could not be RUN at all — a billing
                                ;; quota, a rate limit, a credential. Split from
                                ;; :review-failed, which is this run breaking:
@@ -2152,6 +2157,11 @@
    ;; is broken and leaves finding it as an exercise, on a nine-layer branch
    ;; whose conflict is mid-stack and which `jj resolve --list` reports as clean.
    [:conflicted {:optional true} [:sequential string?]]
+   ;; On :stratum-undeclared, each layer whose `Stratum:` named a stratum the
+   ;; governing design's `:strata` does not, and those strata: the work to
+   ;; amend the design for, or the brief to correct.
+   [:stratum-undeclared {:optional true}
+    [:sequential [:map {:closed true} [:layer string?] [:strata [:sequential string?]]]]]
    ;; The repairs a fixer wrote that the stack would not take. Nothing in the
    ;; counts above says one was ever attempted — the rebase refused it and it
    ;; was put back, so the branch is exactly what was reviewed and the findings
@@ -3083,6 +3093,11 @@
                 ;; What the judge recommended when nido read it as something else: a :recut with no
                 ;; check of the decomposition broken is recorded as an :amend.
                 [:judge-recommended     {:optional true} [:enum :recut]]
+                ;; Each element fixed in the generation whose secret the judge read this design as
+                ;; moving, and what moved. Present only on a :recut: within its generation no
+                ;; amendment may move what a generation-defining element hides.
+                [:secrets-moved         {:optional true}
+                 [:vector [:map {:closed true} [:id string?] [:because string?]]]]
                 ;; Each id the judge's first answer both confirmed and filed a finding against. It
                 ;; was asked again, and this decision is the second answer when that one was usable.
                 [:self-contradicted     {:optional true} [:vector string?]]
@@ -3439,8 +3454,10 @@
    :carried marks a grant the design round wrote rather than a gate, after a round
    found nothing that stops the design: either a person wrote it carrying their
    grant (`:supersedes :granted`), and :note is that grant word for word, or a
-   person granted the design it replaces — :from — and the move it declares has
-   not changed since, and :note is that grant's. Parking either for a second
+   person granted the design it replaces — :from, when that design is of this
+   generation; one of an earlier generation is reached through the supersession
+   chain and never cited — and the move it declares has not changed since, and
+   :note is that grant's. Parking either for a second
    approval asked the person nothing they had not answered.
 
    :overrules marks a grant a person gave although the decision at :at-seq did not let the
@@ -4548,7 +4565,8 @@
                                  remaining-parked targets-reviewed targets-skipped
                                  report-path
                                  summary open kept conflicted drift reshaped
-                                 rolled-back launch-failed standing errored]}]
+                                 rolled-back launch-failed standing errored
+                                 stratum-undeclared]}]
   (str/join "\n"
     (remove nil?
       [(str "# Review: " (name status))
@@ -4695,6 +4713,12 @@
               " Resolve them before reviewing again — `jj resolve --list`"
               " will not show them, they are mid-stack.\n"
               (str/join "\n" (for [c conflicted] (str "- `" c "`")))))
+       (when (seq stratum-undeclared)
+         (str "\n## A layer names a stratum the design does not declare\n"
+              "Amend the design to declare it, or correct the layer's `Stratum:`."
+              " Nothing was reviewed.\n"
+              (str/join "\n" (for [{:keys [layer strata]} stratum-undeclared]
+                               (str "- **" layer "** — " (str/join ", " strata))))))
        (when summary (str "\n" summary))
        (when report-path (str "\nfull report → " report-path))])))
 

@@ -9,7 +9,8 @@
             [fukan.common.typing.malli]))
 
 (Module record-seats
-  "A workstream as the seats that carry it: spots in its design, each embodied by a session.
+  "A workstream as its seats: the elements its generation fixes in its design, which an embodiment,
+   when one carries the workstream, gives an occupant.
 
    HIDES how that picture is derived from the records: a seat is an element of the current
    generation's governing design whose id the generation fixes, as record-generation reads it, and

@@ -10,10 +10,12 @@
    [clojure.test :refer [deftest is testing]]
    [malli.core :as m]
    [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.report :as report]
    [nido.review.codex :as codex]
    [nido.review.record :as record]
+   [nido.review.settled :as settled]
    [nido.review.stages :as stages]))
 
 (def ^:private baseline
@@ -2758,6 +2760,51 @@
       (is (= :recut (:recommend r)) (str "a broken " c " is the decomposition failing, so the recut stands"))
       (is (nil? (:judge-recommended r))))))
 
+(deftest a-fixed-elements-moved-secret-is-a-recut
+  ;; Within a generation an element marked as defining it keeps what it hides: a design moving that
+  ;; secret is not cleared, and the round says re-cut whatever check broke.
+  (let [answer (fn [moved]
+                 (json/generate-string {:recommend "amend" :reason "r" :asks "a"
+                                        :checks [{:check "goal_served" :status "held" :note "n"}
+                                                 {:check "stratified" :status "held" :note "n"}]
+                                        :findings [{:check "" :cites ["x"] :claim "agg now hides the tax rule"}]
+                                        :secrets_moved moved}))
+        r      (record/parse-design-decision (answer [{:id "[agg]" :because "hid the summing order, now the tax rule"}])
+                                             3 strata)]
+    (is (= :recut (:recommend r)) "no decomposition check broke, and the recut stands")
+    (is (= [{:id "agg" :because "hid the summing order, now the tax rule"}] (:secrets-moved r)))
+    (is (nil? (:judge-recommended r)))
+    (is (= r (report/validate-event :design-decision r)) "the ledger takes it")
+    (is (= :amend (:recommend (record/parse-design-decision (answer []) 3 strata)))
+        "nothing moved, nothing re-cut")))
+
+(deftest a-design-round-shows-the-marks-and-what-the-fixed-elements-hid
+  (let [d (-> design
+              (dissoc :invariants)
+              (assoc :model {:elements [{:id "agg" :sort :module :hides "the tax rule" :defines-generation true}
+                                        {:id "lines" :sort :module :hides "line order"}]
+                             :claims   [{:id "one-path" :about ["agg"] :statement "one summing path"
+                                         :falsified-by "a second path" :evidence {:by :round}}]}))
+        p (record/design-prompt {:design d :fixed {:seq 4 :elements [{:id "agg" :hides "the summing order"}]}})
+        q (record/design-prompt {:design (update-in d [:model :elements 0] dissoc :defines-generation)})]
+    (is (str/includes? p "- [agg] (module)\n    DEFINES THE GENERATION"))
+    (is (not (str/includes? q "DEFINES THE GENERATION")) "an unmarked element reads as before")
+    (is (str/includes? p "FIXED IN THIS GENERATION"))
+    (is (str/includes? p "(entry 4)"))
+    (is (str/includes? p "- [agg] hid: the summing order"))
+    (is (str/includes? p "secrets_moved"))
+    (is (not (str/includes? q "FIXED IN THIS GENERATION")) "nothing fixed, nothing shown"))
+  (testing "what the fixed elements hid is read from the design that fixed them, in the span"
+    (let [fixer {:seq 4 :format :design :model {:elements [{:id "agg" :hides "the summing order" :defines-generation true}
+                                                           {:id "lines" :hides "line order"}]}}]
+      (with-redefs [ws/read-ws                  (fn [_ _] {:entries []})
+                    generation/fixing-design    (fn [_] 4)
+                    generation/fixed-ids        (fn [_] #{"agg"})
+                    ws/entry-at-seq             (fn [_ _ n] (when (= 4 n) fixer))]
+        (is (= {:seq 4 :elements [{:id "agg" :hides "the summing order"}]}
+               (#'record/generation-fixed :brian "ws-1" {:seq 9})))
+        (is (nil? (#'record/generation-fixed :brian "ws-1" {:seq 4})) "the fixing design is held to nothing earlier")))))
+
 (deftest a-finding-under-a-check-ruled-held-is-check-less
   (let [r (record/parse-design-decision
            (decision-json "amend" [["goal_served" "held"] ["relation_honest" "broken"]]
@@ -3233,3 +3280,131 @@
     (is (not= (record/round-open claude) (record/round-open (assoc claude :judged-seq 338)))
         "an amendment moves the judged entry, which is movement")
     (is (nil? (record/round-open {:record {}})) "no judgement, nothing to compare")))
+
+(deftest a-design-round-reads-only-the-current-generations-designs
+  ;; A re-cut's first round has nothing to review until its generation holds a design: the design
+  ;; the re-cut replaced is not offered in its place.
+  (let [rows    (fn [& kinds] {:entries (vec (map-indexed (fn [i k] {:kind k :seq (inc i)}) kinds))})
+        newest  (fn [ledger design-seq]
+                  (with-redefs [ws/read-ws      (fn [_ _] ledger)
+                                ws/latest-entry (fn [_ _ k] (when (= :design k)
+                                                              {:format :design :seq design-seq}))]
+                    (#'record/newest-design :nido "ws-1")))]
+    (is (nil? (newest (rows :intent :design :recut :generation) 2))
+        "the re-cut's generation holds no design yet")
+    (is (= 5 (:seq (newest (rows :intent :design :recut :generation :design) 5))))
+    (is (= 2 (:seq (newest (rows :intent :design) 2)))
+        "a ledger that never opened a generation is wholly its first")))
+
+(deftest a-reading-of-an-earlier-generation-settles-and-counts-nothing-in-this-one
+  ;; What crosses a re-cut is what its :generation entry carries, and the amendment reading of the
+  ;; grants. A decision of the design the re-cut replaced neither settles a claim of this
+  ;; generation's design nor counts as one of its readings.
+  (let [rows      [{:seq 1 :kind :intent} {:seq 2 :kind :design} {:seq 3 :kind :design-decision}
+                   {:seq 4 :kind :recut} {:seq 5 :kind :generation}
+                   {:seq 6 :kind :design} {:seq 7 :kind :design-decision}]
+        intent    {:seq 1}
+        designs   [{:seq 2 :format :design :intent intent}
+                   {:seq 6 :format :design :intent intent :supersedes {:seq 2}}]
+        decisions [{:seq 3 :format :design-decision :design-seq 2} {:seq 7 :format :design-decision :design-seq 6}]
+        by-seq    (into {} (map (juxt :seq identity)) (concat designs decisions))]
+    (with-redefs [ws/read-ws      (fn [_ _] {:entries rows})
+                  ws/entries-of   (fn [_ _ kind] (case kind :design designs :design-decision decisions []))
+                  ws/entry-at-seq (fn [_ _ n] (by-seq n))]
+      (is (= [7] (mapv :seq (#'record/lineage-of :brian "ws-1" :design-decision :design-seq (by-seq 6))))
+          "the decisions counted for this design are its generation's")
+      (let [seen (atom nil)]
+        (with-redefs [nido.coordinator.record.fork/lineage (fn [_] nil)
+                      settled/settled (fn [ls & _] (reset! seen (first ls)) {})
+                      settled/single-readings (fn [& _] #{})
+                      settled/knock-ons (fn [& _] {})
+                      settled/prior-findings (fn [& _] nil)]
+          (#'record/judge-inputs :brian "ws-1" :design (by-seq 6) {} nil "r" nil)
+          (is (= [7] (mapv :seq (:decisions @seen))))
+          (is (= [6] (mapv :seq (:designs @seen)))))))))
+
+(deftest a-parents-readings-settle-nothing-once-the-child-has-re-cut
+  ;; The fork base lies in the child's first generation; after a re-cut, what crosses is what the
+  ;; :generation entry carries, so the parent's confirmations and findings reach no judge.
+  (let [rows   [{:seq 1 :kind :intent} {:seq 2 :kind :design} {:seq 3 :kind :recut}
+                {:seq 4 :kind :generation} {:seq 5 :kind :design}]
+        design {:seq 5 :format :design}
+        own    (atom rows)
+        seen   (atom nil)]
+    (with-redefs [ws/read-ws    (fn [_ id] {:id id :entries (if (= "p-1" id) [{:seq 9 :kind :design-decision}] @own)})
+                  ws/entries-of (fn [_ id kind]
+                                  (case [id kind]
+                                    ["ws-1" :design]          (filterv (comp (set (map :seq @own)) :seq) [{:seq 2 :format :design} design])
+                                    ["p-1" :design-decision] [{:seq 9 :format :design-decision}]
+                                    []))
+                  nido.coordinator.record.fork/lineage (fn [w] (when (= "ws-1" (:id w)) {:parent "p-1"}))
+                  settled/settled (fn [ls & _] (reset! seen (mapv :ws-id ls)) {})
+                  settled/single-readings (fn [& _] #{})
+                  settled/knock-ons (fn [& _] {})
+                  settled/prior-findings (fn [& _] nil)]
+      (#'record/judge-inputs :brian "ws-1" :design design {} nil "r" nil)
+      (is (= ["ws-1"] @seen))
+      (reset! own (vec (take 2 rows)))
+      (#'record/judge-inputs :brian "ws-1" :design {:seq 2 :format :design} {} nil "r" nil)
+      (is (= ["ws-1" "p-1"] @seen) "before any re-cut the parent's ledger is read as it was"))))
+
+(deftest an-earlier-generations-question-reaches-the-judge-only-as-a-grant-answered-it
+  ;; The amendment reading follows the supersession chain back only to recover what a grant
+  ;; answered. A question the generation before put and nobody granted is not this one's.
+  (let [claims  {:model {:elements [{:id "agg" :sort :module}]
+                         :claims [{:id "c" :about ["agg"] :statement "s" :falsified-by "f"
+                                   :evidence {:by :round}}]}}
+        rows    [{:seq 1 :kind :intent} {:seq 2 :kind :design} {:seq 3 :kind :design-decision}
+                 {:seq 4 :kind :recut} {:seq 5 :kind :generation} {:seq 6 :kind :design}]
+        d1      (merge claims {:seq 2 :format :design :intent {:seq 1}})
+        d2      (merge claims {:seq 6 :format :design :intent {:seq 1} :supersedes {:seq 2 :why "re-cut"}})
+        ask     {:seq 3 :format :design-decision :design-seq 2 :recommend :ask :asks "why c?"
+                 :findings [{:claim-id "c"}]}
+        by-seq  {2 d1 6 d2 3 ask}]
+    (with-redefs [ws/read-ws       (fn [_ _] {:entries rows})
+                  ws/amended-seqs  (fn [_ _] #{2 6})
+                  ws/entry-at-seq  (fn [_ _ n] (by-seq n))
+                  ws/entries-of    (fn [_ _ kind] (case kind :design [d1 d2] :design-decision [ask] []))]
+      (let [a (record/answered :brian "ws-1" d2)]
+        (is (nil? (:asked-of a)) "the earlier generation's question is not put again")
+        (is (nil? (:asked a)) "nor read as one still open")))))
+
+(deftest a-grant-carried-across-a-re-cut-cites-nothing-of-the-generation-before
+  ;; The grant crosses by the supersession reading; an approval citing the earlier design would cross
+  ;; the boundary, and the ledger refuses it.
+  (let [rows    [{:seq 1 :kind :intent} {:seq 2 :kind :design} {:seq 3 :kind :recut}
+                 {:seq 4 :kind :generation} {:seq 5 :kind :design} {:seq 6 :kind :design-decision}]
+        written (atom nil)]
+    (with-redefs [ws/read-ws          (fn [_ _] {:entries rows})
+                  record/answered     (fn [& _] {:grant {:seq 2 :note "go"}})
+                  nido.coordinator.record.standing/of-design (fn [& _] {:decidable? true})
+                  ws/append-entry!    (fn [_ _ _ payload] (reset! written (read-string payload)) "x")]
+      (with-redefs-fn {#'record/move-granted (fn [_] {:seq 2})}
+        (fn []
+          (is (true? (#'record/grant-carried! :brian "ws-1" {:seq 5} 6)))
+          (is (nil? (:from @written)))
+          (is (true? (:carried @written))))))))
+
+(deftest a-merged-childs-readings-settle-only-within-its-own-generation
+  ;; A child that re-cut can still merge while its parent stays in the generation of its fork base.
+  ;; Its earlier generations' confirmations are no reading of the design it merges.
+  (let [rows   {"ws-1"  [{:seq 1 :kind :intent} {:seq 2 :kind :design}]
+                "kid-1" [{:seq 1 :kind :intent} {:seq 2 :kind :design} {:seq 3 :kind :design-decision}
+                         {:seq 4 :kind :recut} {:seq 5 :kind :generation} {:seq 6 :kind :design}
+                         {:seq 7 :kind :design-decision} {:seq 8 :kind :baseline-review}]}
+        design {:seq 2 :format :design :merges {:ws-id "kid-1"}}
+        parsed {["ws-1" :design] [design]
+                ["kid-1" :design-decision] [{:seq 3} {:seq 7}] ["kid-1" :design] [{:seq 2} {:seq 6}]
+                ["kid-1" :baseline-review] [{:seq 8}]}
+        seen   (atom nil)]
+    (with-redefs [ws/read-ws (fn [_ id] {:id id :entries (rows id)})
+                  ws/entries-of (fn [_ id kind] (get parsed [id kind] []))
+                  nido.coordinator.record.fork/lineage (fn [_] nil)
+                  settled/settled (fn [ls & _] (reset! seen (second ls)) {})
+                  settled/single-readings (fn [& _] #{})
+                  settled/knock-ons (fn [& _] {})
+                  settled/prior-findings (fn [& _] nil)]
+      (#'record/judge-inputs :brian "ws-1" :design design {} nil "r" nil)
+      (is (= [7] (mapv :seq (:decisions @seen))))
+      (is (= [6] (mapv :seq (:designs @seen))))
+      (is (= [8] (mapv :seq (:reviews @seen))) "a baseline's review belongs to no generation"))))

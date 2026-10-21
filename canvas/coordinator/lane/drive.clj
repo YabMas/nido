@@ -51,14 +51,15 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :boolean]
      :delegates [workstream/latest-entry standing/of-baseline]})
   (Operation design-decided?
-    "Whether a decision round let the newest design PROCEED.
+    "Whether a decision round let the governing design PROCEED — the current span's, never an
+     earlier generation's.
 
      Standing's answer, `standing/proceeding?`, never re-derived: a round that answered
      `:recut` or `:amend` over any check but the advisory one judged the record rather than
      whether to build it. Public because the gate asks it too: a grant offered on any decision
      at all is a one-click approval of the design its own round sent back."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :boolean]
-     :delegates [workstream/latest-entry standing/proceeding?]})
+     :delegates [standing/governing-design standing/proceeding?]})
   (Operation next-action "The stage to run next and the mode it runs in, or nil at a terminus."
     {:signature [:=> [:catn [:position :any] [:kind :keyword]] [:maybe :map]]})
   (Operation amendment-owed

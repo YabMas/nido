@@ -93,6 +93,37 @@
                                 (add :design (a-design 2 [] :supersedes {:seq d :why "re-marked"}))))
           (is (pos? (add :design (a-design 2 ["agg"] :supersedes {:seq d :why "re-marked"})))))))))
 
+(deftest the-design-that-fixes-a-generation-is-read-within-its-span
+  (with-tmp
+    (fn []
+      (let [[id add stamped w] (ledger)
+            d1 (add :design (a-design 2 ["agg"]))]
+        (is (nil? (generation/fixing-design (w))) "a draft fixes nothing")
+        (add :design-approved {:format :design-approved :design {:seq d1} :at-seq d1})
+        (is (= d1 (generation/fixing-design (w))))
+        (let [d2 (add :design (a-design 2 ["agg"] :supersedes {:seq d1 :why "amended"}))]
+          (add :design-approved {:format :design-approved :design {:seq d2} :at-seq d2})
+          (is (= d1 (generation/fixing-design (w))) "an amendment is held to the design that fixed them"))
+        (let [r (recut! stamped ["agg" "split"])]
+          (ws/open-generation! :brian id {:format :generation :recut {:seq r} :words "split it"
+                                          :ids ["agg" "split"] :base-rev "abc"})
+          (is (nil? (generation/fixing-design (w))) "no design of the closed generation fixes the open one"))))))
+
+(deftest an-opening-refuses-what-it-cannot-read-to-carry
+  ;; What a :generation entry carries is all the new generation inherits of the one it closes: a
+  ;; source entry that cannot be read refuses the opening rather than being carried as nothing.
+  (with-tmp
+    (fn []
+      (let [[id _ stamped w] (ledger)
+            r   (recut! stamped ["agg" "split"])
+            t   (:seq (first (filter #(= :tension (:kind %)) (:entries (w)))))
+            row (first (filter #(= t (:seq %)) (:entries (w))))]
+        (spit (str (fs/path (cstate/workstream-dir :brian id) (:file row))) "{:not")
+        (is (thrown-with-msg? Exception #"cannot be read"
+                              (ws/open-generation! :brian id {:format :generation :recut {:seq r} :words "w"
+                                                              :ids ["agg" "split"] :base-rev "abc"})))
+        (is (= 1 (generation/current (:entries (w)))) "and nothing is opened")))))
+
 (deftest the-generic-appends-refuse-a-generation-and-the-stamped-kinds
   (with-tmp
     (fn []
@@ -179,6 +210,33 @@
         (is (= 1 (generation/current (:entries (w)))) "the refusal wrote nothing")
         (ws/open-generation! :brian id gen)
         (is (= 2 (generation/current (:entries (w)))) "once the run ends it opens")))))
+
+(deftest no-review-claims-the-workstream-while-a-generation-opens
+  ;; The probe and the append are one act to a review: a claim taken after the opening found none
+  ;; waits for its append, so the review reads the generation it opened, never the one it closed.
+  (with-tmp
+    (fn []
+      (let [[id add stamped w] (ledger)
+            _       (add :design (a-design 2 []))
+            r       (recut! stamped ["agg"])
+            gen     {:format :generation :recut {:seq r} :words "w" :ids ["agg"] :base-rev "r"}
+            probed  (promise)
+            go-on   (promise)
+            gen-of  generation/generation-of]
+        (with-redefs [generation/generation-of (fn [& args]
+                                                 (deliver probed true)
+                                                 @go-on
+                                                 (apply gen-of args))]
+          (let [opening (future (ws/open-generation! :brian id gen))
+                _       (deref probed 5000 nil)
+                review  (future (activity/with-claim :brian id
+                                  {:kind :diff-review :run-id "review-1" :report-path nil}
+                                  #(generation/current (:entries (w)))))]
+            (Thread/sleep 300)
+            (deliver go-on true)
+            @opening
+            (is (= 2 (deref review 5000 :timed-out))
+                "the review claimed only once the opening had appended")))))))
 
 (deftest a-retracted-baseline-belongs-to-every-generation
   (with-tmp

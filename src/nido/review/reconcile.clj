@@ -368,12 +368,27 @@
       (when (.isBefore start design-seq-stamped-from)
         (design-before project ws-id started-at)))))
 
+(defn- generation-opened-since?
+  "Whether a generation of `ws-id` was opened after `started-at`: the run then reviewed under a
+   generation that is no longer current, and what it settled is no record of the new one —
+   whatever the new generation's own reviews say, which `newer-review?` reads alone. A date that
+   cannot be read is not known to be before the opening, so it counts as one."
+  [project ws-id started-at]
+  (boolean
+   (when-let [w (ws/read-ws project ws-id)]
+     (let [start (try (Instant/parse (str started-at)) (catch Exception _ nil))]
+       (some #(and (= :generation (:kind %))
+                   (or (nil? start)
+                       (try (not (.isBefore (Instant/parse (str (:at %))) start))
+                            (catch Exception _ true))))
+             (:entries w))))))
+
 (defn- append-settled!
   "Offer the settled run's entry to the workstream it reviewed, and say what
    happened, in `report/with-review-entry`'s shape. Nothing here throws.
 
    `:superseded` is the one answer peculiar to a settled run — see
-   `newer-review?`. An entry naming no design from a run older than the stamp
+   `newer-review?` and `generation-opened-since?`. An entry naming no design from a run older than the stamp
    cites the design it started under (`unstamped-design`) rather than being
    refused as :no-design: it judged under one, and could not say so."
   [entry {:keys [reviewed-project reviewed-ws-id]} started-at]
@@ -388,6 +403,10 @@
           (newer-review? project reviewed-ws-id started-at)
           {:ledger :superseded :ws-id reviewed-ws-id
            :because "the workstream holds a review record written after this run started"}
+
+          (generation-opened-since? project reviewed-ws-id started-at)
+          {:ledger :superseded :ws-id reviewed-ws-id
+           :because "a new generation of the workstream was opened after this run started"}
 
           (and (nil? (:design entry)) (ws/holds-design? (ws/read-ws project reviewed-ws-id)))
           {:ledger :no-design :ws-id reviewed-ws-id

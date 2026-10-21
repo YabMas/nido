@@ -634,6 +634,7 @@
    budget to say so. What that run found is a fact about the BRANCH, and it
    reaches a human already — through the :review ledger entry that names the
    change ids, and through the lane escalating on the status.
+   `:stratum-undeclared` is the same: refused before a reviewer read a line.
 
    An ORPHAN is excluded on exactly that ground and judged by `:targets-reviewed`
    — see `orphan-worth-reading?` — and so is a run a person interrupted, whose
@@ -684,7 +685,7 @@
    incomplete."
   [{:keys [status dry-run? loop launched targets-reviewed design-carried-from] :as run} report?]
   (boolean (and status
-                (not (#{:nothing-to-review :stack-conflicted} (keyword status)))
+                (not (#{:nothing-to-review :stack-conflicted :stratum-undeclared} (keyword status)))
                 (not dry-run?)
                 report?
                 (or (not (contains? settled-statuses (name status)))

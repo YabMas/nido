@@ -140,8 +140,9 @@
   "The next facet and the actions it calls for, given a session's :claude facet, its row in the
    substrate's listing (nil when the listing has none), its events since the facet's cursor, and
    {:now <iso> :token <fresh> :hold-sends? <bool> :baseline <:shown, or why the session's events
-   do not show the launch baseline> :latest <its latest recorded event>}. Pure: it gives nothing,
-   it says what to give.
+   do not show the launch baseline> :latest <its latest recorded event> :owed <the seat messages
+   the session is owed, oldest first, each {:id :text}>}. Pure: it gives nothing, it says what to
+   give.
 
    A turn nido did not give holds a session nido drives whether its prompt was recorded or only
    the listing shows it — and only a turn begun after nido last began driving it or gave it
@@ -153,13 +154,13 @@
    Actions: [:turn-ended event instruction] — instruction the pending nido gave whose token a
    recorded prompt carried, nil for a turn it did not give — [:denial event], [:held because], [:notify-blocked],
    [:refused why] when only the baseline keeps a queued instruction back, and at most one of
-   [:send tagged-text token text from-inbox?] / [:wake tagged-text token text from-inbox?] —
+   [:send tagged-text token text message-id] / [:wake tagged-text token text message-id] —
    whose token the returned facet already holds as pending, so it is recorded before anything is
-   delivered. What is given is the queued instruction, else the oldest seat message in the
-   inbox. Only a session the listing shows done, or blocked with its Stop as its latest recorded
+   delivered. What is given is the queued instruction, else the oldest seat message owed, whose
+   :id the action carries (nil for an instruction). Only a session the listing shows done, or blocked with its Stop as its latest recorded
    event, is given anything; a wake goes only to a session whose latest recorded event is its
    Stop."
-  [facet row evs {:keys [now token hold-sends? baseline latest]}]
+  [facet row evs {:keys [now token hold-sends? baseline latest owed]}]
   (let [{f :facet acts :actions} (reduce read-event {:facet facet :actions []} evs)
         listed-turn? (and (= :nido (:driver f)) (nil? (:hold f)) (nil? (:pending f))
                           (not (:own-work? f)) (= :listed (:idle-seen f)) (= "working" (:state row)))
@@ -177,8 +178,8 @@
         ;; Blocked after its Stop, a session is waiting on the answer a person queued for it;
         ;; blocked mid-turn, it is waiting on something a message would not answer.
         ready-state? (or (= "done" (:state row)) (and blocked? stopped?))
-        from-inbox? (and (nil? (:queued f)) (boolean (seq (:inbox f))))
-        text      (if from-inbox? (first (:inbox f)) (:queued f))
+        message   (when (nil? (:queued f)) (first owed))
+        text      (if message (:text message) (:queued f))
         gated?    (and (= :nido (:driver f)) (nil? (:hold f)) (nil? (:pending f))
                        text row ready-state? (not (:own-work? f))
                        (not hold-sends?)
@@ -186,12 +187,11 @@
         ready?    (and gated? (= :shown baseline))]
     {:facet   (cond-> f
                 ready? (assoc :pending {:token token :at now :via via :seen? false} :idle-seen nil)
-                (and ready? from-inbox?) (update :inbox (comp vec rest))
-                (and ready? (not from-inbox?)) (assoc :queued nil))
+                (and ready? (not message)) (assoc :queued nil))
      :actions (cond-> acts
                 announce? (conj [:notify-blocked])
                 (and gated? (not ready?)) (conj [:refused baseline])
-                ready?    (conj [via (tagged text token) token text from-inbox?]))}))
+                ready?    (conj [via (tagged text token) token text (:id message)]))}))
 
 ;; ── finding the sessions ────────────────────────────────────────────────────
 
@@ -259,10 +259,12 @@
 
    The first prompt's token is recorded, in the record's :dispatching note, before the session
    starts; the facet is written — and the note cleared — only once Claude Code has named the
-   session, so no facet is ever without its session's id. Answers the facet written.
+   session, so no facet is ever without its session's id. Nothing of the record's earlier facet
+   is carried: once the listing shows that session stopped, its conversation is over, hold
+   included. Answers the facet written.
 
-   Refused, writing nothing, while a turn nido did not give holds the record's session, while
-   the listing shows its session alive — whoever drives it, so a start over a released record
+   Refused, writing nothing, while the listing shows the record's session alive — naming the
+   hold when a turn nido did not give holds it — whoever drives it, so a start over a released record
    never leaves the earlier session running unrecorded; retire it first — and while another
    start for the record is in flight. Throws when the session cannot be started: the note is
    cleared, or — when the adapter says it left a process running that the listing has not named
@@ -280,21 +282,24 @@
     (session/update-substrate!
      project ws-id session-name
      (fn [{:keys [claude dispatching] :as m}]
-       (when-let [hold (:hold claude)]
-         (refuse :held (str "A turn nido did not give holds its session (" (name (:because hold))
-                            " at " (:at hold) ") — hand it back first")
-                 {:hold hold}))
-       (when dispatching
-         (refuse :dispatching "A start for this session is already in flight" {:dispatching dispatching}))
-       (when (and claude (:pid (row-for listing claude)))
-         (refuse :live (str "Its session " (:session-id claude) " is alive — retire it first")
-                 {:session-id (:session-id claude)}))
+       ;; Whether the earlier conversation still runs decides what of its facet stands: a live one
+       ;; is refused, held or not; a stopped one is over, its hold with it.
+       (let [alive? (and claude (:pid (row-for listing claude)))]
+         (when-let [hold (when alive? (:hold claude))]
+           (refuse :held (str "A turn nido did not give holds its session (" (name (:because hold))
+                              " at " (:at hold) ") — hand it back first")
+                   {:hold hold}))
+         (when dispatching
+           (refuse :dispatching "A start for this session is already in flight" {:dispatching dispatching}))
+         (when alive?
+           (refuse :live (str "Its session " (:session-id claude) " is alive — retire it first")
+                   {:session-id (:session-id claude)})))
        (assoc m :dispatching (cond-> {:token token :at now} policy (assoc :policy policy)))))
     (try
       (let [named (substrate/dispatch! (assoc opts :prompt (tagged prompt token)))]
         (:claude (session/update-substrate!
                   project ws-id session-name
-                  (fn [{:keys [dispatching]}]
+                  (fn [{:keys [dispatching claude]}]
                     {:claude (dispatched-facet dispatching named) :dispatching nil}))))
       (catch Throwable t
         (session/update-substrate!
@@ -364,25 +369,35 @@
                               :queued nil :own-work? false :driving-since now :idle-seen nil}
                              (when policy {:policy policy})))))))))
 
+(defn- redriven
+  "`facet` with `driver` as its driver — unless `retire!` made it :retired. Retirement ends only
+   when a conversation is driven on the record again, which a start, a naming or an adoption
+   establishes by writing a facet for a session the listing names; a verb that only changes who
+   drives the facet it finds — release, hand-back — sets its driver through this, so none of
+   them makes a stopped conversation hold its record again."
+  [facet driver]
+  (assoc facet :driver (if (= :retired (:driver facet)) :retired driver)))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] :map]}
   release!
   "Stop driving a session. The session is untouched and keeps running; nothing queued for it is
    given. A hold standing on it stays, and with it the person as its driver: only hand-back!
-   clears one. An instruction already given stays outstanding until the session's Stop."
+   clears one. A retired session stays retired: releasing it drives nothing. An instruction
+   already given stays outstanding until the session's Stop."
   [project ws-id session-name]
   (:claude (session/update-claude! project ws-id session-name
                                    ;; A person who took it over still drives it.
-                                   #(assoc % :driver (if (:hold %) :person :nobody) :queued nil))))
+                                   #(-> % (redriven (if (:hold %) :person :nobody)) (assoc :queued nil)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] :map]}
   hand-back!
-  "Clear the hold a turn nido did not give put on a session, making nido its driver again. Turns
-   recorded until now never hold it again, and an instruction a Stop among them ended is no longer
-   outstanding (caught-up)."
+  "Clear the hold a turn nido did not give put on a session, making nido its driver again — a
+   retired session stays retired (`redriven`). Turns recorded until now never hold it again, and
+   an instruction a Stop among them ended is no longer outstanding (caught-up)."
   [project ws-id session-name]
   (:claude (session/update-claude! project ws-id session-name
-                                   #(caught-up (assoc % :driver :nido :hold nil
-                                                      :driving-since (clock/now-iso) :idle-seen nil)
+                                   #(caught-up (-> % (redriven :nido)
+                                                   (assoc :hold nil :driving-since (clock/now-iso) :idle-seen nil))
                                                (select-keys % [:session-id :bg-id])))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName :string] :map]}
@@ -398,24 +413,15 @@
                 (:queued f) (throw (ex-info "An instruction is already queued" {:reason :already-queued :session session-name}))
                 :else (assoc f :queued text))))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName :string] :map]}
-  message!
-  "Put a seat message in the inbox of a session nido drives, behind any already waiting;
-   conduct! gives each in turn once nothing is queued and the session is ready. Tokened like any
-   instruction, so it never holds the session. Refused only when the session has no facet."
-  [project ws-id session-name text]
-  (:claude (session/update-claude!
-            project ws-id session-name
-            (fn [f]
-              (if (nil? f)
-                (throw (ex-info "Not a substrate session" {:reason :no-facet :session session-name}))
-                (update f :inbox (fnil conj []) text))))))
-
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   conduct!
   "One pass over every session with a :claude facet: read its new events and its row in the
    substrate's listing, decide, record the decision, then deliver what it calls for. `opts` may
-   carry :projects and :hold-sends? (true while the account is at its usage limit).
+   carry :projects, :hold-sends? (true while the account is at its usage limit) and :mail —
+   {:owed (fn [project ws-id session-name] [{:id :text} …]) :delivered! (fn [project ws-id id])},
+   where the seat messages a session is owed are kept. A message is given like any instruction,
+   tokened, once nothing is queued; it is marked delivered only once the substrate took it, so
+   one whose delivery failed is owed again. Without :mail no session is owed any.
 
    Answers what the pass saw, by kind — :named (starts the listing has now named), :turn-ends (each with the :instruction it ended, nil for a
    turn nido did not give), :denials, :held, :blocked, :delivered,
@@ -435,6 +441,8 @@
          (let [who     {:project project :ws-id ws-id :session session-name}
                row     (row-for listing facet)
                sid     (:session-id facet)
+               owed    (if-let [f (get-in opts [:mail :owed])] (f project ws-id session-name) [])
+               given!  (fn [id] (when id ((get-in opts [:mail :delivered!]) project ws-id id)))
                out     (atom nil)]
            (session/update-claude!
             project ws-id session-name
@@ -444,11 +452,12 @@
                     d (decide f row evs {:now (clock/now-iso) :token (mint)
                                          :hold-sends? (:hold-sends? opts)
                                          :baseline (or (first (baseline-refusal shown row)) :shown)
-                                         :latest (:latest shown)})]
+                                         :latest (:latest shown)
+                                         :owed owed})]
                 (reset! out d)
                 (assoc (:facet d) :cursor cursor))))
            (reduce
-            (fn [r [kind a b c inbox?]]
+            (fn [r [kind a b c message-id]]
               (case kind
                 :turn-ended     (update r :turn-ends conj (assoc who :event a :instruction b))
                 :denial         (update r :denials conj (assoc who :event a))
@@ -463,17 +472,20 @@
                         running (when (instance? Throwable ok) (left-running ok))]
                   (cond
                     (true? ok)
-                    (update r :delivered conj (assoc who :via kind :token b))
+                    (do (given! message-id)
+                        (update r :delivered conj (assoc who :via kind :token b)))
                     ;; Something the attempt started still runs: the instruction stays outstanding,
-                    ;; so nothing is given again until a person releases or hands the session back.
+                    ;; so nothing is given again until a person releases or hands the session back
+                    ;; — a seat message included, which that process may already hold.
                     running
-                    (update r :left-running conj (assoc who :via kind :running running))
+                    (do (given! message-id)
+                        (update r :left-running conj (assoc who :via kind :running running)))
                     :else
                     (do (session/update-claude! project ws-id session-name
                                                 ;; Back where it waited: undelivered is not outstanding.
+                                                ;; A seat message stays owed, so it needs no putting back.
                                                 #(cond-> (assoc % :pending nil)
-                                                   inbox?       (update :inbox (fn [q] (into [c] q)))
-                                                   (not inbox?) (assoc :queued c)))
+                                                   (not message-id) (assoc :queued c)))
                         (update r :failed conj (assoc who :via kind)))))))
             (cond-> report
               (and (= :nido (:driver facet)) (= "working" (:state row)))
@@ -488,8 +500,11 @@
   "Stop driving a session and stop its process, before the session it belongs to is torn down —
    so nothing tears down a workspace under a session still working in it. A process a failed
    start left running, known only by the :bg-id its :dispatching note keeps, is a session too:
-   it is stopped and the note cleared. The conversation is kept. Answers the facet, or nil for a
-   session without one; throws, the session released, when Claude Code refuses the stop."
+   it is stopped and the note cleared. The conversation is kept, and the facet's driver made
+   :retired once its process is stopped, its hold cleared with it — a hold was on a conversation
+   that is over: it holds no session until a conversation is driven on the record again. Answers
+   the facet, or nil for a session without one;
+   throws, the session released and not marked, when Claude Code refuses the stop."
   [project ws-id session-name opts]
   (let [s (session/read-session project ws-id session-name)]
     (when-let [bg-id (get-in s [:dispatching :bg-id])]
@@ -499,7 +514,8 @@
     (when (:claude s)
       (let [f (release! project ws-id session-name)]
         (when-let [id (:bg-id f)] (substrate/stop! id opts))
-        f))))
+        (:claude (session/update-claude! project ws-id session-name
+                                         #(assoc % :driver :retired :hold nil)))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   live-states

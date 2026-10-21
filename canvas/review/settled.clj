@@ -81,13 +81,15 @@
      :delegates [subjects]})
   (Operation ledger
     "One workstream's reviews and decisions, the baselines and designs they judged, and its
-     retractions, as `settled` reads them — or nil when any entry of those kinds cannot be read, since
-     the judgement or retraction nobody can parse could be the one that unsettles a subject."
+     retractions, as `settled` reads them, within its current generation's span — or nil when any
+     entry of those kinds in the span cannot be read, since the judgement or retraction nobody can
+     parse could be the one that unsettles a subject. An earlier generation's entries are cut before
+     anything is held against the reading."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]})
   (Operation ledgers
     "Every ledger a round over a record may find its subjects settled on — its own workstream's,
-     its fork parent's, and the child a merged design cites — or nil when any of them cannot be
-     read."
+     its fork parent's unless the workstream has re-cut, and the child a merged design cites — or
+     nil when any of them cannot be read."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:record :map]]
                  [:maybe [:vector :map]]]
      :delegates [ledger fork/lineage]})

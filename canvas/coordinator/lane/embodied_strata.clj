@@ -2,6 +2,7 @@
   "Self-spec: `nido.coordinator.lane.embodied-strata` — a workstream carried by one seat per stratum."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
+            [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.record.state :refer [WorkstreamId]]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
@@ -16,9 +17,20 @@
    strata its stratum rests on or that rest on it — practice in a brief, since nothing below may
    read the :rests-on edges canvas declares. Written in the seats vocabulary; nothing is written in it."
   (Operation embodiment
-    "The strata embodiment's seat naming and brief practice, as the data occupancy takes."
+    "The strata embodiment's seat naming, brief practice and refusal of a workstream its strata do
+     not carry, as the data occupancy takes — the refusal run inside each occupancy transaction."
     {:signature [:=> [:catn] :map]})
   (Operation carry!
     "Carry a workstream whose governing design marks exactly its strata: occupy each stratum's
      seat; refuse any other, naming each stratum left unmarked and each non-stratum marked."
-    {:signature [:=> [:catn [:project ProjectName] [:ws WorkstreamId]] :map]}))
+    {:signature [:=> [:catn [:project ProjectName] [:ws WorkstreamId]] :map]
+     :delegates [seats/occupy!]})
+  (Operation occupy!
+    "Occupy one stratum's seat, refused as carry! refuses a workstream its strata do not carry."
+    {:signature [:=> [:catn [:project ProjectName] [:ws WorkstreamId] [:seat :string]] :map]
+     :delegates [seats/occupy!]})
+  (Operation replace!
+    "Replace one stratum's seat's occupant, refused as carry! refuses a workstream its strata do
+     not carry."
+    {:signature [:=> [:catn [:project ProjectName] [:ws WorkstreamId] [:seat :string]] :map]
+     :delegates [seats/replace!]}))

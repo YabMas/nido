@@ -5,6 +5,7 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.state :refer [Path]]
             [canvas.platform.io :as io]
+            [canvas.platform.process :as proc]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
@@ -42,14 +43,13 @@
      :delegates [session-key]})
   (Operation read-session-profile
     "The profile one session was brought up with, or nil — read where `session-profile-path` keeps
-     it, else where a session that predates it had its runtime to itself, copied to its own place
-     on that first read so it outlives the runtime it left."
+     it, else where a session that predates it had its runtime to itself — the state directory
+     keyed by its worktree's leaf, the last segment of its name — copied to its own place on that
+     first read so it outlives the runtime it left."
     {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string]] [:maybe :any]]
-     :delegates [session-profile-path session-key instance-state-dir]})
+     :delegates [session-profile-path instance-state-dir]})
   (Operation instance-state-dir "One instance's state directory."
     {:signature [:=> [:catn [:instance-id InstanceId]] Path] :delegates [state-dir]})
-  (Operation session-mcp-path "A session's rendered MCP config — a launch input."
-    {:signature [:=> [:catn [:instance-id InstanceId]] Path] :delegates [instance-state-dir]})
   (Operation session-state-file "One instance's own record."
     {:signature [:=> [:catn [:instance-id InstanceId]] Path] :delegates [instance-state-dir]})
   (Operation log-dir "An instance's logs."
@@ -136,6 +136,12 @@
     {:signature [:=> [:catn [:instance-id InstanceId]] :any] :delegates [session-state-file]})
   (Operation read-registry "The registry of live worktrees."
     {:signature [:=> [:catn] :map]})
+  (Operation session-live?
+    "Whether the session a registry entry records is up RIGHT NOW: one that recorded an app or nREPL
+     port while one answers — the registry records what was started, the port says it is still
+     there — and a lite session, which records none, while its entry stands. The one predicate
+     every reader of liveness asks, whichever level it sits at."
+    {:signature [:=> [:catn [:s :map]] :boolean] :delegates [proc/tcp-open?]})
   (Operation upsert-registry!
     "Record or update one worktree's entry.
 

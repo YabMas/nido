@@ -763,9 +763,13 @@
         (is (str/includes? b "started in /wt-a"))
         (is (not (str/includes? a "Loading your changes"))))
       (testing "a worktree-cwd launch on the shared runtime is told too"
-        (is (str/includes? (launcher/live-services-prompt "brian--ws") "(load-file"))))
+        (is (str/includes? (launcher/live-services-prompt "brian--ws" nil) "(load-file"))
+        (is (str/includes? (launcher/live-services-prompt "brian--ws" "/wt-b") "(load-file \"/wt-b/")
+            "by its own working copy's path when it is given")
+        (is (not (str/includes? (launcher/live-services-prompt "brian--ws" "/wt-a") "load-file"))
+            "and not at all when its copy is the one the JVM runs out of")))
     (with-redefs [state/read-session (fn [_id] (assoc rt :members {"/wt-a" "a"}))]
-      (is (not (str/includes? (launcher/live-services-prompt "brian--ws") "load-file"))
+      (is (not (str/includes? (launcher/live-services-prompt "brian--ws" nil) "load-file"))
           "nothing to say while the JVM's own working copy is the only one on it"))))
 
 (deftest rerender-briefing-writes-claude-and-agents-files

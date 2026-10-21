@@ -8,8 +8,10 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.phase :as phase]
    [nido.coordinator.record.session :as csession]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.report :as report]
@@ -42,11 +44,13 @@
    round that found nothing while the last run's `:open` list still names a
    layer nobody answered for. `:stack-unmovable` is reached by a throw rather
    than returned — see `terminal-reasons`. `:usage-limited` is the warden's or a
-   fixer's launch refused by the account — see `usage-limited`."
+   fixer's launch refused by the account — see `usage-limited`.
+   `:stratum-undeclared` is a layer naming a stratum the governing design does
+   not declare, refused before a reviewer reads it — see `undeclared-strata`."
   #{:stack-conflicted :nothing-to-review :clean :warden-indeterminate :unfixable
     :dry-run :workspace-drifted :fix-unrouted :fix-conflicted :fix-rolled-back
     :fix-declined :fix-timed-out :fix-launch-failed :unresolved :stack-unmovable
-    :usage-limited})
+    :usage-limited :stratum-undeclared})
 
 (def terminal-reasons
   "The `:reason`s a diff stage throws with that end the run on that status
@@ -1816,11 +1820,118 @@
     (ex-info (ex-message e) (assoc (ex-data e) :ctx round) e)
     e))
 
+(defn- undeclared-strata
+  "One row per brief whose `Stratum:` names a stratum `design` does not declare in
+   its `:strata`: `{:layer label :strata [the ids it names that are not there]}` —
+   one per commit, so a layer two of whose commits name one is two rows. A brief
+   naming no stratum is not a row — most stacks are cut
+   without one. A nil `design`, or one declaring no strata, declares none, so
+   every stratum a layer names is a row.
+
+   A seat's layer is written in its stratum, so a layer naming one the governing
+   design never declared is either work the design did not decide or a design
+   that moved without being amended; reviewing it against that design would
+   judge it on a yardstick it was not built to. The ids are split on commas and
+   whitespace."
+  [design targets]
+  (let [declared (set (:strata design))]
+    (into []
+          (keep (fn [{:keys [label brief]}]
+                  (let [named (some->> (:stratum brief)
+                                       (re-seq #"[^,\s]+")
+                                       distinct)
+                        off   (vec (remove declared named))]
+                    (when (seq off) {:layer label :strata off}))))
+          targets)))
+
+(defn- layer-briefs
+  "Every commit this round reviews with its brief, `{:label :brief}` bottom→top, labelled by the
+   layer owning it — `stack-label` on a branch no layer of the session owns, which is reviewed
+   whole. Every commit rather than every layer tip, so no shape of branch has a brief the check
+   skips. Throws when the session or what `layers/commit-briefs` reads cannot be read: a brief
+   read as naming no stratum is one the check passes."
+  [cwd base]
+  (let [session (or (:session (lifecycle/session-from-cwd cwd))
+                    (throw (ex-info "the session could not be resolved" {:cwd cwd})))]
+    (mapv (fn [{:keys [label brief]}] {:label (or label stack-label) :brief brief})
+          (layers/commit-briefs cwd session (or base "main")))))
+
+(declare ledger-rows)
+
+(defn- workstream-of
+  "`project+ws-from-cwd`, throwing where that answers nil for a failure as for a cwd outside any
+   workstream."
+  [cwd]
+  (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
+    (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
+      [(keyword project) ws-id])))
+
+(defn- preflight-design
+  "The workstream's governing design as the round's preflight reads it — delivered or not — with
+   whether it is delivered, and the workstream it read: `{:ws [project ws-id] :design d
+   :delivered? b}`; `{:ws …}` alone when it holds none; `{}` outside a workstream; `{:unread e}`
+   when the workstream could not be resolved, its ledger could not be asked or the design that
+   governs it could not be read. The one reading the preflight checks against and every stop it
+   makes cites, so a stop never cites a design its check did not read. An unread ledger is
+   carried rather than thrown: a park or a conflict stops the round without it, and only the
+   stratum check, which cannot be made without it, refuses on it.
+
+   `project+ws-from-cwd` and `standing/governing-design` each answer nil for a failure as for
+   nothing there, so a nil from either is asked again of a reading that tells the two apart."
+  [cwd]
+  (try
+    (if-let [[project ws-id :as ws] (or (project+ws-from-cwd cwd) (workstream-of cwd))]
+      (if-let [d (standing/governing-design project ws-id)]
+        {:ws ws :design d :delivered? (phase/delivered? d (ledger-rows project ws-id))}
+        (if-let [n (some-> (ws/read-ws project ws-id) generation/current-design)]
+          (throw (ex-info (str "the governing design at entry " n " cannot be read")
+                          {:ws-id ws-id :design n}))
+          {:ws ws}))
+      {})
+    (catch Throwable e {:unread e})))
+
+(defn- layers-off-strata
+  "`undeclared-strata` over this round's layers, against the preflight's reading `pre` — its
+   governing design, delivered or not, and none when it holds none. nil outside a workstream,
+   which has no design to name strata. Throws when the workstream, its ledger or the layers'
+   briefs could not be read, so a layer whose stratum went unchecked never reaches a reviewer."
+  [cwd base pre]
+  (when-let [e (:unread pre)]
+    (throw (ex-info (str "Cannot check the layers' strata: the ledger could not be read — "
+                         (ex-message e))
+                    {:reason :stratum-unchecked} e)))
+  (when (:ws pre)
+    (let [briefs (try (layer-briefs cwd base)
+                      (catch Throwable e
+                        (throw (ex-info (str "Cannot check the layers' strata: their briefs could "
+                                             "not be read — " (ex-message e))
+                                        {:reason :stratum-unchecked} e))))]
+      (undeclared-strata (:design pre) briefs))))
+
+(defn- current-generation
+  "The number of `ws-id`'s current generation — 1 when its ledger cannot be read."
+  [project ws-id]
+  (try (generation/current (:entries (ws/read-ws project ws-id))) (catch Exception _ 1)))
+
+(defn- generation-cache
+  "`ws-id`'s review cache as generation `g` knows it: the entries written
+   in that generation, an unstamped one being the first's. What the cache knows of a patch — that it
+   converged, and the rulings on it — was decided under a design a re-cut replaced, and crosses
+   into the new generation by no record its opening carries. Every read of the cache is this.
+
+   The map carries the generation it was read in as metadata, and what a round writes back is
+   stamped with that generation. No generation opens under a live review run — opening one is
+   refused while a run holds the workstream — so that is the current one."
+  [project ws-id g]
+  (with-meta (into {} (filter #(= g (or (:generation (val %)) 1))) (cache/read-cache project ws-id))
+    {::generation g}))
+
 (defn- fan-out-reviews
   [ctx]
   (let [{:keys [cwd base]} (:config ctx)
         [project ws-id] (project+ws-from-cwd cwd)
-        cached  (if ws-id (cache/read-cache project ws-id) {})
+        g       (when ws-id (current-generation project ws-id))
+        cached  (if ws-id (generation-cache project ws-id g) {})
         ;; Pin the top of the reviewed range for the whole round. `@` is
         ;; whatever the working copy currently is, and every stage that resolved
         ;; it again was silently asking about a different tree — a concurrent
@@ -2084,19 +2195,38 @@
    four consecutive runs on one branch fanned out six agents, ruled on what they
    found, and aborted at the first landing when jj refused it. The answer was
    one revset call away the whole time, and asking it first turns twenty minutes
-   into a second."
+   into a second.
+
+   A layer naming a stratum the governing design does not declare is refused
+   the same way, before anything is read — see `undeclared-strata`."
   [ctx]
   (let [{:keys [cwd base]} (:config ctx)
         stood (stood-too-long (get-in ctx [:carry :parks]) (:iter ctx))
-        conflicted (when-not stood (stack-conflicts cwd base))]
+        conflicted (when-not stood (stack-conflicts cwd base))
+        pre        (preflight-design cwd)
+        undeclared (when-not (or stood (seq conflicted))
+                     (layers-off-strata cwd base pre))]
     (announce-conflicts! ctx conflicted)
     (cond
-      stood
-      (assoc ctx :control :stop :status :unfixable :unfixable stood :parks-stood stood
-             :findings [] :review-aborted? true)
+      ;; A round stopped before `fan-out-reviews` still ends under the design it would have
+      ;; judged against: the run's ledger entry cites it, and a stop citing none on a workstream
+      ;; holding one never reaches the ledger.
+      (or stood (seq conflicted) (seq undeclared))
+      (cond-> (cond
+                stood
+                (assoc ctx :control :stop :status :unfixable :unfixable stood :parks-stood stood
+                       :findings [] :review-aborted? true)
 
-      (seq conflicted)
-      (assoc ctx :control :stop :status :stack-conflicted :conflicted conflicted)
+                (seq conflicted)
+                (assoc ctx :control :stop :status :stack-conflicted :conflicted conflicted)
+
+                :else
+                (assoc ctx :control :stop :status :stratum-undeclared
+                       :stratum-undeclared undeclared :findings []))
+        ;; The design the preflight read: the stratum check's own, delivered or not; any other
+        ;; stop cites it as `discover-design-record` would — none once it is delivered.
+        (or (seq undeclared) (not (:delivered? pre)))
+        (assoc :design (:design pre)))
 
       :else
       (try
@@ -2123,8 +2253,9 @@
 
 (defn ^{:malli/schema [:=> [:cat :Path] [:maybe :map]]}
   discover-design-record
-  "This workstream's latest :design record, or nil — nil too when that record is
-   DELIVERED (`delivered-design`).
+  "The :design record that governs this workstream (`standing/governing-design`), or nil — nil
+   too when that record is DELIVERED (`delivered-design`), and in a generation that holds no
+   design yet.
 
    Replaces a glob for the newest `docs/superpowers/specs/*-design.md`, which
    picked a file by filename order — in a project with a specs directory that is
@@ -2138,19 +2269,19 @@
    verdict comes back :sound for a change nobody designed."
   [cwd]
   (when-let [[project ws-id] (project+ws-from-cwd cwd)]
-    (when-let [d (ws/latest-entry project ws-id :design)]
+    (when-let [d (standing/governing-design project ws-id)]
       (when-not (phase/delivered? d (ledger-rows project ws-id))
         d))))
 
 (defn ^{:malli/schema [:=> [:cat :Path] [:maybe :map]]}
   delivered-design
-  "This workstream's latest :design record when it is delivered — a `:merged`
+  "The :design record that governs this workstream when it is delivered — a `:merged`
    follows it and no phase of its plan is left — else nil. What
    `discover-design-record` declines, named so the refusal can say why the
    workstream holds a design and still has no yardstick."
   [cwd]
   (when-let [[project ws-id] (project+ws-from-cwd cwd)]
-    (when-let [d (ws/latest-entry project ws-id :design)]
+    (when-let [d (standing/governing-design project ws-id)]
       (when (phase/delivered? d (ledger-rows project ws-id))
         d))))
 
@@ -2245,6 +2376,19 @@
                             " defect in any layer's code. A person decides whether this"
                             " work needs its own design record or its own workstream.")})))
 
+(defn- latest-in-span
+  "The newest `kind` entry of `ws-id`, when the current generation's span holds it, else nil —
+   the newest of a kind is the current generation's, or that generation holds none. A verdict or
+   a review an earlier generation recorded is not this one's: what crosses a re-cut is what its
+   :generation entry carries, and a design's amendment chain. A ledger that cannot be read holds
+   no generation to cut by, so the newest is taken."
+  [project ws-id kind]
+  (when-let [e (ws/latest-entry project ws-id kind)]
+    (let [span (try (some-> (ws/read-ws project ws-id) :entries generation/current-span)
+                    (catch Exception _ nil))]
+      (when (or (nil? span) (some #(= (:seq e) (:seq %)) span))
+        e))))
+
 (defn- same-phase?
   "Whether `prior` was reached in the phase of `design`'s plan the workstream is in
    now. What a phased design owes changes at a gate: an :on-completion invariant
@@ -2288,7 +2432,7 @@
   [cwd design]
   (when-let [n (:seq design)]
     (when-let [[project ws-id] (project+ws-from-cwd cwd)]
-      (let [v (ws/latest-entry project ws-id :design-verdict)]
+      (let [v (latest-in-span project ws-id :design-verdict)]
         (when (and (= n (:design-seq v))
                    (same-phase? design v #(try (:entries (ws/read-ws project ws-id))
                                                (catch Exception _ nil))))
@@ -2356,7 +2500,7 @@
   [cwd design]
   (when-let [n (:seq design)]
     (when-let [[project ws-id] (project+ws-from-cwd cwd)]
-      (let [v (ws/latest-entry project ws-id :design-verdict)]
+      (let [v (latest-in-span project ws-id :design-verdict)]
         (when (and (integer? (:design-seq v)) (< (:design-seq v) n)
                    (same-phase? design v #(try (:entries (ws/read-ws project ws-id))
                                                (catch Exception _ nil))))
@@ -2430,17 +2574,18 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
   last-review
-  "The newer of `ws-id`'s last `:review` and last `:review-settled` — what the
-   last run on this workstream left, whether it finished or was settled from its
-   run dir — or nil when it holds neither.
+  "The newer of `ws-id`'s last `:review` and last `:review-settled` in its current
+   generation — what the last run on this workstream left, whether it finished or
+   was settled from its run dir — or nil when the generation holds neither. A run
+   before a re-cut left its obligations to a design the generation replaced.
 
    Both kinds, because a run that stopped mid-fix may be holding the rulings the
    next run most needs, and reading `:review` alone would inherit from the run
    before it. `nido.coordinator.report/ReviewSettled` says why a settled run is
    not a `:review`."
   [project ws-id]
-  (->> [(ws/latest-entry project ws-id :review)
-        (ws/latest-entry project ws-id :review-settled)]
+  (->> [(latest-in-span project ws-id :review)
+        (latest-in-span project ws-id :review-settled)]
        (remove nil?)
        (sort-by :seq)
        last))
@@ -3204,9 +3349,13 @@
     (when-let [[project ws-id] (project+ws-from-cwd cwd)]
       (when (or (seq statuses) (seq reopen))
         (let [now (str (java.time.Instant/now))
+              read (or (:cache ctx)
+                       (generation-cache project ws-id (current-generation project ws-id)))
+              g   (::generation (meta read))
               c   (reduce (fn [c [t status]]
                             (cache/record c (:patch-hash t)
                                           (cond-> {:status   status
+                                                   :generation g
                                                    :label    (:label t)
                                                    :round    (:iter ctx)
                                                    :at       now
@@ -3215,7 +3364,7 @@
                                             ;; this reading can name it (`paired-with-earlier`).
                                             (get-in ctx [:config :run-id])
                                             (assoc :run-id (str (get-in ctx [:config :run-id]))))))
-                          (or (:cache ctx) (cache/read-cache project ws-id))
+                          read
                           statuses)
               c   (reduce (fn [c h] (cache/reopen c h now)) c reopen)]
           (cache/write! project ws-id c))))
@@ -5403,8 +5552,8 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    never a precondition for running one."
   [cwd]
   (try
-    (some-> (:instance-id (lifecycle/session-from-cwd cwd))
-            launcher/live-services-prompt)
+    (when-let [{:keys [instance-id worktree]} (lifecycle/session-from-cwd cwd)]
+      (some-> instance-id (launcher/live-services-prompt worktree)))
     (catch Throwable _ nil)))
 
 (defn- tell-fix-progress!

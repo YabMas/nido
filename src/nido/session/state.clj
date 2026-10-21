@@ -3,7 +3,8 @@
    [babashka.fs :as fs]
    [clojure.string]
    [nido.platform.core :as core]
-   [nido.platform.io :as io]))
+   [nido.platform.io :as io]
+   [nido.platform.process :as proc]))
 
 ;; ---------------------------------------------------------------------------
 ;; Path helpers — all session state lives under ~/.nido/state/<instance-id>/
@@ -48,14 +49,6 @@
   "Per-instance state directory: ~/.nido/state/<instance-id>/"
   [instance-id]
   (str (fs/path (state-dir) instance-id)))
-
-(defn ^{:malli/schema [:=> [:cat :InstanceId] :Path]}
-  session-mcp-path
-  "Path to a session's rendered postgres MCP config (a launch input passed via
-   claude's --mcp-config). Lives under the durable instance-state dir, not the
-   ephemeral session home."
-  [instance-id]
-  (str (fs/path (instance-state-dir instance-id) "mcp.json")))
 
 (defn ^{:malli/schema [:=> [:cat :InstanceId] :Path]}
   session-state-file
@@ -112,18 +105,25 @@
 ;; off instance-state-dir is complete.
 ;; ---------------------------------------------------------------------------
 
+(defn- leaf-instance-id
+  "The instance id a session's runtime had before runtimes were keyed by session: `<project>--`
+   and the leaf of its worktree path, which is the last segment of its name — `feat/x` was
+   `<project>--x`. The one spelling of that key, for every reader of state written under it."
+  [project-name session-name]
+  (str project-name "--" (fs/file-name (fs/path session-name))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string] [:maybe :any]]}
   read-session-profile
   "The profile the session `session-name` was brought up with, or nil. A session brought up
    before profiles were kept by session has its profile in the state directory of the runtime it
-   had to itself, which its own key names; the first read copies it to the session's own
-   `session-profile-path`, so it outlives that runtime's directory, which reclaim removes once
-   the session has moved off it."
+   had to itself, keyed by its worktree's leaf (`leaf-instance-id`); the first read copies it to
+   the session's own `session-profile-path`, so it outlives that runtime's directory, which
+   reclaim removes once the session has moved off it."
   [project-name session-name]
   (let [own (session-profile-path project-name session-name)]
     (if (fs/exists? own)
       (io/read-edn own)
-      (let [legacy (str (fs/path (instance-state-dir (session-key project-name session-name))
+      (let [legacy (str (fs/path (instance-state-dir (leaf-instance-id project-name session-name))
                                  "profile.edn"))]
         (when (fs/exists? legacy)
           (let [profile (io/read-edn legacy)]
@@ -331,6 +331,28 @@
   read-registry []
   (merge (read-legacy-registry)
          (or (io/read-edn @registry-file-path) {})))
+
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  session-live?
+  "Is the session this registry entry records up RIGHT NOW? THE predicate for whether a session
+   is up, which every reader of it asks.
+
+   A session that recorded an app/nREPL port is up while one answers: probed rather than trusted,
+   since the registry is only cleaned on a graceful `down!` (engine/stop-session! →
+   state/remove-from-registry!), so a reboot, a JVM crash or a `kill` leaves an entry with its
+   port numbers intact indefinitely. A `:lite` session (`:services []`) records no port and is in
+   use without one, so it is up while its entry stands — nil, or a map naming no instance, is a
+   session that is down.
+
+   `:pg-port` is deliberately not a signal: most sessions point at the project's
+   SHARED cluster, which answers whenever any one session is up. `:repl-pid` is
+   not a signal either: PIDs are recycled, so a months-old entry whose PID was
+   reused would read as live forever."
+  [s]
+  (boolean (if (or (pos-int? (:app-port s)) (pos-int? (:nrepl-port s)))
+             (or (and (pos-int? (:app-port s))   (proc/tcp-open? (:app-port s)))
+                 (and (pos-int? (:nrepl-port s)) (proc/tcp-open? (:nrepl-port s))))
+             (:instance-id s))))
 
 (defn- update-registry!
   "Apply `f` to the merged registry and write the result to the canonical file,

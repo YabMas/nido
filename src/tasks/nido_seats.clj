@@ -41,13 +41,13 @@
   occupy*
   "Occupy :seat, under the strata embodiment."
   [{:keys [seat] :as opts}]
-  (let [[p id] (here opts)] (seats/occupy! p id (embodied/embodiment) (str seat))))
+  (let [[p id] (here opts)] (embodied/occupy! p id (str seat))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   replace*
   "Replace :seat's occupant with a fresh session, briefed afresh from the records."
   [{:keys [seat] :as opts}]
-  (let [[p id] (here opts)] (seats/replace! p id (embodied/embodiment) (str seat))))
+  (let [[p id] (here opts)] (embodied/replace! p id (str seat))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   conductor*

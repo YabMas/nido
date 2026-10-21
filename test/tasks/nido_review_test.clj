@@ -468,6 +468,18 @@
                        "xlortuwzrtlu")
         "and a reader of the workstream is told where to go")))
 
+(deftest a-stratum-undeclared-run-reaches-the-ledger-naming-the-layers
+  (let [rows [{:layer "lane-scratch" :strata ["view"]}]
+        ev   (t/review-event {:status :stratum-undeclared :history [] :findings []
+                              :stratum-undeclared rows}
+                             {:summary {:rounds 1 :fix-attempts 0}
+                              :target {:base "main" :base-rev "x"}}
+                             "/runs/r/report.json")]
+    (is (= rows (:stratum-undeclared ev)))
+    (is (= ev (report/validate-event :review ev)) "the closed status enum admits it")
+    (is (str/includes? (report/report->markdown (assoc ev :format :review-report)) "lane-scratch")
+        "and a reader is told which layer to correct")))
+
 (deftest a-refused-repair-reaches-the-ledger-entry-that-outlives-the-run-dir
   ;; The status that most needs a human carried the least: the branch is
   ;; unchanged, so the counts read exactly like a round no fixer was launched
@@ -2895,3 +2907,12 @@
                                :findings-classified [{:finding "a1" :as :implementation}]})]
       (is (= 3 (count (:options b))))
       (is (= "guard the nil" (:summary (last (:options b))))))))
+
+(deftest a-halt-the-generation-before-left-asks-nothing-of-this-one
+  ;; The position reads blockers over the current span, so a new generation's halt is appended even
+  ;; when an unanswered one of the generation before asks the same.
+  (let [rows [{:seq 1 :kind :intent} {:seq 2 :kind :blocker} {:seq 3 :kind :recut}
+              {:seq 4 :kind :generation} {:seq 5 :kind :blocker}]]
+    (with-redefs [ws/read-ws    (fn [_ _] {:entries rows})
+                  ws/entries-of (fn [_ _ kind] (case kind :blocker [{:seq 2} {:seq 5}] []))]
+      (is (= [5] (mapv :seq (#'t/unanswered-blockers :brian "ws-1")))))))

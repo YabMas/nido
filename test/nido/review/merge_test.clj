@@ -7,6 +7,7 @@
    [clojure.test :refer [deftest is testing]]
    [nido.platform.core :as core]
    [nido.coordinator.record.fork :as fork]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.report.model :as model]
    [nido.design.check :as design]
@@ -137,15 +138,33 @@
               (is (= :law-violated (:kind conflict)))
               (is (= "every modelled Module is realized by a namespace" (first (:names conflict)))))))))))
 
+(deftest a-child-forked-in-an-earlier-generation-is-refused
+  ;; A re-cut replaced the design the child was forked from; what the child decided was decided
+  ;; against a decomposition the parent no longer has.
+  (with-tmp
+    (fn [_]
+      (let [[p c] (parent-and-child)]
+        (child-designs! c c3-about-total)
+        (parent-restates! p (assoc-in unchanged [:elements 0 :defines-generation] true))
+        (ws/append-stamped! :brian p {:format :recut :by {:as :person} :ids ["agg"]
+                                      :why "the summing order is two secrets"})
+        (ws/open-generation! :brian p {:format :generation
+                                       :recut {:seq (count (:entries (ws/read-ws :brian p)))}
+                                       :words "split it" :ids ["agg"] :base-rev "abc"})
+        (let [e (try (unit-merge/proposal :brian c "/w") nil
+                     (catch clojure.lang.ExceptionInfo e e))]
+          (is (= :merge (:refused (ex-data e))))
+          (is (= {:generation 1 :current 2} (select-keys (ex-data e) [:generation :current]))))))))
+
 (deftest a-record-from-before-role-membership-is-refused-by-entry
   (with-tmp
     (fn [_]
       (let [[_ c]  (parent-and-child)
             _      (child-designs! c c3-about-total)
-            latest ws/latest-entry]
-        (with-redefs [ws/latest-entry (fn [project ws-id kind]
-                                        (cond-> (latest project ws-id kind)
-                                          (= c ws-id) (update-in [:model :elements] conj {:id "payer" :sort :role})))]
+            latest standing/governing-design]
+        (with-redefs [standing/governing-design (fn [project ws-id]
+                                                  (cond-> (latest project ws-id)
+                                                    (= c ws-id) (update-in [:model :elements] conj {:id "payer" :sort :role})))]
           (let [e (try (unit-merge/proposal :brian c "/w") nil
                        (catch clojure.lang.ExceptionInfo e e))]
             (is (= :merge (:refused (ex-data e))))
@@ -157,11 +176,11 @@
     (fn [_]
       (let [[_ c]  (parent-and-child)
             _      (child-designs! c c3-about-total)
-            latest ws/latest-entry]
-        (with-redefs [ws/latest-entry (fn [project ws-id kind]
-                                        (cond-> (latest project ws-id kind)
-                                          (= c ws-id) (update-in [:model :elements] conj
-                                                                 {:id "ledger" :sort :module})))]
+            latest standing/governing-design]
+        (with-redefs [standing/governing-design (fn [project ws-id]
+                                                  (cond-> (latest project ws-id)
+                                                    (= c ws-id) (update-in [:model :elements] conj
+                                                                           {:id "ledger" :sort :module})))]
           (let [e (try (unit-merge/proposal :brian c "/w") nil
                        (catch clojure.lang.ExceptionInfo e e))]
             (is (= :merge (:refused (ex-data e))))

@@ -6,6 +6,7 @@
             [canvas.coordinator.lane.drive :as pipeline]
             [canvas.coordinator.lane.work :as lanes]
             [canvas.coordinator.record.session :as session :refer [Session]]
+            [canvas.coordinator.record.standing :as standing]
             [canvas.coordinator.source.core :as queue]
             [canvas.coordinator.record.triggers :as triggers]
             [canvas.coordinator.record.state :refer [Path RunId SessionName WorkstreamId]]
@@ -15,6 +16,7 @@
             [canvas.platform.project :refer [ProjectName]]
             [canvas.session.casualties :as casualties]
             [canvas.session.lifecycle :as lifecycle]
+            [canvas.session.state :as sstate]
             [fukan.common.typing.malli]))
 
 (Kind Gate
@@ -89,9 +91,9 @@
      :delegates [session/list-sessions]})
   (Operation holds
     "The three records that CURRENTLY hold for a workstream — what it is standing on right now,
-     as against everything its ledger ever said."
+     as against everything its ledger ever said. The design is the governing one."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
-     :delegates [workstream/latest-entry]})
+     :delegates [workstream/latest-entry standing/governing-design]})
   (Operation workstream "Full detail for one workstream."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:selected-seq [:? :any]]] :map]
      :delegates [classify-origin holds latest-report environment workstream/read-ws]})
@@ -160,14 +162,10 @@
     {:signature [:=> [:catn [:project ProjectName] [:k :keyword]] :any]})
   (Operation facet-match? "Whether a row satisfies every active facet selection."
     {:signature [:=> [:catn [:facet-filter :map] [:row :map]] :boolean]})
-  (Operation session-live?
-    "Whether a registry-shaped session holds a port RIGHT NOW. The registry records what was
-     started; the port is what says it is still there."
-    {:signature [:=> [:catn [:s :map]] :boolean]})
   (Operation live-session-names "The sessions of a project that are actually up."
-    {:signature [:=> [:catn [:project ProjectName]] :any] :delegates [session-live?]})
+    {:signature [:=> [:catn [:project ProjectName]] :any] :delegates [sstate/session-live?]})
   (Operation prune-dead-registry! "Drop registry entries whose session no longer holds a port."
-    {:signature [:=> [:catn [:now-ms [:? :int]]] :any] :delegates [session-live? casualties/record!]})
+    {:signature [:=> [:catn [:now-ms [:? :int]]] :any] :delegates [sstate/session-live? casualties/record!]})
   (Operation bring-down! "Down every live session of a workstream."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]
      :delegates [session/list-sessions lifecycle/down!]})

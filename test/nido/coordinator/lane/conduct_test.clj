@@ -1,6 +1,7 @@
 (ns nido.coordinator.lane.conduct-test
   (:require
    [babashka.fs :as fs]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.platform.core :as core]
    [nido.coordinator.agent.substrate :as substrate]
@@ -24,7 +25,7 @@
 
 (deftest a-queued-instruction-goes-to-a-done-session-with-its-token-already-pending
   (let [d (conduct/decide (assoc driving :queued "do it") done-row [] ctx)]
-    (is (= [[:send "do it\n\n[nido-send T]" "T" "do it" false]] (:actions d)))
+    (is (= [[:send "do it\n\n[nido-send T]" "T" "do it" nil]] (:actions d)))
     (is (= {:token "T" :at "t1" :via :send :seen? false} (get-in d [:facet :pending]))
         "recorded in the facet the caller writes before it delivers")
     (is (nil? (get-in d [:facet :queued])))))
@@ -328,12 +329,28 @@
       (let [hold {:at "t" :because :foreign-prompt}]
         (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :hold hold)))
         (with-redefs [substrate/trusted?  (constantly true)
-                      substrate/listing   (constantly [])
+                      substrate/listing   (constantly [done-row])
                       substrate/dispatch! (fn [_] (throw (ex-info "must not" {})))]
           (is (= :held (:reason (ex-data (try (conduct/start! {:project :nido :ws-id "ws-1" :session-name "kid" :cwd "/wt" :prompt "go"})
                                               (catch Exception e e)))))))
         (is (= hold (:hold (facet))))))))
 
+(deftest a-start-over-a-retired-held-conversation-inherits-nothing-of-it
+  ;; Replacing an occupant a person had taken over: retire! stops its session and keeps the hold,
+  ;; which was that conversation's. Once the listing shows it stopped, the new conversation starts
+  ;; with nothing of the old facet.
+  (with-tmp
+    (fn []
+      (session/update-claude! :nido "ws-1" "kid"
+                              (constantly (assoc driving :hold {:at "t" :because :foreign-prompt}
+                                                 :queued "stale")))
+      (with-redefs [substrate/trusted?  (constantly true)
+                    substrate/listing   (constantly [])
+                    substrate/dispatch! (constantly {:bg-id "b" :session-id "b-1"})]
+        (conduct/start! {:project :nido :ws-id "ws-1" :session-name "kid" :cwd "/wt" :prompt "go"}))
+      (is (= "b-1" (:session-id (facet))))
+      (is (nil? (:hold (facet))))
+      (is (nil? (:queued (facet)))))))
 (deftest a-dispatch-that-left-a-session-running-keeps-its-note
   (with-tmp
     (fn []
@@ -369,16 +386,14 @@
         (is (= :live (:reason (ex-data (try (conduct/start! {:project :nido :ws-id "ws-1" :session-name "kid" :cwd "/wt" :prompt "go"})
                                             (catch Exception e e))))))))))
 
-(deftest seat-messages-are-given-in-the-order-sent-after-any-queued-instruction
-  (let [f  (assoc driving :queued "do it" :inbox ["m1" "m2"])
-        d1 (conduct/decide f done-row [] ctx)]
-    (is (= "do it" (nth (first (:actions d1)) 3)) "the queued instruction goes first")
-    (is (= ["m1" "m2"] (get-in d1 [:facet :inbox])))
-    (let [d2 (conduct/decide (assoc (:facet d1) :pending nil) done-row [] ctx)]
-      (is (= ["m1" true] (subvec (first (:actions d2)) 3)))
-      (is (= ["m2"] (get-in d2 [:facet :inbox])))
+(deftest seat-messages-are-given-in-the-order-owed-after-any-queued-instruction
+  (let [owed [{:id "m1" :text "first"} {:id "m2" :text "second"}]
+        f    (assoc driving :queued "do it")
+        d1   (conduct/decide f done-row [] (assoc ctx :owed owed))]
+    (is (= ["do it" nil] (subvec (first (:actions d1)) 3)) "the queued instruction goes first")
+    (let [d2 (conduct/decide (assoc (:facet d1) :pending nil) done-row [] (assoc ctx :owed owed))]
+      (is (= ["first" "m1"] (subvec (first (:actions d2)) 3)) "then the oldest message owed, by its id")
       (is (nil? (get-in d2 [:facet :queued]))))))
-
 (deftest start-refuses-while-a-start-is-in-flight
   (with-tmp
     (fn []
@@ -591,7 +606,9 @@
         (with-redefs [substrate/stop! (fn [id _] (swap! stopped conj id) true)]
           (conduct/retire! :nido "ws-1" "kid" {}))
         (is (= ["s"] @stopped))
-        (is (= :nobody (:driver (facet)))))
+        (is (= :retired (:driver (facet))) "its conversation is over until one is driven on the record again")
+        (conduct/release! :nido "ws-1" "kid")
+        (is (= :retired (:driver (facet))) "releasing it drives nothing"))
       (is (nil? (with-redefs [session/read-session (constantly {:claude nil})]
                   (conduct/retire! :nido "ws-1" "kid" {})))
           "a session without a facet has nothing to retire"))))
@@ -606,16 +623,25 @@
         (is (= ["bg-9"] @stopped))
         (is (nil? (:dispatching (session/read-session :nido "ws-1" "kid"))) "its note cleared, so nothing names it after")))))
 
-(deftest a-seat-message-waits-behind-another-and-an-undelivered-one-goes-back-first
+(deftest a-seat-message-is-marked-delivered-only-once-the-substrate-took-it
+  ;; What a session is owed is kept where the mail is, not on its facet: a message whose delivery
+  ;; failed is simply still owed, and one delivered is marked so.
   (with-tmp
     (fn []
       (auto-baseline!)
       (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :cursor 2)))
-      (conduct/message! :nido "ws-1" "kid" "m1")
-      (conduct/message! :nido "ws-1" "kid" "m2")
-      (is (= ["m1" "m2"] (:inbox (facet))) "none refused because another waits")
-      (with-redefs [substrate/listing (constantly [done-row])
-                    substrate/send!   (fn [_ _] {:delivered? false})]
-        (is (= 1 (count (:failed (conduct/conduct! {:projects [:nido]}))))))
-      (is (= ["m1" "m2"] (:inbox (facet))) "the undelivered message is back at the head")
-      (is (nil? (:queued (facet)))))))
+      (let [delivered (atom [])
+            mail {:owed (fn [_ _ n] (if (= "kid" n) (vec (remove (comp (set @delivered) :id)
+                                                                 [{:id "m1" :text "first"} {:id "m2" :text "second"}]))
+                                       []))
+                  :delivered! (fn [_ _ id] (swap! delivered conj id))}]
+        (with-redefs [substrate/listing (constantly [done-row])
+                      substrate/send!   (fn [_ _] {:delivered? false})]
+          (is (= 1 (count (:failed (conduct/conduct! {:projects [:nido] :mail mail}))))))
+        (is (= [] @delivered) "a failed delivery leaves it owed")
+        (is (nil? (:pending (facet))))
+        (is (nil? (:queued (facet))) "and puts nothing on the facet")
+        (with-redefs [substrate/listing (constantly [done-row])
+                      substrate/send!   (fn [_ text] (is (str/starts-with? text "first")) {:delivered? true})]
+          (is (= 1 (count (:delivered (conduct/conduct! {:projects [:nido] :mail mail}))))))
+        (is (= ["m1"] @delivered))))))

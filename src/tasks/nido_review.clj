@@ -20,6 +20,7 @@
    [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.report :as creport]
    [nido.coordinator.report.model :as claim-model]
@@ -238,6 +239,8 @@
       ;; mid-stack, so `jj resolve --list` reports the branch clean and the ids
       ;; are the only pointer at what to open.
       (seq (:conflicted final)) (assoc :conflicted (vec (:conflicted final)))
+      (seq (:stratum-undeclared final))
+      (assoc :stratum-undeclared (vec (:stratum-undeclared final)))
       ;; A repair the stack refused is the reason one of the findings above is
       ;; still open, and it is a reason nothing else in the entry states: the
       ;; branch is unchanged, so the counts read exactly like a round no fixer
@@ -613,10 +616,15 @@
     (some #(when (covers %) %) (reverse standing))))
 
 (defn- unanswered-blockers
-  "This workstream's blockers no :blocker-answered names, oldest first."
+  "This workstream's blockers of its current generation no :blocker-answered names, oldest first.
+   One an earlier generation left is no halt of this one — the position reads blockers over the
+   current span, and no answer may cite across the boundary — so it asks nothing a new halt would
+   repeat."
   [project ws-id]
-  (let [answered (into #{} (keep :blocker-seq) (ws/entries-of project ws-id :blocker-answered))]
-    (into [] (remove #(contains? answered (:seq %))) (ws/entries-of project ws-id :blocker))))
+  (let [answered (into #{} (keep :blocker-seq) (ws/entries-of project ws-id :blocker-answered))
+        span     (into #{} (map :seq) (generation/current-span (:entries (ws/read-ws project ws-id))))]
+    (into [] (filter #(and (contains? span (:seq %)) (not (contains? answered (:seq %)))))
+          (ws/entries-of project ws-id :blocker))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   append-blocker!
@@ -1536,6 +1544,7 @@
    ;; repairs below the conflict have landed and the fixers above it never ran.
    :fix-conflicted "a repair conflicted the layers above it and would not roll back, so the branch is holding markers — resolve them and re-run; the repairs that did land are kept"
    :stack-conflicted "the branch was already holding markers before a reviewer read a line — resolve them and re-run; nothing was reviewed"
+   :stratum-undeclared "a layer names a stratum the governing design does not declare — amend the design or correct the layer's Stratum:, and re-run; nothing was reviewed"
 
    ;; ── nothing was learned about the branch ──
    :nothing-to-review "every diff was empty — nothing was read, so this is not a clean bill; check the base you passed"

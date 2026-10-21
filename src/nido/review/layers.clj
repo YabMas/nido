@@ -69,6 +69,38 @@
   "The label of the layer `stack` makes of the commits above the top bookmark."
   "unbookmarked")
 
+(defn- branch-rows
+  "The commits of `<base>..@`, bottom→top, as `parse-row` reads them — nil when jj could not
+   read the range."
+  [cwd base]
+  (let [{:keys [exit out]} (jj/jj! cwd "log" "-r" (str base "..@")
+                                   "--reversed" "--no-graph" "-T" row-template)]
+    (when (zero? exit)
+      (mapv parse-row (remove str/blank? (str/split-lines out))))))
+
+(defn- layers-of
+  "This session's layers among `rows` — see `stack`."
+  [session rows]
+  (let [layers (into []
+                     (keep (fn [{:keys [commit change bookmarks]}]
+                             (when-let [bm (layer-bookmark session bookmarks)]
+                               {:bookmark bm
+                                :slug     (slug-of session bm)
+                                :tip      commit
+                                :change   change})))
+                     rows)
+        above  (when-let [top (peek layers)]
+                 (->> rows
+                      (drop-while #(not= (:tip top) (:commit %)))
+                      rest
+                      (remove :empty?)
+                      last))]
+    (cond-> layers
+      above (conj {:bookmark nil
+                   :slug     unbookmarked-slug
+                   :tip      (:commit above)
+                   :change   (:change above)}))))
+
 (defn ^{:malli/schema [:=> [:cat :Path :any :any] :any]}
   stack
   "This session's layers, ordered bottom→top:
@@ -82,32 +114,40 @@
    They are in `<base>..@`, so a reviewer reads them, and leaving them out of
    the stack put every repair on the top bookmark — beneath code the reviewer
    cited and the fixer could not see. An empty working copy is no commit of
-   anyone's and makes no layer. Every jj call on a layer names it by `rev-of`."
+   anyone's and makes no layer. Every jj call on a layer names it by `rev-of`.
+   Empty too when jj cannot read the branch."
   [cwd session base]
-  (let [{:keys [exit out]} (jj/jj! cwd "log" "-r" (str base "..@")
-                                   "--reversed" "--no-graph" "-T" row-template)]
-    (if-not (zero? exit)
-      []
-      (let [rows   (mapv parse-row (remove str/blank? (str/split-lines out)))
-            layers (into []
-                         (keep (fn [{:keys [commit change bookmarks]}]
-                                 (when-let [bm (layer-bookmark session bookmarks)]
-                                   {:bookmark bm
-                                    :slug     (slug-of session bm)
-                                    :tip      commit
-                                    :change   change})))
-                         rows)
-            above  (when-let [top (peek layers)]
-                     (->> rows
-                          (drop-while #(not= (:tip top) (:commit %)))
-                          rest
-                          (remove :empty?)
-                          last))]
-        (cond-> layers
-          above (conj {:bookmark nil
-                       :slug     unbookmarked-slug
-                       :tip      (:commit above)
-                       :change   (:change above)}))))))
+  (if-let [rows (branch-rows cwd base)] (layers-of session rows) []))
+
+(declare description parse-brief)
+
+(defn ^{:malli/schema [:=> [:cat :Path :any :any] [:vector :map]]}
+  commit-briefs
+  "Every commit of `<base>..@` with its brief, bottom→top — an empty one too, since a layer's
+   tip may be one:
+     [{:label <the slug, else bookmark, of the layer of `stack` owning it — nil when none does>
+       :commit <commit-id> :brief <its brief, nil for a message carrying none>} …]
+
+   Every commit a review reads, whatever enumerates the layers — a branch with no session
+   bookmark is reviewed whole, and its commits are here unowned. Throws when jj cannot read the
+   range or a commit's message, where `stack` and `brief` answer as for an empty stack and a
+   message carrying nothing."
+  [cwd session base]
+  (let [rows   (or (branch-rows cwd base)
+                   (throw (ex-info (str "jj could not read " base "..@") {:cwd cwd :base base})))
+        layers (layers-of session rows)
+        tip-at (into {} (map-indexed (fn [i r] [(:commit r) i])) rows)
+        owner  (fn [i] (first (filter #(<= i (tip-at (:tip %))) layers)))]
+    (into []
+          (map-indexed
+           (fn [i {:keys [commit]}]
+             {:label  (some-> (owner i) ((some-fn :slug :bookmark)))
+              :commit commit
+              :brief  (parse-brief
+                       (or (description cwd commit)
+                           (throw (ex-info (str "jj could not read the message of " commit)
+                                           {:cwd cwd :commit commit}))))}))
+          rows)))
 
 (defn- rev-of
   "The revision a layer is addressed by: its bookmark, which jj carries across
@@ -194,16 +234,17 @@
 
 (def ^:private brief-fields
   {"Layer" :mode "Claims" :claims "Verify" :verify
-   "Lane" :lane "Out of scope" :out-of-scope "Deviation" :deviation})
+   "Lane" :lane "Out of scope" :out-of-scope "Deviation" :deviation
+   "Stratum" :stratum})
 
 (def ^:private field-re
-  #"^(Layer|Claims|Verify|Lane|Out of scope|Deviation):\s*(.*)$")
+  #"^(Layer|Claims|Verify|Lane|Out of scope|Deviation|Stratum):\s*(.*)$")
 (def ^:private continuation-re #"^\s+\S.*$")
 
 (defn ^{:malli/schema [:=> [:cat :string] :map]}
   parse-brief
   "A layer commit message → its `/stack` §5 review brief:
-     {:mode :claims :verify :lane :out-of-scope :subject :raw}
+     {:mode :claims :verify :lane :out-of-scope :stratum :subject :raw}
 
    Fields the message doesn't carry come back nil. That is the normal case for
    an ordinary commit written before the stack doctrine, and for a fixup commit

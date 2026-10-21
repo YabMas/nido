@@ -290,23 +290,39 @@
    deleting: the lock file stays, and the OS drops the lock if this process dies
    mid-activity. The payload is left behind too — it is debris the next reader's
    probe will refuse to trust, and rewriting it on release would be a second
-   thing that could fail."
+   thing that could fail.
+
+   TAKEN UNDER THE WORKSTREAM'S APPEND LOCK, held only while the claim is taken,
+   so that a ledger writer asking `held?` under that lock gets an answer that
+   stands until its append is done: every claim taken before it is seen, and none
+   can be taken until it lets go. Opening a generation is that writer — a review
+   that claimed the workstream between its probe and its append would judge a
+   generation already closed. The append lock is taken BEFORE the path's monitor,
+   the order that writer takes them in, so the two never wait on each other."
   [project ws-id base f]
   (let [lock-path (cstate/activity-lock-path project ws-id)
         payload   (validate (assoc base
                                    :started-at (clock/now-iso)
-                                   :pid (.pid (java.lang.ProcessHandle/current))))]
-    (if-let [ch (take-claim! lock-path (cstate/activity-path project ws-id) payload)]
+                                   :pid (.pid (java.lang.ProcessHandle/current))))
+        release   (fn [^FileChannel ch]
+                    ;; Under the monitor for the same reason taking it is: between the two
+                    ;; steps this process holds a lock the holder table no longer accounts
+                    ;; for, and a reader that slipped in would end the claim by closing.
+                    #_{:clj-kondo/ignore [:locking-suspicious-lock]}
+                    (locking (monitor-for lock-path)
+                      (swap! local-holders dissoc lock-path)
+                      (.close ch)))
+        taken     (volatile! nil)]
+    (if-let [ch (try
+                  (io/with-file-lock (cstate/append-lock-path project ws-id)
+                    #(vreset! taken (take-claim! lock-path (cstate/activity-path project ws-id)
+                                                 payload)))
+                  ;; Letting go of the append lock can throw once the claim is taken, and a
+                  ;; claim nobody hands back would stand until this process dies.
+                  (catch Throwable t (some-> @taken release) (throw t)))]
       (try
         (f)
-        (finally
-          ;; Under the monitor for the same reason taking it is: between the two
-          ;; steps this process holds a lock the holder table no longer accounts
-          ;; for, and a reader that slipped in would end the claim by closing.
-          #_{:clj-kondo/ignore [:locking-suspicious-lock]}
-          (locking (monitor-for lock-path)
-            (swap! local-holders dissoc lock-path)
-            (.close ch))))
+        (finally (release ch)))
       ;; The refusal is a fact of its own, carried by ::refused, and the holder
       ;; rides beside it in ::holder. One key holding the claim could not say
       ;; both: a holder that exits before this read leaves nothing to return,

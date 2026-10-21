@@ -2645,17 +2645,31 @@
     (is (not (contains? (work/live-session-names "p") "down"))
         "a session the registry holds no entry for is down")))
 
+(deftest status-unprobed-reads-a-lite-session-as-up
+  ;; A board passes the live set it read; a caller of `status` that passes none is answered by the
+  ;; same predicate — so a lite session, which holds no port, is up there too while its entry stands.
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :p {:external-refs []})]
+        (session/create! :p (:id w) {:name "lite" :weight :light :autonomy nil})
+        (with-redefs [nido.session.lifecycle/list-all-data
+                      (fn [_] {:sessions [{:name "lite" :worktree "/w/lite"}]})
+                      nido.session.state/read-registry (constantly {"/w/lite" {:instance-id "i5"}})
+                      nido.platform.process/tcp-open? (constantly false)]
+          (is (true? (:live (pipeline/status :p (:id w)))))
+          (is (= (work/live-session-names "p") #{"lite"}) "the board's probe agrees"))))))
+
 (deftest session-live?-reads-app-or-nrepl-only
   (with-redefs [nido.platform.process/tcp-open? (fn [port] (= 4000 port))]
-    (is (true?  (work/session-live? {:app-port 4000})))
-    (is (true?  (work/session-live? {:nrepl-port 4000})))
-    (is (false? (work/session-live? {:app-port 4001 :nrepl-port 4002})))
-    (is (false? (work/session-live? {:pg-port 4000}))  "pg excluded")
-    (is (false? (work/session-live? {:repl-pid 12345})) "pid excluded — PIDs get recycled")
-    (is (false? (work/session-live? {})))
-    (is (false? (work/session-live? nil)) "no entry is a session that is down")
-    (is (true?  (work/session-live? {:instance-id "i"})) "a :lite entry records no port")
-    (is (false? (work/session-live? {:instance-id "i" :app-port 4001}))
+    (is (true?  (nido.session.state/session-live? {:app-port 4000})))
+    (is (true?  (nido.session.state/session-live? {:nrepl-port 4000})))
+    (is (false? (nido.session.state/session-live? {:app-port 4001 :nrepl-port 4002})))
+    (is (false? (nido.session.state/session-live? {:pg-port 4000}))  "pg excluded")
+    (is (false? (nido.session.state/session-live? {:repl-pid 12345})) "pid excluded — PIDs get recycled")
+    (is (false? (nido.session.state/session-live? {})))
+    (is (false? (nido.session.state/session-live? nil)) "no entry is a session that is down")
+    (is (true?  (nido.session.state/session-live? {:instance-id "i"})) "a :lite entry records no port")
+    (is (false? (nido.session.state/session-live? {:instance-id "i" :app-port 4001}))
         "a recorded port is probed, whatever else the entry holds")))
 
 (deftest machine-facts-keyed-by-session-name

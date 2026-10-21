@@ -76,27 +76,26 @@
           (throw e))))))
 
 (defn- settle-runtime!
-  "Move the session onto workstream `ws-id`'s runtime when it is up on another one — including one
+  "Move the session onto the runtime keyed `key` when it is up on another one — including one
    started before runtimes recorded their key — restarting its services there while its Claude
-   session and working copy carry on. No-op for a session that is down: its next start comes up on
-   the workstream's runtime. Returns true when it moved the session."
-  [project session-name ws-id]
+   session and working copy carry on. No-op for a session that is down: its next start comes up
+   under `key`. Returns true when it moved the session."
+  [project session-name key]
   (let [opts {:project (name project)}
         on   (try (lifecycle/runtime-of session-name opts) (catch Exception _ nil))]
-    (when (and on (not= (:key on) ws-id))
-      (lifecycle/restart! session-name (assoc opts :runtime-key ws-id))
+    (when (and on (not= (:key on) key))
+      (lifecycle/restart! session-name (assoc opts :runtime-key key))
       true)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName [:set :SessionName]] [:vector :SessionName]]}
   settle-runtimes!
-  "Move each of the `live` sessions a workstream holds onto that workstream's runtime, so every
-   session a workstream holds runs on it — the ones that were up before the rule existed too.
-   Sessions no workstream holds are left alone. Returns the names it moved."
+  "Move each of the `live` sessions onto the runtime it belongs on — its workstream's, or, for one
+   no workstream holds, its own keyed by its whole name — so none stays on a runtime keyed by
+   anything else, such as its worktree's leaf. Returns the names it moved."
   [project live]
   (into []
         (filter (fn [n]
-                  (when-let [ws-id (session/workstream-id-for project n)]
-                    (settle-runtime! project n ws-id))))
+                  (settle-runtime! project n (or (session/workstream-id-for project n) n))))
         (sort live)))
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] :boolean]}

@@ -21,6 +21,7 @@
    [nido.coordinator.daemon.reconcile :as reconcile]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.lane.conduct :as conduct]
+   [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.lane.resume :as resume]
    [nido.coordinator.lane.review :as review]
    [nido.coordinator.record.runs :as runs]
@@ -405,7 +406,8 @@
    blocked, and keep what the rest of the tick reads."
   [now-ms]
   (let [projects (registered-projects)
-        r        (conduct/conduct! {:projects projects :hold-sends? (usage-held? now-ms)})]
+        r        (conduct/conduct! {:projects projects :hold-sends? (usage-held? now-ms)
+                                    :mail {:owed seats/owed :delivered! seats/delivered!}})]
     (when-not (:skipped r)
       (settle-turn-ends! r)
       (let [faceted (conduct/faceted-sessions {:projects projects})
@@ -994,9 +996,10 @@
       (settle-run! run-id run provision-only? result))))
 
 (defn- retire-run-session!
-  "What every teardown of a Run's session does first: retire the background conversation running
-   in it, so no workspace is removed under a session still working there. A stop the substrate
-   refuses throws, and teardown keeps the session whole. A session without a :claude facet has
+  "What every teardown of a Run's session does first: stop the Claude process working in it, its
+   conversation kept, so no workspace is removed under a session still working there. A stop the substrate
+   refuses throws, and teardown keeps the session whole. A process a start left running before
+   the listing named it is retired too; a session with neither that nor a :claude facet has
    nothing to retire."
   [{:keys [project workstream-id session-name]}]
   (when (and workstream-id session-name)

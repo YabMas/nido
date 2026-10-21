@@ -5,7 +5,9 @@
             [canvas.coordinator.daemon.brakes :as brakes]
             [canvas.coordinator.daemon.lifecycle :as daemon]
             [canvas.coordinator.executor :as executor]
+            [canvas.coordinator.lane.conduct :as conduct]
             [canvas.coordinator.lane.drive :as drive]
+            [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.record.runs :as runs]
             [canvas.coordinator.record.state :refer [RunId]]
             [canvas.coordinator.source.core :as source]
@@ -35,7 +37,8 @@
     {:signature [:=> [:catn [:entry :map]] :string]})
   (Operation tick! "One iteration: brakes, drain, route, spawn, promote, reap."
     {:signature [:=> [:catn] :any]
-     :delegates [source/drain! source/route executor/tick! drive/tick! daemon/write! execute!]})
+     :delegates [source/drain! source/route executor/tick! drive/tick! daemon/write! execute!
+                 conduct/conduct! seats/owed seats/delivered!]})
   (Operation shutdown-grace-ms
     "How long to let in-flight work finish before exiting. A daemon that killed its own runs on
      shutdown would leave exactly the mid-flight state reconcile exists to repair."

@@ -18,10 +18,10 @@
     {:signature [:=> [:catn [:opts :map]] :any] :delegates [embodied/carry!]})
   (Operation occupy*
     "Occupy one seat under the strata embodiment."
-    {:signature [:=> [:catn [:opts :map]] :any] :delegates [seats/occupy! embodied/embodiment]})
+    {:signature [:=> [:catn [:opts :map]] :any] :delegates [embodied/occupy!]})
   (Operation replace*
     "Replace one seat's occupant."
-    {:signature [:=> [:catn [:opts :map]] :any] :delegates [seats/replace! embodied/embodiment]})
+    {:signature [:=> [:catn [:opts :map]] :any] :delegates [embodied/replace!]})
   (Operation conductor*
     "Start the workstream's conductor."
     {:signature [:=> [:catn [:opts :map]] :any] :delegates [seats/conductor!]})

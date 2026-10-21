@@ -104,7 +104,7 @@
     "The lock serialising appends to ONE workstream — per workstream, so two unrelated ones
      never queue behind each other."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Path]
-     :delegates [state/workstream-dir]})
+     :delegates [state/append-lock-path]})
   (Operation newest-record
     "The index row of the newest entry that records the work rather than a status decision —
      what every reader asking `what happened last` means."
@@ -132,15 +132,23 @@
   (Operation open-generation!
     "Append a :generation a person gives, opening the next generation of the design — the kind's
      one writer, under the workstream's lock. Refused while the workstream waits between phases,
-     or unless it cites a :recut of the generation it closes. The tensions that re-cut names are
+     while a review run of it is live — naming the run — or unless it cites a :recut of the
+     generation it closes. The tensions that re-cut names are
      carried on it by value from the ledger."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:gen :map]] Workstream]
      :delegates [append-lock-path read-ws generation/current generation/generation-of]})
   (Operation append-stamped!
     "Append a :tension, :accord, :withdrawal or :recut whose writer its caller stamped — the one
      path these kinds join a ledger by, which the generic appends refuse. Every other check an
-     append makes holds."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:payload :map]] Path]
+     append makes holds. The payload may be a function of the workstream read under the lock, so
+     a writer is stamped against the generation its entry joins."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
+                       [:payload [:or :map [:=> [:cat Workstream] :map]]]] Path]
+     :delegates [append-lock-path read-ws]})
+  (Operation holding-ledger
+    "Answer a function of the workstream read under its append lock — the lock every append and a
+     generation's opening hold — so what it decides from that read stays true while it runs."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:f [:=> [:cat Workstream] :any]]] :any]
      :delegates [append-lock-path read-ws]})
   (Operation open-phase!
     "Append a :phase-gate and reopen the workstream, under its lock and in one write of the

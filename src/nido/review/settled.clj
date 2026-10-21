@@ -43,6 +43,7 @@
    [babashka.process :as p]
    [clojure.string :as str]
    [nido.coordinator.record.fork :as fork]
+   [nido.coordinator.record.generation :as generation]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.workstream :as ws]
    [nido.review.digest :as digest]
@@ -282,15 +283,23 @@
    :designs :retractions}`, each oldest first and stamped with :seq — or nil when the workstream is
    unreadable or any entry of those kinds fails to parse.
 
+   Only the current generation's span is read (`generation/current-span`): its designs, decisions
+   and retractions, and every baseline and baseline review, which belong to no generation. The cut
+   comes first, so an earlier generation's entry is never held against the reading — a confirmation
+   made of a design a re-cut replaced settles nothing, and one that cannot be parsed unsettles
+   nothing either.
+
    `ws/entries-of` drops what it cannot parse, and here a dropped entry is not harmless: the
    judgement it held may be the one that found against a subject, and the retraction may be the
-   one that unseats a confirmation. So the parsed count is held against the index, and a shortfall
-   settles nothing."
+   one that unseats a confirmation. So the parsed count is held against the span's index rows, and
+   a shortfall settles nothing."
   [project ws-id]
   (try
     (when-let [w (ws/read-ws project ws-id)]
-      (let [indexed (frequencies (map :kind (:entries w)))
-            read    (into {} (map (fn [k] [k (vec (ws/entries-of project ws-id k))]))
+      (let [span    (generation/current-span (:entries w))
+            in-span (into #{} (map :seq) span)
+            indexed (frequencies (map :kind span))
+            read    (into {} (map (fn [k] [k (filterv (comp in-span :seq) (ws/entries-of project ws-id k))]))
                           ledger-kinds)]
         (when (every? #(= (get indexed % 0) (count (read %))) ledger-kinds)
           {:ws-id       ws-id
@@ -304,16 +313,20 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] [:maybe [:vector :map]]]}
   ledgers
   "The ledgers a round over `record`, on `ws-id`, may find its subjects settled on: this
-   workstream's first, then its parent's when this unit was forked, then the child's when `record`
-   is a design carrying :merges. nil when any of them cannot be read, or this unit's lineage cannot
-   be said — the confirmation or the finding that decides might be on the ledger nobody could read."
+   workstream's first, then its parent's when this unit was forked and has not re-cut, then the
+   child's when `record` is a design carrying :merges — each read within its own current generation
+   (`ledger`). A re-cut workstream does not read its parent at all: its fork base lies in its first
+   generation, and what crosses a re-cut is what the :generation entry carries. nil when any ledger
+   it reads cannot be read, or this unit's lineage cannot be said — the confirmation or the finding
+   that decides might be on the ledger nobody could read."
   [project ws-id record]
   (try
     (when-let [w (ws/read-ws project ws-id)]
-      (let [ls (mapv #(ledger project %)
-                     (distinct (remove nil? [ws-id
-                                             (:parent (fork/lineage w))
-                                             (get-in record [:merges :ws-id])])))]
+      (let [cut? (< 1 (generation/current (:entries w)))
+            ls   (mapv #(ledger project %)
+                       (distinct (remove nil? [ws-id
+                                               (when-not cut? (:parent (fork/lineage w)))
+                                               (get-in record [:merges :ws-id])])))]
         (when (every? some? ls) ls)))
     (catch Throwable _ nil)))
 

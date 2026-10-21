@@ -37,7 +37,11 @@
    [:session-id string?]
    [:bg-id [:maybe string?]]
    [:origin [:enum :nido :person]]
-   [:driver [:enum :nido :person :nobody]]
+   ;; :retired once retire! stopped its process: the conversation is over, and nothing drives the
+   ;; facet. It lasts until a conversation is driven on the record again — a start, an adoption,
+   ;; a turn that holds it — and a release or a hand-back, which only change who drives the facet
+   ;; they find, leave it retired.
+   [:driver [:enum :nido :person :nobody :retired]]
    ;; Set when a turn nido did not give is seen; only a hand-back clears it.
    [:hold [:maybe [:map {:closed true} [:at string?] [:because keyword?]]]]
    ;; The instruction given and not yet followed by the session's Stop. Its token is written
@@ -48,9 +52,6 @@
                       [:seen? boolean?]]]]
    ;; One instruction waiting for the session to be ready for it.
    [:queued [:maybe string?]]
-   ;; Seat messages waiting, oldest first — each given in turn once nothing is queued; none is
-   ;; refused because another waits.
-   [:inbox {:optional true} [:vector string?]]
    ;; The session's last Stop left work of its own running (background tasks, crons), so the
    ;; turn that follows is the session's own and not a person's.
    [:own-work? boolean?]

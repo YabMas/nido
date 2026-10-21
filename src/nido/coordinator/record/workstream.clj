@@ -1225,11 +1225,9 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
   append-lock-path
-  "The lock that serialises appends to one workstream. Per workstream rather than
-   global: two ledgers have no sequence to contend over, and a global lock would
-   queue every writer in nido behind whichever one is slowest."
+  "The lock that serialises appends to one workstream — `cstate/append-lock-path`."
   [project ws-id]
-  (str (fs/path (cstate/workstream-dir project ws-id) ".append.lock")))
+  (cstate/append-lock-path project ws-id))
 
 (defn- refuse-if-taken!
   "Throw rather than write over an entry that already exists.
@@ -1950,7 +1948,8 @@
    generation it closes. The tensions that re-cut names as its cause, and the claims the closing
    generation's records found falsified — read through `falsifications`, as each claim's id and
    what falsified it — are carried by value from the ledger, replacing any `gen` holds, so the new
-   generation inherits what was raised rather than what its opener retold. Throws naming the
+   generation inherits what was raised rather than what its opener retold — and an entry those are
+   read from that cannot be read refuses the opening rather than carrying less. Throws naming the
    precondition that failed and writes nothing then. Returns the record."
   [project ws-id gen]
   (io/with-file-lock
@@ -1969,7 +1968,8 @@
           (refuse "it is waiting between phases" {})
 
           ;; A review run reads the ledger as it stood when it began; opening a generation under
-          ;; it would leave the run judging a generation that has closed.
+          ;; it would leave the run judging a generation that has closed. A claim is taken only
+          ;; under this append lock (`activity/with-claim`), so none starts before the append.
           (activity/held? project ws-id)
           (let [run (:run-id (activity/read-live project ws-id))]
             (refuse (str "a review run of it is live" (when run (str " — " run))
@@ -1985,13 +1985,19 @@
           (refuse (str "the re-cut at entry " n " is of generation "
                        (generation/generation-of (:entries w) n) ", and the one open is " cur)
                   {:recut n :current cur}))
-        (let [caused    (->> (:tensions (read-entry-at w n))
-                             (keep #(some-> (read-entry-at w (:seq %))
-                                            (select-keys [:by :to :about :statement])))
+        (let [;; Every value the entry carries is read through this, and an entry it cannot
+              ;; read refuses the opening: what it carries is all the new generation inherits of
+              ;; the one it closes, so a source silently read as nothing is lost for good.
+              carried   (fn [m]
+                          (or (read-entry-at w m)
+                              (refuse (str "entry " m ", which what it carries is read from, cannot be read")
+                                      {:unreadable m})))
+              caused    (->> (:tensions (carried n))
+                             (map #(select-keys (carried (:seq %)) [:by :to :about :statement]))
                              vec)
               falsified (->> falsifications
                              (mapcat (fn [[kind of]]
-                                       (mapcat #(of (read-entry-at w (:seq %))) (span-of w kind))))
+                                       (mapcat #(of (carried (:seq %))) (span-of w kind))))
                              distinct
                              vec)]
           (append-locked! project ws-id w {:kind :generation}
@@ -2000,25 +2006,39 @@
                                     (seq falsified) (assoc :falsified falsified)))))
         (read-ws project ws-id)))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Path]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:or :map [:=> [:cat :Workstream] :map]]] :Path]}
   append-stamped!
   "Append a `:tension`, `:accord`, `:withdrawal` or `:recut` whose `:by` the caller stamped from
    where it runs. The ledger cannot tell where that was; the one caller is the verb that can, and
    the generic appends refuse these kinds so nothing else takes a writer on its word. Every other
-   check an append makes holds. Returns the absolute path."
+   check an append makes holds. `payload` is the entry, or a function of the workstream read under
+   the append lock answering it — so a writer stamped from that read is stamped against the same
+   generation the entry joins, which no generation can open between. Returns the absolute path."
   [project ws-id payload]
-  (let [kind (:format payload)]
-    (when-not (contains? stamped-kinds kind)
-      (throw (ex-info (str "append-stamped! takes " (str/join ", " (sort stamped-kinds))
-                           ", not " kind)
-                      {:kind kind})))
-    (io/with-file-lock
-      (append-lock-path project ws-id)
-      (fn []
-        (append-locked! project ws-id
-                        (or (read-ws project ws-id)
-                            (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
-                        {:kind kind} (pr-str payload))))))
+  (io/with-file-lock
+    (append-lock-path project ws-id)
+    (fn []
+      (let [w       (or (read-ws project ws-id)
+                        (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+            payload (if (map? payload) payload (payload w))
+            kind    (:format payload)]
+        (when-not (contains? stamped-kinds kind)
+          (throw (ex-info (str "append-stamped! takes " (str/join ", " (sort stamped-kinds))
+                               ", not " kind)
+                          {:kind kind})))
+        (append-locked! project ws-id w {:kind kind} (pr-str payload))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:=> [:cat :Workstream] :any]] :any]}
+  holding-ledger
+  "Answer `f` of the workstream read under its append lock — the lock every append, and a
+   generation's opening, holds — so what `f` decides from that read stays true until it returns.
+   `f` must not append: the lock is not reentrant."
+  [project ws-id f]
+  (io/with-file-lock
+    (append-lock-path project ws-id)
+    (fn []
+      (f (or (read-ws project ws-id)
+             (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] [:maybe :LedgerEntry]]}
   latest-entry

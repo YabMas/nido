@@ -2,8 +2,10 @@
   "Who occupies each seat of a workstream, and what a new occupant is told.
 
    HIDES the occupancy policy, for any embodiment — an embodiment being how a seat's session is
-   named and its occupant briefed ({:seat-name (fn [seat-id] slug) :practice text}); it selects
-   nothing, since the seats are the design's mark, read by record.seats.
+   named and its occupant briefed ({:seat-name (fn [seat-id] slug) :practice text :refuse (fn
+   [project ws-id])}), and what it refuses to carry; it selects nothing, since the seats are the
+   design's mark, read by record.seats. Its refusal is run inside every occupancy transaction,
+   against the generation that transaction seats.
 
    Every seat of a workstream an embodiment carries is occupied by a driven background session
    of its own, on the workstream's one runtime; the conductor is a separate session that occupies
@@ -15,8 +17,11 @@
 
    A first brief is built from records — the seat, its interface, its open tensions, the accords
    that settled tensions it was party to, and what the generation inherited — never from another
-   session's account. Seat messages reach a driven addressee only through conduct's inbox, and
-   are logged per workstream beside the ledger, keyed by generation; no round reads the log.
+   session's account. Seat messages are logged per workstream beside the ledger, keyed by
+   generation, and the log is all there is of them: what a seat or the conductor is still owed is
+   what the log addresses to it in the current generation with no delivery recorded, given by
+   conduct to whichever session holds the seat or conducts at the time (`owed`, `delivered!`). No
+   round reads the log.
 
    Who wrote a :tension, :accord, :withdrawal or :recut is stamped by record! from the session
    it runs in, never stated by the caller: a seat's occupant as its seat, the conductor as the
@@ -38,8 +43,7 @@
    [nido.platform.project :as project]
    [nido.session.commit-gate :as commit-gate]
    [nido.session.launcher :as launcher]
-   [nido.session.lifecycle :as lifecycle]
-   [nido.session.state :as session-state]))
+   [nido.session.lifecycle :as lifecycle]))
 
 ;; ── reading who is where ────────────────────────────────────────────────────
 
@@ -49,28 +53,22 @@
 (defn- live-records [project ws-id]
   (filter session/live? (session/list-sessions project ws-id)))
 
+(defn- occupants-in [project ws-id g]
+  (->> (live-records project ws-id)
+       (filter #(= g (get-in % [:seat :generation])))
+       (map (fn [s] {:seat (get-in s [:seat :id]) :session (:name s)}))
+       (sort-by :seat)
+       vec))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:sequential :map]]}
   occupants
   "Each seat's live occupant in the current generation, as {:seat :session}, sorted by seat.
    An earlier generation's occupant is never one, even of a seat whose element survived."
   [project ws-id]
-  (let [g (current-generation project ws-id)]
-    (->> (live-records project ws-id)
-         (filter #(= g (get-in % [:seat :generation])))
-         (map (fn [s] {:seat (get-in s [:seat :id]) :session (:name s)}))
-         (sort-by :seat)
-         vec)))
+  (occupants-in project ws-id (current-generation project ws-id)))
 
 (defn- conductor-record [project ws-id]
   (first (filter :conductor (live-records project ws-id))))
-
-(defn- session-of
-  "The live record of the session that occupies `to` — a seat id or :conductor — or nil."
-  [project ws-id to]
-  (if (= :conductor to)
-    (conductor-record project ws-id)
-    (when-let [n (:session (first (filter #(= to (:seat %)) (occupants project ws-id))))]
-      (session/read-session project ws-id n))))
 
 (defn- here
   "The directory the calling process runs in — where a writer is stamped from."
@@ -89,11 +87,13 @@
 (defn- writer
   "Who a record or message written from `cwd` is by, on `ws-id`: a seat's occupant as its seat,
    the conductor as the conductor, any other nido session by its name, and a person outside every
-   session. A seat's occupant of an earlier generation writes as the session it is, not the seat."
-  [project ws-id cwd]
+   session. A seat's occupant of an earlier generation writes as the session it is, not the seat.
+   The generation is read from `w`, the workstream as the caller holds it under its append lock,
+   so no generation opens between the stamp and what is done under it."
+  [project ws-id cwd w]
   (let [[p n] (session-at cwd)
         s (when (and n (= (keyword project) p)) (session/read-session project ws-id n))
-        g (current-generation project ws-id)]
+        g (generation/current (:entries w))]
     (cond
       (and s (:conductor s))                        {:as :conductor :session n}
       (and s (= g (get-in s [:seat :generation])))  {:as :seat :seat (get-in s [:seat :id]) :session n}
@@ -111,56 +111,112 @@
    :tension, :accord or :withdrawal from anyone but a seat's occupant or the conductor. Answers
    the entry as appended."
   [project ws-id entry]
-  (let [kind (:format entry)
-        by   (writer project ws-id (here))]
+  (let [kind    (:format entry)
+        cwd     (here)
+        stamped (volatile! nil)]
     (cond
       (not (stamped-kinds kind))
       (throw (ex-info (str "record! appends a :tension, :accord, :withdrawal or :recut, not " kind)
                       {:reason :kind :format kind}))
       (contains? entry :by)
       (throw (ex-info "record! stamps the writer from where it runs — drop :by"
-                      {:reason :stated-writer}))
-      (and (not= :recut kind) (not (#{:seat :conductor} (:as by))))
-      (throw (ex-info (str "Only a seat's occupant or the conductor writes a " (name kind)
-                           " — this runs " (if (:session by) (str "in " (:session by)) "outside every session"))
-                      {:reason :not-in-ensemble :by by})))
-    (let [stamped (assoc entry :by by)]
-      (ws/append-stamped! project ws-id stamped)
-      stamped)))
+                      {:reason :stated-writer})))
+    ;; The writer is resolved from the workstream the append reads under its lock: resolved
+    ;; before it, a generation opened in between would take an old occupant's entry as its seat's.
+    (ws/append-stamped!
+     project ws-id
+     (fn [w]
+       (let [by (writer project ws-id cwd w)]
+         (when (and (not= :recut kind) (not (#{:seat :conductor} (:as by))))
+           (throw (ex-info (str "Only a seat's occupant or the conductor writes a " (name kind)
+                                " — this runs " (if (:session by) (str "in " (:session by)) "outside every session"))
+                           {:reason :not-in-ensemble :by by})))
+         (vreset! stamped (assoc entry :by by)))))
+    @stamped))
 
 (defn- log-path [project ws-id]
   (str (fs/path (cstate/workstream-dir project ws-id) "seat-messages.edn")))
 
+(defn- log-rows
+  "The log as written: a message is {:id :generation :from :to :text :at}, a delivery
+   {:delivered <message id> :at}."
+  [project ws-id]
+  (or (io/read-edn (log-path project ws-id)) []))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int] [:sequential :map]]}
   traffic
-  "Generation `generation`'s seat messages, oldest first, each {:generation :from :to :text :at}."
+  "Generation `generation`'s seat messages, oldest first, each {:id :generation :from :to :text
+   :at :delivered?}."
   [project ws-id generation]
-  (filterv #(= generation (:generation %)) (or (io/read-edn (log-path project ws-id)) [])))
+  (let [rows (log-rows project ws-id)
+        done (into #{} (keep :delivered) rows)]
+    (into [] (comp (filter #(and (:text %) (= generation (:generation %))))
+                   (map #(assoc % :delivered? (contains? done (:id %)))))
+          rows)))
 
 (defn- describe [{:keys [as seat]}]
   (if (= :seat as) (str "seat " seat) "the conductor"))
 
+(defn- addressee
+  "What the session record `s` is addressed as in generation `g`: :conductor, its seat's id when
+   it occupies that seat in `g`, else nil."
+  [s g]
+  (cond
+    (not (session/live? s))               nil
+    (:conductor s)                        :conductor
+    (= g (get-in s [:seat :generation]))  (get-in s [:seat :id])))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] [:sequential :map]]}
+  owed
+  "The seat messages the session `session-name` is owed, oldest first, each {:id :text} with its
+   sender named in the text: those the log addresses to the seat it occupies in the current
+   generation — or to the conductor, when it conducts — that no recorded delivery answers.
+   Derived each time, so a replaced occupant's successor is owed what it was, and a session that
+   is no seat's or conductor's is owed nothing. Empty for a workstream or record not there."
+  [project ws-id session-name]
+  (let [s  (session/read-session project ws-id session-name)
+        g  (some-> (ws/read-ws project ws-id) :entries generation/current)
+        to (when (and s g) (addressee s g))]
+    (if-not to
+      []
+      (into [] (comp (filter #(and (= to (:to %)) (not (:delivered? %))))
+                     (map (fn [{:keys [id from text]}]
+                            {:id id :text (str "[seat message from " (describe from) "]\n\n" text)})))
+            (traffic project ws-id g)))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string] :any]}
+  delivered!
+  "Record that the seat message `id` was given to its addressee's session; it is owed no more."
+  [project ws-id id]
+  (io/update-edn! (log-path project ws-id) (fnil conj [])
+                  {:delivered id :at (clock/now-iso)}))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   send!
   "Send {:to <seat id | :conductor> :text} from the seat's occupant or the conductor this runs
-   in: log it under the current generation, then hand it to the addressee's session through
-   conduct, attributed to its sender. Refused from anyone else, and to an addressee with no live
-   session. Answers the logged message."
+   in: log it under the current generation, addressed to that seat or the conductor and
+   attributed to its sender. Conduct gives it to whichever session holds the seat, or conducts,
+   once one is ready (`owed`); none need be live when it is sent. Refused from anyone else, and to
+   anything the current generation has no seat for. Answers the logged message."
   [project ws-id {:keys [to text]}]
-  (let [from (writer project ws-id (here))
-        g    (current-generation project ws-id)
-        to-s (session-of project ws-id to)]
-    (when-not (#{:seat :conductor} (:as from))
-      (throw (ex-info "Only a seat's occupant or the conductor sends a seat message"
-                      {:reason :not-in-ensemble :from from})))
-    (when-not to-s
-      (throw (ex-info (str "No live session occupies " (if (= :conductor to) "the conductor" (str "seat " to)))
-                      {:reason :no-addressee :to to})))
-    (let [msg {:generation g :from from :to to :text text :at (clock/now-iso)}]
-      (io/update-edn! (log-path project ws-id) (fnil conj []) msg)
-      (conduct/message! project ws-id (:name to-s)
-                        (str "[seat message from " (describe from) "]\n\n" text))
-      msg)))
+  (let [cwd (here)]
+    ;; Sender, generation and addressee from one read, held under the lock a generation's opening
+    ;; takes until the message is logged: none of them can change in between.
+    (ws/holding-ledger
+     project ws-id
+     (fn [w]
+       (let [g    (generation/current (:entries w))
+             from (writer project ws-id cwd w)]
+         (when-not (#{:seat :conductor} (:as from))
+           (throw (ex-info "Only a seat's occupant or the conductor sends a seat message"
+                           {:reason :not-in-ensemble :from from})))
+         (when-not (or (= :conductor to) (contains? (set (generation/fixed-ids w)) to))
+           (throw (ex-info (str "Generation " g " has no seat " to)
+                           {:reason :no-addressee :to to})))
+         (let [msg {:id (str (random-uuid)) :generation g :from from :to to :text text
+                    :at (clock/now-iso)}]
+           (io/update-edn! (log-path project ws-id) (fnil conj []) msg)
+           msg))))))
 
 ;; ── briefs ──────────────────────────────────────────────────────────────────
 
@@ -225,7 +281,7 @@
         opts  {:project pname :runtime-key ws-id}]
     (lifecycle/up! session-name opts)
     (let [instance-id (:instance-id (lifecycle/runtime-of session-name opts))
-          mcp         (some-> instance-id session-state/session-mcp-path)]
+          mcp         (launcher/session-mcp-path pname session-name)]
       (conduct/start! {:project       project :ws-id ws-id :session-name session-name
                        :name          session-name
                        :cwd           (str (:wt-path (lifecycle/session-coords session-name opts)))
@@ -239,16 +295,22 @@
   (str (fs/path (cstate/workstream-dir project ws-id) ".occupancy.lock")))
 
 (defn- serially
-  "Run `f` holding the workstream's occupancy lock, so reading who occupies what, writing the
-   record and starting its session are one step against every other occupancy verb."
+  "Run `f` holding the workstream's occupancy lock and, inside it, its ledger's append lock — the
+   one a generation's opening takes — so reading who occupies what in which generation, writing
+   the record and starting its session are one step against every other occupancy verb and
+   against an opening: no occupant is launched in a generation that has closed. Always in that
+   order, occupancy then ledger; nothing takes the occupancy lock while holding the ledger's."
   [project ws-id f]
-  (io/with-file-lock (occupancy-lock-path project ws-id) f))
+  (io/with-file-lock (occupancy-lock-path project ws-id)
+                     #(ws/holding-ledger project ws-id (fn [_] (f)))))
 
 (defn- started?
-  "Whether a session was ever started on record `s`, or a start of it is in flight — as against a
-   record written for a launch that failed, which a retry may start on."
+  "Whether record `s` holds a session — one driven on it and not retired since
+   (`conduct/retire!` makes its facet's driver :retired, and whatever drives it again writes its
+   own), or a start of it in flight — as against a record written for a launch that failed, or
+   whose session was retired before a launch that failed, which a retry may start on."
   [s]
-  (boolean (or (:claude s) (:dispatching s))))
+  (boolean (or (and (:claude s) (not= :retired (:driver (:claude s)))) (:dispatching s))))
 
 (defn- retire-earlier!
   "Retire every live seat occupant of a generation before the current one — its Claude session
@@ -272,7 +334,8 @@
   occupy!
   "Start a driven session for `seat-id`, a seat of the current generation with no occupant in it,
    briefed from the records, once every occupant of an earlier generation is retired — a
-   retirement that fails throws, and nothing is started. Refused for an id that is not a seat
+   retirement that fails throws, and nothing is started. Refused as the embodiment refuses the
+   workstream (`:refuse`, read against the generation it seats), for an id that is not a seat
    and for a seat already occupied — a session started on its record, or a start in flight; a record left by a launch
    that failed is started on again. Answers {:seat :session}."
   [project ws-id embodiment seat-id]
@@ -280,6 +343,7 @@
    project ws-id
    (fn []
      (retire-earlier! project ws-id)
+     ((:refuse embodiment) project ws-id)
      (let [g (current-generation project ws-id)]
        (when-not (some #(= seat-id (:id %)) (seats/seats project ws-id))
          (throw (ex-info (str seat-id " is not a seat of generation " g) {:reason :not-a-seat :seat seat-id})))
@@ -299,16 +363,19 @@
   replace!
   "Retire the Claude session occupying `seat-id` in the current generation and start a fresh one
    on the same record and working copy, briefed afresh from the records — the old session is
-   stopped before the new one starts, so the seat never has two. Answers {:seat :session}."
+   stopped before the new one starts, so the seat never has two. Refused as the embodiment refuses
+   the workstream, against the generation it seats. Answers {:seat :session}."
   [project ws-id embodiment seat-id]
   (serially
    project ws-id
    (fn []
      (retire-earlier! project ws-id)
+     ((:refuse embodiment) project ws-id)
      (let [o (or (first (filter #(= seat-id (:seat %)) (occupants project ws-id)))
                  (throw (ex-info (str "Seat " seat-id " has no occupant to replace") {:reason :unoccupied :seat seat-id})))]
        (conduct/retire! project ws-id (:session o) {})
-       (session/update-substrate! project ws-id (:session o) #(assoc % :claude nil))
+       ;; The retired facet stays on the record until the new session installs its own; `start!`
+       ;; refuses while its session still lives.
        (launch! project ws-id (:session o) (brief project ws-id embodiment seat-id))
        o))))
 
@@ -365,25 +432,38 @@
    trailer — each layer is held to its own seat, so an unpublished layer of another seat under
    the pusher's goes out with it — or a `gh pr` title not starting `[<seat> <n>/<m>]` with the
    pusher's own seat. Takes a Claude Code `PreToolUse` input; nil for any
-   session that occupies no seat, and on anything it cannot read — it fails open, as the commit
-   gate does."
+   session that occupies no seat. Whether the session occupies one is the only thing it fails
+   open on: once it does, a publication it recognises but cannot read is refused, since letting
+   it through would publish a seat's layer that may name no seat. Best-effort over the commands
+   it recognises: a script, a wrapper or a command assembled at run time publishes unseen, and
+   what holds every seat's layer to its seat is the :layer-completed entry and the review loop."
   [{:keys [tool_name tool_input cwd]}]
-  (try
-    (when (and (= "Bash" tool_name) (string? (:command tool_input)) (string? cwd))
-      (when-let [[p n] (session-at cwd)]
-        (when-let [ws-id (session/workstream-id-for p n)]
-          (when-let [seat-id (get-in (session/read-session p ws-id n) [:seat :id])]
-            (some (fn [{:keys [kind dir args title]}]
-                    (case kind
-                      :push  (let [ids (into #{seat-id} (map :id) (seats/seats p ws-id))]
-                               (some (fn [{:keys [change description]}]
-                                       (when-not (marked? :push ids description)
-                                         (str "Blocked: commit " change " does not name its seat. Add a `Seat: <seat> <n>/<m>` "
-                                              "trailer — the seat whose layer it is, " seat-id " for your own, and its position "
-                                              "among that seat's layers — with `jj describe -r " change "`, then push again.")))
-                                     (commit-gate/push-range dir args)))
-                      :title (when-not (marked? :title [seat-id] title)
-                               (str "Blocked: a PR title of seat " seat-id " starts `[" seat-id
-                                    " <n>/<m>] ` — its position among the seat's layers."))))
-                  (commit-gate/checks (:command tool_input) cwd))))))
-    (catch Throwable _ nil)))
+  (when-let [[p ws-id seat-id]
+             (try
+               (when (and (= "Bash" tool_name) (string? (:command tool_input)) (string? cwd))
+                 (when-let [[p n] (session-at cwd)]
+                   (when-let [ws-id (session/workstream-id-for p n)]
+                     (when-let [seat-id (get-in (session/read-session p ws-id n) [:seat :id])]
+                       [p ws-id seat-id]))))
+               (catch Throwable _ nil))]
+    (try
+      (some (fn [{:keys [kind dir args title what]}]
+              (case kind
+                :push  (let [ids   (into #{seat-id} (map :id) (seats/seats p ws-id))
+                             range (or (commit-gate/push-range dir args)
+                                       (throw (ex-info "jj could not say what the push publishes" {})))]
+                         (some (fn [{:keys [change description]}]
+                                 (when-not (marked? :push ids description)
+                                   (str "Blocked: commit " change " does not name its seat. Add a `Seat: <seat> <n>/<m>` "
+                                        "trailer — the seat whose layer it is, " seat-id " for your own, and its position "
+                                        "among that seat's layers — with `jj describe -r " change "`, then push again.")))
+                               range))
+                :title (when-not (marked? :title [seat-id] title)
+                         (str "Blocked: a PR title of seat " seat-id " starts `[" seat-id
+                              " <n>/<m>] ` — its position among the seat's layers."))
+                :unread (str "Blocked: seat " seat-id "'s publication cannot be read for its seat and "
+                             "position — " what ".")))
+            (commit-gate/publications (:command tool_input) cwd))
+      (catch Throwable e
+        (str "Blocked: seat " seat-id "'s publication could not be checked for its seat and position ("
+             (ex-message e) "). A seat's publication goes out only once it is; retry when the cause is fixed.")))))

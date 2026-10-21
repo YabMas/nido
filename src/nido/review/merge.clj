@@ -14,6 +14,8 @@
   (:require
    [clojure.string :as str]
    [nido.coordinator.record.fork :as fork]
+   [nido.coordinator.record.generation :as generation]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.report.model :as model]
    [nido.design.check :as design]))
@@ -100,9 +102,17 @@
         {fb :baseline fd :design} (fork/parent-records project lineage)
         _       (model-era! parent [fd (:design-seq lineage) "forked design"])
         _       (model-era! parent [fb (:baseline-seq lineage) "forked baseline"])
-        pd      (or (ws/latest-entry project parent :design)
+        _       (let [entries (:entries (ws/read-ws project parent))
+                      base    (generation/generation-of entries (:design-seq lineage))
+                      now     (generation/current entries)]
+                  (when (and base (< base now))
+                    (refuse! (str "The child " child-ws " was forked from entry " (:design-seq lineage)
+                                  ", of generation " base " — it cannot merge into generation " now
+                                  " of " parent)
+                             {:ws-id child-ws :generation base :current now})))
+        pd      (or (standing/governing-design project parent)
                     (refuse! (str "The parent " parent " holds no design") {:ws-id parent}))
-        cd      (or (ws/latest-entry project child-ws :design)
+        cd      (or (standing/governing-design project child-ws)
                     (refuse! (str "The child " child-ws " holds no design to merge") {:ws-id child-ws}))
         {pm :model pb :baseline} (laid-over-its-baseline project parent pd "parent's current")
         {cm :model}              (laid-over-its-baseline project child-ws cd "child's")

@@ -134,16 +134,19 @@
   [design]
   (into #{} (comp (filter :defines-generation) (map :id)) (get-in design [:model :elements])))
 
-(defn- first-fixing
-  "In a first generation, the ids of the design marking any element that is first cleared or
-   approved, in the order those clearances and approvals were written — nil while none is."
-  [w rows]
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :int]]}
+  fixing-design
+  "The seq of the current span's design that fixes its generation-defining elements as they stand:
+   the first design marking any element that is cleared or approved, in the order those clearances
+   and approvals were written — nil while none is. What its marked elements hide is what the
+   generation's later designs are held to keep."
+  [w]
   (some (fn [row]
-          (let [ids (some->> (get-in (entry-at w (:seq row)) [:design :seq])
-                             (entry-at w)
-                             defining-ids)]
-            (not-empty ids)))
-        (->> rows (filter #(#{:design-cleared :design-approved} (:kind %))) (sort-by :seq))))
+          (let [d (get-in (entry-at w (:seq row)) [:design :seq])]
+            (when (some->> d (entry-at w) defining-ids not-empty) d)))
+        (->> (current-span (:entries w))
+             (filter #(#{:design-cleared :design-approved} (:kind %)))
+             (sort-by :seq))))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe [:set :string]]]}
   fixed-ids
@@ -154,4 +157,4 @@
   [w]
   (if-let [opened (opened-by (:entries w))]
     (some-> (entry-at w (:seq opened)) :ids set)
-    (first-fixing w (current-span (:entries w)))))
+    (some->> (fixing-design w) (entry-at w) defining-ids)))

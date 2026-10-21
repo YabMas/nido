@@ -2712,38 +2712,16 @@
              (boolean (some #(= v %) vals))))))
    facet-filter))
 
-(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
-  session-live?
-  "Is the session this registry entry records up RIGHT NOW? THE predicate for whether a session
-   is up, which every reader of it asks.
-
-   A session that recorded an app/nREPL port is up while one answers: probed rather than trusted,
-   since the registry is only cleaned on a graceful `down!` (engine/stop-session! →
-   state/remove-from-registry!), so a reboot, a JVM crash or a `kill` leaves an entry with its
-   port numbers intact indefinitely. A `:lite` session (`:services []`) records no port and is in
-   use without one, so it is up while its entry stands — nil, or a map naming no instance, is a
-   session that is down.
-
-   `:pg-port` is deliberately not a signal: most sessions point at the project's
-   SHARED cluster, which answers whenever any one session is up. `:repl-pid` is
-   not a signal either: PIDs are recycled, so a months-old entry whose PID was
-   reused would read as live forever."
-  [s]
-  (boolean (if (or (pos-int? (:app-port s)) (pos-int? (:nrepl-port s)))
-             (or (and (pos-int? (:app-port s))   (proc/tcp-open? (:app-port s)))
-                 (and (pos-int? (:nrepl-port s)) (proc/tcp-open? (:nrepl-port s))))
-             (:instance-id s))))
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
   live-session-names
-  "Set of session names for `project` that are actually up, as `session-live?` reads each one's
+  "Set of session names for `project` that are actually up, as `sstate/session-live?` reads each one's
    registry entry — a `:lite` session included. THE liveness oracle: the TUI board, the web
    grouping, the adopter, the runtime migration and the winding-down band all read this one fn."
   [project]
   (let [registry (sstate/read-registry)]
     (->> (lifecycle/list-all-data {:project (name project)})
          :sessions
-         (filter #(session-live? (get registry (:worktree %))))
+         (filter #(sstate/session-live? (get registry (:worktree %))))
          (map :name)
          set)))
 
@@ -2765,7 +2743,7 @@
 (defn- prunable?
   "Only an entry that once recorded a probeable port is a prune candidate. An
    entry that never had one — a `:lite` session (`:services []`, so the engine
-   records :app-port/:nrepl-port nil) — is live while its entry stands, under session-live?'s
+   records :app-port/:nrepl-port nil) — is live while its entry stands, under sstate/session-live?'s
    definition, so judging it dead on liveness grounds is a category error: it
    would be pruned while in active use, and reclaim/orphan-instance-dirs would
    then delete its state dir."
@@ -2774,7 +2752,7 @@
 
 (defn- prune-veto?
   "Keep an entry whose ports do not answer but whose JVM is still running.
-   `session-live?` ignores :repl-pid on purpose — a recycled PID would make a
+   `sstate/session-live?` ignores :repl-pid on purpose — a recycled PID would make a
    dead session read live forever, the wrong failure for the ORACLE. Deleting is
    the opposite trade: a false `dead` costs a PGDATA via reclaim, a recycled PID
    costs only a delayed prune. So a live PID vetoes the DELETE without ever
@@ -2800,9 +2778,9 @@
    JVM crash or a `kill` leaves an entry — and its phantom Winding-down row —
    behind forever. Entries inside the grace window are left alone.
 
-   Two extra guards keep this DELETE path safe, distinct from session-live?'s
+   Two extra guards keep this DELETE path safe, distinct from sstate/session-live?'s
    ORACLE contract (a false `live` there is the expensive mistake — see
-   session-live?'s docstring):
+   sstate/session-live?'s docstring):
      prunable?    — an entry with no recorded port (a `:lite` session) is never
                     a candidate; it is live while its entry stands, and judging
                     it dead would be a category error, not a liveness result.
@@ -2825,7 +2803,7 @@
          dead (->> registry
                    (remove (fn [[_ entry]]
                              (or (not (prunable? entry))
-                                 (session-live? entry)
+                                 (sstate/session-live? entry)
                                  (prune-veto? entry)
                                  (when-let [age (entry-age-ms entry now-ms)]
                                    (< age registry-prune-grace-ms)))))
@@ -2928,7 +2906,7 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :Path] [:vector :map]]}
   machine-rows
-  "Machine facts for every worktree of one project: registry entry, liveness as `session-live?` reads it,
+  "Machine facts for every worktree of one project: registry entry, liveness as `sstate/session-live?` reads it,
    RSS for the repl JVM + PG, and the configured heap ceiling. No UI-optimistic
    state — that is a surface concern injected by callers that need it.
 
@@ -2945,7 +2923,7 @@
                   (let [nm       (str (fs/file-name d))
                         wt-path  (str d)
                         entry    (get registry wt-path)
-                        live?    (session-live? entry)
+                        live?    (sstate/session-live? entry)
                         iid      (:instance-id entry)
                         repl-rss (when (and live? (:repl-pid entry))
                                    (proc/rss-bytes (:repl-pid entry)))

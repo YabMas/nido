@@ -23,7 +23,9 @@
    installed in every session of every project, and one that blocked a push it
    could not reason about would be worse than none. What it promises is narrow:
    a description the project's hook rejects does not leave through a command it
-   recognises."
+   recognises. `publications` names what the gate could not read, for a caller —
+   a seat's gate — that must refuse it rather than let it through; `checks`
+   drops it."
   (:require
    [babashka.fs :as fs]
    [babashka.process :as p]
@@ -149,6 +151,142 @@
     (when-let [t (last (option-values #{"-t" "--title"} (drop 3 words)))]
       {:title t})))
 
+(def ^:private publication-verbs
+  "Every way a command publishes that the gate knows of, as the program and the subcommand words
+   naming it — with, for a call on the API, a word its target must contain. The one list: what
+   `publications` recognises and what the installed hook starts the gate for are both read off
+   it, so a verb added here is recognised and reached at once, and none is one and not the other."
+  [{:verb :push   :program "jj"  :sub ["git" "push"]}
+   {:verb :push   :program "git" :sub ["push"]}
+   {:verb :create :program "gh"  :sub ["pr" "create"]}
+   {:verb :edit   :program "gh"  :sub ["pr" "edit"]}
+   {:verb :api    :program "gh"  :sub ["api"] :target "pulls"}])
+
+(def ^:private shell-runners
+  "Programs that run a command line handed to them as one word. What a word is run as is not
+   in its syntax, so this is the one thing the gate is told rather than reads: a string handed to
+   one of these is read as a command line of its own; any other string is a value."
+  #{"sh" "bash" "zsh" "eval"})
+
+(def ^:private valued-globals
+  "Options before a subcommand that take a value, so the word after them is not the subcommand."
+  (into jj-global-valued #{"-C" "-c" "--git-dir" "--work-tree"}))
+
+(defn- writes?
+  "Whether a `verb` invocation whose words after its subcommand are `args` publishes anything: a
+   push and a create always do; an edit only through a title or a word the gate cannot read
+   standing as no other option's value; an API call only when it writes — a method other than
+   GET, a field, an input, or a word the gate cannot read."
+  [verb args]
+  (let [free-opaque? (some (fn [[prev w]] (and (= :opaque w)
+                                               (not (and (string? prev) (str/starts-with? prev "-")))))
+                           (partition 2 1 (cons nil args)))]
+    (case verb
+      (:push :create) true
+      :edit (boolean (or (seq (option-values #{"-t" "--title"} args)) free-opaque?))
+      :api  (boolean (or (some #{:opaque} args)
+                         (some #(not= "GET" (str/upper-case %)) (option-values #{"-X" "--method"} args))
+                         (some #(and (string? %)
+                                     (or (#{"-f" "-F" "--field" "--raw-field" "--input"} %)
+                                         (re-find #"^--(field|raw-field|input)=" %)))
+                               args))))))
+
+(defn- publication
+  "The publication a simple command's words `ws` name, or nil: `{:verb v :direct? b}`, `:direct?`
+   when its program is the command's first word — anything else runs it through a wrapper the
+   gate does not read, or as a command line handed to a shell. The program is found wherever it
+   stands, so no wrapper needs naming; a word the gate cannot read may stand for an option. A
+   `--dry-run` publishes nothing."
+  [ws]
+  (when-not (some #{"--dry-run"} ws)
+    (or (some (fn [i]
+                (let [program (nth ws i)
+                      words   (loop [[a & more] (drop (inc i) ws), out []]
+                                (cond
+                                  (nil? a)                         out
+                                  (= :opaque a)                    (recur more out)
+                                  (valued-globals a)               (recur (rest more) out)
+                                  (str/starts-with? a "-")         (recur more out)
+                                  :else                            (recur more (conj out a))))]
+                  (some (fn [{:keys [verb sub target] :as row}]
+                          (when (and (= program (:program row))
+                                     (= sub (take (count sub) words))
+                                     (or (nil? target)
+                                         ;; after the subcommand, the order `verb-pattern` matches
+                                         (some #(and (string? %) (str/includes? % target))
+                                               (rest (drop-while #(not= (last sub) %)
+                                                                 (drop (inc i) ws)))))
+                                     (writes? verb (drop (inc i) ws)))
+                            {:verb verb :direct? (zero? i)}))
+                        publication-verbs)))
+              (keep-indexed (fn [i w] (when (string? w) i)) ws))
+        ;; A command line handed to a shell, wherever the shell stands.
+        (some (fn [w]
+                (when (string? w)
+                  (some #(some-> (publication (strip-prefix %)) (assoc :direct? false))
+                        (segments (tokenize w)))))
+              (rest (drop-while #(not (shell-runners %)) ws))))))
+
+(defn- unread
+  [what]
+  {:kind :unread :what what})
+
+(defn ^{:malli/schema [:=> [:cat :string :string] [:vector :map]]}
+  publications
+  "What a Bash command would publish, in order: `{:kind :push :dir d :args [word …]}` for a
+   `jj git push`, `{:kind :title :dir d :title t}` for a titled `gh pr create`/`edit`, and
+   `{:kind :unread :what <why>}` for every other command naming a publication (`publication`)
+   — one the gate cannot attribute: a push or title decided by a substitution, one run in a
+   directory a `cd` left unknown or through a wrapper or a shell, a `gh pr create` naming no
+   title, a `git push` or a `gh api` write, which publish around jj. `:dir` is where the command
+   runs — `cwd`, moved by any `cd` earlier on the line."
+  [command cwd]
+  (loop [[ws & more] (map strip-prefix (segments (tokenize command)))
+         dir cwd
+         out []]
+    (if (nil? ws)
+      out
+      (if (= "cd" (first ws))
+        (let [to (second ws)]
+          (if (or (nil? to) (= :opaque to) (= "-" to))
+            (recur more nil out)
+            (recur more (when dir (str (fs/normalize (fs/path dir (str/replace to #"^~(?=/|$)" (System/getProperty "user.home")))))) out)))
+        (let [{:keys [verb direct?] :as pub} (publication ws)
+              push  (when (= :push verb) (jj-push ws))
+              title (when (#{:create :edit} verb) (pr-title ws))]
+          (recur more dir
+                 (cond
+                   (nil? pub) out
+
+                   (nil? dir)
+                   (conj out (unread "it runs in a directory a `cd` left unknown"))
+
+                   (not direct?)
+                   (conj out (unread "it runs through a wrapper or a shell the gate does not read — run `jj git push` or `gh pr` as the command itself"))
+
+                   (and push (not-any? #{:opaque} (:args push)))
+                   (conj out {:kind :push
+                              :dir  (if-let [r (:repo push)] (str (fs/normalize (fs/path dir r))) dir)
+                              :args (:args push)})
+
+                   push
+                   (conj out (unread "a push argument is decided when the shell runs it"))
+
+                   (= :push verb)
+                   (conj out (unread "it publishes around jj — push with `jj git push`"))
+
+                   (string? (:title title))
+                   (conj out {:kind :title :dir dir :title (:title title)})
+
+                   title
+                   (conj out (unread "the PR title is decided when the shell runs it"))
+
+                   (= :create verb)
+                   (conj out (unread "`gh pr create` names no title for the gate to read — pass `--title`"))
+
+                   :else
+                   (conj out (unread "it publishes in a way the gate does not read — publish with `jj git push` and `gh pr` with a literal `--title`")))))))))
+
 (defn ^{:malli/schema [:=> [:cat :string :string] [:vector :map]]}
   checks
   "What a Bash command would publish that the project's hook should judge, in
@@ -156,37 +294,11 @@
    `{:kind :title :dir d :title t}` for a titled `gh pr create`/`edit`. `:dir`
    is where the command runs — `cwd`, moved by any `cd` earlier on the line.
 
-   A command whose relevant part the gate cannot read — a title or a push
-   argument decided by a substitution, a `cd` into one — contributes no check
-   for that part. That is the failing-open contract, applied before anything runs."
+   `publications` without what the gate cannot read: a title or a push argument
+   decided by a substitution, a `cd` into one, contributes no check for that
+   part. That is the failing-open contract, applied before anything runs."
   [command cwd]
-  (loop [[ws & more] (map strip-prefix (segments (tokenize command)))
-         dir cwd
-         out []]
-    (if (nil? ws)
-      out
-      (cond
-        (= "cd" (first ws))
-        (let [to (second ws)]
-          (if (or (nil? to) (= :opaque to) (= "-" to))
-            out
-            (recur more (str (fs/normalize (fs/path dir (str/replace to #"^~(?=/|$)" (System/getProperty "user.home"))))) out)))
-
-        (some #{:opaque} (take 3 ws))
-        (recur more dir out)
-
-        :else
-        (let [push  (jj-push ws)
-              title (pr-title ws)]
-          (recur more dir
-                 (cond-> out
-                   ;; a push is re-run by the gate, so every word must be known
-                   (and push (every? string? (:args push)))
-                   (conj {:kind :push
-                          :dir  (if-let [r (:repo push)] (str (fs/normalize (fs/path dir r))) dir)
-                          :args (:args push)})
-                   (and title (string? (:title title)))
-                   (conj {:kind :title :dir dir :title (:title title)}))))))))
+  (filterv #(not= :unread (:kind %)) (publications command cwd)))
 
 ;; ── the project's hook ──────────────────────────────────────────────────────
 
@@ -262,17 +374,19 @@
   push-range
   "`[{:change c :description d}]` for every commit the push would publish that
    carries a description: reachable from a head it would move, and from no
-   remote bookmark. Nil when jj cannot answer."
+   remote bookmark; [] when the push moves nothing. Nil when jj cannot answer."
   [dir args]
-  (when-let [heads (seq (pushed-heads dir args))]
-    (let [revset (str "::(" (str/join " | " heads) ") ~ ::remote_bookmarks()")
+  (when-let [heads (pushed-heads dir args)]
+    (if (empty? heads)
+      []
+      (let [revset (str "::(" (str/join " | " heads) ") ~ ::remote_bookmarks()")
           out    (sh-out dir "jj" "log" "--no-graph" "--ignore-working-copy" "-r" revset
                          "-T" (str "change_id.short() ++ \"" field-sep "\" ++ description ++ \"" record-sep "\""))]
       (when out
         (vec (for [rec (str/split out (re-pattern record-sep))
                    :let [[change desc] (str/split (str/triml rec) (re-pattern field-sep) 2)]
                    :when (and change (not (str/blank? desc)))]
-               {:change change :description desc}))))))
+               {:change change :description desc})))))))
 
 (defn- check-rejection
   "The first rejection `check` meets, as `{:subject s :output o :hook h}`, or nil."
@@ -314,12 +428,19 @@
    `timeout-ms` each, plus bb's start."
   60)
 
+(defn- verb-pattern
+  "A shell `case` pattern matching any text holding a verb's words in order — so any command
+   `publication` could recognise as it, whatever stands between them."
+  [{:keys [program sub target]}]
+  (str "*" (str/join "*" (map #(str "'" % "'") (concat [program] sub (when target [target])))) "*"))
+
 (defn- gate-command
   "The shell command the host runs on each Bash call. It reads the host's JSON
-   once and starts bb only when the command could be a push or a PR — every
-   other Bash call costs a shell `case` and no bb start."
+   once and starts bb only when the command could name a publication — read off
+   `publication-verbs`, as `publications` is, so nothing it recognises goes
+   unchecked. Every other Bash call costs a shell `case` and no bb start."
   []
-  (str "i=$(cat); case \"$i\" in *'git push'*|*'gh pr'*) "
+  (str "i=$(cat); case \"$i\" in " (str/join "|" (map verb-pattern publication-verbs)) ") "
        "printf '%s' \"$i\" | bb --config '" (fs/path (core/nido-source-dir) "bb.edn") "' nido:commit:gate ;; esac"))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}

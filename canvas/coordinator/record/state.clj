@@ -151,6 +151,12 @@
      staleness story. Separate from the payload so that publishing it takes no second lock —
      the payload is renamed into place beside this rather than written through it."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Path]})
+  (Operation append-lock-path
+    "The lock serialising appends to ONE workstream — per workstream, so two unrelated ones never
+     queue behind each other. Here rather than in the ledger because taking a workstream's
+     activity claim is serialised under it too."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Path]
+     :delegates [workstream-dir]})
   (Operation activity-path
     "What the current activity says about itself. Meaningless unless the lock beside it is
      held — nothing clears it on release."

@@ -541,3 +541,22 @@
         "the newest design written before the run started is the one its first round read")
     (is (= :no-design (:ledger (settle "2026-10-02T10:00:00Z")))
         "a run after the stamp that names none captured none")))
+
+(deftest a-settled-run-from-before-a-re-cut-is-no-record-of-the-new-generation
+  ;; The new generation's reviews are all `newer-review?` reads, so a run that started under the
+  ;; generation before would otherwise settle into the new one.
+  (let [appended (atom [])
+        rows     [{:kind :design :seq 2 :at "2026-10-01T09:00:00Z"}
+                  {:kind :recut :seq 3 :at "2026-10-02T09:00:00Z"}
+                  {:kind :generation :seq 4 :at "2026-10-02T10:00:00Z"}]
+        settle   (fn [started-at]
+                   (with-redefs [stages/last-review (fn [_ _] nil)
+                                 ws/read-ws (fn [_ _] {:id "ws-1" :entries rows})
+                                 ws/append-entry! (fn [_ _ _ content] (swap! appended conj content) "/p")]
+                     (#'reconcile/append-settled! {:format :review-report :status :orphaned :design {:seq 2}}
+                                                  {:reviewed-project "brian" :reviewed-ws-id "ws-1"}
+                                                  started-at)))]
+    (is (= :superseded (:ledger (settle "2026-10-02T09:30:00Z"))))
+    (is (empty? @appended))
+    (is (= :appended (:ledger (settle "2026-10-02T11:00:00Z")))
+        "a run started in the current generation settles as before")))

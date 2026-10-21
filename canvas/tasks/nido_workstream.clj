@@ -7,6 +7,8 @@
    work plane and make it shallow."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
+            [canvas.coordinator.lane.seats :as seats]
+            [canvas.coordinator.record.workstream :as workstream]
             [fukan.common.typing.malli]))
 
 (Module nido-workstream
@@ -59,8 +61,10 @@
     {:signature [:=> [:catn [:opts :map]] :string]})
   (Operation generation-open*
     "Open the next generation of the design from a re-cut, in a person's words, from a base
-     revision, retiring every seat occupant of the generation it closes."
-    {:signature [:=> [:catn [:opts :map]] :map]})
+     revision, retiring every seat occupant of the generation it closes — refused, as the ledger
+     refuses it, while a review run of the workstream is live."
+    {:signature [:=> [:catn [:opts :map]] :map]
+     :delegates [workstream/open-generation! seats/reseat!]})
   (Operation generation-open-cmd
     "bb nido:workstream:generation:open — the entry point for `generation-open*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

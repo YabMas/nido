@@ -367,6 +367,19 @@
               "the profile outlives the runtime directory it was kept in, once reclaim takes it")))
       (finally (fs/delete-tree tmp)))))
 
+(deftest a-slash-named-sessions-old-profile-is-read-under-its-worktree-leaf
+  ;; Before runtimes were keyed by session, `feat/x`'s worktree leaf `x` keyed its state.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-home (constantly (str tmp))]
+        (let [p {:services [] :worktree {:strategy :symlink :target "/tmp/x"}}]
+          (fs/create-dirs (state/instance-state-dir "p--x"))
+          (spit (str (fs/path (state/instance-state-dir "p--x") "profile.edn")) (pr-str p))
+          (is (= p (engine/read-profile-for-session "p" "feat/x"))
+              "a lite session named with a slash does not come back full")
+          (is (fs/exists? (state/session-profile-path "p" "feat/x")) "and is copied to its own key")))
+      (finally (fs/delete-tree tmp)))))
+
 (deftest starting-a-member-again-keeps-its-recorded-profile
   (with-runtime-home
     (fn [_ wt-b]

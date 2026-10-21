@@ -1245,7 +1245,7 @@
           (catch Exception e
             (core/log-step (str "warning: run-shim: " (ex-message e)))))))))
 
-(defn ^{:malli/schema [:=> [:cat :InstanceId] [:maybe :string]]}
+(defn ^{:malli/schema [:=> [:cat :InstanceId [:maybe :Path]] [:maybe :string]]}
   live-services-prompt
   "The session's live services, as an --append-system-prompt block for a
    headless agent launched with the WORKTREE as its cwd.
@@ -1274,10 +1274,15 @@
    claim here is only the one that is true of every nido session: the JVM is
    already warm, so do not pay to start another.
 
+   `worktree` is the reader's own working copy, its cwd: it is told to load what it changes from
+   there, by that path, when the JVM runs out of another. nil when the reader's copy is not
+   known — then it is told whenever any session on the runtime works elsewhere than the JVM
+   started, in the 'your working directory' form.
+
    Nil when the session provisions no services (a lite session, or one that is
    down), because then there is nothing to connect to and the block would be
    three headings over an empty fact list."
-  [instance-id]
+  [instance-id worktree]
   (let [session    (some-> instance-id state/read-session)
         ctx        (:context session)
         runtime-dir (get-in ctx [:session :project-dir])
@@ -1318,10 +1323,12 @@
               "and where this project's own guidance names a path for full suites, follow\n"
               "that: this rule is about not starting a JVM the session already has, not\n"
               "about how this project runs its tests.\n"
-              ;; The reader's worktree is its cwd, which this cannot see: told whenever the
-              ;; runtime carries a session working elsewhere than where its JVM started.
-              (when (some #(other-working-copy? % runtime-dir) (keys (:members session)))
-                (str "\n" (render-code-loading nil runtime-dir)))))))))
+              ;; The reader's own copy when the caller names it; else told whenever the runtime
+              ;; carries a session working elsewhere than where its JVM started.
+              (when (if worktree
+                      (other-working-copy? worktree runtime-dir)
+                      (some #(other-working-copy? % runtime-dir) (keys (:members session))))
+                (str "\n" (render-code-loading worktree runtime-dir)))))))))
 
 (defn- member-worktree
   "The worktree of `session-name` on the runtime `session`: its own when the runtime records its

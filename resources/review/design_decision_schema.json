@@ -14,7 +14,8 @@
     "clause_rulings",
     "questions",
     "settled_questions",
-    "step_back"
+    "step_back",
+    "secrets_moved"
   ],
   "properties": {
     "recommend": {
@@ -350,6 +351,28 @@
           }
         }
       }
+    },
+    "secrets_moved": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "because"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The id of an element FIXED IN THIS GENERATION, as shown in brackets, WITHOUT the brackets."
+          },
+          "because": {
+            "type": "string",
+            "description": "What it hid when fixed, and what this design has it hide instead."
+          }
+        }
+      },
+      "description": "Each element fixed in this generation whose secret — what it hides — this design moves. Naming one makes the recommendation recut. Empty when none moved, or when nothing is fixed."
     }
   }
 }

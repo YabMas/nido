@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [babashka.process :as p]
+   [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.session.commit-gate :as gate]))
@@ -25,6 +26,59 @@
     (is (= [] (gate/checks "jj git push --dry-run" "/s")))
     (is (= [] (gate/checks "gh pr create --fill" "/s")))
     (is (= [] (gate/checks "git log | grep push" "/s")))))
+
+(deftest publications-name-what-the-gate-cannot-read
+  ;; `checks` drops these, failing open; a seat's gate refuses on them, so each is named.
+  (let [unread? (fn [cmd] (let [ks (map :kind (gate/publications cmd "/s"))]
+                         (and (seq ks) (every? #{:unread} ks))))]
+    (is (unread? "gh pr create --title \"$title\""))
+    (is (unread? "gh pr create --fill"))
+    (is (unread? "jj git push -b \"$B\""))
+    (is (unread? "jj $FLAGS git push"))
+    (is (unread? "cd \"$D\" && jj git push"))
+    (is (unread? "command git push origin HEAD"))
+    (is (unread? "gh api repos/o/r/pulls -f title=x"))
+    (is (unread? "gh pr edit 3 $ARGS"))
+    (is (unread? "env jj git push"))
+    (is (unread? "nohup gh pr create --fill"))
+    (is (unread? "bash -c 'jj git push -b x'"))
+    (is (unread? "$(which jj) git push"))
+    (is (unread? "env gh pr edit 7 --title 'Oops'"))
+    (is (unread? "gh api repos/o/r/pulls/7 -X PATCH -f title=Oops")))
+  (testing "and nothing that publishes nothing"
+    (is (= [] (gate/publications "jj git push --dry-run" "/s")))
+    (is (= [] (gate/publications "git log | grep push" "/s")))
+    (is (= [] (gate/publications "jj describe -m \"$(cat msg)\"" "/s")))
+    (is (= [] (gate/publications "gh pr edit 3 --body \"$b\"" "/s")))
+    (is (= [] (gate/publications "jj describe -m 'make jj git push safe'" "/s")))
+    (is (= [] (gate/publications "bash -c 'bb nido:test'" "/s")))
+    (is (= [] (gate/publications "gh api repos/o/r/pulls" "/s")))
+    (is (= [] (gate/publications "grep -r 'gh pr create' src" "/s"))))
+  (testing "what it can read, it reads as `checks` does"
+    (is (= (gate/checks "cd worktree && jj git push; gh pr edit 1 --title x" "/s")
+           (gate/publications "cd worktree && jj git push; gh pr edit 1 --title x" "/s")))))
+
+(def ^:private publishing
+  "Commands naming a publication, read or not."
+  ["jj git push -b x" "jj -R /r git push" "gh pr create --title t" "gh pr edit 7 --title 'Oops'"
+   "env gh pr edit 7 --title 'Oops'" "nohup gh pr create --fill" "bash -c 'jj git push'"
+   "command git push origin HEAD" "gh api repos/o/r/pulls/7 -X PATCH -f title=Oops"
+   "gh api repos/o/r/pulls -f title=x" "jj $F git push" "xargs sh -c 'gh pr edit 1 --title x'"])
+
+(deftest the-installed-hook-reaches-every-publication-the-gate-reads
+  ;; The hook starts the gate behind a shell `case`; a command it lets past is never judged, so
+  ;; every command `publications` names must reach it.
+  (let [hook (str/replace (#'gate/gate-command) #"printf '%s' \"\$i\" \| bb .* nido:commit:gate"
+                          "echo reached")
+        reached? (fn [cmd] (= "reached\n"
+                              (:out (p/sh {:in (json/generate-string
+                                                {:tool_name "Bash" :tool_input {:command cmd}})}
+                                          "sh" "-c" hook))))]
+    (is (str/includes? hook "echo reached") "the stand-in replaced the gate's start")
+    (doseq [cmd publishing]
+      (is (seq (gate/publications cmd "/s")) (str "a publication: " cmd))
+      (is (reached? cmd) (str "the hook starts the gate for: " cmd)))
+    (is (not (reached? "ls -la")) "and starts nothing for a command naming none")))
 
 (def ^:private conventional-hook
   "#!/bin/sh\ngrep -qE '^(feat|fix)(\\([a-z-]+\\))?: .+' \"$1\" || { echo \"Expected: type(scope): message\"; exit 1; }\n")

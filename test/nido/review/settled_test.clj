@@ -291,6 +291,33 @@
       (is (nil? (settled/ledgers :nido "ws-child" {}))
           "a ledger nobody could read settles nothing"))))
 
+(deftest a-ledger-is-read-and-held-to-its-index-within-its-current-generation
+  ;; An earlier generation's entry is cut before the parsed count is held against the index: one
+  ;; that cannot be parsed there unsettles nothing in the generation a re-cut opened.
+  (let [rows   [{:seq 1 :kind :intent} {:seq 2 :kind :baseline} {:seq 3 :kind :design}
+                {:seq 4 :kind :design-decision} {:seq 5 :kind :tension} {:seq 6 :kind :recut}
+                {:seq 7 :kind :generation} {:seq 8 :kind :design} {:seq 9 :kind :design-decision}]
+        parsed {:baseline [{:seq 2}] :design [{:seq 3} {:seq 8}]
+                ;; seq 4, the first generation's decision, cannot be parsed and is dropped
+                :design-decision [{:seq 9}]}]
+    (with-redefs [ws/read-ws    (fn [_ id] {:id id :entries rows})
+                  ws/entries-of (fn [_ _ k] (get parsed k []))]
+      (is (= {:ws-id "ws-1" :reviews [] :decisions [{:seq 9}] :baselines [{:seq 2}]
+              :designs [{:seq 8}] :retractions []}
+             (settled/ledger :nido "ws-1")))
+      (with-redefs [ws/entries-of (fn [_ _ k] (get (assoc parsed :design-decision []) k []))]
+        (is (nil? (settled/ledger :nido "ws-1"))
+            "one in the current generation that cannot be parsed still settles nothing")))))
+
+(deftest a-re-cut-unit-does-not-read-its-parents-ledger
+  ;; Its fork base lies in its first generation: an unreadable parent unsettles nothing after it.
+  (with-redefs [ws/read-ws     (fn [_ id] {:id id :entries (if (= "ws-child" id)
+                                                             [{:seq 1 :kind :intent} {:seq 2 :kind :generation}]
+                                                             [])})
+                fork/lineage   (fn [w] (when (= "ws-child" (:id w)) {:parent "ws-parent"}))
+                settled/ledger (fn [_ id] (when-not (= "ws-parent" id) {:ws-id id}))]
+    (is (= ["ws-child"] (mapv :ws-id (settled/ledgers :nido "ws-child" {}))))))
+
 (deftest an-elements-identity-moves-with-its-declaration-or-its-code
   (let [dir (fs/create-temp-dir)
         f   (str (fs/path dir "src" "a.clj"))]

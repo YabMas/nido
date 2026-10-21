@@ -308,6 +308,9 @@
       ;; asked, so nothing was reviewed and "clean" would be the report asserting
       ;; a clean bill nobody issued.
       (seq (:conflicted review))                                   "stack-conflicted"
+      ;; The same shape again: refused before fan-out, because a layer named a
+      ;; stratum the design does not declare.
+      (seq (:stratum-undeclared review))                           "stratum-undeclared"
       ;; The same shape: a park that stood too long ended the run before the
       ;; round read a line, and it is not a round that found nothing.
       (seq (:parks-stood review))                                  "unfixable"
@@ -920,6 +923,8 @@
                              :layers (review-layers ctx))
                 (get-in ctx [:design :seq]) (assoc :design-seq (get-in ctx [:design :seq]))
                 (seq (:conflicted ctx)) (assoc :conflicted (vec (:conflicted ctx)))
+                (seq (:stratum-undeclared ctx))
+                (assoc :stratum-undeclared (vec (:stratum-undeclared ctx)))
                 (seq (:read-once ctx))  (assoc :read-once (vec (:read-once ctx)))
                 (seq (:unplaced ctx))   (assoc :unplaced (vec (:unplaced ctx)))
                 (seq (:inherited-answered ctx))

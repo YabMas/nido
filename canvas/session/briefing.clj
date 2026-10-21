@@ -62,8 +62,9 @@
      walking up from there, and what it finds is the PROJECT's — `agent-guidance` writes nido's
      rules beside them only where the project ships none. So the system prompt is the only layer
      left, and this is the part of the briefing that has to reach it: which services this session
-     already provisions, and on which ports."
-    {:signature [:=> [:catn [:instance-id InstanceId]] [:maybe :string]]
+     already provisions, and on which ports — and, when its JVM runs out of another working copy,
+     how the reader loads what it changes from its own, by that copy's path when it is given."
+    {:signature [:=> [:catn [:instance-id InstanceId] [:worktree [:maybe Path]]] [:maybe :string]]
      :delegates [sstate/read-session]})
   (Operation session-briefing "The briefing text, from persisted state and live readings."
     {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string]

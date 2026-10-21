@@ -201,11 +201,16 @@
         (is (= [] (restarts-with {"settled" {:instance-id (str "brian--" ws-id) :key ws-id}}
                                  #(scratch/settle-runtimes! :brian #{"settled"}))))))))
 
-(deftest a-session-no-workstream-holds-is-not-moved
+(deftest a-session-no-workstream-holds-is-moved-onto-its-own-whole-name
   (with-tmp
     (fn [_]
       (is (= [] (restarts-with {"loose" {:instance-id "brian--loose" :key "loose"}}
-                               #(scratch/settle-runtimes! :brian #{"loose"})))))))
+                               #(scratch/settle-runtimes! :brian #{"loose"})))
+          "already on its whole-name runtime")
+      (is (= [["feat/x" "feat/x"]]
+             (restarts-with {"feat/x" {:instance-id "brian--x" :key nil}}
+                            #(scratch/settle-runtimes! :brian #{"feat/x"})))
+          "a slash-named session up on its worktree leaf's runtime moves to its whole name"))))
 
 (deftest a-birth-moves-a-session-that-is-already-up
   (with-tmp

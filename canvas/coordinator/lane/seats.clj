@@ -2,7 +2,7 @@
   "Self-spec: `nido.coordinator.lane.seats` — filling, replacing and re-seating a workstream's seats."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.record.state :refer [WorkstreamId]]
+            [canvas.coordinator.record.state :refer [WorkstreamId SessionName]]
             [canvas.session.commit-gate :as commit-gate]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
@@ -24,15 +24,19 @@
    kept: an occupant is a session record naming its seat and the generation it occupies it in, and
    only re-seating reads an earlier generation's; the conductor is a session record of the
    workstream naming it the conductor, never a seat, whatever the generation; seat messages are a
-   per-workstream log beside the ledger, keyed by generation, that no round reads. And who wrote a `:tension`,
+   per-workstream log beside the ledger, keyed by generation, that no round reads, and what a seat
+   or the conductor is still owed is derived from it, never held by a session. And who wrote a
+   `:tension`,
    `:accord`, `:withdrawal` or `:recut`: these are appended only through record!, which stamps
    the writer from where it is run, and the generic appends refuse them."
   (Operation occupy!
     "Start a driven session for a seat that has no occupant in the current generation, briefed from
-     the seats reading."
+     the seats reading — once the embodiment's refusal passes against that generation, in the same
+     transaction."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:embodiment :map] [:seat :string]] :map]})
   (Operation replace!
-    "Retire a seat's occupant of the current generation and occupy the seat afresh."
+    "Retire a seat's occupant of the current generation and occupy the seat afresh, once the
+     embodiment's refusal passes against that generation, in the same transaction."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:embodiment :map] [:seat :string]] :map]})
   (Operation reseat!
     "On a newly opened generation: retire every seat occupant of an earlier generation — its Claude
@@ -44,9 +48,8 @@
      conductor. Refused while the workstream's conductor is live."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]})
   (Operation send!
-    "Log a message from a seat's occupant or the conductor to a seat or the conductor, and hand it
-     to the addressee's session through conduct, which gives a session's seat messages in the
-     order sent."
+    "Log a message from a seat's occupant or the conductor to a seat of the current generation or
+     the conductor; no session need be live to be sent one."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:message :map]] :map]})
   (Operation record!
     "Append a `:tension`, `:accord`, `:withdrawal` or `:recut` to the workstream's ledger, its
@@ -60,9 +63,19 @@
   (Operation traffic
     "A generation's seat messages, oldest first."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:generation :int]] [:sequential :map]]})
+  (Operation owed
+    "The seat messages a session is owed, oldest first: those the log addresses, in the current
+     generation, to the seat it occupies or to the conductor when it conducts, with no delivery
+     recorded — so an occupant's successor is owed what it was."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName]] [:sequential :map]]})
+  (Operation delivered!
+    "Record that a seat message was given to its addressee's session."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:id :string]] :any]})
   (Operation gate-verdict
     "Why a Bash command a seat's occupant runs must not run, or nil: a push publishing a
      description, or a PR title, that does not name the seat and its position among the seat's
-     layers. Fails open, as the commit gate does."
+     layers. Fails open only on whether the session occupies a seat; a seat's publication it
+     recognises but cannot read is refused. Best-effort: a publication it does not recognise as
+     one — a script, a wrapper, a command built at run time — goes unseen."
     {:signature [:=> [:catn [:input :map]] [:maybe :string]]
-     :delegates [commit-gate/checks commit-gate/push-range]}))
+     :delegates [commit-gate/publications commit-gate/push-range]}))

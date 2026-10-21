@@ -59,7 +59,8 @@
 
 (Stratum seats
   "A workstream as the seats that carry it: the current generation's governing design's
-   generation-defining elements, each embodied by a session, with the interface it guards, the tensions
+   generation-defining elements — the seats an embodiment, when one carries the workstream, gives
+   an occupant — each with the interface it guards, the tensions
    open against it and the accords that settled others; the generation it belongs to and what that
    generation inherited. What occupancy and every embodiment are written in."
   {:provided-by [record-seats]

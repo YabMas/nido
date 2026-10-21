@@ -6,7 +6,10 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.phase :as phase]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as ws]
    [nido.platform.core :as core]
    [nido.review.cache :as cache]
@@ -155,6 +158,7 @@
                   pass/merge-base (fn [& _] "BASEREV")
                   pass/review! (fn [_] {:status nil :findings [{:title "x"}]})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  stages/layer-briefs (fn [_ _] [])
                   cache/read-cache (fn [& _] {})
                   conformance/findings (fn [& _] [{:title "design: no undeclared edge" :id "d1"}])]
       (let [ctx ((:run stages/review-stage)
@@ -168,6 +172,7 @@
                   pass/merge-base (fn [& _] "BASEREV")
                   pass/review! (fn [_] {:status :clean :findings []})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  stages/layer-briefs (fn [_ _] [])
                   cache/read-cache (fn [& _] {})
                   conformance/findings (fn [& _] [{:title "design: no undeclared edge" :id "d1"}])]
       (let [ctx ((:run stages/review-stage)
@@ -180,6 +185,7 @@
                   pass/merge-base (fn [& _] "BASEREV")
                   pass/review! (fn [_] {:status :clean :findings []})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  stages/layer-briefs (fn [_ _] [])
                   cache/read-cache (fn [& _] {})
                   cache/write! (fn [& _] true)
                   conformance/findings (fn [& _] [])]
@@ -209,6 +215,156 @@
              --list` reports the branch clean")
         (is (zero? @launched)
             "not one reviewer launched — the saving is the whole claim")))))
+
+(defn- briefs
+  "A `layers/commit-briefs` stub answering `rows` for the session the preflight resolves."
+  [rows]
+  (fn [_ session _] (assert (= "s" session)) rows))
+
+(def ^:private in-session
+  "A `lifecycle/session-from-cwd` stub standing in session `s`."
+  (fn [_] {:project "nido" :session "s"}))
+
+(deftest a-layer-naming-a-stratum-the-design-does-not-declare-costs-no-reviewer
+  ;; A seat's layer is written in its stratum; one naming a stratum the governing design never
+  ;; declared is work that design did not decide, and judging it against that design would hold it
+  ;; to a yardstick it was not built to.
+  (let [launched (atom 0)]
+    (with-redefs [layers/conflicted (fn [_ _] [])
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  standing/governing-design (fn [_ _] {:seq 9 :strata ["record" "lane"]})
+                  lifecycle/session-from-cwd in-session
+                  layers/commit-briefs (briefs [{:label "l1" :brief {:stratum "record"}}
+                                                {:label "l2" :brief {:stratum "lane, view"}}
+                                                {:label "l3" :brief nil}])
+                  pass/review!     (fn [_] (swap! launched inc) {:findings []})]
+      (let [ctx ((:run stages/review-stage)
+                 {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
+        (is (= :stratum-undeclared (:status ctx)))
+        (is (= :stop (:control ctx)))
+        (is (= [{:layer "l2" :strata ["view"]}] (:stratum-undeclared ctx))
+            "only the stratum the design lacks, and a layer naming none is not a row")
+        (is (zero? @launched))))))
+
+(deftest a-single-layer-naming-an-undeclared-stratum-is-refused-too
+  ;; One layer composes nothing, so the review reads no layer brief for composing it; the
+  ;; preflight reads the briefs itself.
+  (let [launched (atom 0)]
+    (with-redefs [layers/conflicted (fn [_ _] [])
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  standing/governing-design (fn [_ _] {:seq 9 :strata ["record"]})
+                  lifecycle/session-from-cwd in-session
+                  layers/commit-briefs (briefs [{:label "only" :brief {:stratum "unknown"}}])
+                  pass/merge-base  (fn [& _] "BASEREV")
+                  pass/review!     (fn [_] (swap! launched inc) {:findings []})]
+      (let [ctx ((:run stages/review-stage)
+                 {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
+        (is (= :stratum-undeclared (:status ctx)))
+        (is (= [{:layer "only" :strata ["unknown"]}] (:stratum-undeclared ctx)))
+        (is (= 9 (:seq (:design ctx))) "the stop cites the design, so its entry reaches the ledger")
+        (is (zero? @launched))))))
+
+(deftest a-stratum-refusal-under-a-delivered-design-cites-it
+  ;; The stratum check reads the governing design delivered or not, so its stop cites that same
+  ;; design — a stop citing none on a workstream holding one never reaches the ledger.
+  (with-redefs [layers/conflicted (fn [_ _] [])
+                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                standing/governing-design (fn [_ _] {:seq 9 :strata ["record"]})
+                phase/delivered? (constantly true)
+                lifecycle/session-from-cwd in-session
+                layers/commit-briefs (briefs [{:label "only" :brief {:stratum "unknown"}}])
+                pass/review!     (fn [_] (throw (ex-info "must not" {})))]
+    (let [ctx ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
+      (is (= :stratum-undeclared (:status ctx)))
+      (is (= 9 (:seq (:design ctx)))))))
+
+(deftest a-design-declaring-no-strata-declares-none-a-layer-may-name
+  ;; The refusal is of a stratum the governing design does not name, so a design naming none —
+  ;; or no design at all — refuses every stratum a layer names, and never a layer naming none.
+  (let [targets [{:label "l1" :brief {:stratum "x"}} {:label "l2" :brief {}}]]
+    (is (= [{:layer "l1" :strata ["x"]}] (#'stages/undeclared-strata {:seq 1 :strata []} targets)))
+    (is (= [{:layer "l1" :strata ["x"]}] (#'stages/undeclared-strata nil targets)))
+    (is (= [] (#'stages/undeclared-strata nil [{:label "l2" :brief {}}]))))
+  (testing "outside a workstream there is no design to ask, and the stack is not read for it"
+    (with-redefs [stages/project+ws-from-cwd (fn [_] nil)
+                  layers/commit-briefs (fn [& _] (throw (ex-info "must not be read" {})))]
+      (is (nil? (#'stages/layers-off-strata "/w" "main" nil))))))
+
+(deftest a-branch-no-layer-owns-has-its-brief-checked
+  ;; A plain branch carries no `<session>--<slug>` bookmark and is reviewed whole; a `Stratum:`
+  ;; its commit names is checked all the same, under the whole-branch label.
+  (with-redefs [lifecycle/session-from-cwd in-session
+                layers/commit-briefs (briefs [{:label nil :brief {:stratum "unknown"}}])]
+    (is (= [{:layer "stack" :strata ["unknown"]}]
+           (#'stages/layers-off-strata "/w" "main" {:ws [:nido "ws-1"] :design {:strata []}})))))
+
+(deftest every-commit-the-round-reviews-has-its-brief-read-once-from-jj
+  ;; Read through jj itself, so the reading under test is the one the round makes. A plain branch
+  ;; no layer owns, and a layer whose message jj fails to give on the first asking, are each
+  ;; what the check used to wave through.
+  (let [pre  {:ws [:nido "ws-1"] :design {:strata []}}
+        row  (fn [c bm] (str c "\tch-" c "\t" bm "\t\n"))
+        jj!  (fn [rows messages]
+               (let [asked (atom {})]
+                 (fn [_dir & args]
+                   (if (some #{"description"} args)
+                     (let [c (nth args 2) n (get (swap! asked update c (fnil inc 0)) c)]
+                       (if-let [m (get-in messages [c (dec n)])]
+                         {:exit 0 :out m :err ""}
+                         {:exit 1 :out "" :err "transient"}))
+                     {:exit 0 :out (apply str rows) :err ""}))))]
+    (testing "a branch with no layer bookmark"
+      (with-redefs [lifecycle/session-from-cwd in-session
+                    jj/jj! (jj! [(row "c1" "")] {"c1" ["plain\n\nStratum: unknown\n"]})]
+        (is (= [{:layer "stack" :strata ["unknown"]}]
+               (#'stages/layers-off-strata "/w" "main" pre)))))
+    (testing "a message jj gives only on the second asking"
+      (with-redefs [lifecycle/session-from-cwd in-session
+                    jj/jj! (jj! [(row "c1" "s--a")] {"c1" [nil "a\n\nStratum: unknown\n"]})]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"strata"
+                              (#'stages/layers-off-strata "/w" "main" pre)))))))
+
+(deftest a-stratum-check-that-cannot-read-stops-before-any-reviewer
+  ;; A layer whose stratum went unchecked would reach a reviewer under a design that may not name
+  ;; it, so an unreadable ledger or brief ends the round rather than waving the stack through.
+  (let [launched (atom 0)]
+    (with-redefs [layers/conflicted (fn [_ _] [])
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  standing/governing-design (fn [_ _] (throw (ex-info "ledger unreadable" {})))
+                  lifecycle/session-from-cwd in-session
+                  layers/commit-briefs (briefs [{:label "only" :brief {:stratum "record"}}])
+                  pass/review!     (fn [_] (swap! launched inc) {:findings []})]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"ledger could not be read"
+                            ((:run stages/review-stage)
+                             {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})))
+      (is (zero? @launched))))
+  (testing "a brief that cannot be read stops it too"
+    (with-redefs [lifecycle/session-from-cwd in-session
+                  layers/commit-briefs (fn [& _] (throw (ex-info "jj failed" {})))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"briefs could not be read"
+                            (#'stages/layers-off-strata "/w" "main"
+                             {:ws [:nido "ws-1"] :design {:strata []}}))))))
+
+(deftest a-read-answering-as-if-empty-stops-the-stratum-check-too
+  ;; `project+ws-from-cwd` and `standing/governing-design` each answer a failed read as an empty
+  ;; one, and an empty one is what the check passes; `layers/commit-briefs` throws its own.
+  (let [ws  [:nido "ws-1"]
+        pre {:ws ws :design {:strata []}}]
+    (testing "a session that could not be resolved"
+      (with-redefs [lifecycle/session-from-cwd (fn [_] nil)]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"session could not be resolved"
+                              (#'stages/layers-off-strata "/w" "main" pre)))))
+    (testing "a governing design the ledger names and cannot give"
+      (with-redefs [stages/project+ws-from-cwd   (fn [_] ws)
+                    standing/governing-design    (fn [_ _] nil)
+                    ws/read-ws                   (fn [_ _] {:entries []})
+                    generation/current-design    (fn [_] 7)]
+        (is (re-find #"entry 7 cannot be read"
+                     (ex-message (:unread (#'stages/preflight-design "/w")))))))
+    (testing "a workstream that could not be resolved"
+      (with-redefs [stages/project+ws-from-cwd (fn [_] nil)
+                    lifecycle/session-from-cwd (fn [_] (throw (ex-info "registry unreadable" {})))]
+        (is (:unread (#'stages/preflight-design "/w")))))))
 
 (deftest the-conflict-preflight-answers-on-a-clean-stack-too
   ;; [] and never-asked are different answers, and only the first one can settle
@@ -637,14 +793,14 @@
                                   {:num-turns 4 :result-error? false :result-text "done"})
                   stages/working-copy-dirty? (fn [_] true)
                   stages/session-stack (fn [_ _] two-layer-stack)
-                  lifecycle/session-from-cwd (fn [_] {:instance-id "p--s"})
-                  launcher/live-services-prompt (fn [id] (str "LIVE:" id))
+                  lifecycle/session-from-cwd (fn [_] {:instance-id "p--s" :worktree "/w"})
+                  launcher/live-services-prompt (fn [id wt] (str "LIVE:" id ":" wt))
                   jj/jj! (jj-scripted [[] []])]
       ((:run stages/fix-stage)
        {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 2
         :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "lower"}
                    {:id "bb22" :title "y" :disposition :fix :owner-layer "upper"}]})
-      (is (= ["LIVE:p--s" "LIVE:p--s"] (mapv :system-prompt @launches))
+      (is (= ["LIVE:p--s:/w" "LIVE:p--s:/w"] (mapv :system-prompt @launches))
           "every fixer of the round, not just the first — they stand in one
            worktree and the answer cannot differ between them"))))
 
@@ -2344,6 +2500,8 @@
                   cache/read-cache  (fn [& _] {})
                   conformance/findings (fn [& _] [])
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  stages/layer-briefs (fn [_ _] [])
+                  standing/governing-design (fn [p w] (ws/latest-entry p w :design))
                   ws/latest-entry (fn [_ _ kind]
                                     (case kind
                                       :design         {:seq 3}
@@ -2513,6 +2671,7 @@
                 pass/merge-base     (fn [& _] "FORK")
                 pass/changed-files  (fn [_ _ to] [(str to ".clj")])
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                stages/layer-briefs (fn [_ _] [])
                 cache/read-cache     (fn [& _] {"h-cA" {:status :converged :round 1}})
                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                 {:bookmark "s--b" :slug "b" :tip "cB"}])
@@ -2715,6 +2874,7 @@
                   pass/merge-base           (fn [& _] "FORK")
                   stages/session-stack       (fn [& _] [])
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  stages/layer-briefs (fn [_ _] [])
                   stages/discover-design-record (fn [_] nil)
                   stages/read-stance         (fn [_] nil)
                   cache/read-cache           (fn [& _] {})
@@ -4127,6 +4287,7 @@
                   stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                   {:bookmark "s--b" :slug "b" :tip "cB"}])
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  stages/layer-briefs (fn [_ _] [])
                   cache/read-cache     (fn [& _] {})
                   cache/write!         (fn [_ _ c] (reset! written c) true)
                   pass/review!        (fn [{:keys [label]}]
@@ -4168,6 +4329,7 @@
                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                 {:bookmark "s--b" :slug "b" :tip "cB"}])
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                stages/layer-briefs (fn [_ _] [])
                 stages/discover-design-record (fn [_] nil)
                 stages/prior-open    (fn [_] nil)
                 stages/standing-needs (fn [& _] nil)
@@ -4201,6 +4363,7 @@
                   stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                   {:bookmark "s--b" :slug "b" :tip "cB"}])
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  stages/layer-briefs (fn [_ _] [])
                   stages/discover-design-record (fn [_] {:seq 7 :claims []})
                   stages/prior-open    (fn [_] nil)
                   stages/standing-needs (fn [& _] nil)
@@ -4861,6 +5024,7 @@
   ;; discover-prior-verdict, and dropped — which is how one item was named by
   ;; two consecutive verdicts of the same branch, both times as still unraised.
   (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                standing/governing-design (fn [p w] (ws/latest-entry p w :design))
                 ws/latest-entry (ledger-of {:verdict :strained :design-seq 3 :round 4
                                             :reason "the seam is under pressure"
                                             :unraised [{:where "turn.clj:40"
@@ -4875,6 +5039,7 @@
     ;; One verdict's :needs became `The earlier outstanding item is unchanged`,
     ;; and ten reviewers were handed it as a thing to find.
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  standing/governing-design (fn [p w] (ws/latest-entry p w :design))
                   ws/latest-entry (ledger-of {:verdict :sound :design-seq 3 :round 2
                                               :reason "nothing moved"
                                               :needs "The earlier outstanding item is unchanged."})]
@@ -4882,6 +5047,7 @@
 
   (testing "a verdict that named nothing outstanding seeds nothing"
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  standing/governing-design (fn [p w] (ws/latest-entry p w :design))
                   ws/latest-entry (ledger-of {:verdict :sound :design-seq 3 :round 2
                                               :reason "implementation details"})]
       (is (nil? (stages/standing-needs "/w" nil))))))
@@ -4906,6 +5072,7 @@
   ;; The reviewer is told out of range is a silence, so such a row could only
   ;; come back unraised and be copied forward as kept, run after run.
   (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                standing/governing-design (fn [p w] (ws/latest-entry p w :design))
                 ws/latest-entry (ledger-of {:verdict :sound :design-seq 3 :round 2
                                             :reason "r"
                                             :unraised [{:where "turn.clj:40" :what "in range"}
@@ -4935,6 +5102,7 @@
                             {:where "handlers/admin_sso_conflicts.clj:356" :what "no door"}]}
         design  {:shape "the admin door is decided per handler in admin_sso_conflicts.clj"}]
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  standing/governing-design (fn [p w] (ws/latest-entry p w :design))
                   ws/latest-entry (amended-ledger design verdict)]
       (is (nil? (stages/discover-prior-verdict "/w" (assoc design :seq 5)))
           "the old JUDGMENT is still not a standing answer for the new record")
@@ -4946,10 +5114,12 @@
           "and that row reaches the next run's reviewers"))
     (testing "a verdict against the current record is not an amendment's"
       (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                    standing/governing-design (fn [p w] (ws/latest-entry p w :design))
                     ws/latest-entry (amended-ledger design (assoc verdict :design-seq 5))]
         (is (nil? (stages/across-amendment "/w" (assoc design :seq 5))))))
     (testing "an amendment naming every row carries nothing"
       (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                    standing/governing-design (fn [p w] (ws/latest-entry p w :design))
                     ws/latest-entry (amended-ledger design verdict)]
         (is (nil? (stages/across-amendment
                    "/w" {:seq 5 :shape "eduplaces_sync.clj and admin_sso_conflicts.clj"})))))))
@@ -5112,6 +5282,7 @@
                   cache/write!      (fn [& _] true)
                   conformance/findings (fn [& _] [])
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  stages/layer-briefs (fn [_ _] [])
                   ws/latest-entry (review-ledger [{:id "a" :layer "core" :title "t"
                                                    :disposition :fix}])
                   pass/review! (fn [_] {:status nil :findings []})]
@@ -5175,6 +5346,7 @@
                                                       "cB" ["src/babel/schedule.clj"]
                                                       []))
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  stages/layer-briefs (fn [_ _] [])
                   ws/latest-entry      (review-ledger ledger)
                   cache/read-cache     (fn [& _] {})
                   cache/write!         (fn [_ _ c] (reset! written c) true)
@@ -5681,6 +5853,7 @@
                   cache/write!      (fn [& _] true)
                   conformance/findings (fn [& _] [])
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  stages/layer-briefs (fn [_ _] [])
                   ws/latest-entry (fn [& _] nil)
                   pass/review! (fn [_] {:status nil :findings []})]
       (is (= :unresolved (:status ((:run stages/review-stage) ctx)))
@@ -5790,6 +5963,7 @@
   ;; :sound over files the design never names.
   (let [rows (fn [& kinds] (vec (map-indexed (fn [i k] {:kind k :seq (inc i)}) kinds)))]
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  standing/governing-design (fn [p w] (ws/latest-entry p w :design))
                   ws/latest-entry (fn [_ _ _] {:seq 1 :shape "the door"})
                   ws/read-ws (fn [_ _] {:entries (rows :design :review :merged :review)})]
       (is (nil? (stages/discover-design-record "/w"))
@@ -5797,11 +5971,13 @@
       (is (= 1 (:seq (stages/delivered-design "/w")))
           "and the gate is told which record it declined"))
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  standing/governing-design (fn [p w] (ws/latest-entry p w :design))
                   ws/latest-entry (fn [_ _ _] {:seq 1 :shape "the door"})
                   ws/read-ws (fn [_ _] {:entries (rows :design :review)})]
       (is (= 1 (:seq (stages/discover-design-record "/w"))) "unlanded, it is the yardstick")
       (is (nil? (stages/delivered-design "/w"))))
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  standing/governing-design (fn [p w] (ws/latest-entry p w :design))
                   ws/latest-entry (fn [_ _ _] {:seq 1 :shape "the door"})
                   ws/read-ws (fn [_ _] (throw (ex-info "unreadable" {})))]
       (is (= 1 (:seq (stages/discover-design-record "/w")))
@@ -6263,6 +6439,7 @@
                   cache/write!      (fn [& _] true)
                   conformance/findings (fn [& _] [])
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  stages/layer-briefs (fn [_ _] [])
                   ws/latest-entry (fn [& _] nil)
                   pass/review! (fn [_] {:status nil :findings []})]
       (let [out ((:run stages/review-stage)
@@ -6271,3 +6448,37 @@
         (is (= :unresolved (:status out))
             "a first quiet reading under a blocking park ends the run as the park decides")
         (is (nil? (:read-once out)) "and goes back for no second reading")))))
+
+(deftest a-review-or-verdict-before-a-re-cut-is-not-the-new-generations
+  ;; What crosses a re-cut is what its :generation entry carries. The last review's open and
+  ;; standing items, and the last verdict's unraised rows and :needs, were owed to a design the
+  ;; re-cut replaced.
+  (let [rows [{:seq 1 :kind :intent} {:seq 2 :kind :design} {:seq 3 :kind :review}
+              {:seq 4 :kind :design-verdict} {:seq 5 :kind :recut} {:seq 6 :kind :generation}
+              {:seq 7 :kind :design}]]
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:brian "ws-1"])
+                  ws/read-ws (fn [_ _] {:entries rows})
+                  ws/latest-entry (fn [_ _ kind]
+                                    (case kind
+                                      :review {:seq 3 :open [{:what "owed"}]}
+                                      :design-verdict {:seq 4 :design-seq 2 :verdict :sound
+                                                       :unraised [{:where "a.clj:1" :what "w"}]
+                                                       :needs "do it"}
+                                      nil))]
+      (is (nil? (stages/last-review :brian "ws-1")))
+      (is (nil? (stages/across-amendment "/w" {:seq 7 :format :design})))
+      (testing "within one generation the newest is read as before"
+        (with-redefs [ws/read-ws (fn [_ _] {:entries (take 4 rows)})]
+          (is (= 3 (:seq (stages/last-review :brian "ws-1")))))))))
+
+(deftest what-the-cache-knows-of-a-patch-stays-in-its-generation
+  ;; A patch converged, or ruled on, under the design a re-cut replaced is reviewed afresh.
+  (let [rows  [{:seq 1 :kind :intent} {:seq 2 :kind :design} {:seq 3 :kind :recut} {:seq 4 :kind :generation}]
+        cache {"h-old" {:status :converged} "h-new" {:status :converged :generation 2}}]
+    (with-redefs [cache/read-cache (fn [_ _] cache)
+                  ws/read-ws       (fn [_ _] {:entries rows})]
+      (is (= #{"h-new"} (set (keys (#'stages/generation-cache :brian "ws-1" (#'stages/current-generation :brian "ws-1")))))))
+    (with-redefs [cache/read-cache (fn [_ _] cache)
+                  ws/read-ws       (fn [_ _] {:entries (take 2 rows)})]
+      (is (= #{"h-old"} (set (keys (#'stages/generation-cache :brian "ws-1" (#'stages/current-generation :brian "ws-1")))))
+          "a workstream never re-cut reads its cache as it did"))))

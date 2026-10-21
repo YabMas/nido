@@ -2,10 +2,11 @@
 (ns tasks.nido-commit-gate
   "bb-task entrypoint: nido's commit gate, run as a Claude Code `PreToolUse`
    hook on Bash. Exit 2 with the reason on stderr blocks the command; 0 lets it
-   run. Two judges, each failing open: the project's own convention
-   (`nido.session.commit-gate/verdict`), and for a seat's occupant that every
-   commit and PR title names its seat and position (`nido.coordinator.lane.seats/
-   gate-verdict`). This composes them; it judges nothing itself."
+   run. Two judges: the project's own convention
+   (`nido.session.commit-gate/verdict`), which fails open, and for a seat's
+   occupant that every commit and PR title names its seat and position
+   (`nido.coordinator.lane.seats/gate-verdict`), which refuses a seat's
+   publication it cannot read. This composes them; it judges nothing itself."
   (:require
    [cheshire.core :as json]
    [nido.coordinator.lane.seats :as seats]

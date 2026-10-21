@@ -48,7 +48,8 @@
   (Operation with-claim
     "Run a body holding the claim, or refuse and hand back the holder's. Refusing rather than
      waiting is the whole point; releasing happens on every exit path by closing a channel,
-     never by deleting a file."
+     never by deleting a file. Taken under the workstream's append lock, so a ledger writer that
+     finds no claim under that lock finds none until its append is done."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:base :map]
                             [:f [:=> [:catn] :any]]] :any]
      :delegates [validate read-live held?]})

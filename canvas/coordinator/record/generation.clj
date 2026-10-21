@@ -52,6 +52,12 @@
      none. The append checks compare these and the seats level reads its seats through them, so
      the two cannot disagree on what a generation fixes."
     {:signature [:=> [:catn [:design :map]] [:set :string]]})
+  (Operation fixing-design
+    "The seq of the current span's design that fixes its generation-defining elements as they
+     stand — the first marking any element that is cleared or approved — or nil while none is. A
+     design round shows its judge what that design's marked elements hide, so a later design of
+     the generation moving one's secret is judged against it, read within the span."
+    {:signature [:=> [:catn [:workstream :map]] [:maybe :int]]})
   (Operation fixed-ids
     "The generation-defining ids the current generation fixes: those its `:generation` entry
      carries, or in a first generation those of the design marking any element that is first

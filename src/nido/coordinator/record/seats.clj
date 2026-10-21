@@ -1,5 +1,5 @@
 (ns nido.coordinator.record.seats
-  "A workstream as the seats that carry it, read off its records.
+  "A workstream as its seats, read off its records.
 
    A seat is one of the ids the current generation fixes — generation-defining elements of its
    design, as record-generation reads them — and is never stored: no entry or file names a seat,

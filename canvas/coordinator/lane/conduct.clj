@@ -43,8 +43,9 @@
     {:signature [:=> [:catn [:opts :map]] [:sequential :map]]})
   (Operation start!
     "Start a conversation for a session record as a background session nido drives, its first
-     prompt's token recorded before the session starts, refused naming the hold while one stands;
-     trust is given only to a directory made from a trusted source."
+     prompt's token recorded before the session starts, refused while the record's session lives —
+     naming the hold when one stands on it — and carrying nothing of a stopped one's facet; trust is
+     given only to a directory made from a trusted source."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [tagged substrate/trusted? substrate/ensure-trusted! substrate/dispatch!]})
   (Operation adopt!
@@ -62,19 +63,18 @@
   (Operation instruct!
     "Queue the next instruction for a session nido drives, given once it is ready for it."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:text :string]] :map]})
-  (Operation message!
-    "Put a seat message in a driven session's inbox, behind any already waiting: each is given in
-     turn, tokened, once nothing is queued and the session is ready, and none is refused because
-     another waits."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:text :string]] :map]})
   (Operation conduct!
     "One pass: read every new session event and the substrate's listing, decide, record, then
      deliver — only while the session's own events still show the launch baseline; answer what
-     the pass saw — turn ends, denials, holds, blocked sessions, deliveries, refusals."
+     the pass saw — turn ends, denials, holds, blocked sessions, deliveries, refusals. Seat
+     messages are asked of the mail its caller supplies — what each session is owed, oldest first
+     — given tokened once nothing is queued, and marked delivered only once the substrate took
+     them; conduct keeps none itself."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [faceted-sessions decide baseline-shown events/events-since substrate/listing substrate/send! substrate/wake!]})
   (Operation retire!
-    "Stop driving a session and stop its process, before the session it belongs to is torn down."
+    "Stop driving a session and stop its process, before the session it belongs to is torn down;
+     its facet marked retired, so it holds no session."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:opts :map]] [:maybe :map]]
      :delegates [release! substrate/stop!]})
   (Operation live-states
