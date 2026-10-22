@@ -188,6 +188,16 @@
    :doc "Delete the shared cluster for a project"
    :task (apply nido-shared-pg/destroy *command-line-args*)}
 
+  nido:test-pg:status
+  {:requires ([tasks.nido-test-pg :as nido-test-pg])
+   :doc "Show a project's test cluster and the session test databases in it"
+   :task (apply nido-test-pg/status *command-line-args*)}
+
+  nido:test-pg:reset
+  {:requires ([tasks.nido-test-pg :as nido-test-pg])
+   :doc "Delete a project's test cluster and every session test database in it"
+   :task (apply nido-test-pg/reset *command-line-args*)}
+
   nido:reclaim
   {:requires ([tasks.nido-reclaim :as nido-reclaim])
    :doc "List (or with :force? true, delete) per-instance state dirs not tracked in the registry"

@@ -39,7 +39,8 @@
    [nido.session.links :as links]
    [nido.session.profiles :as profiles]
    [nido.session.services.postgresql :as pg]
-   [nido.session.state :as state]))
+   [nido.session.state :as state]
+   [nido.session.test-pg :as test-pg]))
 
 ;; ---------------------------------------------------------------------------
 ;; Project & worktree path resolution
@@ -825,6 +826,20 @@
               (fs/delete-tree pg-data)))
           (engine/start-session! wt-path (assoc opts :session-name name))))))))
 
+(defn- drop-test-databases!
+  "Drop the session's database in each test cluster its project declares. Stop
+   keeps a test database and the service protocol has no destroy, so this is
+   the one place a session's test database ends."
+  [project-name instance-id]
+  (try
+    (doseq [svc (:services (engine/read-session-edn project-name))
+            :when (= :test-pg (:type svc))]
+      (test-pg/drop-session-db! project-name
+                                (assoc (select-keys svc [:db-user :max-connections :db-stem])
+                                       :instance-id instance-id)))
+    (catch Exception e
+      (core/log-step (str "warning: dropping test database: " (ex-message e))))))
+
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   destroy!
   "Bring the named session down, drop its instance state-dir (PGDATA,
@@ -842,7 +857,7 @@
    that became jj-colocated after some sessions were already created with
    `git worktree`) tear down on the same path they were created with."
   [name opts]
-  (let [{:keys [project-dir wt-path branch]} (with-context name opts)
+  (let [{:keys [project-name project-dir wt-path branch]} (with-context name opts)
         delete-branch? (boolean (or (:delete-branch? opts) (:delete-branch opts)))
         instance-id (engine/resolve-instance-id wt-path)]
     (with-session-lock
@@ -855,6 +870,7 @@
              (engine/stop-session! wt-path))
            (catch Exception e
              (core/log-step (str "warning: stop-session error: " (ex-message e)))))
+         (drop-test-databases! project-name instance-id)
          (let [state-dir (state/instance-state-dir instance-id)
                survivors (state/pid-files instance-id)]
            (cond

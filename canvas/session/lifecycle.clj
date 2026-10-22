@@ -5,6 +5,7 @@
             [canvas.coordinator.record.state :refer [Path]]
             [canvas.platform.project :refer [ProjectName]]
             [canvas.session.state :as sstate :refer [InstanceId]]
+            [canvas.session.test-pg :as tpg]
             [fukan.common.typing.malli]))
 
 (Module session-lifecycle
@@ -70,8 +71,10 @@
   (Operation share! "Move a session back onto the shared cluster."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]
      :delegates [sstate/clear-pg-mode-override!]})
-  (Operation destroy! "Bring a session down and remove its worktree and state. The one that does not preserve — except the state of a process the stop could not show was gone, which is its only record."
-    {:signature [:=> [:catn [:name :string] [:opts :map]] :any]})
+  (Operation destroy! "Bring a session down and remove its worktree and state. The one that does not preserve — except the state of a process the stop could not show was gone, which is its only record.
+     Drops the session's test database itself: the service protocol has no destroy, and stop keeps it."
+    {:signature [:=> [:catn [:name :string] [:opts :map]] :any]
+     :delegates [tpg/drop-session-db!]})
   (Operation status "What state a named session is in."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]})
   (Operation cd-target-file

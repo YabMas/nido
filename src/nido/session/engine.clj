@@ -20,6 +20,7 @@
    [nido.session.services.eval :as eval-svc]
    nido.session.services.postgresql
    nido.session.services.process
+   nido.session.test-pg
    [nido.session.state :as state]))
 
 ;; ---------------------------------------------------------------------------

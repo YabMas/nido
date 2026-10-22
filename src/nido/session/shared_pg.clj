@@ -455,8 +455,11 @@
                                 (history-rekey-sql {:schema schema :from-version from
                                                     :version version :script f
                                                     :checksum checksum})
+                                ;; A migration's last statement need not end in `;`
+                                ;; (V4 on brian's main does not); the separator keeps it
+                                ;; from running into the history insert.
                                 (str "SET search_path TO " schema ", public;\n"
-                                     (slurp file-path) "\n"
+                                     (slurp file-path) "\n;\n"
                                      (history-insert-sql
                                       {:schema schema :rank rank :version version
                                        :description desc :script f :checksum checksum
