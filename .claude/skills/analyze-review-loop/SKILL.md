@@ -5,187 +5,83 @@ description: Read one finished review-loop run WHOLE — the arc across all its 
 
 # analyze-review-loop skill
 
-> **Harness-side skill, owned by nido.** Fired by the `:review-analysis` trigger on project `nido`, enqueued by `nido.review.analysis/enqueue!` at the end of every review loop that was not a dry run — whatever project the loop reviewed.
+> **Harness-side skill, owned by nido.** Fired by the `:review-analysis` trigger on project `nido` at the end of every review loop that was not a dry run. **Read `~/Code/nido/docs/reference/self-improvement.md` first** — what you propose is held to it.
 
-## What you are looking at, and what you are not
+You analyse **the loop, not the code it reviewed**, and **the whole run, not its rounds one by one**: whether the rounds added up, how findings travelled, and whether it stopped for the right reason. A per-round recap is the wrong artifact; the report already is one.
 
-You are analysing **the review loop**, not the code it reviewed. A run that correctly found twelve real bugs and fixed them in one round is a *good* run; a run that found nothing after six rounds of agents may be a *bad* one. The subject is the machinery.
+## Boundaries
 
-**And you are analysing one whole run, not a sequence of rounds.** You fire once, after the loop has terminated, precisely so you can see what no round could see from inside itself: whether the rounds added up, how a finding travelled from the layer that reported it to the layer that fixed it, and whether the loop stopped for the right reason. A round-by-round write-up is the wrong artifact — the report already holds that, and reading it back adds nothing. Every observation you file has to say something about the **arc**.
+1. **Never touch the reviewed branch.** You get `{{event/reviewed-project}} / {{event/reviewed-session}}` as names, not a path. Everything you need is in the run dir and nido's ledger; wanting the diff is itself a finding about what the report records.
+2. **Never edit code.** This `:lite` worktree is a symlink to `~/Code/nido`; an edit lands outside any branch. You write `artifacts/analysis.md` and one ledger entry.
 
-**Two hard boundaries.**
-
-1. **Never touch the reviewed branch.** You were given its project and session as *names* — `{{event/reviewed-project}} / {{event/reviewed-session}}` — deliberately, and not as a path. Do not `cd` to it, do not read files in it, do not run `jj` against it. Everything you need is under the run dir and in nido's own ledger. If you find yourself wanting the reviewed diff, say so as a gap in what the report records; that is itself a finding.
-2. **Never edit code.** This session runs on the `:lite` profile, whose worktree is a **symlink to nido's main checkout** — an edit here lands in `~/Code/nido` directly, outside any branch. You write exactly two things: `artifacts/analysis.md` and one ledger entry. Improvements are *proposed*, never applied.
-
-## 1. Say you have started
+## 1. Read the run
 
 ```bash
-cat > _run-status.edn <<'EDN'
-{:phase :investigating :note "Reading the run"}
-EDN
-```
-
-## 2. Read the run
-
-The payload names the run dir and the report. Start there:
-
-```bash
-ls "<run-dir>"
-cat "<report-path>" | jq '{status: .status, rounds: .summary.rounds, target: .target, machinery: .machinery}'
-```
-
-`report.json` is the whole run: `:target` (cwd, base, base-rev, layers, files), `:machinery` (the source root the loop's OWN namespaces were loaded from, and the revision it stood at — §4 is what you need it for), then one entry per round under `:rounds`, each with its phases — `review` (per-layer `:layers` rows and every `:findings` body), `warden` (`:decision`, `:reason`, and per-finding `:rulings` — each carrying `:handle`, the identity the loop tells findings apart by across rounds, and `:sweep`, whether the fixer was ordered to audit the layer for siblings of it), and `fix` (`:fixes`, `:fixed-count`, and the four ways a repair does not happen — `:declined` a fixer that read the finding and refused, `:rolled-back` a repair the stack would not take, `:launch-failed` a fixer claude refused before it took a turn, with its `:exit-code`, `:unattempted` a layer whose fixer was never launched because the stage stopped on a `:conflicted` it could not undo).
-
-Also in the run dir: `agent.err.log` (the warden's stderr) and `*-round-N.err.log` per stage. A run that ended `:review-failed` or `:warden-indeterminate` has its whole story in those, not in the report.
-
-And one transcript per fixer, `fix-<layer>-round-N.log` — the stream-json of everything that fixer did, in order. It is where a question about *how* a repair was made gets answered: what the fixer read before it edited, whether it verified, where a killed one had got to. `agent.log` holds the rest of the run's agents, the warden among them.
-
-Read the reviewed workstream's ledger too — **nido-side, via the CLI, not by opening the worktree**:
-
-```bash
+echo '{:phase :investigating :note "Reading the run"}' > _run-status.edn
+jq '{status, rounds: .summary.rounds, target, machinery}' "<report-path>"
 bb nido:workstream:show :project <reviewed-project> :ws-id <reviewed-ws-id>
 ```
 
-The `:review` entry it holds is what the loop reported about itself; the `:design`/`:design-verdict` entries are the yardstick it judged against.
+`report.json` holds every round's phases. A **diff run** has `review` (per-layer findings), `warden` (`:decision`, per-finding `:rulings` with `:handle` — the cross-round identity), and `fix` (`:fixes`, plus `:declined`, `:rolled-back`, `:launch-failed`, `:unattempted`). A **record run** (`baseline-loop-…`/`design-loop-…`) has `judge` and `amend`; its report lists only the broken checks, so count from `bb nido:review:figures :project <p> :run-id <run-id>` and quote it. Stderr is in `*-round-N.err.log` (the whole story of a `:review-failed`); each agent's transcript is in its own `*.log`.
 
-## 2a. A record loop reads differently
+## 2. Build the arc
 
-A run titled `baseline-loop …` or `design-loop …` — its run id starts the same way, and its headline names the record it judged — is a **record loop**: it judged a baseline or a design record before any code existed, and amended the record between rounds. Everything in §1 still holds (never the reviewed tree; the ledger through the CLI), but the arc is different and §3's table is not the one to build.
+One table: **every finding (or check/claim) against every round** — reported where, ruled what, owned by which layer, fixed or amended, and whether it came back (answered from cache, or re-adjudicated). Then read off it:
 
-Its report has one `judge` and, when the round amended, one `amend` phase per round. A judge phase carries the verdict or the outcome that stood in for one; for a design round, its `:findings` are the broken checks it handed on — **not every check**: a round that proceeds drops what it found broken, and the report never lists a held check. So do not count checks off the report. The ledger holds every round's decision whole, each naming the run that appended it:
+- **Shape.** Converging (each round less), flat (running without closing), or rising (fixes creating work).
+- **Routing.** reported on X → attributed to Y → fixed on Y → re-reviewed → answered. A finding that keeps travelling is circling.
+- **Termination.** Was the status the right one? A `:converged` because the judge went quiet, or a `:stalled`/`:no-progress` while real work remained, is the loop stopping on the wrong signal. Past ~5 rounds, say what kept it going.
+- **Record runs.** A claim refuted again after every rewording, by new counterexamples each time, is one no wording settles. A weakening (`:retreats`) without a reason the judge gave is a retreat, even on a run that cleared.
 
-```bash
-bb nido:review:figures :project <reviewed-project> :run-id <run-id>
-```
-
-That prints, per derived check (and per baseline derivation, for a baseline run or a design run's re-survey), in how many rounds it was broken, in how many it was the only thing broken, and whether it was still broken when the run ended; and, for a baseline run, which claims were found false and how often. Quote it; do not recount it. `bb nido:review:figures :project <p>` without a run id sums every attributable run, which is how one check's behaviour across runs is read.
-
-Build this table instead of §3's: **every check or claim, against every round** — broken or refuted, what the amender changed for it, what it gave up (`:retreats`, the weakenings), whether it objected (`:disputes`), and whether the next round found it again. Then read:
-
-- **Convergence.** A healthy run narrows: each round refutes less, and the record ends `sufficient` or `cleared`. A claim refuted again after every correction, each time by a different counterexample, is a claim no rewording will settle — say so, and say whether the claim or the round was wrong.
-- **The cost of converging.** Weakenings are the amender making a finding go away by claiming less. One with a reason the judge gave is the loop working; one with none is a retreat, and it is a finding here even on a run that cleared.
-- **Which check carried the run.** A check broken alone round after round, or still broken at the end, is either a real defect the record kept or a check the round cannot answer. The figures say which check it was; the decisions' notes say which of the two.
-- **Resurveys.** A design round that sent its premise back is a baseline loop inside the design run; its reviews are read as this run's by the run they name.
-
-The machinery a record run exercised: `src/nido/review/record.clj` (both rounds' prompts, pipelines and amenders), `src/nido/review/retreat.clj` (what counts as a weakening), `src/nido/review/settled.clj` (what a round was not asked to check), and `src/nido/review/loop.clj` (the terminal status). Read them at `:machinery.rev`, as §4 says.
-
-## 3. Reconstruct the arc — do this before anything else
-
-Everything holistic falls out of one table, so build it first: **every finding id, against every round**, and what happened to it.
-
-For each finding, across the whole run: which round first reported it and from which layer; what the warden ruled (`fix` / `closed` + authority / `deviation` / `park`) and which layer it attributed ownership to; whether a fixer on that layer committed for it; whether it came back in a later round; and if it came back, whether it returned *answered* from the cache or was re-adjudicated from scratch.
-
-Then read three things off that table.
-
-**The shape of the run.** Findings and fixes per round. A healthy arc converges — each round finds and fixes less than the last. A flat arc (the same count round after round) means the loop was running without closing anything. A rising one means fixes were creating work.
-
-**The routing.** A finding's whole path is: *reported by* layer X → *attributed to* owner layer Y → *fixed on* Y → *re-reviewed* next round → *answered* from Y's cache. Every hop can go wrong, and only a cross-round view shows it: an attribution that sent a finding to a layer that could not fix it, a fix that landed but did not stop the finding recurring, an answer that should have been cached and was not. Where the same finding keeps travelling, the loop is not converging — it is circling.
-
-**The termination.** The loop stopped for exactly one reason (`loop.clj`): converged, escalated, clean, no-progress, review-failed, fix-noop, warden-indeterminate, or — only if a cap was asked for — max-iters. Was it the right one? A `:no-progress` that fired while real work remained, or a `:converged` reached because the reviewer went quiet rather than because the code got fixed, are both the loop stopping on the wrong signal, and neither is visible from inside a single round.
-
-## 4. Read the machinery the run exercised — at the revision that ran it
-
-**Not the checkout you are standing in.** `report.json`'s `:machinery` names the source root the run's `nido.review.*` namespaces were loaded from and the revision it stood at, and that is the code whose behaviour you are explaining. Read it there:
+## 3. Read the machinery at the revision that ran
 
 ```bash
 REV=$(jq -r '.machinery.rev // empty' "<report-path>")
-jj --ignore-working-copy file show -r "$REV" src/nido/review/stages.clj
+jj --ignore-working-copy file show -r "$REV" src/nido/review/<file>.clj
 ```
 
-`--ignore-working-copy` because your worktree is a symlink to nido's main checkout and an analysis must not snapshot it. Nido's checkout and every nido session worktree are workspaces of one repo sharing one store, so the revision resolves from here whichever of them the run loaded from — and `:machinery.root` is what says which it was.
+`:machinery.lacks` lists main's loop-changing commits the run did not have — **anything main has since fixed is not an observation**. When `:dirty?` is true, `:hash` (not `:rev`) is what ran. No `:machinery`? Read the checkout and say every observation is provisional.
 
-**Say how far behind the run was, before you file anything.** The stamp already says: `:machinery.lacks` lists main's commits the run's copy did not have that change the loop, `:behind-main` counts all of them, and `:main-base` is the newest commit on main the copy contained. Do not compute it from `:rev` — a root checkout's `:rev` is normally an unnamed working-copy commit on no branch, and `$REV::main` is then empty and reads as current. When `:dirty?` is true the disk held edits `:rev` does not, so `:rev` is NOT the code that ran; `:hash` is, and `jj --ignore-working-copy file show -r <rev> resources/review src/nido/review src/tasks/nido_review.clj | shasum -a 256` equals it exactly at a revision that holds what was loaded. `:behind-base?` says the copy predates the reviewed branch's fork point; `:self-review?` says the reviewed branch changes the loop, and `:own-copy?` whether the run executed that change. The payload's headline repeats any of these that should change how you read the run. A review run holds the code it started with, and the improvement sweep lands changes to that code daily, so the gap is normally non-empty and sometimes large. One analysis read the current files instead and filed four already-fixed defects as fresh bugs; establishing that took bisecting main. Anything main has since fixed is not an observation — say so in a sentence and move on.
+The files: `loop.clj` (termination), `stages.clj` (diff stages, `apply-rulings`, caches), `prompts.clj` (diff prompts), `cache.clj`, `record.clj` (record judges and amenders), `retreat.clj`, `settled.clj`.
 
-If `:machinery` is absent (a report written before the stamp existed) or the revision will not resolve, fall back to the checkout you are in and **say in the entry that you did** — every observation below is then provisional.
+## 4. What to look for
 
-| file | what to check it against |
-|---|---|
-| `src/nido/review/loop.clj` | termination — which terminal status fired, and whether it was the right one |
-| `src/nido/review/stages.clj` | the three stages, `apply-rulings`, `converged-targets`, `answered-for` |
-| `src/nido/review/prompts.clj` | every prompt the run's agents actually received |
-| `src/nido/review/cache.clj` | the converged/answered cache, keyed by patch hash |
-| `src/nido/review/codex.clj` | how the reviewer is invoked |
+- **Waste** — rounds that closed nothing new; a finding re-adjudicated instead of answered (its hash moved); layers re-reviewed after converging.
+- **Miss** — a ruling the warden omitted (`because` reads "the warden did not rule on this finding"); `park`/`deviation` where a fix was due.
+- **Misfire** — a `closed` with no authority; `owner_layer` outside the stack; a fix that did not stop the recurrence.
+- **Friction** — the report lacked what reconstructing the arc needed.
+- **Working well** — record it as an arc; it is how a regression is told from the normal state.
 
-An observation that cannot be pinned to one of these is not yet actionable — keep digging until it is, or file it as `:friction` and say what you could not determine.
+## 5. Propose only what the evidence carries
 
-## 5. What to look for
+Before proposing, check whether this run is the pattern: `bb nido:review:figures :project <p>` (no run id) and `bb nido:review:trend`. A `:proposal`:
 
-These are the failure modes the machinery actually has. Not a checklist to fill — the table from §3 decides what is here, and evidence decides what gets filed.
+- names the **class** of defect and the **rule, branch or prompt section it removes or subsumes** — not only what it adds;
+- says how often the behaviour is seen across runs (once is a hypothesis: observe it, propose nothing);
+- says whether it is **invariant** (true of every project) or belongs to one project's reviewers or briefing.
 
-**Waste** — rounds, agents or tokens spent for nothing. This is the most cross-round of the five, and the hardest to see from anywhere but here.
-- Rounds that fixed nothing new. A round that reported findings and closed all of them is a round that cost a full fan-out to learn what the previous round already knew.
-- The same finding re-adjudicated instead of answered. A finding closed in round 1 should return *answered* from that layer's cache, keyed on its patch hash. If it was ruled on again from scratch, the hash moved when it should not have — a real bug, and one that compounds every round.
-- Layers re-reviewed after converging, or skipped as converged when their content had in fact moved.
-- The loop is **uncapped** (no default `:max-iters`), so length is now a signal rather than a ceiling. Any run past ~5 rounds needs a sentence on what kept it going, and whether that reason was good.
+`:evidence` is required and points at this run: a round, a finding id, a log line. Without it the observation does not go in.
 
-**Miss** — something the loop should have caught and did not.
-- A finding whose `because` reads *"the warden did not rule on this finding"* — `apply-rulings`' fail-safe firing, meaning the warden's JSON omitted it. One is a blip; the same layer omitted round after round is a prompt that has outgrown its context.
-- `park` and `deviation` used where a `fix` was warranted, or the reverse.
-- A composition (`stack`) finding spanning one layer that was not closed `duplicate`.
+## 6. Write and file
 
-**Misfire** — the loop did something incorrect.
-- A `closed` with no authority, or an authority that does not hold up against the layer's stated Out of scope (now visible to the warden via `toc-block`).
-- `owner_layer` naming a layer that is not in the stack — the fix then falls to the top layer, quietly.
-- A fixer that committed something outside its layer's scope, or one whose commit did not stop the finding recurring.
-
-**Friction** — the loop worked but was hard to follow, or the report does not record what a reader needs. If reconstructing the arc in §3 required guessing, that gap is itself the finding: the report should have held it.
-
-**Working well** — record these too, and record them as arcs. "The answered-cache held across all four rounds — nothing was re-adjudicated" is worth as much as a complaint, because without it there is no way to tell a regression from the normal state, and no way to know which mechanisms are safe to leave alone.
-
-## 6. Write the artifact
-
-`artifacts/analysis.md` — prose, for a human. Lead with the verdict, then **the arc in a sentence or two** — how the run went from its first round to its last, and why it stopped — and then the one thing most worth acting on.
-
-Do not restate the report round by round. The reader can open it, and a per-round recap is exactly the artifact firing once per run was meant to avoid. The table from §3 is your working material, not the deliverable; include a compressed version of it only where it is the evidence for an observation.
-
-## 7. File the ledger entry
-
-Your own workstream id is in this session's briefing (`- workstream: <id>` in `CLAUDE.md`). Write the EDN to a file — a typed body does not survive a shell argument — then:
+`artifacts/analysis.md`: the verdict, the arc in two sentences, the one thing most worth acting on. Then:
 
 ```bash
 cat > artifacts/analysis.edn <<'EDN'
 {:format :review-analysis
- :verdict :healthy            ; :healthy | :degraded | :broken — about the RUN, not the reviewed code
- :run-id "<run-id>"
- :status "<the run's terminal status>"
- :rounds 3
+ :verdict :healthy            ; :healthy | :degraded | :broken — about the RUN
+ :run-id "<run-id>" :status "<terminal status>" :rounds 3
  :reviewed "<project>/<session>"
- :summary "One or two sentences: what this run says about the loop."
- :observations
- [{:kind :waste                ; :waste | :miss | :misfire | :friction | :working-well
-   :where "answered-cache"     ; the machinery it is about
-   :summary "..."
-   :evidence "..."             ; REQUIRED — point at a round, a finding id, a log line
-   :proposal "..."}]           ; optional; omit when you noticed it but cannot yet answer it
- :report-path "<report-path>"
- :artifact "artifacts/analysis.md"}
+ :summary "What this run says about the loop."
+ :observations [{:kind :waste   ; :waste | :miss | :misfire | :friction | :working-well
+                 :where "answered-cache" :summary "…" :evidence "…"
+                 :proposal "…"}]  ; optional
+ :report-path "<report-path>" :artifact "artifacts/analysis.md"}
 EDN
-
-bb nido:workstream:entry:add :project nido :ws-id <ws-id> \
-  :kind review-analysis :file artifacts/analysis.edn
+bb nido:workstream:entry:add :project nido :ws-id <your ws-id, from CLAUDE.md> :kind review-analysis :file artifacts/analysis.edn
+echo '{:phase :complete :note "Analysis filed" :artifact "artifacts/analysis.md"}' > _run-status.edn
 ```
 
-The body is validated at the ledger boundary; a malformed one is rejected with an explain dump and a non-zero exit, so read the error and retry rather than dropping the entry.
+A refused body prints why; fix and retry. **`:healthy` is the usual answer** — one omitted ruling in a run that converged is a `:miss` on a healthy run. `:degraded` is for rounds spent for nothing, `:broken` for a run that did not do its job. Never park at `:awaiting-input`.
 
-**A `:proposal` names the class and the rule it replaces.** Say what kind of defect the observation is an instance of, and which existing rule, branch or prompt section the proposal would remove or subsume — not only what it would add. And say how often the behaviour is seen: one run of a stochastic judge is one sample, and a rule written for one sample is how the machinery grew rules that fought each other (design-loop-7d596499 circled 25 rounds between four of them). `bb nido:review:figures :project <p>` without a run id, and `bb nido:review:trend`, are how to check whether this run is the pattern or the exception.
-
-**`:evidence` is what makes an observation worth keeping.** It must point at something in *this* run. "The warden prompt is too long" is a belief; "the warden omitted 3 of 11 findings in round 2, all from the layer whose brief runs 400 lines" is a finding. If you cannot produce evidence, the observation does not go in.
-
-**Verdict, honestly.** `:healthy` is the right answer for most runs and is not a participation prize — a loop that converged in two rounds with every finding ruled on is healthy even if you can imagine improvements. Reserve `:degraded` for rounds or agents genuinely spent for nothing, and `:broken` for a run that failed to do its job at all.
-
-**The verdict is about the arc, not the worst moment in it.** A single omitted ruling in a run that otherwise converged cleanly is one `:miss` observation on a `:healthy` run. What makes a run `:degraded` is the shape: rounds that did not pay for themselves, or a finding that circled without ever being closed.
-
-## 8. Finish
-
-```bash
-cat > _run-status.edn <<'EDN'
-{:phase :complete :note "Analysis filed" :artifact "artifacts/analysis.md"}
-EDN
-```
-
-Do **not** park at `:awaiting-input`. This fires after every review loop; a gate per run would make the inbox useless. If something needs a human decision, say so plainly in the summary and let the verdict carry it — a `:broken` verdict is visible on the workstream without interrupting anyone.
-
-## Idempotency
-
-Re-fired for a run you have already analysed, you land in the same workstream (the external ref is the run id). Read the existing `artifacts/analysis.md` and the ledger first: if the analysis is already there and the run has not changed, say so and finish `:complete` rather than filing a second entry.
+Re-fired for a run already analysed (same workstream, keyed on run id): if the entry is there and the run is unchanged, finish `:complete` without filing again.
