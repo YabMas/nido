@@ -33,8 +33,10 @@
   "The nido home, as the single redirect seam. Production code reads it
    exactly like nido-home; tests with-redefs THIS var to point a whole run
    at a temp dir. It is deliberately distinct from nido-home: the session
-   band addresses nido-home directly and is not redirected by it, which is
-   what keeps a redirected test looking at real session state."
+   band addresses nido-home directly and is not redirected by it, so a test
+   that redefines only this still sees nido-home's sessions. What keeps those
+   from being a person's is `bb nido:test`, which runs every suite against a
+   home of its own (tasks.nido-test)."
   []
   (str (nido-home)))
 

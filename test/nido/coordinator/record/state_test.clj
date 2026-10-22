@@ -7,8 +7,8 @@
    [nido.coordinator.record.state :as cstate]))
 
 (deftest paths
-  (testing "coordinator-dir under ~/.nido/coordinator"
-    (is (= (str (fs/path (fs/home) ".nido" "coordinator"))
+  (testing "coordinator-dir under <nido home>/coordinator"
+    (is (= (str (fs/path (core/nido-home) "coordinator"))
            (cstate/coordinator-dir))))
   (testing "queue-dir is a child of coordinator-dir"
     (is (= (str (fs/path (cstate/coordinator-dir) "queue"))
@@ -16,8 +16,8 @@
   (testing "status-path is status.edn under coordinator-dir"
     (is (= (str (fs/path (cstate/coordinator-dir) "status.edn"))
            (cstate/status-path))))
-  (testing "runs-dir under ~/.nido/runs"
-    (is (= (str (fs/path (fs/home) ".nido" "runs"))
+  (testing "runs-dir under <nido home>/runs"
+    (is (= (str (fs/path (core/nido-home) "runs"))
            (cstate/runs-dir))))
   (testing "run-dir is a child of runs-dir, named by run-id"
     (is (= (str (fs/path (cstate/runs-dir) "abc-123"))
@@ -26,7 +26,7 @@
     (is (= (str (fs/path (cstate/run-dir "abc-123") "run.edn"))
            (cstate/run-edn-path "abc-123"))))
   (testing "triggers.edn path is per-project"
-    (is (= (str (fs/path (fs/home) ".nido" "projects" "brian" "triggers.edn"))
+    (is (= (str (fs/path (core/nido-home) "projects" "brian" "triggers.edn"))
            (cstate/triggers-path :brian)))))
 
 (deftest workstream-paths-compose-under-project

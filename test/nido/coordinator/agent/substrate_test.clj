@@ -90,9 +90,9 @@
     (is (= {:delivered? false :because :no-inbox} (sub/send! {:pid 1} "hi")))))
 
 (deftest send-writes-one-user-message-line-to-the-inbox
-  ;; A short directory: a Unix socket's path is capped near 104 bytes, and the system temp dir
-  ;; on macOS alone is longer than that leaves room for.
-  (let [dir  (fs/create-temp-dir {:dir "/tmp"})
+  ;; A Unix socket's path is capped near 104 bytes; `bb nido:test` keeps its temp dir short
+  ;; enough for one (tasks.nido-test).
+  (let [dir  (fs/create-temp-dir)
         path (str (fs/path dir "s.sock"))
         addr (java.net.UnixDomainSocketAddress/of ^String path)
         srv  (doto (java.nio.channels.ServerSocketChannel/open java.net.StandardProtocolFamily/UNIX)

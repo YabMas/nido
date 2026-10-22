@@ -17,8 +17,9 @@
     {:signature [:=> [:catn] :string]})
   (Operation nido-root
     "The nido home as the single redirect seam. Deliberately distinct from nido-home: the
-     session band addresses nido-home directly and is NOT redirected by it, which is what keeps
-     a redirected test looking at real session state."
+     session band addresses nido-home directly and is NOT redirected by it, so a test that
+     redefines only this still sees nido-home's sessions — under `bb nido:test`, those of the
+     run's own test home."
     {:signature [:=> [:catn] :string]
      :delegates [nido-home]})
   (Operation project-file

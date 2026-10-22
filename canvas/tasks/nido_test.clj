@@ -10,7 +10,13 @@
             [fukan.common.typing.malli]))
 
 (Module nido-test
-  "Run unit tests under test/. Optional :only <ns-prefix> filter."
+  "Run unit tests under test/, against a nido home made for the run — never the caller's.
+   Optional :only <ns-prefix> filter."
   (Operation run
-    "The `run` entry point."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]}))
+    "The `run` entry point: make a fresh test home and run the suite in a child bb whose
+     NIDO_HOME is that home; in the child, refuse a home it was not given, then run the suite."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation home-refusal
+    "Why the suite must not run against a home, or nil when it may: only the home made for this
+     run, carrying the marker the run wrote, and never ~/.nido."
+    {:signature [:=> [:catn [:expected [:maybe :string]] [:home :string]] [:maybe :string]]}))
