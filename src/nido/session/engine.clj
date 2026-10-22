@@ -9,6 +9,7 @@
    [nido.platform.io :as io]
    [nido.platform.process :as proc]
    [nido.session.agent-guidance :as agent-guidance]
+   [nido.session.checkout :as checkout]
    [nido.session.context :as ctx]
    [nido.session.launcher :as launcher]
    [nido.session.resume-shim :as resume-shim]
@@ -223,8 +224,8 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string] :InstanceId]}
   instance-id-for-key
-  "The instance id of `project-name`'s runtime keyed by `runtime-key`: `<project>--<key>`, with a
-   `/` in the key written `~` so the id stays one path segment. The key is the caller's, taken
+  "The instance id of `project-name`'s runtime keyed by `runtime-key`: `<project>--<key>`, spelled by
+   `state/keyed-id`, which keeps distinct keys distinct. The key is the caller's, taken
    whole — nothing here derives one from a path."
   [project-name runtime-key]
   (state/keyed-id project-name runtime-key))
@@ -263,13 +264,6 @@
     runtime-key (instance-id-for-key project-name runtime-key)
     :else (throw (ex-info (str "No runtime key for " project-dir)
                           {:reason :no-runtime-key :project-dir project-dir}))))
-
-(defn- members
-  "The worktrees on runtime `session`, each mapped to its session's name. A runtime recorded
-   before it had members has one: the session that started it."
-  [session]
-  (or (:members session)
-      {(str (:project-dir session)) (:name session)}))
 
 (defn- print-session-summary [_session-data ctx]
   (println "nido session:")
@@ -430,67 +424,29 @@
    (filter-services (:services session-edn) (runtime-services project-name profile others))
    instance-id))
 
-(defn- record-runtime!
-  "Write `runtime` — what it actually runs, with the context its services returned — as its
-   record, and register and brief the members `dirs` (worktree to session name) from it, under
-   `runtime-key`. What an extension, or the rollback of one, leaves running is told to its
-   members only so."
-  [runtime runtime-key session-edn dirs]
-  (state/write-session! (:instance-id runtime) runtime)
-  (doseq [[dir member] dirs]
-    (rebrief! dir member runtime-key runtime session-edn)))
-
-(defn- with-def
-  "`defs` with `svc-def` in place of the one of its name, or added after them."
-  [defs svc-def]
-  (if (some #(= (:name svc-def) (:name %)) defs)
-    (mapv #(if (= (:name svc-def) (:name %)) svc-def %) defs)
-    (conj (vec defs) svc-def)))
-
 (defn- start-each!
-  "Bring `services` up in order over `ctx` on a runtime that already runs `prior`'s — its
-   {:instance-id :context :service-defs :service-states}, empty for a runtime starting from
-   nothing. Returns {:ctx :service-defs :service-states}: what the runtime runs after the call,
-   the definitions and states written together so whatever stops it later stops what this call
-   started. A service not yet running is started. One already running is left as it is unless what
-   it renders from the context differs now that the context has grown: then it is re-derived —
-   stopped and started again over the grown context — before the services after it, which may read
-   what it renders, start.
-
-   When one throws, the call undoes itself and the throw goes on: what it started is stopped, in
-   reverse, and what it replaced is started again over the context it was first rendered from, so
-   the runtime is left running what its record says. Nothing is persisted on the way, so nothing
-   else would undo it."
-  [ctx prior services opts]
+  "Bring `services` up in order over `ctx`, on a runtime running nothing. Returns
+   {:ctx :service-defs :service-states}, the definitions and states written together so whatever
+   stops the runtime later stops what this call started. When one throws, what it started is
+   stopped, in reverse, and the throw goes on: nothing is persisted on the way, so nothing else
+   would undo it."
+  [ctx services opts]
   ;; `started` accumulates {:resolved-def ... :state ...} in start order so we can roll
   ;; back (stop in reverse) if any later service throws. Without this, a mid-init failure
   ;; would leave PG/JVM/etc. orphaned because session state isn't persisted until after.
-  ;; `replaced` holds the definitions a re-derivation stopped, as they were rendered, in stop order.
-  (let [started  (atom [])
-        replaced (atom [])]
+  (let [started (atom [])]
     (try
       (reduce
-       (fn [{:keys [ctx service-states] :as acc} svc-def]
+       (fn [acc svc-def]
          (let [svc-name     (:name svc-def)
-               resolved-def (ctx/substitute ctx svc-def)
-               saved        (get service-states svc-name)
-               was-def      (when saved (ctx/substitute (:context prior) svc-def))]
-           (if (and saved (= was-def resolved-def))
-             acc
-             (do
-               (when saved
-                 (core/log-step (str "Re-deriving " (name svc-name) " over the grown runtime"))
-                 (service/stop-service! was-def saved)
-                 (swap! replaced conj was-def))
-               (let [{:keys [state context]} (service/start-service! resolved-def ctx opts)]
-                 (swap! started conj {:resolved-def resolved-def :state state})
-                 (-> acc
-                     (assoc :ctx (ctx/merge-context ctx (keyword svc-name) context))
-                     (update :service-defs with-def svc-def)
-                     (assoc-in [:service-states svc-name] state)))))))
-       {:ctx            ctx
-        :service-defs   (vec (:service-defs prior))
-        :service-states (or (:service-states prior) {})}
+               resolved-def (ctx/substitute (:ctx acc) svc-def)
+               {:keys [state context]} (service/start-service! resolved-def (:ctx acc) opts)]
+           (swap! started conj {:resolved-def resolved-def :state state})
+           (-> acc
+               (update :ctx ctx/merge-context (keyword svc-name) context)
+               (update :service-defs conj svc-def)
+               (assoc-in [:service-states svc-name] state))))
+       {:ctx ctx :service-defs [] :service-states {}}
        services)
       (catch Exception e
         (core/log-step (start-failure-report e (count @started)))
@@ -502,81 +458,104 @@
               (catch Exception e2
                 (println (str "warning: rollback of " (name svc-name)
                               " threw: " (ex-message e2)))))))
-        ;; Put back what a re-derivation replaced. When what the restarts return differs from
-        ;; what the runtime's record holds — another pid, another port — the record, and every
-        ;; member's registration and briefing, are written from what they returned, as a
-        ;; successful extension writes them; otherwise the record is left as it was.
-        (let [restored (reduce
-                        (fn [rt was-def]
-                          (let [svc-name (:name was-def)]
-                            (try
-                              (core/log-step (str "Restoring " (name svc-name) "..."))
-                              (let [{:keys [state context]}
-                                    (service/start-service! was-def (:context prior) opts)]
-                                (-> rt
-                                    (assoc-in [:service-states svc-name] state)
-                                    (update :context ctx/merge-context (keyword svc-name) context)))
-                              (catch Exception e2
-                                (println (str "warning: restoring " (name svc-name)
-                                              " threw: " (ex-message e2)))
-                                (-> rt
-                                    (update :service-states dissoc svc-name)
-                                    (update :context dissoc (keyword svc-name)))))))
-                        prior
-                        @replaced)]
-          (when (not= (select-keys restored [:context :service-states])
-                      (select-keys prior [:context :service-states]))
-            (record-runtime! restored (:runtime-key opts)
-                             (load-session-edn (:project-name prior)) (members restored))))
         (throw e)))))
 
+(defn- stop-services!
+  "Stop every service runtime `session` (instance `instance-id`) runs, in reverse start order. A
+   service it declares but saved no state for is stopped from its own record, since a later start
+   that did not complete may have left its process there. A service that throws is reported and the
+   rest are still stopped."
+  [session instance-id]
+  (doseq [svc-def (reverse (or (:service-defs session) []))]
+    (let [svc-name    (:name svc-def)
+          saved-state (get (:service-states session) svc-name)]
+      (try
+        (if saved-state
+          (do (core/log-step (str "Stopping " (name svc-name) "..."))
+              (service/stop-service! svc-def saved-state))
+          (service/stop-recorded! svc-def instance-id))
+        (catch Exception e
+          (println (str "warning: error stopping " (name svc-name) ": "
+                        (ex-message e))))))))
+
+(defn- checkout?
+  "Does a runtime carrying `dirs` (its members' worktrees) run out of a checkout of its own? Only
+   when every member is a jj workspace: a git worktree's uncommitted changes are no commit a merge
+   can read, so a runtime with one runs out of a member's worktree, as it always did."
+  [dirs]
+  (and (seq dirs) (every? checkout/jj-workspace? dirs)))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
+  owes-checkout?
+  "Does live runtime record `runtime` run out of a member's worktree though every member is a jj
+   workspace — one started before runtimes of jj workspaces ran out of a checkout of their own? It
+   is moved onto one by restarting it, every member kept."
+  [runtime]
+  (boolean (and runtime (not (:checkout runtime))
+                (checkout? (keys (state/members runtime))))))
+
+(defn- runtime-dir
+  "Where runtime `instance-id`, carrying `members` (worktree to session name), runs out of: its own
+   checkout, brought up to date with them, when `checkout?` holds; else `fallback`, a member's
+   worktree. Throws, changing nothing, when the members' working copies conflict."
+  [instance-id members session-edn fallback]
+  (if (checkout? (keys members))
+    (checkout/refresh! instance-id members
+                       (fn [dir] (doseq [step (:setup session-edn)] (run-setup-step! step dir))))
+    fallback))
+
+(defn- sync-checkout!
+  "Bring runtime `runtime`'s checkout up to date with `members`, when it runs out of one. A
+   conflict, or a working copy that cannot be snapshotted, is reported and the checkout kept as it
+   was: a member coming up or going down is not refused for what another member's working copy
+   holds."
+  [runtime members]
+  (when (and (:checkout runtime) (checkout? (keys members)))
+    (try (checkout/refresh! (:instance-id runtime) members)
+         (catch clojure.lang.ExceptionInfo e
+           (if (#{:checkout-conflict :checkout-unsnapshottable} (:reason (ex-data e)))
+             (core/log-step (str "warning: " (ex-message e)))
+             (throw e))))))
+
 (defn- start-services!
-  "Start runtime `instance-id`'s services for the session in `project-dir`. `others` are the
-   sessions still on the runtime when it died — worktree to session name — which stay its
-   members and are re-registered and re-briefed with the ports it comes up on."
-  [project-dir project-name instance-id session-edn opts others]
+  "Start runtime `instance-id` cold for the session in `project-dir`, under the union of what it
+   and `others` ask for. `others` are the sessions staying on the runtime — those still on it when
+   it died, or every member when a join restarts it — worktree to session name; they stay its
+   members and are re-registered and re-briefed with the ports it comes up on. `fallback-dir` is
+   the worktree the runtime runs out of when it has no checkout of its own (`runtime-dir`)."
+  [project-dir project-name instance-id session-edn opts others fallback-dir]
   (core/log-step (str "Starting session " instance-id " (" project-dir ")"))
-  (let [services (runtime-service-defs project-name session-edn instance-id (:profile opts) others)
-        pre-allocated (pre-allocate-ports services project-dir)
+  (let [session-name (:session-name opts)
+        all      (assoc others (str project-dir) session-name)
+        run-dir  (runtime-dir instance-id all session-edn fallback-dir)
+        services (runtime-service-defs project-name session-edn instance-id (:profile opts) others)
+        pre-allocated (pre-allocate-ports services run-dir)
         jvm-cfg (resolve-jvm-config (:defaults session-edn) opts)
-        session-name (:session-name opts)
         init-ctx (merge pre-allocated
-                        {:session (cond-> {:project-dir project-dir
+                        {:session (cond-> {:project-dir run-dir
                                            :project-name project-name
                                            :instance-id instance-id
                                            :runtime-key (:runtime-key opts)
                                            :jvm jvm-cfg}
                                     session-name (assoc :name session-name))})
         ;; No session state is persisted unless every service starts.
-        result (start-each! init-ctx {} services opts)
+        result (start-each! init-ctx services opts)
         final-ctx (:ctx result)
-        service-states (:service-states result)
-        session-data (cond-> {:project-dir project-dir
+        session-data (cond-> {:project-dir run-dir
                               :project-name project-name
                               :instance-id instance-id
                               :runtime-key (:runtime-key opts)
-                              :members (assoc others (str project-dir) session-name)
+                              :members all
                               :service-defs (:service-defs result)
-                              :service-states service-states
+                              :service-states (:service-states result)
                               :context final-ctx
                               :created-at (core/now-iso)}
-                       session-name (assoc :name session-name))]
-    ;; Write session state
+                       session-name              (assoc :name session-name)
+                       (checkout? (keys all))    (assoc :checkout run-dir))]
     (state/write-session! instance-id session-data)
-    (register! project-dir session-name (:runtime-key opts) session-data)
-    ;; Persist the resolved profile so destroy! / reset! can read it back
-    ;; without re-resolving (robust against registry edits between up and
-    ;; destroy). Must precede launcher/write-artifacts!, which reads
-    ;; profile.edn from disk to decide between the full/lite briefing —
-    ;; reversed order misclassifies every fresh session as lite.
-    (record-profile! project-name session-name (:profile opts))
-    ;; The owning Run's directory travels as its own argument: it is a per-session fact, and
-    ;; session.edn — the project's shared declaration — is not where one belongs. nil when no
-    ;; Run owns the session.
-    (try (launcher/write-artifacts! final-ctx session-edn (:run-dir opts))
-         (catch Exception e
-           (core/log-step (str "warning: failed to write launcher artifacts: "
-                               (ex-message e)))))
+    ;; The profile is recorded before the briefing, which reads it to choose the full or lite one.
+    (rebrief! project-dir session-name (:runtime-key opts) session-data session-edn
+              (select-keys opts [:run-dir :profile]))
     (doseq [[dir member] others]
       (rebrief! dir member (:runtime-key opts) session-data session-edn))
     (print-session-summary session-data final-ctx)
@@ -630,7 +609,7 @@
           (comp (keep #(state/read-session (str (fs/file-name %))))
                 (remove #(= except (:instance-id %)))
                 (filter #(= dir (str (fs/normalize (fs/absolutize (str (:project-dir %)))))))
-                (mapcat #(vals (dissoc (members %) (str project-dir) dir))))
+                (mapcat #(vals (dissoc (state/members %) (str project-dir) dir))))
           (when (fs/exists? (state/state-dir)) (fs/list-dir (state/state-dir))))))
 
 (defn ^{:malli/schema [:=> [:cat :keyword [:maybe :string] :Path [:maybe :InstanceId]] :nil]}
@@ -658,14 +637,14 @@
   [name project-dir instance-id]
   (let [existing (state/read-session instance-id)]
     (when-not (and existing (session-alive? existing)
-                   (seq (dissoc (members existing) (str project-dir))))
+                   (seq (dissoc (state/members existing) (str project-dir))))
       (refuse-backing-worktree! :start name project-dir instance-id))))
 
 (defn ^{:malli/schema [:=> [:cat :InstanceId] [:sequential :string]]}
   sessions-on
   "The names of the sessions on runtime `instance-id`; empty when it is not up."
   [instance-id]
-  (vec (vals (some-> (state/read-session instance-id) members))))
+  (vec (vals (some-> (state/read-session instance-id) state/members))))
 
 (declare stop-session!)
 
@@ -744,35 +723,45 @@
   (into {}
         (filter (fn [[dir _]]
                   (= (:instance-id existing) (:instance-id (registry-entry dir)))))
-        (some-> existing members (dissoc (str project-dir)))))
+        (some-> existing state/members (dissoc (str project-dir)))))
 
 (defn- join!
-  "Put the session `session-name` in `project-dir` on the live runtime `existing`: record it as a
-   member, register its worktree with the runtime's ports, and brief it — its own session home,
-   told the runtime's REPL, app and database. Starts only what the runtime lacks: a service the
-   joiner asks for that none of its members did, and an app its JVM lost. A service it starts
-   re-briefs the members already on it, whose briefing did not name it."
+  "Put the session `session-name` in `project-dir` on the live runtime `existing`. When the
+   runtime already runs everything the joiner asks for, nothing is provisioned: it is recorded as a
+   member, registered with the runtime's ports and briefed — its own session home, told the
+   runtime's REPL, app and database — and the runtime's checkout, if it has one, takes in its
+   working copy. When it asks for a service the runtime lacks, the whole runtime is restarted cold
+   under the union of every member's profile and its own, out of the same place, and every member
+   is re-briefed with what it came up on; Claude sessions and working copies are not touched. A
+   runtime is never grown, nor rolled back, service by service. A runtime that `owes-checkout?` is
+   restarted the same way, onto a checkout of its own."
   [project-dir session-name existing session-edn opts]
-  (let [others  (dissoc (members existing) (str project-dir))
+  (let [others  (dissoc (state/members existing) (str project-dir))
+        all     (assoc others (str project-dir) session-name)
         defs    (runtime-service-defs (:project-name existing) session-edn
                                       (:instance-id existing) (:profile opts) others)
         missing (remove #(contains? (:service-states existing) (:name %)) defs)
-        grown   (when (seq missing)
-                  (core/log-step (str "Starting " (str/join ", " (map (comp name :name) missing))
-                                      " on " (:instance-id existing) " for " session-name))
-                  ;; The runtime's own context wins: only a service not yet running is allocated.
-                  ;; Every service is walked, so one rendered before the context grew is re-derived.
-                  (start-each! (merge (pre-allocate-ports missing project-dir) (:context existing))
-                               existing defs opts))
-        runtime (cond-> (update existing :members assoc (str project-dir) session-name)
-                  grown (assoc :context (:ctx grown) :service-defs (:service-defs grown)
-                               :service-states (:service-states grown)))]
-    (println "Joining running session" (:instance-id runtime))
-    (record-runtime! runtime (:runtime-key opts) session-edn (when grown others))
-    (rebrief! project-dir session-name (:runtime-key opts) runtime session-edn
-              (select-keys opts [:run-dir :profile]))
-    (reconcile-app! runtime)
-    nil))
+        moving? (owes-checkout? (assoc existing :members all))]
+    (if (or (seq missing) moving?)
+      (do
+        ;; A conflict between the working copies refuses the join before anything is stopped.
+        (when (checkout? (keys all)) (runtime-dir (:instance-id existing) all session-edn nil))
+        (core/log-step (str "Restarting " (:instance-id existing) " for " session-name
+                            (if (seq missing)
+                              (str ", which asks for " (str/join ", " (map (comp name :name) missing)))
+                              ", onto a checkout of its own")))
+        (stop-services! existing (:instance-id existing))
+        (start-services! project-dir (:project-name existing) (:instance-id existing) session-edn
+                         opts others (:project-dir existing))
+        nil)
+      (let [runtime (assoc existing :members (assoc (state/members existing) (str project-dir) session-name))]
+        (println "Joining running session" (:instance-id runtime))
+        (state/write-session! (:instance-id runtime) runtime)
+        (sync-checkout! runtime (state/members runtime))
+        (rebrief! project-dir session-name (:runtime-key opts) runtime session-edn
+                  (select-keys opts [:run-dir :profile]))
+        (reconcile-app! runtime)
+        nil))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :map] :any]}
   start-session!
@@ -818,7 +807,7 @@
     (if join?
       (join! project-dir (:session-name opts) existing session-edn opts)
       (start-services! project-dir project-name instance-id session-edn opts
-                       (if existing (still-on project-dir existing) {})))))
+                       (if existing (still-on project-dir existing) {}) project-dir))))
 
 ;; ---------------------------------------------------------------------------
 ;; Legacy session detection
@@ -831,20 +820,22 @@
 (defn- leave!
   "Take the session in `project-dir` off runtime `session`, which other sessions are still on:
    drop its membership, its registry entry and its session home, restore the config files
-   rendered into its worktree, and stop nothing."
+   rendered into its worktree, take its working copy out of the runtime's checkout, and stop
+   nothing."
   [project-dir session]
   (let [instance-id (:instance-id session)
-        session-name (get (members session) (str project-dir))]
+        session-name (get (state/members session) (str project-dir))]
     (state/write-session! instance-id (-> (unrender-member! project-dir session)
-                                          (update :members dissoc (str project-dir))))
+                                          (assoc :members (dissoc (state/members session) (str project-dir)))))
     (state/remove-from-registry! (str project-dir))
+    (sync-checkout! session (dissoc (state/members session) (str project-dir)))
     (when session-name
       (try (launcher/remove-artifacts! (:project-name session) session-name)
            (catch Exception e
              (core/log-step (str "warning: failed to remove launcher artifacts: "
                                  (ex-message e))))))
     (println "Left session" instance-id "— still running for"
-             (str/join ", " (vals (dissoc (members session) (str project-dir)))))))
+             (str/join ", " (vals (dissoc (state/members session) (str project-dir)))))))
 
 (defn ^{:malli/schema [:=> [:cat :Path] :any]}
   stop-session!
@@ -868,29 +859,17 @@
                                  (ex-message e))))))
           (println "No session to stop for" project-dir))
 
-      (seq (dissoc (members session) (str project-dir)))
+      (seq (dissoc (state/members session) (str project-dir)))
       (leave! project-dir session)
 
       :else
-      (let [service-defs (or (:service-defs session) [])
-            service-states (or (:service-states session) {})]
+      (do
         (core/log-step (str "Stopping session " instance-id))
         (doseq [dir (keys (:member-states session))]
           (unrender-member! dir session))
-        ;; Stop services in reverse order
-        (doseq [svc-def (reverse service-defs)]
-          (let [svc-name (:name svc-def)
-                saved-state (get service-states svc-name)]
-            (try
-              (if saved-state
-                (do (core/log-step (str "Stopping " (name svc-name) "..."))
-                    (service/stop-service! svc-def saved-state))
-                ;; Declared but never saved: a later start that did not
-                ;; complete may have left this service's process on record.
-                (service/stop-recorded! svc-def instance-id))
-              (catch Exception e
-                (println (str "warning: error stopping " (name svc-name) ": "
-                              (ex-message e)))))))
+        (stop-services! session instance-id)
+        (when (:checkout session)
+          (checkout/remove! instance-id (str project-dir)))
         ;; Clean up state
         (when instance-id (state/delete-session! instance-id))
         (state/remove-from-registry! (str project-dir))
@@ -907,11 +886,32 @@
                (core/log-step (str "warning: failed to remove agent CLAUDE.md: "
                                    (ex-message e)))))
         (try (launcher/remove-artifacts! (:project-name session)
-                                         (get (members session) (str project-dir) (:name session)))
+                                         (get (state/members session) (str project-dir) (:name session)))
              (catch Exception e
                (core/log-step (str "warning: failed to remove launcher artifacts: "
                                    (ex-message e)))))
         (println "Stopped session" instance-id)))))
+
+(defn ^{:malli/schema [:function [:=> [:cat :Path] [:maybe :Path]]
+                       [:=> [:cat :Path [:maybe :InstanceId]] [:maybe :Path]]]}
+  sync-runtime!
+  "Bring the checkout of the runtime the session in `project-dir` is on up to date with every
+   member's working copy, snapshotting each, so what they changed — code or not — is what the
+   runtime's JVM and app read. Returns the checkout's directory; nil when the runtime runs out of a
+   member's worktree, where there is nothing to bring up to date. Throws when no session is up in
+   `project-dir`, and, changing nothing, when the members' working copies conflict.
+
+   Membership is read here, so a caller runs this holding the lock of runtime `instance-id` — the
+   one `resolve-instance-id` gave it before taking that lock — as every join and departure does:
+   a membership read before a departure would put the departed member's files back. Throws, as
+   when no session is up, when `project-dir` is no longer on that runtime."
+  ([project-dir] (sync-runtime! project-dir (resolve-instance-id project-dir)))
+  ([project-dir instance-id]
+   (let [runtime (some-> instance-id state/read-session)]
+     (when-not (and runtime (= instance-id (resolve-instance-id project-dir)))
+       (throw (ex-info (str "No session is up in " project-dir) {:reason :no-session})))
+     (when (:checkout runtime)
+       (checkout/refresh! (:instance-id runtime) (state/members runtime))))))
 
 (defn ^{:malli/schema [:=> [:cat :Path] :any]}
   session-status

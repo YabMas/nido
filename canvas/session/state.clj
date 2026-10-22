@@ -27,8 +27,13 @@
    A layout with one root would make reclaiming an instance a question of which files to spare."
   {:child [InstanceId]}
   (Operation state-dir "The per-instance state root." {:signature [:=> [:catn] Path]})
+  (Operation file-safe
+    "An id spelled in `[A-Za-z0-9.-]` alone, every other byte written `_XX` — the one spelling of a
+     lock's or a jj workspace's name built from a runtime key, distinct for distinct ids."
+    {:signature [:=> [:catn [:id :string]] :string]})
   (Operation keyed-id
-    "`<project>--<key>`, with `/` written `~` so the id is one path segment — the one spelling of a
+    "`<project>--<key>`, with `/` written `~` so the id is one path segment, and a `%` or `~`
+     already in the key escaped first so distinct keys keep distinct ids — the one spelling of a
      key-derived id: a runtime's instance id, and a session's own key."
     {:signature [:=> [:catn [:project-name ProjectName] [:key :string]] :string]})
   (Operation session-key "One session's key, whatever runtime it is on: what its links are kept under."
@@ -127,6 +132,10 @@
     {:signature [:=> [:catn [:instance-id InstanceId]] [:maybe Path]] :delegates [instance-state-dir]})
   (Operation read-session "One instance's record, or nil."
     {:signature [:=> [:catn [:instance-id InstanceId]] [:maybe :map]] :delegates [session-state-file]})
+  (Operation members
+    "The worktrees on a runtime record, each to its session's name — the one reading of its
+     membership; a record from before runtimes had members has the session that started it."
+    {:signature [:=> [:catn [:session [:maybe :map]]] [:map-of :string [:maybe :string]]]})
   (Operation write-session!
     "Persist an instance's record, and the worktree it names in a record of its own that outlives it."
     {:signature [:=> [:catn [:instance-id InstanceId] [:data :map]] :any] :delegates [session-state-file]})

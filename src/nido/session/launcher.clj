@@ -25,6 +25,12 @@
    [nido.session.profiles :as profiles]
    [nido.session.state :as state]))
 
+(defn- nido-task
+  "The shell command that runs nido's bb task `task` from wherever a session stands: its working
+   copy carries the project's bb.edn, or none, so the command names nido's own."
+  [task]
+  (str "bb --config '" (fs/path (core/nido-source-dir) "bb.edn") "' " task))
+
 (defn- run-workstream-context
   "Given a run-id or a session-home path, return {:workstream-id … :br-id …}
    for embedding in the briefing. Takes a run DIRECTORY, not a run-id: resolving
@@ -246,12 +252,12 @@
        "immediately so future sessions inherit it. **Do not ask permission**;\n"
        "adding relevant links is mandatory, not a suggestion. Run:\n"
        "\n"
-       "    nido session:link:add :type <kw> :url <url> [:title \"...\"]\n"
+       "    " (nido-task "nido:session:link:add") " :type <kw> :url <url> [:title \"...\"]\n"
        "\n"
        "Types: `:notion-ticket` `:pr` `:gh-issue` `:slack-thread` `:other`.\n"
        "Project + session resolve from the worktree. To remove:\n"
-       "`nido session:link:remove :url <url>`. To inspect:\n"
-       "`nido session:link:list`. Existing entries are listed under\n"
+       "`" (nido-task "nido:session:link:remove") " :url <url>`. To inspect:\n"
+       "`" (nido-task "nido:session:link:list") "`. Existing entries are listed under\n"
        "\"Relevant links\" above (when any).\n"))
 
 (def ^:private shipping-doctrine-instructions
@@ -638,8 +644,8 @@
          "    " source-dir "\n"
          "\n"
          "Edits made directly in the worktree are invisible to jj. To resync this\n"
-         "session as a jj workspace, run `bb nido:session:destroy` followed by\n"
-         "`bb nido:session:up` once the source has been jj-colocated.\n")
+         "session as a jj workspace, run `" (nido-task "nido:session:destroy") "` followed by\n"
+         "`" (nido-task "nido:session:up") "` once the source has been jj-colocated.\n")
 
     :plain-git
     (str "You are working through the nido orchestrator. You are in the session's\n"
@@ -685,7 +691,7 @@
          "\n;; A design this size should be SCOPED rather than cut: the workstream's baseline"
          "\n;; records a `:scope`, and a project may set `:select` on its registry entry —"
          "\n;; either carries a whole answer to a narrower question instead of most of a wide"
-         "\n;; one. `bb nido:design:check` reads the whole declaration either way.\n")))
+         "\n;; one. `" (nido-task "nido:design:check") "` reads the whole declaration either way.\n")))
 
 (defn- render-design-section
   "The project's declared design, verbatim, and what the reader is to do about it.
@@ -734,11 +740,11 @@
       (str "## The design this project declares\n"
            "\n"
            "This is not documentation. It is a model your code is CHECKED against:\n"
-           "`bb nido:design:check` exits non-zero the moment the code stops obeying\n"
-           "it, and `bb nido:land:check` refuses the landing. Read it before you add\n"
-           "a namespace or a require — nearly every violation is one import that\n"
-           "should have gone the other way, and it is far cheaper to not write than\n"
-           "to unpick.\n"
+           "`" (nido-task "nido:design:check") "` exits non-zero the moment the code\n"
+           "stops obeying it, and `" (nido-task "nido:land:check") "` refuses the landing.\n"
+           "Read it before you add a namespace or a require — nearly every violation\n"
+           "is one import that should have gone the other way, and it is far cheaper\n"
+           "to not write than to unpick.\n"
            "\n"
            (capped document)
            "\n"
@@ -754,7 +760,7 @@
            "\n"
            "You are not on a project without a design. You are on one whose design\n"
            "this briefing could not show you, which is the more dangerous of the\n"
-           "two: `bb nido:design:check` still refuses the landing on a violation of\n"
+           "two: `" (nido-task "nido:design:check") "` still refuses the landing on a violation of\n"
            "a declaration you have not read. Run it before you add a namespace or a\n"
            "require, and read the declaration directly if you need it.\n"
            "\n"))))
@@ -794,6 +800,27 @@
      "classpath, the other working copy's.\n"
      "\n")))
 
+(defn- render-checkout-sync
+  "How a session's changes reach a JVM that runs out of its runtime's own checkout — the merge of
+   every member's working copy at `checkout`: a sync, after which the project's own reload reads
+   them from that checkout, resources and templates included. The one place either briefing says
+   so."
+  [checkout]
+  (str
+   "## Getting your changes into the shared JVM\n"
+   "\n"
+   "The JVM runs out of " checkout ", the runtime's own checkout: the merge of every\n"
+   "session's working copy on this runtime. After you change files — code, resources,\n"
+   "templates or config — run\n"
+   "\n"
+   "    " (nido-task "nido:session:sync") "\n"
+   "\n"
+   "to bring that checkout up to date, then reload as this project does (`(require 'some.ns\n"
+   ":reload)` reads the synced file). Never edit the checkout itself; it is rewritten on\n"
+   "every sync. When your working copy and another session's conflict, the sync is refused,\n"
+   "names the paths, and the runtime keeps serving what it had.\n"
+   "\n"))
+
 (defn- other-working-copy?
   "Does the JVM of the runtime run out of a working copy other than `worktree`?"
   [worktree runtime-dir]
@@ -802,7 +829,7 @@
              (str (fs/normalize (fs/absolutize runtime-dir))))))
 
 (defn- render-context
-  [{:keys [project-name session-name worktree source-dir runtime-dir
+  [{:keys [project-name session-name worktree source-dir runtime-dir checkout
            app-port app-url nrepl-port pg-port
            profile links project-briefing
            workstream-id br-id design-scope]}]
@@ -825,7 +852,9 @@
        "## Services are already running\n\nThe REPL, app server, and database for this worktree are managed by\nnido. Don't run project-local scripts that spin up a REPL/app/DB —\nconnect to what's already live. The postgres MCP is preconfigured to\nthis session's DB.\n\n"
        "## Lite session\n\nThis is a lite session with no background services. The worktree is a\nread-only symlink to the project source directory.\n\n")
      (when-not (str/blank? project-briefing) (str project-briefing "\n"))
-     (when (and nrepl-port (other-working-copy? worktree runtime-dir))
+     (cond
+       (and nrepl-port checkout) (render-checkout-sync checkout)
+       (and nrepl-port (other-working-copy? worktree runtime-dir))
        (render-code-loading worktree runtime-dir))
      (render-design-section project-name worktree design-scope)
      shipping-doctrine-instructions
@@ -838,10 +867,10 @@
      "\n"
      "Manage this session with nido (the session name is shown above):\n"
      "\n"
-     "- `nido session:status <name>` — inspect\n"
-     "- `nido session:down <name>` then `:up` — restart services in this worktree\n"
-     "- `nido session:reset <name>` — nuclear recovery (drops PGDATA, re-clones template)\n"
-     "- `nido session:destroy <name>` — stop and remove the worktree\n"
+     "- `" (nido-task "nido:session:status") " <name>` — inspect\n"
+     "- `" (nido-task "nido:session:down") " <name>` then `:up` — restart services in this worktree\n"
+     "- `" (nido-task "nido:session:reset") " <name>` — nuclear recovery (drops PGDATA, re-clones template)\n"
+     "- `" (nido-task "nido:session:destroy") " <name>` — stop and remove the worktree\n"
      "\n"
      (render-links-section links)
      add-link-instructions)))
@@ -1192,6 +1221,8 @@
                                                ;; written before any member is briefed.
                                                :runtime-dir      (some-> instance-id state/read-session
                                                                          :project-dir)
+                                               :checkout         (some-> instance-id state/read-session
+                                                                         :checkout)
                                                :source-dir       (project-source-dir project-name)
                                                :app-port         (get-in ctx [:app :port])
                                                :app-url          (get-in ctx [:app :url])
@@ -1274,8 +1305,9 @@
    claim here is only the one that is true of every nido session: the JVM is
    already warm, so do not pay to start another.
 
-   `worktree` is the reader's own working copy, its cwd: it is told to load what it changes from
-   there, by that path, when the JVM runs out of another. nil when the reader's copy is not
+   `worktree` is the reader's own working copy, its cwd. On a runtime that runs out of its own
+   checkout every reader is told to sync after changing files; otherwise it is told to load what
+   it changes from its own copy, by that path, when the JVM runs out of another. nil when the reader's copy is not
    known — then it is told whenever any session on the runtime works elsewhere than the JVM
    started, in the 'your working directory' form.
 
@@ -1325,16 +1357,19 @@
               "about how this project runs its tests.\n"
               ;; The reader's own copy when the caller names it; else told whenever the runtime
               ;; carries a session working elsewhere than where its JVM started.
-              (when (if worktree
-                      (other-working-copy? worktree runtime-dir)
-                      (some #(other-working-copy? % runtime-dir) (keys (:members session))))
+              (cond
+                (:checkout session)
+                (str "\n" (render-checkout-sync (:checkout session)))
+                (if worktree
+                  (other-working-copy? worktree runtime-dir)
+                  (some #(other-working-copy? % runtime-dir) (keys (state/members session))))
                 (str "\n" (render-code-loading worktree runtime-dir)))))))))
 
 (defn- member-worktree
   "The worktree of `session-name` on the runtime `session`: its own when the runtime records its
    members, else the worktree the runtime started in."
   [session session-name]
-  (or (some (fn [[dir n]] (when (= n session-name) dir)) (:members session))
+  (or (some (fn [[dir n]] (when (= n session-name) dir)) (state/members session))
       (get-in session [:context :session :project-dir])))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string [:maybe :InstanceId]] :string]}
@@ -1356,6 +1391,7 @@
              :project-name     project-name
              :worktree         worktree
              :runtime-dir      (get-in ctx [:session :project-dir])
+             :checkout         (:checkout session)
              :source-dir       (project-source-dir project-name)
              :app-port         (get-in ctx [:app :port])
              :app-url          (get-in ctx [:app :url])

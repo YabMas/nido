@@ -67,6 +67,9 @@
   (Operation status
     "Print status for the named session."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation sync-runtime
+    "Bring the current session's runtime checkout up to date with every member's working copy."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation list-sessions
     "List every session for a project."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

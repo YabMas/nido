@@ -9,16 +9,16 @@
             [fukan.common.typing.malli]))
 
 (Module record-seats
-  "A workstream as its seats: the elements its generation fixes in its design, which an embodiment,
-   when one carries the workstream, gives an occupant.
+  "A workstream as its seats: the ids its current generation fixes, which an embodiment, when one
+   carries the workstream, gives an occupant.
 
-   HIDES how that picture is derived from the records: a seat is an element of the current
-   generation's governing design whose id the generation fixes, as record-generation reads it, and
-   is never stored; whether a tension is open is derived from an `:accord` by its addressee or a
-   `:withdrawal` by its raiser citing it, and a tension addressed to a seat the generation lacks is
-   the conductor's. It names no sort of
-   element itself and takes no selection from its caller — which elements are seats is the
-   design's mark — so a caller asks for seats and tensions and never names the entries they are
+   HIDES how that picture is derived from the records: a seat is an id the current generation
+   fixes, as record-generation reads it, whether or not a design of the generation states it yet,
+   with its interface from the governing design once one does, and is never stored; whether a
+   tension is open is derived from an `:accord` by its addressee or a `:withdrawal` by its raiser
+   citing it, and a tension addressed to an id the generation does not fix is the conductor's. It
+   names no sort of element itself and takes no selection from its caller — which ids are seats is the
+   generation's — so a caller asks for seats and tensions and never names the entries they are
    read from."
   (Operation seats
     "The current generation's seats: each id the generation fixes, with the interface its governing

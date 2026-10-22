@@ -59,6 +59,25 @@
               "the reset must not start services while the up is still starting them")
           (is (nil? (lock/holder lock-name)) "the lock is released after both"))))))
 
+(deftest a-sync-and-a-departure-run-one-after-the-other
+  ;; A sync reads the runtime's members and refreshes its checkout; a departure between the two
+  ;; would have the sync put the departed member's files back.
+  (let [inside (atom 0)
+        most   (atom 0)
+        busy   (fn [& _]
+                 (swap! most max (swap! inside inc))
+                 (Thread/sleep 150)
+                 (swap! inside dec)
+                 nil)]
+    (with-session {:start (constantly nil) :stop busy}
+      (fn [_]
+        (with-redefs [engine/sync-runtime! busy]
+          (let [a (future (lifecycle/sync! (str (lifecycle/worktree-path "brian" "." "feat"))))
+                b (future (lifecycle/down! "feat" {:project "brian"}))]
+            @a @b
+            (is (= 1 @most) "the sync must not refresh while the departure is under way")
+            (is (nil? (lock/holder lock-name)) "the lock is released after both")))))))
+
 (deftest a-verb-another-process-holds-is-waited-for-then-refused
   (let [other (p/process ["sleep" "30"])]
     (try
@@ -129,3 +148,18 @@
                                  (swap! done conj :b) (catch Exception e (swap! done conj e))))]
               @a @b
               (is (= #{:a :b} (set @done)) "both moves finish; neither waits out the other"))))))))
+
+(deftest runtimes-whose-ids-fold-alike-keep-distinct-locks
+  ;; A lock's file name folds `~` to `_`: the runtime keyed `a/b` and the one keyed `a_b` must
+  ;; not share one, or a verb holding both would drop the outer hold when the inner releases.
+  (let [lock-name @#'lifecycle/lock-name
+        lock-file (comp str @#'lock/lock-path lock-name)]
+    (is (not= (lock-file "p--a~b") (lock-file "p--a_b")))
+    (let [digest (->> (.digest (java.security.MessageDigest/getInstance "SHA-256")
+                               (.getBytes "p--a~b" "UTF-8"))
+                      (map #(format "%02x" (bit-and % 0xff)))
+                      (apply str))
+          ids    ["p--a~b" "p--a_b" "p--a_7Eb" (str "p--a_b-" (subs digest 0 12))]]
+      (is (= (count ids) (count (set (map lock-file ids))))
+          "no two ids share a lock file, an id shaped like another's escape included"))
+    (is (= "session-brian--feat" (lock-name "brian--feat")) "a plain id is its own name")))

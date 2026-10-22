@@ -56,3 +56,9 @@
             "and its delete writes the record first")
         (is (nil? (state/read-instance-worktree "p--none"))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest distinct-keys-keep-distinct-ids
+  (is (not= (state/keyed-id "p" "a/b") (state/keyed-id "p" "a~b")))
+  (is (not= (state/keyed-id "p" "a~b") (state/keyed-id "p" "a%7Eb")))
+  (is (= "p--feat~x" (state/keyed-id "p" "feat/x")) "a session name is spelled as it always was")
+  (is (= "p--ws-1" (state/keyed-id "p" "ws-1"))))

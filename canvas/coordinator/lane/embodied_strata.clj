@@ -9,7 +9,7 @@
 
 (Module lane-embodied-strata
   "The first embodiment: a design's strata, each embodied by a seat. A design carried this way marks
-   its strata generation-defining; which elements are seats is still the mark's, read below.
+   its strata generation-defining; which ids are seats is still the generation's, read below.
 
    HIDES that the generation-defining elements it carries are exactly a design's strata — it
    refuses a design that leaves a stratum unmarked or marks anything else, naming each; that a seat

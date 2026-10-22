@@ -3,6 +3,9 @@
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.state :refer [WorkstreamId SessionName]]
+            [canvas.coordinator.lane.conduct :as conduct]
+            [canvas.coordinator.record.seats :as rseats]
+            [canvas.coordinator.record.workstream :as ws]
             [canvas.session.commit-gate :as commit-gate]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
@@ -11,7 +14,7 @@
   "Who occupies each seat of a workstream, and what a new occupant is told.
 
    An embodiment is how a seat is named and its occupant briefed; it selects nothing, since the
-   seats are the design's generation-defining elements.
+   seats are the ids the current generation fixes, as the seats level reads them.
 
    HIDES the occupancy policy, for any embodiment: every seat of a workstream an embodiment carries
    is occupied by a session of its own, and a workstream no embodiment carries has no occupants,
@@ -33,20 +36,24 @@
     "Start a driven session for a seat that has no occupant in the current generation, briefed from
      the seats reading — once the embodiment's refusal passes against that generation, in the same
      transaction."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:embodiment :map] [:seat :string]] :map]})
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:embodiment :map] [:seat :string]] :map]
+     :delegates [rseats/seats rseats/tensions rseats/inherited conduct/retire! conduct/start!]})
   (Operation replace!
     "Retire a seat's occupant of the current generation and occupy the seat afresh, once the
      embodiment's refusal passes against that generation, in the same transaction."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:embodiment :map] [:seat :string]] :map]})
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:embodiment :map] [:seat :string]] :map]
+     :delegates [rseats/seats rseats/tensions rseats/inherited conduct/retire! conduct/start!]})
   (Operation reseat!
     "On a newly opened generation: retire every seat occupant of an earlier generation — its Claude
      session stopped, its record archived — and keep the conductor's. The new generation's seats
      are occupied by whatever carries it, once it can be carried."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]})
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
+     :delegates [conduct/retire!]})
   (Operation conductor!
     "Start the workstream's conductor: a driven session on a session record naming it the
      conductor. Refused while the workstream's conductor is live."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]})
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
+     :delegates [conduct/start!]})
   (Operation send!
     "Log a message from a seat's occupant or the conductor to a seat of the current generation or
      the conductor; no session need be live to be sent one."
@@ -56,7 +63,8 @@
      writer stamped from where it is run: a seat's occupant as its seat, the conductor as the
      conductor, and — for a `:recut` alone — any other session by its name, or a person outside
      every session; any other writer is refused."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:entry :map]] :map]})
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:entry :map]] :map]
+     :delegates [ws/append-stamped!]})
   (Operation occupants
     "Each seat's live occupant, read from the session records naming it in the current generation."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:sequential :map]]})

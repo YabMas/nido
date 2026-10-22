@@ -14,6 +14,7 @@
               to actually `cd` (see Nido's CLAUDE.md). Pass :cd worktree to
               land in the code instead of the session-home.
      status   per-session liveness + ports
+     sync-runtime  bring the runtime's checkout up to date with every member's working copy
      list     project-wide overview
      adopt    make nido the driver of a background session started in it
      release  stop nido driving its background session; the session keeps running
@@ -587,6 +588,22 @@
         _project (require-project opts)
         session (require-session-name pos)]
     (lifecycle/status session opts)))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  sync-runtime
+  "Bring the checkout the runtime of the session the current directory belongs to — its worktree
+   or its session home — runs out of up to date with every member's working copy. Run it after
+   changing files; the project's reload then reads them. Exits 1, changing nothing, when the
+   working copies conflict or no session is found here.
+   Usage: bb nido:session:sync"
+  [& _]
+  (try
+    (if-let [dir (lifecycle/sync! (or (lifecycle/worktree-from-cwd) (str (fs/cwd))))]
+      (println "Runtime checkout up to date:" dir)
+      (println "This runtime runs out of a member's worktree; load your changes with load-file."))
+    (catch clojure.lang.ExceptionInfo e
+      (binding [*out* *err*] (println (ex-message e)))
+      (exit! 1))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   list-sessions

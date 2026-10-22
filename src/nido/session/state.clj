@@ -19,9 +19,29 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string] :string]}
   keyed-id
   "`<project>--<key>`, a `/` in `key` written `~` so the id is one path segment. The one spelling
-   of a key-derived id: a runtime's instance id, and a session's own key."
+   of a key-derived id: a runtime's instance id, and a session's own key. A `%` or `~` already in
+   `key` is written `%25` or `%7E` first, so two keys never spell one id — `a/b` and `a~b` are
+   two runtimes — while a key holding neither, as every session name does, is spelled as before."
   [project-name key]
-  (str project-name "--" (clojure.string/replace (str key) "/" "~")))
+  (str project-name "--"
+       (-> (str key)
+           (clojure.string/replace "%" "%25")
+           (clojure.string/replace "~" "%7E")
+           (clojure.string/replace "/" "~"))))
+
+(defn ^{:malli/schema [:=> [:cat :string] :string]}
+  file-safe
+  "`id` spelled in `[A-Za-z0-9.-]` alone — a lock file's or a jj workspace's name — with every
+   other byte, `_` included, written `_XX` in hex. The one spelling of a name built from a runtime
+   key or an id derived from one: `_` begins only an escape, so distinct ids never share a name,
+   and a name a consumer folds to `[A-Za-z0-9._-]` is left as it is."
+  [id]
+  (apply str (map (fn [b]
+                    (let [c (char (bit-and b 0xff))]
+                      (if (re-matches #"[A-Za-z0-9.-]" (str c))
+                        c
+                        (format "_%02X" (bit-and b 0xff)))))
+                  (.getBytes (str id) "UTF-8"))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string] :string]}
   session-key
@@ -283,6 +303,17 @@
 
 (defn- worktree-record-file [instance-id]
   (str (fs/path (instance-state-dir instance-id) "worktree.edn")))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:map-of :string [:maybe :string]]]}
+  members
+  "The worktrees on runtime record `session`, each mapped to its session's name — the one reading
+   of a runtime's membership, so a change to it starts from this and never from the stored field. A
+   runtime recorded before it had members has one: the session that started it; no record has none."
+  [session]
+  (cond
+    (nil? session)      {}
+    (:members session)  (:members session)
+    :else               {(str (:project-dir session)) (:name session)}))
 
 (defn ^{:malli/schema [:=> [:cat :InstanceId :map] :any]}
   write-session!

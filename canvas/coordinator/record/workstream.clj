@@ -128,7 +128,9 @@
   (Operation append-entry!
     "Append an immutable entry and record it in the index, under the workstream's lock."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:entry :map] [:content :string]] Path]
-     :delegates [append-lock-path read-ws write! report/entry-payload]})
+     :delegates [append-lock-path read-ws write! report/entry-payload
+                 generation/opened-by generation/current generation/generation-of
+                 generation/closed-design generation/fixed-ids generation/defining-ids]})
   (Operation open-generation!
     "Append a :generation a person gives, opening the next generation of the design — the kind's
      one writer, under the workstream's lock. Refused while the workstream waits between phases,
@@ -144,7 +146,9 @@
      a writer is stamped against the generation its entry joins."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
                        [:payload [:or :map [:=> [:cat Workstream] :map]]]] Path]
-     :delegates [append-lock-path read-ws]})
+     :delegates [append-lock-path read-ws
+                 generation/opened-by generation/current generation/generation-of
+                 generation/closed-design generation/fixed-ids generation/defining-ids]})
   (Operation holding-ledger
     "Answer a function of the workstream read under its append lock — the lock every append and a
      generation's opening hold — so what it decides from that read stays true while it runs."
@@ -178,12 +182,16 @@
     "Append only if the ledger's latest entry is still the one the caller read. The optimistic
      lock that stops two people deciding the same thing from both writing the decision."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:expected-seq :int] [:entry :map] [:content :string]] :map]
-     :delegates [append-lock-path read-ws write! report/entry-payload]})
+     :delegates [append-lock-path read-ws write! report/entry-payload
+                 generation/opened-by generation/current generation/generation-of
+                 generation/closed-design generation/fixed-ids generation/defining-ids]})
   (Operation append-entry-once!
     "Append an entry only when none of its kind is already the one the caller's identity names — an
      entry an interrupted append wrote included, which a read holds — rather than write a second."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:entry :map] [:content :string] [:same? :any]] :map]
-     :delegates [append-lock-path read-ws report/parse-event]})
+     :delegates [append-lock-path read-ws report/parse-event
+                 generation/opened-by generation/current generation/generation-of
+                 generation/closed-design generation/fixed-ids generation/defining-ids]})
   (Operation latest-entry
     "The most recent entry of a kind, parsed through the READ contract. nil when there is none,
      and nil when the one that is there no longer parses."
@@ -286,10 +294,12 @@
   (Operation goal-amendment
     "How far the amendment of a goal has got, read off citations alone and within that goal's
      unit: the live goal of the chain the given intent is on, the goal it replaced, and the
-     unit's newest baseline and design with whether each still reaches a replaced goal. nil when
-     nothing in the unit was built on a replaced goal. Facts only — which stages they leave owed,
-     and whether a replacement was judged, are the arc's to say."
-    {:signature [:=> [:catn [:w Workstream] [:goal-seq :int]] [:maybe :map]]})
+     unit's newest baseline and its newest design in the current generation's span with whether
+     each still reaches a replaced goal. nil when nothing in the unit was built on a replaced goal.
+     Facts only — which stages they leave owed, and whether a replacement was judged, are the
+     arc's to say."
+    {:signature [:=> [:catn [:w Workstream] [:goal-seq :int]] [:maybe :map]]
+     :delegates [generation/current-span]})
   (Operation holds-design?
     "Whether a workstream holds a :design at all — a PRESENCE CHECK, and never a citation
      source.

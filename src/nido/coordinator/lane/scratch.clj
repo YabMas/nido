@@ -77,13 +77,14 @@
 
 (defn- settle-runtime!
   "Move the session onto the runtime keyed `key` when it is up on another one — including one
-   started before runtimes recorded their key — restarting its services there while its Claude
-   session and working copy carry on. No-op for a session that is down: its next start comes up
-   under `key`. Returns true when it moved the session."
+   started before runtimes recorded their key — or on one that still owes a checkout of its own,
+   restarting its services there while its Claude session and working copy carry on. No-op for a
+   session that is down: its next start comes up under `key`. Returns true when it moved the
+   session."
   [project session-name key]
   (let [opts {:project (name project)}
         on   (try (lifecycle/runtime-of session-name opts) (catch Exception _ nil))]
-    (when (and on (not= (:key on) key))
+    (when (and on (or (not= (:key on) key) (:owes-checkout? on)))
       (lifecycle/restart! session-name (assoc opts :runtime-key key))
       true)))
 

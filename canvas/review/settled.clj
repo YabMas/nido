@@ -4,6 +4,7 @@
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.fork :as fork]
+            [canvas.coordinator.record.generation :as generation]
             [canvas.coordinator.record.state :refer [Path WorkstreamId]]
             [canvas.design.check :refer [DeclaredElements]]
             [canvas.platform.project :refer [ProjectName]]
@@ -81,18 +82,18 @@
      :delegates [subjects]})
   (Operation ledger
     "One workstream's reviews and decisions, the baselines and designs they judged, and its
-     retractions, as `settled` reads them, within its current generation's span — or nil when any
-     entry of those kinds in the span cannot be read, since the judgement or retraction nobody can
-     parse could be the one that unsettles a subject. An earlier generation's entries are cut before
-     anything is held against the reading."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]})
+     retractions, as `settled` reads them, within the current generation's span record-generation
+     gives — or nil when any entry of those kinds in the span cannot be read, since the judgement or
+     retraction nobody can parse could be the one that unsettles a subject."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
+     :delegates [generation/current-span]})
   (Operation ledgers
     "Every ledger a round over a record may find its subjects settled on — its own workstream's,
      its fork parent's unless the workstream has re-cut, and the child a merged design cites — or
      nil when any of them cannot be read."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:record :map]]
                  [:maybe [:vector :map]]]
-     :delegates [ledger fork/lineage]})
+     :delegates [ledger fork/lineage generation/current]})
   (Operation settled
     "The subjects of a record settled at a reading — the code identity and the element identities a
      judge is about to read — each with the workstream and seq of the judgement that settled it.

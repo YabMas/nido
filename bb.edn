@@ -113,6 +113,11 @@
    :doc "Spawn a child session from inside a parent one: :project <p> <child> :parent-agent <your agent name> :brief-file <path> [:ws-id <id>] [:permission-mode <yours; default bypassPermissions>] [:model <id>] [up opts] — up, link both ways, stage a kickoff, open a Warp tab where the child's agent starts on the brief. See the spawn-session skill."
    :task (apply nido-session/spawn *command-line-args*)}
 
+  nido:session:sync
+  {:requires ([tasks.nido-session :as nido-session])
+   :doc "Bring your runtime's checkout up to date with every member's working copy — run from your worktree"
+   :task (nido-session/sync-runtime)}
+
   nido:session:status
   {:requires ([tasks.nido-session :as nido-session])
    :doc "Session status: :project <p> <session>"

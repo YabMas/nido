@@ -22,7 +22,7 @@
   {:about [of-design] :evidence "test"})
 
 (Claim position-reads-retraction-through-standing
-  "The pipeline's retracted positions come from standing's blocked reason for the workstream's newest design, else its newest baseline, else its newest intent — :design-retracted, :premise-retracted, or :intent-retracted for :goal-retracted — and a retraction that unseats none of those holds no position. The pipeline reads no :retraction entry."
+  "The pipeline's retracted positions come from standing's blocked reason for the workstream's governing design, as record-standing's governing gives it, else its newest baseline, else its newest intent — :design-retracted, :premise-retracted, or :intent-retracted for :goal-retracted — and a retraction that unseats none of those holds no position. The pipeline reads no :retraction entry."
   {:about [of lane-reentry] :evidence "test"})
 
 (Claim retracted-position-advises-its-own-repair

@@ -603,6 +603,13 @@
               #(or % (java.util.concurrent.locks.ReentrantLock.)))
        instance-id))
 
+(defn- lock-name
+  "The machine-wide lock name of lifecycle lock `id` — a runtime's instance id, or a session's
+   `member-` key — spelled `state/file-safe`, so the lock file it names is distinct for every
+   distinct id whatever characters the lock's own file naming would fold."
+  [id]
+  (str "session-" (state/file-safe id)))
+
 (defn- with-session-lock
   "Run `f` holding the session's lifecycle lock, waiting while another verb
    holds it. Throws when the wait runs out. The throw is a refusal, so it is
@@ -629,7 +636,7 @@
     (try
       (if (> (.getHoldCount l) 1)
         (f)
-        (lock/with-lock* (str "session-" instance-id) (str (name verb) " " instance-id)
+        (lock/with-lock* (lock-name instance-id) (str (name verb) " " instance-id)
           {:wait-ms session-wait-ms
            :on-wait (fn [{:keys [label pid]}]
                       (core/log-step (str "Waiting for `" label "` (pid " pid
@@ -667,14 +674,19 @@
   (let [{:keys [wt-path instance-id on]} (with-context name opts)]
     {:wt-path wt-path :instance-id (or on instance-id)}))
 
-(defn ^{:malli/schema [:=> [:cat :string :map] [:maybe [:map [:instance-id :string] [:key [:maybe :string]]]]]}
+(defn ^{:malli/schema [:=> [:cat :string :map] [:maybe [:map [:instance-id :string] [:key [:maybe :string]]
+                                                           [:owes-checkout? :boolean]]]]}
   runtime-of
-  "The runtime the named session is up on, as {:instance-id :key}, or nil when it is down. `:key`
-   is nil for a runtime started before runtimes recorded the key they were started under."
+  "The runtime the named session is up on, as {:instance-id :key :owes-checkout?}, or nil when it
+   is down. `:key` is nil for a runtime started before runtimes recorded the key they were started
+   under; `:owes-checkout?` holds for one that runs out of a member's worktree though it should run
+   out of a checkout of its own (`engine/owes-checkout?`)."
   [name opts]
   (let [{:keys [wt-path on]} (with-context name opts)]
     (when on
-      {:instance-id on :key (engine/runtime-key-of wt-path)})))
+      {:instance-id    on
+       :key            (engine/runtime-key-of wt-path)
+       :owes-checkout? (engine/owes-checkout? (state/read-session on))})))
 
 (defn- weight-from-worktree
   "Fallback reading of provisioned weight for a session whose profile snapshot
@@ -766,6 +778,17 @@
     (when-not (fs/exists? wt-path)
       (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
     (with-lifecycle-locks name opts :down (fn [_] (engine/stop-session! wt-path)))))
+
+(defn ^{:malli/schema [:=> [:cat :Path] [:maybe :Path]]}
+  sync!
+  "Bring the checkout of the runtime the session in `worktree` is on up to date with every
+   member's working copy (`engine/sync-runtime!`), holding that runtime's lifecycle lock, so its
+   membership is read and its checkout refreshed with no join or departure between them."
+  [worktree]
+  (let [instance-id (engine/resolve-instance-id worktree)]
+    (if instance-id
+      (with-session-lock instance-id :sync #(engine/sync-runtime! worktree instance-id))
+      (engine/sync-runtime! worktree nil))))
 
 (defn- carried-across-stop
   "`opts` carrying what the session `name` was started with and a restart would lose: the

@@ -92,6 +92,17 @@
   (Operation stop-session! "Bring a worktree's services down."
     {:signature [:=> [:catn [:project-dir Path]] :any]
      :delegates [resolve-instance-id sstate/read-session sstate/remove-from-registry!]})
+  (Operation owes-checkout?
+    "Whether a live runtime record runs out of a member's worktree though every member is a jj
+     workspace — started before such runtimes ran out of a checkout of their own."
+    {:signature [:=> [:catn [:runtime [:maybe :map]]] :boolean]})
+  (Operation sync-runtime!
+    "Bring the checkout a worktree's runtime runs out of up to date with every member's working
+     copy; nil when it runs out of a member's worktree."
+    {:signature [:function
+                 [:=> [:catn [:project-dir Path]] [:maybe Path]]
+                 [:=> [:catn [:project-dir Path] [:instance-id [:maybe InstanceId]]] [:maybe Path]]]
+     :delegates [resolve-instance-id sstate/read-session]})
   (Operation session-status "What a worktree's session is doing."
     {:signature [:=> [:catn [:project-dir Path]] :any]
      :delegates [resolve-instance-id sstate/read-session]})

@@ -3,6 +3,7 @@
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.agent :as agent]
+            [canvas.coordinator.record.generation :as generation]
             [canvas.coordinator.record.standing :as standing]
             [canvas.coordinator.record.state :refer [Path WorkstreamId]]
             [canvas.coordinator.record.workstream :as workstream]
@@ -109,7 +110,8 @@
      :delegates [workstream/amended-seqs]})
   (Operation design-decision! "Run the decision round over a design."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [design-prompt parse-design-decision unresolved-subjects design/elements answered]})
+     :delegates [design-prompt parse-design-decision unresolved-subjects design/elements answered
+                 generation/fixing-design]})
   (Operation append!
     "Append a round's record to the ledger the run resolved when it started — never one re-resolved
      from a directory mid-run."

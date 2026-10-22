@@ -19,8 +19,9 @@
   "A fork is a CHILD WORKSTREAM, never a second unit on the parent's.
 
    That is the whole of what keeps the parent standing as it stood. Every reader of a workstream
-   takes its newest design, so a child unit on the parent's ledger would become the parent's
-   design; on its own ledger it is nobody else's. Forking therefore writes only to the child: a
+   takes its governing design, as record-standing's governing-design gives it, so a child unit's
+   design on the parent's ledger would become the parent's governing design; on its own ledger it
+   is nobody else's. Forking therefore writes only to the child: a
    `:fork` entry citing the parent's baseline and design by workstream and seq, and a baseline
    derived from those two. The parent's ledger and record are untouched.
 

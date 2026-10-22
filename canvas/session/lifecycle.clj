@@ -58,6 +58,11 @@
      :delegates [worktree-path session-name-problem]})
   (Operation down! "Stop a session. Worktree and state are PRESERVED."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]})
+  (Operation sync!
+    "Bring the checkout a worktree's runtime runs out of up to date with every member's working
+     copy, holding that runtime's lifecycle lock, so no join or departure falls between reading
+     its members and refreshing its checkout."
+    {:signature [:=> [:catn [:worktree Path]] [:maybe Path]]})
   (Operation restart! "Stop then start, worktree untouched."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]})
   (Operation with-runtime-to-itself
@@ -81,10 +86,12 @@
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]
      :delegates [tpg/drop-session-db!]})
   (Operation runtime-of
-    "The runtime a named session is up on, with the key it was started under, or nil when it is
-     down. The key is nil for a runtime started before runtimes recorded one."
+    "The runtime a named session is up on, with the key it was started under and whether it still
+     owes a checkout of its own, or nil when it is down. The key is nil for a runtime started
+     before runtimes recorded one."
     {:signature [:=> [:catn [:name :string] [:opts :map]]
-                 [:maybe [:map [:instance-id :string] [:key [:maybe :string]]]]]})
+                 [:maybe [:map [:instance-id :string] [:key [:maybe :string]]
+                          [:owes-checkout? :boolean]]]]})
   (Operation status "What state a named session is in."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]})
   (Operation cd-target-file

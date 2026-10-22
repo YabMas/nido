@@ -69,9 +69,11 @@
      decision until a round lets it proceed — each with the live goal and the seqs it cites or
      supersedes, and no text. One function of a goal, answered for whichever unit the caller
      names; a next action whose stage is the first owed by its newest survey's unit carries them
-     as :owed."
+     as :owed. Read off the ledger's goal-amendment reading, with whether standing lets the
+     unit's newest design proceed."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:goal-seq :int]]
-                 [:vector :map]]})
+                 [:vector :map]]
+     :delegates [workstream/goal-amendment standing/proceeding?]})
   (Operation disposition "What a finished status means for the workstream it finished on."
     {:signature [:=> [:catn [:status :keyword]] :keyword]})
   (Operation of "Where a workstream stands and what should happen to it next."

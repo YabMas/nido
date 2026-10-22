@@ -27,9 +27,10 @@
 
   {:child [Standing]}
   (Operation of-design
-    "Whether a stamped design record still holds, and what its standing rests on."
+    "Whether a stamped design record still holds, and what its standing rests on — the designs and
+     decisions it weighs read from the current generation's span, intents and baselines whole."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design :map]] Standing]
-     :delegates [workstream/entries-of]})
+     :delegates [workstream/entries-of generation/current-span]})
   (Operation governing-design
     "The design that governs a workstream — the one record-generation's current-design names over
      the current span — read whole, or nil. Every reader of the governing design takes it from
@@ -56,10 +57,11 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:intent :map]] :map]
      :delegates [workstream/entries-of]})
   (Operation open-findings
-    "The items of the newest findings round that no later resolution entry names — the one
-     reading of what a findings round still owes, for the position and the board's count alike."
+    "The items of the newest findings round of the current generation's span that no later
+     resolution entry names — the one reading of what a findings round still owes, for the
+     position and the board's count alike."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:set :string]]
-     :delegates [workstream/entries-of]})
+     :delegates [workstream/entries-of generation/current-span]})
   (Operation why-not-decided
     "Why a standing is not decided, in words a person can act on. nil when it is."
     {:signature [:=> [:catn [:standing Standing]] [:maybe :string]]})
@@ -87,7 +89,8 @@
     "Whether the workstream was born a one-off: its ledger holds the birth entry."
     {:signature [:=> [:catn [:w :any]] :boolean]})
   (Operation newest-findings
-    "The newest findings round as written — its number and the phase it belongs to are what the
-     next round and its settling derive from. Fails closed on a round that cannot be read."
+    "The newest findings round of the current generation's span as written — its number and the
+     phase it belongs to are what the next round and its settling derive from. Fails closed on a
+     round that cannot be read."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:w :any]] [:maybe :map]]
-     :delegates [workstream/entries-of]}))
+     :delegates [workstream/entries-of generation/current-span]}))

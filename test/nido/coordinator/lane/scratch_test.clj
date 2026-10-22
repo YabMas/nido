@@ -201,6 +201,15 @@
         (is (= [] (restarts-with {"settled" {:instance-id (str "brian--" ws-id) :key ws-id}}
                                  #(scratch/settle-runtimes! :brian #{"settled"}))))))))
 
+(deftest a-session-on-a-runtime-owing-its-checkout-is-restarted-under-the-same-key
+  (with-tmp
+    (fn [_]
+      (let [ws-id (scratch/birth! :brian "jj" :heavy)]
+        (is (= [["jj" ws-id]]
+               (restarts-with {"jj" {:instance-id (str "brian--" ws-id) :key ws-id :owes-checkout? true}}
+                              #(scratch/settle-runtimes! :brian #{"jj"})))
+            "a runtime of jj workspaces still running out of a member's worktree is moved")))))
+
 (deftest a-session-no-workstream-holds-is-moved-onto-its-own-whole-name
   (with-tmp
     (fn [_]

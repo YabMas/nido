@@ -64,4 +64,5 @@
      cleared or approved — nil while none is fixed. The append checks hold a generation's designs
      to these and the seats level reads its seats from them, so seats and the ids they are held to
      start from one event."
-    {:signature [:=> [:catn [:workstream :map]] [:maybe [:set :string]]]}))
+    {:signature [:=> [:catn [:workstream :map]] [:maybe [:set :string]]]
+     :delegates [fixing-design defining-ids]}))

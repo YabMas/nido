@@ -31,8 +31,9 @@
     "How each trail kind stands against the current design: which are current, which are behind."
     {:signature [:=> [:catn [:w Workstream] [:current :int]] :map]})
   (Operation current-standing
-    "The standing that answers for a workstream's current records — the newest design's, else
-     the newest baseline's, else the newest intent's. The one place that choice is made."
+    "The standing that answers for a workstream's current records — the governing design's, as
+     record-standing's `governing-design` gives it, else the newest baseline's, else the newest
+     intent's. The one place that choice is made."
     {:signature [:=> [:catn [:design-standing [:maybe :map]] [:baseline-standing [:maybe :map]]
                       [:intent-standing [:maybe :map]]]
                  [:maybe :map]]})
@@ -55,4 +56,4 @@
   (Operation of
     "Re-entry for a workstream, reading what it needs."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
-     :delegates [of* workstream/read-ws standing/of-design standing/of-baseline]}))
+     :delegates [of* workstream/read-ws standing/governing-design standing/of-design standing/of-baseline]}))

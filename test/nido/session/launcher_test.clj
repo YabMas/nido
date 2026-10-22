@@ -772,6 +772,35 @@
       (is (not (str/includes? (launcher/live-services-prompt "brian--ws" nil) "load-file"))
           "nothing to say while the JVM's own working copy is the only one on it"))))
 
+(defn- nido-task
+  "A nido task run under nido's own bb.edn — the one form that resolves from a working copy of
+   any project, whose own bb.edn has no nido tasks."
+  [task]
+  (str "bb --config '" (fs/path (core/nido-source-dir) "bb.edn") "' " task))
+
+(deftest a-session-on-a-checkout-runtime-is-told-to-sync
+  ;; The runtime runs out of its own checkout, the merge of every member's working copy: every
+  ;; member, the one that started it included, is told to sync, and nobody to load-file.
+  (let [rt {:project-dir "/state/rt/checkout" :checkout "/state/rt/checkout"
+            :members {"/wt-a" "a" "/wt-b" "b"}
+            :context {:session {:project-dir "/state/rt/checkout"} :repl {:port 5000}}}]
+    (with-redefs [state/read-session             (fn [_id] rt)
+                  links/read-links               (fn [_id] [])
+                  launcher/read-project-briefing (fn [_] nil)]
+      (doseq [who ["a" "b"]]
+        (let [b (launcher/session-briefing "brian" who "brian--ws")]
+          (is (str/includes? b (nido-task "nido:session:sync")))
+          (is (not (str/includes? b "load-file")))))
+      (is (str/includes? (launcher/live-services-prompt "brian--ws" "/wt-a")
+                         (nido-task "nido:session:sync")))
+      (is (not (str/includes? (launcher/live-services-prompt "brian--ws" "/wt-a") "load-file")))
+      (testing "the link and lifecycle verbs it hands the session resolve without nido's shell function"
+        (let [b (launcher/session-briefing "brian" "a" "brian--ws")]
+          (doseq [task ["nido:session:link:add" "nido:session:link:list" "nido:session:status"
+                        "nido:session:destroy"]]
+            (is (str/includes? b (nido-task task)) task))
+          (is (not (re-find #"`nido session:" b))))))))
+
 (deftest rerender-briefing-writes-claude-and-agents-files
   (let [tmp  (fs/create-temp-dir)
         home (fs/path tmp "home")
@@ -837,7 +866,7 @@
             (is (str/includes? doc "## The design this project declares"))
             (is (str/includes? doc "the floor, depends on nothing")
                 "verbatim — the docstrings are the half a reader most needs")
-            (is (str/includes? doc "bb nido:design:check")
+            (is (str/includes? doc (nido-task "nido:design:check"))
                 "the section says how to ask, since it carries no count of its own")))
         (finally (fs/delete-tree wt))))))
 

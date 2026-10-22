@@ -7,6 +7,7 @@
    [clojure.test :refer [deftest is testing]]
    [nido.platform.core :as core]
    [nido.platform.process :as proc]
+   [nido.session.checkout :as checkout]
    [nido.session.engine :as engine]
    [nido.session.launcher :as launcher]
    [nido.session.lifecycle :as lifecycle]
@@ -434,99 +435,6 @@
         (engine/start-session! wt-a {:runtime-key "ws-2" :session-name "a"})
         (is (= ["a"] (engine/sessions-on "p--ws-2")) "with nobody else on it, a moves")))))
 
-(deftest a-join-re-derives-what-the-runtime-rendered-before-it-grew
-  ;; a's runtime rendered its config with no app, so `{{app.port}}` stayed unresolved. b's join
-  ;; adds the app: the config is rendered again over the grown context, before the app starts.
-  (with-runtime-home
-    (fn [wt-a wt-b]
-      (let [svcs  [{:type :config-file :name :cfg :template {:port "{{app.port}}"}}
-                   {:type :eval :name :app}]
-            calls (atom [])]
-        (state/write-session! "p--ws-1" {:project-dir wt-a :project-name "p" :instance-id "p--ws-1"
-                                         :runtime-key "ws-1" :name "a" :members {wt-a "a"}
-                                         :service-defs svcs :service-states {:cfg {:path "x"} :repl {:pid 1}}
-                                         :context {:session {:instance-id "p--ws-1" :name "a"}}})
-        (engine/write-profile-for-session! "p" "a" {:services [:config-file] :worktree {:strategy :git-worktree}})
-        (with-redefs [engine/load-session-edn (constantly {:services svcs})
-                      service/stop-service!   (fn [d _] (swap! calls conj [:stop (:name d)]))
-                      service/start-service!  (fn [d _ _] (swap! calls conj [:start (:name d) (:template d)])
-                                                {:state {:pid 2} :context {}})]
-          (engine/start-session! wt-b {:runtime-key "ws-1" :session-name "b"}))
-        (let [[stop [_ cfg tpl] [_ app]] @calls]
-          (is (= [:stop :cfg] stop))
-          (is (= :cfg cfg))
-          (is (integer? (:port tpl)) "the config now names the app's port")
-          (is (= :app app) "and is rendered before the app starts"))))))
-
-(deftest a-failed-join-puts-back-what-it-re-derived
-  ;; The join stops a's config to render it again over the app's port; when the app then fails to
-  ;; start, a's config is rendered again as it was, and the runtime's record still describes it.
-  (with-runtime-home
-    (fn [wt-a wt-b]
-      (let [svcs   [{:type :config-file :name :cfg :template {:port "{{app.port}}"}}
-                    {:type :eval :name :app}]
-            before {:project-dir wt-a :project-name "p" :instance-id "p--ws-1"
-                    :runtime-key "ws-1" :name "a" :members {wt-a "a"}
-                    :service-defs svcs :service-states {:cfg {:path "x"} :repl {:pid 1}}
-                    :context {:session {:instance-id "p--ws-1" :name "a"} :cfg {}}}
-            calls  (atom [])]
-        (state/write-session! "p--ws-1" before)
-        (engine/write-profile-for-session! "p" "a" {:services [:config-file] :worktree {:strategy :git-worktree}})
-        (with-redefs [engine/load-session-edn (constantly {:services svcs})
-                      service/stop-service!   (fn [d _] (swap! calls conj [:stop (:name d)]))
-                      service/start-service!  (fn [d _ _]
-                                                (swap! calls conj [:start (:name d) (:template d)])
-                                                (when (= :app (:name d)) (throw (ex-info "boom" {})))
-                                                {:state {:path "x"} :context {}})]
-          (is (thrown? clojure.lang.ExceptionInfo
-                       (engine/start-session! wt-b {:runtime-key "ws-1" :session-name "b"}))))
-        (is (= [:start :cfg {:port "{{app.port}}"}] (last @calls))
-            "a's config is rendered again from the context it was first rendered from")
-        (is (= before (state/read-session "p--ws-1")) "and the record still describes the runtime")))))
-
-(deftest a-failed-join-tells-the-members-where-what-it-restored-now-is
-  ;; The join re-derives a's REPL over the app's port; the app then fails, and the REPL restored
-  ;; over the old context comes up on another port. The record and a's registration name that
-  ;; port, not the one the stopped process had.
-  (with-runtime-home
-    (fn [wt-a wt-b]
-      (let [svcs  [{:type :process :name :repl :args ["{{app.port}}"]}
-                   {:type :eval :name :app}]
-            ports (atom 1)]
-        (state/write-session! "p--ws-1" {:project-dir wt-a :project-name "p" :instance-id "p--ws-1"
-                                         :runtime-key "ws-1" :name "a" :members {wt-a "a"}
-                                         :service-defs svcs :service-states {:repl {:pid 1}}
-                                         :context {:session {:instance-id "p--ws-1" :name "a"}
-                                                   :repl {:port 1}}})
-        (state/upsert-registry! wt-a {:instance-id "p--ws-1" :runtime-key "ws-1" :session-name "a"
-                                      :nrepl-port 1})
-        (engine/write-profile-for-session! "p" "a" {:services [:process] :worktree {:strategy :git-worktree}})
-        (with-redefs [engine/load-session-edn (constantly {:services svcs})
-                      service/stop-service!   (fn [& _] nil)
-                      service/start-service!  (fn [d _ _]
-                                                (when (= :app (:name d)) (throw (ex-info "boom" {})))
-                                                (let [p (swap! ports inc)]
-                                                  {:state {:pid p} :context {:port p}}))]
-          (is (thrown? clojure.lang.ExceptionInfo
-                       (engine/start-session! wt-b {:runtime-key "ws-1" :session-name "b"}))))
-        (let [rt (state/read-session "p--ws-1")]
-          (is (= {:pid 3} (get-in rt [:service-states :repl])) "the restored process's state")
-          (is (= {:port 3} (get-in rt [:context :repl])) "and the context it returned"))
-        (is (= 3 (:nrepl-port (#'engine/registry-entry wt-a)))
-            "a is registered with the restored REPL's port")))))
-
-(deftest a-join-records-the-services-it-adds
-  ;; A service the declaration gained after the runtime started is started by the join, and the
-  ;; record names it — so the last session's stop stops it rather than leaving it running.
-  (with-runtime-home
-    (fn [_ wt-b]
-      (with-redefs [engine/load-session-edn (constantly {:services [{:type :process :name :extra}]})
-                    service/start-service!  (fn [& _] {:state {:pid 7} :context {}})]
-        (engine/start-session! wt-b {:runtime-key "ws-1" :session-name "b"}))
-      (let [rt (state/read-session "p--ws-1")]
-        (is (= {:pid 7} (get-in rt [:service-states :extra])))
-        (is (= [:extra] (mapv :name (:service-defs rt))))))))
-
 (deftest a-stopped-session-keeps-no-key-of-its-own
   ;; Which workstream holds a session is nido's to say each time, and can change while it is down:
   ;; once stopped, a start that names no key brings it up on its own runtime, never on one a key
@@ -538,18 +446,150 @@
       (with-redefs [lifecycle/resolve-project (constantly ["p" {:directory "/nonexistent"}])]
         (is (= "b" (:runtime-key (#'lifecycle/with-context "b" {:project "p" :path wt-b}))))))))
 
-(deftest a-joiner-gets-the-services-the-runtime-lacks
+(deftest a-joiner-asking-for-a-missing-service-restarts-the-runtime-under-the-union
+  ;; a's runtime runs only its repl; b asks for everything. The runtime is not grown by the
+  ;; services it lacks: it is stopped whole and started cold under a's and b's union, out of the
+  ;; worktree it ran out of, and both are told what it came up on.
   (with-runtime-home
-    (fn [_ wt-b]
+    (fn [wt-a wt-b]
       (engine/write-profile-for-session! "p" "a" {:services [:process] :worktree {:strategy :git-worktree}})
-      (let [started (atom [])
+      (let [calls   (atom [])
             briefed (atom [])]
         (with-redefs [engine/load-session-edn   (constantly {:services fake-services})
-                      service/start-service!    (fn [svc & _] (swap! started conj (:name svc))
+                      service/stop-service!     (fn [d _] (swap! calls conj [:stop (:name d)]))
+                      service/start-service!    (fn [svc & _] (swap! calls conj [:start (:name svc)])
                                                   {:state {:pid 2} :context {:port 1}})
                       launcher/write-artifacts! (fn [ctx & _] (swap! briefed conj (get-in ctx [:session :name])))]
+          (state/write-session! "p--ws-1" (assoc (state/read-session "p--ws-1")
+                                                 :service-defs [{:type :process :name :repl}]))
           (engine/start-session! wt-b {:runtime-key "ws-1" :session-name "b"
                                        :profile {:services :all :worktree {:strategy :git-worktree}}}))
-        (is (= [:pg :app] @started) "a's repl stays; what b asks for and nobody ran is started")
-        (is (= #{:repl :pg :app} (set (keys (:service-states (state/read-session "p--ws-1"))))))
-        (is (= #{"a" "b"} (set @briefed)) "a is told the services b brought up")))))
+        (is (= [[:stop :repl] [:start :pg] [:start :repl] [:start :app]] @calls)
+            "the running repl is stopped and everything the union asks for started from nothing")
+        (let [rt (state/read-session "p--ws-1")]
+          (is (= {wt-a "a" wt-b "b"} (:members rt)) "every member stays on it")
+          (is (= wt-a (:project-dir rt)) "out of the worktree it ran out of")
+          (is (= #{:repl :pg :app} (set (keys (:service-states rt))))))
+        (is (= #{"a" "b"} (set @briefed)) "a is told what the runtime came up on")))))
+
+(deftest a-joiner-asking-for-nothing-new-provisions-nothing
+  (with-runtime-home
+    (fn [_ wt-b]
+      (let [calls (atom 0)]
+        (with-redefs [service/stop-service!  (fn [& _] (swap! calls inc))
+                      service/start-service! (fn [& _] (swap! calls inc) {:state {} :context {}})]
+          (engine/start-session! wt-b {:runtime-key "ws-1" :session-name "b"
+                                       :profile {:services [] :worktree {:strategy :git-worktree}}}))
+        (is (zero? @calls) "nothing is stopped or started")))))
+
+;; ---------------------------------------------------------------------------
+;; A runtime of jj workspaces runs out of a checkout of its own
+;; ---------------------------------------------------------------------------
+
+(defn- with-checkout-stubs
+  "Run `f` with every worktree a jj workspace and the checkout's refresh recorded in `refreshes`
+   (the members each was asked for) — or throwing a conflict when `conflict?` holds."
+  [refreshes conflict? f]
+  (with-redefs [checkout/jj-workspace? (constantly true)
+                checkout/refresh!      (fn [id members & _]
+                                         (when @conflict?
+                                           (throw (ex-info "conflict" {:reason :checkout-conflict
+                                                                       :paths ["x"]})))
+                                         (swap! refreshes conj (set (vals members)))
+                                         (str "/state/" id "/checkout"))
+                checkout/remove!       (fn [id _] (swap! refreshes conj [:removed id]) nil)]
+    (f)))
+
+(deftest a-runtime-of-jj-workspaces-runs-out-of-its-own-checkout
+  (let [tmp (fs/create-temp-dir)
+        wt  (str (fs/path tmp "wt"))
+        refreshes (atom [])]
+    (try
+      (with-redefs [core/nido-home              (constantly (str tmp))
+                    engine/resolve-project-name (constantly "p")
+                    engine/load-session-edn     (constantly {:services []})
+                    launcher/write-artifacts!   (fn [& _] nil)
+                    launcher/remove-artifacts!  (fn [& _] nil)
+                    service/start-service!      (fn [& _] {:state {} :context {}})]
+        (with-checkout-stubs refreshes (atom false)
+          (fn []
+            (engine/start-session! wt {:runtime-key "ws-9" :session-name "s"})
+            (let [rt (state/read-session "p--ws-9")]
+              (is (= "/state/p--ws-9/checkout" (:project-dir rt) (:checkout rt))
+                  "the JVM runs out of the checkout, not the worktree")
+              (is (= {wt "s"} (:members rt))))
+            (is (= "/state/p--ws-9/checkout" (engine/sync-runtime! wt)))
+            (engine/stop-session! wt)
+            (is (= [:removed "p--ws-9"] (last @refreshes)) "the last stop removes the checkout"))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest a-conflicting-checkout-refuses-a-restarting-join-before-anything-stops
+  (with-runtime-home
+    (fn [wt-a wt-b]
+      (state/write-session! "p--ws-1" (assoc (state/read-session "p--ws-1") :checkout "/co" :project-dir "/co"))
+      (engine/write-profile-for-session! "p" "a" {:services [] :worktree {:strategy :git-worktree}})
+      (let [stopped (atom 0)]
+        (with-checkout-stubs (atom []) (atom true)
+          (fn []
+            (with-redefs [engine/load-session-edn (constantly {:services fake-services})
+                          service/stop-service!   (fn [& _] (swap! stopped inc))]
+              (is (= :checkout-conflict
+                     (try (engine/start-session! wt-b {:runtime-key "ws-1" :session-name "b"
+                                                       :profile {:services :all :worktree {:strategy :git-worktree}}})
+                          nil
+                          (catch clojure.lang.ExceptionInfo e (:reason (ex-data e)))))))))
+        (is (zero? @stopped) "the runtime keeps running what it ran")
+        (is (= {wt-a "a"} (:members (state/read-session "p--ws-1"))))))))
+
+(deftest a-join-and-a-leave-bring-the-checkout-up-to-date
+  (with-runtime-home
+    (fn [wt-a wt-b]
+      (state/write-session! "p--ws-1" (assoc (state/read-session "p--ws-1") :checkout "/co" :project-dir "/co"))
+      (let [refreshes (atom [])
+            conflict? (atom false)]
+        (with-checkout-stubs refreshes conflict?
+          (fn []
+            (engine/start-session! wt-b {:runtime-key "ws-1" :session-name "b"})
+            (is (= [#{"a" "b"}] @refreshes) "b's working copy is merged in as it joins")
+            (reset! conflict? true)
+            (engine/stop-session! wt-b)
+            (is (= {wt-a "a"} (:members (state/read-session "p--ws-1")))
+                "a conflict while leaving keeps the old checkout and still lets b go")
+            (reset! conflict? false)
+            (is (thrown? clojure.lang.ExceptionInfo
+                         (do (reset! conflict? true) (engine/sync-runtime! wt-a)))
+                "a sync that conflicts is refused")))))))
+
+(deftest joining-a-runtime-recorded-before-members-keeps-its-starter
+  ;; A runtime written before runtimes recorded :members has one member, the session that
+  ;; started it; a joiner is added beside it, so the starter leaving stops nothing.
+  (with-runtime-home
+    (fn [wt-a wt-b]
+      (state/write-session! "p--ws-1" (dissoc (state/read-session "p--ws-1") :members))
+      (engine/start-session! wt-b {:runtime-key "ws-1" :session-name "b"})
+      (is (= {wt-a "a" wt-b "b"} (:members (state/read-session "p--ws-1"))))
+      (let [stopped (atom 0)]
+        (with-redefs [service/stop-service! (fn [& _] (swap! stopped inc))]
+          (engine/stop-session! wt-b)
+          (is (zero? @stopped) "a is still on it")
+          (is (= {wt-a "a"} (:members (state/read-session "p--ws-1")))))))))
+
+(deftest a-live-runtime-of-jj-workspaces-is-moved-onto-a-checkout-of-its-own
+  ;; Started before runtimes of jj workspaces ran out of a checkout: it runs out of a's worktree.
+  ;; The next session to come up on it restarts it onto one, every member kept.
+  (with-runtime-home
+    (fn [wt-a wt-b]
+      (is (true? (with-redefs [checkout/jj-workspace? (constantly true)]
+                   (engine/owes-checkout? (state/read-session "p--ws-1"))))
+          "every member a jj workspace, and no checkout")
+      (let [refreshes (atom [])
+            stopped   (atom 0)]
+        (with-checkout-stubs refreshes (atom false)
+          (fn []
+            (with-redefs [service/stop-service!  (fn [& _] (swap! stopped inc))
+                          service/start-service! (fn [& _] {:state {} :context {}})]
+              (engine/start-session! wt-b {:runtime-key "ws-1" :session-name "b"}))
+            (let [rt (state/read-session "p--ws-1")]
+              (is (= "/state/p--ws-1/checkout" (:checkout rt) (:project-dir rt)))
+              (is (= {wt-a "a" wt-b "b"} (:members rt)))
+              (is (false? (engine/owes-checkout? rt))))))))))

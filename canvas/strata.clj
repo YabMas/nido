@@ -58,10 +58,9 @@
    :rests-on    [record-status ledger record-vocabulary]})
 
 (Stratum seats
-  "A workstream as the seats that carry it: the current generation's governing design's
-   generation-defining elements — the seats an embodiment, when one carries the workstream, gives
-   an occupant — each with the interface it guards, the tensions
-   open against it and the accords that settled others; the generation it belongs to and what that
+  "A workstream as the seats an embodiment may occupy: the ids the current generation fixes, each
+   with the interface the governing design gives it once a design of the generation states it, its
+   open tensions and the accords that settled others; the generation it belongs to and what that
    generation inherited. What occupancy and every embodiment are written in."
   {:provided-by [record-seats]
    :rests-on    [record-status ledger record-model record-vocabulary]})
