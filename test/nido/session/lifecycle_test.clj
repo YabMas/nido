@@ -572,3 +572,31 @@
             "a kickoff never overrides the worktree's launch baseline")
         (is (= "Go.\n" (slurp (str (fs/path home ".nido-kickoff-prompt.md")))))
         (is (= (str "cd '" home "' && zsh " @#'lifecycle/kickoff-file) by-hand))))))
+
+;; destroy! used to delete the instance state dir whatever its stop left behind,
+;; so a REPL that survived the stop, or could not be shown to be the session's,
+;; lost the pid file that was its only record.
+
+(defn- destroy-with-pid-left!
+  "destroy! a session whose stop leaves `left` pid files; true when its state
+   dir survived."
+  [left]
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [nido.platform.core/nido-home            (constantly (str tmp))
+                    nido.platform.core/log-step             (constantly nil)
+                    lifecycle/with-context                  (fn [_ _] {:project-dir (str tmp) :wt-path (str tmp "/wt") :branch "b"})
+                    engine/resolve-instance-id              (constantly "p--s")
+                    engine/read-profile-for-session         (constantly {:worktree {:strategy :symlink}})
+                    lifecycle/remove-symlink-worktree!      (fn [_] nil)
+                    nido.session.links/delete-links!        (fn [_] nil)]
+        (let [dir (nido.session.state/instance-state-dir "p--s")]
+          (fs/create-dirs dir)
+          (doseq [n left] (spit (str (fs/path dir (str n ".pid"))) "4242"))
+          (lifecycle/destroy! "s" {})
+          (fs/exists? dir)))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest destroy-keeps-the-state-of-a-process-its-stop-left-running
+  (is (true? (destroy-with-pid-left! ["repl"])) "the pid file and its dir stay")
+  (is (false? (destroy-with-pid-left! [])) "with nothing left on record, the dir goes"))

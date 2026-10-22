@@ -529,7 +529,14 @@
                       (core/log-step "Found legacy session format, converting...")
                       legacy))]
     (if-not session
-      (println "No session to stop for" project-dir)
+      ;; A start that never completed wrote no session.edn, yet a service it
+      ;; reached may have left a detached process on its own record.
+      (do (doseq [svc-def (:services (read-session-edn (resolve-project-name project-dir)))]
+            (try (service/stop-recorded! svc-def instance-id)
+                 (catch Exception e
+                   (println (str "warning: error stopping " (name (:name svc-def)) ": "
+                                 (ex-message e))))))
+          (println "No session to stop for" project-dir))
       (let [service-defs (or (:service-defs session) [])
             service-states (or (:service-states session) {})]
         (core/log-step (str "Stopping session " instance-id))
@@ -537,13 +544,16 @@
         (doseq [svc-def (reverse service-defs)]
           (let [svc-name (:name svc-def)
                 saved-state (get service-states svc-name)]
-            (when saved-state
-              (try
-                (core/log-step (str "Stopping " (name svc-name) "..."))
-                (service/stop-service! svc-def saved-state)
-                (catch Exception e
-                  (println (str "warning: error stopping " (name svc-name) ": "
-                                (ex-message e))))))))
+            (try
+              (if saved-state
+                (do (core/log-step (str "Stopping " (name svc-name) "..."))
+                    (service/stop-service! svc-def saved-state))
+                ;; Declared but never saved: a later start that did not
+                ;; complete may have left this service's process on record.
+                (service/stop-recorded! svc-def instance-id))
+              (catch Exception e
+                (println (str "warning: error stopping " (name svc-name) ": "
+                              (ex-message e)))))))
         ;; Clean up state
         (state/delete-session! instance-id)
         (state/remove-from-registry! project-dir)

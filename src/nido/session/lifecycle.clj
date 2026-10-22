@@ -828,7 +828,9 @@
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   destroy!
   "Bring the named session down, drop its instance state-dir (PGDATA,
-   logs, session.edn) and its links, and remove its worktree.
+   logs, session.edn) and its links, and remove its worktree. The state-dir
+   stays when the stop left a pid file: that file is the only record of a
+   process the stop could not show was gone.
    opts: {... :delete-branch? bool (default false)}
    Also accepts :delete-branch (no `?`) since `?` is a zsh glob char.
 
@@ -853,10 +855,19 @@
              (engine/stop-session! wt-path))
            (catch Exception e
              (core/log-step (str "warning: stop-session error: " (ex-message e)))))
-         (let [state-dir (state/instance-state-dir instance-id)]
-           (when (fs/exists? state-dir)
-             (core/log-step (str "Dropping instance state-dir at " state-dir))
-             (fs/delete-tree state-dir)))
+         (let [state-dir (state/instance-state-dir instance-id)
+               survivors (state/pid-files instance-id)]
+           (cond
+             ;; A pid file the stop left names a process it could not show was
+             ;; gone; the state dir is its only record, and reclaim keeps it
+             ;; and reports it while that process runs.
+             (seq survivors)
+             (core/log-step (str "warning: keeping " state-dir " — a process it records is still"
+                                 " running (" (str/join ", " survivors) ")"))
+
+             (fs/exists? state-dir)
+             (do (core/log-step (str "Dropping instance state-dir at " state-dir))
+                 (fs/delete-tree state-dir))))
          ;; Links live outside the state-dir (they have to survive reclaim, which
          ;; eats it an hour after `down`), so destroy is the one verb that has to say
          ;; so out loud. Without this they would outlive the session that owned them.

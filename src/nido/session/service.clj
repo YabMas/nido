@@ -15,3 +15,12 @@
   service-status
   "Check if a service is alive. Returns {:alive? bool ...}."
   (fn [service-def _saved-state] (:type service-def)))
+
+(defmulti ^{:malli/schema [:=> [:cat :map :string] :any]}
+  stop-recorded!
+  "Stop whatever this service left on record for `instance-id` when no saved
+   state names it — a start that never wrote session.edn. A type that keeps no
+   record of its own outside the saved state has nothing to do."
+  (fn [service-def _instance-id] (:type service-def)))
+
+(defmethod stop-recorded! :default [_ _] nil)

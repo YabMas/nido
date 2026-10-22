@@ -41,6 +41,10 @@
      to name it, so a boot killed half-way still leaves its detached process on record."
     {:signature [:=> [:catn [:instance-id InstanceId] [:service-name :any]] Path]
      :delegates [instance-state-dir]})
+  (Operation pid-files
+    "Every pid file an instance holds. One left after its session was stopped names a process the
+     stop could not show was gone."
+    {:signature [:=> [:catn [:instance-id InstanceId]] [:vector Path]] :delegates [instance-state-dir]})
   (Operation pg-data-dir "An instance's own Postgres data directory."
     {:signature [:=> [:catn [:instance-id InstanceId]] Path] :delegates [instance-state-dir]})
   (Operation sessions-root "The session-home root."

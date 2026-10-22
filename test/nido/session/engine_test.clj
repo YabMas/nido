@@ -1,6 +1,7 @@
 (ns nido.session.engine-test
   (:require
    [babashka.fs :as fs]
+   [babashka.process :as bp]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.platform.core :as core]
@@ -150,3 +151,53 @@
   (with-redefs [eval-svc/start-app! (fn [& _] (throw (ex-info "nREPL is not listening" {})))]
     (is (thrown-with-msg? Exception #"nREPL is not listening"
                           (engine/reconcile-app! live-jvm-dead-app)))))
+
+;; ---------------------------------------------------------------------------
+;; Stopping a session whose start never completed
+;; ---------------------------------------------------------------------------
+
+(deftest stop-session-without-session-edn-stops-what-the-pid-files-name
+  ;; A start killed after spawning writes no session.edn, so down used to find
+  ;; "no session" and leave the detached process running.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-home (constantly (str tmp))
+                    core/log-step (constantly nil)
+                    engine/resolve-project-name (constantly "p")
+                    engine/resolve-instance-id  (constantly "p--s")
+                    engine/read-session-edn     (constantly {:services fake-services})]
+        (let [proc     (bp/process ["sleep" "30"])
+              pid      (.pid ^Process (:proc proc))
+              pid-file (state/pid-file "p--s" :repl)]
+          (try
+            (fs/create-dirs (fs/parent pid-file))
+            (spit pid-file (str pid))
+            (with-out-str (engine/stop-session! (str tmp)))
+            (is (not (proc/process-alive? pid)))
+            (is (not (fs/exists? pid-file)))
+            (finally (proc/stop-process! pid)))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest stop-session-reaches-the-record-of-a-service-session-edn-never-saved
+  ;; session.edn from a start that completed without this :process service
+  ;; (a narrower profile), and a later start killed after spawning it.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-home (constantly (str tmp))
+                    core/log-step (constantly nil)
+                    engine/resolve-instance-id (constantly "p--s")
+                    state/read-session (constantly {:service-defs fake-services
+                                                    :service-states {}})
+                    state/delete-session! (fn [_] nil)
+                    state/remove-from-registry! (fn [_] nil)
+                    launcher/remove-artifacts! (fn [& _] nil)]
+        (let [proc     (bp/process ["sleep" "30"])
+              pid      (.pid ^Process (:proc proc))
+              pid-file (state/pid-file "p--s" :repl)]
+          (try
+            (fs/create-dirs (fs/parent pid-file))
+            (spit pid-file (str pid))
+            (with-out-str (engine/stop-session! (str tmp)))
+            (is (not (proc/process-alive? pid)))
+            (finally (proc/stop-process! pid)))))
+      (finally (fs/delete-tree tmp)))))

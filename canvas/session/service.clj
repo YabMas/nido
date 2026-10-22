@@ -6,12 +6,14 @@
             [fukan.common.typing.malli]))
 
 (Module session-service
-  "Three polymorphic operations and nothing else — the whole contract a session service has to
-   satisfy: start it, stop it, say what it is doing.
+  "Four polymorphic operations and nothing else — the whole contract a session service has to
+   satisfy: start it, stop it, say what it is doing, and stop what it left on record when no
+   saved state names it.
 
-   Dispatch is on the service's declared `:type`, so adding a kind of service adds three methods
+   Dispatch is on the service's declared `:type`, so adding a kind of service adds its methods
    in its own namespace and changes nothing here. That is what lets a project declare services
-   nido has never heard of, and it is why this namespace has no implementation at all."
+   nido has never heard of, and it is why this namespace implements nothing but the no-op
+   default of stop-recorded!."
   (Operation start-service!
     "Bring one declared service up, contributing whatever the rest of the session may reference."
     {:signature [:=> [:catn [:service-def :map] [:ctx :map] [:opts :any]] :map]})
@@ -20,10 +22,14 @@
     {:signature [:=> [:catn [:service-def :map] [:saved-state :any]] :any]})
   (Operation service-status
     "What one declared service is doing."
-    {:signature [:=> [:catn [:service-def :map] [:saved-state :any]] :map]}))
+    {:signature [:=> [:catn [:service-def :map] [:saved-state :any]] :map]})
+  (Operation stop-recorded!
+    "Stop what one declared service left on its own record for an instance when no saved state
+     names it — a start that never wrote session.edn. A type keeping no such record does nothing."
+    {:signature [:=> [:catn [:service-def :map] [:instance-id :string]] :any]}))
 
 ;; `nido.session.services.config-file` and `nido.session.services.process` carry ONLY defmethods
-;; of the three operations above. They are the protocol's implementations and declare no public
+;; of the operations above. They are the protocol's implementations and declare no public
 ;; function of their own, so there is nothing here to model: a Module for either would be a
 ;; Module with no operations, asserting a boundary that holds nothing.
 ;;

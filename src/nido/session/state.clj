@@ -64,6 +64,17 @@
   [instance-id service-name]
   (str (fs/path (instance-state-dir instance-id) (str (name service-name) ".pid"))))
 
+(defn ^{:malli/schema [:=> [:cat :InstanceId] [:vector :Path]]}
+  pid-files
+  "Every pid file an instance holds, whatever service wrote it; [] when it has
+   none or no state dir. One left after its session was stopped names a process
+   the stop could not show was gone."
+  [instance-id]
+  (let [dir (instance-state-dir instance-id)]
+    (if (fs/directory? dir)
+      (mapv str (fs/glob dir "*.pid"))
+      [])))
+
 (defn ^{:malli/schema [:=> [:cat :InstanceId] :Path]}
   pg-data-dir
   "PostgreSQL data directory: ~/.nido/state/<instance-id>/pg-data/"

@@ -1,6 +1,7 @@
 (ns nido.session.services.process-test
   (:require
    [babashka.fs :as fs]
+   [babashka.process :as bp]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
@@ -105,4 +106,124 @@
           (is (thrown? clojure.lang.ExceptionInfo (service/start-service! svc ctx {})))
           (is (not (fs/exists? (state/pid-file "inst-dead" :repl)))
               "a failed boot leaves no pid file to be mistaken for a live process")))
+      (finally (fs/delete-tree tmp)))))
+
+;; The pid file is the only record of a process a start spawned and never saw
+;; through to session.edn — its bb was killed, or its rollback could not stop it.
+;; The next start of the same instance used to overwrite that record unread,
+;; leaving the earlier JVM running and named by nothing: six brian REPLs ran that
+;; way on 2026-10-22, burning cores the next start then timed out for lack of.
+
+(defn- spawn-sleep!
+  "A `sleep` this instance never started."
+  []
+  (.pid ^Process (:proc (bp/process ["sleep" "30"]))))
+
+(deftest start-service-stops-the-process-an-earlier-start-left-on-record
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-home (constantly (str tmp))
+                    core/log-step (constantly nil)]
+        (let [ctx {:session {:project-name "proj" :project-dir (str tmp) :instance-id "inst"}}
+              svc {:type :process :name :repl :command "sleep 30"}
+              first-start  (:state (service/start-service! svc ctx {}))
+              second-start (:state (service/start-service! svc ctx {}))]
+          (try
+            (is (not (proc/process-alive? (:pid first-start)))
+                "the earlier start's process is stopped before the new one spawns")
+            (is (proc/process-alive? (:pid second-start)))
+            (is (= (str (:pid second-start)) (slurp (state/pid-file "inst" :repl)))
+                "and the record names the one process left")
+            (finally (proc/stop-process! (:pid first-start))
+                     (proc/stop-process! (:pid second-start))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest start-service-leaves-a-recycled-pid-running
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-home (constantly (str tmp))
+                    core/log-step (constantly nil)]
+        (let [ctx      {:session {:project-name "proj" :project-dir (str tmp) :instance-id "inst"}}
+              svc      {:type :process :name :repl :command "sleep 30"}
+              pid-file (state/pid-file "inst" :repl)
+              stranger (spawn-sleep!)]
+          ;; A record older than the process it names: the pid was reused after
+          ;; the recorded process died.
+          (fs/create-dirs (fs/parent pid-file))
+          (spit pid-file (str stranger))
+          (fs/set-last-modified-time pid-file (java.time.Instant/parse "2026-01-01T00:00:00Z"))
+          (let [{:keys [state]} (service/start-service! svc ctx {})]
+            (try
+              (is (proc/process-alive? stranger) "a process this instance never started is left alone")
+              (is (= (str (:pid state)) (slurp pid-file)))
+              (finally (proc/stop-process! stranger)
+                       (proc/stop-process! (:pid state)))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest stop-service-with-only-a-pid-file-stops-the-process-it-names
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-home (constantly (str tmp))
+                    core/log-step (constantly nil)]
+        (let [ctx      {:session {:project-name "proj" :project-dir (str tmp) :instance-id "inst"}}
+              svc      {:type :process :name :repl :command "sleep 30"}
+              {:keys [state]} (service/start-service! svc ctx {})
+              pid-file (state/pid-file "inst" :repl)]
+          (try
+            (service/stop-service! svc {:pid-file pid-file})
+            (is (not (proc/process-alive? (:pid state))))
+            (is (not (fs/exists? pid-file)))
+            (finally (proc/stop-process! (:pid state))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest stop-service-keeps-the-record-of-a-process-that-survives
+  (let [tmp (fs/create-temp-dir)
+        pid-file (str (fs/path tmp "repl.pid"))]
+    (try
+      (spit pid-file "4242")
+      (with-redefs [proc/process-alive? (constantly true)
+                    proc/stop-process!  (constantly :killed)
+                    core/log-step       (constantly nil)]
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (service/stop-service! {:type :process :name :repl}
+                                            {:pid 4242 :pid-file pid-file})))
+        (is (fs/exists? pid-file) "the only record of a running process is not thrown away"))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest stop-service-stops-what-the-pid-file-names-beside-a-dead-saved-pid
+  ;; session.edn from an earlier start whose process died; a later start killed
+  ;; after spawning, which overwrote the pid file. Stopping from session.edn used
+  ;; to stop the dead pid and delete the only record of the live one.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-home (constantly (str tmp))
+                    core/log-step (constantly nil)]
+        (let [ctx      {:session {:project-name "proj" :project-dir (str tmp) :instance-id "inst"}}
+              svc      {:type :process :name :repl :command "sleep 30"}
+              {:keys [state]} (service/start-service! svc ctx {})
+              pid-file (state/pid-file "inst" :repl)]
+          (try
+            (service/stop-service! svc {:pid 999999 :pid-file pid-file})
+            (is (not (proc/process-alive? (:pid state))) "the process the file names is stopped")
+            (is (not (fs/exists? pid-file)))
+            (finally (proc/stop-process! (:pid state))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest start-service-names-the-process-when-the-shell-output-is-not-a-pid
+  ;; `bash -l` runs the login profile, which may print. Reading the pid from
+  ;; stdout made such noise a start that detached a process and recorded none.
+  (let [tmp (fs/create-temp-dir)
+        real-shell bp/shell]
+    (try
+      (with-redefs [core/nido-home (constantly (str tmp))
+                    core/log-step  (constantly nil)
+                    bp/shell       (fn [& args]
+                                     (update (apply real-shell args) :out #(str "Welcome!\n" %)))]
+        (let [ctx {:session {:project-name "proj" :project-dir (str tmp) :instance-id "inst"}}
+              svc {:type :process :name :repl :command "sleep 30"}
+              {:keys [state]} (service/start-service! svc ctx {})]
+          (try
+            (is (proc/process-alive? (:pid state)))
+            (is (= (str (:pid state)) (str/trim (slurp (state/pid-file "inst" :repl)))))
+            (finally (proc/stop-process! (:pid state))))))
       (finally (fs/delete-tree tmp)))))

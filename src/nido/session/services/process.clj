@@ -52,6 +52,51 @@
     (str/join " " (remove (fn [t] (or (nil? t) (and (string? t) (str/blank? t)))) tmpl))
     (:command service-def)))
 
+(defn- recorded-pid
+  "The pid `pid-path` holds, or nil when there is no file or it holds no pid."
+  [pid-path]
+  (when (fs/exists? pid-path)
+    (try (some-> (slurp pid-path) str/trim parse-long)
+         (catch Exception _ nil))))
+
+(defn- recorded-owner
+  "Whose process the pid in `pid-path` names now: :gone when nothing runs under
+   it, :ours when the running process started no later than the file was
+   written — the spawn always precedes the write — :other when it started after
+   (the pid was recycled), and :unknown when the OS will not say when it started.
+   :unknown is not :other: it is the answer that must not license anything."
+  [pid pid-path]
+  (let [ph (.orElse (java.lang.ProcessHandle/of pid) nil)]
+    (if (or (nil? ph) (not (.isAlive ^java.lang.ProcessHandle ph)))
+      :gone
+      (if-let [start (.orElse (.startInstant (.info ^java.lang.ProcessHandle ph)) nil)]
+        (if (<= (.toEpochMilli ^java.time.Instant start)
+                (.toMillis (fs/last-modified-time pid-path)))
+          :ours
+          :other)
+        :unknown))))
+
+(defn- retire-recorded!
+  "Stop the process `pid-path` names when it is this instance's, then remove the
+   file. The file is the only record of a process a start spawned and never saw
+   through to session.edn, so it outlives anything that fails here: a process
+   that survives its stop, or one whose ownership cannot be told, throws with the
+   file left in place. A recycled pid is left running and only the file goes."
+  [pid-path]
+  (when-let [pid (recorded-pid pid-path)]
+    (case (recorded-owner pid pid-path)
+      (:gone :other) nil
+      :ours (do (core/log-step (str "Stopping process left by an earlier start (pid " pid ")"))
+                (proc/stop-process! pid)
+                (when (proc/process-alive? pid)
+                  (throw (ex-info (str "Could not stop pid " pid ", which " pid-path " names")
+                                  {:pid pid :pid-file pid-path}))))
+      :unknown (throw (ex-info (str "Cannot tell whether pid " pid ", which " pid-path
+                                    " names, is this instance's process — stop it or"
+                                    " remove the file")
+                               {:pid pid :pid-file pid-path}))))
+  (fs/delete-if-exists pid-path))
+
 (defmethod service/start-service! :process
   [service-def ctx _opts]
   (let [{:keys [port-file port-timeout-ms]
@@ -69,6 +114,11 @@
 
     (fs/create-dirs (state/log-dir instance-id))
 
+    ;; One process per instance and service: whatever an earlier start left
+    ;; running is stopped before this one spawns, since the spawn overwrites the
+    ;; only record of it.
+    (retire-recorded! (state/pid-file instance-id svc-name))
+
     ;; Delete existing port file
     (when port-file
       (fs/delete-if-exists (str (fs/path project-dir port-file))))
@@ -78,24 +128,26 @@
     ;; hook hangs the bb process at exit when the spawned bash leaves a
     ;; long-running detached descendant (the JVM here is intentionally
     ;; supposed to outlive bb).
-    (let [cmd (str "nohup " command " > "
+    ;;
+    ;; The shell records $! itself, in the same command that detaches it, so no
+    ;; check made here afterwards — exit code, stdout a login profile may have
+    ;; written to — can stand between the detach and the record. Until the
+    ;; engine writes session.edn, after every other service is up, this file is
+    ;; the only thing on disk that names the process.
+    (let [pid-path (state/pid-file instance-id svc-name)
+          cmd (str "nohup " command " > "
                    (proc/quoted log-path)
-                   " 2>&1 & echo $!")
+                   " 2>&1 & printf %s $! > " (proc/quoted pid-path))
           result (shell {:continue true :out :string :err :string
                          :dir project-dir :shutdown nil}
                         "bash" "-lc" cmd)
-          pid (some-> (:out result) str/trim parse-long)
-          pid-path (state/pid-file instance-id svc-name)]
+          pid (recorded-pid pid-path)]
       (when-not (zero? (:exit result))
         (throw (ex-info (str "Failed to start " (name svc-name))
-                        {:error (:err result)})))
+                        {:error (:err result) :pid-file pid-path})))
       (when-not (pos-int? pid)
-        (throw (ex-info (str "Failed to parse pid for " (name svc-name))
-                        {:output (:out result)})))
-      ;; Before anything slow. The process is detached now, and until the
-      ;; engine writes session.edn — after every other service is up — this
-      ;; file is the only thing on disk that names it.
-      (spit pid-path (str pid))
+        (throw (ex-info (str "Failed to read the pid of " (name svc-name) " from " pid-path)
+                        {:output (:out result) :pid-file pid-path})))
       (core/log-step (str "Started " (name svc-name) " process (pid " pid ")"))
 
       ;; Optionally wait for port file
@@ -103,8 +155,9 @@
                    (let [pf (str (fs/path project-dir port-file))
                          {p :port outcome :outcome} (wait-for-port-file! pf pid port-timeout-ms)]
                      (when-not p
-                       (proc/stop-process! pid)
-                       (fs/delete-if-exists pid-path)
+                       ;; A process that will not stop keeps its record; the
+                       ;; cause reported is still the boot's, not the stop's.
+                       (try (retire-recorded! pid-path) (catch Exception _ nil))
                        (throw (ex-info (if (= :process-died outcome)
                                          (str (name svc-name) " process exited before writing "
                                               port-file)
@@ -121,14 +174,26 @@
                     port (assoc :port port))}))))
 
 (defmethod service/stop-service! :process
+  ;; The saved :pid and the pid file can name different processes: a start that
+  ;; never reached session.edn overwrites the file while session.edn still holds
+  ;; an earlier start's pid. Both are stopped; the file only through the
+  ;; ownership check, since nothing but the file vouches for what it names.
   [_service-def saved-state]
   (let [{:keys [pid pid-file]} saved-state]
-    (when (and (pos-int? pid) (proc/process-alive? pid))
-      (core/log-step (str "Stopping process (pid " pid ")"))
-      (proc/stop-process! pid))
-    ;; A pid file left behind would outlive its process and could name a
-    ;; recycled pid; state written before :pid-file existed has none to remove.
-    (when pid-file (fs/delete-if-exists pid-file))))
+    (when (pos-int? pid)
+      (when (proc/process-alive? pid)
+        (core/log-step (str "Stopping process (pid " pid ")"))
+        (proc/stop-process! pid))
+      ;; A survivor keeps its record for the next start or stop to find.
+      (when (proc/process-alive? pid)
+        (throw (ex-info (str "Process " pid " survived its stop")
+                        {:pid pid :pid-file pid-file}))))
+    ;; State written before :pid-file existed has none.
+    (when pid-file (retire-recorded! pid-file))))
+
+(defmethod service/stop-recorded! :process
+  [service-def instance-id]
+  (retire-recorded! (state/pid-file instance-id (:name service-def))))
 
 (defmethod service/service-status :process
   [_service-def saved-state]

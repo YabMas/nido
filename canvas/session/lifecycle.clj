@@ -70,7 +70,7 @@
   (Operation share! "Move a session back onto the shared cluster."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]
      :delegates [sstate/clear-pg-mode-override!]})
-  (Operation destroy! "Bring a session down and remove its worktree and state. The one that does not preserve."
+  (Operation destroy! "Bring a session down and remove its worktree and state. The one that does not preserve — except the state of a process the stop could not show was gone, which is its only record."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]})
   (Operation status "What state a named session is in."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]})
