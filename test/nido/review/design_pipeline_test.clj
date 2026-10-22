@@ -209,36 +209,6 @@
                                    {:cwd "/w" :run-id "r1" :label "l"}))))
       (is (= 1 @launched)))))
 
-(deftest a-decision-round-asks-for-every-relation-id-before-it-is-recorded
-  ;; Seen live: a judge shown claims, modules and strata returned rulings on the claims alone, two
-  ;; runs running, and the lineage could never proceed. The schema now names every id, and what a
-  ;; judge still skips is asked again inside the round rather than recorded :unruled.
-  (let [calls    (atom [])
-        baseline {:format :baseline :seq 1
-                  :load-bearing [{:id "p" :property "one rounding boundary"}]
-                  :modules [{:id "m-rounding" :module "rounding" :hides "h" :interface "i"}]}
-        answers  [{:recommend "proceed" :reason "r" :asks "worth it?"
-                   :checks [{:check "relation_honest" :status "held" :note "n"}]
-                   :findings [] :confirmed [] :unchecked []
-                   :relation_rulings [{:id "p" :ruling "breaks" :reason "moves"}]}
-                  {:relation_rulings [{:id "m-rounding" :ruling "stands" :reason "kept"}]}]
-        out      (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
-                               ws/latest-entry (fn [_ _ k] (when (= :design k) a-design))
-                               standing/of-design (constantly {:decidable? true})
-                               stages/cited-baseline (fn [_ _] baseline)
-                               stages/read-stance (constantly nil)
-                               record/discover-intent (constantly nil)
-                               record/run-round! (fn [opts]
-                                                   (let [n (count (swap! calls conj opts))]
-                                                     {:ok (json/generate-string (answers (dec n)))}))]
-                   (record/design-decision! {:cwd "/w" :run-id "r1" :label "l"}))
-        enum-of  #(get-in (json/parse-string (:schema %) true)
-                          [:properties :relation_rulings :items :properties :id :enum])]
-    (is (= [["p" "m-rounding"] ["m-rounding"]] (mapv enum-of @calls))
-        "the decision is shaped to rule on every id, and the re-ask on only the one it skipped")
-    (is (= ["p" "m-rounding"] (mapv :id (:relation-rulings out))))
-    (is (empty? (:unruled out)) "an id ruled on the second ask does not stop the proceed")))
-
 (deftest a-round-holds-a-reversal-on-an-unmoved-record-to-the-last-ruling
   ;; Seen live: rulings re-derived cold each round flipped on text no amendment touched, and each
   ;; flip was enforced against :breaks as an amend round the next flip undid.
@@ -428,10 +398,9 @@
       (is (= :escalate (:control out)))
       (is (= :proceed (:status out))))))
 
-(deftest a-proceed-over-unruled-claims-is-asked-again-then-refused
-  ;; A proceed reached the person with claims the judge was handed and never ruled on, and nothing
-  ;; recorded that they were never checked. Asked once more; then the run ends :unruled, and the
-  ;; decision does not proceed on any reader's reading of it.
+(deftest a-proceed-over-unruled-claims-goes-to-the-next-round
+  ;; A proceed reached the person with claims the judge was handed and never ruled on. It does not
+  ;; proceed: the next round's judge rules them, and `stalled?` ends a run that keeps leaving them.
   (let [appended (atom [])]
     (with-redefs [record/design-decision! (fn [_] (assoc (decision :proceed :checks [(check :relation-honest :held)])
                                                         :unruled ["lines-exact"]))
@@ -441,8 +410,8 @@
         (is (nil? (:status first)))
         (is (= 1 (count @appended)) "the round is on the ledger all the same")
         (let [second (run record/design-judge-stage (ctx :carry (:carry first)))]
-          (is (= :unruled (:status second)))
-          (is (= :escalate (:control second))))))))
+          (is (nil? (:status second)) "nothing is re-asked within a round, nor ended on a count")
+          (is (= :next-round (:control second))))))))
 
 (deftest a-judged-round-names-the-entry-its-decision-became
   ;; The seq is read off the append that wrote it and nowhere else: the newest entry once the lock
@@ -2826,73 +2795,6 @@
             :out-path "/run/a.edn"})]
     (is (str/includes? p "A SUMMARY NAMES WHAT IT SUMMARISES; IT NEVER RESTATES IT")
         "a design shape citing its claims by id is refuted once, on the claim, instead of twice")))
-
-(deftest a-decision-confirming-what-it-refutes-is-sent-back-once
-  ;; Seen live: a judge confirmed a claim with four citations and filed its only finding against the
-  ;; same claim. `rule` let the finding win silently, so the claim read refuted at end.
-  (let [calls    (atom [])
-        finding  {:claim-id "c1" :check "goal_served" :cites ["x"] :claim "c1 misses the batch path"}
-        answer-1 {:recommend "amend" :reason "r" :asks "a"
-                  :checks [{:check "goal_served" :status "broken" :note "n"}]
-                  :confirmed [{:id "c1" :evidence ["a.clj:1"] :at_this_tree "holds"}]
-                  :findings [finding] :unchecked [] :relation_rulings []}
-        answer-2 (assoc answer-1 :confirmed [])
-        run      (fn [answers]
-                   (reset! calls [])
-                   (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
-                                 ws/latest-entry (fn [_ _ k] (when (= :design k) (assoc a-design :seq 5)))
-                                 standing/of-design (constantly {:decidable? true})
-                                 stages/cited-baseline (fn [_ _] {:format :baseline :seq 1})
-                                 stages/read-stance (constantly nil)
-                                 record/discover-intent (constantly nil)
-                                 record/run-round! (fn [opts]
-                                                     (let [n (count (swap! calls conj opts))]
-                                                       (answers (dec n))))]
-                     (record/design-decision! {:cwd "/w" :run-id "r1" :label "l"})))
-        out      (run [{:ok (json/generate-string answer-1)} {:ok (json/generate-string answer-2)}])]
-    (is (= 2 (count @calls)) "sent back once, not resolved by nido")
-    (is (str/includes? (:prompt (second @calls)) "[c1] found: c1 misses the batch path")
-        "the judge is shown what it said both ways")
-    (is (= (:schema (first @calls)) (:schema (second @calls))) "and answers the same decision again")
-    (is (= ["c1"] (:self-contradicted out)) "the inconsistency is recorded where it was made")
-    (is (report/validate-event :design-decision out) "and the ledger takes the decision")
-    (let [out (run [{:ok (json/generate-string answer-1)} {:outcome :codex-failed :detail "x"}])]
-      (is (= :amend (:recommend out)) "a re-ask that fails leaves the first answer standing")
-      (is (= ["c1"] (:self-contradicted out))))))
-
-(deftest a-refused-decision-is-asked-again-naming-the-rule
-  ;; Seen live: sixteen design runs ended :unusable-answer on one broken rule, each discarding a
-  ;; complete judgement, and the driver re-ran the whole round against the same prompt.
-  (let [calls    (atom [])
-        refused  {:recommend "amend" :reason "r" :asks ""
-                  :checks [{:check "goal_served" :status "broken" :note "n"}]
-                  :findings [] :unchecked [] :relation_rulings []}
-        repaired (assoc refused :findings [{:claim-id "c1" :check "goal_served" :cites ["x"] :claim "c1 misses it"}])
-        run      (fn [answers]
-                   (reset! calls [])
-                   (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
-                                 ws/latest-entry (fn [_ _ k] (when (= :design k) (assoc a-design :seq 5)))
-                                 standing/of-design (constantly {:decidable? true})
-                                 stages/cited-baseline (fn [_ _] {:format :baseline :seq 1})
-                                 stages/read-stance (constantly nil)
-                                 record/discover-intent (constantly nil)
-                                 record/run-round! (fn [opts]
-                                                     (let [n (count (swap! calls conj opts))]
-                                                       (answers (dec n))))]
-                     (record/design-decision! {:cwd "/w" :run-id "r1" :label "l"})))
-        out      (run [{:ok (json/generate-string refused)} {:ok (json/generate-string repaired)}])]
-    (is (= 2 (count @calls)) "a refusal costs one more ask, not the round")
-    (is (str/includes? (:prompt (second @calls)) "filed no finding saying what to repair")
-        "the judge is told which rule its answer broke, or it repeats the answer")
-    (is (= :amend (:recommend out)))
-    (is (report/validate-event :design-decision out) "and the second answer reaches the ledger")
-    (let [out (run [{:ok (json/generate-string refused)} {:ok (json/generate-string refused)}])]
-      (is (= 2 (count @calls)) "one more ask, not a loop")
-      (is (= :unusable-answer (:outcome out)))
-      (is (= :amend-without-findings (:refused out)) "the run ends naming the rule, for the report")
-      (is (= :amend (get-in out [:answer :recommend])) "and what the judge said is kept beside it"))
-    (run [{:ok "not json"}])
-    (is (= 1 (count @calls)) "an answer that is not JSON names no rule to re-ask about")))
 
 (deftest a-run-judges-the-ledger-it-pinned-at-start
   ;; Seen live: round 1 appended its decision, the session restarted, and round 2 re-resolved

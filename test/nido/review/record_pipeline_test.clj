@@ -1480,44 +1480,27 @@
                 settled/ledgers (fn [_ _ _] [(assoc settling-ledger :ws-id "ws-1")])]
     (run record/judge-stage c))))
 
-(deftest a-sufficient-verdict-over-unruled-checks-is-asked-again-then-refused
-  ;; A sufficient verdict ended the run while checks had no ruling, and nothing recorded them. Asked
-  ;; again first — what the round did confirm is settled by then, so the next judge is handed only
-  ;; what was left — and the run ends :unruled, not :sufficient, if they are still unruled.
+(deftest a-sufficient-verdict-over-unruled-checks-goes-to-the-next-round
+  ;; A sufficient verdict ended the run while checks had no ruling, and nothing recorded them. What
+  ;; the round did confirm is settled by then, so the next judge is handed only what was left.
   (let [review {:format :baseline-review :verdict :sufficient :reason "ok" :unruled ["shape"]}
         first  (judged-with review (ctx))]
     (is (= :next-round (:control first)) "no amendment, another judgement")
     (is (nil? (:status first)))
     (let [second (judged-with review (ctx :carry (:carry first)))]
-      (is (= :unruled (:status second))))
+      (is (= :next-round (:control second))))
     (is (= :sufficient (:status (judged-with (dissoc review :unruled) (ctx))))
         "a verdict that ruled on every check ends the run as it always did")))
 
-(deftest an-omission-after-a-round-that-ruled-everything-is-a-first-one-again
-  ;; Watched: R3 left a subject unruled, R4 ruled every subject, R5 omitted a clause of it again —
-  ;; and the run ended :unruled, the mark from R3 still standing. The judge was never asked twice
-  ;; running.
-  (let [unruled  {:format :baseline-review :verdict :sufficient :reason "ok" :unruled ["shape"]}
-        first    (judged-with unruled (ctx))
-        repaired (judged-with {:format :baseline-review :verdict :falsified :reason "r"
-                               :findings [a-finding]}
-                              (ctx :carry (:carry first)))
-        again    (judged-with unruled (ctx :carry (:carry repaired)))]
-    (is (= :next-round (:control first)))
-    (is (not (get-in repaired [:carry :reasked-unruled]))
-        "a round that left nothing unruled ends the streak")
-    (is (= :next-round (:control again)) "so the next omission is asked again, not the end of the run")
-    (is (nil? (:status again)))))
-
-(deftest a-subject-whose-clauses-were-asked-again-in-the-round-ends-the-run-unruled
-  ;; The round already asked its open clauses alone (`rule-open-clauses!`). A second whole round
-  ;; re-sends the same schema to the same judge, which repeats the omission.
+(deftest a-subject-left-unruled-goes-to-the-next-round
+  ;; Nothing is re-asked within a round; the next round's judge is the other one, and `stalled?`
+  ;; ends a run whose rounds keep leaving the same subjects open.
   (let [out (judged-with {:format :baseline-review :verdict :sufficient :reason "ok"
                           :unruled ["mod-the-order-aggregate"]
                           :incomplete-clauses {"mod-the-order-aggregate" ["mod-the-order-aggregate#2"]}}
                          (ctx))]
-    (is (= :unruled (:status out)) "the targeted ask was the second ask")
-    (is (= :stop (:control out)))))
+    (is (nil? (:status out)))
+    (is (= :next-round (:control out)))))
 
 (deftest the-report-is-told-how-much-was-checked-and-whether-it-banks
   (let [out (judged-with {:format :baseline-review :verdict :sufficient :reason "ok"
@@ -1844,218 +1827,6 @@
     (is (nil? (:clause-rulings r)) "the answer's clause rulings are no ledger field")
     (is (m/validate ledger-report/BaselineReview (dissoc r :tree-moved))
         "the closed ledger schema admits what the round derives — an append it refuses is lost whole")))
-
-(defn- reviewed-twice
-  "What `baseline-review!` appends when the judge answers `answer` and the re-ask of open clauses
-   answers `reask` (nil: that ask fails), and the rounds it ran as `[label schema prompt]`."
-  [answer reask]
-  (let [rounds (atom [])]
-    (with-redefs [record/run-round! (fn [{:keys [label schema prompt]}]
-                                      (swap! rounds conj [label schema prompt])
-                                      (if (str/ends-with? (str label) "-open-clauses")
-                                        (if reask
-                                          {:ok (json/generate-string reask)}
-                                          {:outcome :codex-failed :detail "x"})
-                                        {:ok (json/generate-string answer)}))
-                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
-                  settled/code-identity (fn [_] "tree-a")]
-      [(record/baseline-review! {:cwd "/w" :run-id "r1" :label "baseline-review-round-3"
-                                 :baseline (assoc a-baseline :seq 3)
-                                 :settled {"c1" 2} :code-identity "tree-a"})
-       @rounds])))
-
-(deftest an-open-clause-of-a-sufficient-review-is-asked-again-alone
-  ;; Watched: a judge skipped clause #2 of one confirmed subject, and the whole round was asked again
-  ;; — the same 35-clause schema to the same judge, which skipped #2 again.
-  (let [checks    ["composition" "invoice-resums" "mod-the-order-aggregate" "shape"]
-        all       (apply held checks)
-        skipped   (some #(when (= "mod-the-order-aggregate#2" (:clause %)) %) all)
-        answer    {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
-                   :confirmed (mapv read-at checks)
-                   :clause_rulings (vec (remove #{skipped} all))}
-        [r rounds] (reviewed-twice answer {:clause_rulings [skipped]})
-        [label schema prompt] (second rounds)]
-    (is (= 2 (count rounds)) "one more ask, within the round")
-    (is (= "baseline-review-round-3-open-clauses" label) "beside the round's own artifacts, not over them")
-    (is (= ["mod-the-order-aggregate#2"]
-           (get-in (json/parse-string schema true) [:properties :clause_rulings :items :properties :clause :enum]))
-        "the schema admits only the open clause, so the omission is the only thing asked")
-    (is (str/includes? prompt "Still to rule on:\n[mod-the-order-aggregate]\n  mod-the-order-aggregate#2"))
-    (is (= checks (sort (:confirmed r)))
-        "ruled on the re-ask, the confirmation counts")
-    (is (nil? (:unruled r)))
-    (is (nil? (:incomplete-clauses r)))
-    (testing "a re-ask that leaves it open leaves it unruled, naming the clause"
-      (let [[r rounds] (reviewed-twice answer nil)]
-        (is (= 2 (count rounds)))
-        (is (= ["mod-the-order-aggregate"] (:unruled r)))
-        (is (= {"mod-the-order-aggregate" ["mod-the-order-aggregate#2"]} (:incomplete-clauses r)))))
-    (testing "the re-ask rules only what it was asked"
-      (let [held-one (assoc (some #(when (= "mod-the-order-aggregate#1" (:clause %)) %) all) :ruling "false")
-            [r _]    (reviewed-twice answer {:clause_rulings [skipped held-one]})]
-        (is (some #{"mod-the-order-aggregate"} (:confirmed r))
-            "a clause the review held is not overturned by an answer to a question it was not asked")))
-    (testing "an insufficient review is not asked again: its findings go to the amender"
-      (let [[_ rounds] (reviewed-twice (assoc answer :verdict "falsified"
-                                              :findings [{:claim-id "shape" :blocks "none" :cites ["h"]
-                                                          :claim "c" :needs "" :evidence ["src/order/invoice.clj:88"]}])
-                                       {:clause_rulings [skipped]})]
-        (is (= 1 (count rounds)))))))
-
-(deftest an-exclusivity-held-without-a-whole-tree-search-is-unruled
-  ;; Watched: an `only X reserves room` claim confirmed three times on the sites it cited, while a
-  ;; global rule elsewhere in the tree also reserved it.
-  (let [unsearched (mapv #(assoc % :search "") (held "shape"))
-        r (reviewed {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
-                     :confirmed [(read-at "shape")] :clause_rulings unsearched})]
-    (is (nil? (:confirmed r)) "held on the cited sites alone confirms the sites, not the exclusivity")
-    (is (= {"shape" ["shape#1"]} (:incomplete-clauses r)))))
-
-(deftest an-interface-is-held-only-on-the-search-that-enumerated-it
-  ;; Watched: an element's :interface held three rounds running with no search, citing only its own
-  ;; definitions, then refuted for vars used outside it — the closed list was never searched.
-  (let [owed       (get (#'record/clauses-owed a-baseline ["mod-the-order-aggregate"]) "mod-the-order-aggregate")
-        iface      (some #(when (= :interface (:field %)) %) owed)
-        unsearched (mapv #(cond-> % (= (:key iface) (:clause %)) (assoc :search ""))
-                         (held "mod-the-order-aggregate"))
-        r          (reviewed {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
-                              :confirmed [(read-at "mod-the-order-aggregate")]
-                              :clause_rulings unsearched})]
-    (is (:search? iface) "an :interface owes a search whatever its words: it is a closed list")
-    (is (nil? (:confirmed r)) "held at its own definitions, the list is sampled, not enumerated")
-    (is (= {"mod-the-order-aggregate" [(:key iface)]} (:incomplete-clauses r)))
-    (testing "held on a search, the confirmation carries it where settlement reads it"
-      (let [r (reviewed {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
-                         :confirmed [(read-at "mod-the-order-aggregate")]
-                         :clause_rulings (held "mod-the-order-aggregate")})]
-        (is (= ["src/order/aggregate.clj:12" (str settled/enumeration-mark "rg -n sum .")]
-               (get-in r [:checked-at "mod-the-order-aggregate"]))
-            "the clause rulings are not kept, so the enumeration travels on :checked-at or is lost")
-        (is (m/validate ledger-report/BaselineReview (dissoc r :tree-moved)))))))
-
-(deftest a-confirmation-with-a-clause-ruled-false-is-not-counted
-  (let [r (reviewed {:verdict "sufficient" :reason "ok" :findings [] :unchecked []
-                     :confirmed [(read-at "mod-the-order-aggregate")]
-                     :clause_rulings (mapv #(cond-> % (= "mod-the-order-aggregate#2" (:clause %))
-                                                       (assoc :ruling "false"))
-                                           (held "mod-the-order-aggregate"))})]
-    (is (nil? (:confirmed r)) "it confirmed what it read false")
-    (is (= {"mod-the-order-aggregate" ["mod-the-order-aggregate#2"]} (:incomplete-clauses r)))))
-
-(deftest a-finding-over-a-partly-ruled-subject-stands-and-the-rest-is-owed
-  (let [r (reviewed {:verdict "falsified" :reason "r" :unchecked [] :confirmed []
-                     :clause_rulings [{:clause "mod-the-order-aggregate#1" :ruling "false"
-                                       :evidence ["src/order/invoice.clj:88"] :search ""}]
-                     :findings [{:claim-id "mod-the-order-aggregate" :blocks "none"
-                                 :cites ["the order in which lines are summed"] :claim "c"
-                                 :needs "" :evidence ["src/order/invoice.clj:88"]}]})]
-    (is (= :falsified (:verdict r)) "what it found is found")
-    (is (some #{"mod-the-order-aggregate"} (:unruled r))
-        "and the clause it never ruled is owed, not passed by the finding beside it")))
-
-(deftest a-subject-the-judge-could-not-check-owes-no-clause
-  (let [r (reviewed {:verdict "sufficient" :reason "ok" :findings [] :confirmed []
-                     :clause_rulings []
-                     :unchecked [{:id "mod-the-order-aggregate" :reason "production data"}]})]
-    (is (not (contains? (:incomplete-clauses r) "mod-the-order-aggregate"))
-        "unchecked is a ruling: the subject is out of the code's reach, clause by clause")))
-
-(deftest a-confirmation-reading-a-site-its-own-finding-cites-is-recorded
-  ;; Watched: a judge confirmed `chat sessions call no content view` beside its own finding citing
-  ;; the chat session making that call; the next round refuted the unchanged claim on those lines.
-  (let [r (reviewed {:verdict "falsified" :reason "r" :unchecked []
-                     :confirmed [{:id "shape" :evidence ["src/order/invoice.clj:80-90"]}]
-                     :clause_rulings (held "shape")
-                     :findings [{:claim-id "mod-the-order-aggregate" :blocks "none" :cites ["h"]
-                                 :claim "c" :needs "" :evidence ["src/order/invoice.clj:88"]}]})]
-    (is (= [{:id "shape" :site "src/order/invoice.clj:88"}] (:confirmed-over-findings r))
-        "recorded where the judgement is, so a self-contradicting confirmation is visible")
-    (is (= ["shape"] (:confirmed r))
-        "and still counted: a chokepoint every reading passes through shares a site as surely")))
-
-(deftest a-review-keeps-only-the-identities-its-subjects-rest-on
-  ;; One ledger held 730 KB of 790 KB in identity maps: every declared element of the project, on
-  ;; every judgement, when a judgement needs only what its own subjects rest on.
-  (let [agg      {:id "canvas.order/aggregate" :sort :module :hides "h" :interface "i"}
-        claim    {:id "one-path" :about ["canvas.order/aggregate"] :statement "s" :falsified-by "f"
-                  :evidence {:by :round}}
-        baseline {:format :baseline :seq 3 :strata [] :area "a" :bounded-by "b"
-                  :model {:elements [agg] :claims [claim]}}
-        r (with-redefs [record/run-round! (fn [_] {:ok (json/generate-string
-                                                        {:verdict "sufficient" :reason "ok" :findings []
-                                                         :unchecked [] :confirmed (mapv read-at ["one-path" "canvas.order/aggregate"])})})
-                        stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
-                        settled/code-identity (fn [_] "tree-a")]
-            (record/baseline-review! {:cwd "/w" :run-id "r1" :baseline baseline :listing {:status :unmodelled}
-                                      :code-identity "tree-a"
-                                      :subject-identities {"canvas.order/aggregate" "agg-1"
-                                                           "canvas.other/unrelated" "x-1"}}))]
-    (is (= {"canvas.order/aggregate" "agg-1"} (:subject-identities r)))))
-
-(deftest a-tree-that-moved-under-a-round-with-settled-subjects-keeps-its-answer-and-settles-nothing
-  ;; A moved tree only argues against banking the round forward — its settled subjects were
-  ;; settled against a tree the judge did not read throughout. Its findings and its rulings on
-  ;; its own checks are still a judgment of code, and refusing them sent the next run in blind
-  ;; to a refutation already paid for.
-  (with-redefs [record/run-round! (fn [_] {:ok (json/generate-string
-                                                 {:verdict "falsified" :reason "no" :unchecked []
-                                                  :confirmed [] :findings [{:claim-id "invoice-resums" :claim "c"
-                                                                            :cites ["x"] :evidence ["f.clj:1"]}]})})
-                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
-                settled/code-identity (fn [_] "tree-b")]
-    (let [r (record/baseline-review! {:cwd "/w" :run-id "r1" :baseline (assoc a-baseline :seq 3)
-                                      :settled {"c1" 2} :code-identity "tree-a"
-                                      :subject-identities {"invoice-resums" "id-1"}})]
-      (is (= :baseline-review (:format r)) "the judgment reaches the ledger")
-      (is (= :falsified (:verdict r)))
-      (is (seq (:findings r)) "a refutation paid for is not thrown away")
-      (is (nil? (:code-identity r)) "no single tree was read, so nothing settles forward from it")
-      (is (nil? (:subject-identities r)) "identities are only the judge's beside a tree that held still"))))
-
-(deftest the-refused-answer-is-kept-in-the-persisted-report
-  ;; Nothing was appended, so the report is the only place the judgment can be
-  ;; read — and a fold that kept only the outcome wrote a round that said a tree
-  ;; moved and nothing about what its judge found.
-  (let [moved {:outcome :code-moved :detail "the tree changed while the judge read it"
-               :answer  {:format :baseline-review :verdict :falsified :reason "no"
-                         :findings [a-finding]}}
-        out   (with-redefs [record/baseline-review! (fn [_] moved)
-                            record/append! (fn [_ _] nil)
-                            stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
-                            ws/latest-entry (fn [_ _ _] a-baseline)
-                            settled/code-identity (fn [_] "tree-a")
-                            settled/ledger (fn [_ _] settling-ledger)]
-                (run record/judge-stage (ctx)))
-        ph    (persisted-phase :judge out)]
-    (is (= "code-moved" (:outcome ph)))
-    (is (= "the tree changed while the judge read it" (:detail ph))
-        "why there is no verdict, which no ledger entry says either")
-    (is (= "falsified" (get-in ph [:answer :verdict])))
-    (is (= [(:claim a-finding)] (map :claim (get-in ph [:answer :findings])))
-        "with what the judge found, since the stage copies none of it into :findings")))
-
-(deftest a-settled-subject-is-shown-but-is-not-a-check
-  (let [p (record/baseline-prompt {:baseline a-baseline :settled {"c1" 2 "shape" 2}})
-        [outside checks] (-> p (str/split #"OUTSIDE THIS ROUND'S CHECKS" 2) second
-                             (str/split #"WHAT YOU ARE CHECKING" 2))]
-    (is (some? outside) "every subject is still shown")
-    (is (str/includes? outside "[c1] the aggregate is the only summing path"))
-    (is (str/includes? outside "[shape] the aggregate is the only thing that sums lines"))
-    (is (not (str/includes? outside "refuted by")) "with nothing to go looking for")
-    (is (not (str/includes? checks "[c1]")) "and not among the checks")
-    (is (not (str/includes? checks "[shape]")))
-    (is (str/includes? checks "[invoice-resums]") "an unsettled subject is still a check")))
-
-(deftest the-checks-come-last-and-are-restated-by-id
-  ;; Shown the settled block after its checks, a judge confirmed ten of those ids and skipped one of
-  ;; its two checks: what it read last was the list it drew its answer from.
-  (let [p     (record/baseline-prompt {:baseline a-baseline :settled {"c1" 2 "shape" 2}})
-        rule  (second (str/split p #"RULE ON EVERY SUBJECT YOU ARE ASKED TO CHECK" 2))]
-    (is (< (str/index-of p "OUTSIDE THIS ROUND'S CHECKS") (str/index-of p "WHAT YOU ARE CHECKING"))
-        "the settled subjects come before the checks, never after them")
-    (is (= #{"composition" "invoice-resums" "mod-the-order-aggregate"}
-           (set (map second (re-seq #"(?m)^- ([a-z-]+)$" rule))))
-        "the instructions name exactly the open checks, so the confirmed list is drawn from them")))
 
 (def ^:private every-subject
   "Every subject of `a-baseline`, settled."

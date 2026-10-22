@@ -13,7 +13,7 @@
    What a replay can and cannot say. Each recorded round is handed back to the engine as its judge
    stage's result, so the engine's own stops — the cap, `no-progress?`, the give-up counter,
    `stalled?` — are exercised for real. A stop the record pipeline makes inside its judge stage
-   (unruled-stop, :asked, :disputed) is replayed as recorded: the round that ended the run carries
+   (:asked, :disputed) is replayed as recorded: the round that ended the run carries
    its recorded status, and nothing earlier can end there. So a replay answers whether the engine would
    now stop this run sooner, and on what — which is the question a terminator change asks."
   (:require

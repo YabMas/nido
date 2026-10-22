@@ -1536,53 +1536,6 @@
       (is (= [0 0] [(:minItems s) (:maxItems s)]))
       (is (nil? (get-in s [:items :properties :id :enum])) "an empty enum is no schema a provider takes"))))
 
-(defn- reasked
-  "`decision` through the in-round re-ask, the judge answering `answer` (or failing, for nil).
-   Returns [decision' every run-round! call]."
-  [decision answer]
-  (let [calls (atom [])]
-    [(with-redefs [record/run-round! (fn [opts] (swap! calls conj opts)
-                                       (if answer {:ok (json/generate-string answer)}
-                                           {:outcome :no-output :detail "stub"}))]
-       (#'record/rule-unruled-relations! decision ids {:run-id "r" :kind :design-decision :label "l"}
-                                         {:design design :baseline strata-baseline}))
-     @calls]))
-
-(deftest the-ids-a-decision-skipped-are-asked-again-within-the-round
-  (let [claims-only     (decided [{:id "one-summing-path" :ruling "stands" :reason "untouched"}])
-        skipped         (mapv second (rest ids))
-        [r [call :as cs]] (reasked claims-only
-                                   {:relation_rulings
-                                    (conj (mapv #(hash-map :id % :ruling "stands" :reason "kept") skipped)
-                                          {:id "one-summing-path" :ruling "breaks" :reason "a second word"})})]
-    (is (= 1 (count cs)) "one more ask, not a loop")
-    (is (= skipped (get-in (rulings-schema (:schema call)) [:items :properties :id :enum]))
-        "only the ids still owed are asked")
-    (is (str/includes? (:prompt call) "Still to rule on:\n  modules:\n    [canvas.order/aggregate]"))
-    (is (str/includes? (:prompt call) "[one-summing-path] stands — untouched")
-        "the rulings already made are shown, not asked again")
-    (is (= "l-unruled-relations" (:label call)) "its artifacts do not overwrite the decision's")
-    (is (= {:id "one-summing-path" :ruling :stands :reason "untouched"}
-           (first (:relation-rulings r)))
-        "the re-ask cannot overturn a ruling the decision made")
-    (is (empty? (:relation-unruled (held r []))) "every id ruled, so nothing stops the proceed")
-    (is (report/proceeds? (held r [])))
-    (is (report/validate-event :design-decision (held r [])) "and the ledger takes it")))
-
-(deftest a-decision-that-ruled-every-id-is-not-asked-again
-  (let [r (decided (every-id-stands))]
-    (is (= [r []] (reasked r {:relation_rulings []})))))
-
-(deftest an-underivable-relation-honest-is-not-asked-for-rulings
-  (let [r (-> (decided []) (assoc :checks [{:check :relation-honest :status :underivable :note "n"}]))]
-    (is (= [] (second (reasked r {:relation_rulings []})))
-        "relation-held holds it to no ruling, so asking for one buys nothing")))
-
-(deftest a-failed-re-ask-leaves-the-ids-unruled
-  (let [[r] (reasked (decided []) nil)]
-    (is (= (mapv second ids) (:relation-unruled (held r []))) "what two asks left open is still named")
-    (is (not (report/proceeds? (held r []))))))
-
 ;; ── A ruling is a reading of a record, held to the last one ─────────────────
 ;; Watched: rulings re-derived cold each round, while relation-held enforced each round's reading
 ;; against :breaks. One id ruled breaks, stands, breaks across nine rounds on text no amendment
@@ -1666,38 +1619,19 @@
                           "THE LAST DECISION RULED"))
       "a first decision has nothing to be held to"))
 
-(defn- reconciled
-  "`decision` through the contradiction re-ask over :breaks `breaks`, the judge answering `answer`.
-   Returns [decision' every run-round! call]."
-  [decision breaks answer]
-  (let [calls (atom [])]
-    [(with-redefs [record/run-round! (fn [opts] (swap! calls conj opts)
-                                       (if answer {:ok (json/generate-string answer)}
-                                           {:outcome :no-output :detail "stub"}))]
-       (#'record/reconcile-relation-reading! decision ids breaks
-                                             {:run-id "r" :kind :design-decision :label "l"}
-                                             {:design design :baseline strata-baseline} nil))
-     @calls]))
-
-(deftest a-held-relation-honest-over-mismatched-rulings-is-asked-again
-  (let [contradicted   (decided (assoc (every-id-stands) 0 {:id "one-summing-path" :ruling "breaks"
-                                                            :reason "moves"}))
-        [r [call :as cs]] (reconciled contradicted []
-                                      {:relation_rulings [{:id "one-summing-path" :ruling "stands"
-                                                           :reason "the held reading was right" :cause ""}]})]
-    (is (= 1 (count cs)) "one more ask, not a loop")
-    (is (= ["one-summing-path"] (get-in (rulings-schema (:schema call)) [:items :properties :id :enum]))
-        "only the contradicted ids are asked")
-    (is (str/includes? (:prompt call) "it contradicts itself: it called relation-honest HELD"))
-    (is (= "l-contradicted-relations" (:label call)) "its artifacts do not overwrite the decision's")
+(deftest a-held-relation-honest-over-mismatched-rulings-is-left-open
+  (let [contradicted (decided (assoc (every-id-stands) 0 {:id "one-summing-path" :ruling "breaks"
+                                                          :reason "moves"}))
+        r            (#'record/contradicted-relations-open contradicted ids [])]
     (is (= ["one-summing-path"] (:relation-contradicted r)) "the inconsistency is recorded where it was made")
-    (is (= :stands (:ruling (first (:relation-rulings r)))) "the judge's second answer is the ruling")
-    (is (report/proceeds? (held r [])) "resolved toward the check, nothing forces an amend")
+    (is (= ["one-summing-path"] (:relation-unruled (held r [])))
+        "neither reading is taken: the next round's judge rules it")
+    (is (not (report/proceeds? (held r []))))
     (is (report/validate-event :design-decision (held r [])) "and the ledger takes it"))
   (testing "a broken relation-honest is no contradiction of a mismatch"
     (let [broken (-> (decided (assoc (every-id-stands) 0 {:id "one-summing-path" :ruling "breaks" :reason "m"}))
                      (assoc :checks [{:check :relation-honest :status :broken :note "n"}]))]
-      (is (= [broken []] (reconciled broken [] {:relation_rulings []}))))))
+      (is (= broken (#'record/contradicted-relations-open broken ids []))))))
 
 (deftest an-omission-claimed-of-an-id-breaks-already-lists-is-flagged-for-the-amender
   (let [r (-> (decided (assoc (every-id-stands) 0 {:id "one-summing-path" :ruling "breaks" :reason "moves"}))
@@ -2019,9 +1953,7 @@
   ;; claim refuted after its settlement, and re-asked the judge as a self-contradiction.
   (is (= "" (str (:claim-id (#'record/cite-paired ["settled-rule-unchanged"]
                                                   {:for-person true :claim "q"
-                                                   :cites ["The design leaves the settled rule unchanged"]})))))
-  (is (= [] (#'record/self-contradicted-ids {:confirmed ["retry-op"]
-                                             :findings [{:claim-id "retry-op" :for-person true}]}))))
+                                                   :cites ["The design leaves the settled rule unchanged"]}))))))
 
 (deftest the-judge-is-told-when-nobody-will-read-its-ask
   ;; A design declaring :conforms/:within clears on a proceed, and its required ask reached no

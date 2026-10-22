@@ -820,7 +820,7 @@
        "with the file:line you read it at, or false, with the counterexample's site. A\n"
        "`refuted by` clause is held when the counterexample it names exists NOWHERE.\n"
        "A subject you confirm or find against while any of its clauses is unruled is an\n"
-       "incomplete judgment: it is not counted, and the round is asked again. Confirm a\n"
+       "incomplete judgment: it is not counted, and the next round rules it. Confirm a\n"
        "subject only when every clause held. When any is false, report ONE finding for\n"
        "the subject naming EVERY clause you found false, each with its counterexample:\n"
        "the amender repairs what the finding names, so a false clause you saw and did\n"
@@ -1137,7 +1137,7 @@
       "\nEach one ends up confirmed, named by a finding, or in unchecked with why it\n"
       "cannot be checked here: its evidence is not in the code (production data, a\n"
       "deploy history). A subject you leave without a ruling is not counted as held:\n"
-      "the round is asked again, and a sufficient verdict over it does not stand."))
+      "the next round rules it, and a sufficient verdict over it does not stand."))
    (when-not derive?
      (prior-findings-block (apply dissoc prior (keys settled))))
    (when-not derive?
@@ -2087,7 +2087,7 @@
    "RULE ON EVERY CLAIM YOU ARE ASKED TO CHECK — the claims above, and none listed\n"
    "as outside this round's checks. Each one ends up confirmed, named by a finding,\n"
    "or in unchecked with why it cannot be checked here. A claim left without a\n"
-   "ruling is asked again, and a proceed over it does not stand.\n\n"
+   "ruling is left to the next round, and a proceed over it does not stand.\n\n"
    "asks states what the human still has to answer, with everything you derived\n"
    "already taken off the table — and with it what the record's open notes state is\n"
    "decided and what a grant or a person's answer already covers.\n"
@@ -2122,43 +2122,6 @@
    (executed-block (update executed :read #(apply dissoc % (keys settled))))
    (disputes-block disputes)
    (level-reminder :commitment))))
-
-(def ^:private unruled-pass
-  "Why a re-ask asks, when the decision left ids unruled."
-  (str "THIS PASS ASKS ONE THING. The decision on this design is already made, and\n"
-       "it ruled on relation-honest per baseline id — but not on every id. Rule on\n"
-       "EACH id below, exactly as the relation-honest instruction above says, and\n"
-       "answer relation_rulings only; every other field above is not asked here.\n"
-       "Still to rule on:\n"))
-
-(defn- contradicted-pass
-  "Why a re-ask asks, when the decision called relation-honest held over rulings :breaks does not
-   match. `breaks` is what :breaks lists."
-  [breaks]
-  (str "THIS PASS ASKS ONE THING. The decision on this design is already made, and\n"
-       "it contradicts itself: it called relation-honest HELD — :breaks names exactly\n"
-       "what this design stops being true — and ruled the ids below so that :breaks\n"
-       "does not match them, ruled breaks and not listed, or listed and ruled stands.\n"
-       ":baseline :breaks lists: " (if (seq breaks) (str/join ", " breaks) "nothing") "\n"
-       "One of the two readings is wrong. Rule on EACH id below again, exactly as the\n"
-       "relation-honest instruction above says, and answer relation_rulings only. A\n"
-       "ruling you keep says in its reason why the held reading was wrong.\n"
-       "To rule on again:\n"))
-
-(defn- relation-reask-prompt
-  "The decision prompt over the same records, closed by `pass` — why this pass asks — and a block
-   asking only for rulings on `missing`, ids of `subjects`, beside the `rulings` the decision made
-   on the rest. The whole prompt rather than the ids alone, because a ruling is a reading of the
-   design against the baseline, and a judge launched fresh has neither in front of it otherwise."
-  [opts subjects missing rulings pass]
-  (let [missing (set missing)]
-    (str (design-prompt opts)
-         "\n\n" pass
-         (relation-ids-lines (filterv (comp missing second) subjects) "  " nil)
-         (when (seq rulings)
-           (str "Already ruled, for context — not to rule again:\n"
-                (relation-ids-lines (remove (comp missing second) subjects) "  "
-                                    (into {} (map (juxt :id identity)) rulings)))))))
 
 ;; ── Running a round ─────────────────────────────────────────────────────────
 
@@ -2229,30 +2192,6 @@
         (assoc-in [:properties :checks :items :properties :check :enum] checks)
         (assoc-in [:properties :findings :items :properties :check :enum] (conj checks ""))
         json/generate-string)))
-
-(defn- relation-reask-schema
-  "The output schema for re-asking a judge only the relation ids it left unruled: one ruling each,
-   in the decision schema's ruling shape."
-  [ids]
-  (let [decision (json/parse-string (schemas :design-decision) true)]
-    (json/generate-string
-     {:type                 "object"
-      :additionalProperties false
-      :required             ["relation_rulings"]
-      :properties           {:relation_rulings (exactly-these-rulings
-                                                (get-in decision [:properties :relation_rulings])
-                                                ids)}})))
-
-(defn- clause-reask-schema
-  "The output schema for re-asking a judge only the clauses of `owed` (`clauses-owed`, narrowed to
-   what it left open): one clause ruling each, in the verification schema's ruling shape."
-  [owed]
-  (let [review (with-clause-keys (json/parse-string (schemas :baseline-review) true) owed)]
-    (json/generate-string
-     {:type                 "object"
-      :additionalProperties false
-      :required             ["clause_rulings"]
-      :properties           {:clause_rulings (get-in review [:properties :clause_rulings])}})))
 
 (def ^:private derivation-keys
   "Every derivation a round may answer about, of either era. What an answer names is kept only if it
@@ -2429,13 +2368,13 @@
    A subject only :unchecked owes no clause: it was ruled as out of the code's reach. One the
    judgement called unchecked for a TOOL FAILURE while holding every listed clause, citing what a
    held ruling owes, was not: it says both that it read the claim true and that its tools could not
-   read it, so neither is taken. It leaves :unchecked for :unruled, and the round is asked again.
+   read it, so neither is taken. It leaves :unchecked for :unruled, for the next round to rule.
    :unchecked-over-held names it there, since :unruled alone reads as a judge that said nothing.
 
    Unchecked as out of the code's reach is not that contradiction, and stays :unchecked. A claim
    whose commitment holds can carry a clause no tree can show — the measurement that motivated it,
    a socket's behaviour at runtime — and a judge that holds every clause it can read and says the
-   rest is outside the code has ruled. Made :unruled, it was asked again by every reading of that
+   rest is outside the code has ruled. Made :unruled, it was left open by every reading of that
    judge: codex said exactly this of two claims in each of its 13 rounds of design-loop-7d596499."
   [result owed]
   (let [rulings  (:clause-rulings result)
@@ -2778,18 +2717,11 @@
 
 (def ^:private refusal-rules
   "Each rule `parse-design-decision` refuses a decision for: :broke, what the refused answer did,
-   for the round's :detail; :keep, what the judge is told when it is asked again (`reask-refused!`).
-   :parse-error has no :keep, because an answer that is not JSON names no rule to re-ask about."
-  {:bad-recommend          {:broke "recommend is none of proceed, ask, amend, recut, resurvey"
-                            :keep  "recommend is exactly one of: proceed, ask, amend, recut, resurvey."}
-   :no-asked-checks        {:broke "it ruled on none of the checks this round defines"
-                            :keep  "Rule on every check this round defines, under the name it is given above."}
-   :asks-blank             {:broke "it recommended ask and left asks empty"
-                            :keep  (str "An ask stops for a person, and asks is the question they read: write it.\n"
-                                        "If no question is left for a person, recommend what your findings support.")}
-   :amend-without-findings {:broke "it recommended a repair and filed no finding saying what to repair"
-                            :keep  (str "A repair is carried out from its findings: file each defect, citing what\n"
-                                        "it falsifies. If nothing derivable blocks the design, recommend proceed.")}
+   for the round's :detail."
+  {:bad-recommend          {:broke "recommend is none of proceed, ask, amend, recut, resurvey"}
+   :no-asked-checks        {:broke "it ruled on none of the checks this round defines"}
+   :asks-blank             {:broke "it recommended ask and left asks empty"}
+   :amend-without-findings {:broke "it recommended a repair and filed no finding saying what to repair"}
    :parse-error            {:broke "it is not the JSON a decision is returned as"}})
 
 (defn ^{:malli/schema [:=> [:cat :string :any [:set :keyword] [:? [:maybe [:set :string]]] [:? :any]
@@ -3214,85 +3146,6 @@
        :detail "the answer did not satisfy what a round must return"})
     result))
 
-(defn- unruled-relation-ids
-  "The ids of `subjects` `decision` gave no relation ruling, in `subjects`' order — none when its
-   relation-honest was underivable, since `relation-held` does not hold such a decision to rulings."
-  [decision subjects]
-  (if (some #(and (= :relation-honest (:check %)) (= :underivable (:status %))) (:checks decision))
-    []
-    (let [ruled (into #{} (map :id) (:relation-rulings decision))]
-      (into [] (comp (map second) (remove ruled)) subjects))))
-
-(defn- rule-unruled-relations!
-  "`decision` with rulings on every id of `subjects` it left unruled, asked of a judge once more
-   before the decision is held to them. `round` is `run-round!`'s options for the decision round,
-   `prompt-opts` `design-prompt`'s.
-
-   One more ask, not a loop: what is still unruled after it stays so, and `relation-held` names it
-   :relation-unruled. A re-ask that fails or answers nothing usable leaves `decision` as it was, for the same
-   reason — the decision is the judge's, and a failed second ask adds nothing to it. Only the asked
-   ids are taken from the answer, so it cannot overturn a ruling the decision already made."
-  [decision subjects round prompt-opts]
-  (let [missing (unruled-relation-ids decision subjects)]
-    (if (or (not (:format decision)) (empty? missing))
-      decision
-      (let [asked  (set missing)
-            answer (:ok (run-round! (assoc round
-                                           :label  (str (or (:label round) "design-decision") "-unruled-relations")
-                                           :schema (relation-reask-schema missing)
-                                           :prompt (relation-reask-prompt prompt-opts subjects missing
-                                                                          (:relation-rulings decision)
-                                                                          unruled-pass))))
-            added  (when answer
-                     (try (filterv (comp asked :id)
-                                   (parse-rulings (:relation_rulings (json/parse-string answer true))))
-                          (catch Exception _ nil)))]
-        (cond-> decision
-          (seq added) (update :relation-rulings (fnil into []) added))))))
-
-(def ^:private open-clauses-pass
-  "Why a re-ask asks, when a sufficient review left clauses of subjects it ruled open."
-  (str "THIS PASS ASKS ONE THING. The review of this baseline is already made, and\n"
-       "it ruled on the subjects below without ruling each of their clauses as the\n"
-       "clause instruction above says: a clause was left with no ruling, held citing\n"
-       "nothing, held with no whole-tree search where one is owed, or ruled false under\n"
-       "a confirmation. Rule on EACH clause below, and answer clause_rulings only;\n"
-       "every other field above is not asked here.\n"
-       "Still to rule on:\n"))
-
-(defn- rule-open-clauses!
-  "`result`, a ruled verification (`rule`) still carrying its :clause-rulings, with every clause
-   `held-to-clauses` would leave open on a subject it ruled asked of a judge once more — only on a
-   sufficient verdict, the one an open clause alone stops. `owed` is `clauses-owed`, `round`
-   `run-round!`'s options for the verification round and `prompt` what it was asked with.
-
-   The open clauses rather than the whole round again: a judge handed the same schema of thirty-odd
-   clauses repeats its omission, and with a single judge nothing the round confirmed settles
-   meanwhile, so a second whole round is the first one over. One more ask, not a loop, as
-   `rule-unruled-relations!`: what it leaves open stays open, and the stage ends the run :unruled on
-   it (`run-judge-stage`). Only the asked keys are taken from the answer, so it rules nothing the
-   review did not leave open; one that fails or answers nothing usable leaves `result` as it was."
-  [result owed round prompt]
-  (let [gaps (when (= :sufficient (:verdict result))
-               (:incomplete-clauses (held-to-clauses result owed)))
-        open (into (sorted-map) (keep (fn [[id ks]]
-                                        (let [ks (set ks)]
-                                          [id (filterv (comp ks :key) (get owed id))])))
-                   gaps)]
-    (if (empty? open)
-      result
-      (let [asked  (into #{} (comp (mapcat val) (map :key)) open)
-            answer (:ok (run-round! (assoc round
-                                           :label  (str (or (:label round) "baseline-review") "-open-clauses")
-                                           :schema (clause-reask-schema open)
-                                           :prompt (str prompt "\n\n" open-clauses-pass (clause-lines open)))))
-            added  (when answer
-                     (try (select-keys (parse-clause-rulings (:clause_rulings (json/parse-string answer true)))
-                                       asked)
-                          (catch Exception _ nil)))]
-        (cond-> result
-          (seq added) (update :clause-rulings merge added))))))
-
 (defn- contradicted-relation-ids
   "The ids of `subjects` whose ruling `decision` contradicts its own relation-honest reading: it
    called the check held, and ruled them so `breaks` does not match (`mismatched`). None unless the
@@ -3304,100 +3157,18 @@
                              (mapv second subjects)))
     []))
 
-(defn- reconcile-relation-reading!
-  "`decision` with the ids whose rulings contradict its own held relation-honest
-   (`contradicted-relation-ids`) ruled on once more, the contradiction in front of the judge, and
-   named under :relation-contradicted. `prior` is `relation-prior`'s, which the new rulings are held
-   to as the first ones were.
-
-   Asked rather than resolved by nido, because each reading is the judge's and nido has no ground
-   to prefer either: enforcing the ruling turns the judge's own disagreement into an amend round,
-   and trusting the check proceeds over a :breaks its rulings say is wrong. What the second answer
-   rules is held to like any other ruling; a re-ask that fails leaves the rulings as they were, and
-   `relation-held` holds :breaks to them."
-  [decision subjects breaks round prompt-opts prior]
-  (let [ids (contradicted-relation-ids decision subjects breaks)]
-    (if (or (not (:format decision)) (empty? ids))
-      decision
-      (let [asked  (set ids)
-            answer (:ok (run-round! (assoc round
-                                           :label  (str (or (:label round) "design-decision") "-contradicted-relations")
-                                           :schema (relation-reask-schema ids)
-                                           :prompt (relation-reask-prompt prompt-opts subjects ids
-                                                                          (:relation-rulings decision)
-                                                                          (contradicted-pass (map slug breaks))))))
-            again  (when answer
-                     (try (into {} (comp (filter (comp asked :id)) (map (juxt :id identity)))
-                                (parse-rulings (:relation_rulings (json/parse-string answer true))))
-                          (catch Exception _ nil)))]
-        (cond-> (assoc decision :relation-contradicted ids)
-          (seq again) (-> (update :relation-rulings (partial mapv #(get again (:id %) %)))
-                          (held-to-prior prior)))))))
-
-(defn- self-contradicted-ids
-  "The ids `decision` both lists as confirmed and names in a finding's claim-id, in confirmed order.
-   A :for-person finding names a claim the person is asked about and refutes nothing (`run-keys`),
-   so confirming the claim beside it is no contradiction."
-  [decision]
-  (let [found (into #{} (keep #(when-not (:for-person %) (:claim-id %))) (:findings decision))]
-    (filterv found (:confirmed decision))))
-
-(defn- self-contradiction-block
-  "What a judge whose answer confirmed and refuted the same ids is told when it is asked again."
-  [decision ids]
-  (str "\nYOUR LAST ANSWER CONTRADICTED ITSELF. It listed each id below in confirmed AND\n"
-       "filed a finding naming it in claim-id:\n"
-       (str/join "\n" (for [id ids
-                            f  (:findings decision)
-                            :when (= id (:claim-id f))]
-                        (str "- [" id "] found: " (:claim f))))
-       "\nOne reading cannot both hold a claim and refute it. Answer the whole decision\n"
-       "again. For each id, either confirm it or file against it, not both. A finding\n"
-       "whose defect is in something the claim cites — a route, a health observation —\n"
-       "names that instead, and leaves the claim's id out of claim-id.\n"))
-
-(defn- reask-self-contradicted!
-  "`decision`, or the judge's second answer when its first both confirmed ids and filed findings
-   against them (`self-contradicted-ids`), with those ids named under :self-contradicted.
-   `round` is `run-round!`'s options for the decision round, `prompt` the prompt it was asked with,
-   `parse` the decision parse.
-
-   Sent back rather than resolved by nido, as `reconcile-relation-reading!` is: the confirmation and
-   the finding are both the judge's, and nido has no ground to prefer either. One more ask, not a
-   loop. A second answer that still contradicts itself is held by `rule`, where the finding wins; a
-   re-ask that fails or answers nothing usable leaves the first answer."
-  [decision round prompt parse]
-  (let [ids (when (:format decision) (self-contradicted-ids decision))]
+(defn- contradicted-relations-open
+  "`decision` with the rulings that contradict its own held relation-honest
+   (`contradicted-relation-ids`) taken off, so `relation-held` names those ids :relation-unruled,
+   and the ids kept as :relation-contradicted. nido has no ground to prefer the check or the
+   rulings; both are the judge's, so the ids are left open for the next round's judge."
+  [decision subjects breaks]
+  (let [ids (when (:format decision) (contradicted-relation-ids decision subjects breaks))]
     (if (empty? ids)
       decision
-      (let [again (judged (judge-round! (assoc round
-                                             :label  (str (or (:label round) "design-decision") "-self-contradicted")
-                                             :prompt (str prompt (self-contradiction-block decision ids))))
-                          parse)]
-        (assoc (if (:format again) again decision) :self-contradicted ids)))))
-
-(defn- reask-refused!
-  "`result`, or the judge's second answer when its first was refused by a rule a decision must keep
-   (`judged`'s :refused, other than :parse-error) — asked once more with the rule named, under the
-   same prompt and parse. `round` is `run-round!`'s options for the decision round.
-
-   A refusal is the judge saying something nido will not record, not the judge failing to answer, so
-   it costs one ask rather than the round. One more ask, not a loop: a second answer that is refused
-   or fails leaves the first refusal, whose :answer is what the judge said."
-  [result round prompt parse]
-  (let [rule (:refused result)]
-    (if (or (nil? rule) (= :parse-error rule))
-      result
-      (let [again (judged (judge-round! (assoc round
-                                             :label  (str (or (:label round) "design-decision") "-refused")
-                                             :prompt (str prompt "\nYOUR LAST ANSWER WAS REFUSED, AND NOTHING IN IT WAS RECORDED: "
-                                                          (get-in refusal-rules [rule :broke]) ".\n"
-                                                          (get-in refusal-rules [rule :keep])
-                                                          "\nAnswer the whole decision again.\n")))
-                          parse)]
-        (if (:format again)
-          again
-          (update result :detail str "; asked again, and the second answer was not usable either"))))))
+      (-> decision
+          (assoc :relation-contradicted ids)
+          (update :relation-rulings (partial filterv #(not ((set ids) (:id %)))))))))
 
 (defn ^{:malli/schema [:=> [:cat :map :DeclaredElements] [:vector :string]]}
   unresolved-subjects
@@ -3676,8 +3447,7 @@
    the tree did not move — they are what a model claim is settled on in a
    project that declares a design, and only those the baseline's subjects rest on. Settled subjects
    are shown and are not checks; the review's ruling is held to its checks by `rule`, so a check the
-   judge left without one is named under :unruled — on a sufficient verdict, after the clauses it left
-   open were asked once more (`rule-open-clauses!`). `:prior` is what earlier runs found against
+   judge left without one is named under :unruled. `:prior` is what earlier runs found against
    the subjects it checks (`prior-findings-block`), `:running` the refutation runs before it
    (`spent-needs-block`), and `:refuted-with` every counterexample they were refuted with
    (`judge-refutations-block`). A round whose tree moved is still appended,
@@ -3730,10 +3500,7 @@
                                                  :stance (stages/read-stance project)})
                       result   (judged (judge-round! (assoc round :prompt prompt))
                                        #(parse-baseline-review % (:seq baseline)))
-                      ;; Asked before the tree is read again, so the identity spans the re-ask too.
-                      result   (cond-> result
-                                 (:format result) (-> (rule checks asked)
-                                                      (rule-open-clauses! owed round prompt)))
+                      result   (cond-> result (:format result) (rule checks asked))
                       after    (settled/code-identity code-cwd)
                       one-tree (when (= before after) before)
                       rests-on (settled/rested-on baseline baseline)]
@@ -4034,13 +3801,10 @@
    decision's ruling is held to its checks by `rule`, and a claim it was handed and
    left without a ruling is named under :unruled. A baseline id relation-honest is ruled on per id,
    whose rulings the decision is then held to (`relation-held`), left without one is named under
-   :relation-unruled. The judge is handed a schema admitting exactly those ids, and asked once more
-   for any it still skipped (`rule-unruled-relations!`), so :relation-unruled names what two asks
-   left open. Each ruling is shown the
-   last decision's beside it and held to it where the record did not move (`held-to-prior`), and ids
-   whose rulings contradict the judge's own held relation-honest are asked once more
-   (`reconcile-relation-reading!`), so what reaches `relation-held` is the judge's reading and not
-   its variance. It carries `:code-identity`, and
+   :relation-unruled. The judge is handed a schema admitting exactly those ids. Each ruling is shown
+   the last decision's beside it and held to it where the record did not move (`held-to-prior`), and
+   ids whose rulings contradict the judge's own held relation-honest are left unruled
+   (`contradicted-relations-open`). It carries `:code-identity`, and
    the `:subject-identities` of what the design's subjects rest on beside it, only when the tree read
    as the judge launched is the tree read as it returned — and a round holding
    settled claims whose tree moved appends nothing, answering
@@ -4090,11 +3854,8 @@
                                                  (into #{} (keep :id) (model/claims design)))
                 result   (-> (judge-round! (assoc round :prompt prompt))
                              (judged parse)
-                             (reask-refused! round prompt parse)
-                             (reask-self-contradicted! round prompt parse)
-                             (rule-unruled-relations! relation round asking)
                              (held-to-prior prior-rs)
-                             (reconcile-relation-reading! relation breaks round asking prior-rs))
+                             (contradicted-relations-open relation breaks))
                 after    (settled/code-identity code-cwd)
                 one-tree (when (= before after) before)
                 subjects (settled/subjects design)
@@ -6400,36 +6161,6 @@
       (assoc :unbanked (str "the tree moved while the judge read it, so the " lost
                             " subject(s) this round confirmed cannot settle")))))
 
-(defn- unruled-stop
-  "A round that would have ended the run with checks it never ruled on. The first time, the run goes
-   on to another judgement and nothing is amended: what this round did confirm is settled by then,
-   so the next judge is handed only what was left. The second time running, or when the round
-   itself already asked again (`asked-again?`), the run ends :unruled — the judge was asked and
-   still did not rule, and nothing lets the record hold over that.
-
-   Running means no round between them ruled on everything it was handed: such a round takes the
-   mark off (`ruled-in-full`), so an omission after it is a first one again."
-  ([ctx] (unruled-stop ctx false))
-  ([ctx asked-again?]
-   (if (or asked-again? (get-in ctx [:carry :reasked-unruled]))
-     (assoc ctx :control :stop :status :unruled)
-     (-> ctx (assoc :control :next-round) (assoc-in [:carry :reasked-unruled] true)))))
-
-(defn- ruled-in-full
-  "`ctx` with `unruled-stop`'s mark taken off when `record` left nothing it was handed unruled —
-   no check, no baseline id's relation."
-  [ctx record]
-  (cond-> ctx
-    (and (empty? (:unruled record)) (empty? (:relation-unruled record)))
-    (update :carry dissoc :reasked-unruled)))
-
-(defn- clauses-asked-again?
-  "Whether a sufficient verification left unruled a subject whose clauses it had already asked
-   again within the round: `baseline-review!` asks every open clause once more on that verdict
-   (`rule-open-clauses!`), so a subject still under :incomplete-clauses is open after two asks."
-  [record]
-  (boolean (some #(contains? (:incomplete-clauses record) %) (:unruled record))))
-
 (defn- judge-inputs
   "What a judge stage reads off the ledgers for `subject`, a `kind` of record, at `reading`, before
    it launches a judge:
@@ -7072,7 +6803,6 @@
                                  :refuted-with (refutations (into lineage mine))
                                  :spent spent-now :spent-awaiting awaiting)
                           (update :carry dissoc :stale :stale-because)
-                          (ruled-in-full record)
                           (judged-by-carry record)
                           (cond-> ledger (assoc-in [:carry :ledger] ledger)))
                       (when (:seq subject) {:judged-seq (:seq subject)})
@@ -7090,8 +6820,9 @@
         (:outcome record)
         (assoc ctx :record record :status (:outcome record))
 
+        ;; Left open, not re-asked: the next round's judge is the other one (`stalled?` bounds it).
         (and (= :sufficient (:verdict record)) (seq (:unruled record)))
-        (unruled-stop (assoc ctx :record record :findings []) (clauses-asked-again? record))
+        (assoc ctx :record record :findings [] :control :next-round)
 
         ;; A sufficient verdict over a subject no reading can rule on is not one the run may end
         ;; on: it goes to the amender with the rest below, and is read again after.
@@ -7157,11 +6888,9 @@
    more, not less: `:codex-failed` on round three of an otherwise converging run
    is not convergence.
 
-   A sufficient verdict ends the run only over checks it ruled on. One leaving
-   some :unruled is judged once more, with no amendment between; still unruled,
-   the run ends :unruled (`unruled-stop`). A subject left unruled by its open
-   clauses was already asked again within the round, by those clauses alone
-   (`rule-open-clauses!`), so it ends the run :unruled there. And only on a second reading: one
+   A sufficient verdict ends the run only over checks it ruled on. Nothing is re-asked
+   within a round: what a round leaves :unruled goes to the next round's judge, and
+   `stalled?` ends the run when rounds keep leaving the same things open. And only on a second reading: one
    confirming a subject no confirmation at its key preceded, or reading a record
    this run amended for the first time, is appended as :read-once or
    :amendment-read-once, holds nothing, and is judged again (`second-reading`).
@@ -8574,7 +8303,6 @@
                                  :refuted-with (refutations (into lineage (when-not reused [record])))
                                  :spent spent-now :spent-awaiting awaiting)
                           (update :carry dissoc :stale :stale-because)
-                          (ruled-in-full record)
                           (judged-by-carry record)
                           (cond-> ledger (assoc-in [:carry :ledger] ledger)))
                       (when (:seq design) {:judged-seq (:seq design)})
@@ -8726,14 +8454,12 @@
                          (put! ledger record))
 
           ;; Nothing to repair, and claims or relation ids it was handed that it neither confirmed
-          ;; nor refuted: a proceed over them does not proceed (`report/proceeds?`), so the round is
-          ;; asked again before a person is.
+          ;; nor refuted: a proceed over them does not proceed (`report/proceeds?`). Left open for the
+          ;; next round's judge, which is the other one; `stalled?` ends a run they never close.
           (or (seq (:unruled record)) (seq (:relation-unruled record)))
-          (let [c (unruled-stop (assoc ctx :record record :findings []
-                                       :underivable (underivable-checks record)))]
-            (if (= :unruled (:status c))
-              (final! (assoc c :control :escalate))
-              (with-appended c (put! ledger record))))
+          (with-appended (assoc ctx :record record :findings [] :control :next-round
+                                :underivable (underivable-checks record))
+                         (put! ledger record))
 
           ;; Nothing an amender could repair, and a check the round could not derive at
           ;; all: what is left is the missing yardstick. An amender told to fix one would
@@ -8773,8 +8499,8 @@
    :nothing-to-amend: it would not proceed and named nothing, which is the judge
    contradicting itself. A finding stated a third time after two objections
    escalates. A round that would proceed but left claims it was handed :unruled,
-   or baseline ids :relation-unruled, does not proceed: it is judged once more, and still unruled it escalates
-   :unruled. Nor does one that would proceed on a claim it confirmed on a first
+   or baseline ids :relation-unruled, does not proceed: the next round's judge rules them, and
+   `stalled?` ends a run whose rounds keep leaving the same ones open. Nor does one that would proceed on a claim it confirmed on a first
    reading: it is appended :read-once and judged again (`second-reading`), so a
    proceed rests on two consecutive clean readings — and so does an :ask with
    nothing derivable, the other round that ends the run. Everything else is another
