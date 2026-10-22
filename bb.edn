@@ -650,6 +650,21 @@
    :doc "Loop the baseline round: judge the survey against the code, amend it, repeat until it holds. Uncapped unless :max-iters. :seq names WHICH survey when the workstream holds more than one; the default is the newest. The survey is judged at the worktree's fork point with main unless :code-cwd names another tree. [:cwd <dir>] [:code-cwd <dir>] [:seq <n>] [:max-iters <n>] [:budget 30m] [:dry-run? true] [:reviewer codex|claude]"
    :task (apply nido-review/baseline-cmd *command-line-args*)}
 
+  nido:review:trend
+  {:requires ([tasks.nido-trend :as nido-trend])
+   :doc "Weekly convergence per review loop (runs, median rounds and minutes, converged and handed shares), and whether the last two weeks regressed against the two before — the reading the improvement sweep holds on. Exits 1 on a regression. [:days <n>]"
+   :task (apply nido-trend/trend-cmd *command-line-args*)}
+
+  nido:review:replay
+  {:requires ([tasks.nido-trend :as nido-trend])
+   :doc "Replay every recorded design/baseline run through today's engine and list the runs today's stopping rules would end before their recorded end. Run it before landing any change to when a loop stops. [:days <n>]"
+   :task (apply nido-trend/replay-cmd *command-line-args*)}
+
+  nido:improvement:release
+  {:requires ([tasks.nido-trend :as nido-trend])
+   :doc "Release the improvement sweep's convergence hold through a date: :until <YYYY-MM-DD> :note <why> [:project nido]. The release lapses on its own."
+   :task (apply nido-trend/release-cmd *command-line-args*)}
+
   nido:review:figures
   {:requires ([tasks.nido-review :as nido-review])
    :doc "What record runs' rounds did, derived from the ledger: per derived check and per baseline derivation, rounds broken, rounds broken alone, broken at the end. One run with :run-id, else every attributable run summed. [:project <p>] [:run-id <id>]"
