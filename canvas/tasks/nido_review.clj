@@ -165,6 +165,13 @@
   (Operation figures-cmd
     "The `figures-cmd` entry point."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation hot-areas-cmd*
+    "Print the hot areas of a workstream's newest design, each with its heat, its claims, how many
+     decisions refuted it in all and since its reset, and the step-backs carried out on it."
+    {:signature [:=> [:catn [:opts :map]] :any]})
+  (Operation hot-areas-cmd
+    "The `hot-areas-cmd` entry point."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation amend-check*
     "Dry-run a record amender's answer file against the ledger: 0 when the append would take its
      record, 1 with the refusal when it would not, 2 when there is no record to check."

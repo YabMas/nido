@@ -690,6 +690,11 @@
    :doc "What record runs' rounds did, derived from the ledger: per derived check and per baseline derivation, rounds broken, rounds broken alone, broken at the end. One run with :run-id, else every attributable run summed. [:project <p>] [:run-id <id>]"
    :task (apply nido-review/figures-cmd *command-line-args*)}
 
+  nido:review:hot-areas
+  {:requires ([tasks.nido-review :as nido-review])
+   :doc "The hot areas of a workstream's newest design — the elements (or lone claims) refuted by three or more decisions across its rounds and runs since a step-back was last carried out on them — each with its heat and claims. Derived from the ledger. [:project <p>] [:ws-id <id>], else the cwd's workstream"
+   :task (apply nido-review/hot-areas-cmd *command-line-args*)}
+
   nido:review:amend:check
   {:requires ([tasks.nido-review :as nido-review])
    :doc "Dry-run a record amender's answer file: would the ledger take its :record as a :baseline or :design amendment now, citing what the loop would have it cite? Writes nothing; exit 1 prints the refusal. :project <p> :ws-id <id> :kind baseline|design :file <answer.edn>"

@@ -134,6 +134,34 @@
      What every surface a hand amender or a capped run reads names."
     {:signature [:=> [:catn [:running [:maybe [:map-of :string :int]]] [:offerable? :any]]
                  [:map-of :string :int]]})
+  (Operation heat
+    "How many decisions of a design's lineage refuted each area of it since a step-back on the area
+     was last carried out — a recorded :recut or :resurvey, which re-does the whole design and so
+     resets every area, an :ask under a :step-back naming it or a person's answer to it, or a design
+     adding a :rejected entry under it. An area is an element of the design
+     that is neither a module nor a stratum — refuted by a decision that refutes any claim about it,
+     once per decision — or a claim about no such element, alone. A confirmation ends nothing:
+     findings landing on one area across rounds and runs are the signal that its approach, not its
+     wording, is off."
+    {:signature [:=> [:catn [:design :map] [:decisions [:sequential :map]]] [:map-of :string :int]]})
+  (Operation hot-areas
+    "The areas of a design whose heat has reached the threshold, each with its claims, every
+     finding against them with those since its reset marked, the approaches the design's :rejected already gave up
+     for it, and the person's answers bearing on it. What a design round's judge and amender are
+     shown; it decides nothing about when a round proceeds, stops or what it hands on."
+    {:signature [:=> [:catn [:design :map] [:entries [:sequential :map]]] [:sequential :map]]})
+  (Operation hot-figures
+    "Over a workstream's ledger, or every ledger, within a window: the share of claim findings that
+     landed on an area already hot, counted with no reset; the share of decisions ruling on a hot
+     area that stepped back on it, as heat counts a step-back carried out, off the recorded
+     :recommend — with step-backs recorded but not carried out counted apart;
+     and the asks put to a person, by claim and by area. Pure over the entries, so the window before
+     a change is read by the same code as the window after it."
+    {:signature [:=> [:catn [:ledgers [:sequential [:sequential :map]]] [:window [:? [:maybe :map]]]] :map]})
+  (Operation lineage-entries
+    "The ledger entries heat and hot-areas read for a design: the designs of its lineage, the
+     decisions that judged them, and the workstream's grants and person-written intents."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design :map]] [:sequential :map]]})
   (Operation spent-at-cap
     "What a record run reaching its cap ends :unfixable on instead of :max-iters: the spent subjects
      of a round that still owes an amendment, less those held only as a person's question."

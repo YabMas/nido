@@ -2915,6 +2915,34 @@
   (let [[_ opts] (task-args/split-args args)]
     (figures-cmd* opts)))
 
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  hot-areas-cmd*
+  "Print the hot areas of a workstream's newest design: per area its heat — refuting decisions since
+   its last carried-out step-back — the claims about it, how many decisions refuted it in all and
+   since the reset, and how many step-backs were carried out on it. Derived from the ledger on every
+   call. The workstream is :ws-id on :project, else the one the cwd's session is on."
+  [{:keys [project ws-id]}]
+  (let [[p w]   (stages/project+ws-from-cwd (System/getProperty "user.dir"))
+        project (keyword (name (or project p "nido")))
+        ws-id   (some-> (or ws-id w) str)]
+    (if-let [design (and ws-id (ws/latest-entry project ws-id :design))]
+      (let [areas (record/hot-areas design (record/lineage-entries project ws-id design))]
+        (println (str (name project) "/" ws-id " — design " (:seq design) ": "
+                      (if (seq areas) (str (count areas) " hot area(s)") "no hot area")))
+        (doseq [{:keys [area heat claims history stepped]} areas]
+          (println (str "  " area "  heat " heat
+                        " · refuted by " (count history) " decision(s), "
+                        (count (filter :since-reset history)) " since the last step-back"
+                        " · step-backs carried out " stepped))
+          (println (str "    claims: " (str/join ", " claims)))))
+      (println (str "no design record on " (name project) "/" (or ws-id "<no workstream for this cwd>"))))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  hot-areas-cmd
+  [& args]
+  (let [[_ opts] (task-args/split-args args)]
+    (hot-areas-cmd* opts)))
+
 (defn ^{:malli/schema [:=> [:cat :map] :int]}
   amend-check*
   "Dry-run an amender's answer file against the ledger it will be appended to: 0 and `ok` when the

@@ -4,8 +4,12 @@
 
    Conventions: kwargs are `:keyword value`."
   (:require
+   [babashka.fs :as fs]
    [clojure.string :as str]
+   [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.trend :as trend]
+   [nido.coordinator.record.workstream :as ws]
+   [nido.review.record :as record]
    [nido.platform.task-args :as task-args]
    [nido.review.prompt-shape :as shape]
    [nido.review.replay :as replay])
@@ -14,6 +18,35 @@
 
 (defn- pct [x] (if x (format "%3.0f%%" (* 100 x)) "   -"))
 (defn- num* [x] (if x (format "%5.1f" (double x)) "    -"))
+
+(defn- design-ledgers
+  "Every workstream's design entries — designs, decisions, grants, intents — on every project's
+   ledgers, one vector per workstream: what `record/hot-figures` reads."
+  []
+  (let [root (fs/path (cstate/nido-root) "projects")]
+    (vec (for [p    (when (fs/exists? root) (fs/list-dir root))
+               :let [project (keyword (str (fs/file-name p)))]
+               id   (try (ws/list-ids project) (catch Exception _ []))
+               :let [es (mapcat #(ws/entries-of project id %) [:design :design-decision :design-approved :intent])]
+               :when (some #(= :design-decision (:format %)) es)]
+           (vec (sort-by :seq es))))))
+
+(defn- hot-lines
+  "The hot-area figures over the last two weeks up to `today` and the two before, as lines."
+  [today]
+  (let [t       (LocalDate/parse today)
+        ledgers (design-ledgers)
+        window  (fn [from to] (record/hot-figures ledgers {:from (str from) :to (str to)}))
+        rows    [["2 weeks before" (window (.minusDays t 27) (.minusDays t 14))]
+                 ["last 2 weeks"   (window (.minusDays t 13) t)]]
+        share   #(if (pos? %2) (format "%3.0f%%" (* 100.0 (/ %1 %2))) "   -")]
+    (into [(format "%-15s %9s %8s %9s %10s %11s  %s" "hot areas" "findings" "on hot" "on hot %"
+                   "hot ruled" "stepped %" "asks area/claim/grant/other")]
+          (for [[label f] rows]
+            (format "%-15s %9d %8d %9s %10d %11s  %s" label (:findings f) (:on-hot f)
+                    (share (:on-hot f) (:findings f)) (:ruling-on-hot f)
+                    (share (:stepped-back f) (:ruling-on-hot f))
+                    (str/join "/" (map #(get-in f [:asks %]) [:area :claim :grant :other])))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   trend-cmd
@@ -33,6 +66,8 @@
                        (name kind) w (:runs s) (:decided s)
                        (num* (:median-rounds s)) (num* (:median-minutes s))
                        (pct (:converged s)) (pct (:handed s)))))
+    (println)
+    (doseq [l (hot-lines today)] (println l))
     (println)
     (if (seq worse)
       (do (println "Regressed — the last two weeks against the two before:")

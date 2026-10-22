@@ -4493,6 +4493,266 @@
                                    (ws/entries-of project ws-id kind))))]
     (filterv (comp seqs seq-key) (ws/entries-of project ws-id judged))))
 
+;; ---------------------------------------------------------------------------
+;; Hot areas — where findings keep landing across a design's rounds and runs
+;; ---------------------------------------------------------------------------
+
+(def ^:private hot-after
+  "How many refuting decisions make an area hot. Calibrated on the ledgers on 2026-10-22: an
+   element refuted by three decisions drew a median of two more, and 37% of all element hits fell
+   after the third; a claim at three drew a median of one, with 23% after."
+  3)
+
+(def ^:private container-sorts
+  "Element sorts that are never an area: a module or a stratum is what every claim of a long run is
+   about, so it would always be hot and say nothing."
+  #{:module :stratum})
+
+(defn- areas-of
+  "`{subject-id #{area}}` for `design`: a claim's areas are the elements it is about that are neither
+   a module nor a stratum, or the claim itself when it is about no such element. A finding keyed to
+   an element rather than a claim lands on that element, unless it is a module or a stratum, which
+   is never an area."
+  [design]
+  (let [sorts (into {} (map (juxt :id :sort)) (get-in design [:model :elements]))]
+    (merge (into {} (for [[id s] sorts] [id (if (container-sorts s) #{} #{id})]))
+           (into {}
+                 (for [{:keys [id about]} (get-in design [:model :claims])
+                       :let [els (remove (comp container-sorts sorts) about)]]
+                   [id (if (seq els) (set els) #{id})])))))
+
+(defn- refuted-areas
+  "The areas decision `d` refutes, given `areas` (`areas-of` the design it judged): those of every
+   claim one of its findings refutes, as `refuted-ids` reads the finding — each once."
+  [d areas]
+  (into #{} (comp (mapcat refuted-ids) (mapcat #(get areas % #{%}))) (:findings d)))
+
+(defn- step-back-areas
+  "The areas decision `d`'s :step-back names with step `step`."
+  [d step]
+  (into #{} (comp (filter #(= step (:step %))) (map :area)) (:step-back d)))
+
+(defn- answer?
+  "Whether ledger entry `e` is a person's answer: a grant, or a design or intent a person wrote
+   superseding another (`loop-why-prefix` marks every :why the loop writes)."
+  [e]
+  (or (= :design-approved (:format e))
+      (and (#{:design :intent} (:format e))
+           (:supersedes e)
+           (not (str/starts-with? (str (get-in e [:supersedes :why])) loop-why-prefix)))))
+
+(defn- new-rejected-areas
+  "The areas `design` adds a :rejected entry under that `before`, the design it follows, lacks."
+  [design before]
+  (let [had (into #{} (keep #(when (:area %) [(:area %) (:alternative %)])) (:rejected before))]
+    (into #{} (keep #(when (and (:area %) (not (had [(:area %) (:alternative %)]))) (:area %)))
+          (:rejected design))))
+
+(defn- heat-walk
+  "Walk a design lineage's ledger `entries` — its designs, decisions and a person's answers, oldest
+   first — and say, per area: :heat, the refuting decisions since its last carried-out step-back;
+   :total, every refuting decision with no reset; :reset-at, the :seq of that step-back; :history,
+   the decisions that refuted it as {:seq :findings}; and :stepped, how many step-backs were carried
+   out on it.
+
+   A step-back carried out on an area is a decision recording :recut or :resurvey, which re-does the
+   whole design and so counts for every area; a decision recommending :ask whose :step-back names
+   the area, or a person's answer to that ask; or a design adding a :rejected entry under the area.
+   A :step-back recorded on a decision that carries out none of these resets nothing. `design` maps
+   the claims of decisions whose judged design is not among `entries`."
+  [design entries]
+  (let [designs (into {} (comp (filter #(= :design (:format %))) (map (juxt :seq identity))) entries)
+        reset   (fn [st areas at]
+                  (reduce (fn [st a] (-> st (update :heat dissoc a) (assoc-in [:reset-at a] at)
+                                         (update-in [:stepped a] (fnil inc 0))))
+                          st areas))]
+    (reduce
+     (fn [st e]
+       (case (:format e)
+         :design-decision
+         (let [judged  (get designs (:design-seq e) design)
+               areas   (areas-of judged)
+               hit     (refuted-areas e areas)
+               st      (reduce (fn [st a]
+                                 (-> st (update-in [:heat a] (fnil inc 0)) (update-in [:total a] (fnil inc 0))
+                                     (update-in [:history a] (fnil conj [])
+                                                {:seq (:seq e)
+                                                 :findings (filterv #(some (fn [id] (contains? (get areas id #{id}) a))
+                                                                           (refuted-ids %))
+                                                                    (:findings e))})))
+                               st hit)
+               asked   (when (= :ask (:recommend e)) (step-back-areas e :ask))]
+           (cond-> st
+             (#{:recut :resurvey} (:recommend e)) (reset (into (set (keys (:heat st))) hit) (:seq e))
+             (seq asked)                          (-> (reset asked (:seq e)) (assoc :pending asked))))
+
+         :design
+         (let [st (cond-> st
+                    (:last-design st) (reset (new-rejected-areas e (:last-design st)) (:seq e))
+                    (and (answer? e) (seq (:pending st))) (-> (reset (:pending st) (:seq e)) (dissoc :pending)))]
+           (assoc st :last-design e))
+
+         (if (and (answer? e) (seq (:pending st)))
+           (-> (reset st (:pending st) (:seq e)) (dissoc :pending))
+           st)))
+     {:heat {} :total {} :reset-at {} :history {} :stepped {}}
+     (sort-by :seq entries))))
+
+(defn ^{:malli/schema [:=> [:cat :map [:sequential :map]] [:map-of :string :int]]}
+  heat
+  "How many decisions of `design`'s lineage refuted each of its areas since a step-back on the area
+   was last carried out, read off the lineage's ledger `entries` (`heat-walk`). An area is an element
+   of the design that is neither a module nor a stratum, or a claim about no such element, alone. A
+   confirmation ends no count."
+  [design entries]
+  (:heat (heat-walk design entries)))
+
+(defn ^{:malli/schema [:=> [:cat :map [:sequential :map]] [:sequential :map]]}
+  hot-areas
+  "The areas of `design` whose `heat` over its lineage's `entries` has reached `hot-after`, hottest
+   first, each as {:area :heat :claims :history :rejected :answers :stepped}: the claims of `design`
+   about it, every decision that refuted it with its findings and whether it falls since the reset
+   (:since-reset), the approaches `design`'s :rejected gave up under it, the asks about it with the
+   answer a person wrote, and how many step-backs were carried out on it before. What a design
+   round's judge and amender are shown; it decides nothing about when a round proceeds or stops."
+  [design entries]
+  (let [{:keys [heat reset-at history stepped]} (heat-walk design entries)
+        areas   (areas-of design)
+        claim-ids (into #{} (map :id) (get-in design [:model :claims]))
+        sorted  (sort-by :seq entries)
+        answers (fn [area claims]
+                  (for [[d after] (map vector sorted (rest (iterate rest sorted)))
+                        :when (and (= :design-decision (:format d)) (seq (str (:asks d)))
+                                   (or ((step-back-areas d :ask) area)
+                                       (some (comp claims str) (mapcat asked-ids (:findings d)))))
+                        :let [a (first (filter answer? after))]]
+                    (cond-> {:seq (:seq d) :asks (:asks d)}
+                      a (assoc :answer {:seq (:seq a)
+                                        :text (or (:note a) (get-in a [:supersedes :why]))}))))]
+    (vec
+     (for [[area n] (sort-by (comp - val) heat)
+           :when (>= n hot-after)
+           :let [claims (into (sorted-set) (keep (fn [[c as]] (when (and (claim-ids c) (as area)) c))) areas)
+                 since  (get reset-at area 0)]]
+       {:area     area
+        :heat     n
+        :claims   (vec claims)
+        :history  (mapv #(assoc % :since-reset (> (:seq %) since)) (get history area))
+        :rejected (filterv #(= area (:area %)) (:rejected design))
+        :answers  (vec (answers area claims))
+        :stepped  (get stepped area 0)}))))
+
+(defn- lineage-root
+  "The :seq at the root of design `d`'s :supersedes chain within `designs` ({seq design})."
+  [designs d]
+  (loop [d d seen #{}]
+    (let [up (get designs (get-in d [:supersedes :seq]))]
+      (if (and up (not (seen (:seq up)))) (recur up (conj seen (:seq d))) (:seq d)))))
+
+(defn- in-window?
+  "Whether entry `e`'s :at falls within `window` ({:from :to}, ISO dates, either open)."
+  [{:keys [from to]} e]
+  (let [day (subs (str (:at e) "          ") 0 10)]
+    (and (or (nil? from) (>= (compare day from) 0))
+         (or (nil? to) (<= (compare day to) 0)))))
+
+(defn ^{:malli/schema [:=> [:cat [:sequential [:sequential :map]] [:? [:maybe :map]]] :map]}
+  hot-figures
+  "What hot areas did across `ledgers` — each one workstream's entries, oldest first, carrying :at —
+   counting only decisions within `window` ({:from :to} ISO dates; nil reads all):
+
+     :findings / :on-hot  claim findings (refuting, as `refuted-ids` reads them), and those landing on
+                          an area that was already hot before the decision, counted with no reset — so
+                          a step-back cannot lower it by resetting the count
+     :ruling-on-hot / :stepped-back  decisions finding against an area hot under `heat`'s reset, and
+                          those that carried out a step-back on one — a recorded :recut or :resurvey,
+                          an :ask whose :step-back names it, or a :rejected entry under it in the design
+                          that follows — read off the recorded :recommend
+     :step-back-not-carried  decisions ruling on a hot area that recorded a :step-back and carried out
+                          none
+     :asks  decisions putting a question to a person, by what it is about: :area (a :step-back :ask),
+            :claim (a :for-person finding under a claim), :grant (whether to approve a design that
+            proceeded), :other
+
+   Pure over the entries, so the window before a change is read by the same code as the one after."
+  ([ledgers] (hot-figures ledgers nil))
+  ([ledgers window]
+   (reduce
+    (fn [acc entries]
+      (let [entries   (vec (sort-by :seq entries))
+            designs   (into {} (comp (filter #(= :design (:format %))) (map (juxt :seq identity))) entries)
+            lineage   #(lineage-root designs (get designs %))
+            by-line   (group-by #(case (:format %)
+                                   :design          (lineage-root designs %)
+                                   :design-decision (lineage (:design-seq %))
+                                   :all)
+                                entries)
+            answers   (filterv #(and (answer? %) (not= :design (:format %))) (get by-line :all))]
+        (reduce
+         (fn [acc [line es]]
+           (if (= :all line)
+             acc
+             (let [es (vec (sort-by :seq (concat es answers)))]
+               (:acc
+                (reduce
+                 (fn [{:keys [acc seen]} [i e]]
+                   (let [seen' (conj seen e)]
+                     (if-not (and (= :design-decision (:format e)) (in-window? window e))
+                       {:acc acc :seen seen'}
+                       (let [judged  (or (get designs (:design-seq e)) {})
+                             before  (heat-walk judged seen)
+                             areas   (areas-of judged)
+                             hot     #(>= (get %1 %2 0) hot-after)
+                             claimed (filterv (comp seq refuted-ids) (:findings e))
+                             on-hot  (filterv #(some (fn [id] (some (partial hot (:total before)) (get areas id #{id})))
+                                                     (refuted-ids %))
+                                              claimed)
+                             ruled   (into #{} (filter (partial hot (:heat before))) (refuted-areas e areas))
+                             nxt     (first (filter #(= :design (:format %)) (subvec es (inc i))))
+                             carried (or (#{:recut :resurvey} (:recommend e))
+                                         (and (= :ask (:recommend e)) (some ruled (step-back-areas e :ask)))
+                                         (and nxt (some ruled (new-rejected-areas nxt judged))))
+                             recorded (some ruled (map :area (:step-back e)))
+                             asks?    (seq (str/trim (str (:asks e))))
+                             ask-kind (cond (seq (step-back-areas e :ask))      :area
+                                            (some :for-person (:findings e))   :claim
+                                            (= :proceed (:recommend e))        :grant
+                                            :else                              :other)]
+                         {:seen seen'
+                          :acc  (cond-> (-> acc
+                                            (update :findings + (count claimed))
+                                            (update :on-hot + (count on-hot)))
+                                  (seq ruled)                         (update :ruling-on-hot inc)
+                                  (and (seq ruled) carried)           (update :stepped-back inc)
+                                  (and (seq ruled) recorded (not carried)) (update :step-back-not-carried inc)
+                                  asks?                               (update-in [:asks ask-kind] inc))}))))
+                 {:acc acc :seen []}
+                 (map-indexed vector es))))))
+         acc
+         by-line)))
+    {:findings 0 :on-hot 0 :ruling-on-hot 0 :stepped-back 0 :step-back-not-carried 0
+     :asks {:area 0 :claim 0 :grant 0 :other 0}}
+    ledgers)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] [:sequential :map]]}
+  lineage-entries
+  "The ledger entries `hot-areas` and `heat` read for `design` on `ws-id`: the designs of its
+   lineage (`lineage-of`'s reach — its :supersedes chain, or the same :intent), the decisions that
+   judged them, and every grant and person-written intent on the workstream, oldest first."
+  [project ws-id design]
+  (let [line    (into #{} (map :design-seq) (lineage-of project ws-id :design-decision :design-seq design))
+        chain   (loop [d design seen #{}]
+                  (if (or (nil? d) (nil? (:seq d)) (seen (:seq d)))
+                    seen
+                    (recur (some->> (get-in d [:supersedes :seq]) (ws/entry-at-seq project ws-id))
+                           (conj seen (:seq d)))))
+        seqs    (into line chain)]
+    (vec (sort-by :seq
+                  (concat (filter (comp seqs :seq) (ws/entries-of project ws-id :design))
+                          (filter (comp seqs :design-seq) (ws/entries-of project ws-id :design-decision))
+                          (ws/entries-of project ws-id :design-approved)
+                          (filter :supersedes (ws/entries-of project ws-id :intent)))))))
+
 (defn- withdrawable
   "The claims of `baseline` that `findings` refute and `refuted-running` counts at
    `withdrawable-after` or more, as a sorted `{claim-id n}` — the claims its amender may remove with
