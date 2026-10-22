@@ -65,6 +65,25 @@
   (stubbing [#'sub/claude! (fake-claude (atom []) {"agents" {:exit 1 :out "" :err "boom"}})]
     (is (thrown? Exception (sub/listing {})))))
 
+(deftest callers-during-a-slow-listing-share-its-one-read
+  (let [reads (atom 0)
+        slow  (fn [_] (swap! reads inc) (Thread/sleep 200) [{:sessionId "s"}])]
+    (reset! @#'sub/!last-listing nil)
+    (stubbing [#'sub/listing slow
+               #'sub/listing-ttl-ms 100]
+      (testing "concurrent callers wait for the read in flight"
+        (let [answers (mapv deref (mapv (fn [_] (future (sub/listing-cached {}))) (range 10)))]
+          (is (= 1 @reads))
+          (is (every? #(= [{:sessionId "s"}] %) answers))))
+      (testing "a read slower than the window is fresh when it lands"
+        (sub/listing-cached {})
+        (is (= 1 @reads)))
+      (testing "and stale once the window has passed"
+        (Thread/sleep 150)
+        (sub/listing-cached {})
+        (is (= 2 @reads))))
+    (reset! @#'sub/!last-listing nil)))
+
 (deftest send-needs-a-live-process-with-an-inbox
   (is (= {:delivered? false :because :no-process} (sub/send! {:id "x"} "hi")))
   (stubbing [#'sub/socket-path (constantly nil)]

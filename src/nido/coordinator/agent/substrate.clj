@@ -61,24 +61,30 @@
     (json/parse-string out true)))
 
 (def ^:private listing-ttl-ms
-  "How long a listing read for display stays good. A board renders every workstream at once; one
-   read serves the render rather than one each."
-  2000)
+  "How long a listing read for display stays good, counted from when the read finished. A board
+   renders every workstream at once; one read serves the render rather than one each."
+  5000)
 
-(defonce ^:private !last-listing (atom nil))
+(defonce ^:private !last-listing
+  ;; A delay of {:at :rows}: unrealized while its read is in flight.
+  (atom nil))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:sequential :map]]}
   listing-cached
-  "`listing`, served from the last read when it is under two seconds old — for display, never
-   for a decision to message or wake a session. An unreadable listing answers empty here."
+  "`listing`, served from the last read when it is under five seconds old — for display, never
+   for a decision to message or wake a session. An unreadable listing answers empty here.
+
+   A caller arriving while a read is in flight waits for that read rather than starting its own.
+   Each read is a `claude` process, and a read slows as load rises: without the wait, every
+   render landing during a slow read started another, which slowed the next — 2026-10-22's
+   dashboard ran ~34 at once at a load of 176."
   [opts]
-  (let [{:keys [at rows]} @!last-listing
-        now (System/currentTimeMillis)]
-    (if (and at (< (- now at) listing-ttl-ms))
-      rows
-      (let [rows (try (listing opts) (catch Exception _ []))]
-        (reset! !last-listing {:at now :rows rows})
-        rows))))
+  (let [stale? (fn [d] (or (nil? d)
+                           (and (realized? d)
+                                (>= (- (System/currentTimeMillis) (:at @d)) listing-ttl-ms))))
+        read   (delay (let [rows (try (listing opts) (catch Exception _ []))]
+                        {:at (System/currentTimeMillis) :rows rows}))]
+    (:rows @(swap! !last-listing #(if (stale? %) read %)))))
 
 (defn- background-id
   "The short id a `--bg` launch printed — `backgrounded · <id> · <name>` — or nil."
