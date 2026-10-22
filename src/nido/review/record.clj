@@ -8810,6 +8810,22 @@
     (get-in out [:record :carried-from]) :carried
     :else                                :held))
 
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  round-open
+  "A record run's `run-loop` :open: what a round left open — the entry it judged, the subjects it
+   confirmed on a first reading only, and what it left unruled — or nil before any judgement.
+
+   Equal across two rounds exactly when neither settled, refuted or amended anything: settling a
+   subject takes it off :read-once, an amendment moves :seq. design-loop-7d596499 read the same
+   entry 25 rounds running, one judge confirming every subject once and the other leaving the same
+   two :unruled, and each judge's round looked exactly like the last one that judge ran."
+  [ctx]
+  (when-let [n (:judged-seq ctx)]
+    {:seq              n
+     :read-once        (set (get-in ctx [:record :read-once]))
+     :unruled          (set (get-in ctx [:record :unruled]))
+     :relation-unruled (set (get-in ctx [:record :relation-unruled]))}))
+
 (defn- resurvey!
   "Repair the premise by running the baseline loop, then come back.
 
@@ -8866,7 +8882,8 @@
                                   :judged-after :judge
                                   :finding-key baseline-finding-key
                                   :attempt-key (attempt-key baseline-finding-key)
-                                  :changed?    baseline-round-changed?}))
+                                  :changed?    baseline-round-changed?
+                                  :open        round-open}))
         out (if survey-cwd
               (survey survey-cwd)
               (tree/with-reading! cwd reading nested-id

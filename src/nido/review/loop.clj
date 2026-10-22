@@ -25,9 +25,10 @@
    under no enum this one can drift from.
 
    `:owed-second-reading` is reachable only by a pipeline that passes `run-loop` an
-   :owes-reading. Both the diff loop and the record loops pass one, so it is here."
+   :owes-reading. Both the diff loop and the record loops pass one, so it is here.
+   `:stalled` likewise only by one that passes an :open (`stalled?`)."
   #{:converged :unresolved :escalated :unfixable :no-progress :max-iters
-    :owed-second-reading :review-failed :reviewer-unavailable})
+    :owed-second-reading :stalled :review-failed :reviewer-unavailable})
 
 (def ^:private terminal-reasons
   "The `:reason`s a stage throws with that END the run rather than crash it —
@@ -150,6 +151,35 @@
                                         (every? #(contains? % (attempt-key f)) runs))
                                (finding-key f)))
                            curr-findings))))))
+
+(def ^:private stall-after
+  "How many quiet rounds running, each leaving open exactly what the round two before it left open,
+   end a run as :stalled.
+
+   Calibrated by replaying the rule over every recorded record run (1530, to 2026-10-22). At four
+   it fires on six, every one a circle: design-loop-7d596499 alternated two judges over one
+   unchanged design for 25 rounds, baseline-loop-9b33bab5 read one claim once per round for
+   thirteen. At three it also ends baseline-loop-671e1eee one round before that circle happened to
+   break."
+  4)
+
+(defn- stalled?
+  "Whether the last `stall-after` rounds went nowhere: `opens` holds, per round, the pipeline's
+   :open reading of what the round left open, or nil for a round that held findings or that the
+   pipeline cannot read.
+
+   Compared with the round TWO before rather than the one before, because record judges alternate:
+   a subject one judge cannot rule and the other can leaves the run in a two-round cycle, and no
+   two neighbouring rounds of it look alike. A round that finds nothing and moves nothing is how
+   every earlier stop is evaded — `no-progress?` needs findings to repeat, the give-up counter
+   needs repairs to attempt, and the cap has no default — so this is the stop for that shape."
+  [opens]
+  (let [n (count opens)]
+    (and (>= n (+ stall-after 2))
+         (every? (fn [i]
+                   (let [o (nth opens i)]
+                     (and (some? o) (= o (nth opens (- i 2))))))
+                 (range (- n stall-after) n)))))
 
 (defn- terminal
   "The status this round ends on, or nil to keep going — or, at a cap over a spent subject, the
@@ -336,7 +366,11 @@
    error). A round that changes nothing still ends the run via `no-progress?`,
    so unbounded does not mean non-terminating. Pass :max-iters only to cap it.
    :emit / :clock / :attempt-key / :attempted? / :owed / :spent / :unspent / :owes-reading /
-   :repair-before-escalate? are injection seams.
+   :open / :repair-before-escalate? are injection seams.
+   :open is what a round left open, off its ctx, as a value equal across two rounds exactly when
+   neither moved anything — or nil when the pipeline cannot say. A run whose findings-free rounds
+   keep leaving the same thing open ends :stalled (`stalled?`). It defaults to \"cannot say\",
+   which never stalls.
    :repair-before-escalate? is asked of a judgement that escalates: truthy runs the rest of the
    round's pipeline — its repairs — before the run ends :escalated. It defaults to \"never\", which
    ends the run on the judgement. See `run-pipeline`.
@@ -388,7 +422,7 @@
    nobody reached."
   [{:keys [run-id max-iters pipeline emit clock finding-key attempt-key
            attempted? judged-after owed changed? spent unspent owes-reading repair-at-cap?
-           repair-before-escalate?] :as config
+           repair-before-escalate? open] :as config
     :or   {emit (fn [_]) clock #(Instant/now)
            attempted? (constantly true)
            repair-before-escalate? (constantly false)
@@ -396,7 +430,8 @@
            changed? (constantly false)
            spent (constantly nil)
            unspent (constantly nil)
-           owes-reading (constantly nil)}}]
+           owes-reading (constantly nil)
+           open (constantly nil)}}]
   (let [pipeline (or pipeline
                      (throw (ex-info "run-loop needs a :pipeline — the engine runs what its caller passes and names no program of its own" {})))
         finding-key (or finding-key
@@ -413,7 +448,7 @@
         impl-session-id (str (random-uuid))]
     (emit {:event :run-started :run-id run-id
            :cwd (:cwd config) :base (:base config) :at (str (clock))})
-    (loop [iter 1, counted 1, rereading? false, history [], prev-findings nil, carry nil]
+    (loop [iter 1, counted 1, rereading? false, history [], prev-findings nil, carry nil, opens []]
       (let [ctx0 {:config (assoc config :impl-session-id impl-session-id)
                   :iter iter :history history :control :continue
                   ;; The one thing a round may hand to the next one. Everything
@@ -460,6 +495,8 @@
                                        :status reason :error (ex-message e))
                                 (select-keys data [:unavailable]))
                          (throw e)))))
+            opens (conj opens (when (and (not (:status ctx)) (empty? (:findings ctx)))
+                                (open ctx)))
             final (or (when (:status ctx) (dissoc ctx ::escalating))
                       ;; An escalating round whose repairs ran out the pipeline — see
                       ;; `run-pipeline`. Before the terminal check, which the escalation outranks.
@@ -471,7 +508,9 @@
                       ;; judged-after stage has already asked and been told no,
                       ;; on the same findings and the same prior — so this
                       ;; cannot contradict it.
-                      (terminal cfg ctx (butlast (:history ctx)) false))]
+                      (terminal cfg ctx (butlast (:history ctx)) false)
+                      (when (stalled? opens)
+                        (assoc ctx :status :stalled :stalled-on (peek opens))))]
         (if final
           ;; What the run still owes rides on the terminal ctx, read once by
           ;; the reading that decided the status, so the report states the
@@ -484,4 +523,4 @@
                                   (= :next-round (:control ctx))
                                   (boolean (owes-reading ctx)))]
             (recur (inc iter) (if reread-next? counted (inc counted)) reread-next?
-                   (:history ctx) (held ctx) (:carry ctx))))))))
+                   (:history ctx) (held ctx) (:carry ctx) opens)))))))

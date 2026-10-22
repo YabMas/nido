@@ -142,6 +142,11 @@
     "What a capped round over a spent subject still repairs before it ends :unfixable: its findings
      against anything not spent, with those against only spent subjects withheld for the person."
     {:signature [:=> [:catn [:ctx :map]] [:maybe :map]]})
+  (Operation round-open
+    "What a round left open — the entry it judged, the subjects it read once, what it left unruled.
+     Equal across two rounds exactly when neither moved anything, which is what the engine stops a
+     circling run on."
+    {:signature [:=> [:catn [:ctx :map]] :any]})
   (Operation owed-reading
     "What a round sent on to its second reading read once — the record, the ids, whether it was an
      amendment's first reading. The engine counts no round against the cap that only reads this

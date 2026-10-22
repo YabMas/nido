@@ -810,3 +810,48 @@
                         :repair-before-escalate? (constantly true)})]
     (is (= :fix-conflicted (:status out))
         "a branch holding markers is the pipeline's to put first, and the engine does not overrule it")))
+
+(deftest alternating-quiet-rounds-that-leave-the-same-things-open-end-stalled
+  ;; design-loop-7d596499: two judges alternated over one unchanged design for 25 rounds. One
+  ;; confirmed every subject on a first reading, the other left the same two :unruled; no round
+  ;; held a finding, so no-progress?, the give-up counter and (absent) cap were all out of reach.
+  (let [rounds (atom 0)
+        pipe   [(stage :judge (fn [c]
+                                (swap! rounds inc)
+                                (assoc c :findings [] :control :next-round
+                                       :open (if (odd? (:iter c))
+                                               {:seq 337 :unruled #{"a" "b"}}
+                                               {:seq 337 :read-once #{"a" "b" "c"}}))))]
+        out    (run-loop {:run-id "r1" :pipeline pipe :judged-after :judge :open :open})]
+    (is (= :stalled (:status out)))
+    (is (= 6 @rounds) "two rounds to establish the cycle, four to see it repeat")
+    (is (= {:seq 337 :read-once #{"a" "b" "c"}} (:stalled-on out)) "the run says what it left open")))
+
+(deftest quiet-rounds-that-settle-something-are-not-a-stall
+  ;; Second readings pairing confirmations a few at a time are quiet AND progress: what is left
+  ;; open shrinks, so no round looks like the one two before it.
+  (let [pipe [(stage :judge (fn [c]
+                              (if (< (:iter c) 8)
+                                (assoc c :findings [] :control :next-round
+                                       :open {:seq 1 :read-once (set (range (- 8 (:iter c))))})
+                                (assoc c :findings [] :control :stop))))]
+        out  (run-loop {:run-id "r1" :pipeline pipe :judged-after :judge :open :open})]
+    (is (= :converged (:status out)))))
+
+(deftest a-round-holding-findings-breaks-a-stall
+  (let [pipe [(stage :judge (fn [c]
+                              (cond
+                                (= 10 (:iter c)) (assoc c :findings [] :control :stop)
+                                (zero? (mod (:iter c) 3)) (assoc c :findings [{:title (str (:iter c))}])
+                                :else (assoc c :findings [] :control :next-round :open {:seq 1}))))
+              (stage :amend (fn [c] c))]
+        out  (run-loop {:run-id "r1" :pipeline pipe :judged-after :judge :open :open})]
+    (is (= :converged (:status out)))))
+
+(deftest a-pipeline-that-cannot-say-what-is-open-never-stalls
+  (let [pipe [(stage :judge (fn [c]
+                              (if (< (:iter c) 12)
+                                (assoc c :findings [] :control :next-round)
+                                (assoc c :findings [] :control :stop))))]
+        out  (run-loop {:run-id "r1" :pipeline pipe :judged-after :judge})]
+    (is (= :converged (:status out)))))

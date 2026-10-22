@@ -1972,6 +1972,9 @@
                                ;; A cap reached holding no finding, only layers
                                ;; read quiet once and owed their second reading.
                                :owed-second-reading
+                               ;; Rounds that found nothing kept leaving the
+                               ;; same thing open (nido.review.loop/stalled?).
+                               :stalled
                                ;; Findings raised in four consecutive rounds
                                ;; that no repair moved, or a park that stood
                                ;; that long. The loop has nothing further to

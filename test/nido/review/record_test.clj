@@ -3257,3 +3257,14 @@
         (is (str/includes? (:why (first (moves {} nil intent r))) "/progress-goals"))
         (is (nil? (moves {} nil {:goal "Pair the fields."} r))
             "an intent naming nothing lists no scope to widen")))))
+
+(deftest a-round-leaves-open-what-it-read-once-and-left-unruled
+  ;; Each judge's round of design-loop-7d596499 read exactly like the last one that judge ran,
+  ;; and that equality is what `nido.review.loop/stalled?` stops on.
+  (let [codex  {:judged-seq 337 :record {:unruled ["b" "a"]}}
+        claude {:judged-seq 337 :record {:read-once ["a" "b" "c"]}}]
+    (is (= (record/round-open codex) (record/round-open (update-in codex [:record :unruled] reverse))))
+    (is (not= (record/round-open codex) (record/round-open claude)))
+    (is (not= (record/round-open claude) (record/round-open (assoc claude :judged-seq 338)))
+        "an amendment moves the judged entry, which is movement")
+    (is (nil? (record/round-open {:record {}})) "no judgement, nothing to compare")))

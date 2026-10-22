@@ -897,6 +897,8 @@
    :declaration-unreadable :escalate
    :unfixable            :escalate  ; raised every round and never moved
    :no-progress          :escalate
+   ;; Quiet rounds circling over what they leave open: what is open is a person's to decide.
+   :stalled              :escalate
    :unresolved           :escalate  ; the run ended still holding findings
    :retreated            :escalate  ; the record shrank below its own worth
    :amend-touched-code   :escalate  ; a record round wrote code; whatever it wrote is still there

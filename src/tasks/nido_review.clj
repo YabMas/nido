@@ -1528,6 +1528,7 @@
    :fix-rolled-back "every repair was refused by the rebase and put back, so the branch is exactly what was reviewed — a re-run earns the same refusal; what is in question is the layer order"
    :max-iters "the cap you passed was reached with findings open — this is not convergence; the last round's findings were handed to fixers and no round read what they did"
    :owed-second-reading "the cap you passed was reached with no finding open, only layers read quiet once and owed the second reading convergence takes — re-run to read them, there is nothing to repair"
+   :stalled "rounds kept finding nothing while leaving the same things open — the loop was circling, and a re-run circles the same way"
 
    ;; ── the branch is holding conflict markers ──
    ;; Named apart because they say different things about what put the markers
@@ -2100,6 +2101,7 @@
    ;; :unfixable reached at a cap rather than by the give-up counter: see `shared-remedy`.
    ::spent    "the cap ended the run owing an amendment to what is named above, and each has been reworded and refuted again across runs — another rewording at the same strength, by hand or by a re-run, is the circle; weaken it to what the code guarantees, withdraw it, or decide it"
    :disputed   "the judge restated a finding the amender objected to twice — neither can settle it, so you do"
+   :stalled    "four rounds running found nothing and left open exactly what the round two before them did — the judges were circling, not converging. What they left open is under :stalled-on: subjects confirmed on one reading that no second reading would pair (a judge that cannot rule them, typically), or subjects one judge keeps leaving unruled. Decide those yourself, or grant the record as it stands; a re-run circles the same way"
    :unruled    "the judge would have ended the run leaving checks it neither confirmed, refuted nor called uncheckable, or baseline ids with no relation ruling, and asked again it still did not rule — the record does not hold over them; the report's judge phase names them, under :unruled and :relation-unruled, and a subject's open clauses under :incomplete-clauses"
    :amend-noop "the amender completed and produced no record — nothing was appended"
    :amend-launch-failed "the amender never completed — it exited or was killed before answering, so the round's findings are still unanswered and nothing was appended; read its transcript, then re-run"
@@ -2350,6 +2352,7 @@
                                  :spent record/spent-at-cap
                                  :unspent record/unspent-at-cap
                                  :owes-reading record/owed-reading
+                                 :open record/round-open
                                  :repair-at-cap? true}
                           changed?    (assoc :changed? changed?)
                           baseline    (assoc :baseline baseline)
