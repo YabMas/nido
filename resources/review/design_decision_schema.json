@@ -32,7 +32,7 @@
     },
     "checks": {
       "type": "array",
-      "description": "The four derivations, each with what you found. Never empty.",
+      "description": "Every check defined above, each with what you found. Never empty.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -96,7 +96,7 @@
               "routing_coherent",
               ""
             ],
-            "description": "The derived check this finding shows broken. Empty string when it bears on none of the four."
+            "description": "The derived check this finding shows broken. Empty string when it bears on none of them."
           },
           "cites": {
             "type": "array",

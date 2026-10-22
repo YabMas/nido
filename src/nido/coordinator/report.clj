@@ -2606,6 +2606,17 @@
   [record]
   (if (contains? record :strata) strata-derivations derivations))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:vector :keyword]]}
+  design-checks
+  "The checks a design decision rules on: its era's `derivations-of`, and `:data-shaped`.
+
+   :data-shaped is a design's alone. A baseline is sufficient when the derivations can be made
+   against it, and asking it to record the area's data shape as well would reopen every baseline
+   to land a check whose findings nobody has yet read. It is advisory (`advisory-checks`) until
+   its findings show it should hold a design."
+  [design]
+  (conj (derivations-of design) :data-shaped))
+
 (def BlockedFinding
   "A gap in a baseline, named by the derivation it blocks.
 
@@ -2868,6 +2879,10 @@
                          levelling that would make it markedly simpler (a design
                          naming its strata)
      :routing-coherent — the health routes make this two stories rather than one
+     :data-shaped      — the design's data does not carry its reasoning: a value in
+                         motion admits states the goal rules out, state at rest is
+                         not flat, or no boundary parses what enters (a design's
+                         alone, and advisory: `advisory-checks`)
 
    :status has three values, not two. A round that COULD NOT derive a check is
    not a round that derived it and found it wanting, and collapsing the two lets
@@ -2878,7 +2893,8 @@
    not reduce anything, and handing a human an unreduced question is the rubber
    stamp this round exists to avoid."
   [:map {:closed true}
-   [:check  [:enum :relation-honest :goal-served :decomposable :stratified :routing-coherent]]
+   [:check  [:enum :relation-honest :goal-served :decomposable :stratified :routing-coherent
+             :data-shaped]]
    [:status [:enum :held :broken :underivable]]
    [:note   string?]])
 
@@ -3038,7 +3054,8 @@
                 ;; `decomposable` on a record naming its strata, or `stratified` on one that does not.
                 ;; Dropped from :checks, and named here so the drop is visible.
                 [:unasked-checks        {:optional true}
-                 [:vector [:enum :relation-honest :goal-served :decomposable :stratified :routing-coherent]]]
+                 [:vector [:enum :relation-honest :goal-served :decomposable :stratified :routing-coherent
+                           :data-shaped]]]
                 ;; What the judge recommended when nido read it as something else: a :recut with no
                 ;; check of the decomposition broken is recorded as an :amend.
                 [:judge-recommended     {:optional true} [:enum :recut]]
@@ -3461,8 +3478,14 @@
   (boolean (or (= :challenges (get-in design [:standing :relation]))
                (= :revisit    (get-in design [:baseline :relation])))))
 
-(def ^:private advisory-check
-  "The one derived check that may not block, and the reason it is the only one.
+(def ^:private advisory-checks
+  "The derived checks that may not block.
+
+   `data-shaped` is advisory while it is new: it is the stance's synthesis — the shape of the data
+   is the design — made decidable, and until rounds have shown what it finds, a finding of it is
+   recorded and read (`bb nido:review:figures`) rather than allowed to hold a design.
+
+   `decomposable` is advisory for good, for this reason.
 
    `relation-honest`, `goal-served` and `routing-coherent` judge what the change
    COMMITS TO. `decomposable` judges how the work is cut into layers — and
@@ -3477,14 +3500,14 @@
    round of 16 of the 61 runs that ended badly. Two prompt-level bars against
    over-splitting were already in place through all of that, which is why the
    rule is enforced and not only asked for."
-  :decomposable)
+  #{:decomposable :data-shaped})
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
   proceeds?
   "Does this design decision let its design proceed?
 
    It does when it recommends :proceed, and when everything the round found
-   broken is the advisory check, whatever it recommended but :ask — a complaint about the
+   broken is an advisory check, whatever it recommended but :ask — a complaint about the
    cut alone may not hold a design. False when nothing broke on a round that did
    not say :proceed: a clean round reads as its own recommendation.
 
@@ -3508,7 +3531,7 @@
                   (empty? (:read-once decision))
                   (not (:amendment-read-once decision))
                   (or (= :proceed (:recommend decision))
-                      (and (seq broken) (every? #(= advisory-check (:check %)) broken)))))))
+                      (and (seq broken) (every? (comp advisory-checks :check) broken)))))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe [:enum :amend :recut :resurvey]]]}
   repair-before-asking

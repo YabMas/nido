@@ -632,6 +632,49 @@
    "                      no phase plan is the ordinary case and is NOT a finding.\n"
    "                      This check blocks like the others.\n"))
 
+(def data-shaped-check
+  "The stance's synthesis — the shape of the data is the design — put to a design as a check. The
+   other checks carry Tar Pit (goal-served), Parnas (relation-honest) and stratified design and
+   Ousterhout (stratified); none asked about the data, so a design admitting the very states its
+   goal rules out was caught only when it happened to break a claim. Advisory
+   (`report/design-checks`) until its findings have been read. Public for `nido.review.probe`,
+   which puts it to rounds recorded before it existed."
+  (str
+   "  data-shaped       — does the data carry the reasoning? Three questions of
+"
+   "                      the data this design introduces or reshapes:
+"
+   "                      REGISTER — a value in motion admits only the states the
+"
+   "                      goal allows: alternatives are a tagged union, not
+"
+   "                      optional keys a reader must check together. State at
+"
+   "                      rest stays flat, normalized and declaratively
+"
+   "                      constrained. A union persisted as a discriminator beside
+"
+   "                      nullable columns, or a stored row travelling into domain
+"
+   "                      logic unparsed, is broken.
+"
+   "                      BOUNDARY — untrusted shape becomes trusted at one place
+"
+   "                      the design names, past which nothing re-checks; a
+"
+   "                      workflow states its input and output shape, with its
+"
+   "                      failures named in the output rather than thrown.
+"
+   "                      DERIVED — what can be derived from stored data is
+"
+   "                      derived, not stored beside it.
+"
+   "                      Cite the line of the record that commits to the data.
+"
+   "                      A design that introduces or reshapes no data holds it.
+"))
+
 ;; ── Clauses a judge rules one by one ─────────────────────────────────────────
 
 (defn- clauses
@@ -865,7 +908,7 @@
        "nido records each confirmation reading a site your findings cite.\n\n"
        (when decision?
          (str "RULE EVERY SUBJECT AGAINST EVERY CHECK, not until the first falls. Before\n"
-              "you recommend, hold each claim to each of the four, and report one finding\n"
+              "you recommend, hold each claim to each of the checks, and report one finding\n"
               "per subject a check breaks — every one, not the first: each one left for the\n"
               "next round costs an amendment and a reading. Under relation-honest, `stands`\n"
               "means EVERY clause of that baseline id's statement still holds, not its\n"
@@ -1937,7 +1980,7 @@
                         ss)) "\n"))
    (baseline-block baseline)
    (when stance (str "\nPROJECT STANCE — framing only:\n" stance "\n"))
-   "\nDERIVE THESE FOUR. Each is decidable; none is a matter of taste:\n\n"
+   "\nDERIVE THESE. Each is decidable; none is a matter of taste:\n\n"
    "  relation-honest   — does it stand where it says it stands? A design\n"
    "                      declaring :within whose own shape needs a load-bearing\n"
    "                      property to move is not what it says it is. Read this\n"
@@ -1987,7 +2030,8 @@
    (if (strata-era? design) stratified-check decomposable-check)
    "  routing-coherent  — do the routed health observations keep this ONE story?\n"
    "                      Observations routed to fix-here that belong to a\n"
-   "                      different story make this two changes.\n\n"
+   "                      different story make this two changes.\n"
+   data-shaped-check "\n"
    "Then recommend:\n"
    "  proceed  — nothing derivable blocks it.\n"
    "  ask      — stop for a person. What you found can only be repaired by a\n"
@@ -2046,7 +2090,7 @@
    "             nothing.\n\n"
    "Every finding MUST cite what it falsifies. A finding that cites nothing is\n"
    "not a finding. A finding about one claim names its id in claim-id. A finding\n"
-   "that shows one of the four broken names it in check; one that bears on none\n"
+   "that shows a check broken names it in check; one that bears on none\n"
    "of them leaves check empty — a record contradicting itself or a claim it\n"
    "rests on is a defect under no derivation, and it is repaired like any other.\n\n"
    ;; Twice a record and then a judge credited a person with a change nobody had asked for —
@@ -2175,8 +2219,8 @@
   "The decision round's output schema for `design`, ruled on per id over `subjects`
    (`relation-yardstick`): relation_rulings must name every one of them, clause_rulings every
    clause `owed` lists (`with-clause-keys`), and a check — on the
-   checks list or on a finding — must be one of the four the design's era is judged by
-   (`report/derivations-of`), the same four `design-prompt` defines.
+   checks list or on a finding — must be one the design is judged by
+   (`report/design-checks`), the same ones `design-prompt` defines.
 
    Generated per round because the fixed schema let a judge told to rule on seventeen ids return
    the six claims and skip every module and stratum, round after round — and an id left unruled
@@ -2185,7 +2229,7 @@
    defines only `stratified`, a judge answers the check it was never asked, and a `broken` on it
    reads as the advisory check `report/proceeds?` waives."
   [design subjects owed]
-  (let [checks (check-names (report/derivations-of design))]
+  (let [checks (check-names (report/design-checks design))]
     (-> (json/parse-string (schemas :design-decision) true)
         (update-in [:properties :relation_rulings] exactly-these-rulings (mapv second subjects))
         (with-clause-keys owed)
@@ -2196,7 +2240,7 @@
 (def ^:private derivation-keys
   "Every derivation a round may answer about, of either era. What an answer names is kept only if it
    is one of these; which of them a round asks about is the record's era."
-  (into #{} (concat report/derivations report/strata-derivations)))
+  (into #{:data-shaped} (concat report/derivations report/strata-derivations)))
 
 (defn- slug
   "An id as the judge wrote it, stripped of the brackets the prompt renders around every id. A judge
@@ -3849,7 +3893,7 @@
                           :schema (design-decision-schema design relation
                                                           (clauses-owed design (decision-asked design settled)))}
                 prompt   (design-prompt asking)
-                parse    #(parse-design-decision % (:seq design) (set (report/derivations-of design))
+                parse    #(parse-design-decision % (:seq design) (set (report/design-checks design))
                                                  (health-ids design baseline) (:intent asking)
                                                  (into #{} (keep :id) (model/claims design)))
                 result   (-> (judge-round! (assoc round :prompt prompt))
@@ -8293,7 +8337,7 @@
         ;; Every append below writes `record`; a reused one is on the ledger already.
         put!    (fn [ledger record] (if reused (reused-answer reused) (append! ledger record)))
         ;; A derivation check is never spent: no amender can weaken one (`spent`).
-        spent-now (spent running (every-pred (complement (into #{} (map str) (report/derivations-of design)))
+        spent-now (spent running (every-pred (complement (into #{} (map str) (report/design-checks design)))
                                              (judged-subjects record)))
         awaiting  (awaiting-person spent-now (check-statuses record) (:findings record))
         record (cond-> record

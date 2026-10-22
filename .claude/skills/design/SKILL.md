@@ -207,7 +207,10 @@ A claim, a test, and the failure mode it prevents.
    plan.
 7. **Boundaries before mechanisms.** Say where the boundaries are and what
    crosses them; do not name libraries or data shapes unless the boundary is
-   *about* them.
+   *about* them. Data the change introduces or reshapes is always about them —
+   the stance's synthesis is that the shape of the data is the design — so state
+   it: the states a value may be in, what is stored flat, and where untrusted
+   shape is parsed.
    *Failure:* an implementation sketch that cannot survive the first surprise in
    the code, so it is abandoned rather than amended.
 8. **The strata are read off the code; the cut is read off the strata.** A
@@ -615,6 +618,13 @@ restructuring — which is how a change neither snowballs into a refactor nor
 accepts today's levels by default. The level judges ask the same first question
 of every stratum they read, so a stratum declared badly is questioned each time
 a design touches it, not only on the day it was declared.
+
+Its `data-shaped` check asks the stance's synthesis of the data the change
+introduces or reshapes: does a value in motion admit only the states the goal
+allows, does state at rest stay flat and constrained, is there one named place
+where untrusted shape becomes trusted, and is what can be derived derived rather
+than stored. It is advisory while new — recorded and read, never holding a
+design — and `bb nido:review:figures` is where what it finds is read.
 
 ### Health — and why it is still an `is`
 

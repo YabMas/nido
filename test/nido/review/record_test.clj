@@ -1755,14 +1755,32 @@
      (get-in s [:properties :findings :items :properties :check :enum])]))
 
 (deftest the-decision-schema-offers-only-the-checks-the-prompt-defines
-  (is (= [["relation_honest" "goal_served" "stratified" "routing_coherent"]
-          ["relation_honest" "goal_served" "stratified" "routing_coherent" ""]]
+  (is (= [["relation_honest" "goal_served" "stratified" "routing_coherent" "data_shaped"]
+          ["relation_honest" "goal_served" "stratified" "routing_coherent" "data_shaped" ""]]
          (check-enums (#'record/design-decision-schema {:strata ["totals"]} [] nil)))
       "a strata-era judge offered decomposable answers a check its prompt never asked")
-  (is (= [["relation_honest" "goal_served" "decomposable" "routing_coherent"]
-          ["relation_honest" "goal_served" "decomposable" "routing_coherent" ""]]
+  (is (= [["relation_honest" "goal_served" "decomposable" "routing_coherent" "data_shaped"]
+          ["relation_honest" "goal_served" "decomposable" "routing_coherent" "data_shaped" ""]]
          (check-enums (#'record/design-decision-schema {} [] nil)))
       "a design from before strata is still judged by decomposable, as its prompt says"))
+
+(deftest the-data-shape-is-a-design-check-that-does-not-yet-hold-a-design
+  (is (str/includes? (record/design-prompt {:design design}) "data-shaped       — does the data carry")
+      "every check the schema offers is one the prompt defines")
+  (let [only-data (record/parse-design-decision
+                   (json/generate-string
+                    {:recommend "amend" :reason "r" :asks ""
+                     :checks [{:check "relation_honest" :status "held" :note "n"}
+                              {:check "data_shaped" :status "broken" :note "a union stored as nullable columns"}]
+                     :findings [{:claim-id "" :check "data_shaped" :cites ["the design's state shape"]
+                                 :claim "c" :evidence [] :for_person false}]})
+                   4 #{:relation-honest :goal-served :decomposable :routing-coherent :data-shaped})]
+    (is (= :broken (some #(when (= :data-shaped (:check %)) (:status %)) (:checks only-data)))
+        "its ruling is kept on the ledger, where figures reads what it finds")
+    (is (report/proceeds? only-data) "advisory: a data-shape finding alone does not hold the design")
+    (is (not (report/proceeds? (update only-data :checks conj
+                                       {:check :goal-served :status :broken :note "n"})))
+        "beside a blocking check it changes nothing")))
 
 (deftest a-check-the-round-never-asked-is-dropped-and-named
   (let [r (record/parse-design-decision
