@@ -675,6 +675,11 @@
    :doc "Print a probe plan skeleton over the newest recorded design rounds, to edit and pass to nido:review:probe. [:per-worktree 2] [:days 14]"
    :task (apply nido-probe/sample-cmd *command-line-args*)}
 
+  nido:review:probe:hot
+  {:requires ([tasks.nido-probe :as nido-probe])
+   :doc "Print a probe plan over recorded design rounds that checked a claim in a hot area by the ledger as it stood then, each round carrying its own hot-area section for the hot-areas variant. [:per-workstream 2] [:days 14]"
+   :task (apply nido-probe/hot-sample-cmd *command-line-args*)}
+
   nido:review:probe:summary
   {:requires ([tasks.nido-probe :as nido-probe])
    :doc "Print the summary of a probe already run. :probe-id <id>"

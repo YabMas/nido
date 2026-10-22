@@ -29,6 +29,7 @@
   (:require
    [babashka.fs :as fs]
    [cheshire.core :as json]
+   [clojure.java.io :as jio]
    [clojure.string :as str]
    [nido.coordinator.record.state :as cstate]
    [nido.review.codex :as codex]
@@ -65,6 +66,18 @@
          (update-in [:properties :findings :items :properties :check :enum]
                     #(let [v (vec (remove #{""} %))] (conj (vec (distinct (conj v check))) "")))))))
 
+(defn- add-property
+  "`schema` (JSON text) carrying property `prop` as the schema at resource `from` defines it, and
+   requiring it as every property of a judge's schema is required."
+  [schema prop from]
+  (let [s    (json/parse-string schema true)
+        spec (get-in (json/parse-string (slurp (jio/resource from)) true) [:properties (keyword prop)])]
+    (when-not spec (throw (ex-info (str "no property " prop " in " from) {:from from})))
+    (json/generate-string
+     (-> s
+         (assoc-in [:properties (keyword prop)] spec)
+         (update :required #(vec (distinct (conj (vec %) prop))))))))
+
 (defn ^{:malli/schema [:=> [:cat [:map [:prompt :string] [:schema :string]] :map]
                      [:map [:prompt :string] [:schema :string]]]}
   apply-variant
@@ -74,8 +87,10 @@
      {:replace <heading> :text <t>}      every section so headed replaced by `t`
      {:prepend <t>}                      `t` before the prompt's first heading
      {:insert-before <marker> :text <t>} `t` before the first `marker`; the edit fails without one
+     {:insert-before-last <marker> :text <t>}  `t` before the last `marker`
      {:substitute <old> :text <new>}      the first `old` replaced by `new`
      {:add-check <name>}                 the schema offers `name` as a check
+     {:add-property <name> :from <res>}  the schema carries property `name` as resource `res` has it
 
    A stance section dropped or replaced keeps the level reminder after it (`stance-tail`). An edit
    that cannot be made throws: a variant that silently judged the control's prompt would measure
@@ -104,6 +119,11 @@
          (when-not i (throw (ex-info (str "no marker " (:insert-before e)) {:edit e})))
          (assoc r :prompt (str (subs prompt 0 i) (:text e) (subs prompt i))))
 
+       (:insert-before-last e)
+       (let [i (str/last-index-of prompt (:insert-before-last e))]
+         (when-not i (throw (ex-info (str "no marker " (:insert-before-last e)) {:edit e})))
+         (assoc r :prompt (str (subs prompt 0 i) (:text e) (subs prompt i))))
+
        (:substitute e)
        (let [i (str/index-of prompt (:substitute e))]
          (when-not i (throw (ex-info (str "no text " (:substitute e)) {:edit e})))
@@ -111,6 +131,9 @@
 
        (:add-check e)
        (assoc r :schema (add-check schema (:add-check e)))
+
+       (:add-property e)
+       (assoc r :schema (add-property schema (:add-property e) (:from e)))
 
        :else (throw (ex-info "unknown edit" {:edit e}))))
    {:prompt prompt :schema schema}
@@ -133,7 +156,7 @@
   metrics
   "What a design-decision or baseline-review answer (its JSON text) says, as the probe compares it:
    `{:recommend :checks {check status} :findings [{:id :check :claim-id :claim}] :confirmed n
-   :unchecked n}`; nil for an answer that is not JSON."
+   :unchecked n :step-back [{:area :step}]}`; nil for an answer that is not JSON."
   [answer]
   (when-let [a (try (json/parse-string answer true) (catch Exception _ nil))]
     {:recommend (or (:recommend a) (:verdict a))
@@ -142,7 +165,8 @@
                                              :claim (:claim f)})
                                   (:findings a)))
      :confirmed (count (:confirmed a))
-     :unchecked (count (:unchecked a))}))
+     :unchecked (count (:unchecked a))
+     :step-back (mapv #(select-keys % [:area :step]) (:step_back a))}))
 
 ;; ── Running ───────────────────────────────────────────────────────────────────
 
@@ -197,12 +221,14 @@
 (defn ^{:malli/schema [:=> [:cat :map :int :map] [:sequential :map]]}
   jobs
   "Every (round × variant × repetition) of `plan` for round `i`, with its prompt and schema built —
-   what `probe!` judges, and what a dry run shows without judging."
+   what `probe!` judges, and what a dry run shows without judging. A round's own `:edits`, by
+   variant name, follow that variant's: a variant whose text differs per round, as a section
+   rendered from the ledger as it stood at that round does."
   [{:keys [variants reps probe-dir]} i {:keys [prompt schema] :as rd}]
   (let [base {:prompt (slurp prompt) :schema (slurp schema)}]
     (for [{vname :name :as v} variants
           rep (range (get reps (keyword vname) (get reps :default 1)))]
-      (merge (apply-variant base v)
+      (merge (apply-variant base (update v :edits (fnil into []) (get-in rd [:edits vname])))
              {:round i :round-file prompt :variant vname :rep rep :worktree (:worktree rd)
               :dir (str (fs/path probe-dir (str "round-" i) (str vname "-" rep)))}))))
 
@@ -215,7 +241,7 @@
      {:probe-id <str> :reviewer :codex :parallel 4
       :reps     {:control 2 :default 1}
       :rounds   [{:prompt <path to a recorded *-prompt.txt> :schema <its *-schema.json>
-                  :worktree <the reviewed worktree>} …]
+                  :worktree <the reviewed worktree> :edits {<variant name> [<edit> …]}} …]
       :variants [{:name \"control\" :edits []} {:name \"no-stance\" :edits [{:drop \"PROJECT STANCE\"}]} …]}"
   [{:keys [probe-id parallel rounds] :as plan}]
   (let [probe-dir (str (fs/path (probes-dir) probe-id))
@@ -315,7 +341,8 @@
   summary
   "One row per variant, over the runs a stand-in did not answer: its runs, how often it agreed with
    the round's first control run on the recommendation and on each check, its mean findings, the
-   share of graded findings at the design level, and its mean minutes and tokens. The `control`
+   share of graded findings at the design level, the share of its runs that stepped back on an area
+   (`:step-back`) and what they recommended, and its mean minutes and tokens. The `control`
    row's agreement is its later repetitions against its first — the noise: a variant's effect
    smaller than it is no effect."
   [results]
@@ -331,6 +358,8 @@
                      :check-agreement (mean (map :check-agreement agr))
                      :findings        (mean (map #(count (get-in % [:metrics :findings])) rs))
                      :design-level    (when (seq lv) (/ (count (filter #{:design} lv)) (double (count lv))))
+                     :stepped-back    (mean (map #(if (seq (get-in % [:metrics :step-back])) 1.0 0.0) rs))
+                     :recommends      (frequencies (map #(get-in % [:metrics :recommend]) rs))
                      :minutes         (mean (map :minutes rs))
                      :tokens          (mean (map :tokens rs))}))]
     (into [(let [cs (filter #(= "control" (:variant %)) ok)]
