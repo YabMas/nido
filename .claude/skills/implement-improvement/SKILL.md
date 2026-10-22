@@ -67,6 +67,8 @@ Ordinary work, in this worktree. What this codebase asks of you specifically:
 bb nido:test
 ```
 
+**A change to when a loop stops is tried on the recorded runs before it lands.** If your diff touches `nido.review.loop`, or a branch that sets `:control :stop`/`:escalate` or a terminal `:status` in `nido.review.record` or `nido.review.stages`, run `bb nido:review:replay` on main and again at your tip, and quote both summaries in the message. A tip that ends a run earlier than main did, where that run converged as recorded, does not land without a sentence naming why that run should have stopped. The four rules that kept design-loop-7d596499 circling for 25 rounds were each landed on the run that prompted it and never tried on the others.
+
 **Green is required and is not negotiable.** If it is red:
 
 1. If your own change caused it, fix it and re-run.
@@ -129,6 +131,7 @@ It refuses without the reservation, records nothing if the push did not land, an
 - A brief: `Claims:` / `Verify:` / `Lane:` / `Out of scope:`.
 - Never restate the diff. It is attached.
 - Name every proposal the claim covered. One landing discharges several, and the message is where a reader learns which.
+- Name what the change removed, or why it could remove nothing (the plan's claim statement says which it should be).
 
 Then leave the root checkout on what you landed, so the next session does not run stale code:
 

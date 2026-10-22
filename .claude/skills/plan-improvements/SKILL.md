@@ -16,6 +16,7 @@ You are writing **one record**: today's partition of the open proposals into cla
 3. **You do not decide whether a proposal is worth doing.** Approval is not required any more and a decline is the only verdict that acts, so a proposal reaching you is one nobody has vetoed. What you decide is what closes it: a change, a filed ticket, or nothing.
 4. **You may not plan a change to the machinery that plans.** `record.proposal`, `source.sweep`, the plan and reservation ledger kinds, and this skill are out of bounds for a `:land` claim: the sweep must not edit the code deciding what the sweep does. Everything else in nido, including the whole review loop, is in scope. A proposal about the carve-out gets `:file`.
 5. **Never `git`.** This worktree is a jj workspace nested in a colocated repo; bare `git` binds to the parent. Use `jj`.
+6. **The machinery is judged by the trend, not by the proposals.** Between 2026-09-01 and 2026-10-22 this sweep landed some 226 changes, every one answering a real observation, and the loops got worse: design runs handed to a person went from one in five to nine in ten, diff runs from 9 to 29 median minutes. Each change was right about its run; nothing checked what they added up to. The sweep now holds itself while `bb nido:review:trend` reads a regression — and a plan that cannot say how it moves that trend is not a plan.
 
 ## 1. Read what is owed
 
@@ -24,6 +25,14 @@ bb nido:work:proposals :project nido      # every proposal, with what was decide
 ```
 
 The owed set is what carries no landing, no decline, and no disposition from an earlier plan. You do not have to compute it — the append will refuse you if you get it wrong — but you do have to read every row, because grouping is the whole job.
+
+## 1b. Read the trend
+
+```bash
+bb nido:review:trend            # weekly rounds, minutes, converged / handed shares per loop
+```
+
+Name, in each `:land` claim's statement, which measure it is meant to move (handed share, rounds, minutes) and in which loop. A claim that moves none of them — a report wording, a field nobody reads — is `:no-op` or `:file` unless it is a defect.
 
 ## 2. Read the analyses, and the transcripts when they help
 
@@ -44,6 +53,10 @@ What that looks like in practice: three analyses independently reported that `:p
 The opposite mistake is grouping by theme. Two proposals both "about the report" that need two unrelated edits are two claims. If you cannot state the single change in one sentence, it is not one claim.
 
 ## 4. Give every claim a disposition
+
+**The evidence bar for `:land`.** One run is one sample of a stochastic judge. A proposal about what a judge did, seen in one run, is a hypothesis: `:land` it only when a second run shows the same thing, or when `bb nido:review:replay` shows the change on recorded runs. Otherwise `:no-op` with the reason "one observation" — the address stays on record, and a second analysis that sees it again is what makes it a claim. Keeping the machinery as it stands is a disposition, not a failure to plan: the 86-of-86 `:land` plans of 2026-10-20 to 22 were the failure.
+
+**A claim that adds must say what it removes.** Nearly every landing since September added a rule, a field or a prompt paragraph (266 of 273 commits to the review machinery were net additions; design prompts reached 180 KB), and every addition is one more thing a judge can skip and an analysis can report. A `:land` statement names the rule, branch or prompt section the change replaces, or says in a sentence why nothing can go. Prefer the claim that deletes.
 
 - **`:land`** — a change you are asking a session to make. The statement says what that change is.
 - **`:no-op`** — nothing to do. A proposal whose own text says "already fixed on main", or one the code has outgrown. The statement is the whole record: say why, with the evidence, because nothing else will be written about it. **Two of the currently-open proposals are this**, and each would otherwise get a worktree and four hours.

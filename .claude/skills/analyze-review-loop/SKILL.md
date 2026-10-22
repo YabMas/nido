@@ -168,6 +168,8 @@ bb nido:workstream:entry:add :project nido :ws-id <ws-id> \
 
 The body is validated at the ledger boundary; a malformed one is rejected with an explain dump and a non-zero exit, so read the error and retry rather than dropping the entry.
 
+**A `:proposal` names the class and the rule it replaces.** Say what kind of defect the observation is an instance of, and which existing rule, branch or prompt section the proposal would remove or subsume — not only what it would add. And say how often the behaviour is seen: one run of a stochastic judge is one sample, and a rule written for one sample is how the machinery grew rules that fought each other (design-loop-7d596499 circled 25 rounds between four of them). `bb nido:review:figures :project <p>` without a run id, and `bb nido:review:trend`, are how to check whether this run is the pattern or the exception.
+
 **`:evidence` is what makes an observation worth keeping.** It must point at something in *this* run. "The warden prompt is too long" is a belief; "the warden omitted 3 of 11 findings in round 2, all from the layer whose brief runs 400 lines" is a finding. If you cannot produce evidence, the observation does not go in.
 
 **Verdict, honestly.** `:healthy` is the right answer for most runs and is not a participation prize — a loop that converged in two rounds with every finding ruled on is healthy even if you can imagine improvements. Reserve `:degraded` for rounds or agents genuinely spent for nothing, and `:broken` for a run that failed to do its job at all.
