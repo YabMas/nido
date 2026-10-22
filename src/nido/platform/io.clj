@@ -150,13 +150,19 @@
    looks like. A `bb nido:*` process reads, then blocks on a slow path — or is
    abandoned and unwinds much later — and writes an hours-old snapshot over
    everything added since. Reading inside the lock makes every write derive from
-   state read microseconds earlier, whatever the process did before it got here."
+   state read microseconds earlier, whatever the process did before it got here.
+
+   An existing file whose value `f` leaves equal is not rewritten, so its mtime
+   moves only when its content does: readers poll mtimes to learn that nothing
+   changed, and a periodic updater rewriting the same value defeats every one."
   [path f & args]
   (with-file-lock
     (lock-path-for path)
     (fn []
-      (let [next (apply f (read-edn path) args)]
-        (write-edn! path next)
+      (let [prev (read-edn path)
+            next (apply f prev args)]
+        (when-not (and (= prev next) (fs/exists? path))
+          (write-edn! path next))
         next))))
 
 (defn ^{:malli/schema [:=> [:cat :string] :any]}

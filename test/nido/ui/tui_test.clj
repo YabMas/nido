@@ -616,3 +616,32 @@
       (is (some #(re-find #"Awaiting gate" (:title %)) rows))
       (is (str/includes? (:title item) "[phase 1/2]"))
       (is (= "gate: a quiet week" (:description item))))))
+
+;; ---------------------------------------------------------------------------
+;; Live-refresh tick: the board is rebuilt when its inputs move, not every tick.
+;; An idle TUI on brian used to re-read 419 workstreams every 1.5s.
+;; ---------------------------------------------------------------------------
+
+(defn- tick-builds
+  "Tick the board once per clock reading in `clock`, the stamp reading the
+   matching entry of `stamps`; how many ticks rebuilt it."
+  [stamps clock]
+  (let [builds (atom 0)
+        stamps (atom stamps)]
+    (with-redefs [work/board-stamp (fn [_] (let [s (first @stamps)] (swap! stamps rest) s))
+                  tui/current-rows (fn [_] (swap! builds inc) [])
+                  tui/refresh-list (fn [s _] s)]
+      (reduce #(#'tui/tick-rows %1 %2) {:screen :board :project "brian"} clock))
+    @builds))
+
+(deftest tick-skips-the-rebuild-while-the-board-stamp-holds
+  (is (= 1 (tick-builds [:a :a :a] [0 1500 3000]))
+      "an unchanged stamp inside the backstop costs no rebuild"))
+
+(deftest tick-rebuilds-when-the-board-stamp-moves
+  (is (= 2 (tick-builds [:a :a :b :b] [0 1500 3000 4500]))
+      "a change on disk shows on the next tick"))
+
+(deftest tick-rebuilds-after-the-backstop-whatever-the-stamp
+  (is (= 2 (tick-builds [:a :a] [0 30000]))
+      "what no stamp sees — a released lock, a dead port — still shows"))

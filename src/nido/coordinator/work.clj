@@ -749,6 +749,50 @@
             ;; without nido ever writing :closed (see winding-down).
             :winding-down (winding-down project live-names rows)))))
 
+(defn- dir-stamps
+  "Last-modified millis of `dir` and of each of its subdirectories, in listing
+   order; [0] when `dir` does not exist. java.io.File rather than babashka.fs:
+   this runs on every board tick, and per-entry Path wrapping was most of its
+   cost."
+  [^java.io.File dir]
+  (into [(.lastModified dir)]
+        (keep #(when (.isDirectory ^java.io.File %) (.lastModified ^java.io.File %)))
+        (.listFiles dir)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  board-stamp
+  "A value that changes whenever what `grouped` reads from disk for `project` has
+   changed, cheap enough to take on every board tick — so a board can skip a
+   rebuild while it is equal. Directory mtimes stand for the files in them, which
+   every ledger, session and run writer creates or renames into place: each
+   workstream's own directory, entries/, entries.meta/, sessions/ and every
+   session's, runs/, and each run it registers with that run's locks/. The
+   session registry and the Notion page facts are compared as values, because
+   their files are rewritten on every poll whether or not anything changed.
+
+   NOT covered, by construction: a lock released by a process exiting (an
+   activity claim, a run's agent), a session port that stops answering, and
+   claude's own agent listing. None of them touches disk, so a caller that must
+   show them has to rebuild on a clock as well."
+  [project]
+  (let [ws-root (java.io.File. (str (cstate/workstreams-dir project)))
+        per-ws  (fn [^java.io.File wd]
+                  (let [runs (java.io.File. wd "runs")]
+                    [(.lastModified wd)
+                     (.lastModified (java.io.File. wd "entries"))
+                     (.lastModified (java.io.File. wd "entries.meta"))
+                     (dir-stamps (java.io.File. wd "sessions"))
+                     (.lastModified runs)
+                     (mapv (fn [^java.io.File m]
+                             (let [rd (java.io.File. (str (cstate/run-dir (.getName m))))]
+                               [(.lastModified rd)
+                                (.lastModified (java.io.File. rd "locks"))]))
+                           (.listFiles runs))]))]
+    [(.lastModified ws-root)
+     (mapv per-ws (filter #(.isDirectory ^java.io.File %) (.listFiles ws-root)))
+     (sstate/read-registry)
+     (notion-cache/project-page-facts project)]))
+
 (defn- session-status
   "Unified status across the autonomy axis: an autonomous session reports the state of the run
    that owns it (`run-states`, session name → run state), nil when none does; an interactive

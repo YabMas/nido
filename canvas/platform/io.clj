@@ -40,7 +40,8 @@
     "Read, apply, write — as ONE operation. The read is inside the lock, which is the whole
      point: a writer that read hours ago and is only now unwinding writes over everything added
      since, and the file it leaves is perfectly well-formed with nothing to say what went
-     missing."
+     missing. A value left equal is not rewritten, so the file's mtime moves only with its
+     content — what an mtime-polling reader relies on."
     {:signature [:=> [:catn [:path :string] [:f [:=> [:cat :any] :any]] [:args [:* :any]]] :any]
      :delegates [lock-path-for read-edn write-edn! with-file-lock]})
   (Operation read-json

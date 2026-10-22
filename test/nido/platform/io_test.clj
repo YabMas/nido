@@ -76,6 +76,22 @@
         (is (= {:seeded true} (io/read-edn p))))
       (finally (fs/delete-tree tmp)))))
 
+(deftest update-edn!-leaves-an-unchanged-file-alone
+  ;; The coordinator rewrote session records with their own value every tick, so
+  ;; their mtimes moved every two seconds and no mtime-polling reader could tell
+  ;; an idle ~/.nido from a busy one.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [p    (str (fs/path tmp "m.edn"))
+            then (java.nio.file.attribute.FileTime/fromMillis 1000000)]
+        (io/write-edn! p {:n 1})
+        (fs/set-last-modified-time p then)
+        (is (= {:n 1} (io/update-edn! p identity)))
+        (is (= then (fs/last-modified-time p)) "an equal value is not written")
+        (io/update-edn! p #(update % :n inc))
+        (is (not= then (fs/last-modified-time p)) "a changed one is"))
+      (finally (fs/delete-tree tmp)))))
+
 (deftest update-edn!-throwing-f-writes-nothing
   ;; A refusal expressed by throwing INSIDE the update must leave the file as it
   ;; was, not rewrite it with what it already held.

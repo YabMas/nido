@@ -455,6 +455,28 @@
 ;; tick is ever in flight: we only re-arm on receipt.
 (def ^:private refresh-ms 1500)
 
+;; The board is rebuilt on a tick only when `work/board-stamp` has moved, or this
+;; long after its last rebuild. The stamp sees every file the board reads; the
+;; clock is for what it cannot — a lock released by a process exiting, a session
+;; port gone dead, claude's agent listing — so those show within this, not
+;; within a tick. A rebuild reads every workstream (about 2s for brian's 419 on a
+;; loaded machine); the stamp only stats their directories.
+(def ^:private board-backstop-ms 30000)
+
+(defn- tick-rows
+  "The live-refresh tick's rebuild at wall-clock `now` (ms): `state` with fresh
+   rows, or unchanged when the board's inputs are unchanged and the backstop has
+   not elapsed. Every other screen is cheap to read and is rebuilt every tick."
+  [state now]
+  (if (not= :board (:screen state))
+    (refresh-list state (current-rows state))
+    (let [stamp' (work/board-stamp (:project state))
+          {:keys [stamp built-at]} (::board-tick state)]
+      (if (and (= stamp' stamp) built-at (< (- now built-at) board-backstop-ms))
+        state
+        (-> (refresh-list state (current-rows state))
+            (assoc ::board-tick {:stamp stamp' :built-at now}))))))
+
 (defn- tick-cmd []
   (program/cmd (fn [] (Thread/sleep refresh-ms) {:type ::tick})))
 
@@ -1209,7 +1231,7 @@
     (= ::tick (msg/msg-type msg))
     (if (or (:modal state) (:busy state))
       [state (tick-cmd)]
-      [(refresh-list state (current-rows state)) (tick-cmd)])
+      [(tick-rows state (System/currentTimeMillis)) (tick-cmd)])
 
     ;; ctrl+c always quits. `q` only quits when no modal is active so the
     ;; create-session text-input can accept it as a literal character.

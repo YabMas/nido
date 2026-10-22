@@ -3852,3 +3852,37 @@
             (pr-str {:format :blocker-answered :blocker-seq b :summary "go"})))
         (workstream/advance-stage! :brian (:id w) :ready :person)
         (is (= :ready (:stage (row))) "answered, a choice newer than every record holds")))))
+
+;; The TUI skips a board rebuild while this holds, so a write it misses is a
+;; board that never shows the write. Sleeps keep the writes in distinct mtime
+;; milliseconds.
+
+(deftest board-stamp-holds-while-nothing-is-written
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:external-refs []})]
+        (session/create! :brian (:id w) {:name "s1" :weight :light :autonomy nil})
+        (is (= (work/board-stamp :brian) (work/board-stamp :brian)))))))
+
+(deftest board-stamp-moves-with-the-ledger-sessions-and-runs
+  (with-tmp
+    (fn [_]
+      (let [w      (workstream/create! :brian {:external-refs []})
+            moved? (fn [write!]
+                     (let [before (work/board-stamp :brian)]
+                       (Thread/sleep 15)
+                       (write!)
+                       (not= before (work/board-stamp :brian))))]
+        (is (moved? #(workstream/append-entry! :brian (:id w) {:kind :scratch}
+                                               (pr-str {:format :scratch})))
+            "a ledger append")
+        (is (moved? #(session/create! :brian (:id w) {:name "s1" :weight :light :autonomy nil}))
+            "a new session")
+        (is (moved? #(session/update-substrate! :brian (:id w) "s1" (fn [_] {:dispatching nil :claude nil})))
+            "a session record rewritten in place of the old one")
+        (is (moved? #(write-run! "run-1" (:id w) "s1" "sid"))
+            "a run registered")
+        (is (moved? #(runs/write-run! (assoc (runs/read-run "run-1") :state :done)))
+            "a registered run changing state")
+        (is (moved? #(workstream/create! :brian {:external-refs []}))
+            "a new workstream")))))

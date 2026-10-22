@@ -75,6 +75,12 @@
   (Operation grouped "A project's workstreams grouped along the spine."
     {:signature [:=> [:catn [:project ProjectName] [:live-names [:? :any]]] :map]
      :delegates [list-workstreams]})
+  (Operation board-stamp
+    "A value equal across two calls exactly when nothing `grouped` reads from disk changed
+     between them — directory mtimes for the ledger, session and run records, the registry and
+     Notion page facts as values. Blind to what never touches disk: a lock released by an
+     exiting process, a session port gone dead, claude's agent listing."
+    {:signature [:=> [:catn [:project ProjectName]] :any]})
   (Operation latest-report "The workstream's most recent ledger entry."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]})
   (Operation environment "The workstream's current environment — its latest live session."
