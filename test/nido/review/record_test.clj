@@ -3141,6 +3141,21 @@
                                                        :reason "r" :baseline-seq 1))
         "and the ledger takes it")))
 
+(deftest an-unchecked-claim-out-of-the-codes-reach-stays-unchecked-over-held-clauses
+  ;; design-loop-7d596499: codex held every clause of answers-are-the-record and called the claim
+  ;; unchecked because its motivating measurement (70 vs 82 entities) is no fact of the tree. Made
+  ;; :unruled, it was asked again by each of codex's 13 readings and the run circled for 25 rounds.
+  (let [owed {"q" [{:key "q#1" :text "It stores." :field :statement :search? false}
+                   {:key "q#2" :text "Twice gave 70 and 82." :field :statement :search? false}]}
+        r    (#'record/held-to-clauses
+              {:unchecked [{:id "q" :reason "the measurement cannot be verified from this tree"}]
+               :clause-rulings {"q#1" {:ruling :held :evidence ["a.clj:1"] :search ""}
+                                "q#2" {:ruling :held :evidence ["a.clj:2"] :search ""}}}
+              owed)]
+    (is (nil? (:unruled r)) "a judge that held what it could read and named the rest out of reach has ruled")
+    (is (nil? (:unchecked-over-held r)))
+    (is (= ["q"] (map :id (:unchecked r))) "the claim is unchecked, as the judge said")))
+
 (deftest a-reader-that-cannot-execute-is-marked-when-it-withdraws-an-observation
   ;; Watched: codex observed exit 127 by sourcing ci/lib.sh; claude, whose shell runs only jj and
   ;; grep, later refuted the same clause by reasoning from the record, and only an amender's dispute

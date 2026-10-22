@@ -2426,17 +2426,23 @@
    question beside it, and read as a reading it contradicts every holding of the same words
    (`:contradicts-held-clause`).
 
-   A subject only :unchecked owes no clause: it was ruled as out of the code's reach. One whose
-   every listed clause the same judgement held, citing what a held ruling owes, was not: the
-   judgement says both that it read the claim true and that it could not read it, so neither is
-   taken. It leaves :unchecked for :unruled, and the round is asked again.
-   :unchecked-over-held names it there, since :unruled alone reads as a judge that said nothing."
+   A subject only :unchecked owes no clause: it was ruled as out of the code's reach. One the
+   judgement called unchecked for a TOOL FAILURE while holding every listed clause, citing what a
+   held ruling owes, was not: it says both that it read the claim true and that its tools could not
+   read it, so neither is taken. It leaves :unchecked for :unruled, and the round is asked again.
+   :unchecked-over-held names it there, since :unruled alone reads as a judge that said nothing.
+
+   Unchecked as out of the code's reach is not that contradiction, and stays :unchecked. A claim
+   whose commitment holds can carry a clause no tree can show — the measurement that motivated it,
+   a socket's behaviour at runtime — and a judge that holds every clause it can read and says the
+   rest is outside the code has ruled. Made :unruled, it was asked again by every reading of that
+   judge: codex said exactly this of two claims in each of its 13 rounds of design-loop-7d596499."
   [result owed]
   (let [rulings  (:clause-rulings result)
         open-any (into #{} (mapcat #(open-clauses % rulings)) (vals owed))
-        held-all (into #{} (keep (fn [{:keys [id]}]
+        held-all (into #{} (keep (fn [{:keys [id tool-failure]}]
                                    (let [cs (get owed id)]
-                                     (when (and (seq cs) (empty? (open-clauses cs rulings))
+                                     (when (and tool-failure (seq cs) (empty? (open-clauses cs rulings))
                                                 (every? #(= :held (get-in rulings [(:key %) :ruling])) cs))
                                        id))))
                        (:unchecked result))
