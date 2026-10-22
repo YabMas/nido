@@ -660,6 +660,26 @@
    :doc "Replay every recorded design/baseline run through today's engine and list the runs today's stopping rules would end before their recorded end. Run it before landing any change to when a loop stops. [:days <n>]"
    :task (apply nido-trend/replay-cmd *command-line-args*)}
 
+  nido:review:prompts
+  {:requires ([tasks.nido-trend :as nido-trend])
+   :doc "What record rounds were shown, read off the prompts on disk: per kind and week the median prompt and its largest sections, then each variant (stance digest, checks asked) with how its runs ended. Read it before and after any prompt change. [:days <n>] [:kind design-decision]"
+   :task (apply nido-trend/prompts-cmd *command-line-args*)}
+
+  nido:review:probe
+  {:requires ([tasks.nido-probe :as nido-probe])
+   :doc "Re-judge recorded record rounds under prompt variants against one frozen tree per round, grade the findings blind, and print one row per variant beside the control's own noise. Spends a judge run per round x variant x repetition. :plan <plan.edn> [:grade false]"
+   :task (apply nido-probe/probe-cmd *command-line-args*)}
+
+  nido:review:probe:sample
+  {:requires ([tasks.nido-probe :as nido-probe])
+   :doc "Print a probe plan skeleton over the newest recorded design rounds, to edit and pass to nido:review:probe. [:per-worktree 2] [:days 14]"
+   :task (apply nido-probe/sample-cmd *command-line-args*)}
+
+  nido:review:probe:summary
+  {:requires ([tasks.nido-probe :as nido-probe])
+   :doc "Print the summary of a probe already run. :probe-id <id>"
+   :task (apply nido-probe/summary-cmd *command-line-args*)}
+
   nido:improvement:release
   {:requires ([tasks.nido-trend :as nido-trend])
    :doc "Release the improvement sweep's convergence hold through a date: :until <YYYY-MM-DD> :note <why> [:project nido]. The release lapses on its own."

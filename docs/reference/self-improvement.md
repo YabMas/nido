@@ -31,8 +31,11 @@ to.
    shows it, or a probe on recorded runs does.
 3. **Probe before you compose.** A change to when a loop stops is run through
    `bb nido:review:replay` on main and at the tip; a run it would cut short that
-   converged as recorded needs a sentence saying why it should have stopped. No
-   probe exists yet for a prompt change, so rule 2 is the whole bar for one.
+   converged as recorded needs a sentence saying why it should have stopped. A
+   change to what a judge is shown is run through `bb nido:review:probe`:
+   recorded rounds re-judged under the change and unchanged, against one frozen
+   tree, with the unchanged prompt judged twice so its own noise is measured. An
+   effect smaller than that noise is no effect.
 4. **Subtract first.** Every rule, field or prompt paragraph is one more thing a
    judge can skip and an analysis can report. A change names what it removes, or
    says in a sentence why nothing can go. A rule that fires in a handful of runs
@@ -56,5 +59,7 @@ to.
 | analysing a run | `bb nido:review:figures :project <p>` (no run id) | is this run's behaviour the pattern or the exception |
 | analysing, planning | `bb nido:review:trend` | which loop is getting worse, on which measure (exit 1 on a regression) |
 | changing a terminator | `bb nido:review:replay` at main and at the tip | which recorded runs the change ends sooner, and on what |
+| changing a prompt | `bb nido:review:probe :plan <plan>` (`bb nido:review:probe:sample` drafts one; `:dry-run true` first) | what the change does to verdicts, findings and their level, against the judge's own noise |
+| after a prompt change lands | `bb nido:review:prompts` | what rounds were shown, week by week, and how runs ended under each stance and check set |
 | landing | `bb nido:test`, `bb nido:land:check` | the only gates; nothing runs after the push |
 | a person, overriding the hold | `bb nido:improvement:release :until <date> :note <why>` | lets the sweep run through a regression, dated so it lapses |

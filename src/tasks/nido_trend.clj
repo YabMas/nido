@@ -7,6 +7,7 @@
    [clojure.string :as str]
    [nido.coordinator.record.trend :as trend]
    [nido.platform.task-args :as task-args]
+   [nido.review.prompt-shape :as shape]
    [nido.review.replay :as replay])
   (:import
    [java.time LocalDate]))
@@ -71,3 +72,40 @@
       (println "Missing :until <YYYY-MM-DD>") (System/exit 2))
     (when (str/blank? note) (println "Missing :note — say why the hold is released") (System/exit 2))
     (println "released through" until "—" (trend/release! project until note))))
+
+(defn- median [xs]
+  (let [xs (vec (sort xs)) n (count xs)]
+    (when (pos? n) (nth xs (quot n 2)))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  prompts-cmd
+  "bb nido:review:prompts [:days <n>] [:kind <design-decision|design-amend|baseline-review|amend>]
+   — what record rounds were shown, read off the prompts on disk: per kind and week, the median
+   prompt and its largest sections; then each variant (stance and checks asked) with how its runs
+   ended."
+  [& args]
+  (let [[_ opts] (task-args/split-args args)
+        days     (or (some-> (:days opts) str parse-long) 56)
+        only     (some-> (:kind opts) str)
+        ps       (cond->> (shape/read-recent! days) only (filter #(= only (:kind %))))
+        monday   #(str (let [d (LocalDate/parse %)] (.minusDays d (dec (.getValue (.getDayOfWeek d))))))]
+    (doseq [[kind kps] (sort-by key (group-by :kind ps))]
+      (println (str "\n" kind))
+      (doseq [[w wps] (sort-by key (group-by (comp monday :day) kps))
+              :let [total (reduce + (map (comp :bytes :shape) wps))
+                    by    (apply merge-with + (map (comp :sections :shape) wps))
+                    top   (take 5 (sort-by (comp - val) by))]]
+        (println (format "  %s %4d prompts, median %5.1fK — %s" w (count wps)
+                         (/ (median (map (comp :bytes :shape) wps)) 1024.0)
+                         (str/join ", " (for [[h b] top] (format "%s %.0f%%" h (* 100.0 (/ b total)))))))))
+    (println "\nloop      stance       checks              runs  first      last       rounds  handed")
+    (doseq [[[kind v] rs] (sort-by (fn [[[k] rs]] [(name k) (first (sort (map :day rs)))])
+                                   (group-by (juxt :kind :variant) (shape/variants ps)))
+            :let [s (trend/summary rs) days (sort (map :day rs))]]
+      (println (format "  %-8s %-12s %-18s %4d  %s %s %6s %7s"
+                       (name kind) (or (:stance v) "no stance")
+                       (cond (some #{"data-shaped"} (:checks v)) (str (count (:checks v)) " incl. data-shaped")
+                             (seq (:checks v))                    (str (count (:checks v)) " checks")
+                             :else                                "-")
+                       (count rs) (first days) (last days)
+                       (num* (:median-rounds s)) (pct (:handed s)))))))
