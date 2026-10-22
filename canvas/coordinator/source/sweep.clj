@@ -16,6 +16,10 @@
     {:signature [:=> [:catn [:iso :string]] :string]})
   (Operation plan-for "Today's plan among a project's plans, or nil."
     {:signature [:=> [:catn [:plans [:vector :map]] [:day :string]] [:maybe :map]]})
+  (Operation latest-plan
+    "The newest plan, or nil. Its next claim fires whatever day wrote it, so a plan is carried through
+     before another is written."
+    {:signature [:=> [:catn [:plans [:vector :map]]] [:maybe :map]]})
   (Operation next-claim
     "The first :land claim of a plan whose claim workstream has never existed, with its index, or
      nil when the plan is discharged."
@@ -28,7 +32,7 @@
     "One poll: emit at most one fire, and return the state to persist — who holds the sweep, the
      day, whether it is planned, how many proposals are owed and what was emitted."
     {:signature [:=> [:catn [:source-config :map] [:emit-fn :any]] :map]
-     :delegates [day-of plan-for next-claim claim-payload plan-payload]})
+     :delegates [day-of plan-for latest-plan next-claim claim-payload plan-payload]})
   (Operation start-instance!
     "Start one configured instance: its poll writes what poll-once! returns as the source's state."
     {:signature [:=> [:catn [:source-config :map] [:emit-fn :any]] :map]

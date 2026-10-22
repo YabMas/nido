@@ -28,11 +28,23 @@
    Emits AT MOST ONE EVENT PER POLL, for the reason improvement.clj gives:
    provisioning mints workstream, run and session at drain time, before any
    scheduling gate runs, so two envelopes drained in one tick become two sessions
-   whatever any cap says."
+   whatever any cap says.
+
+   A plan is carried through before the next is written. Each day used to plan afresh and fire
+   only that day's claims, so a day whose claims could not run (the claim trigger's breaker open)
+   left them unfired forever and the next day planned the same backlog again: three identical
+   86-claim plans, 2026-10-20 to 22, each a planning session nobody could act on.
+
+   And the sweep holds itself while the review loops converge worse than they did
+   (`nido.coordinator.record.trend/regression`). It changes the machinery on one run's evidence at a
+   time; whether those changes add up is only visible across runs, and between 2026-09-01 and
+   2026-10-22 they added up to a regression nothing reported. A person releases the hold, dated,
+   with `bb nido:improvement:release`."
   (:require
    [clojure.string :as str]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.proposal :as proposal]
+   [nido.coordinator.record.trend :as trend]
    [nido.coordinator.source.registry :as sources]
    [nido.coordinator.source.state :as sst]))
 
@@ -58,6 +70,12 @@
   "Today's plan, or nil."
   [plans day]
   (first (filter #(= day (:date %)) plans)))
+
+(defn ^{:malli/schema [:=> [:cat [:vector :map]] [:maybe :map]]}
+  latest-plan
+  "The newest plan, or nil."
+  [plans]
+  (last (sort-by (juxt :date :seq) plans)))
 
 (defn ^{:malli/schema [:=> [:cat :map :string [:vector :map]] [:maybe :map]]}
   next-claim
@@ -123,6 +141,7 @@
         day      (day-of (clock/now-iso))
         plans    (proposal/plans-of project)
         today    (plan-for plans day)
+        latest   (latest-plan plans)
         ;; Derived held or not: the hold stops the poll firing, not the backlog
         ;; growing, and a state file reading :owed 0 during a wedge says the
         ;; opposite of what is happening.
@@ -130,12 +149,15 @@
                                 plans
                                 (proposal/claim-attempts project))
         pick     (when-not open
-                   (if today
-                     (when-let [c (next-claim today (:ws-id today) attempts)]
-                       {:kind :implement
-                        :payload (claim-payload (:claim c) (:ws-id today) (:seq today) c)})
-                     (when (seq owed)
-                       {:kind :plan :payload (plan-payload day (count owed))})))]
+                   (if-let [c (some->> latest (#(next-claim % (:ws-id %) attempts)))]
+                     {:kind :implement
+                      :payload (claim-payload (:claim c) (:ws-id latest) (:seq latest) c)}
+                     (when (and (nil? today) (seq owed))
+                       {:kind :plan :payload (plan-payload day (count owed))})))
+        ;; Read only when something would fire: a held or discharged sweep has nothing to stop.
+        regressed (when (and pick (not (trend/released? project day)))
+                    (not-empty (trend/regression (trend/read-recent! 28) day)))
+        pick     (when-not regressed pick)]
     (when pick (emit-fn (:payload pick)))
     {:type             :improvement-sweep
      :source-config    source-config
@@ -144,7 +166,9 @@
      ;; What this poll DID, because the honest failure mode is silence: a source
      ;; emitting nothing because it is held looks exactly like one emitting
      ;; nothing because the day is discharged, and only the first needs clearing.
-     :held-by          (when open (:ws-id open))
+     :held-by          (cond open      (:ws-id open)
+                             regressed "convergence-regressed")
+     :regressed        (some->> regressed (mapv trend/regression-line))
      :day              day
      :planned?         (some? today)
      :owed             (count owed)

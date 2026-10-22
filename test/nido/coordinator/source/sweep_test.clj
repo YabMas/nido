@@ -10,6 +10,7 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.record.clock]
    [nido.coordinator.record.proposal :as proposal]
+   [nido.coordinator.record.trend :as trend]
    [nido.coordinator.source.sweep :as sweep]))
 
 (defn- plan [ws-id seq date & claims]
@@ -95,9 +96,12 @@
 
 (defn- poll
   "One poll against a stubbed ledger. Returns [emitted-payload state]."
-  [& {:keys [attempts plans proposals]}]
+  [& {:keys [attempts plans proposals regression released?]}]
   (let [emitted (atom nil)]
-    (with-redefs [proposal/attempts       (constantly (vec attempts))
+    (with-redefs [trend/read-recent!      (constantly [])
+                  trend/regression        (constantly (vec regression))
+                  trend/released?         (constantly (boolean released?))
+                  proposal/attempts       (constantly (vec attempts))
                   proposal/plans-of       (constantly (vec plans))
                   proposal/claim-attempts (constantly [])
                   proposal/of-project     (constantly (vec proposals))
@@ -149,3 +153,38 @@
   (is (= "claim" (:leg (sweep/claim-payload (claim :land "one" "ws-a/1.0") "ws-p" 1 {:index 0}))))
   (is (not= (:leg (sweep/plan-payload "2026-09-04" 3))
             (:leg (sweep/claim-payload (claim :land "one" "ws-a/1.0") "ws-p" 1 {:index 0})))))
+
+;; ── carrying a plan through ────────────────────────────────────────────────
+
+(deftest an-earlier-plan-still-owed-a-claim-fires-it-rather-than-a-new-plan
+  ;; 2026-10-20 to 22: the claim trigger's breaker was open, so each day's claims never ran, and
+  ;; each next day planned the same 178 proposals into the same 86 claims again.
+  (let [[_ st] (poll :attempts []
+                     :plans [(plan "ws-p" 1 "2026-10-20" (claim :land "one" "ws-a/1.0"))]
+                     :proposals [{:ws-id "ws-a" :analysis-seq 1 :observation 0}])]
+    (is (= "ws-p/1#0" (:emitted st)))
+    (is (false? (:planned? st)) "today has no plan, and none is written while one is owed")))
+
+(deftest a-discharged-earlier-plan-lets-today-plan
+  (let [[_ st] (poll :attempts [(attempt (proposal/claim-address "ws-p" 1 0) :open? false)]
+                     :plans [(plan "ws-p" 1 "2026-10-20" (claim :land "one" "ws-a/1.0"))]
+                     :proposals [{:ws-id "ws-a" :analysis-seq 1 :observation 0}])]
+    (is (str/starts-with? (str (:emitted st)) "plan/"))))
+
+;; ── the convergence hold ───────────────────────────────────────────────────
+
+(def ^:private worse {:kind :design :measure :handed :before 0.61 :now 0.88})
+
+(deftest a-convergence-regression-holds-both-fires-and-says-why
+  (let [[_ st] (poll :attempts [] :plans [] :regression [worse]
+                     :proposals [{:ws-id "ws-a" :analysis-seq 1 :observation 0}])]
+    (is (nil? (:emitted st)))
+    (is (= "convergence-regressed" (:held-by st)))
+    (is (= ["design handed 61% → 88%"] (:regressed st)))
+    (is (= 1 (:owed st)) "the backlog is still reported while held")))
+
+(deftest a-person-releasing-the-hold-lets-the-sweep-fire
+  (let [[_ st] (poll :attempts [] :plans [] :regression [worse] :released? true
+                     :proposals [{:ws-id "ws-a" :analysis-seq 1 :observation 0}])]
+    (is (str/starts-with? (str (:emitted st)) "plan/"))
+    (is (nil? (:held-by st)))))
