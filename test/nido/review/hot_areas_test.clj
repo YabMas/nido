@@ -2,7 +2,10 @@
   "Where findings keep landing across a design's rounds and runs: `heat`, `hot-areas` and
    `hot-figures`, pure over ledger entries."
   (:require
+   [cheshire.core :as json]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
+   [nido.coordinator.report :as report]
    [nido.review.record :as record]))
 
 (def ^:private design
@@ -88,3 +91,60 @@
               (decision 5 ["a2"] :at "2026-10-25T00:00:00Z")]]
       (is (= {:findings 1 :on-hot 1}
              (select-keys (record/hot-figures [es] {:from "2026-10-24"}) [:findings :on-hot]))))))
+
+(def ^:private model-design
+  "`design` whole: what a prompt and the ledger need of it."
+  (-> design
+      (update-in [:model :claims]
+                 (partial mapv #(assoc % :statement (str "claim " (:id %)) :falsified-by "x" :evidence {:by :round})))
+      (assoc :summary "s" :shape "s" :effort :S :strata []
+             :standing {:relation :conforms :principles []}
+             :baseline {:seq 1 :relation :within})))
+
+(def ^:private hot-op-a
+  (first (record/hot-areas model-design [model-design (decision 2 ["a1"]) (decision 3 ["a2"]) (decision 4 ["a1"])])))
+
+(deftest a-decision-keeps-the-step-back-its-judge-recorded
+  (let [answer #(json/generate-string {:recommend "amend" :reason "r" :asks ""
+                                        :checks [{:check "relation_honest" :status "broken" :note "n"}]
+                                        :findings [{:claim "op-a again" :check "" :claim-id "a1" :cites ["x"] :evidence ["src/a.clj:1"] :for_person false}]
+                                        :confirmed [] :step_back %})
+        parse  #(record/parse-design-decision (answer %) 4 (into #{} (concat report/derivations report/strata-derivations)))]
+    (testing "a well-formed entry is kept, its area slugged"
+      (let [r (parse [{:area "[m/op-a]" :step "restate" :classes ["rewording" " "]}])]
+        (is (= [{:area "m/op-a" :step :restate :classes ["rewording"]}] (:step-back r)))
+        (is (report/validate-event :design-decision r) "and the ledger takes it")))
+    (testing "a malformed entry is dropped, never refusing the decision it rode on"
+      (let [r (parse [{:area "" :step "restate"} {:area "m/op-a" :step "shrug"} "nonsense"])]
+        (is (= :amend (:recommend r)))
+        (is (not (contains? r :step-back)))))))
+
+(deftest a-rejected-entry-may-name-its-area
+  (is (report/validate-event :design (assoc (dissoc model-design :seq)
+                                            :intent {:seq 1}
+                                            :rejected [{:alternative "old" :why-not "y" :area "m/op-a"}]))))
+
+(deftest the-judge-is-shown-a-hot-area-it-checks
+  (let [p #(record/design-prompt (merge {:design model-design :hot [hot-op-a]} %))]
+    (is (str/includes? (p {}) "HOT AREAS"))
+    (is (str/includes? (p {}) "- [m/op-a] refuted by 3 decision(s) since its last step-back"))
+    (is (str/includes? (p {}) "entry 4 (since the last step-back) [a1]: x"))
+    (testing "not when every claim in it is settled, outside the round's checks"
+      (is (not (str/includes? (p {:settled {"a1" {} "a2" {}}}) "HOT AREAS"))))
+    (testing "nor when nothing is hot"
+      (is (not (str/includes? (p {:hot []}) "HOT AREAS"))))))
+
+(deftest the-amender-restates-the-area-instead-of-weakening-its-spent-claims
+  (let [args {:design model-design :recommend :amend :out-path "/x"
+              :raised [{:claim "op-a again" :claim-id "a1"} {:claim "op-b again" :claim-id "b1"}]
+              :refuted-running {"a1" 4 "b1" 4}}
+        plain    (record/design-amend-prompt args)
+        restated (record/design-amend-prompt (assoc args :restated [hot-op-a]))
+        withdrawal #(second (re-find #"A CLAIM NO REWORDING HAS SETTLED\. ([^\n]*)" %))]
+    (is (not (str/includes? plain "AN AREA THE JUDGE STEPPED BACK ON")))
+    (is (str/includes? (withdrawal plain) "[a1]"))
+    (is (str/includes? restated "AN AREA THE JUDGE STEPPED BACK ON"))
+    (is (str/includes? restated "repaired by this restatement rather than\nweakened or given a residual: [a1]"))
+    (testing "the spent block still offers its repairs to a spent claim outside the area"
+      (is (not (str/includes? (withdrawal restated) "[a1]")))
+      (is (str/includes? (withdrawal restated) "[b1]")))))

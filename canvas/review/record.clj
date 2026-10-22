@@ -150,6 +150,11 @@
      for it, and the person's answers bearing on it. What a design round's judge and amender are
      shown; it decides nothing about when a round proceeds, stops or what it hands on."
     {:signature [:=> [:catn [:design :map] [:entries [:sequential :map]]] [:sequential :map]]})
+  (Operation hot-area-section
+    "What a design judge is shown about the hot areas holding a claim its round checks: each area
+     whole, and that findings repeating in one area say its approach is off, so it steps back on
+     the area and records the step. Nothing when no hot area holds a checked claim."
+    {:signature [:=> [:catn [:hot [:sequential :map]] [:checked [:set :string]]] [:maybe :string]]})
   (Operation hot-figures
     "Over a workstream's ledger, or every ledger, within a window: the share of claim findings that
      landed on an area already hot, counted with no reset; the share of decisions ruling on a hot

@@ -311,9 +311,22 @@
    [:drift {:optional true} string?]])
 
 (def Rejected
+  "An alternative the design gave up and why. :area names the area of the design — an element id,
+   or a claim id — whose approach it was, when a step-back on that area replaced it: what makes the
+   record say what approach replaced what, and what resets the area's heat."
   [:map {:closed true}
    [:alternative string?]
-   [:why-not     string?]])
+   [:why-not     string?]
+   [:area        {:optional true} string?]])
+
+(def StepBack
+  "One step a design decision took on a hot area (`record/hot-areas`): the area by its element or
+   claim id, the step — :restate its approach, :recut, :resurvey, or :ask a person one area-level
+   question — and the classes of finding that made the area hot, as the judge words them."
+  [:map {:closed true}
+   [:area    string?]
+   [:step    [:enum :restate :recut :resurvey :ask]]
+   [:classes [:vector string?]]])
 
 (def Layer
   "One intended layer of the vertical cut — claim + review mode only. Bookmarks,
@@ -3050,6 +3063,11 @@
                 ;; :unruled because an id can be a design element as well: confirmed or :owed as
                 ;; that, and still unruled as what the baseline records — two questions, two lists.
                 [:relation-unruled      {:optional true} [:vector string?]]
+                ;; The step the judge took on each hot area it found against. Asked for, never
+                ;; enforced: no decision is refused for lacking one, and only a step carried out —
+                ;; a :recut or :resurvey recorded, an :ask, or a :rejected entry under the area —
+                ;; resets the area's heat (`record/heat`).
+                [:step-back             {:optional true} [:vector StepBack]]
                 ;; Each check the judge answered that the round's prompt never defined — a
                 ;; `decomposable` on a record naming its strata, or `stratified` on one that does not.
                 ;; Dropped from :checks, and named here so the drop is visible.

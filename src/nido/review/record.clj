@@ -261,6 +261,76 @@
                  (when (seq (:evidence finding)) (str "\n  evidence: " (str/join ", " (:evidence finding)))))))
          "\n")))
 
+(defn- gist
+  "A finding's, question's or answer's text as one line: its first sentence, cut at 200 characters.
+   An area's history is read for the pattern it makes, and whole it ran to 170K characters on one
+   prompt."
+  [s]
+  (let [one (first (str/split (str/trim (str s)) #"(?<=[.!?])\s+|\n"))]
+    (if (> (count one) 200) (str (subs one 0 199) "…") one)))
+
+(defn- hot-area-lines
+  "Each of `hot` — `hot-areas`' maps — whole: its claims, every decision that refuted it with the
+   findings since its last carried-out step-back marked, the approaches given up under it, and what
+   a person was asked about it and answered — each finding, question and answer as its `gist`."
+  [hot]
+  (str/join
+   "\n"
+   (for [{:keys [area heat claims history rejected answers stepped]} hot]
+     (str "- [" area "] refuted by " heat " decision(s) since its last step-back"
+          (when (pos? stepped) (str " (stepped back on " stepped " time(s) before)"))
+          "\n  claims in it: " (if (seq claims) (str/join " " (map #(str "[" % "]") claims)) "none")
+          "\n  what was found against it, oldest first:"
+          (str/join (for [{n :seq :keys [findings since-reset]} history
+                          f findings]
+                      (str "\n    entry " n (if since-reset " (since the last step-back)" " (before it)")
+                           (when (:claim-id f) (str " [" (:claim-id f) "]"))
+                           ": " (gist (:claim f)))))
+          (when (seq rejected)
+            (str "\n  approaches already given up for it:"
+                 (str/join (for [r rejected] (str "\n    " (:alternative r) " — because " (:why-not r))))))
+          (when (seq answers)
+            (str "\n  asked of a person about it:"
+                 (str/join (for [{n :seq :keys [asks answer]} answers]
+                             (str "\n    entry " n ": " (gist asks)
+                                  (if answer
+                                    (str "\n      answered at entry " (:seq answer) ": " (gist (:text answer)))
+                                    "\n      not answered"))))))
+          "\n"))))
+
+(defn- hot-area-block
+  "What a design judge is told about `hot` — `hot-areas`' maps, those holding a claim the round
+   checks — or nil with none: each area whole, and that findings repeating in one area say its
+   approach is off, so the judge steps back on the area rather than repair or ask about the newest
+   finding, and records the step under step_back. It changes no rule of what the round may
+   recommend: a :restate is an amend, and each other step is the recommendation of that name."
+  [hot]
+  (when (seq hot)
+    (str "\nHOT AREAS — findings keep landing in these parts of the design, across its rounds\n"
+         "and runs. Findings repeating in one area say the area's APPROACH is off, not that\n"
+         "its newest claim needs one more repair: each repair so far was followed by another\n"
+         "finding there. For an area you find against again, do not repair or ask about the\n"
+         "newest finding alone. Step back on the area and take ONE of:\n"
+         "  restate  — the approach can be restated within the record: recommend amend,\n"
+         "             and in your findings say what the area's approach should become.\n"
+         "  recut    — the area is cut wrong: recommend recut.\n"
+         "  resurvey — the area rests on a premise the baseline got wrong: recommend\n"
+         "             resurvey.\n"
+         "  ask      — choosing the approach is the person's: recommend ask, with ONE\n"
+         "             question about the area that states its accumulated findings, the\n"
+         "             approaches already given up and the trade-off between what is left.\n"
+         "Record the step under step_back: the area's id, the step, and the classes of\n"
+         "finding that kept landing there. An area you now find nothing against needs no\n"
+         "step and no entry.\n\n"
+         (hot-area-lines hot))))
+
+(defn ^{:malli/schema [:=> [:cat [:sequential :map] [:set :string]] [:maybe :string]]}
+  hot-area-section
+  "What a design judge is shown about `hot` (`hot-areas`' maps): the areas holding a claim in
+   `checked`, the claims its round checks (`hot-area-block`), or nil when none does."
+  [hot checked]
+  (hot-area-block (filterv #(some checked (:claims %)) hot)))
+
 (declare withdrawable-after judge-refutations-block)
 
 (defn- spent-needs-block
@@ -1488,7 +1558,7 @@
                  first
                  (subject-delta prev))))))
 
-(declare lineage-of loop-why-prefix)
+(declare lineage-of loop-why-prefix hot-areas lineage-entries)
 
 (defn- written-by-person?
   "Whether the design `d` was written by somebody other than a review loop's amender — a person, or
@@ -1892,8 +1962,9 @@
    `:relation-prior` is `relation-prior`'s: the last decision's rulings, shown beside the ids to rule
    on with whether the record moved under each since."
   [{:keys [design baseline stance intent disputes settled levels prior answers relation-prior stale
-           executed]}]
+           executed hot]}]
   (let [owes?        (report/owes-a-person? design)
+        checked      (into #{} (map :id) (get-in (checks-of design (set (keys settled))) [:model :claims]))
         design       (judged-alone design)
         baseline     (judged-alone baseline)
         relation-ids (relation-yardstick design baseline)]
@@ -2162,6 +2233,7 @@
    "still changing. Name a correction in asks only when the question depends on it.\n"
    (answered-block owes? (:seq design) (:open design) answers)
    (prior-findings-block (apply dissoc prior (keys settled)))
+   (hot-area-section hot checked)
    (stale-block (apply dissoc stale (keys settled)))
    (executed-block (update executed :read #(apply dissoc % (keys settled))))
    (disputes-block disputes)
@@ -2256,6 +2328,21 @@
   (if-let [[_ id n] (re-matches #"(.+)#(\d+)" (str s))]
     [id (parse-long n)]
     [(str s) nil]))
+
+(defn- parse-step-back
+  "A judge's step_back list as the decision's :step-back: each entry naming an area and a step it
+   knows, the area slugged. An entry that names neither is dropped rather than refusing the decision —
+   a step-back is a reading of the round, and a malformed one must not change what the round decides."
+  [raw]
+  (into [] (keep (fn [e]
+                   (let [area (when (map? e) (slug (:area e)))
+                         step (when (map? e) (keyword (str (:step e))))]
+                     (when (and (not (str/blank? area)) (#{:restate :recut :resurvey :ask} step))
+                       {:area    area
+                        :step    step
+                        :classes (into [] (comp (map (comp str/trim str)) (remove str/blank?))
+                                       (when (sequential? (:classes e)) (:classes e)))}))))
+        (when (sequential? raw) raw)))
 
 (defn- parse-confirmed
   "A judge's confirmed list as `{:confirmed [id …] :checked-at {id [file:line …]} :owed [id …]
@@ -2844,6 +2931,7 @@
                          (when (sequential? (:settled_questions m)) (:settled_questions m)))
           about    (into #{} (comp (map slug) (remove str/blank?)) (:asks_about m))
           about-ids (into #{} (map (comp first clause-ref)) about)
+          stepped  (parse-step-back (:step_back m))
           ;; An :ask needs no finding: what it hands on is the question, and a doubt the build must
           ;; not start without is one whether or not it breaks a check.
           refused  (cond
@@ -2881,7 +2969,8 @@
           (and (= :ask r) (seq about))           (assoc :asks-about (vec (sort about)))
           (seq rulings)                          (assoc :relation-rulings rulings)
           (seq unasked)                          (assoc :unasked-checks unasked)
-          (not= said r)                          (assoc :judge-recommended said))))
+          (not= said r)                          (assoc :judge-recommended said)
+          (seq stepped)                          (assoc :step-back stepped))))
     (catch Exception e {:refused :parse-error :message (or (ex-message e) (str (class e)))})))
 
 (defn- mismatched
@@ -3887,7 +3976,8 @@
                           :executed executed
                           :levels   levels
                           :answers  (answered project ws-id design run-id)
-                          :relation-prior prior-rs}
+                          :relation-prior prior-rs
+                          :hot      (hot-areas design (lineage-entries project ws-id design))}
                 round    {:cwd code-cwd :run-id run-id :kind :design-decision
                           :label label :reviewer reviewer
                           :schema (design-decision-schema design relation
@@ -4911,6 +5001,29 @@
             "    yours: dispute the numbered line as one only a person can answer, naming the\n"
             "    class. The judge is asked again with it, and may stop for the person."))
      (interface-block interfaces by-hand))))
+
+(defn- restated-area-block
+  "What a design amender is told about `restated` — the hot areas the judge's :step-back restates
+   (`restated-areas`) — or nil with none: each area as the judge was shown it, the approach to
+   restate rather than the newest finding to repair, and what it gave up to go under :rejected with
+   the area's id. `spent-in` is the spent subjects inside them (`design-spent`): the restatement is
+   their repair, so they are named here and not offered `design-withdrawal-block`'s."
+  [restated spent-in]
+  (when (seq restated)
+    (str "\n\nAN AREA THE JUDGE STEPPED BACK ON. Findings kept landing in it across rounds and\n"
+         "runs, each repair followed by the next, and the judge reads that as the area's\n"
+         "APPROACH being off. Do not repair its newest finding alone: restate how the\n"
+         "area does what its claims promise, so that the findings below stop arising, and\n"
+         "change its claims to say the restated approach. Add the approach you give up\n"
+         "to :rejected, with :area set to the area's id and :why-not saying which of\n"
+         "these findings it kept producing. The numbered lines on these claims are\n"
+         "answered by the restatement; say so under each.\n"
+         (when (seq spent-in)
+           (str "Refuted readings running, and repaired by this restatement rather than\n"
+                "weakened or given a residual: "
+                (str/join " " (map #(str "[" % "]") (sort spent-in))) "\n"))
+         "\n"
+         (hot-area-lines restated))))
 
 (defn- named-ids
   "The claims a record finding is keyed to: a design finding's :claim-ids, else its :claim-id."
@@ -8310,7 +8423,9 @@
    :standing-ask on it (`asked-moves`). `:by-hand` is the :seq of the design under repair when a
    person wrote it, superseding another (`interface-block`)."
   [{:keys [design baseline recommend reason asks asks-about asks-repaired raised findings rulings out-path declared?
-           check-cmd settled refuted-running resurvey-outcome intent refuted-with by-hand]}]
+           check-cmd settled refuted-running resurvey-outcome intent refuted-with by-hand restated]}]
+  (let [in-area (into #{} (mapcat #(cons (:area %) (:claims %))) restated)
+        spent   (design-spent raised refuted-running)]
   (str
    "A read-only judge derived what could be derived about this DESIGN record,\n"
    "before any code is written, and it did not come out clean.\n\n"
@@ -8389,15 +8504,15 @@
    "other line is a defect in the record that breaks none of them:\n\n"
    (str/join
     "\n"
-    (let [spent (design-spent raised refuted-running)]
-      (map-indexed (fn [i f]
-                     (str (inc i) ". " (numbered-line f findings)
-                          (when-let [ns (seq (keep #(some->> (get spent %) (vector %)) (refuted-ids f)))]
-                            (str "\n   running: "
-                                 (str/join ", " (for [[id n] ns] (str "[" id "] refuted " n " readings in a row")))
-                                 " — see what follows the numbered lines"))))
-                   raised)))
-   (design-withdrawal-block (design-spent raised refuted-running) (enumerated-ids design baseline) by-hand)
+    (map-indexed (fn [i f]
+                   (str (inc i) ". " (numbered-line f findings)
+                        (when-let [ns (seq (keep #(some->> (get spent %) (vector %)) (refuted-ids f)))]
+                          (str "\n   running: "
+                               (str/join ", " (for [[id n] ns] (str "[" id "] refuted " n " readings in a row")))
+                               " — see what follows the numbered lines"))))
+                 raised))
+   (design-withdrawal-block (apply dissoc spent in-area) (enumerated-ids design baseline) by-hand)
+   (restated-area-block restated (filterv in-area (keys spent)))
    (unsettled-block :design raised)
    (when (seq findings)
      (str "\n\nWHAT THE DERIVATION FOUND:\n\n"
@@ -8527,7 +8642,7 @@
    "which is what you are replacing, and writes its :why from the numbered lines you\n"
    "answered: what this amendment answers is the round's to say, and a :why the\n"
    "next judge reads as provenance must not credit a person with what a judge asked.\n"
-   (level-reminder :commitment)))
+   (level-reminder :commitment))))
 
 (defn- run-design-judge-stage
   [ctx]
@@ -9130,6 +9245,13 @@
        " that asked for it under :out-of-reach, saying what the person must decide; keep the"
        " rest of your repair"))
 
+(defn- restated-areas
+  "The hot areas of `prev` (`hot-areas` over its lineage) that `decision`'s :step-back restates, as
+   the judge was shown them — or nil when it restates none."
+  [project ws-id prev decision]
+  (when-let [areas (not-empty (step-back-areas decision :restate))]
+    (not-empty (filterv (comp areas :area) (hot-areas prev (lineage-entries project ws-id prev))))))
+
 (defn- design-amend-message
   "What the design amender is told to repair `prev` for this round's `recommend`, shown `baseline`
    beside it and answering into `out-path`."
@@ -9162,6 +9284,7 @@
       :intent (discover-intent ledger prev)
       :resurvey-outcome (:resurvey-outcome ctx)
       :by-hand (written-by-hand project ws-id prev)
+      :restated (when (and project ws-id) (restated-areas project ws-id prev (:record ctx)))
       :declared? declared?})))
 
 (defn- amend-design!

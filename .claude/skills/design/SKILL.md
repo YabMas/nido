@@ -99,7 +99,8 @@ One `:design` event per workstream, appended to the ledger:
               :relation :within            ; :within | :extends | :revisit
               :breaks   ["load-bearing property that cannot survive"]  ; REQUIRED for :revisit
               :note     "REQUIRED for :extends / :revisit"}
- :rejected   [{:alternative "…" :why-not "…"}]
+ :rejected   [{:alternative "…" :why-not "…"}]  ; + :area "<element or claim id>" when the
+              ;; approach was given up in a step-back on that hot area
  :strata     ["the strata this change touches, floor first"]  ; [] where none is declared
  :phases     [{:claim     "what is true of the RUNNING system once this lands"
                 :habitable "what is true of it while this phase is live"
