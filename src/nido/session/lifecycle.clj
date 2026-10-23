@@ -835,7 +835,7 @@
     (doseq [svc (:services (engine/read-session-edn project-name))
             :when (= :test-pg (:type svc))]
       (test-pg/drop-session-db! project-name
-                                (assoc (select-keys svc [:db-user :max-connections :db-stem])
+                                (assoc (select-keys svc [:db-user :max-connections :settings :locale :db-stem])
                                        :instance-id instance-id)))
     (catch Exception e
       (core/log-step (str "warning: dropping test database: " (ex-message e))))))

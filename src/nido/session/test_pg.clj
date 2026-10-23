@@ -55,25 +55,33 @@
 ;; ---------------------------------------------------------------------------
 
 (def ^:private settings-file
-  "Rewritten before every start, so a changed :max-connections takes effect the
-   next time the cluster starts; a running cluster keeps the value it started with."
+  "Rewritten before every start, so a changed :max-connections or :settings takes
+   effect the next time the cluster starts; a running cluster keeps the values it
+   started with."
   "nido-test.conf")
 
-(defn- write-settings! [project-name max-connections]
+(defn- write-settings!
+  "settings: the project's own postgresql.conf parameters, name → value, written
+   after nido's and so overriding them — what the project's CI database runs
+   with (wal_level, timezone, …). A value is written verbatim: quote a string
+   the way postgresql.conf wants it."
+  [project-name max-connections settings]
   (spit (str (fs/path (data-dir project-name) settings-file))
         (str "fsync = off\n"
              "full_page_writes = off\n"
              "synchronous_commit = off\n"
-             "max_connections = " max-connections "\n")))
+             "max_connections = " max-connections "\n"
+             (apply str (for [[k v] settings] (str (name k) " = " v "\n"))))))
 
 (defn- initdb!
   "Initialize the cluster. A data dir with no PG_VERSION and no live postmaster
-   is a half-made one from an interrupted init, and is replaced."
-  [bin-dir project-name db-user]
+   is a half-made one from an interrupted init, and is replaced. The locale is
+   fixed here for the cluster's life: a changed :locale takes a `reset!`."
+  [bin-dir project-name db-user locale]
   (let [dir (data-dir project-name)]
     (when (and (fs/exists? dir) (not (pg/detect-running-postmaster dir)))
       (fs/delete-tree dir))
-    (pg/initdb! bin-dir dir db-user)
+    (pg/initdb! bin-dir dir db-user locale)
     (spit (str (fs/path dir "postgresql.conf"))
           (str "\ninclude_if_exists = '" settings-file "'\n")
           :append true)))
@@ -81,7 +89,7 @@
 (defn- start!
   "Start the cluster, or adopt the one already running over its data dir.
    Never touches the data of a running cluster. Returns its port."
-  [bin-dir project-name max-connections]
+  [bin-dir project-name max-connections settings]
   (let [dir      (data-dir project-name)
         existing (pg/detect-running-postmaster dir)]
     (if (= :running (:status existing))
@@ -92,7 +100,7 @@
                         preferred)]
         (when (= :stale (:status existing))
           (fs/delete-if-exists (:pid-file existing)))
-        (write-settings! project-name max-connections)
+        (write-settings! project-name max-connections settings)
         (pg/pg-ctl-start! bin-dir dir port (log-file project-name) pg/socket-base-dir)
         (pg/wait-for-tcp! port)
         (core/log-step (str "Test cluster for " project-name " running (port " port ")"))
@@ -100,12 +108,12 @@
 
 (defn- up!
   "The cluster running, initialized first when there is none. Returns its port."
-  [project-name {:keys [db-user max-connections]
+  [project-name {:keys [db-user max-connections settings locale]
                  :or {db-user "user" max-connections default-max-connections}}]
   (let [bin-dir (pg/find-pg-bin-dir)]
     (when-not (initialized? project-name)
-      (initdb! bin-dir project-name db-user))
-    (start! bin-dir project-name max-connections)))
+      (initdb! bin-dir project-name db-user locale))
+    (start! bin-dir project-name max-connections settings)))
 
 (defn- psql! [port db-user db-name sql]
   (let [result (shell {:continue true :out :string :err :string}
@@ -149,7 +157,9 @@
   "Bring the project's test cluster up and its template database to
    main@origin, under the project's test lock. Returns {:port p}.
 
-   opts: :db-user, :max-connections, and what the template is built from —
+   opts: :db-user, :max-connections, :settings (see `write-settings!`),
+   :locale (the cluster's default collation; nil is C), and what the template
+   is built from —
    :schema, :baseline and :project-dir as `setup-fresh-database!` takes them,
    and :source-repo, whose main@origin the template follows (nil: no advance)."
   [project-name opts]
@@ -201,7 +211,7 @@
   drop-session-db!
   "Drop a session's test database if it exists, bringing the test cluster up
    to do so. A project with no test cluster has nothing to drop.
-   opts: :db-user, :max-connections, :db-stem, :instance-id."
+   opts: :db-user, :max-connections, :settings, :locale, :db-stem, :instance-id."
   [project-name {:keys [db-user db-stem instance-id] :or {db-user "user"} :as opts}]
   (when (initialized? project-name)
     (let [db-name (session-db-name db-stem instance-id)]
@@ -254,7 +264,7 @@
 
 (defn- service-opts [service-def ctx]
   (let [project-dir (get-in ctx [:session :project-dir])]
-    (merge (select-keys service-def [:db-user :schema :baseline :max-connections :db-stem])
+    (merge (select-keys service-def [:db-user :schema :baseline :max-connections :settings :locale :db-stem])
            {:project-dir project-dir
             :instance-id (or (get-in ctx [:session :instance-id])
                              (get-in ctx [:session :project-name]))

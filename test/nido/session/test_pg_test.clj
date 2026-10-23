@@ -45,7 +45,8 @@
       (with-redefs [core/nido-home (constantly home)]
         (try
           (let [def  {:type :test-pg :name :test-pg :db-stem "app_test" :schema "app"
-                      :max-connections 37
+                      :max-connections 37 :settings {"timezone" "'UTC'"}
+                      :locale "en_US.UTF-8"
                       :baseline {:file "V1__baseline.sql" :version "1" :description "baseline"}}
                 ctx  (fn [id] {:session {:project-name project :project-dir home :instance-id id}})
                 a    (service/start-service! def (ctx "tpgproj--a") {})
@@ -61,6 +62,13 @@
               (is (= "off" (psql port "postgres" "show full_page_writes")))
               (is (= "off" (psql port "postgres" "show synchronous_commit")))
               (is (= "37" (psql port "postgres" "show max_connections"))))
+            (testing "the project's declared settings are in force"
+              (is (= "UTC" (psql port "postgres" "show timezone"))))
+            (testing "a session database collates by the cluster's declared locale"
+              (is (= "en_US.UTF-8"
+                     (psql port "postgres"
+                           (str "select datcollate from pg_database where datname = '"
+                                (get-in a [:context :db-name]) "'")))))
             (testing "a restart keeps what a session wrote"
               (psql port (get-in a [:context :db-name]) "insert into thing values (1)")
               (service/start-service! def (ctx "tpgproj--a") {})

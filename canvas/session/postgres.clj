@@ -93,8 +93,11 @@
     "A Flyway-compatible checksum of a migration file — computed here so a row nido inserts is
      indistinguishable from one Flyway would have."
     {:signature [:=> [:catn [:file-path Path]] :any]})
-  (Operation initdb! "Initialise a cluster if it is not already. Idempotent."
-    {:signature [:=> [:catn [:bin-dir Path] [:data-dir Path] [:db-user :string]] :any]
+  (Operation initdb!
+    "Initialise a cluster if it is not already. Idempotent. A nil locale is C; any other is the
+     default collation of every database later created without one of its own."
+    {:signature [:=> [:catn [:bin-dir Path] [:data-dir Path] [:db-user :string]
+                         [:locale [:maybe :string]]] :any]
      :delegates [pg-cmd]})
   (Operation template-stopped?
     "Whether a data directory has no live postmaster — checked before cloning, because cloning a

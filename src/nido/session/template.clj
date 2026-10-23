@@ -200,7 +200,7 @@
           (ensure-stopped! data-dir)
           (fs/delete-tree data-dir))
         (fs/create-dirs (state/project-template-dir project-name))
-        (pg/initdb! bin-dir data-dir db-user)
+        (pg/initdb! bin-dir data-dir db-user nil)
         (pg/pg-ctl-start! bin-dir data-dir port log-path)
         (pg/wait-for-tcp! port)
         (try

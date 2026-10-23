@@ -99,10 +99,12 @@
 ;; Cluster lifecycle helpers (reusable: session pg + template pg)
 ;; ---------------------------------------------------------------------------
 
-(defn ^{:malli/schema [:=> [:cat :Path :Path :string] :any]}
+(defn ^{:malli/schema [:=> [:cat :Path :Path :string [:maybe :string]] :any]}
   initdb!
-  "Run initdb on data-dir if not already initialized. Idempotent."
-  [bin-dir data-dir db-user]
+  "Run initdb on data-dir if not already initialized. Idempotent.
+   locale: the cluster's default locale, which every database created without
+   one of its own collates by (e.g. \"en_US.UTF-8\"); nil is the C locale."
+  [bin-dir data-dir db-user locale]
   (when-not (fs/exists? (str (fs/path data-dir "PG_VERSION")))
     (core/log-step (str "Initializing PostgreSQL data directory at " data-dir))
     (let [result (shell {:continue true :out :string :err :string}
@@ -111,7 +113,7 @@
                         "--auth" "trust"
                         "--username" db-user
                         "--encoding" "UTF8"
-                        "--no-locale")]
+                        (if locale (str "--locale=" locale) "--no-locale"))]
       (when-not (zero? (:exit result))
         (throw (ex-info "initdb failed" {:error (:err result) :output (:out result)}))))))
 
@@ -428,7 +430,7 @@
         (core/log-step (str "Adopting running PostgreSQL (pid " (:pid existing)
                             ", port " pg-port ", data-dir=" data-dir ")"))
         cloned? (clone-pgdata! (state/template-pg-data-dir project-name) data-dir)
-        :else (initdb! bin-dir data-dir db-user))
+        :else (initdb! bin-dir data-dir db-user nil))
       (when-not adopted?
         (pg-ctl-start! bin-dir data-dir pg-port log-path socket-base-dir))
       (wait-for-tcp! pg-port)
