@@ -58,12 +58,17 @@
      :mode      (:permission-mode (last evs))
      :latest    (last evs)}))
 
+(def ^:private unattended-modes
+  "The permission modes a session nido drives may run in: neither stops a sent turn on a prompt
+   nobody is there to answer. bypassPermissions is the launch baseline; auto is the one before it."
+  #{"bypassPermissions" "auto"})
+
 (defn ^{:malli/schema [:=> [:cat :map [:maybe :map]] [:maybe [:tuple :keyword :string]]]}
   baseline-refusal
   "Why the session's own recorded events do not show the launch baseline, as [reason message], or
    nil when they do: its latest start recorded by nido's hooks, from the directory the listing
-   `row` shows it in, and permission mode auto on its latest event — given what `baseline-shown`
-   read. Each half needs evidence that shows it: a start or a row naming no directory shows none.
+   `row` shows it in, and a mode that asks nobody (`unattended-modes`) on its latest event —
+   given what `baseline-shown` read. Each half needs evidence that shows it: a start or a row naming no directory shows none.
    The one check adoption, a send, a wake and the session list all make."
   [{:keys [started? start-cwd mode]} row]
   (cond
@@ -72,8 +77,8 @@
     (or (nil? start-cwd) (not= (:cwd row) start-cwd))
     [:started-elsewhere (str "It runs in " (:cwd row) ", but nido's hooks last recorded its start in "
                              (or start-cwd "an unknown directory") " — start it in a nido session home or worktree")]
-    (not= "auto" mode)
-    [:not-auto (str "Its latest recorded permission mode is " (or mode "unknown") ", not auto — switch it to auto first")]))
+    (not (unattended-modes mode))
+    [:not-auto (str "Its latest recorded permission mode is " (or mode "unknown") ", not auto or bypassPermissions — switch it to one of them first")]))
 
 (defn- left-running
   "The id of a process an adapter call that threw says it left running, or nil when it left
@@ -326,7 +331,7 @@
    background, or one nido released — on the session record {:project :ws-id :session-name}, by
    its :session-id. Refused, naming what fails, unless the session is a background session in the
    substrate's listing whose own recorded events show the launch baseline: its latest start
-   recorded by nido's hooks from the directory it runs in, and permission mode auto on its latest
+   recorded by nido's hooks from the directory it runs in, and a mode that asks nobody on its latest
    event. Refused too, naming the hold, while a turn nido did not give holds the record's session:
    only hand-back! clears that. Turns recorded before adoption never hold it. An instruction
    given to this same session and not yet followed by its Stop stays outstanding. Answers the

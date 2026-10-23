@@ -202,6 +202,13 @@
                (:reason (ex-data (try (conduct/adopt! {:project :nido :ws-id "ws-1" :session-name "kid" :session-id "s"})
                                       (catch Exception e e))))))))))
 
+(deftest bypassed-permissions-show-the-baseline
+  (let [shown {:started? true :start-cwd "/home/kid"}
+        row   {:cwd "/home/kid"}]
+    (is (nil? (conduct/baseline-refusal (assoc shown :mode "bypassPermissions") row)) "the launch baseline")
+    (is (nil? (conduct/baseline-refusal (assoc shown :mode "auto") row)) "the baseline before it")
+    (is (= :not-auto (first (conduct/baseline-refusal (assoc shown :mode "default") row))))))
+
 (deftest adopt-refuses-a-session-started-elsewhere
   (with-tmp
     (fn []

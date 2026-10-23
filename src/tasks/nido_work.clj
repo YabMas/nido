@@ -54,7 +54,7 @@
    prompt placed last would be read as one more directory. `:model` is claude's
    own, passed through unchecked.
 
-   No permission mode and no settings: the launch baseline — auto mode, nido's
+   No permission mode and no settings: the launch baseline — permissions bypassed, nido's
    hooks, the commit gate — is the worktree's `.claude/settings.local.json`,
    which `work` writes before starting claude. A command line that carried any
    of it could make a session nido starts and one a person starts differ.
@@ -105,7 +105,7 @@
   (let [[_ opts] (task-args/split-args args #{:name :prompt-file :model})
         {:keys [cmd dir home]} (work-cmd* opts)]
     ;; A session up before the baseline existed has no worktree settings yet; writing them here
-    ;; keeps the gate and auto mode from depending on when the session was last brought up.
+    ;; keeps the gate and the permission mode from depending on when the session was last brought up.
     (when home (launcher/ensure-worktree-baseline! dir home))
     ;; Hand off to the interactive agent in the worktree (inherit the terminal).
     (p/exec cmd {:dir dir})))
