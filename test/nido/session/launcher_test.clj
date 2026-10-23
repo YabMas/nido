@@ -377,7 +377,7 @@
         (let [s (json/parse-string
                  (slurp (str (fs/path home ".claude" "settings.local.json"))) true)]
           (testing "the home carries the launch baseline"
-            (is (= "bypassPermissions" (get-in s [:permissions :defaultMode])))
+            (is (= "auto" (get-in s [:permissions :defaultMode])))
             (is (= "none" (get-in s [:worktree :bgIsolation])))
             (is (= "accept" (:crossSessionInbound s))))
           (is (= [(str "cd '" home "' && bb nido:session:hook Stop")
@@ -836,7 +836,7 @@
             (is (= ["Bash(ls)"] (get-in once [:permissions :allow])))
             (is (some #{"say done"} (map #(get-in % [:hooks 0 :command]) (get-in once [:hooks :Stop])))))
           (testing "the baseline is there"
-            (is (= "bypassPermissions" (get-in once [:permissions :defaultMode])))
+            (is (= "auto" (get-in once [:permissions :defaultMode])))
             (is (= "none" (get-in once [:worktree :bgIsolation])))
             (is (= "accept" (:crossSessionInbound once)))
             (is (every? #(seq (get-in once [:hooks %]))
@@ -850,6 +850,6 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (launcher/ensure-worktree-baseline! (str tmp) "/home/s")
-      (is (= "bypassPermissions" (get-in (json/parse-string (slurp (str (fs/path tmp ".claude" "settings.local.json"))) true)
+      (is (= "auto" (get-in (json/parse-string (slurp (str (fs/path tmp ".claude" "settings.local.json"))) true)
                             [:permissions :defaultMode])))
       (finally (fs/delete-tree tmp)))))

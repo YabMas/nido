@@ -998,7 +998,7 @@
 
 (defn- baseline-settings
   "`settings` carrying nido's launch baseline — every Claude Code session started in a nido
-   session home or worktree runs under it, whoever starts it: permissions bypassed, Claude
+   session home or worktree runs under it, whoever starts it: permission mode auto, Claude
    Code's own worktree isolation off (nido already isolates each session in its own workspace),
    messages from other sessions accepted, nido's session hook on every event it records, and the
    commit gate. Whatever else `settings` declares stays.
@@ -1007,7 +1007,7 @@
    file sits in."
   [settings home]
   (-> (without-nido-hooks settings)
-      (assoc-in [:permissions :defaultMode] "bypassPermissions")
+      (assoc-in [:permissions :defaultMode] "auto")
       (assoc-in [:worktree :bgIsolation] "none")
       (assoc :crossSessionInbound "accept")
       (as-> s (reduce (fn [s ev]

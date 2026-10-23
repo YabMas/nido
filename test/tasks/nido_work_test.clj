@@ -104,19 +104,20 @@
                 launcher/session-briefing (fn [_ _ _] "B")
                 state/session-mcp-path    (fn [_] "/does/not/exist.json")
                 launcher/nido-add-dirs    (fn [] ["/opt/nido"])]
-    (is (= ["claude" "--append-system-prompt" "B" "--add-dir" "/opt/nido"]
+    (is (= ["claude" "--dangerously-skip-permissions" "--append-system-prompt" "B" "--add-dir" "/opt/nido"]
            (:cmd (work/work-cmd* {:claude-bin "claude"})))
-        "no settings ride the command line: the gate is the worktree's launch baseline")))
+        "no settings ride the command line: the gate is the worktree's launch baseline, and bypass is a flag")))
 
-(deftest no-permission-mode-reaches-claude
+(deftest permissions-are-bypassed-by-the-flag
   (with-redefs [lifecycle/session-from-cwd
                 (fn [] {:project "nido" :session "kid" :worktree "/wt" :instance-id "nido--kid"})
                 launcher/session-briefing (fn [_ _ _] "B")
                 state/session-mcp-path    (fn [_] "/does/not/exist.json")
                 launcher/nido-add-dirs    (fn [] ["/opt/nido"])]
-    (is (not-any? #{"--permission-mode"}
-                  (:cmd (work/work-cmd* {:claude-bin "claude" :permission-mode "bypassPermissions"})))
-        "the baseline's auto mode cannot be overridden from the command line")))
+    (let [cmd (:cmd (work/work-cmd* {:claude-bin "claude" :permission-mode "default"}))]
+      (is (some #{"--dangerously-skip-permissions"} cmd)
+          "a settings file cannot turn bypass on, so the flag does")
+      (is (not-any? #{"--permission-mode"} cmd) "no other mode can be asked for"))))
 
 (deftest a-model-is-passed-to-claude
   (with-redefs [lifecycle/session-from-cwd

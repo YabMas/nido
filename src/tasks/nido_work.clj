@@ -54,10 +54,12 @@
    prompt placed last would be read as one more directory. `:model` is claude's
    own, passed through unchecked.
 
-   No permission mode and no settings: the launch baseline — permissions bypassed, nido's
-   hooks, the commit gate — is the worktree's `.claude/settings.local.json`,
-   which `work` writes before starting claude. A command line that carried any
-   of it could make a session nido starts and one a person starts differ.
+   Permissions bypassed, and no settings: Claude Code reads bypass only from its
+   flag — `defaultMode: bypassPermissions` in a settings file is ignored and
+   falls back to `default` — so the flag is the one part of the launch baseline
+   on the command line. The rest, nido's hooks and the commit gate, is the
+   worktree's `.claude/settings.local.json`, which `work` writes before
+   starting claude.
 
    Returns the session home beside the command, for `work` to write it from."
   [{:keys [project session worktree instance-id]}
@@ -66,6 +68,7 @@
         mcp      (state/session-mcp-path instance-id)
         cmd      (cond-> [claude-bin]
                    prompt-file      (conj (slurp (str prompt-file)))
+                   :always          (conj "--dangerously-skip-permissions")
                    :always          (into ["--append-system-prompt" briefing])
                    name             (into ["--name" (str name)])
                    model            (into ["--model" (str model)])
@@ -105,7 +108,7 @@
   (let [[_ opts] (task-args/split-args args #{:name :prompt-file :model})
         {:keys [cmd dir home]} (work-cmd* opts)]
     ;; A session up before the baseline existed has no worktree settings yet; writing them here
-    ;; keeps the gate and the permission mode from depending on when the session was last brought up.
+    ;; keeps the gate from depending on when the session was last brought up.
     (when home (launcher/ensure-worktree-baseline! dir home))
     ;; Hand off to the interactive agent in the worktree (inherit the terminal).
     (p/exec cmd {:dir dir})))
