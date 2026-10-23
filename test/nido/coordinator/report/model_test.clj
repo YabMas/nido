@@ -151,6 +151,35 @@
                                                :claims   [(first (:claims baseline))]})))))
     (is (not (contains? laid :removed)) "an effective model is laid over nothing, so removes nothing")))
 
+(deftest what-a-design-declares-broken-is-not-carried-as-it-was
+  ;; Watched on brian: a :revisit design listed claims and elements under :breaks and stated neither
+  ;; anew, so the baseline a fork derived from it asserted everything the design said stops holding.
+  (let [c        (fn [id about statement] {:id id :about about :statement statement
+                                           :falsified-by "f" :evidence {:by :round}})
+        baseline {:elements [{:id "agg" :sort :module :hides "summing order" :interface "a total"}
+                             {:id "store" :sort :module :hides "storage" :interface "write a total"}
+                             {:id "total" :sort :operation}]
+                  :claims   [(c "c1" ["agg"] "one summing path") (c "c2" ["total"] "rounded once")
+                             (c "c3" ["store"] "stored once") (c "c4" ["agg"] "lines stay private")]}
+        design   {:elements [{:id "agg" :sort :module}
+                             {:id "store" :sort :module :interface "write and read back a total"}]
+                  :claims   [(c "c1" ["agg"] "one summing path, per line")]
+                  :removed  {:claims ["c3"]}}
+        broken   ["c2" "c1" "c3" "agg" "store" "not-in-the-baseline" "c2"]]
+    (testing "a claim declared broken and left unsaid is taken out; one the design states stands"
+      (is (= ["c1"] (mapv :id (:claims (model/effective baseline design ["c2" "c1" "c3" "c4"])))))
+      (is (= ["c1" "c4"] (mapv :id (:claims (model/effective baseline design broken))))
+          "a claim not declared broken is carried as overlay carries it"))
+    (testing "elements are never taken out"
+      (is (= (:elements (model/overlay baseline design))
+             (:elements (model/effective baseline design broken)))))
+    (is (= (model/overlay baseline design) (model/effective baseline design []))
+        "a design declaring nothing broken leaves exactly its overlay")
+    (testing "an element declared broken and left as the baseline describes it is named, once"
+      (is (= ["agg"] (model/unrestated-elements baseline design broken))
+          "agg is named by id alone; store is stated anew; the claims and the unknown id are not elements")
+      (is (= [] (model/unrestated-elements baseline design ["c2" "store"]))))))
+
 (deftest three-models-combine-by-id-against-the-base
   (let [c    (fn [id s] {:id id :about ["agg"] :statement s :falsified-by "f" :evidence {:by :round}})
         agg  {:id "agg" :sort :module}

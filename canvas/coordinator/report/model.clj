@@ -46,7 +46,7 @@
         [:names [:vector :string]]])
 
 (Module report-model
-  "The shared model of an area, the readings every consumer takes it through, and the two
+  "The shared model of an area, the readings every consumer takes it through, and the
    derivations over it that fork and merge need.
 
    A record of any era answers through the readings: a current record carries its model, and an
@@ -95,6 +95,19 @@
      claim it states is the claim, and an element it states is laid over the baseline's — what
      the design says wins, and what it leaves unsaid is carried."
     {:signature [:=> [:catn [:baseline Model] [:design Model]] Model]})
+  (Operation effective
+    "A design's effective model: its overlay, with every claim of the baseline it declares broken
+     and does not state taken out — declaring a claim broken is saying it no longer holds. Handed
+     those ids, it reads no record; with none it is the overlay exactly."
+    {:signature [:=> [:catn [:baseline Model] [:design Model] [:broken [:sequential :string]]] Model]
+     :delegates [overlay]})
+  (Operation unrestated-elements
+    "The elements of the baseline a design declares broken and leaves as the baseline describes
+     them. Only the design can say what such an element becomes, so a baseline derived from the
+     two would describe it as it was."
+    {:signature [:=> [:catn [:baseline Model] [:design Model] [:broken [:sequential :string]]]
+                 [:vector :string]]
+     :delegates [overlay]})
   (Operation combine
     "Three effective models — the fork's base, the parent's and the child's — combined by id, each
      side read against the base. A side that alone changed an element or claim wins; both changing

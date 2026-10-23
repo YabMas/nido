@@ -3777,14 +3777,13 @@
 
    What it does not keep is what its `:baseline :breaks` names: a revisit says which of the
    baseline's claims cannot survive it, and a claim the design removes — about code the change may
-   well delete — is no part of what holds once it lands, nor a subject the declaration still owes."
+   well delete — is no part of what holds once it lands, nor a subject the declaration still owes.
+   The same `model/effective` a fork derives its child's baseline by and a merge combines."
   [ledger design]
-  (let [baseline (stages/cited-baseline ledger design)
-        broken   (set (get-in design [:baseline :breaks]))]
+  (let [baseline (stages/cited-baseline ledger design)]
     (if (and (:model design) (:model baseline))
-      (assoc design :model (model/overlay (update (:model baseline) :claims
-                                                  #(vec (remove (comp broken :id) %)))
-                                          (:model design)))
+      (assoc design :model (model/effective (:model baseline) (:model design)
+                                            (report/broken-ids design)))
       design)))
 
 (defn- stratum-row? [row] (= "stratum" (some-> (:sort row) name str/lower-case)))

@@ -430,6 +430,34 @@
                                      (naming {:id "mod-the-order-aggregate" :sort :module})))
             "a module the baseline describes is named by id alone")))))
 
+(deftest a-design-states-what-an-element-it-breaks-becomes
+  ;; A claim declared broken is taken out by saying so. An element's new description only the
+  ;; design can give, and left alone a child forked from it would describe the element as it was.
+  (with-tmp
+    (fn [_]
+      (let [w        (ws/create! :brian {:external-refs []})
+            _        (seed-baseline! w)
+            breaking (fn [element]
+                       (pr-str (assoc (design-citing 2)
+                                      :model {:elements [element]
+                                              :claims   [{:id "c1" :about ["mod-the-order-aggregate"]
+                                                          :statement "the aggregate sums each line once"
+                                                          :falsified-by "a line summed twice"
+                                                          :evidence {:by :round}}]}
+                                      :baseline {:seq 2 :relation :revisit
+                                                 :breaks ["composition — lines leave the aggregate"
+                                                          "[mod-the-order-aggregate] its interface moves"]
+                                                 :note "the store reads lines"})))]
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo
+             #"Design lists mod-the-order-aggregate under :baseline :breaks but leaves each as baseline entry 2 describes it"
+             (ws/append-entry! :brian (:id w) {:kind :design}
+                               (breaking {:id "mod-the-order-aggregate" :sort :module}))))
+        (is (some? (ws/append-entry! :brian (:id w) {:kind :design}
+                                     (breaking {:id "mod-the-order-aggregate" :sort :module
+                                                :interface "an order's total and its lines"})))
+            "stated anew it is answered — and the composition claim, declared broken, needs nothing more")))))
+
 (deftest a-baseline-cites-the-intent-it-was-scoped-for
   (with-tmp
     (fn [_]

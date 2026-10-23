@@ -187,6 +187,37 @@
             (is (= 4 (:seq (ex-data e))) "named by the child design's entry")
             (is (= ["ledger"] (:modules (ex-data e))))))))))
 
+(deftest a-claim-a-side-declares-broken-is-a-removal-on-that-side
+  (with-tmp
+    (fn [_]
+      (let [[p c] (parent-and-child)]
+        (parent-restates! p {:elements [{:id "agg" :sort :module}] :claims [c1]})
+        ;; the child declares c2 broken and says nothing more of it
+        (add! c :design (a-design 3 c3-about-total
+                                  :baseline {:seq 3 :relation :revisit :breaks ["c2 — rounding moves"] :note "n"}))
+        (let [prop (unit-merge/proposal :brian c "/w")]
+          (is (= [] (:conflicts prop)))
+          (is (= ["c1" "c3"] (mapv :id (get-in prop [:model :claims]))))
+          (is (= ["c2"] (get-in prop [:model :removed :claims]))
+              "the merged design states as removed what the child said stops holding"))))))
+
+(deftest a-current-design-leaving-an-element-it-breaks-as-it-was-is-refused-by-entry
+  (with-tmp
+    (fn [_]
+      (let [[_ c]  (parent-and-child)
+            _      (child-designs! c c3-about-total)
+            governing standing/governing-design]
+        (with-redefs [standing/governing-design (fn [project ws-id]
+                                                  (cond-> (governing project ws-id)
+                                                    (= c ws-id) (assoc :baseline {:seq 3 :relation :revisit
+                                                                                  :breaks ["agg — its interface moves"]
+                                                                                  :note "n"})))]
+          (let [e (try (unit-merge/proposal :brian c "/w") nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+            (is (= :merge (:refused (ex-data e))))
+            (is (= 4 (:seq (ex-data e))) "named by the child design's entry")
+            (is (= ["agg"] (:unrestated (ex-data e))))))))))
+
 (deftest the-ledger-appends-a-merged-design-only-as-the-combination
   (with-tmp
     (fn [_]

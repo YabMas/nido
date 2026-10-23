@@ -5,6 +5,7 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.state :refer [WorkstreamId]]
             [canvas.coordinator.record.workstream :as workstream :refer [Workstream]]
+            [canvas.coordinator.report :as report]
             [canvas.coordinator.report.model :as model]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
@@ -37,7 +38,11 @@
      :delegates [workstream/entry-at-seq]})
   (Operation fork!
     "Mint a child workstream from a parent whose design stands: append its `:fork` entry and the
-     baseline derived from the parent's baseline and design. Refuses a parent whose cited records
-     predate the shared model, naming them. Writes nothing on the parent."
+     baseline derived from the parent's baseline and design — the design's effective model, less
+     every claim it declares broken. Refuses, naming them, cited records that predate the shared
+     model, modules or strata the design adds undescribed, and elements it declares broken and
+     leaves as they were; every refusal is decided before the child exists. Writes nothing on the
+     parent."
     {:signature [:=> [:catn [:project ProjectName] [:parent WorkstreamId] [:opts :map]] Workstream]
-     :delegates [workstream/create! workstream/append-entry! parent-records model/overlay]}))
+     :delegates [workstream/create! workstream/append-entry! parent-records model/effective
+                 model/unrestated-elements report/broken-ids]}))

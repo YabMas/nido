@@ -4,6 +4,7 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.fork :as fork]
+            [canvas.coordinator.report :as report]
             [canvas.coordinator.report.model :as model]
             [canvas.design.check :as design]
             [canvas.platform.project :refer [ProjectName]]
@@ -29,7 +30,8 @@
     "Combine the fork's base, the parent's current design and the child's design, then check the
      combined declaration in the child's working copy. Conflicts from both are reported together."
     {:signature [:=> [:catn [:project ProjectName] [:child-ws :string] [:worktree :string]] MergeProposal]
-     :delegates [fork/lineage fork/parent-records model/overlay model/combine design/check]})
+     :delegates [fork/lineage fork/parent-records model/effective model/unrestated-elements
+                 report/broken-ids model/combine design/check]})
   (Operation conflicts-text
     "The conflicts for a person, each named by claim id or by law."
     {:signature [:=> [:catn [:proposal MergeProposal]] :string]})

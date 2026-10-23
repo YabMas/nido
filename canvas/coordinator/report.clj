@@ -89,6 +89,10 @@
     "The baseline id a `:breaks` entry names, its reason and brackets taken off. The schema admits
      any string, and every reader holding :breaks to ids compares through this."
     {:signature [:=> [:catn [:entry :any]] :string]})
+  (Operation broken-ids
+    "The baseline ids a design declares it breaks, each `:breaks` entry read by `break-id`, in order."
+    {:signature [:=> [:catn [:design [:maybe :map]]] [:vector :string]]
+     :delegates [break-id]})
   (Operation repair-before-asking
     "The repair a design decision's `:asks` waits on: its `:recommend` when that is `:amend`,
      `:recut` or `:resurvey` and the decision does not `proceeds?` anyway, else nil.

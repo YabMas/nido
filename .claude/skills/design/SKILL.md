@@ -165,6 +165,16 @@ what survives the session.
   other. `:revisit` must name what it breaks — otherwise "the design needs
   revisiting" is a feeling, and deriving it instead of feeling it is the entire
   point of surveying first.
+
+  **What `:breaks` names, the model answers.** A baseline *claim* listed there
+  and not stated in your `:model` is taken out of the design's effective model —
+  saying it breaks is saying it no longer holds — so a child forked from the
+  design, or a merge, never inherits it. Restate it only if something takes its
+  place under that id. A baseline *element* listed there is a module or
+  operation whose description moves, and only you can say what it becomes:
+  state it with its new `:hides` / `:interface`, or remove it. The ledger
+  refuses a design that names one by id alone, or not at all, because a child's
+  baseline would describe it as it was.
 - **`:strata` is the design's decomposition claim** — the levels of the code the
   change is written in or adds to, each a `:stratum` element of its model (§4). It
   states no cut: the cut dies at `/land`, so `/stack` draws it at stack time from
@@ -793,8 +803,9 @@ The parent's newest design has to stand — cleared or granted — and it and it
 baseline must be written in the shared model. The child is a new workstream
 holding its own goal, a `:fork` entry naming the parent's baseline and design,
 and a baseline DERIVED from those two: the parent design laid over the parent
-baseline, by id. Verify that baseline with the ordinary round instead of
-surveying again. Nothing is written on the parent.
+baseline, by id, less every claim the design declares broken. Verify that
+baseline with the ordinary round instead of surveying again. Nothing is written
+on the parent.
 
 The rounds find their workstream through the session they run in, and the
 session you forked from stays on the parent. Work the child from a session of
@@ -806,7 +817,7 @@ bb nido:session:up <name> :project <p> :ws-id <child>
 
 Design the child like any unit. A design states only what it changes: an id it
 leaves out is carried unchanged, and taking one out is said under
-`:model :removed`.
+`:model :removed` — or, for a claim, by listing it under `:baseline :breaks`.
 
 To bring it home:
 

@@ -15,7 +15,9 @@
    Beside the readings, the derivations over current-era models that forking and merging need:
    `overlay`, the model a design leaves when laid over the baseline it cites, and `combine`, three
    such models put together by id. Both read models only, never a record's own fields, and
-   `predates` says which records hold a model they can be given."
+   `predates` says which records hold a model they can be given. What a design declares broken
+   bears on both — `effective` takes out the claims it names, `unrestated-elements` names the
+   elements it leaves as they were — and each is handed those ids rather than reading the record."
   (:require
    [nido.coordinator.report :as report]))
 
@@ -155,7 +157,8 @@
 
 (defn ^{:malli/schema [:=> [:cat :Model :Model] :Model]}
   overlay
-  "The model `design` leaves when laid over `baseline`, by id — a design's EFFECTIVE model.
+  "The model `design` leaves when laid over `baseline`, by id — a design's effective model when it
+   declares nothing broken, and the ground `effective` builds on when it does.
 
    A design restates nothing it keeps. So an id the design neither states nor removes is carried
    unchanged, an id it states as removed is dropped, and an id it states is laid over the
@@ -184,6 +187,41 @@
                     (set (get-in design [:removed :claims])) (fn [_ restated] restated))}))
 
 (defn- by-id [xs] (into {} (map (juxt :id identity)) xs))
+
+(defn ^{:malli/schema [:=> [:cat :Model :Model [:sequential :string]] :Model]}
+  effective
+  "The model a design leaves over `baseline` once what it declares broken is honoured: `overlay`,
+   with every claim among `broken` that the baseline holds and the design does not state taken out
+   as though the design had removed it. `broken` is the ids the design's :baseline :breaks names,
+   as `report/break-id` reads them; empty, this is `overlay` exactly.
+
+   A design states only what it changes, so a claim it declares broken and leaves unsaid would
+   otherwise be carried as true — into the baseline a child is forked with, and into a merge.
+   Saying it breaks is saying it no longer holds, so nothing more need be said to take it out. A
+   claim the design does state is the design's word and stands. Elements are not taken out: an
+   element under :breaks is a module or operation whose description moves, not one that is gone,
+   and what it becomes is the design's to state (`unrestated-elements`)."
+  [baseline design broken]
+  (let [stated (into #{} (map :id) (:claims design))
+        held   (into #{} (map :id) (:claims baseline))
+        gone   (into [] (comp (filter held) (remove stated) (distinct)) broken)]
+    (overlay baseline (cond-> design
+                        (seq gone) (update-in [:removed :claims] (fnil into []) gone)))))
+
+(defn ^{:malli/schema [:=> [:cat :Model :Model [:sequential :string]] [:vector :string]]}
+  unrestated-elements
+  "The ids among `broken` — what a design declares it breaks, as `report/break-id` reads its
+   :breaks — of elements `baseline` holds that `design`, laid over it, leaves exactly as the
+   baseline describes them, distinct and in the order given. Naming one by id alone leaves it so.
+
+   An element declared broken has a description that no longer holds, and only the design can say
+   what replaces it; carried unchanged, a baseline derived from the two describes it as it was. An
+   id the baseline holds as no element is not one of them — a claim is answered by `effective`, and
+   whether :breaks names the right ids at all is a round's judgement."
+  [baseline design broken]
+  (let [was  (by-id (:elements baseline))
+        laid (by-id (:elements (overlay baseline design)))]
+    (into [] (comp (filter #(and (was %) (= (was %) (laid %)))) (distinct)) broken)))
 
 (defn- combine-kind
   "One kind's entries combined three ways, in first-seen order: `{:kept [<entry>] :diverged [<id>]}`."

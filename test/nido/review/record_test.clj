@@ -13,6 +13,7 @@
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.report :as report]
+   [nido.coordinator.report.model :as model]
    [nido.review.codex :as codex]
    [nido.review.record :as record]
    [nido.review.settled :as settled]
@@ -288,6 +289,19 @@
         "and the subject's refutation run survives it")
     (is (= ["modal-footer" "rounded-once"] (:confirmed (#'record/rule result checks checks)))
         "a round with no :breaks confirms as before")))
+
+(deftest a-round-resolves-a-design-over-the-model-a-fork-would-derive
+  ;; A :breaks entry carrying its reason was compared to claim ids as written, so it took nothing
+  ;; out; and the round's reading of a design's model is the one a fork and a merge derive.
+  (let [c        (fn [id] {:id id :about ["agg"] :statement id :falsified-by "f" :evidence {:by :round}})
+        baseline {:model {:elements [{:id "agg" :sort :module :hides "h" :interface "i"}]
+                          :claims   [(c "c1") (c "c2")]}}
+        design   {:model    {:elements [{:id "agg" :sort :module}] :claims [(c "c3")]}
+                  :baseline {:seq 2 :relation :revisit :breaks ["c2 — rounding moves"] :note "n"}}]
+    (with-redefs [stages/cited-baseline (fn [_ _] baseline)]
+      (is (= ["c1" "c3"] (mapv :id (get-in (#'record/effective-design [:brian "ws"] design) [:model :claims]))))
+      (is (= (model/effective (:model baseline) (:model design) ["c2"])
+             (:model (#'record/effective-design [:brian "ws"] design)))))))
 
 (deftest an-owed-ruling-keeps-what-the-judge-read
   ;; Owed rulings reversed earlier refutations with file:line evidence in the judge's answer, and the

@@ -47,14 +47,15 @@
   (throw (ex-info message (assoc data :refused :fork))))
 
 (defn- derived-baseline
-  "A child's first baseline: the parent baseline as it reads, with the parent design laid over its
-   model and naming the strata that model lists, less the health observations that design routed
-   :fix-here. The design answers those, and a child does not inherit what its parent committed to
-   fixing."
+  "A child's first baseline: the parent baseline as it reads, with the parent design's effective
+   model in place of its own — less every claim the design declares broken — and naming the strata
+   that model lists, less the health observations that design routed :fix-here. The design answers
+   those, and a child does not inherit what its parent committed to fixing, nor what it said stops
+   holding."
   [baseline design]
   (let [fixed  (into #{} (keep #(when (= :fix-here (:to %)) (:health-id %))) (:routes design))
         health (into [] (remove #(contains? fixed (:id %))) (:health baseline))
-        laid   (model/overlay (:model baseline) (:model design))]
+        laid   (model/effective (:model baseline) (:model design) (report/broken-ids design))]
     (cond-> (-> (ws/unstamp baseline)
                 (dissoc :supersedes :health :intent :fork)
                 (assoc :model laid :strata (model/strata-of laid)))
@@ -72,8 +73,9 @@
    Refuses — throwing with `:refused :fork` and writing nothing anywhere — a parent with no design;
    a design that does not stand, because nothing cleared or granted it or something blocks it; a
    design or baseline written before the shared model, or before a role named its players, named by
-   entry; a design adding a module or a stratum it does not describe, naming them; and child records the
-   ledger would not accept, with why. All of it is decided before the child is minted, so a refused
+   entry; a design adding a module or a stratum it does not describe, naming them; a design listing
+   under :baseline :breaks an element it leaves as its baseline describes it, naming them; and child
+   records the ledger would not accept, with why. All of it is decided before the child is minted, so a refused
    fork leaves no workstream behind."
   [project parent {:keys [goal done-when context]}]
   (let [design   (or (standing/governing-design project parent)
@@ -107,6 +109,14 @@
                                  " its level, so the child's baseline would list a stratum it could"
                                  " not survey — amend the design to describe them first")
                             {:parent parent :seq (:seq design) :strata (vec bare)}))
+        _        (when-let [kept (seq (model/unrestated-elements (:model baseline) (:model design)
+                                                                (report/broken-ids design)))]
+                   (refuse! (str "The design at entry " (:seq design) " on " parent " lists "
+                                 (str/join ", " kept) " under :baseline :breaks but leaves each as"
+                                 " baseline entry " bseq " describes it, so the child's baseline would"
+                                 " describe them as they were — amend the design to state each as it"
+                                 " is after the change first")
+                            {:parent parent :seq (:seq design) :unrestated (vec kept)}))
         intent   (cond-> {:format :intent :goal goal :done-when (vec done-when)}
                    context (assoc :context context))
         derived  (derived-baseline baseline design)

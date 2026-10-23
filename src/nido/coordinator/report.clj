@@ -1350,6 +1350,13 @@
   [entry]
   (-> (str entry) str/trim (str/replace #"[\[\]]" "") (str/split #"[\s—]+" 2) first str))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:vector :string]]}
+  broken-ids
+  "The baseline ids a design declares it breaks — each `:baseline :breaks` entry read by `break-id`,
+   in order. Empty for a design that declares none."
+  [design]
+  (mapv break-id (get-in design [:baseline :breaks])))
+
 (def BaselineRelation
   "How this change relates to the area's CURRENT design — the layer-2 question,
    and deliberately NOT :standing, which relates it to the project's stance. The

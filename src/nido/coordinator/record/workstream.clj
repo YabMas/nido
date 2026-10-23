@@ -401,6 +401,22 @@
                            " without saying what each provides and reading its level")
                       {:seq (:seq baseline) :strata (vec bare)})))))
 
+(defn- check-breaks-restated!
+  "A design that lists an element of its baseline under :baseline :breaks says what that element
+   becomes — states it anew, or removes it. A claim it lists is taken out of its effective model by
+   saying so (`report-model/effective`), but an element's new description is the design's to give:
+   left alone, a child forked from the design describes it as it was. An entry naming no element
+   the baseline holds is left to the round that judges :breaks. Records from before the shared
+   model are left to the readers that refuse them."
+  [baseline record]
+  (when (and (contains? baseline :model) (contains? record :model))
+    (when-let [kept (seq (report-model/unrestated-elements
+                          (:model baseline) (:model record) (report/broken-ids record)))]
+      (throw (ex-info (str "Design lists " (str/join ", " kept) " under :baseline :breaks but leaves"
+                           " each as baseline entry " (:seq baseline) " describes it — state each as"
+                           " it is after the change, or list it under :model :removed")
+                      {:seq (:seq baseline) :unrestated (vec kept)})))))
+
 (defn- check-baseline-citation!
   "A :design record's :baseline names the entry it was judged against, its
    :routes answer that entry's health observations, and its :intent names what
@@ -434,7 +450,8 @@
                                            (mapv :seq))})))
         (let [baseline (read-entry-at w n)]
           (check-routes-total! baseline record)
-          (check-modules-described! baseline record)))
+          (check-modules-described! baseline record)
+          (check-breaks-restated! baseline record)))
       (when-let [n (get-in record [:intent :seq])]
         (let [e (->> (:entries w) (filter #(= n (:seq %))) first)]
           (when-not (= :intent (:kind e))
@@ -613,11 +630,12 @@
                         (refuse (str "The merged design names entry " n " on " child-ws
                                      ", which is not a design")))
               laid    (fn [ledger design]
-                        (report-model/overlay
+                        (report-model/effective
                          (:model (read-entry-at ledger (get-in design [:baseline :seq])))
-                         (:model design)))
+                         (:model design) (report/broken-ids design)))
               {:keys [model conflicts]} (report-model/combine
-                                         (report-model/overlay (:model fb) (:model fd))
+                                         (report-model/effective (:model fb) (:model fd)
+                                                                 (report/broken-ids fd))
                                          (laid w pd) (laid child cd))
               keyed   (fn [m] [(into {} (map (juxt :id identity)) (:elements m))
                                (into {} (map (juxt :id identity)) (:claims m))])]

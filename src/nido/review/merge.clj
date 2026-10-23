@@ -7,7 +7,7 @@
    the proposal, and the merged design is judged by the ordinary design round, whose record-level
    derivations run whatever the proposal found.
 
-   Three effective models are combined, each built by the one overlay: the BASE, recomputed from
+   Three effective models are combined, each built by the one `model/effective`: the BASE, recomputed from
    the child's :fork entry as the design it forked laid over that design's baseline, and never read
    off a child record a later round may have superseded; the PARENT, its current design over the
    baseline that design cites; and the CHILD, its current design over the baseline it cites."
@@ -17,6 +17,7 @@
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.report :as report]
    [nido.coordinator.report.model :as model]
    [nido.design.check :as design]))
 
@@ -53,8 +54,14 @@
                     (str/join ", " bare) " without saying what each provides and reading its level"
                     " — amend it to describe them before merging")
                {:ws-id ws-id :seq (:seq design) :strata (vec bare)}))
+    (when-let [kept (seq (model/unrestated-elements (:model baseline) (:model design)
+                                                    (report/broken-ids design)))]
+      (refuse! (str "The " whose " design at entry " (:seq design) " on " ws-id " lists "
+                    (str/join ", " kept) " under :baseline :breaks but leaves each as its baseline"
+                    " describes it — amend it to state each as it is after the change before merging")
+               {:ws-id ws-id :seq (:seq design) :unrestated (vec kept)}))
     {:baseline baseline
-     :model    (model/overlay (:model baseline) (:model design))}))
+     :model    (model/effective (:model baseline) (:model design) (report/broken-ids design))}))
 
 (defn- law-conflicts
   "Every law the declaration in `worktree` breaks, as conflicts. A declaration fukan could not check
@@ -91,7 +98,10 @@
 
    Refuses, throwing with `:refused :merge`: a workstream that was not forked, a parent or child
    holding no design, a record that cannot be read or predates the shared model, a design adding a
-   module it does not describe, and a declaration fukan could not check."
+   module it does not describe, a current design listing under :breaks an element it leaves as its baseline
+   describes it, and a declaration fukan could not check. The forked design is not held to that: it
+   is immutable, so no amendment could answer the refusal, and its model is only what each side is
+   read against — a base value reaches the combination only where both sides kept it."
   [project child-ws worktree]
   (let [child   (or (ws/read-ws project child-ws)
                     (refuse! (str "No workstream " child-ws) {:ws-id child-ws}))
@@ -116,7 +126,8 @@
                     (refuse! (str "The child " child-ws " holds no design to merge") {:ws-id child-ws}))
         {pm :model pb :baseline} (laid-over-its-baseline project parent pd "parent's current")
         {cm :model}              (laid-over-its-baseline project child-ws cd "child's")
-        {:keys [model conflicts]} (model/combine (model/overlay (:model fb) (:model fd)) pm cm)
+        {:keys [model conflicts]} (model/combine (model/effective (:model fb) (:model fd) (report/broken-ids fd))
+                                                  pm cm)
         removed (removed-from pb model)]
     {:model     (cond-> model (seq removed) (assoc :removed removed))
      :conflicts (into (vec conflicts) (law-conflicts project worktree))

@@ -62,7 +62,7 @@
   {:about [record-fork record-workstream] :evidence "round"})
 
 (Claim child-baseline-derived
-  "A child unit's first baseline is derived, never surveyed from scratch: its model is the parent's cited baseline model overlaid by that design's model by id, and it cites the :fork entry naming the parent workstream and both seqs."
+  "A child unit's first baseline is derived, never surveyed from scratch: its model is the parent design's effective model over the parent's cited baseline — the overlay by id, less every claim the design declares broken — and it cites the :fork entry naming the parent workstream and both seqs."
   {:about [record-fork report-model] :evidence "round"})
 
 (Claim merge-combines-by-id

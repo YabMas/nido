@@ -183,6 +183,49 @@
             (is (= ["ledger"] (:strata (ex-data e))))
             (is (str/includes? (ex-message e) "provides"))))))))
 
+(defn- breaking [breaks]
+  (-> (a-design 2)
+      (assoc :seq 9)
+      (assoc :baseline {:seq 2 :relation :revisit :breaks breaks :note "rounding leaves the total"})))
+
+(deftest a-claim-the-design-declares-broken-leaves-the-child-baseline
+  ;; Watched on brian: a :revisit design listed claims under :breaks that its model neither
+  ;; restated nor removed, and the child's derived baseline asserted every one — falsified on them
+  ;; by its first review.
+  (with-tmp
+    (fn [_]
+      (let [p       (parent)
+            amend!  (fn [design]
+                      (ws/append-entry! :brian p {:kind :design}
+                                        (pr-str (-> design (dissoc :seq)
+                                                    (assoc :supersedes {:seq 4 :why "it breaks c1"})))))
+            derived (fn [] (with-redefs [standing/of-design (fn [& _] {:cleared? true})]
+                             (let [child (fork/fork! :brian p goal)]
+                               (mapv :id (get-in (ws/latest-entry :brian (:id child) :baseline)
+                                                 [:model :claims])))))]
+        (amend! (breaking ["c1 — summing moves" "c2"]))
+        (is (= ["c1" "c3"] (derived))
+            "c2 is removed either way; c1, which the design states, stands as the design states it")
+        (amend! (-> (breaking ["c1"]) (update-in [:model :claims] (comp vec rest))))
+        (is (= ["c3"] (derived)) "c1, declared broken and left unsaid, is not carried")))))
+
+(deftest a-design-leaving-an-element-it-breaks-as-it-was-is-refused-before-the-child-exists
+  ;; The ledger now refuses such a design; one written before it is still on disk, which is what
+  ;; the redef stands for.
+  (with-tmp
+    (fn [_]
+      (let [p      (parent)
+            before (set (ws/list-ids :brian))]
+        (with-redefs [standing/governing-design (fn [_ _] (breaking ["c2" "total — rounding moves" "agg"]))
+                      standing/of-design (fn [& _] {:cleared? true})]
+          (let [e (try (fork/fork! :brian p goal) nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+            (is (= :fork (:refused (ex-data e))))
+            (is (= ["total" "agg"] (:unrestated (ex-data e)))
+                "total is unsaid and agg named by id alone; c2 is a claim, and is taken out")
+            (is (str/includes? (ex-message e) "entry 9"))
+            (is (= before (set (ws/list-ids :brian))) "refused before any child was minted")))))))
+
 (deftest a-child-record-the-ledger-would-refuse-says-why
   (with-tmp
     (fn [_]
