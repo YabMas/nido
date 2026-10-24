@@ -306,7 +306,7 @@
 
   nido:design:approve
   {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "Record a person's go, given in chat, as the grant of a design — the same :design-approved the gate's Approve writes. Answers a decision that proceeds or asks; refuses one that sent the record back. :project <p> (:ws-id <id> | :ref <BR-####>) :design-seq <n> [:note <what the person said>]"
+   :doc "Record a person's go, given in chat, as the grant of a design — the same :design-approved the gate's Approve writes. Answers a decision that proceeds or asks; refuses one that sent the record back unless :over-sendback? true, which grants it with the person's words and names the findings it leaves open. :project <p> (:ws-id <id> | :ref <BR-####>) :design-seq <n> [:note <what the person said>] [:over-sendback? true]"
    :task (apply nido-workstream/approve-cmd *command-line-args*)}
 
   nido:design:diff

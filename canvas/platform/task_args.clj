@@ -11,4 +11,8 @@
   ;; false about the other. The gap is fukan's; recorded here rather than papered over.
   (Operation split-args
     "Split CLI args into [positionals opts-map]. A token starting with ':' is a kwarg key and
-     consumes the next token; every other token is a positional, order preserved."))
+     consumes the next token; every other token is a positional, order preserved.")
+  (Operation unknown-opts-refusal
+    "Why an opts map cannot be run by a task that reads exactly the given keys, or nil — each
+     unknown key named with the nearest known one. split-args keeps every key it is given."
+    {:signature [:=> [:catn [:opts :map] [:known [:set :keyword]]] [:maybe :string]]}))

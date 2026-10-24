@@ -244,15 +244,19 @@
   "Record a person's go, given in chat, as the grant of a design. Exits non-zero on a refusal,
    naming why — an agent told `no` without the reason would fall back to writing the answer
    into the record, which is the prose no reader of a grant reads."
-  [{:keys [project design-seq note] :as opts}]
+  [{:keys [project design-seq note over-sendback?] :as opts}]
   (when-not design-seq
     (println "Missing :design-seq <n> — a grant names the design it grants, by number")
     (System/exit 2))
   (let [n   (parse-long (str design-seq))
-        res (work/grant-design! (keyword project) (resolve-ws-id opts) n (some-> note str))]
+        res (work/grant-design! (keyword project) (resolve-ws-id opts) n (some-> note str)
+                                {:over-sendback? (true? over-sendback?)})]
     (case (:decision res)
-      :approved        (println (str "granted design " n " (answering the decision at entry "
-                                     (:at-seq res) ")"))
+      :approved        (do (println (str "granted design " n " (answering the decision at entry "
+                                         (:at-seq res) ")"))
+                           (when-let [{:keys [recommend open]} (:overruled res)]
+                             (println (str "  over its " (name recommend) ", leaving open:"))
+                             (doseq [f open] (println (str "  - " f)))))
       :already-granted (println (str "design " n " is already granted since its decision — nothing written"))
       (do (println (str "grant REFUSED — "
                         (or (get-in res [:because :detail]) (name (:decision res)))))

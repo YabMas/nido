@@ -237,10 +237,14 @@
      reported unanswered and asked again.
 
      Admits what the gate admits plus an :ask, since an :ask is the round stopping for a person
-     and a person answering it is what this is for. Refuses a decision that sent the record back,
-     a design that is not the newest, and one that does not stand."
+     and a person answering it is what this is for — and, asked :over-sendback? with the
+     person's words, any decision that does not let the design proceed, marking the grant
+     :overrules and naming to the person the findings that decision leaves open: the round's
+     amender answers a send-back with another design, so this is the one way a person ends a
+     round that never stops sending back. Refuses a design that is not
+     the newest, one that does not stand, and one no decision names."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design-seq :int]
-                            [:note [:maybe :string]]] :map]
+                            [:note [:maybe :string]] [:opts [:maybe :map]]] :map]
      :delegates [workstream/append-entry!]})
   (Operation record-landing!
     "Record that an approved proposal is now carried by a revision.

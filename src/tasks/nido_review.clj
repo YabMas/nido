@@ -2636,7 +2636,14 @@
       (println (str "\n  If the answer is go, record it as the grant — never as prose in the record:\n"
                     "  bb nido:design:approve :project <p> :ws-id <id> :design-seq "
                     (get-in final [:record :design-seq] "<n>")
-                    " :note \"<what the person said>\"")))))
+                    " :note \"<what the person said>\""))))
+  ;; A send-back the amender answers with another design can go on for as long as the judge
+  ;; finds something; the person may end it on a design they accept, and this is how.
+  (when (#{:amend :recut :resurvey} (get-in final [:record :recommend]))
+    (println (str "\n  To build the design as it stands instead, the person's go is a grant over the send-back:\n"
+                  "  judge the newest design without amending it — bb nido:review:design :dry-run? true —\n"
+                  "  then bb nido:design:approve :project <p> :ws-id <id> :design-seq <its seq>"
+                  " :over-sendback? true :note \"<what the person said>\""))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   design-cmd*
@@ -2662,17 +2669,36 @@
     (println (str "clearance: " (name status)))
     status))
 
+(def ^:private record-loop-options
+  "The options a person may give a record loop on the command line — what `record-loop-cmd*`
+   reads, less what only another command passes (:caller, :baseline)."
+  #{:cwd :code-cwd :max-iters :budget :dry-run? :reviewer})
+
+(defn- refuse!
+  "Print why the command line was refused and exit 2, before any round runs."
+  [why]
+  (println why)
+  (System/exit 2))
+
+(defn- loop-opts
+  "`args` as the record loop's options, or a refusal when any key is one the loop does not read:
+   a mistyped option would otherwise be dropped, and the round would run as though it had never
+   been typed — a judge-only round asked for as `:dry-run` amends."
+  [args known]
+  (let [[_ opts] (task-args/split-args args)]
+    (if-let [why (task-args/unknown-opts-refusal opts known)]
+      (refuse! why)
+      opts)))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   baseline-cmd
   [& args]
-  (let [[_ opts] (task-args/split-args args)]
-    (baseline-cmd* opts)))
+  (baseline-cmd* (loop-opts args (conj record-loop-options :seq))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   design-cmd
   [& args]
-  (let [[_ opts] (task-args/split-args args)]
-    (design-cmd* opts)))
+  (design-cmd* (loop-opts args record-loop-options)))
 
 ;; ── A stopped run's answer, appended as written ─────────────────────────────
 

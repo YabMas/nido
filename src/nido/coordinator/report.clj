@@ -3435,14 +3435,20 @@
    grant (`:supersedes :granted`), and :note is that grant word for word, or a
    person granted the design it replaces — :from — and the move it declares has
    not changed since, and :note is that grant's. Parking either for a second
-   approval asked the person nothing they had not answered."
+   approval asked the person nothing they had not answered.
+
+   :overrules marks a grant a person gave although the decision at :at-seq did not let the
+   design proceed — it sent the record back, or proceeded on a reading that does not count.
+   What that decision answered and the findings it left open are read off it, not copied
+   here: the person's choice to build over it is the one fact no other record holds."
   [:map {:closed true}
    [:format  [:= :design-approved]]
    [:design  [:map {:closed true} [:seq int?]]]
    [:at-seq  int?]
    [:note    {:optional true} string?]
    [:carried {:optional true} [:= true]]
-   [:from    {:optional true} [:map {:closed true} [:seq int?]]]])
+   [:from    {:optional true} [:map {:closed true} [:seq int?]]]
+   [:overrules {:optional true} [:= true]]])
 
 (def DesignCleared
   "A decision round found this design implementable without a person: it

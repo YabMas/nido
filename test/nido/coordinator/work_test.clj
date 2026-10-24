@@ -1118,7 +1118,7 @@
     (fn [_]
       (let [[id _ d _] (approvable)
             ask (decide! id d :ask)
-            out (work/grant-design! :brian id d "go — worth it now")]
+            out (work/grant-design! :brian id d "go — worth it now" nil)]
         (is (= :approved (:decision out)))
         (let [granted (workstream/latest-entry :brian id :design-approved)]
           (is (= {:format :design-approved :design {:seq d} :at-seq ask :note "go — worth it now"}
@@ -1127,24 +1127,88 @@
         (is (:decided? (standing/of-design :brian id
                                            (workstream/latest-entry :brian id :design)))
             "standing counts it as the grant it is")
-        (is (= :already-granted (:decision (work/grant-design! :brian id d nil)))
+        (is (= :already-granted (:decision (work/grant-design! :brian id d nil nil)))
             "an agent repeating the command does not stack a second grant")))))
 
-(deftest a-chat-grant-refuses-what-the-round-sent-back
+(deftest a-chat-grant-refuses-what-the-round-sent-back-naming-the-way-past-it
   (with-tmp
     (fn [_]
       (let [[id _ d _] (approvable)]
         (decide! id d :amend)
-        (let [out (work/grant-design! :brian id d nil)]
+        (let [out (work/grant-design! :brian id d nil nil)]
           (is (= :sent-back (get-in out [:because :reason]))
-              "the next move after :amend is the author's; a grant would build what the round rejected")
+              "unasked, the next move after :amend is the author's")
+          (is (str/includes? (get-in out [:because :detail]) ":over-sendback? true")
+              "and the refusal names the grant that needs no further amending round")
           (is (nil? (workstream/latest-entry :brian id :design-approved))))))))
+
+(deftest a-person-may-grant-over-a-send-back-in-their-own-words
+  ;; The round's amender answers a send-back with another design, so a round that never stops
+  ;; sending back left a person's go nowhere to be recorded.
+  (with-tmp
+    (fn [_]
+      (let [[id _ d _] (approvable)
+            amend (decide! id d :amend)]
+        (is (= :note-required
+               (get-in (work/grant-design! :brian id d nil {:over-sendback? true})
+                       [:because :reason]))
+            "a grant over the round's judgement carries the person's words")
+        (let [out (work/grant-design! :brian id d "build it as it stands" {:over-sendback? true})
+              granted (workstream/latest-entry :brian id :design-approved)]
+          (is (= :approved (:decision out)))
+          (is (= {:format :design-approved :design {:seq d} :at-seq amend
+                  :note "build it as it stands" :overrules true}
+                 (dissoc granted :seq :at :kind :file))
+              "the grant marks that it overrules the decision it answers, and copies nothing of it")
+          (is (= {:recommend :amend :open ["goal-served — c"]} (:overruled out))
+              "the findings it leaves open are read off that decision and named to the person")
+          (is (:cleared? (standing/of-design :brian id (workstream/latest-entry :brian id :design)))
+              "and standing reads it as the grant it is")
+          (is (= :already-granted
+                 (:decision (work/grant-design! :brian id d "again" {:over-sendback? true})))))))))
+
+(deftest a-grant-may-overrule-a-proceed-that-does-not-count
+  ;; A :proceed on a first reading lets nothing proceed, and recommends nothing a send-back
+  ;; names; the grant over it is the same grant.
+  (with-tmp
+    (fn [_]
+      (let [[id _ d _] (approvable)
+            once (workstream/append-entry!
+                  :brian id {:kind :design-decision}
+                  (pr-str {:format :design-decision :recommend :proceed :design-seq d :reason "r"
+                           :checks [{:check :goal-served :status :held :note "n"}]
+                           :read-once ["one-path"]}))
+            out (work/grant-design! :brian id d "build it" {:over-sendback? true})]
+        (is (some? once))
+        (is (= :approved (:decision out)))
+        (is (= {:recommend :proceed :open []} (:overruled out)))
+        (is (true? (:overrules (workstream/latest-entry :brian id :design-approved))))))))
+
+(deftest a-design-no-round-judged-is-refused-naming-the-judge-only-round
+  (with-tmp
+    (fn [_]
+      (let [[id b d _] (approvable)
+            ;; approvable decides its design; a design superseding it is one no round has judged.
+            _  (workstream/append-entry!
+                :brian id {:kind :design}
+                (pr-str {:format :design :strata [] :summary "s2" :shape "sh"
+                         :model {:elements [{:id "m" :sort :module}]
+                                 :claims [{:id "one-path" :about ["m"] :statement "one path"
+                                           :falsified-by "a second path" :evidence {:by :round}}]}
+                         :standing {:relation :conforms}
+                         :baseline {:seq b :relation :within} :intent {:seq 1}
+                         :supersedes {:seq d :why "amended"} :effort :S}))
+            d2 (:seq (workstream/latest-entry :brian id :design))
+            out (work/grant-design! :brian id d2 "go" {:over-sendback? true})]
+        (is (= :undecided (get-in out [:because :reason])))
+        (is (str/includes? (get-in out [:because :detail]) "bb nido:review:design :dry-run? true"))
+        (is (nil? (workstream/latest-entry :brian id :design-approved)))))))
 
 (deftest a-chat-grant-names-the-design-that-stands-now
   (with-tmp
     (fn [_]
       (let [[id _ d _] (approvable)
-            out (work/grant-design! :brian id (dec d) nil)]
+            out (work/grant-design! :brian id (dec d) nil nil)]
         (is (= :not-newest (get-in out [:because :reason]))
             "a grant of a superseded record would be read as deciding the one that replaced it")
         (is (nil? (workstream/latest-entry :brian id :design-approved)))))))

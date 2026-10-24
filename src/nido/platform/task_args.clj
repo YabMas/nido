@@ -43,3 +43,37 @@
                                     (str v)
                                     (parse-token v)))))
            (recur (rest xs) (conj pos x) opts)))))))
+
+(defn- distance
+  "Levenshtein distance between two strings."
+  [^String a ^String b]
+  (let [n (count b)]
+    (peek (reduce (fn [prev [i ca]]
+                    (reduce (fn [row [j cb]]
+                              (conj row (min (inc (peek row))
+                                             (inc (nth prev (inc j)))
+                                             (+ (nth prev j) (if (= ca cb) 0 1)))))
+                            [(inc i)]
+                            (map-indexed vector b)))
+                  (vec (range (inc n)))
+                  (map-indexed vector a)))))
+
+(defn ^{:malli/schema [:=> [:cat :map [:set :keyword]] [:maybe :string]]}
+  unknown-opts-refusal
+  "Why `opts` cannot be run by a task that reads exactly the keys in `known`, or nil when every
+   key is one of them. Names each unknown key with the nearest known one, when one is within two
+   edits — `:dry-run` for `:dry-run?` — and then every key the task takes.
+
+   split-args keeps any key it is given, so without this a mistyped option is dropped by the
+   destructuring that reads the map and the task runs as though it had never been typed."
+  [opts known]
+  (when-let [unknown (seq (sort-by str (remove (set known) (keys opts))))]
+    (let [nearest (fn [k] (->> known
+                               (map (fn [kn] [(distance (str k) (str kn)) kn]))
+                               (filter #(<= (first %) 2))
+                               sort first second))]
+      (str "unknown option" (when (next unknown) "s") " "
+           (apply str (interpose ", " (for [k unknown]
+                                        (str k (when-let [n (nearest k)]
+                                                 (str " (closest: " n ")"))))))
+           " — this task takes " (apply str (interpose " " (sort-by str known)))))))

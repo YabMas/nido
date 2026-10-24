@@ -1310,6 +1310,29 @@
       (with-out-str (t/baseline-cmd ":cwd" "/w" ":dry-run?" "true"))
       (is (true? (:dry-run? @seen))))))
 
+;; A mistyped option used to be dropped by the destructuring that reads the map, so
+;; `:dry-run true` — the option is `:dry-run?` — ran a round that amended.
+(deftest a-record-loop-refuses-an-option-it-does-not-read-before-any-round
+  (let [ran (atom false)]
+    (with-redefs [rloop/run-loop (fn [_] (reset! ran true) {:status :sufficient})
+                  t/refuse!      (fn [why] (throw (ex-info why {:refused true})))]
+      (doseq [cmd [t/design-cmd t/baseline-cmd]]
+        (let [e (try (cmd ":cwd" "/w" ":dry-run" "true") nil
+                     (catch clojure.lang.ExceptionInfo e e))]
+          (is (:refused (ex-data e)))
+          (is (str/includes? (ex-message e) ":dry-run (closest: :dry-run?)"))))
+      (is (false? @ran) "no round runs on a refused command line")
+      (is (some? (try (t/design-cmd ":cwd" "/w" ":seq" "3") nil
+                      (catch clojure.lang.ExceptionInfo e e)))
+          ":seq names a baseline, and the design loop reads none"))))
+
+(deftest a-record-loop-takes-every-option-it-documents
+  (let [seen (atom nil)]
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :sufficient})]
+      (with-out-str (t/baseline-cmd ":cwd" "/w" ":max-iters" "1" ":budget" "5m"
+                                    ":dry-run?" "true" ":reviewer" "claude"))
+      (is (some? @seen)))))
+
 (deftest baseline-cmd-resolves-the-worktree-when-cwd-is-absent
   (let [seen (atom nil)]
     (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :sufficient})
@@ -1488,8 +1511,11 @@
   (with-redefs [rloop/run-loop (fn [_] {:status :nothing-to-amend
                                         :record {:recommend :amend :design-seq 50
                                                  :asks "?"}})]
-    (is (not (str/includes? (with-out-str (t/design-cmd ":cwd" "/w")) "nido:design:approve"))
-        "a record sent back is not a grant a person may give")))
+    (let [out (with-out-str (t/design-cmd ":cwd" "/w"))]
+      (is (not (str/includes? out ":design-seq 50 :note"))
+          "a record sent back is not granted as though the round had proceeded")
+      (is (str/includes? out ":over-sendback? true")
+          "the person may still build it as it stands, by a grant over the send-back"))))
 
 (deftest design-cmd-names-a-check-it-had-no-yardstick-for
   (with-redefs [rloop/run-loop (fn [_] {:status :underivable
