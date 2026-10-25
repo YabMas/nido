@@ -48,13 +48,17 @@
 (defn ^{:malli/schema [:=> [:cat [:sequential :map]] :Holding]}
   record!
   "Hold every pre-boot entry among those given in the current boot's record. Idempotent per
-   instance and boot: an instance already held keeps the entry it was first held with."
+   instance and boot: an instance already held keeps the entry it was first held with. An entry
+   that names no instance, project or worktree is no session anything could bring back, and is
+   not held."
   [entries]
   (if-let [boot (process/host-boot)]
     (let [held (->> entries
                     (filter #(pre-boot? % boot))
-                    (keep (fn [e] (when-let [iid (:instance-id e)] {:instance-id iid :entry e})))
-                    vec)]
+                    (keep (fn [e] (let [h {:instance-id (:instance-id e) :entry e}]
+                                    (when (parse-casualty (:id boot) h) h))))
+                    (reduce (fn [acc h] (if (some #(= (:instance-id h) (:instance-id %)) acc) acc (conj acc h)))
+                            []))]
       (try
         (when (seq held)
           (io/update-edn! (record-path (:id boot))
@@ -83,15 +87,17 @@
            (vals registry)))))
 
 (defn- read-record
-  "A record file as {:casualties [Casualty …] :settled #{…}}, or nil when it does not parse — a
-   file that cannot be read is reported, never taken as empty."
+  "A record file as {:boot :casualties [Casualty …] :settled #{…} :whole? bool}, or nil when the
+   file does not parse. An entry that does not parse to a Casualty is dropped and the record
+   marked not whole — reported, never silently taken as empty, and never costing the entries
+   beside it."
   [path]
   (try
     (let [{:keys [boot casualties settled] :as rec} (io/read-edn path)
           parsed (mapv #(parse-casualty (:id boot) %) casualties)]
-      (when (and (map? rec) (string? (:id boot)) (string? (:began-at boot))
-                 (every? some? parsed))
-        {:boot boot :casualties parsed :settled (set settled)}))
+      (when (and (map? rec) (string? (:id boot)) (string? (:began-at boot)))
+        {:boot boot :casualties (filterv some? parsed) :settled (set settled)
+         :whole? (every? some? parsed)}))
     (catch Exception _ nil)))
 
 (defn ^{:malli/schema [:=> [:cat] :Unsettled]}
@@ -117,7 +123,7 @@
                       vals
                       (sort-by :instance-id)
                       vec)
-     :unreadable (vec (keep (fn [[f rec]] (when-not rec f)) read))}))
+     :unreadable (vec (keep (fn [[f rec]] (when-not (:whole? rec) f)) read))}))
 
 (defn ^{:malli/schema [:=> [:cat [:sequential :Casualty]] :boolean]}
   settle!

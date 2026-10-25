@@ -58,6 +58,30 @@
             (is (true? (casualties/settle! (:casualties (casualties/unsettled)))))
             (is (= [] (:casualties (casualties/unsettled))))))))))
 
+(deftest record-holds-only-what-could-come-back-and-each-instance-once
+  (with-dirs (atom {})
+    (fn [tmp]
+      (let [wt (str (fs/create-dirs (fs/path tmp "a")))
+            {:keys [held]} (casualties/record! [(entry "brian--a" wt nil)
+                                                {:instance-id "brian--a" :project-dir wt :project-name "brian"}
+                                                {:instance-id "p--fixture" :session-name "a"}])]
+        (is (= ["brian--a"] (map :instance-id held)))
+        (is (= {:casualties ["brian--a"] :unreadable []}
+               (update (casualties/unsettled) :casualties #(mapv :instance-id %))))))))
+
+(deftest a-bad-entry-is-reported-without-costing-its-neighbours
+  (with-dirs (atom {})
+    (fn [tmp]
+      (let [wt  (str (fs/create-dirs (fs/path tmp "a")))
+            dir (fs/create-dirs (fs/path tmp "casualties"))]
+        (spit (str (fs/path dir "b.edn"))
+              (pr-str {:boot boot :settled #{}
+                       :casualties [{:instance-id "brian--a" :entry (entry "brian--a" wt nil)}
+                                    {:instance-id "x" :entry {}}]}))
+        (let [{:keys [casualties unreadable]} (casualties/unsettled)]
+          (is (= ["brian--a"] (map :instance-id casualties)))
+          (is (= 1 (count unreadable))))))))
+
 (deftest an-unreadable-record-is-reported-not-taken-as-empty
   (with-dirs (atom {})
     (fn [tmp]
