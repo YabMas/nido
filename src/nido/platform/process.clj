@@ -301,7 +301,9 @@
    string — and the instant it began, or nil when it cannot be read."
   []
   (try
+    ;; By absolute path: the daemon runs under launchd, whose PATH has no /usr/sbin, and a bare
+    ;; `sysctl` there reads as an unknown boot — every reboot then went unrecorded.
     (when-let [sec (second (re-find #"sec = (\d+)" (:out (shell {:out :string :err :string}
-                                                                "sysctl" "-n" "kern.boottime"))))]
+                                                                "/usr/sbin/sysctl" "-n" "kern.boottime"))))]
       {:id sec :began-at (str (java.time.Instant/ofEpochSecond (parse-long sec)))})
     (catch Exception _ nil)))
