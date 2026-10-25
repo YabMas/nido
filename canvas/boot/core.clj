@@ -9,6 +9,7 @@
             [canvas.coordinator.record.runs :as runs]
             [canvas.coordinator.record.state :refer [RunId]]
             [canvas.coordinator.source.core :as source]
+            [canvas.session.casualties :as casualties]
             [fukan.common.typing.malli]))
 
 (Module boot-core
@@ -41,4 +42,4 @@
     {:signature [:=> [:catn] :int]})
   (Operation run! "Start the loop, with a dashboard lifecycle supplied from outside."
     {:signature [:=> [:catn [:opts [:* :any]]] :any]
-     :delegates [tick! dashboard-config daemon/reconcile!]}))
+     :delegates [tick! dashboard-config daemon/reconcile! casualties/record!]}))

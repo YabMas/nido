@@ -19,9 +19,17 @@
        (keep :instance-id)
        set))
 
+(defn- down-not-gone?
+  "Whether the instance's recorded worktree still exists — its session is down, not gone. A
+   graceful down and a host boot both clear the registry entry and leave the dir, and a :clone or
+   :isolated session was promised its PGDATA back; only a dir whose worktree is gone, or that
+   names none, is garbage."
+  [id]
+  (boolean (some-> (state/read-instance-worktree id) fs/directory?)))
+
 (defn- orphan-instance-dirs
-  "State dirs under ~/.nido/state/ with no matching registry entry.
-   Excludes top-level files (the registry itself, legacy metadata)."
+  "State dirs under ~/.nido/state/ with no matching registry entry, whose recorded worktree is
+   gone. Excludes top-level files (the registry itself, legacy metadata)."
   []
   (let [root (state/state-dir)
         tracked (tracked-instance-ids)]
@@ -29,7 +37,7 @@
       (->> (fs/list-dir root)
            (filter fs/directory?)
            (map #(vector (str (fs/file-name %)) (str %)))
-           (remove (fn [[id _]] (contains? tracked id)))
+           (remove (fn [[id _]] (or (contains? tracked id) (down-not-gone? id))))
            (sort-by first)))))
 
 (defn- recorded-pids

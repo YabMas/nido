@@ -805,18 +805,31 @@
      [:div.gate-err "⚠ " (count denials) " permission denial" (when (< 1 (count denials)) "s")
       " — latest: " (or (:tool-name (peek denials)) "?")])])
 
+(defn- casualty-card
+  "The sessions that died with the host, and the command that brings them back. A command and no
+   button: reviving opens terminal tabs, which only a process in the person's terminal session
+   can do, and the dashboard runs inside the daemon."
+  [casualties]
+  [:div.gate-card
+   [:div.gate-top [:span.lbl (count casualties) (if (= 1 (count casualties)) " session" " sessions")
+                   " to revive"] [:span.needs {:title "needs you"}]]
+   [:div.gate-sub [:span "died with the host"]
+    [:span "run " [:code "nido session:revive"] " in a terminal — " [:code ":dry-run true"] " to preview"]]
+   [:div.gate-prev (str/join ", " (map #(str (:project %) "/" (:instance-id %)) casualties))]])
+
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   needs-fragment
   "The needs-you queue column — initial render + SSE refresh. Renders from the
    screen so a poll preserves the open gate's highlight (selection is threaded
    from the screen, not reset to nil each tick). Each gate's link carries the
    view-state (scope + selection) so selecting one preserves scope."
-  [{:keys [gates selection] :as screen}]
+  [{:keys [gates selection casualties] :as screen}]
   (let [sel-id (:ws-id selection)]
     (str
      (h/html
-      (if (seq gates)
+      (if (or (seq gates) (seq casualties))
         [:div {:id "needs"}
+         (when (seq casualties) (casualty-card casualties))
          (for [g gates]
            (gate-card g (= sel-id (:ws-id g))
                       (str "/" (screen-query screen {:sel (str (:project g) ":" (:ws-id g))}))))]

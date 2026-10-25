@@ -24,6 +24,7 @@
             [nido.platform.io :as io]
             [nido.platform.project :as project]
             [babashka.process :as p]
+            [nido.platform.process :as process]
             [babashka.fs :as fs]))
 
 ;; ── tokens ──────────────────────────────────────────────────────────────────
@@ -488,8 +489,7 @@
   current-boot
   "This host boot's identity: the boot time the kernel reports, or nil when it cannot be read."
   []
-  (try (second (re-find #"sec = (\d+)" (:out (p/shell {:out :string} "sysctl" "-n" "kern.boottime"))))
-       (catch Exception _ nil)))
+  (:id (process/host-boot)))
 
 (defn- boot-marker-path [] (str (fs/path (cstate/coordinator-dir) "recovered-boot.edn")))
 

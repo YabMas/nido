@@ -18,6 +18,7 @@
      adopt    make nido the driver of a background session started in it
      release  stop nido driving its background session; the session keeps running
      hand-back  let nido drive it again after a person's prompt held it
+     revive   bring back the sessions a host boot took down, and reopen their conversations
 
    Examples:
      bb nido:session:up      :project brian feat-auth
@@ -33,15 +34,21 @@
      bb nido:session:status  :project brian feat-auth
      bb nido:session:list    :project brian"
   (:require
+   [babashka.fs :as fs]
+   [babashka.process :as p]
    [clojure.string :as str]
    [nido.coordinator.agent.substrate :as substrate]
    [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.record.session :as csession]
+   [nido.coordinator.record.session-events :as session-events]
    [nido.platform.process :as process]
+   [nido.platform.project :as project]
    [nido.platform.task-args :as task-args]
+   [nido.session.casualties :as casualties]
    [nido.session.fleet :as fleet]
    [nido.session.lifecycle :as lifecycle]
+   [nido.session.revive :as revive]
    [nido.session.state :as state]))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
@@ -229,6 +236,171 @@
         project (require-project opts)
         session (require-session-name pos)]
     (up* project session (some-> (:ws-id opts) str) (dissoc opts :ws-id))
+    nil))
+
+;; ── revive: bring back what died with the host ──────────────────────────────
+
+(defn- session-name-of
+  "The session name a casualty's worktree is registered under — its path relative to its
+   project's worktrees dir — or nil when the project is gone or the worktree is not under it."
+  [{:keys [project worktree]}]
+  (try
+    (when-let [dir (:directory (get (project/list-projects) project))]
+      (let [rel (str (fs/relativize (lifecycle/worktrees-dir project dir) worktree))]
+        (when-not (or (str/blank? rel) (str/starts-with? rel "..")) rel)))
+    (catch Exception _ nil)))
+
+(defn- conflicts-of
+  "Whether the worktree's working copy holds unresolved conflicts — :none, :conflicted, or
+   :unknown when the VCS would not answer. Read-only: jj is asked without snapshotting the
+   working copy, so even this probe writes nothing."
+  [worktree]
+  (try
+    (cond
+      (fs/exists? (fs/path worktree ".jj"))
+      (let [{:keys [exit out]} (p/shell {:dir worktree :out :string :err :string :continue true}
+                                        "jj" "--ignore-working-copy" "log" "--no-graph"
+                                        "-r" "@ & conflicts()" "-T" "change_id")]
+        (cond (not (zero? exit)) :unknown (str/blank? out) :none :else :conflicted))
+
+      (fs/exists? (fs/path worktree ".git"))
+      (let [{:keys [exit out]} (p/shell {:dir worktree :out :string :err :string :continue true}
+                                        "git" "diff" "--name-only" "--diff-filter=U")]
+        (cond (not (zero? exit)) :unknown (str/blank? out) :none :else :conflicted))
+
+      :else :unknown)
+    (catch Exception _ :unknown)))
+
+(defn- within? [path dir]
+  (let [p (str (fs/normalize path)) d (str (fs/normalize dir))]
+    (or (= p d) (str/starts-with? p (str d "/")))))
+
+(defn- newest-conversation
+  "The conversation whose last recorded event is newest among those recorded in the session's
+   home or within its worktree."
+  [conversations {:keys [project worktree]} session]
+  (let [home (when session (state/session-home-dir project session))]
+    (->> conversations
+         (filter #(or (within? (:cwd %) worktree) (and home (within? (:cwd %) home))))
+         (sort-by :last-at-ms >)
+         first)))
+
+(defn- machine-facts
+  "Physical RAM and committed memory, each nil when unreadable, and each project's typical session
+   cost in the live fleet."
+  []
+  (let [rows (try (fleet/snapshot) (catch Exception _ []))]
+    {:physical  (fleet/machine-bytes)
+     :committed (fleet/in-use-bytes)
+     :typical   (into {} (for [p (distinct (keep :project rows))]
+                           [p (:typical (fleet/totals rows p))]))}))
+
+(defn- resume-command [conversation]
+  (str "claude --resume " (:id conversation) " --dangerously-skip-permissions"))
+
+(defn- plan-line [{:keys [row facts why estimated-bytes]} session running]
+  (let [{:keys [casualty conversation]} facts
+        who  (str (:project casualty) "/" (or session (:instance-id casualty)))
+        conv (cond (nil? conversation)            "no conversation recorded"
+                   (running (:id conversation))   (str "conversation " (:id conversation) " already running")
+                   :else                          (str "conversation " (:id conversation)))]
+    (str "  " (format "%-18s" (name row)) who
+         (case row
+           :revive            (str "  ~" (process/human-bytes estimated-bytes) " · " conv)
+           :conversation-only (str "  services stay down — "
+                                   (if (= :conflicted why) "worktree has unresolved conflicts"
+                                       "jj could not say whether the worktree is conflicted")
+                                   " · " conv)
+           :resumable         (str "  left down — "
+                                   (if (= :memory-unknown why) "the memory budget could not be read"
+                                       "over the memory budget")
+                                   "; bring it back with :only " (or session (:instance-id casualty)))
+           :gone              "  worktree is gone"))))
+
+(defn- reopen!
+  "Open `conversation` where it ran: a typed command in a Warp tab at its recorded cwd, or —
+   outside Warp — the command and its directory printed for a person to run. A conversation
+   already running is left where it is and said to be."
+  [session conversation running]
+  (cond
+    (nil? conversation)
+    (println (str "    " session ": no conversation recorded — nothing to reopen"))
+
+    (running (:id conversation))
+    (println (str "    " session ": conversation already running in " (:cwd (running (:id conversation)))
+                  " — reach it with `claude agents`"))
+
+    (lifecycle/warp?)
+    (do (lifecycle/spawn-tab! session {:dir (:cwd conversation) :command (resume-command conversation)})
+        (println (str "    " session ": reopened in a new tab")))
+
+    :else
+    (println (str "    " session ": cd " (:cwd conversation) " && " (resume-command conversation)))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  revive
+  "Bring back the sessions that died with the host: plan from the casualty records, bring the
+   admitted ones up in order, and reopen each one's latest conversation where it ran. A dry run
+   prints the plan and changes nothing.
+
+     bb nido:session:revive                       # newest first, under the memory budget
+     bb nido:session:revive :dry-run true         # the plan, nothing started
+     bb nido:session:revive :only [quiz rag-x]    # just these sessions (name or instance id)
+     bb nido:session:revive :all true             # every one, whatever the budget
+     bb nido:session:revive :dismiss [quiz]       # never offer these again"
+  [& args]
+  (let [[pos opts] (task-args/split-args args)
+        _          (require-no-positional pos)
+        names      (fn [k] (some->> (get opts k) (#(if (sequential? %) % [%])) (map str) set))
+        {:keys [casualties unreadable]} (casualties/unsettled)
+        named      (mapv (fn [c] [c (session-name-of c)]) casualties)
+        pick       (fn [wanted] (filterv (fn [[c s]] (or (wanted s) (wanted (:instance-id c)))) named))]
+    (doseq [f unreadable] (println (str "  ! casualty record could not be read: " f)))
+    (cond
+      (empty? casualties)
+      (println "Nothing to revive — no session that died with the host is still down.")
+
+      (names :dismiss)
+      (let [hit (pick (names :dismiss))]
+        (if (and (seq hit) (casualties/settle! (mapv first hit)))
+          (println (str "Dismissed " (str/join ", " (map #(or (second %) (:instance-id (first %))) hit))))
+          (do (println "Nothing dismissed — no unsettled casualty by those names.") (exit! 1))))
+
+      :else
+      (let [convs   (session-events/conversations)
+            running (try (conduct/live-states {})
+                         (catch Exception _ {}))
+            session (into {} (map (fn [[c s]] [(:instance-id c) s])) named)
+            only    (when-let [w (names :only)] (set (map (comp :instance-id first) (pick w))))
+            facts   (mapv (fn [[c s]]
+                            (let [present? (fs/directory? (:worktree c))]
+                              {:casualty     c
+                               :worktree     (if present? :present :gone)
+                               :conflicts    (if present? (conflicts-of (:worktree c)) :unknown)
+                               :conversation (newest-conversation convs c s)}))
+                          named)
+            rows    (revive/plan {:facts facts :machine (machine-facts) :only only
+                                  :all? (boolean (:all opts))})
+            sname   #(get session (get-in % [:facts :casualty :instance-id]))]
+        (println (str "Revive plan — " (count rows) " session" (when (not= 1 (count rows)) "s")
+                      " that died with the host:"))
+        (doseq [r rows] (println (plan-line r (sname r) running)))
+        (when-not (:dry-run opts)
+          (println)
+          (doseq [{:keys [row facts] :as r} rows
+                  :when (#{:revive :conversation-only} row)
+                  :let [s (sname r)]]
+            (if-not s
+              (println (str "    " (get-in facts [:casualty :instance-id])
+                            ": no session name for its worktree — left down"))
+              (try
+                (when (= :revive row)
+                  (println (str "  ↑ " (get-in facts [:casualty :project]) "/" s))
+                  (lifecycle/up! s {:project (get-in facts [:casualty :project])}))
+                (reopen! s (:conversation facts) running)
+                (casualties/settle! [(:casualty facts)])
+                (catch Exception e
+                  (println (str "    " s ": could not be brought up — " (ex-message e))))))))))
     nil))
 
 ;; ── spawn: a child session with an agent already on its brief ────────────────

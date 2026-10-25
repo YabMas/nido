@@ -49,6 +49,10 @@
     {:signature [:=> [:catn [:instance-id InstanceId]] Path] :delegates [instance-state-dir]})
   (Operation sessions-root "The session-home root."
     {:signature [:=> [:catn] Path]})
+  (Operation casualties-dir
+    "Where the record of sessions that died with the host is kept — under the nido home, never
+     under the per-instance state root, so reclaiming an instance cannot delete it."
+    {:signature [:=> [:catn] Path]})
   (Operation session-home-dir
     "A session's home — where its briefing, its MCP config and its agent files live. Keyed by
      project and session NAME rather than instance id, because the home outlives the services."
@@ -95,11 +99,20 @@
     {:signature [:=> [:catn [:instance-id InstanceId] [:mode :keyword]] :any] :delegates [pg-mode-override-file]})
   (Operation clear-pg-mode-override! "Drop a session's Postgres-mode override."
     {:signature [:=> [:catn [:instance-id InstanceId]] :any] :delegates [pg-mode-override-file]})
+  (Operation read-instance-worktree
+    "The worktree an instance's state dir records — its worktree record, or the :project-dir of
+     its session record where it has none — or nil when it records neither. Written with the
+     instance's record and left when that record is deleted — so a down session's state dir still
+     says whose it is."
+    {:signature [:=> [:catn [:instance-id InstanceId]] [:maybe Path]] :delegates [instance-state-dir]})
   (Operation read-session "One instance's record, or nil."
     {:signature [:=> [:catn [:instance-id InstanceId]] [:maybe :map]] :delegates [session-state-file]})
-  (Operation write-session! "Persist an instance's record."
+  (Operation write-session!
+    "Persist an instance's record, and the worktree it names in a record of its own that outlives it."
     {:signature [:=> [:catn [:instance-id InstanceId] [:data :map]] :any] :delegates [session-state-file]})
-  (Operation delete-session! "Drop an instance's record."
+  (Operation delete-session!
+    "Drop an instance's record; its worktree record stays, written from the record first when
+     there was none."
     {:signature [:=> [:catn [:instance-id InstanceId]] :any] :delegates [session-state-file]})
   (Operation read-registry "The registry of live worktrees."
     {:signature [:=> [:catn] :map]})

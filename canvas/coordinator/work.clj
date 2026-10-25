@@ -13,6 +13,7 @@
             [canvas.coordinator.view.workstreams :as view]
             [canvas.integration.notion :refer [NotionToken]]
             [canvas.platform.project :refer [ProjectName]]
+            [canvas.session.casualties :as casualties]
             [canvas.session.lifecycle :as lifecycle]
             [fukan.common.typing.malli]))
 
@@ -166,7 +167,7 @@
   (Operation live-session-names "The sessions of a project that are actually up."
     {:signature [:=> [:catn [:project ProjectName]] :any] :delegates [session-live?]})
   (Operation prune-dead-registry! "Drop registry entries whose session no longer holds a port."
-    {:signature [:=> [:catn [:now-ms [:? :int]]] :any] :delegates [session-live?]})
+    {:signature [:=> [:catn [:now-ms [:? :int]]] :any] :delegates [session-live? casualties/record!]})
   (Operation bring-down! "Down every live session of a workstream."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]
      :delegates [session/list-sessions lifecycle/down!]})

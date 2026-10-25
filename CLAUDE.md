@@ -381,6 +381,11 @@ All session verbs take `:project <project>` plus a positional `<session>` (any o
 - `bb nido:session:reset :project <p> <session>` — nuclear recovery. Down → drop PGDATA → re-clone from the current template → up. The "I'm wedged, fix it" button.
 - `bb nido:session:destroy :project <p> <session>` — down + remove the worktree.
 - `bb nido:session:status` / `nido:session:list` — read-only.
+- `bb nido:session:revive` — after a host shutdown, bring back the sessions that were up: newest agent activity first, admitted under the fleet's memory budget (the rest are listed as resumable), each one's latest conversation reopened in a Warp tab in the cwd it ran in, as `claude --resume <id> --dangerously-skip-permissions` (outside Warp it prints the commands). `:dry-run true` prints the plan and changes nothing; `:only [<session> …]` picks; `:all true` ignores the budget; `:dismiss [<session> …]` stops offering one. A worktree with unresolved conflicts gets its conversation back but no services; a conversation already running is left where it is.
+
+### After a host reboot
+
+The daemon cannot tell a reboot from a crash by the registry alone, so it asks: every registry entry registered before the current host boot (`kern.boottime`) is held in a casualty record at `~/.nido/casualties/<boot>.edn` — at daemon start and before every prune — outside the per-instance state root, so no reclaim deletes it. The reclaim also keeps any state dir whose recorded worktree still exists (`worktree.edn`, written beside `session.edn` and left by a down), so neither a reboot nor a graceful down costs a `:clone`/`:isolated` session its PGDATA. The daemon starts nothing itself: it announces — the first banner reads "N things need your attention — M sessions to revive", and the gate inbox shows a card with the command. Run `nido session:revive` from a terminal.
 
 There is no `restart` task — use `down` then `up` (or just `up`, since it's idempotent on a running session and a no-op there). The dashboard's restart button still exists; it's an internal UI-only path.
 

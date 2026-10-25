@@ -2,7 +2,11 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
+   [babashka.fs :as fs]
+   [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.scratch :as scratch]
+   [nido.coordinator.record.session-events :as session-events]
+   [nido.session.casualties :as casualties]
    [nido.session.fleet :as fleet]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as state]
@@ -226,3 +230,59 @@
   (let [model-of (fn [calls] (:model (last (first (filter #(= :kickoff (first %)) calls)))))]
     (is (nil? (model-of (first (spawn-calls {})))))
     (is (= "claude-opus-5-5" (model-of (first (spawn-calls {} ":model" "claude-opus-5-5")))))))
+
+(defn- revive-world
+  "Two casualties in temp worktrees — `quiz`, whose conversation is already running, and
+   `conflicted` — with every effect revive could have recorded in `calls`."
+  [calls f]
+  (let [tmp  (fs/create-temp-dir)
+        base (str (fs/create-dirs (fs/path tmp "brian-worktrees")))
+        wt   (fn [n] (str (fs/create-dirs (fs/path base n))))
+        cs   [{:boot-id "b" :instance-id "brian--quiz" :project "brian" :worktree (wt "quiz")
+               :registered-at "2026-10-24T12:00:00Z"}
+              {:boot-id "b" :instance-id "brian--conflicted" :project "brian"
+               :worktree (wt "conflicted") :registered-at "2026-10-24T12:00:00Z"}]]
+    (try
+      (with-redefs [casualties/unsettled         (constantly {:casualties cs :unreadable []})
+                    casualties/settle!           (fn [c] (swap! calls conj [:settle (mapv :instance-id c)]) true)
+                    nido.platform.project/list-projects (constantly {"brian" {:directory "/x"}})
+                    lifecycle/worktrees-dir      (constantly base)
+                    state/session-home-dir       (fn [_ s] (str "/homes/" s))
+                    session-events/conversations (constantly [{:id "c-quiz" :cwd (str (fs/path base "quiz" "src"))
+                                                               :last-at-ms 2}
+                                                              {:id "c-conf" :cwd (str (fs/path base "conflicted"))
+                                                               :last-at-ms 1}])
+                    conduct/live-states          (constantly {"c-quiz" {:cwd "/running"}})
+                    fleet/snapshot               (constantly [])
+                    fleet/machine-bytes          (constantly (* 100 1024 1024 1024))
+                    fleet/in-use-bytes           (constantly 0)
+                    lifecycle/warp?              (constantly true)
+                    lifecycle/up!                (fn [s o] (swap! calls conj [:up s (:project o)]))
+                    lifecycle/spawn-tab!         (fn [s o] (swap! calls conj [:tab s o]))
+                    babashka.process/shell       (fn [opts & cmd]
+                                                   {:exit 0 :out (if (str/ends-with? (:dir opts) "conflicted") "xyz" "")})
+                    fs/exists?                   (fn [p & _] (or (str/ends-with? (str p) ".jj") (.exists (java.io.File. (str p)))))]
+        (f))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest revive-dry-run-changes-nothing
+  (let [calls (atom [])
+        out   (revive-world calls #(with-out-str (task/revive ":dry-run" "true")))]
+    (is (= [] @calls) "no start, no tab, no settle")
+    (is (str/includes? out "revive"))
+    (is (str/includes? out "worktree has unresolved conflicts"))))
+
+(deftest revive-starts-what-it-may-and-reopens-only-what-is-not-running
+  (let [calls (atom [])
+        out   (revive-world calls #(with-out-str (task/revive)))]
+    (is (= [[:up "quiz" "brian"]] (filter #(= :up (first %)) @calls))
+        "the conflicted worktree is never started")
+    (let [tabs (filter #(= :tab (first %)) @calls)]
+      (is (= [["conflicted" "claude --resume c-conf --dangerously-skip-permissions"]]
+             (map (fn [[_ s o]] [s (:command o)]) tabs))
+          "the running conversation is left alone; the other reopens")
+      (is (str/ends-with? (:dir (nth (first tabs) 2)) "/brian-worktrees/conflicted")
+          "in the cwd it ran in"))
+    (is (str/includes? out "already running in /running"))
+    (is (= #{["brian--quiz"] ["brian--conflicted"]}
+           (set (map second (filter #(= :settle (first %)) @calls)))))))

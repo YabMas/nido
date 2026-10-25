@@ -8,15 +8,16 @@
             [canvas.boot.core :refer [boot-core tick!]]
             [canvas.coordinator.daemon.brakes :refer [auto-tripped-triggers]]
             [canvas.coordinator.work :refer [all-gates]]
-            [canvas.platform.desktop :refer [platform-desktop]]))
+            [canvas.platform.desktop :refer [platform-desktop]]
+            [canvas.session.casualties :refer [unsettled]]))
 
 (Claim attention-is-pushed
   "With the notifier armed, the daemon makes every gate, halt or auto-tripped breaker known on the desktop within one attention interval of first observing it, without a person asking: either in a notification of its own, or counted in an aggregate notification. Two cases aggregate: the first look after a start posts one count of everything then present instead of one notification per item, and a look whose arrivals exceed the burst limit posts the first few individually and folds the rest into one count."
   {:about [boot-core boot-attention] :evidence "round"})
 
 (Claim announced-from-the-inbox
-  "What the daemon announces is read from all-gates, the halt info and auto-tripped-triggers alone; it derives no reading of its own of what waits on a person."
-  {:about [boot-attention all-gates auto-tripped-triggers] :evidence "round"})
+  "Every condition the daemon announces is one a source reports: a gate from all-gates, a halt from the halt info, a tripped breaker from auto-tripped-triggers, a permission denial or a blocked session from conduct's report, and a boot's casualties from unsettled. The daemon formats what a source reports and decides no condition of its own."
+  {:about [boot-attention all-gates auto-tripped-triggers unsettled] :evidence "round"})
 
 (Claim announced-on-arrival
   "An item is announced when its key appears and again only after it has left the set, and the first look after a start posts at most one notification, a count."

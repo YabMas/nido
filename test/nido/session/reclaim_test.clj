@@ -99,3 +99,28 @@
           (is (fs/exists? live) "a forced reclaim still spares it")
           (is (not (fs/exists? dead)))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest reclaim-keeps-a-down-session-whose-worktree-exists
+  ;; A graceful down and a host boot both clear the registry entry and leave the dir; the dir of a
+  ;; session whose worktree still exists is a down session's, and a :clone session was promised
+  ;; its PGDATA back. Only a dir whose worktree is gone, or that names none, is reclaimed.
+  (let [tmp  (fs/create-temp-dir)
+        wt   (str (fs/create-dirs (fs/path tmp "wt")))
+        root (str (fs/create-dirs (fs/path tmp "state")))
+        ;; writing a record into a dir moves its mtime to the wall clock, so the clock here is it
+        now  (+ (System/currentTimeMillis) 60000)
+        down (mk-dir! root "down" now)
+        gone (mk-dir! root "gone" now)
+        old  (mk-dir! root "legacy" now)
+        none (mk-dir! root "none" now)]
+    (try
+      (io/write-edn! (str (fs/path down "worktree.edn")) {:worktree wt})
+      (io/write-edn! (str (fs/path gone "worktree.edn")) {:worktree (str (fs/path tmp "missing"))})
+      (io/write-edn! (str (fs/path old "session.edn")) {:project-dir wt})
+      (with-redefs [state/state-dir     (constantly root)
+                    state/read-registry (constantly {})]
+        (let [{:keys [deleted]} (reclaim/reclaim-orphans! {:min-age-ms 0 :now-ms now})]
+          (is (= #{"gone" "none"} (set (map first deleted))))
+          (is (fs/exists? down) "a worktree record naming an existing dir keeps it")
+          (is (fs/exists? old) "a session.edn written before the record existed keeps it too")))
+      (finally (fs/delete-tree tmp)))))

@@ -27,6 +27,11 @@
     "Bring the named session up, on the workstream `:ws-id` names when given — refused before
      anything is provisioned when it cannot join it."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation revive
+    "Bring back the sessions that died with the host: plan from the casualty records, bring the
+     admitted ones up in order, and reopen each one's latest conversation where it ran. A dry run
+     prints the plan and changes nothing."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation down
     "Stop the named session. Worktree and on-disk state are preserved."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

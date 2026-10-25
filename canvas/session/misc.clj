@@ -43,17 +43,28 @@
    directory may be a live boot in flight rather than garbage. The grace window is what tells
    them apart.
 
+   WORKTREE-GUARDED as well: a dir whose recorded worktree still exists belongs to a session that
+   is down, not gone — a graceful down and a host boot both clear the registry entry and leave the
+   dir — so it is kept, with the PGDATA and PG-mode override a :clone or :isolated session was
+   promised. The worktree is read from the instance's worktree record, which a start writes and a
+   down leaves, or — for a dir written before that record existed — from the :project-dir of the
+   session.edn still in it. Only a dir whose worktree is gone, or that names none, is garbage.
+
    PROCESS-GUARDED too, past the window: a directory whose recorded pid still runs is kept,
    whatever its age. A boot killed before it registered leaves exactly that — a detached JVM whose
    pid the directory alone holds — and deleting the directory would leave the JVM running with
    nothing in nido able to see it. Kept directories are returned so the sweep can say so."
   (Operation reclaim-orphans!
     "Remove orphaned instance state older than the grace window, sparing any whose recorded
-     process still runs — and return those, since nothing else records them."
+     worktree still exists or whose recorded process still runs — and return the latter, since
+     nothing else records them."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [sstate/state-dir sstate/read-registry]})
-  (Operation reclaim! "List orphaned state directories, or delete the ones no running process holds."
-    {:signature [:=> [:catn [:opts [:* :any]]] :any]}))
+     :delegates [sstate/state-dir sstate/read-registry sstate/read-instance-worktree]})
+  (Operation reclaim!
+    "List orphaned state directories, or delete the ones no running process holds and whose
+     recorded worktree is gone."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]
+     :delegates [sstate/read-instance-worktree]}))
 
 (Module bench-memory
   "Measuring what a session actually costs in memory, lever by lever.

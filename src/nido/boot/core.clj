@@ -53,7 +53,9 @@
    [nido.platform.desktop :as desktop]
    [nido.platform.project :as project]
    [nido.review.reconcile :as review-reconcile]
+   [nido.session.casualties :as casualties]
    [nido.session.reclaim :as reclaim]
+   [nido.session.state :as sstate]
    [nido.session.profiles :as profiles]
    [nido.coordinator.work :as work]))
 
@@ -437,10 +439,11 @@
       (reset! !last-attention-ms now-ms)
       (try
         (let [denials (:denials @!conduct)
-              current (attention/items {:gates    (work/all-gates)
-                                        :halt     halt-info
-                                        :breakers (breakers/auto-tripped-triggers)
-                                        :denials  denials})]
+              current (attention/items {:gates      (work/all-gates)
+                                        :halt       halt-info
+                                        :breakers   (breakers/auto-tripped-triggers)
+                                        :denials    denials
+                                        :casualties (:casualties (casualties/unsettled))})]
           ;; Each denial is posted on the look it first appears in, then dropped.
           (swap! !conduct update :denials #(vec (drop (count denials) %)))
           ;; Off the loop's thread: a sender waiting on a permission prompt
@@ -1438,6 +1441,16 @@
   (cstate/ensure-dirs!)
   (println "nido coordinator: starting (poll" poll-ms "ms)")
   (reconcile/reconcile!)
+  ;; Before anything else touches the registry, and halted or not: what was up when the host went
+  ;; down is held now, since the first prune would otherwise be the last to see it.
+  (try (let [{:keys [outcome held error]} (casualties/record! (vec (vals (sstate/read-registry))))]
+         (case outcome
+           :held    (when (seq held)
+                      (println "nido coordinator:" (count held) "session(s) died with the host — `nido session:revive` brings them back"))
+           :failed  (println "nido coordinator: could not record the sessions that died with the host —" error)
+           :no-boot (println "nido coordinator: host boot unreadable — sessions that died with the host are not recorded")))
+       (catch Throwable t
+         (println "nido coordinator: recording the sessions that died with the host failed —" (ex-message t))))
   ;; Background sessions survive the daemon; a host reboot does not keep them running.
   (try (let [{:keys [first-start? restarted]} (conduct/recover! {:projects (registered-projects)})]
          (when (and first-start? (seq restarted))

@@ -36,3 +36,23 @@
         (is (contains? (state/read-registry) "/live/worktree")
             "unrelated canonical entries survive"))
       (finally (fs/delete-tree tmp)))))
+
+(deftest the-worktree-record-outlives-the-session-record
+  ;; A down session's state dir must still say whose it is, or the reclaim cannot tell a down
+  ;; session from a gone one.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [state/state-dir (constantly (str tmp))]
+        (state/write-session! "p--a" {:project-dir "/w/a"})
+        (is (= "/w/a" (state/read-instance-worktree "p--a")))
+        (state/delete-session! "p--a")
+        (is (= "/w/a" (state/read-instance-worktree "p--a")) "left behind by the delete")
+        (fs/create-dirs (fs/path tmp "p--legacy"))
+        (io/write-edn! (state/session-state-file "p--legacy") {:project-dir "/w/legacy"})
+        (is (= "/w/legacy" (state/read-instance-worktree "p--legacy"))
+            "a dir from before the record existed is read from its session record")
+        (state/delete-session! "p--legacy")
+        (is (= "/w/legacy" (state/read-instance-worktree "p--legacy"))
+            "and its delete writes the record first")
+        (is (nil? (state/read-instance-worktree "p--none"))))
+      (finally (fs/delete-tree tmp)))))

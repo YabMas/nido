@@ -1,10 +1,10 @@
 (ns nido.boot.attention
   "What wants a person right now, and which of it is NEW since the last look.
 
-   Four things are items here: a gate (a workstream parked on a human — the same
+   Five things are items here: a gate (a workstream parked on a human — the same
    rows the gate inbox shows), a halted coordinator, a trigger whose breaker
-   tripped on its own, and a permission auto mode denied in a session nido
-   drives. A session blocked on a person is announced apart from them, by
+   tripped on its own, a permission auto mode denied in a session nido drives,
+   and a host boot whose casualties are still owed a revive. A session blocked on a person is announced apart from them, by
    blocked-notifications. Each becomes one keyed notification; `arrivals` is the
    keys that were absent last time. Edge-triggered on purpose: a gate that sits
    for a day is announced once, and announced again only after it has left the
@@ -59,6 +59,18 @@
     :message  (str session ": auto mode denied " (or (:tool-name event) "a tool call"))
     :sound    sound}])
 
+(defn- casualty-item
+  "One boot's unsettled casualties as one item. It carries how many sessions it holds, which the
+   first look's summary names; a notifier reads only the notification's own keys."
+  [[boot-id cs]]
+  (let [n (count cs)]
+    [[:casualties boot-id]
+     {:title    "nido · sessions to revive"
+      :message  (str n (if (= 1 n) " session" " sessions")
+                     " died with the host — run `nido session:revive`")
+      :sound    sound
+      :sessions n}]))
+
 (defn ^{:malli/schema [:=> [:cat :map] [:map-of :any :map]]}
   items
   "Everything wanting a person, as {key notification}. `:gates` is
@@ -66,13 +78,15 @@
    `breakers/auto-tripped-triggers` — a trigger a person paused on purpose is
    not news to them, so user-disabled breakers are not passed here. `:denials`
    is the permission denials recorded since the last look, each its own item.
+   `:casualties` is `casualties/unsettled`'s casualties, one item per boot.
    A blocked session is not an item: see blocked-notifications."
-  [{:keys [gates halt breakers denials]}]
+  [{:keys [gates halt breakers denials casualties]}]
   (into {}
         (concat (map gate-item gates)
                 (when halt [(halt-item halt)])
                 (map breaker-item breakers)
-                (map denial-item denials))))
+                (map denial-item denials)
+                (map casualty-item (group-by :boot-id casualties)))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe [:set :any]] :map] [:vector :map]]}
   arrivals
@@ -82,14 +96,17 @@
    The first look announces nothing individually: what is already waiting when
    the daemon starts is not news, and a restart must not replay every open
    gate. It posts one summary instead, so a person returning to a restarted
-   daemon still learns that something is there."
+   daemon still learns that something is there — and, after a host boot, how
+   many sessions there are to revive."
   [seen current]
   (if (nil? seen)
     (if (empty? current)
       []
-      (let [n (count current)]
+      (let [n (count current)
+            m (reduce + 0 (keep :sessions (vals current)))]
         [{:title   "nido · waiting on you"
-          :message (str n (if (= 1 n) " thing needs" " things need") " your attention")
+          :message (str n (if (= 1 n) " thing needs" " things need") " your attention"
+                        (when (pos? m) (str " — " m (if (= 1 m) " session" " sessions") " to revive")))
           :sound   sound}]))
     (->> current
          (remove (fn [[k _]] (contains? seen k)))

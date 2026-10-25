@@ -294,3 +294,14 @@
         (if (or (< n 1024.0) (= 1 (count us)))
           (format "%.1f %s" n (first us))
           (recur (/ n 1024.0) (rest us)))))))
+
+(defn ^{:malli/schema [:=> [:cat] [:maybe :map]]}
+  host-boot
+  "This host boot: its identity — the boot time the kernel reports, in epoch seconds, as a
+   string — and the instant it began, or nil when it cannot be read."
+  []
+  (try
+    (when-let [sec (second (re-find #"sec = (\d+)" (:out (shell {:out :string :err :string}
+                                                                "sysctl" "-n" "kern.boottime"))))]
+      {:id sec :began-at (str (java.time.Instant/ofEpochSecond (parse-long sec)))})
+    (catch Exception _ nil)))

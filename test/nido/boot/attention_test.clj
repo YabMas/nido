@@ -26,6 +26,17 @@
       (is (= ["2 things need your attention"]
              (map :message (attention/arrivals nil current)))))))
 
+(deftest a-boot-s-casualties-are-one-item-named-in-the-first-look
+  (let [cs      [{:boot-id "b1" :instance-id "brian--a" :project "brian"}
+                 {:boot-id "b1" :instance-id "brian--b" :project "brian"}]
+        current (attention/items {:gates [gate] :casualties cs})]
+    (is (= #{[:gate "brian" "ws-1"] [:casualties "b1"]} (set (keys current))))
+    (is (= ["2 things need your attention — 2 sessions to revive"]
+           (map :message (attention/arrivals nil current)))
+        "one summary, counting the boot as one thing and naming its sessions")
+    (is (= ["2 sessions died with the host — run `nido session:revive`"]
+           (map :message (attention/arrivals #{[:gate "brian" "ws-1"]} current))))))
+
 (deftest only-new-keys-are-announced
   (let [current (attention/items {:gates [gate (assoc gate :ws-id "ws-2" :label "new one")]})]
     (is (= ["new one"]

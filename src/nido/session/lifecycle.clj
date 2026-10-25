@@ -1055,10 +1055,12 @@
    a shell hook starts runs deaf to its own tab. Warp's new-tab URI cannot
    carry a command, so a command goes through a tab config instead.
 
-   `:cd` / `:auto-up?` behave as in `enter!`."
-  [name {:keys [command] :as opts}]
+   `:dir`, when given, is where the tab opens instead — a resumed conversation reopens in the cwd
+   it ran in, which may lie below the home or the worktree. Otherwise `:cd` / `:auto-up?` behave
+   as in `enter!`."
+  [name {:keys [command dir] :as opts}]
   (when (:auto-up? opts) (up! name opts))
-  (let [path (resolve-cd-target name opts)]
+  (let [path (or dir (resolve-cd-target name opts))]
     (shell {:out :string :err :string} "open"
            (if command (warp-tab-config-uri! path command) (warp-new-tab-uri path)))
     path))

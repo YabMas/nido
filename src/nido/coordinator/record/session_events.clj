@@ -64,3 +64,20 @@
     {:events (into [] (keep #(try (edn/read-string %) (catch Exception _ nil)))
                    (drop from lines))
      :cursor (max from (count lines))}))
+
+(defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
+  conversations
+  "Every recorded conversation with the cwd and time of its last event that carried a cwd, as
+   {:id :cwd :last-at-ms} — what ties a conversation nido did not drive to the session it ran in.
+   A log with no such event, or whose time does not parse, names no conversation."
+  []
+  (let [dir (fs/parent (cstate/session-events-path "_"))]
+    (if-not (fs/directory? dir)
+      []
+      (vec (for [f     (fs/glob dir "*.edn")
+                 :let  [id   (str/replace (str (fs/file-name f)) #"\.edn$" "")
+                        ev   (->> (:events (events-since id nil)) (filter :cwd) last)
+                        ms   (try (.toEpochMilli (java.time.Instant/parse (:at ev)))
+                                  (catch Exception _ nil))]
+                 :when ms]
+             {:id id :cwd (:cwd ev) :last-at-ms ms})))))

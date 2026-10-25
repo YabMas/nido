@@ -18,4 +18,8 @@
     {:signature [:=> [:catn [:session-id :string] [:event :map]] :boolean]})
   (Operation events-since
     "A session's events after a cursor, oldest first, with the cursor to read from next."
-    {:signature [:=> [:catn [:session-id :string] [:cursor [:maybe :int]]] :map]}))
+    {:signature [:=> [:catn [:session-id :string] [:cursor [:maybe :int]]] :map]})
+  (Operation conversations
+    "Every recorded conversation with the cwd and time of its last event that carried a cwd —
+     what ties a conversation nido did not drive to the session it ran in."
+    {:signature [:=> [:catn] [:vector :map]]}))

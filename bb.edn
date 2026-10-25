@@ -68,6 +68,11 @@
    :doc "Bring a session up: :project <p> <session> [:ws-id <existing workstream>] — services start, prints session-home path. :ws-id puts the session on that workstream (a fork child, say) instead of minting a one-off; refused before provisioning when it cannot join."
    :task (apply nido-session/up *command-line-args*)}
 
+  nido:session:revive
+  {:requires ([tasks.nido-session :as nido-session])
+   :doc "Bring back the sessions a host boot took down: newest activity first, under the memory budget, each conversation reopened where it ran. [:dry-run true] [:only [<session> …]] [:all true] [:dismiss [<session> …]]"
+   :task (apply nido-session/revive *command-line-args*)}
+
   nido:session:down
   {:requires ([tasks.nido-session :as nido-session])
    :doc "Stop a session: :project <p> <session> — worktree + state preserved"

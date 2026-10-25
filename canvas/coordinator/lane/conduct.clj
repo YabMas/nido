@@ -5,6 +5,7 @@
             [canvas.coordinator.agent.substrate :as substrate]
             [canvas.coordinator.record.session-events :as events]
             [canvas.coordinator.record.state :refer [WorkstreamId SessionName]]
+            [canvas.platform.process :as process]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
@@ -78,7 +79,8 @@
      :delegates [substrate/listing-cached]})
   (Operation current-boot
     "This host boot's identity, or nil when it cannot be read."
-    {:signature [:=> [:catn] [:maybe :string]]})
+    {:signature [:=> [:catn] [:maybe :string]]
+     :delegates [process/host-boot]})
   (Operation recover!
     "At nido's first start after a host boot, restart once each auto-respawn session without a
      live process, recording only a restart Claude Code accepted; answer the rest as resumable."

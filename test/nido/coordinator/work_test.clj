@@ -2759,6 +2759,7 @@
                                               :created-at "not-a-timestamp"}})
                   nido.session.state/remove-many-from-registry!
                   (fn [ks] (reset! removed (set ks)))
+                  nido.session.casualties/record! (constantly {:outcome :held :held []})
                   nido.platform.process/tcp-open? (fn [port] (= 3000 port))
                   nido.platform.process/process-alive? (fn [pid] (= 4242 pid))]
       (let [pruned (work/prune-dead-registry! now)]
@@ -2770,6 +2771,39 @@
         (is (not (contains? @removed "/wt/repl-up")) "a dead port but a live repl-pid vetoes the delete")
         (is (= #{"p--dead" "p--no-ts" "p--bad-ts"} (set pruned))
             "returns instance-ids for the coordinator's log line")))))
+
+(deftest prune-holds-every-entry-before-removing-any
+  ;; A boot reads as a crash to every prune guard, so the casualty record is asked to hold the
+  ;; WHOLE registry — removable or not — before anything is removed.
+  (let [ancient "2001-09-09T01:46:40Z"
+        reg     {"/wt/dead" {:instance-id "p--dead" :app-port 3001 :created-at ancient}
+                 "/wt/live" {:instance-id "p--live" :app-port 3000 :created-at ancient}}
+        asked   (atom nil)
+        removed (atom nil)]
+    (with-redefs [nido.session.state/read-registry (constantly reg)
+                  nido.session.state/remove-many-from-registry! (fn [ks] (reset! removed (set ks)))
+                  nido.session.casualties/record! (fn [es] (reset! asked (set es)) {:outcome :held :held []})
+                  nido.platform.process/tcp-open? (fn [port] (= 3000 port))]
+      (work/prune-dead-registry! (.toEpochMilli (java.time.Instant/parse "2026-01-01T00:00:00Z")))
+      (is (= (set (vals reg)) @asked) "every entry is offered, the live one included")
+      (is (= #{"/wt/dead"} @removed)))))
+
+(deftest prune-removes-nothing-old-when-the-record-cannot-hold-it
+  ;; :failed and :no-boot both mean the boot's casualties were not held, so only an entry
+  ;; registered since this process started — which cannot have died with the host — may go.
+  (let [old     "2001-09-09T01:46:40Z"
+        fresh   (str (.plusSeconds (java.time.Instant/now) 1))
+        reg     {"/wt/old"   {:instance-id "p--old"   :app-port 3001 :created-at old}
+                 "/wt/fresh" {:instance-id "p--fresh" :app-port 3002 :created-at fresh}}
+        now-ms  (+ (System/currentTimeMillis) (* 60 60 1000))]
+    (doseq [holding [{:outcome :failed :error "disk full"} {:outcome :no-boot}]]
+      (let [removed (atom nil)]
+        (with-redefs [nido.session.state/read-registry (constantly reg)
+                      nido.session.state/remove-many-from-registry! (fn [ks] (reset! removed (set ks)))
+                      nido.session.casualties/record! (constantly holding)
+                      nido.platform.process/tcp-open? (constantly false)]
+          (work/prune-dead-registry! now-ms)
+          (is (= #{"/wt/fresh"} @removed) (str (:outcome holding) " keeps the old entry")))))))
 
 (deftest restore-clears-the-status-and-reopens-the-workstream
   (with-tmp

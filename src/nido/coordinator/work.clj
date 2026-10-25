@@ -49,6 +49,7 @@
    [nido.slack.client :as slack]
    [nido.platform.process :as proc]
    [nido.platform.project :as project]
+   [nido.session.casualties :as casualties]
    [nido.session.failure :as failure]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as sstate]))
@@ -2765,6 +2766,15 @@
   (boolean (and (pos-int? (:repl-pid entry))
                 (proc/process-alive? (:repl-pid entry)))))
 
+(defn- registered-since-start?
+  "Whether the entry was registered after this process started — so it cannot have died with the
+   host, whatever the boot reading says."
+  [entry]
+  (boolean
+   (when-let [started (some-> (java.lang.ProcessHandle/current) .info .startInstant (.orElse nil))]
+     (when-let [at (try (java.time.Instant/parse (str (:created-at entry))) (catch Exception _ nil))]
+       (.isAfter at started)))))
+
 (defn ^{:malli/schema [:=> [:cat [:? :int]] :any]}
   prune-dead-registry!
   "Drop every registry entry whose session no longer holds a port, and return
@@ -2784,16 +2794,27 @@
                     PGDATA via reclaim, so the JVM's liveness (not just its
                     ports) gets a say before deletion.
 
+   A host boot reads as a crash to every guard above, so before any entry goes, every entry
+   registered before the boot — removable or not — is held in the boot's casualty record, the one
+   account of what was up that outlives this prune. An entry the record could not take is not
+   removed: when the record cannot be written, or the host boot cannot be read, only entries
+   registered since this process started — which cannot have died with the host — are removed.
+
    Registry-global, not per-project: one call covers every project."
   ([] (prune-dead-registry! (System/currentTimeMillis)))
   ([now-ms]
-   (let [dead (->> (sstate/read-registry)
+   (let [registry (sstate/read-registry)
+         holding  (casualties/record! (vec (vals registry)))
+         dead (->> registry
                    (remove (fn [[_ entry]]
                              (or (not (prunable? entry))
                                  (session-live? entry)
                                  (prune-veto? entry)
                                  (when-let [age (entry-age-ms entry now-ms)]
                                    (< age registry-prune-grace-ms)))))
+                   (filter (fn [[_ entry]]
+                             (or (= :held (:outcome holding))
+                                 (registered-since-start? entry))))
                    vec)]
      (sstate/remove-many-from-registry! (map first dead))
      (mapv (fn [[k entry]] (or (:instance-id entry) k)) dead))))

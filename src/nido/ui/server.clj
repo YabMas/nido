@@ -6,6 +6,7 @@
             [nido.notion.client :as client]
             [nido.platform.process :as proc]
             [nido.platform.project :as project]
+            [nido.session.casualties :as casualties]
             [nido.session.fleet :as fleet]
             [nido.ui.dev :as dev]
             [nido.coordinator.control :as control]
@@ -94,6 +95,9 @@
         sel (:selection view-state)
         ws-errors (dev/failed-ws-errors)]
     (-> screen
+        ;; Beside the gates, never among them: a casualty is no workstream's gate, and the
+        ;; inbox's count stays a count of gates. An unreadable record must not cost the inbox.
+        (assoc :casualties (try (:casualties (casualties/unsettled)) (catch Throwable _ [])))
         (assoc :selection
                (when sel
                  (let [ws (when (= :workstreams (:surface view-state))

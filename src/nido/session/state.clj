@@ -240,12 +240,28 @@
   read-session [instance-id]
   (io/read-edn (session-state-file instance-id)))
 
+(defn- worktree-record-file [instance-id]
+  (str (fs/path (instance-state-dir instance-id) "worktree.edn")))
+
 (defn ^{:malli/schema [:=> [:cat :InstanceId :map] :any]}
-  write-session! [instance-id data]
+  write-session!
+  "Persist an instance's record, and the worktree it names in a record of its own that outlives
+   it."
+  [instance-id data]
+  (when-let [wt (:project-dir data)]
+    (io/write-edn! (worktree-record-file instance-id) {:worktree (str wt)}))
   (io/write-edn! (session-state-file instance-id) data))
 
 (defn ^{:malli/schema [:=> [:cat :InstanceId] :any]}
-  delete-session! [instance-id]
+  delete-session!
+  "Drop an instance's record; its worktree record stays, written from the record first when there
+   was none — a down session's state dir still says whose it is."
+  [instance-id]
+  (let [wt-file (worktree-record-file instance-id)]
+    (when-not (fs/exists? wt-file)
+      (when-let [wt (try (:project-dir (io/read-edn (session-state-file instance-id)))
+                         (catch Exception _ nil))]
+        (io/write-edn! wt-file {:worktree (str wt)}))))
   (fs/delete-if-exists (session-state-file instance-id)))
 
 ;; ---------------------------------------------------------------------------
@@ -324,3 +340,24 @@
   (when (seq ks)
     (doseq [k ks] (prune-legacy-registry! k))
     (update-registry! #(apply dissoc % ks))))
+
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  casualties-dir
+  "Where the record of sessions that died with the host is kept: ~/.nido/casualties/ — under the
+   nido home, never under the per-instance state root, so reclaiming an instance cannot delete
+   it."
+  []
+  (str (fs/path (core/nido-home) "casualties")))
+
+
+(defn ^{:malli/schema [:=> [:cat :InstanceId] [:maybe :Path]]}
+  read-instance-worktree
+  "The worktree an instance's state dir records — its worktree record, or the :project-dir of its
+   session record where it has none — or nil when it records neither. The worktree record is
+   written with the session record and left when that is deleted, so a down session's state dir
+   still says whose it is."
+  [instance-id]
+  (let [read (fn [f k] (try (let [v (get (io/read-edn f) k)] (when (string? v) v))
+                            (catch Exception _ nil)))]
+    (or (read (worktree-record-file instance-id) :worktree)
+        (read (session-state-file instance-id) :project-dir))))

@@ -62,6 +62,9 @@
     {:signature [:=> [:catn [:pid :int]] [:maybe :int]]})
   (Operation human-bytes "A byte count as a short human string."
     {:signature [:=> [:catn [:v [:maybe :int]]] :string]})
+  (Operation host-boot
+    "This host boot: its identity and the instant it began, or nil when it cannot be read."
+    {:signature [:=> [:catn] [:maybe :map]]})
   (Operation load-average
     "The machine's 1-minute load average, or nil when it cannot be read. What tells a slow
      reading apart from a busy machine."
