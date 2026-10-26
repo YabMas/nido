@@ -1,12 +1,19 @@
 (ns canvas.session.lifecycle
   "Self-spec: `nido.session.lifecycle` — bringing a session up, down and back."
-  (:require [fukan.common.vocab.code.module :refer [Module]]
+  (:require [fukan.common.vocab.code.kind :refer [Kind]]
+            [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.state :refer [Path]]
             [canvas.platform.project :refer [ProjectName]]
             [canvas.session.state :as sstate :refer [InstanceId]]
             [canvas.session.test-pg :as tpg]
             [fukan.common.typing.malli]))
+
+(Kind BootHandoff
+  "What `up!` with `:wait false` returns when a background boot carries the session's services:
+   the session, the boot's pid and the log it writes. The services are not up yet; the session's
+   registry placeholder names the same pid until the boot's registration replaces it."
+  [:map [:session :string] [:boot-pid :int] [:log Path]])
 
 (Module session-lifecycle
   "The verbs a person or a lane uses on a session: up, down, restart, reset, destroy, enter.
@@ -18,6 +25,7 @@
 
    Down PRESERVES the worktree and the state directory; destroy is the one that does not. Two
    verbs rather than a flag, because the destructive one should have to be named."
+  {:child [BootHandoff]}
   (Operation resolve-project "The active project: explicit, then cwd, then registry."
     {:signature [:=> [:catn [:opts :map]] [:maybe ProjectName]]})
   (Operation worktrees-dir "Where this project's worktrees live."
@@ -53,7 +61,9 @@
     {:signature [:=> [:catn [:s :any]] [:maybe :string]]})
   (Operation up!
     "Bring a session up: worktree if missing, then its services. REFUSES a name
-     `session-name-problem` rejects, before the start — so it is never kept as a failure."
+     `session-name-problem` rejects, before the start — so it is never kept as a failure.
+     `:wait false` returns once the session is addressable and leaves its services to a
+     detached boot that is this same verb, blocking — returning that boot's BootHandoff."
     {:signature [:=> [:catn [:name :string] [:opts :map]] :any]
      :delegates [worktree-path session-name-problem]})
   (Operation down! "Stop a session. Worktree and state are PRESERVED."

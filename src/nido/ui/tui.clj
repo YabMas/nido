@@ -579,9 +579,11 @@
 
 (defn- start-session-action!
   "Adapter from action-defs calling convention [sn {:project p}] to work/start!, which settles the
-   session's workstream before the start so it comes up on that workstream's runtime."
+   session's workstream before the start so it comes up on that workstream's runtime. Returns once
+   the session can be entered, its services still booting — the board shows it starting until
+   they are up."
   [sn {:keys [project] :as opts}]
-  (work/start! project sn opts))
+  (work/start! project sn (assoc opts :wait false)))
 
 (def ^:private action-defs
   {:up      {:fn #'start-session-action!                            :gerund "Starting"   :past "Started"   :failed "start"}

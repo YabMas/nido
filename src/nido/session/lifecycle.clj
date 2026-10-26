@@ -33,6 +33,7 @@
    [nido.platform.config :as config]
    [nido.platform.core :as core]
    [nido.platform.lock :as lock]
+   [nido.platform.process :as proc]
    [nido.session.engine :as engine]
    [nido.session.failure :as failure]
    [nido.session.launcher :as launcher]
@@ -723,11 +724,134 @@
     (catch Exception _ nil)))
 
 
+;; ---------------------------------------------------------------------------
+;; Booting in the background
+;;
+;; A session a person starts is usable — its worktree, its home, `nido work` —
+;; long before a cold runtime has finished booting its app, so `up!` can return
+;; at that point and leave the services to a detached bb running the ordinary
+;; blocking `up!`. Until that boot finishes, the session's registry entry is a
+;; PLACEHOLDER: it names the runtime the session comes up on and the boot's pid,
+;; and no port, so `session-from-cwd` resolves the session while no liveness
+;; reading takes it for up. The boot's own registration replaces it whole.
+;; ---------------------------------------------------------------------------
+
+(defn- registry-entry [wt-path]
+  (get (state/read-registry) (str wt-path)))
+
+(defn- live-boot-pid
+  "The pid of the background boot this worktree's placeholder names, while that
+   process is still running; nil once it has ended or when there is none."
+  [wt-path]
+  (let [entry (registry-entry wt-path)]
+    (when (and (= :booting (state/entry-phase entry)) (proc/process-alive? (:boot-pid entry)))
+      (:boot-pid entry))))
+
+(defn- clear-placeholder!
+  "Drop the worktree's registry entry when it is a boot placeholder. A full
+   entry is never touched: it is the record of services that are running."
+  [wt-path]
+  (when (= :booting (state/entry-phase (registry-entry wt-path)))
+    (state/remove-from-registry! (str wt-path))))
+
+(def ^:private boot-opts
+  "The options a background boot is started with: those that shape what the
+   start provisions and which runtime it comes up on. Keyed the way the
+   session:up task reads them back."
+  [:runtime-key :session-profile :base :branch :path :jvm-heap-max :jvm-aliases :jvm-extra-opts])
+
+(defn- boot-log
+  "Where the background boot of session `name` writes its output — the session
+   start's log when no terminal is watching it. Under the runtime it boots, and
+   named for the session: sessions sharing a runtime each have a boot of their own."
+  [instance-id project-name name]
+  (state/log-file instance-id (str "boot-" (state/session-key project-name name))))
+
+(defn- spawn-boot!
+  "Run the blocking `up!` for `name` in a bb detached from this process, and
+   return that process's pid. nohup and a log file rather than a pipe, so it
+   outlives a CLI that returns and a TUI that is quit."
+  [name {:keys [project-name instance-id]} opts]
+  (let [log  (boot-log instance-id project-name name)
+        args (concat ["--config" (str (fs/path (core/nido-source-dir) "bb.edn"))
+                      "nido:session:up" ":project" project-name name
+                      ":wait" "true" ":yes" "true"]
+                     (mapcat (fn [k] (when-some [v (get opts k)] [(str k) (pr-str v)]))
+                             boot-opts))
+        cmd  (str "nohup bb " (str/join " " (map proc/quoted args))
+                  " > " (proc/quoted log) " 2>&1 < /dev/null & printf %s $!")]
+    (fs/create-dirs (state/log-dir instance-id))
+    (let [{:keys [exit out err]} (shell {:continue true :out :string :err :string
+                                         :dir (str (core/nido-source-dir)) :shutdown nil}
+                                        "bash" "-c" cmd)
+          pid (parse-long (str/trim (str out)))]
+      (when-not (and (zero? exit) (pos-int? pid))
+        (throw (ex-info (str "Failed to start the background boot of " name)
+                        {:session name :error err :output out})))
+      pid)))
+
+(defn- runtime-up?
+  "Whether runtime `instance-id` is recorded and up, read by `state/session-live?` over the ports
+   it recorded — a lite runtime, which records none, is up while its record stands."
+  [instance-id]
+  (when-let [runtime (state/read-session instance-id)]
+    (state/session-live? {:instance-id instance-id
+                          :app-port    (get-in runtime [:context :app :port])
+                          :nrepl-port  (get-in runtime [:context :repl :port])})))
+
+(defn- open!
+  "The `:wait false` half of `up!`: make the session addressable and hand a cold
+   runtime to a background boot. Runs under the lifecycle locks, so the boot —
+   which takes the same locks — starts only after the placeholder is written.
+   Returns the BootHandoff of the boot that carries the session's services, or
+   what an in-place start returns when no boot does."
+  [name {:keys [project-name wt-path instance-id runtime-key] :as ctx} profile opts]
+  (let [start! #(engine/start-session! wt-path (assoc opts :session-name name :profile profile
+                                                      :runtime-key runtime-key))]
+    (cond
+      (live-boot-pid wt-path)
+      (let [log (boot-log instance-id project-name name)]
+        (core/log-step (str "Session " name " is already starting in the background (log: " log ")."))
+        {:session name :boot-pid (live-boot-pid wt-path) :log log})
+
+      ;; Nothing to wait for: a lite session, or a runtime already up, which the session joins.
+      (or (not (profiles/services-provisioned? profile))
+          (runtime-up? instance-id))
+      (start!)
+
+      :else
+      (do
+        (launcher/write-artifacts! {:session {:name         name
+                                              :project-dir  (str wt-path)
+                                              :project-name project-name
+                                              :instance-id  instance-id}}
+                                   (engine/load-session-edn project-name)
+                                   (:run-dir opts))
+        (let [pid (spawn-boot! name ctx (assoc opts :runtime-key runtime-key))
+              log (boot-log instance-id project-name name)]
+          (state/upsert-registry! (str wt-path) {:project-dir  (str wt-path)
+                                                 :project-name project-name
+                                                 :instance-id  instance-id
+                                                 :runtime-key  runtime-key
+                                                 :session-name name
+                                                 :boot-pid     pid
+                                                 :created-at   (core/now-iso)})
+          (core/log-step (str "Starting services in the background (pid " pid ", log: " log ")"))
+          {:session name :boot-pid pid :log log})))))
+
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   up!
   "Bring the named session up: create its worktree if missing, then start
    PG + JVM + app. Idempotent — running on an existing live session is a
    no-op (engine/start-session! detects and short-circuits).
+
+   By default returns once the services are up, or throws. `:wait false`
+   returns as soon as the worktree, the session home and a registry placeholder
+   exist, and boots a cold runtime in a detached `nido:session:up :wait true`
+   whose output is `boot-log`, returning that boot's BootHandoff
+   {:session :boot-pid :log}; a start that fails there is kept like any other
+   (nido.session.failure), not thrown here. A runtime already up is joined in
+   place either way.
 
    Worktree creation routes by source-repo VCS: jj-colocated → `jj
    workspace add`; plain git → `git worktree add`."
@@ -765,10 +889,19 @@
               :else
               (create-git-worktree! project-dir wt-path branch base))
             ;; The one write over a recorded profile: this start made the working copy it describes.
+            ;; Before the session home, which reads it back to choose the briefing.
             (when-not existed?
               (engine/write-profile-for-session! project-name name profile))
-            (engine/start-session! wt-path (assoc opts :session-name name :profile profile
-                                                  :runtime-key runtime-key)))))))))
+            (if (false? (:wait opts))
+              (open! name ctx profile opts)
+              (try
+                (engine/start-session! wt-path (assoc opts :session-name name :profile profile
+                                                      :runtime-key runtime-key))
+                (catch Exception e
+                  ;; A boot that failed leaves the session down, so the entry
+                  ;; that said it was coming up goes with it.
+                  (clear-placeholder! wt-path)
+                  (throw e)))))))))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   down!
@@ -1020,12 +1153,15 @@
   status
   "Print status for a named session."
   [name opts]
-  (let [{:keys [wt-path]} (with-context name opts)]
+  (let [{:keys [wt-path instance-id project-name]} (with-context name opts)]
     (println "session:" name)
     (println "worktree:" wt-path)
     (println "exists?:" (fs/exists? wt-path))
-    (when (fs/exists? wt-path)
-      (engine/session-status wt-path))))
+    (if-let [pid (live-boot-pid wt-path)]
+      (println (str "services: starting in the background (pid " pid ", log: "
+                    (boot-log instance-id project-name name) ")"))
+      (when (fs/exists? wt-path)
+        (engine/session-status wt-path)))))
 
 (defn ^{:malli/schema [:=> [:cat] :Path]}
   cd-target-file

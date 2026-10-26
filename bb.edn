@@ -65,7 +65,7 @@
 
   nido:session:up
   {:requires ([tasks.nido-session :as nido-session])
-   :doc "Bring a session up: :project <p> <session> [:ws-id <existing workstream>] — services start, prints session-home path. :ws-id puts the session on that workstream (a fork child, say) instead of minting a one-off; refused before provisioning when it cannot join."
+   :doc "Bring a session up: :project <p> <session> [:ws-id <existing workstream>] [:wait true] — returns once the worktree and session home exist, services boot in the background (:wait true waits for them); prints session-home path. :ws-id puts the session on that workstream (a fork child, say) instead of minting a one-off; refused before provisioning when it cannot join."
    :task (apply nido-session/up *command-line-args*)}
 
   nido:session:revive

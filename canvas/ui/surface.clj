@@ -190,7 +190,7 @@
     {:signature [:=> [:catn] :map]})
   (Operation dev-state-for "A session's dev-resource state. Pure derivation."
     {:signature [:=> [:catn [:wt-path :any] [:instance-id :any] [:registry :map] [:probe :any]
-                            [:app-state-fn :any]] :map]})
+                            [:alive? :any] [:app-state-fn :any]] :map]})
   (Operation session-dev-state "The derived dev state for one session."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id [:maybe :string]] [:session :any]
                             [:registry [:? :map]]] :map]

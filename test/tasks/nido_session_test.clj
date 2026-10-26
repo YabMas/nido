@@ -22,7 +22,7 @@
       (is (some #(= "refshot" (second %)) (filter #(= :up (first %)) @calls)) "lifecycle up still runs")
       (is (some #(= [:birth :brian "refshot" :heavy] %) @calls)
           "loose workstream born carrying the provisioned weight")
-      (is (< (.indexOf @calls [:up "refshot" {:project "brian" :runtime-key "ws-loose"}])
+      (is (< (.indexOf @calls [:up "refshot" {:project "brian" :wait false :runtime-key "ws-loose"}])
              (.indexOf @calls [:weight "refshot"]))
           "weight is read AFTER up! — up! is what persists the profile it reads"))))
 
@@ -35,7 +35,7 @@
                   scratch/birth!           (fn [p s w ws] (swap! calls conj [:birth p s w ws]) ws)]
       (task/up ":project" "brian" "child-work" ":ws-id" "ws-child")
       (is (= [[:birth :brian "child-work" nil "ws-child"]
-              [:up "child-work" {:project "brian" :runtime-key "ws-child"}]
+              [:up "child-work" {:project "brian" :wait false :runtime-key "ws-child"}]
               [:birth :brian "child-work" :heavy "ws-child"]]
              @calls)
           "the record is written on the named workstream first, up! comes up on that workstream's runtime rather than seeing :ws-id, and the weight is reconciled after"))))

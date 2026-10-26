@@ -211,16 +211,20 @@
           (println)
           (println (str "Session ready: " project "/" session
                         (when ws-id (str " on workstream " ws-id))))
+          (when (false? (:wait opts))
+            (println (str "  services are starting in the background — "
+                          "bb nido:session:status :project " project " " session)))
           (println (str "  cd " home))
           (println (str "  bb nido:session:enter :project " project " " session))
           home)))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   up
-  "Bring the named session up. Creates the worktree (if missing) + starts
-   PG/JVM/app, then prints the session-home path the user can cd into to
-   start their preferred agent (claude, codex, …). Idempotent — running
-   on a live session refreshes the session-home artifacts but doesn't
+  "Bring the named session up. Creates the worktree (if missing) and the
+   session home, prints the session-home path the user can cd into to start
+   their preferred agent (claude, codex, …), and leaves PG/JVM/app booting in
+   the background. `:wait true` returns only once they are up. Idempotent —
+   running on a live session refreshes the session-home artifacts but doesn't
    restart services. Kwargs like :base, :branch, :session-profile, :jvm-heap-max
    flow into `up!`.
 
@@ -237,7 +241,8 @@
   (let [[pos opts] (task-args/split-args args)
         project (require-project opts)
         session (require-session-name pos)]
-    (up* project session (some-> (:ws-id opts) str) (dissoc opts :ws-id))
+    (up* project session (some-> (:ws-id opts) str)
+         (-> (dissoc opts :ws-id) (update :wait #(if (nil? %) false %))))
     nil))
 
 ;; ── revive: bring back what died with the host ──────────────────────────────

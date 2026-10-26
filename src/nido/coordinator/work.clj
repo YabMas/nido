@@ -2575,10 +2575,11 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] :any]}
   new!
-  "Birth a scratch workstream and bring its session up — `start!` with no options. Idempotent on
-   an existing session name. Returns the ws-id. `project` may be a keyword or string."
+  "Birth a scratch workstream and bring its session up — `start!` with `:wait false`, so it
+   returns once the session can be entered and leaves a cold runtime booting in the background.
+   Idempotent on an existing session name. Returns the ws-id. `project` may be a keyword or string."
   [project session-name]
-  (start! project session-name {}))
+  (start! project session-name {:wait false}))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:sequential :map]]}
   workstream-listing
@@ -2728,8 +2729,9 @@
 (def ^:private registry-prune-grace-ms
   "Never prune an entry younger than this. `:created-at` is restamped on every
    `up!` (engine/start-session!), so this only ever shields a session that just
-   started — belt and braces on top of the fact that the entry is written AFTER
-   its services are listening."
+   started — belt and braces on top of the fact that a full entry is written
+   AFTER its services are listening, and a boot placeholder is not prunable
+   while its boot runs."
   (* 10 60 1000))
 
 (defn- entry-age-ms
@@ -2746,9 +2748,16 @@
    records :app-port/:nrepl-port nil) — is live while its entry stands, under sstate/session-live?'s
    definition, so judging it dead on liveness grounds is a category error: it
    would be pruned while in active use, and reclaim/orphan-instance-dirs would
-   then delete its state dir."
+   then delete its state dir.
+
+   A boot placeholder records no port either, but it IS a candidate once the
+   background boot it names has ended: a boot that finished replaced it, one
+   that failed removed it, so one still here belongs to a boot that was killed."
   [entry]
-  (or (pos-int? (:app-port entry)) (pos-int? (:nrepl-port entry))))
+  (case (sstate/entry-phase entry)
+    :serving true
+    :booting (not (proc/process-alive? (:boot-pid entry)))
+    false))
 
 (defn- prune-veto?
   "Keep an entry whose ports do not answer but whose JVM is still running.

@@ -486,7 +486,7 @@
         (with-redefs [nido.session.lifecycle/up! (fn [n opts] (swap! ups conj [n opts]) nil)]
           (let [ws-id (work/new! :brian "spike-thing")]
             (is (string? ws-id))
-            (is (= [["spike-thing" {:project "brian" :runtime-key ws-id}]] @ups)
+            (is (= [["spike-thing" {:project "brian" :wait false :runtime-key ws-id}]] @ups)
                 "session brought up via lifecycle, on its workstream's runtime")
             (let [w (workstream/read-ws :brian ws-id)]
               (is (= :scratch (work/classify-origin w)) "ref-less scratch workstream")
@@ -2659,6 +2659,15 @@
           (is (true? (:live (pipeline/status :p (:id w)))))
           (is (= (work/live-session-names "p") #{"lite"}) "the board's probe agrees"))))))
 
+(deftest entry-phase-reads-the-kind-of-entry
+  (is (= :serving (nido.session.state/entry-phase {:instance-id "i" :app-port 4000})))
+  (is (= :serving (nido.session.state/entry-phase {:instance-id "i" :nrepl-port 4000 :boot-pid 7}))
+      "a recorded port wins: the boot's registration replaced the placeholder")
+  (is (= :booting (nido.session.state/entry-phase {:instance-id "i" :boot-pid 7})))
+  (is (= :lite    (nido.session.state/entry-phase {:instance-id "i"})))
+  (is (nil? (nido.session.state/entry-phase {})))
+  (is (nil? (nido.session.state/entry-phase nil))))
+
 (deftest session-live?-reads-app-or-nrepl-only
   (with-redefs [nido.platform.process/tcp-open? (fn [port] (= 4000 port))]
     (is (true?  (nido.session.state/session-live? {:app-port 4000})))
@@ -2669,6 +2678,8 @@
     (is (false? (nido.session.state/session-live? {})))
     (is (false? (nido.session.state/session-live? nil)) "no entry is a session that is down")
     (is (true?  (nido.session.state/session-live? {:instance-id "i"})) "a :lite entry records no port")
+    (is (false? (nido.session.state/session-live? {:instance-id "i" :boot-pid 77}))
+        "a boot placeholder records no port and is not up")
     (is (false? (nido.session.state/session-live? {:instance-id "i" :app-port 4001}))
         "a recorded port is probed, whatever else the entry holds")))
 
@@ -2795,6 +2806,12 @@
                                ;; false "dead" here costs a PGDATA via reclaim).
                                "/wt/repl-up" {:instance-id "p--repl-up" :app-port 3004 :repl-pid 4242
                                               :created-at (str ancient)}
+                               ;; boot placeholders: no port, only the pid of the background
+                               ;; boot. Kept while that boot runs; prunable once it has died.
+                               "/wt/booting" {:instance-id "p--booting" :boot-pid 5151
+                                              :created-at (str ancient)}
+                               "/wt/boot-died" {:instance-id "p--boot-died" :boot-pid 5252
+                                                :created-at (str ancient)}
                                ;; malformed :created-at: entry-age-ms swallows the parse failure
                                ;; and returns nil, which reads as "old enough" — pruned.
                                "/wt/bad-ts"  {:instance-id "p--bad-ts"  :app-port 3005
@@ -2803,15 +2820,16 @@
                   (fn [ks] (reset! removed (set ks)))
                   nido.session.casualties/record! (constantly {:outcome :held :held []})
                   nido.platform.process/tcp-open? (fn [port] (= 3000 port))
-                  nido.platform.process/process-alive? (fn [pid] (= 4242 pid))]
+                  nido.platform.process/process-alive? (fn [pid] (contains? #{4242 5151} pid))]
       (let [pruned (work/prune-dead-registry! now)]
-        (is (= #{"/wt/dead" "/wt/no-ts" "/wt/bad-ts"} @removed)
+        (is (= #{"/wt/dead" "/wt/no-ts" "/wt/bad-ts" "/wt/boot-died"} @removed)
             "dead + old is pruned; no timestamp or a malformed one reads as old and is pruned")
         (is (not (contains? @removed "/wt/live"))    "a listening session survives")
         (is (not (contains? @removed "/wt/young"))   "inside the grace window it survives")
         (is (not (contains? @removed "/wt/lite"))    "a lite session with no recorded port is never a prune candidate")
         (is (not (contains? @removed "/wt/repl-up")) "a dead port but a live repl-pid vetoes the delete")
-        (is (= #{"p--dead" "p--no-ts" "p--bad-ts"} (set pruned))
+        (is (not (contains? @removed "/wt/booting")) "a placeholder whose boot still runs survives")
+        (is (= #{"p--dead" "p--no-ts" "p--bad-ts" "p--boot-died"} (set pruned))
             "returns instance-ids for the coordinator's log line")))))
 
 (deftest prune-holds-every-entry-before-removing-any

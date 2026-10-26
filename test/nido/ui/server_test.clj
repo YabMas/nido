@@ -345,19 +345,19 @@
   (let [reg {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}}]
     ;; running: live port wins
     (is (= {:state :running :url "http://x.localhost:3142"}
-           (dev/dev-state-for "/wt" "brian--x" reg (fn [_] true) (fn [_] nil))))
+           (dev/dev-state-for "/wt" "brian--x" reg (fn [_] true) (fn [_] false) (fn [_] nil))))
     ;; down: port closed, no pending
     (is (= {:state :down}
-           (dev/dev-state-for "/wt" "brian--x" reg (fn [_] false) (fn [_] nil))))
+           (dev/dev-state-for "/wt" "brian--x" reg (fn [_] false) (fn [_] false) (fn [_] nil))))
     ;; down: no registry entry at all
     (is (= {:state :down}
-           (dev/dev-state-for "/missing" "brian--x" reg (fn [_] true) (fn [_] nil))))
+           (dev/dev-state-for "/missing" "brian--x" reg (fn [_] true) (fn [_] false) (fn [_] nil))))
     ;; starting: pending keyword shows when not live
     (is (= {:state :starting :error-msg nil}
-           (dev/dev-state-for "/wt" "brian--x" reg (fn [_] false) (fn [_] :starting))))
+           (dev/dev-state-for "/wt" "brian--x" reg (fn [_] false) (fn [_] false) (fn [_] :starting))))
     ;; failed: pending map carries the error message
     (is (= {:state :failed :error-msg "boom"}
-           (dev/dev-state-for "/wt" "brian--x" reg (fn [_] false)
+           (dev/dev-state-for "/wt" "brian--x" reg (fn [_] false) (fn [_] false)
                               (fn [_] {:state :failed :error-msg "boom"}))))))
 
 (deftest session-dev-state-wires-coords-registry-and-probe

@@ -38,7 +38,7 @@
                                              (or ws "ws-1"))]
       (#'tui/run-session-action! :add "brian" "refshot")
       (is (= [[:birth :brian "refshot" nil]
-              [:up "refshot" {:project "brian" :runtime-key "ws-1"}]
+              [:up "refshot" {:project "brian" :wait false :runtime-key "ws-1"}]
               [:birth :brian "refshot" :heavy]] @calls)
           "the workstream is settled first, up! comes up on its runtime, and birth! then carries the provisioned weight"))))
 
@@ -51,7 +51,7 @@
                                              (or ws "ws-1"))]
       (#'tui/run-session-action! :up "brian" "refshot")
       (is (= [[:birth :brian "refshot" nil]
-              [:up "refshot" {:project "brian" :runtime-key "ws-1"}]
+              [:up "refshot" {:project "brian" :wait false :runtime-key "ws-1"}]
               [:birth :brian "refshot" :heavy]] @calls)))))
 
 (deftest destroy-reaps-the-scratch-workstream

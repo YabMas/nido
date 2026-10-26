@@ -17,6 +17,22 @@
    them is what would make an archived episode look like a running one."
   :string)
 
+(Kind RegistryEntry
+  "One worktree's entry in the registry, keyed by that worktree. Which kind of entry it is —
+   serving, a boot placeholder, lite — is read by `entry-phase` alone: a placeholder names the pid
+   of the background boot starting the session's services and no port, and the boot's own
+   registration replaces it whole."
+  [:map [:project-dir :string] [:project-name :string] [:instance-id InstanceId]
+        [:runtime-key {:optional true} [:maybe :string]]
+        [:session-name {:optional true} [:maybe :string]]
+        [:url {:optional true} [:maybe :string]]
+        [:app-port {:optional true} [:maybe :int]]
+        [:nrepl-port {:optional true} [:maybe :int]]
+        [:pg-port {:optional true} [:maybe :int]]
+        [:repl-pid {:optional true} [:maybe :int]]
+        [:boot-pid {:optional true} :int]
+        [:created-at {:optional true} :string]])
+
 (Module session-state
   "Where the session substrate keeps everything: instance state, session homes, templates, the
    shared cluster, and the registry of live worktrees.
@@ -25,7 +41,7 @@
    with it; `sessions/` is the home an agent reads and outlives the services; `templates/` is
    per-project and shared across every session; `shared/` is one cluster many sessions attach to.
    A layout with one root would make reclaiming an instance a question of which files to spare."
-  {:child [InstanceId]}
+  {:child [InstanceId RegistryEntry]}
   (Operation state-dir "The per-instance state root." {:signature [:=> [:catn] Path]})
   (Operation file-safe
     "An id spelled in `[A-Za-z0-9.-]` alone, every other byte written `_XX` — the one spelling of a
@@ -145,12 +161,17 @@
     {:signature [:=> [:catn [:instance-id InstanceId]] :any] :delegates [session-state-file]})
   (Operation read-registry "The registry of live worktrees."
     {:signature [:=> [:catn] :map]})
+  (Operation entry-phase
+    "Which kind of registry entry this is: :serving once it recorded an app or nREPL port,
+     :booting for a placeholder naming a background boot and no port, :lite for one naming an
+     instance and no port; nil for none. The one reading of it every reader makes."
+    {:signature [:=> [:catn [:entry [:maybe RegistryEntry]]] [:maybe [:enum :serving :booting :lite]]]})
   (Operation session-live?
     "Whether the session a registry entry records is up RIGHT NOW: one that recorded an app or nREPL
      port while one answers — the registry records what was started, the port says it is still
      there — and a lite session, which records none, while its entry stands. The one predicate
-     every reader of liveness asks, whichever level it sits at."
-    {:signature [:=> [:catn [:s :map]] :boolean] :delegates [proc/tcp-open?]})
+     every reader of liveness asks, whichever level it sits at. A boot placeholder is not up."
+    {:signature [:=> [:catn [:s :map]] :boolean] :delegates [entry-phase proc/tcp-open?]})
   (Operation upsert-registry!
     "Record or update one worktree's entry.
 

@@ -6,15 +6,15 @@
   (is (= {:state :running :url "http://x"}
          (dev/dev-state-for "/wt" "iid"
                             {"/wt" {:app-port 4100 :url "http://x"}}
-                            (constantly true) (constantly nil)))))
+                            (constantly true) (constantly false) (constantly nil)))))
 
 (deftest dev-state-down-when-no-port
   (is (= {:state :down}
-         (dev/dev-state-for "/wt" "iid" {} (constantly false) (constantly nil)))))
+         (dev/dev-state-for "/wt" "iid" {} (constantly false) (constantly false) (constantly nil)))))
 
 (deftest dev-state-pending-from-app-state
   (is (= {:state :starting :error-msg nil}
-         (dev/dev-state-for "/wt" "iid" {} (constantly false)
+         (dev/dev-state-for "/wt" "iid" {} (constantly false) (constantly false)
                             (constantly {:state :starting})))))
 
 (deftest pending-winddown-keys-are-the-stopping-slash-keys
@@ -64,3 +64,15 @@
                   nido.session.state/read-registry (constantly {})]
       (dev/ws-session-dev-states "p" {:ws-id "ws-1" :sessions [{:name "a"} {:name "b"}]}))
     (is (= ["ws-1" "ws-1"] @asked) "a stopped session's state is read where its start would put it")))
+
+(deftest dev-state-starting-while-the-placeholder-names-a-live-boot
+  (let [reg {"/wt" {:instance-id "iid" :boot-pid 77}}]
+    (is (= {:state :starting}
+           (dev/dev-state-for "/wt" "iid" reg (constantly false) #(= 77 %) (constantly nil))))
+    (is (= {:state :down}
+           (dev/dev-state-for "/wt" "iid" reg (constantly false) (constantly false) (constantly nil)))
+        "a boot that has ended without replacing its placeholder reads down")
+    (is (= {:state :running :url "http://x"}
+           (dev/dev-state-for "/wt" "iid" (update reg "/wt" assoc :app-port 4000 :url "http://x")
+                              (constantly true) (constantly true) (constantly nil)))
+        "an answering port wins over a boot still finishing")))

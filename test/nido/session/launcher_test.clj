@@ -945,3 +945,19 @@
       (is (= "auto" (get-in (json/parse-string (slurp (str (fs/path tmp ".claude" "settings.local.json"))) true)
                             [:permissions :defaultMode])))
       (finally (fs/delete-tree tmp)))))
+
+(deftest render-context-says-services-are-starting-until-a-port-is-known
+  (let [booting (@#'launcher/render-context
+                  (dissoc base-ctx :app-port :app-url :nrepl-port :pg-port))
+        running (@#'launcher/render-context base-ctx)
+        lite    (@#'launcher/render-context
+                  (-> base-ctx
+                      (dissoc :app-port :app-url :nrepl-port :pg-port)
+                      (assoc :profile {:services []})))]
+    (is (str/includes? booting "## Services are starting"))
+    (is (not (str/includes? booting "already running"))
+        "a briefing with no known port never claims the services are up")
+    (is (str/includes? booting "nido session:status doc-room")
+        "and names the command that shows them once they are")
+    (is (str/includes? running "## Services are already running"))
+    (is (str/includes? lite "## Lite session"))))

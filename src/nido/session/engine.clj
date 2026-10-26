@@ -858,6 +858,9 @@
                  (catch Exception e
                    (println (str "warning: error stopping " (name (:name svc-def)) ": "
                                  (ex-message e))))))
+          ;; Nor did it replace the placeholder that said it was coming up.
+          (when (= :booting (state/entry-phase (get (state/read-registry) project-dir)))
+            (state/remove-from-registry! project-dir))
           (println "No session to stop for" project-dir))
 
       (seq (dissoc (state/members session) (str project-dir)))

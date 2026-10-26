@@ -363,6 +363,19 @@
   (merge (read-legacy-registry)
          (or (io/read-edn @registry-file-path) {})))
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :RegistryEntry]] [:maybe [:enum :serving :booting :lite]]]}
+  entry-phase
+  "Which kind of registry entry `entry` is — the one reading of that every reader makes:
+   :serving when it recorded an app or nREPL port; :booting for a boot placeholder, which names
+   the pid of a background boot still starting the session's services and no port; :lite for an
+   entry naming an instance and no port, a session provisioned without services. nil for no entry,
+   or one naming no instance."
+  [entry]
+  (cond
+    (or (pos-int? (:app-port entry)) (pos-int? (:nrepl-port entry))) :serving
+    (pos-int? (:boot-pid entry))                                       :booting
+    (:instance-id entry)                                               :lite))
+
 (defn ^{:malli/schema [:=> [:cat :map] :boolean]}
   session-live?
   "Is the session this registry entry records up RIGHT NOW? THE predicate for whether a session
@@ -373,17 +386,20 @@
    state/remove-from-registry!), so a reboot, a JVM crash or a `kill` leaves an entry with its
    port numbers intact indefinitely. A `:lite` session (`:services []`) records no port and is in
    use without one, so it is up while its entry stands — nil, or a map naming no instance, is a
-   session that is down.
+   session that is down. A boot placeholder is a session whose services a background boot is
+   still starting: not up, whether or not that boot still runs. Which of these an entry is, is
+   `entry-phase`'s.
 
    `:pg-port` is deliberately not a signal: most sessions point at the project's
    SHARED cluster, which answers whenever any one session is up. `:repl-pid` is
    not a signal either: PIDs are recycled, so a months-old entry whose PID was
    reused would read as live forever."
   [s]
-  (boolean (if (or (pos-int? (:app-port s)) (pos-int? (:nrepl-port s)))
-             (or (and (pos-int? (:app-port s))   (proc/tcp-open? (:app-port s)))
-                 (and (pos-int? (:nrepl-port s)) (proc/tcp-open? (:nrepl-port s))))
-             (:instance-id s))))
+  (case (entry-phase s)
+    :serving (boolean (or (and (pos-int? (:app-port s))   (proc/tcp-open? (:app-port s)))
+                          (and (pos-int? (:nrepl-port s)) (proc/tcp-open? (:nrepl-port s)))))
+    :lite    true
+    false))
 
 (defn- update-registry!
   "Apply `f` to the merged registry and write the result to the canonical file,

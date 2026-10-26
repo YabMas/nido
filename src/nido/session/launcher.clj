@@ -833,7 +833,11 @@
            app-port app-url nrepl-port pg-port
            profile links project-briefing
            workstream-id br-id design-scope]}]
-  (let [services-active? (profiles/services-provisioned? profile)]
+  ;; Services are said to be running only once a port is known: a session whose
+  ;; profile provisions services and has none yet is still booting them.
+  (let [services (cond (not (profiles/services-provisioned? profile)) :lite
+                       (or app-port nrepl-port pg-port)               :running
+                       :else                                          :starting)]
     (str
      "# Active nido session\n"
      "\n"
@@ -848,8 +852,12 @@
      (when pg-port    (str "- postgres port: " pg-port "\n"))
      (render-workstream-line workstream-id br-id)
      "\n"
-     (if services-active?
+     (case services
+       :running
        "## Services are already running\n\nThe REPL, app server, and database for this worktree are managed by\nnido. Don't run project-local scripts that spin up a REPL/app/DB —\nconnect to what's already live. The postgres MCP is preconfigured to\nthis session's DB.\n\n"
+       :starting
+       (str "## Services are starting\n\nThe REPL, app server, and database for this worktree are managed by\nnido and are still booting in the background — a minute or so for a\nlarge app. Don't run project-local scripts that spin up a REPL/app/DB.\n`nido session:status " session-name "` shows whether they are up and\nlists their ports once they are; until then there is no nREPL to\nconnect to and no postgres MCP in this session.\n\n")
+       :lite
        "## Lite session\n\nThis is a lite session with no background services. The worktree is a\nread-only symlink to the project source directory.\n\n")
      (when-not (str/blank? project-briefing) (str project-briefing "\n"))
      (cond
@@ -1183,8 +1191,8 @@
 
 (defn ^{:malli/schema [:=> [:cat :map :map [:maybe :Path]] :any]}
   write-artifacts!
-  "Write per-session launcher artifacts into the session home. Called from
-   start-services! after services are up.
+  "Write per-session launcher artifacts into the session home: once services are up, from the
+   runtime's context, and before a background boot, from a context that carries no ports.
 
    Three arguments, because the three facts it needs are three different KINDS of fact and
    collapsing any two of them hides one. `ctx` is what this session resolved — its ports, its
@@ -1382,7 +1390,14 @@
   (let [home         (state/session-home-dir project-name session-name)
         session      (some-> instance-id state/read-session)
         ctx          (:context session)
-        worktree     (member-worktree session session-name)
+        ;; A session whose runtime is still booting is no member of a running one yet; its
+        ;; registry placeholder already names its worktree.
+        worktree     (or (member-worktree session session-name)
+                         (some (fn [[wt entry]]
+                                 (when (and (= project-name (:project-name entry))
+                                            (= session-name (:session-name entry)))
+                                   wt))
+                               (state/read-registry)))
         profile      (read-profile-for-session project-name session-name)
         link-entries (links/read-links (state/session-key project-name session-name))
         ws-ctx       (run-workstream-context :session-home home)]

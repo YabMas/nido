@@ -87,22 +87,25 @@
        (map (fn [[k v]] [k (:error-msg v)]))
        (into {})))
 
-(defn ^{:malli/schema [:=> [:cat :any :any :map :any :any] :map]}
+(defn ^{:malli/schema [:=> [:cat :any :any :map :any :any :any] :map]}
   dev-state-for
   "Pure derivation of a session's dev-resource state from real state: the
    registry entry (looked up by worktree path), a TCP probe of its app port,
-   and the optimistic app-states. Returns {:state … :url :error-msg}.
+   whether the background boot its placeholder names is still running
+   (`alive?` over a pid), and the optimistic app-states. Returns {:state … :url :error-msg}.
    No :none — every session can host resources; :down just means 'not up'."
-  [wt-path instance-id registry probe app-state-fn]
+  [wt-path instance-id registry probe alive? app-state-fn]
   (let [entry      (get registry wt-path)
         port       (:app-port entry)
         live?      (and (pos-int? port) (probe port))
+        booting?   (and (= :booting (state/entry-phase entry)) (alive? (:boot-pid entry)))
         pending    (app-state-fn instance-id)
         pending-kw (cond (map? pending)     (:state pending)
                          (keyword? pending) pending)]
     (cond
       live?      {:state :running :url (:url entry)}
       pending-kw {:state pending-kw :error-msg (when (map? pending) (:error-msg pending))}
+      booting?   {:state :starting}
       :else      {:state :down})))
 
 (defn- coords
@@ -124,7 +127,8 @@
   ([project ws-id session] (session-dev-state project ws-id session (state/read-registry)))
   ([project ws-id session registry]
    (let [{:keys [wt-path instance-id]} (coords project session ws-id)]
-     (dev-state-for wt-path instance-id registry proc/tcp-open? current-app-state))))
+     (dev-state-for wt-path instance-id registry proc/tcp-open? proc/process-alive?
+                    current-app-state))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :map] :map]}
   ws-session-dev-states
