@@ -120,7 +120,9 @@
                        ;; The instruction this Stop ended: the outstanding one whose token a
                        ;; recorded prompt carried — nil for a turn nido did not give.
                        true (update :actions conj [:turn-ended ev (when (:seen? pending) pending)])
-                       true (assoc-in [:facet :pending] nil))
+                       true (assoc-in [:facet :pending] nil)
+                       ;; Whether it ended one the conductor answers for — given for no Run.
+                       true (assoc-in [:facet :ended-unrun?] (boolean (and (:seen? pending) (nil? (:for pending))))))
             ;; A turn begun before nido began driving, or before nido last gave it anything, is
             ;; not one nido failed to give: only a turn after an idle nido saw can be a person's.
             foreign? (and (nil? pending) (not own-work?) (some? idle-seen))
@@ -153,7 +155,10 @@
    :idle-seen is :listed.
 
    Actions: [:turn-ended event instruction] — instruction the pending nido gave whose token a
-   recorded prompt carried, nil for a turn it did not give — [:denial event], [:held because], [:notify-blocked],
+   recorded prompt carried, with :for naming the Run it was given for and :message the seat
+   message it was, nil for a turn it did not give — [:denial event], [:held because],
+   [:notify-blocked unrun?] — unrun? when nido drives it, nothing is outstanding, and its last turn
+   ended an instruction no Run gave —
    [:refused why] when only the baseline keeps a queued instruction back, and at most one of
    [:send tagged-text token text message-id] / [:wake tagged-text token text message-id] —
    whose token the returned facet already holds as pending, so it is recorded before anything is
@@ -187,10 +192,17 @@
                        (or (= :send via) stopped?))
         ready?    (and gated? (= :shown baseline))]
     {:facet   (cond-> f
-                ready? (assoc :pending {:token token :at now :via via :seen? false} :idle-seen nil)
-                (and ready? (not message)) (assoc :queued nil))
+                ready? (assoc :pending (cond-> {:token token :at now :via via :seen? false}
+                                         (and (not message) (:queued-for f)) (assoc :for (:queued-for f))
+                                         message (assoc :message (:id message)))
+                              :idle-seen nil)
+                (and ready? (not message)) (assoc :queued nil :queued-for nil))
      :actions (cond-> acts
-                announce? (conj [:notify-blocked])
+                ;; Blocked after its turn on an instruction no Run gave ended, it waits on the
+                ;; conductor that turn end was handed back to, not on a person. Blocked mid-turn,
+                ;; nothing has been handed back, and only a person can answer it.
+                announce? (conj [:notify-blocked (boolean (and (= :nido (:driver f)) (nil? (:pending f))
+                                                               (:ended-unrun? f)))])
                 (and gated? (not ready?)) (conj [:refused baseline])
                 ready?    (conj [via (tagged text token) token text (:id message)]))}))
 
@@ -246,20 +258,21 @@
   "The facet a start writes once Claude Code has named its session: nido drives it, and the first
    prompt — given under the token the :dispatching note recorded before the start — is
    outstanding."
-  [{:keys [token at policy]} sess]
+  [{:keys [token at policy for]} sess]
   (cond-> (assoc (fresh-facet :nido at sess)
-                 :pending {:token token :at at :via :dispatch :seen? false})
+                 :pending (cond-> {:token token :at at :via :dispatch :seen? false}
+                            for (assoc :for for)))
     policy (assoc :policy policy)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   start!
   "Start a conversation for an existing session record as a background session nido drives:
-   {:project :ws-id :session-name :cwd :prompt} and optionally :policy, :name, :model, and
-   :source — the repository `:cwd` was made from, which vouches for trusting `:cwd` when Claude
-   Code does not trust it yet.
+   {:project :ws-id :session-name :cwd :prompt} and optionally :policy, :name, :model, :for —
+   the Run the first prompt is given for — and :source — the repository `:cwd` was made from,
+   which vouches for trusting `:cwd` when Claude Code does not trust it yet.
 
-   The first prompt's token is recorded, in the record's :dispatching note, before the session
-   starts; the facet is written — and the note cleared — only once Claude Code has named the
+   The first prompt's token, with the Run it is given for, is recorded in the record's
+   :dispatching note before the session starts; the facet is written — and the note cleared — only once Claude Code has named the
    session, so no facet is ever without its session's id. Nothing of the record's earlier facet
    is carried: once the listing shows that session stopped, its conversation is over, hold
    included. Answers the facet written.
@@ -270,7 +283,7 @@
    start for the record is in flight. Throws when the session cannot be started: the note is
    cleared, or — when the adapter says it left a process running that the listing has not named
    — kept with that process's :bg-id, for conduct! to name it."
-  [{:keys [project ws-id session-name cwd prompt policy source] :as opts}]
+  [{:keys [project ws-id session-name cwd prompt policy source for] :as opts}]
   (when-not (substrate/trusted? cwd)
     (if (and source (substrate/trusted? source))
       (substrate/ensure-trusted! cwd opts)
@@ -295,9 +308,11 @@
          (when alive?
            (refuse :live (str "Its session " (:session-id claude) " is alive — retire it first")
                    {:session-id (:session-id claude)})))
-       (assoc m :dispatching (cond-> {:token token :at now} policy (assoc :policy policy)))))
+       (assoc m :dispatching (cond-> {:token token :at now}
+                               policy (assoc :policy policy)
+                               for    (assoc :for for)))))
     (try
-      (let [named (substrate/dispatch! (assoc opts :prompt (tagged prompt token)))]
+      (let [named (substrate/dispatch! (-> opts (dissoc :for) (assoc :prompt (tagged prompt token))))]
         (:claude (session/update-substrate!
                   project ws-id session-name
                   (fn [{:keys [dispatching claude]}]
@@ -401,31 +416,36 @@
                                                    (assoc :hold nil :driving-since (clock/now-iso) :idle-seen nil))
                                                (select-keys % [:session-id :bg-id])))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName :string] :map]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName :string [:? :RunId]] :map]}
   instruct!
   "Queue `text` as the next instruction for a session nido drives; conduct! gives it once the
-   session is ready for it. Refused when the session has no facet or one is already queued."
-  [project ws-id session-name text]
+   session is ready for it, recorded as given for the Run `for` names — for no Run when it names
+   none, so its turn end settles no Run. Refused when the session has no facet or one is already
+   queued."
+  [project ws-id session-name text & [for]]
   (:claude (session/update-claude!
             project ws-id session-name
             (fn [f]
               (cond
                 (nil? f) (throw (ex-info "Not a substrate session" {:reason :no-facet :session session-name}))
                 (:queued f) (throw (ex-info "An instruction is already queued" {:reason :already-queued :session session-name}))
-                :else (assoc f :queued text))))))
+                :else (assoc f :queued text :queued-for for))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   conduct!
   "One pass over every session with a :claude facet: read its new events and its row in the
    substrate's listing, decide, record the decision, then deliver what it calls for. `opts` may
    carry :projects, :hold-sends? (true while the account is at its usage limit) and :mail —
-   {:owed (fn [project ws-id session-name] [{:id :text} …]) :delivered! (fn [project ws-id id])},
+   {:owed (fn [project ws-id session-name] [{:id :text} …]) :delivered! (fn [project ws-id id token])},
    where the seat messages a session is owed are kept. A message is given like any instruction,
    tokened, once nothing is queued; it is marked delivered only once the substrate took it, so
    one whose delivery failed is owed again. Without :mail no session is owed any.
 
-   Answers what the pass saw, by kind — :named (starts the listing has now named), :turn-ends (each with the :instruction it ended, nil for a
-   turn nido did not give), :denials, :held, :blocked, :delivered,
+   Answers what the pass saw, by kind — :named (starts the listing has now named), :turn-ends
+   (each with the :instruction it ended, nil for a turn nido did not give, and the :run that
+   instruction was recorded as given for, nil for none), :denials, :held, :blocked (each with
+   :unrun? when its last turn, nido's, ended an instruction no Run gave and nothing is
+   outstanding), :delivered,
    :failed, :left-running (a delivery that failed leaving a process it started running, named
    by the adapter; its instruction stays outstanding), :refused (a queued instruction kept back because the session's own events no longer
    show the launch baseline, naming why), and :working (sessions nido drives that the listing
@@ -443,7 +463,7 @@
                row     (row-for listing facet)
                sid     (:session-id facet)
                owed    (if-let [f (get-in opts [:mail :owed])] (f project ws-id session-name) [])
-               given!  (fn [id] (when id ((get-in opts [:mail :delivered!]) project ws-id id)))
+               given!  (fn [id token] (when id ((get-in opts [:mail :delivered!]) project ws-id id token)))
                out     (atom nil)]
            (session/update-claude!
             project ws-id session-name
@@ -460,10 +480,10 @@
            (reduce
             (fn [r [kind a b c message-id]]
               (case kind
-                :turn-ended     (update r :turn-ends conj (assoc who :event a :instruction b))
+                :turn-ended     (update r :turn-ends conj (assoc who :event a :instruction b :run (:for b)))
                 :denial         (update r :denials conj (assoc who :event a))
                 :held           (update r :held conj (assoc who :because a))
-                :notify-blocked (update r :blocked conj who)
+                :notify-blocked (update r :blocked conj (assoc who :unrun? a))
                 :refused        (update r :refused conj (assoc who :because a))
                 (:send :wake)
                 (let [ok (if (= :send kind)
@@ -473,20 +493,21 @@
                         running (when (instance? Throwable ok) (left-running ok))]
                   (cond
                     (true? ok)
-                    (do (given! message-id)
+                    (do (given! message-id b)
                         (update r :delivered conj (assoc who :via kind :token b)))
                     ;; Something the attempt started still runs: the instruction stays outstanding,
                     ;; so nothing is given again until a person releases or hands the session back
                     ;; — a seat message included, which that process may already hold.
                     running
-                    (do (given! message-id)
+                    (do (given! message-id b)
                         (update r :left-running conj (assoc who :via kind :running running)))
                     :else
                     (do (session/update-claude! project ws-id session-name
                                                 ;; Back where it waited: undelivered is not outstanding.
                                                 ;; A seat message stays owed, so it needs no putting back.
                                                 #(cond-> (assoc % :pending nil)
-                                                   (not message-id) (assoc :queued c)))
+                                                   (not message-id) (assoc :queued c
+                                                                           :queued-for (get-in (deref out) [:facet :pending :for]))))
                         (update r :failed conj (assoc who :via kind)))))))
             (cond-> report
               (and (= :nido (:driver facet)) (= "working" (:state row)))

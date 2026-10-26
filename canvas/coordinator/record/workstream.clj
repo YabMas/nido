@@ -140,8 +140,8 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:gen :map]] Workstream]
      :delegates [append-lock-path read-ws generation/current generation/generation-of]})
   (Operation append-stamped!
-    "Append a :tension, :accord, :withdrawal or :recut whose writer its caller stamped — the one
-     path these kinds join a ledger by, which the generic appends refuse. Every other check an
+    "Append a :tension, :accord, :withdrawal, :recut or :conduct-decision whose writer its caller stamped — with
+     appending!, the one path these kinds join a ledger by, which the generic appends refuse. Every other check an
      append makes holds. The payload may be a function of the workstream read under the lock, so
      a writer is stamped against the generation its entry joins."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
@@ -149,6 +149,14 @@
      :delegates [append-lock-path read-ws
                  generation/opened-by generation/current generation/generation-of
                  generation/closed-design generation/fixed-ids generation/defining-ids]})
+  (Operation appending!
+    "Answer a function, under the workstream's append lock, of the workstream read under it, a check
+     throwing what appending an entry now would throw and writing nothing, and an append against the
+     ledger as the last append left it — a stamped kind on append-stamped!'s terms — so a caller
+     checks every entry before writing any, writes several, and acts on each once it is taken, as
+     one step no other append, generation's opening or design approval falls between."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:f [:=> [:cat :map] :any]]] :any]
+     :delegates [append-lock-path read-ws]})
   (Operation holding-ledger
     "Answer a function of the workstream read under its append lock — the lock every append and a
      generation's opening hold — so what it decides from that read stays true while it runs."

@@ -4,6 +4,9 @@
    [clojure.test :refer [deftest is]]
    [babashka.fs :as fs]
    [nido.coordinator.lane.conduct :as conduct]
+   [nido.coordinator.lane.conductor :as conductor]
+   [nido.coordinator.lane.seats :as seats]
+   [nido.coordinator.record.session :as csession]
    [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.record.session-events :as session-events]
    [nido.session.casualties :as casualties]
@@ -153,9 +156,9 @@
     (is (not-any? #(str/includes? % "down one to make room") lines))))
 
 (defn- spawn-calls
-  "Run spawn with every effect recorded instead of performed. Returns
-   [calls printed-output]."
-  [{:keys [joinable warp?] :or {warp? true}} & args]
+  "Run spawn with every effect recorded instead of performed — the child carried when `carried`
+   names its seat, else driven occupying none. Returns [calls printed-output]."
+  [{:keys [joinable warp? carried] :or {warp? true}} & args]
   (let [calls (atom [])
         brief (str (babashka.fs/create-temp-file))]
     (spit brief "Build the widget.")
@@ -164,7 +167,12 @@
                   lifecycle/up!                         (fn [s _] (swap! calls conj [:up s]))
                   lifecycle/session-weight              (fn [_ _] :heavy)
                   lifecycle/link-add!                   (fn [s o] (swap! calls conj [:link s (select-keys o [:project :type :url :title])]))
-                  lifecycle/stage-kickoff!              (fn [s o] (swap! calls conj [:kickoff s o]) "cd /h && zsh k")
+                  conductor/carry!                      (fn [_p _w s & [b m]]
+                                                          (swap! calls conj [:carry s b m])
+                                                          {:carried carried})
+                  seats/drive!                          (fn [_p _w s b & [m]] (swap! calls conj [:drive s b m]))
+                  csession/workstream-id-for            (fn [_ _] (when (some #(= :birth (first %)) @calls) "ws-child"))
+                  csession/read-session                 (fn [_ _ _] {:claude {:session-id "sid-1"}})
                   lifecycle/spawn-tab!                  (fn [s o] (swap! calls conj [:tab s (:cd o) (:command o)]))
                   state/session-home-dir                (fn [_ _] "/tmp/home")
                   scratch/joinable                      (or joinable (fn [& _] nil))
@@ -196,25 +204,27 @@
                            :title "parent · agent parent-a1"}]}
            (set (filter #(= :link (first %)) calls))))))
 
-(deftest spawn-stages-a-kickoff-addressed-back-to-the-parent
+(deftest spawn-drives-the-child-on-a-brief-addressed-back-to-the-parent
   (let [[calls _] (spawn-calls {})
-        [_ s o]   (first (filter #(= :kickoff (first %)) calls))]
-    (is (= "kid" s))
-    (is (= "kid" (:agent-name o)) "the child's agent answers to the child's session name")
-    (is (str/includes? (:prompt o) "SendMessage to `parent-a1`"))
-    (is (str/ends-with? (:prompt o) "Build the widget.\n") "the brief verbatim, last")
-    (is (some #(= [:tab "kid" :home "cd /h && zsh k"] %) calls)
-        "the tab runs the kickoff as a typed command, so the agent gets the keyboard")))
+        [_ s b]   (first (filter #(= :drive (first %)) calls))]
+    (is (= "kid" s) "not carried, the child is driven on its brief all the same")
+    (is (str/includes? b "SendMessage to `parent-a1`"))
+    (is (str/ends-with? b "Build the widget.\n") "the brief verbatim, last")
+    (is (some #(and (= :tab (first %)) (= ["kid" :home] (subvec % 1 3))
+                    (str/ends-with? (nth % 3) "nido:session:attach :session-id sid-1"))
+              calls)
+        "the tab attaches to the driven conversation rather than starting one")))
+
+(deftest spawn-carried-is-not-driven-again
+  (let [[calls out] (spawn-calls {:carried {:seat 1 :session "kid"}})]
+    (is (some #(= :carry (first %)) calls))
+    (is (not-any? #(= :drive (first %)) calls) "carrying started its conversation")
+    (is (str/includes? out "whole seat"))))
 
 (deftest spawn-outside-warp-opens-no-tab
   (let [[calls out] (spawn-calls {:warp? false})]
     (is (not-any? #(= :tab (first %)) calls))
-    (is (str/includes? out "cd /h && zsh k"))))
-
-(deftest spawn-passes-the-child-no-permission-mode
-  (let [kickoff (last (first (filter #(= :kickoff (first %)) (first (spawn-calls {})))))]
-    (is (not (contains? kickoff :permission-mode))
-        "the child runs in the mode its worktree's launch baseline sets, the parent's own")))
+    (is (str/includes? out "nido:session:attach :session-id sid-1"))))
 
 (deftest spawn-never-asks-the-budget-question
   (let [asked (atom 0)]
@@ -226,10 +236,11 @@
         (is (not (str/includes? out "Aborted")))
         (is (some #(= [:up "kid"] %) calls))))))
 
-(deftest spawn-hands-a-model-to-the-kickoff-only-when-given
-  (let [model-of (fn [calls] (:model (last (first (filter #(= :kickoff (first %)) calls)))))]
-    (is (nil? (model-of (first (spawn-calls {})))))
-    (is (= "claude-opus-5-5" (model-of (first (spawn-calls {} ":model" "claude-opus-5-5")))))))
+(deftest spawn-hands-a-model-to-the-child-only-when-given
+  (let [model-of (fn [k calls] (last (first (filter #(= k (first %)) calls))))]
+    (is (nil? (model-of :drive (first (spawn-calls {})))))
+    (is (= "claude-opus-5-5" (model-of :carry (first (spawn-calls {} ":model" "claude-opus-5-5")))))
+    (is (= "claude-opus-5-5" (model-of :drive (first (spawn-calls {} ":model" "claude-opus-5-5")))))))
 
 (defn- revive-world
   "Two casualties in temp worktrees — `quiz`, whose conversation is already running, and

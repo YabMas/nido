@@ -441,6 +441,17 @@
     (when (and (contains? notion-done (:status seen)) (> (:seq seen) moved))
       seen)))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :Workstream] [:maybe :map]]}
+  settled-in-notion
+  "The :notion-status entry by which a person settled the ticket of `whole` — the workstream as
+   read, every generation — in Notion, or nil: nil once it is closed, and while the current
+   generation holds an unanswered blocker, since only an answer naming its seq clears one. `of`
+   places a workstream this answers for where a close is."
+  [project ws-id whole]
+  (when-not (or (ws/closure whole)
+                (unanswered-blocker project ws-id (update whole :entries generation/current-span)))
+    (notion-settlement project ws-id whole)))
+
 (defn- triage-unaccepted?
   "Whether the newest verdict report is one no :triage-accepted cites."
   [project ws-id w]
@@ -1097,7 +1108,7 @@
           ;; owing nobody, so the board's band and the pane's owed-by are one answer. Not over an
           ;; unanswered blocker: only an answer naming its seq clears one, and a Notion status
           ;; names none.
-          settled (when-not (or closed blocker) (notion-settlement project ws-id whole))
+          settled (settled-in-notion project ws-id whole)
           layers (layer-progress project ws-id w design 0)
           facts  {:closed?        (some? (or closed settled))
                          :closed-outcome (:outcome closed)
@@ -1230,7 +1241,9 @@
          owed-by  (if-let [mode (get-in position [:next :mode])]
                     (owed-by-mode mode :nobody)
                     :nobody)
-         sessions (csession/list-sessions project ws-id)
+         ;; Past the conductor's record: it runs for as long as the workstream is open, so counting
+         ;; it would read every worked workstream live and none stalled.
+         sessions (remove :conductor (csession/list-sessions project ws-id))
          ;; A person's session is live while it is up — observed, never a stored phase.
          ;; Absent the caller's observation, make one, and only when there is a person's session
          ;; to ask about: a board passes the set it read once for every row.

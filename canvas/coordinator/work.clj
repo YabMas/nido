@@ -3,7 +3,9 @@
   (:require [fukan.common.vocab.code.kind :refer [Kind]]
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
+            [canvas.coordinator.lane.conductor :as conductor]
             [canvas.coordinator.lane.drive :as pipeline]
+            [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.lane.work :as lanes]
             [canvas.coordinator.record.session :as session :refer [Session]]
             [canvas.coordinator.record.standing :as standing]
@@ -86,7 +88,7 @@
     {:signature [:=> [:catn [:project ProjectName]] :any]})
   (Operation latest-report "The workstream's most recent ledger entry."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]})
-  (Operation environment "The workstream's current environment — its latest live session."
+  (Operation environment "The workstream's current environment — its latest live session past its conductor's record."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
      :delegates [session/list-sessions]})
   (Operation holds
@@ -100,6 +102,10 @@
   (Operation gates "The workstreams of a project that want a person now."
     {:signature [:=> [:catn [:project ProjectName] [:live-names [:? :any]]] [:vector Gate]]
      :delegates [list-workstreams gate-actions]})
+  (Operation replyable?
+    "Whether a reply has someone to reach on a workstream: a session waiting on a person's reply,
+     or a conductor's escalation owed the person's answer, whoever's session the work runs in."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :boolean]})
   (Operation gate "Full gate detail for one workstream, or nil when it is not gating."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe Gate]]
      :delegates [gates]})
@@ -135,10 +141,11 @@
     {:signature [:=> [:catn [:i :int] [:option :map]] :string]})
   (Operation resolve-gate!
     "Apply a gate follow-action. Position-carrying actions check the ledger has not moved, which
-     is what makes two people clicking the same button safe."
+     is what makes two people clicking the same button safe. A reply to a workstream a
+     conductor's escalation parked is recorded as that blocker's answer, for the conductor."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:action-id :any]
                             [:payload [:? :any]]] :map]
-     :delegates [option-input set-stage!]})
+     :delegates [option-input set-stage! conductor/answer!]})
   (Operation new! "Birth a scratch workstream and bring its session up."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
      :delegates [lanes/birth! lifecycle/up!]})
@@ -147,9 +154,19 @@
      session started in its homes or the worktrees they link to."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:sequential :map]]
      :delegates [session/list-sessions]})
-  (Operation open-target "Where opening a workstream lands."
+  (Operation open-target "Where opening a workstream lands — never on its conductor's record."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
      :delegates [session/list-sessions workstream-listing view/session-rows]})
+  (Operation driven-conversation
+    "The background conversation a person entering a session is put in front of — the one its
+     record names, unless nido retired it."
+    {:signature [:=> [:catn [:project ProjectName] [:session SessionName]] [:maybe :string]]
+     :delegates [session/read-session]})
+  (Operation attach-command
+    "The command that attaches a terminal to a session's driven conversation, as a spawned
+     child's tab runs it."
+    {:signature [:=> [:catn [:project ProjectName] [:session SessionName]] [:maybe :string]]
+     :delegates [driven-conversation]})
   (Operation reclaimed? "Whether a session's substrate was reclaimed under it."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session :any]] :boolean]})
   (Operation ensure-open! "Make a session landable, re-provisioning it if it was reclaimed."
@@ -166,7 +183,7 @@
     {:signature [:=> [:catn [:project ProjectName]] :any] :delegates [sstate/session-live?]})
   (Operation prune-dead-registry! "Drop registry entries whose session no longer holds a port."
     {:signature [:=> [:catn [:now-ms [:? :int]]] :any] :delegates [sstate/session-live? casualties/record!]})
-  (Operation bring-down! "Down every live session of a workstream."
+  (Operation bring-down! "Down every live session of a workstream but its conductor."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]
      :delegates [session/list-sessions lifecycle/down!]})
   (Operation orphan-live-sessions "The live sessions no workstream owns. Pure."
@@ -174,15 +191,18 @@
   (Operation start!
     "Bring a session up on the workstream holding it — a fresh one-off when none does — and on that
      workstream's runtime. The workstream is settled first so the session comes up on its runtime
-     at once. Idempotent on a live session. Returns the ws-id."
+     at once. Idempotent on a live session. A session this start first recorded is carried once it
+     is up. Returns the ws-id."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName] [:opts :map]] :any]
-     :delegates [lanes/birth! lifecycle/up!]})
+     :delegates [lanes/birth! lifecycle/up! conductor/carry!]})
   (Operation adopt-orphans!
     "Enforce the invariant that every live session is reachable from a workstream — an orphan is
      a session doing work the board cannot show — and report every session name two workstreams
-     hold that it cannot settle by yielding a bare one-off, naming the holders."
+     hold that it cannot settle by yielding a bare one-off, naming the holders. A yielded one-off
+     is counted past its conductor's record, and its conductor retired before it is deleted."
     {:signature [:=> [:catn [:project ProjectName]] :any]
-     :delegates [orphan-live-sessions live-session-names lanes/birth!]})
+     :delegates [orphan-live-sessions live-session-names lanes/birth! seats/retire-conductor!
+                 workstream/delete!]})
   (Operation machine-rows "Machine facts for every worktree of one project."
     {:signature [:=> [:catn [:project-name ProjectName] [:project-dir Path]] [:vector :map]]})
   (Operation machine-facts "Machine facts for named sessions, keyed by name."

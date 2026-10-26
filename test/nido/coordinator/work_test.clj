@@ -7,6 +7,7 @@
    [nido.platform.core :as core]
    [nido.platform.config]
    [nido.coordinator.lane.facets]
+   [nido.coordinator.lane.drive :as drive]
    [nido.coordinator.lane.intake :as intake]
    [nido.coordinator.lane.pickup]
    [nido.coordinator.lane.promote]
@@ -177,6 +178,16 @@
           (is (= ["s1"] (:sessions row)))
           (is (false? (:needs-you row))))
         (is (= [] (work/winding-down :p #{})) "downed sessions → gone")))))
+
+(deftest winding-down-reads-past-the-conductor
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :p {:external-refs []})]
+        (session/create! :p (:id w) {:name "c" :weight :heavy :autonomy nil :conductor true})
+        (is (= [] (work/winding-down :p #{"c"} [{:ws-id (:id w) :stage :done}]))
+            "only the conductor left running is no work winding down")
+        (session/create! :p (:id w) {:name "s1" :weight :light :autonomy nil})
+        (is (= [["s1"]] (mapv :sessions (work/winding-down :p #{"c" "s1"} [{:ws-id (:id w) :stage :done}]))))))))
 
 (deftest winding-down-ignores-open-workstreams
   (with-tmp
@@ -825,7 +836,7 @@
         (workstream/append-entry! :brian (:id w) {:kind :blocker}
           (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
         (with-redefs [executor/driven?  (constantly false)
-                      conduct/instruct! (fn [_ _ sname text] (reset! given [sname text]))]
+                      conduct/instruct! (fn [_ _ sname text & _] (reset! given [sname text]))]
           (is (= :answered (:decision (work/resolve-gate! :brian (:id w) :option-a 1))))
           (is (= "run-x" (first @given)) "the session that asked is given the answer")
           (is (str/includes? (second @given) "option A")))))))
@@ -1356,6 +1367,26 @@
           (is (= :triage-report (-> g :report :format)))
           (is (= "Verdict" (-> g :report :title)))
           (is (= :bug (-> g :report :determination))))))))
+
+(deftest a-conductors-escalation-is-answerable-at-the-gate
+  ;; A person's carried session has no autonomy, so no agent waits in it — but the conductor's
+  ;; escalation is owed an answer, and :reply is how the person gives it.
+  (with-tmp
+    (fn [_]
+      (let [w  (workstream/create! :brian {:external-refs [{:adapter :notion :id "BR-9" :title "t"}]})
+            id (:id w)]
+        (tickets/open! :brian "BR-9" {:title "t"})
+        (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+        (let [{:keys [seq]} (drive/park! :brian id {:stage :conduct :outcome :escalated
+                                                    :summary "the conductor escalated a hand-back"
+                                                    :needs "approve the design"})]
+          (workstream/append-stamped! :brian id {:format :conduct-decision :hand-back "m-1" :position :implementing
+                                                 :by :conductor :decision [:escalate {:needs "approve the design"}]
+                                                 :parked {:seq seq}}))
+        (let [g (first (filter #(= id (:ws-id %)) (work/gates :brian)))]
+          (is (some? g) "it is a gate")
+          (is (some #{:reply} (map :id (:actions g))) "offering Reply"))
+        (is (true? (:replyable? (work/workstream :brian id))) "and the pane reads the same")))))
 
 (deftest gates-excludes-a-ready-workstream
   (with-tmp

@@ -41,7 +41,7 @@
     "What to tell a person about a position nothing will fire for them: the stage, the mode, and
      the command that would supply it. Pure, and it is where the skip reasons stop being a
      driver's shrug and become an answer — a mode this phase cannot run names the session to
-     enter, a `:human` one names the gate, `:no-runner` names the stage that has none.
+     enter, never its conductor's, a `:human` one names the gate, `:no-runner` names the stage that has none.
 
      The stage is read off the POSITION rather than off the decision, because `fireable` carries
      one only on the branches its own caller needs it for — :waiting-on-a-human has none, and

@@ -77,7 +77,8 @@
                                                  (session/update-substrate! (:project o#) (:ws-id o#) (:session-name o#)
                                                                             (fn [m#] (assoc m# :dispatching {:token "t" :at "now"})))
                                                  {})
-                   conduct/retire!             (fn [~'_ ~'_ n# ~'_] (swap! ~retired conj n#) nil)]
+                   conduct/retire!             (fn [~'_ ~'_ n# ~'_] (swap! ~retired conj n#) nil)
+                   conduct/live-states         (fn [~'_] {})]
        ~@body)))
 
 (defn- with-tmp [f]
@@ -132,7 +133,7 @@
             seat (str id "--canvas_dstrata_sledger-g1")]
         (launching [_ _]
           (embodied/carry! :brian id)
-          (seats/conductor! :brian id))
+          (seats/conductor! :brian id "conduct it"))
         (let [t (in-session seat #(seats/record! :brian id {:format :tension :to "canvas.strata/seats"
                                                               :about ["canvas.strata/ledger"] :statement "s"}))]
           (is (= {:as :seat :seat "canvas.strata/ledger" :session seat} (:by t))))
@@ -161,19 +162,26 @@
             seats-seat  (str id "--canvas_dstrata_sseats-g1")]
         (launching [_ _]
           (embodied/carry! :brian id)
-          (seats/conductor! :brian id))
+          (seats/conductor! :brian id "conduct it"))
         (in-session ledger-seat #(seats/send! :brian id {:to "canvas.strata/seats" :text "your read is mine"}))
-        (in-session (str id "--conductor") #(seats/send! :brian id {:to "canvas.strata/ledger" :text "settle it"}))
+        (is (= :conductor-sends
+               (:reason (ex-data (try (in-session (str id "--conductor")
+                                                  #(seats/send! :brian id {:to "canvas.strata/ledger" :text "x"}))
+                                      (catch Exception e e)))))
+            "the conductor's word reaches a seat only as a decided instruction")
+        (let [posted (seats/post! :brian id {:key "d1" :kind :instruction :to "canvas.strata/ledger" :text "settle it"})]
+          (is (= posted (seats/post! :brian id {:key "d1" :kind :instruction :to "canvas.strata/ledger" :text "again"}))
+              "a second post under one key logs nothing and answers the first"))
         (is (= ["[seat message from seat canvas.strata/ledger]\n\nyour read is mine"]
                (mapv :text (seats/owed :brian id seats-seat))))
-        (is (= ["[seat message from the conductor]\n\nsettle it"]
+        (is (= ["[seat message from nido]\n\nsettle it"]
                (mapv :text (seats/owed :brian id ledger-seat))))
         (is (= [] (seats/owed :brian id (str id "--conductor"))))
         (is (= [["canvas.strata/seats" "your read is mine"] ["canvas.strata/ledger" "settle it"]]
                (mapv (juxt :to :text) (seats/traffic :brian id 1))))
         (is (= [] (seats/traffic :brian id 2)))
         (testing "a delivered message is owed no more"
-          (seats/delivered! :brian id (:id (first (seats/owed :brian id ledger-seat))))
+          (seats/delivered! :brian id (:id (first (seats/owed :brian id ledger-seat))) "tok")
           (is (= [] (seats/owed :brian id ledger-seat)))
           (is (= [false true] (mapv :delivered? (seats/traffic :brian id 1)))))
         (testing "the seat's next occupant is owed what its predecessor was"
@@ -196,7 +204,7 @@
             seat (str id "--canvas_dstrata_sledger-g1")]
         (launching [_ _]
           (embodied/carry! :brian id)
-          (seats/conductor! :brian id))
+          (seats/conductor! :brian id "conduct it"))
         (let [r      (in-session nil #(count (do (seats/record! :brian id {:format :recut :ids strata :why "again"})
                                                  (:entries (ws/read-ws :brian id)))))
               append ws/append-stamped!]
@@ -221,7 +229,7 @@
             opening          (atom nil)]
         (launching [_ _]
           (embodied/carry! :brian id)
-          (seats/conductor! :brian id))
+          (seats/conductor! :brian id "conduct it"))
         (let [r (in-session nil #(count (do (seats/record! :brian id {:format :recut :ids strata :why "again"})
                                             (:entries (ws/read-ws :brian id)))))]
           (with-redefs [io/update-edn! (let [update io/update-edn!]
@@ -286,7 +294,7 @@
       (let [[id add] (ledger strata)]
         (launching [launched retired]
           (embodied/carry! :brian id)
-          (seats/conductor! :brian id)
+          (seats/conductor! :brian id "conduct it")
           (let [r (in-session nil #(count (do (seats/record! :brian id {:format :recut :ids strata :why "again"})
                                               (:entries (ws/read-ws :brian id)))))]
             (ws/open-generation! :brian id {:format :generation :recut {:seq r} :words "again"
@@ -319,10 +327,10 @@
     (fn []
       (let [[id] (ledger strata)]
         (launching [_ _]
-          (seats/conductor! :brian id)
+          (seats/conductor! :brian id "conduct it")
           (is (true? (:conductor (session/read-session :brian id (str id "--conductor")))))
           (is (nil? (:seat (session/read-session :brian id (str id "--conductor")))))
-          (is (= :conducted (:reason (ex-data (try (seats/conductor! :brian id) (catch Exception e e)))))))))))
+          (is (= :conducted (:reason (ex-data (try (seats/conductor! :brian id "conduct it") (catch Exception e e)))))))))))
 
 (deftest a-session-record-names-a-seat-or-the-conductor-never-both
   (with-tmp
@@ -360,7 +368,16 @@
             (doseq [cmd ["gh pr create --title \"$title\"" "gh pr create --fill" "jj git push -b \"$B\""
                          "cd \"$D\" && jj git push"]]
               (is (str/includes? (str (seats/gate-verdict (input cmd))) "cannot be read")
-                  (str "a seat's publication the gate cannot read is refused: " cmd)))))
+                  (str "a seat's publication the gate cannot read is refused: " cmd)))
+            (let [read-session session/read-session
+                  as     (fn [conv cmd] (seats/gate-verdict (assoc (input cmd) :session_id conv)))]
+              (with-redefs [session/read-session (fn [& args] (assoc-in (apply read-session args) [:claude :session-id] "occupant"))]
+                (is (some? (as "occupant" "gh pr create --title 'Do it'")) "the occupant's conversation is held")
+                (is (nil? (as "person" "gh pr create --title 'Do it'"))
+                    "a person's other conversation in the seat's folder occupies no seat")
+                (is (some? (as nil "gh pr create --title 'Do it'")) "an unknown hook conversation is held"))
+              (is (some? (as "person" "gh pr create --title 'Do it'"))
+                  "a record whose conversation is unknown holds whoever runs there"))))
         (in-session nil
           #(is (nil? (seats/gate-verdict (input "gh pr create --title 'Do it'"))) "a session with no seat is not held"))))))
 
@@ -386,9 +403,9 @@
           (let [failing (fn [f] (with-redefs [lifecycle/up! (fn [_ _] (throw (ex-info "no runtime" {})))]
                                   (is (thrown-with-msg? Exception #"no runtime" (f)))))]
             (testing "the conductor"
-              (failing #(seats/conductor! :brian id))
-              (is (= {:session (str id "--conductor")} (seats/conductor! :brian id)) "started on the record left")
-              (is (= :conducted (:reason (ex-data (try (seats/conductor! :brian id) (catch Exception e e)))))))
+              (failing #(seats/conductor! :brian id "conduct it"))
+              (is (= {:session (str id "--conductor")} (seats/conductor! :brian id "conduct it")) "started on the record left")
+              (is (= :conducted (:reason (ex-data (try (seats/conductor! :brian id "conduct it") (catch Exception e e)))))))
             (testing "a seat"
               (failing #(seats/occupy! :brian id (embodied/embodiment) "canvas.strata/ledger"))
               (is (= {:seat "canvas.strata/ledger" :session (str id "--canvas_dstrata_sledger-g1")}
@@ -495,7 +512,7 @@
             ledger-s (str id "--canvas_dstrata_sledger-g1")]
         (launching [launched _retired]
           (embodied/carry! :brian id)
-          (seats/conductor! :brian id)
+          (seats/conductor! :brian id "conduct it")
           (let [t (in-session ledger-s #(do (seats/record! :brian id {:format :tension :to :conductor
                                                                        :about ["canvas.strata/ledger"] :statement "too wide"})
                                             (count (:entries (ws/read-ws :brian id)))))]
@@ -542,7 +559,7 @@
       (let [[id] (ledger strata)]
         (launching [launched _retired]
           (seats/occupy! :brian id (embodied/embodiment) "canvas.strata/ledger")
-          (seats/conductor! :brian id)
+          (seats/conductor! :brian id "conduct it")
           (is (= [(str "/wt/" id "--canvas_dstrata_sledger-g1") (str "/wt/" id "--conductor")] (mapv #(nth % 2) @launched))))))))
 
 (deftest a-retirement-that-failed-at-the-opening-completes-before-anyone-is-seated
@@ -564,3 +581,112 @@
             (is (= #{(str id "--canvas_dstrata_sledger-g1") (str id "--canvas_dstrata_sseats-g1")} (set @retired)) "retired before seating")
             (is (= :archived (:substrate (session/read-session :brian id (str id "--canvas_dstrata_sseats-g1")))))
             (is (= [(str id "--canvas_dstrata_sledger-g2") (str id "--canvas_dstrata_sseats-g2")] (mapv first @launched)))))))))
+
+(deftest a-start-carries-its-session-into-the-whole-seat
+  (with-tmp
+    (fn []
+      (let [[id add] (ledger [])
+            mine     "fix-it"]
+        (session/create! :brian id {:name mine :weight :heavy :autonomy nil})
+        (launching [launched retired]
+          (is (= {:seat 1 :session mine} (seats/occupy! :brian id (seats/default-embodiment) 1 mine)))
+          (is (= {:id 1 :generation 1 :carried true} (:seat (session/read-session :brian id mine))))
+          (is (= [mine] (mapv first @launched)) "started on the brief, nido not yet driving it")
+          (is (str/includes? (second (first @launched)) "whole seat"))
+          (is (= :occupied (:reason (ex-data (try (seats/occupy! :brian id (seats/default-embodiment) 1 "other")
+                                                  (catch Exception e e)))))
+              "a later start displaces no one")
+          (testing "once the generation fixes ids, a carried occupant is released, not archived"
+            (let [d (add :design (a-design ["canvas.strata/ledger"] :supersedes {:seq 4 :why "mark"}))]
+              (add :design-approved {:format :design-approved :design {:seq d} :at-seq d}))
+            (seats/reseat! :brian id)
+            (let [s (session/read-session :brian id mine)]
+              (is (nil? (:seat s)))
+              (is (:released s) "it keeps saying its workstream was carried")
+              (is (session/live? s) "still its person's"))
+            (is (= [] @retired) "nothing of it stopped")
+            (is (= :fixes-ids (:reason (ex-data (try (seats/occupy! :brian id (seats/default-embodiment) 1)
+                                                     (catch Exception e e))))))))))))
+
+(deftest a-runs-carried-session-stays-driven-for-its-run-once-its-seat-is-gone
+  (with-tmp
+    (fn []
+      (let [[id add] (ledger [])
+            run      "run-1"]
+        (session/create! :brian id {:name run :weight :light
+                                    :autonomy {:skill :x :first-message "x" :agent :claude
+                                               :claude-session-id nil :trigger :t :limits {} :priority 0
+                                               :uncapped? false :on-promote nil :error nil}})
+        (session/update-substrate! :brian id run (constantly {:claude {:session-id "conv-1" :bg-id "b" :origin :nido
+                                                                      :driver :nido :hold nil :pending nil
+                                                                      :queued "the run's next" :queued-for "r1"
+                                                                      :own-work? false
+                                                                      :policy {:auto-respawn? false} :cursor 0
+                                                                      :driving-since nil :announced-blocked? false
+                                                                      :recovered-boot nil}
+                                                             :dispatching nil}))
+        (launching [_ retired]
+          (seats/occupy! :brian id (seats/default-embodiment) 1 run)
+          (let [d (add :design (a-design ["canvas.strata/ledger"] :supersedes {:seq 4 :why "mark"}))]
+            (add :design-approved {:format :design-approved :design {:seq d} :at-seq d}))
+          (seats/reseat! :brian id)
+          (let [s (session/read-session :brian id run)]
+            (is (nil? (:seat s)))
+            (is (:released s))
+            (is (= :nido (get-in s [:claude :driver])) "nido still drives it for its Run")
+            (is (= "the run's next" (get-in s [:claude :queued])) "its Run's instruction is kept"))
+          (is (= [] @retired)))))))
+
+(deftest the-conductor-is-owed-its-hand-backs-until-one-is-answered
+  (with-tmp
+    (fn []
+      (let [[id add] (ledger [])
+            c        (str id "--conductor")]
+        (launching [_ _] (seats/conductor! :brian id "conduct it"))
+        (session/update-substrate! :brian id c (constantly {:claude {:session-id "conv-1" :bg-id "b" :origin :nido
+                                                                    :driver :nido :hold nil
+                                                                    :pending {:token "tok" :at "t" :via :send :seen? false}
+                                                                    :queued nil :own-work? false
+                                                                    :policy {:auto-respawn? false} :cursor 0
+                                                                    :driving-since nil :announced-blocked? false
+                                                                    :recovered-boot nil}
+                                                           :dispatching nil}))
+        (let [hb (seats/post! :brian id {:key "turn-1" :kind :hand-back :to :conductor :text "seat 1 stopped"})]
+          (is (= ["[seat message from nido]\n\nseat 1 stopped"] (mapv :text (seats/owed :brian id c))))
+          (seats/delivered! :brian id (:id hb) "tok")
+          (is (= [] (seats/owed :brian id c)) "given to its running conversation")
+          (session/update-claude! :brian id c #(assoc % :session-id "conv-2"))
+          (is (= [(:id hb)] (mapv :id (seats/owed :brian id c)))
+              "a conversation that stopped before answering it leaves it owed to the next")
+          (ws/append-stamped! :brian id {:format :conduct-decision :hand-back (:id hb) :position :intake :by :conductor
+                                         :decision [:instruct [{:seat 1 :text "go on"}]]})
+          (is (= [] (seats/owed :brian id c)) "answered, it is owed no more"))))))
+
+(deftest retiring-the-conductor-stops-it-and-brings-its-session-down
+  (with-tmp
+    (fn []
+      (let [[id] (ledger [])
+            downed (atom [])]
+        (is (= {} (seats/retire-conductor! :brian id)) "nothing to retire without a record")
+        (launching [_ retired]
+          (seats/conductor! :brian id "conduct it")
+          (with-redefs [fs/exists?       (constantly true)
+                        lifecycle/down!  (fn [n _] (swap! downed conj n))]
+            (is (= {:session (str id "--conductor")} (seats/retire-conductor! :brian id))))
+          (is (= [(str id "--conductor")] @retired))
+          (is (= [(str id "--conductor")] @downed))
+          (is (true? (:conductor (session/read-session :brian id (str id "--conductor")))) "its record kept"))))))
+
+(deftest a-tension-goes-to-a-seat-or-the-conductor
+  (with-tmp
+    (fn []
+      (let [[id] (ledger [])
+            mine "fix-it"]
+        (session/create! :brian id {:name mine :weight :heavy :autonomy nil})
+        (launching [_ _] (seats/occupy! :brian id (seats/default-embodiment) 1 mine))
+        (is (= :no-addressee
+               (:reason (ex-data (try (in-session mine #(seats/record! :brian id {:format :tension :to "nowhere"
+                                                                                  :about ["agg"] :statement "s"}))
+                                      (catch Exception e e))))))
+        (is (= :conductor (:to (in-session mine #(seats/record! :brian id {:format :tension :to :conductor
+                                                                          :about ["agg"] :statement "s"})))))))))

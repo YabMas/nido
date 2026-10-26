@@ -650,7 +650,8 @@
          {:type ::action-failed :verb verb :subject sn :error error :output output})))))
 
 (defn- enter-session
-  "Land the user in session `sn` (target `:home` | `:worktree`). In Warp, open
+  "Land the user in session `sn` (target `:home` | `:worktree`), attached to the
+   conversation nido drives there when it has one. In Warp, open
    a new tab in the *current* window in-app so nido stays up to orchestrate from
    — errors surface as a status line. Every other terminal falls back to the
    `cd-target-file` handoff: queue an `:enter` action and quit so the `nido`
@@ -658,7 +659,10 @@
   [state p sn target]
   (if (lifecycle/warp?)
     (try
-      (let [path (lifecycle/spawn-tab! sn {:project p :cd target})]
+      ;; A session nido drives is entered at its conversation, not beside it in a bare shell.
+      (let [attach (work/attach-command p sn)
+            path   (lifecycle/spawn-tab! sn (cond-> {:project p :cd target}
+                                              attach (assoc :command attach)))]
         [(assoc state :status (str "Opened tab → " path)) nil])
       (catch Throwable t
         [(assoc state :status (str "✗ " (ex-message t))) nil]))

@@ -4,7 +4,7 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.agent.substrate :as substrate]
             [canvas.coordinator.record.session-events :as events]
-            [canvas.coordinator.record.state :refer [WorkstreamId SessionName]]
+            [canvas.coordinator.record.state :refer [RunId WorkstreamId SessionName]]
             [canvas.platform.process :as process]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
@@ -43,7 +43,8 @@
     {:signature [:=> [:catn [:opts :map]] [:sequential :map]]})
   (Operation start!
     "Start a conversation for a session record as a background session nido drives, its first
-     prompt's token recorded before the session starts, refused while the record's session lives —
+     prompt's token — with the Run it is given for when the opts name one — recorded before the
+     session starts, refused while the record's session lives —
      naming the hold when one stands on it — and carrying nothing of a stopped one's facet; trust is
      given only to a directory made from a trusted source."
     {:signature [:=> [:catn [:opts :map]] :map]
@@ -61,15 +62,18 @@
     "Clear the hold a turn nido did not give put on a session, making nido its driver again."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName]] :map]})
   (Operation instruct!
-    "Queue the next instruction for a session nido drives, given once it is ready for it."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:text :string]] :map]})
+    "Queue the next instruction for a session nido drives, given once it is ready for it, recorded
+     with the Run it is given for when its caller names one."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName] [:text :string]
+                      [:for [:? RunId]]] :map]})
   (Operation conduct!
     "One pass: read every new session event and the substrate's listing, decide, record, then
      deliver — only while the session's own events still show the launch baseline; answer what
-     the pass saw — turn ends, denials, holds, blocked sessions, deliveries, refusals. Seat
+     the pass saw — turn ends, each with the instruction it ended and the Run that instruction was
+     recorded for, if any, denials, holds, blocked sessions, deliveries, refusals. Seat
      messages are asked of the mail its caller supplies — what each session is owed, oldest first
-     — given tokened once nothing is queued, and marked delivered only once the substrate took
-     them; conduct keeps none itself."
+     — given tokened once nothing is queued, and marked delivered, with the token given, only once
+     the substrate took them; conduct keeps none itself."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [faceted-sessions decide baseline-shown events/events-since substrate/listing substrate/send! substrate/wake!]})
   (Operation retire!

@@ -162,6 +162,18 @@
     (is (false? (get-in d3 [:facet :announced-blocked?])) "left blocked")
     (is (= [:notify-blocked] (kinds d4)) "a new entry is announced")))
 
+(deftest blocked-after-a-turn-the-conductor-answers-for-is-marked-for-it
+  (let [blocked (assoc done-row :state "blocked")
+        given   (fn [pending] (assoc driving :pending (merge {:token "P" :at "t" :via :send :seen? true} pending)))
+        stop    [{:event :stop :background-tasks 0 :crons 0}]
+        unrun   (fn [d] (second (first (filter #(= :notify-blocked (first %)) (:actions d)))))]
+    (is (true? (unrun (conduct/decide (given {}) blocked stop ctx)))
+        "its turn on an instruction no Run gave ended: handed back to the conductor, not the person's")
+    (is (false? (unrun (conduct/decide (given {:for "run-1"}) blocked stop ctx))) "a Run's turn is its Run's")
+    (is (false? (unrun (conduct/decide (given {}) blocked [] (assoc ctx :latest {:event :prompt}))))
+        "blocked mid-turn, nothing is handed back: only the person can answer it")
+    (is (false? (unrun (conduct/decide driving blocked stop ctx))) "a turn nido did not give is the person's")))
+
 (deftest denials-surface-only-while-nido-drives
   (is (= [:denial] (kinds (conduct/decide driving done-row [{:event :permission-denied :tool-name "Bash"}] ctx))))
   (is (= [] (kinds (conduct/decide (assoc driving :driver :nobody) done-row
@@ -475,8 +487,25 @@
         (with-redefs [substrate/listing (constantly [done-row])]
           (let [r (conduct/conduct! {:projects [:nido]})]
             (is (= ["done"] (map #(get-in % [:event :last-message]) (:turn-ends r))))
+            (is (= [nil] (map :run (:turn-ends r))) "an instruction given for no Run ends as no Run's")
             (is (empty? (:held r)) "its own instruction did not hold it")
             (is (nil? (:pending (facet))))))))))
+
+(deftest a-turn-end-names-the-run-its-instruction-was-recorded-for
+  (with-tmp
+    (fn []
+      (auto-baseline!)
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :cursor 2)))
+      (conduct/instruct! :nido "ws-1" "kid" "/drive-home" "run-7")
+      (let [sent (atom nil)]
+        (with-redefs [substrate/listing (constantly [done-row])
+                      substrate/send!   (fn [_ text] (reset! sent text) {:delivered? true})]
+          (conduct/conduct! {:projects [:nido]}))
+        (is (= "run-7" (get-in (facet) [:pending :for])) "recorded with the instruction, before it is given")
+        (events/append! "s" {:event :prompt :prompt @sent :permission-mode "auto"})
+        (events/append! "s" {:event :stop :last-message "done" :background-tasks 0 :crons 0 :permission-mode "auto"})
+        (with-redefs [substrate/listing (constantly [done-row])]
+          (is (= ["run-7"] (map :run (:turn-ends (conduct/conduct! {:projects [:nido]}))))))))))
 
 (deftest conduct-keeps-back-what-a-lost-baseline-would-deliver
   (with-tmp
@@ -699,7 +728,9 @@
             mail {:owed (fn [_ _ n] (if (= "kid" n) (vec (remove (comp (set @delivered) :id)
                                                                  [{:id "m1" :text "first"} {:id "m2" :text "second"}]))
                                        []))
-                  :delivered! (fn [_ _ id] (swap! delivered conj id))}]
+                  :delivered! (fn [_ _ id token]
+                                (is (= token (get-in (facet) [:pending :token])) "delivered under the token given")
+                                (swap! delivered conj id))}]
         (with-redefs [substrate/listing (constantly [done-row])
                       substrate/send!   (fn [_ _] {:delivered? false})]
           (is (= 1 (count (:failed (conduct/conduct! {:projects [:nido] :mail mail}))))))

@@ -7,6 +7,9 @@
    work plane and make it shallow."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
+            [canvas.coordinator.lane.conduct :as conduct]
+            [canvas.coordinator.lane.conductor :as conductor]
+            [canvas.coordinator.lane.seats :as seats]
             [fukan.common.typing.malli]))
 
 (Module nido-session
@@ -25,8 +28,10 @@
     {:signature [:=> [:catn] :any]})
   (Operation up
     "Bring the named session up, on the workstream `:ws-id` names when given — refused before
-     anything is provisioned when it cannot join it."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+     anything is provisioned when it cannot join it. A session this start first recorded is
+     carried once it is up — a step of this verb's own, which spawn takes too."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]
+     :delegates [conductor/carry!]})
   (Operation revive
     "Bring back the sessions that died with the host: plan from the casualty records, bring the
      admitted ones up in order, and reopen each one's latest conversation where it ran. A dry run
@@ -57,13 +62,18 @@
     "Stop nido driving a session's background session; the session keeps running."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation hand-back
-    "Let nido drive a session's background session again after a person's prompt held it."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+    "Let nido drive a session's background session again after a person's prompt held it, and
+     hand the hold back to its workstream's conductor."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]
+     :delegates [conduct/hand-back! conductor/hand-back!]})
   (Operation spawn
-    "Bring a child session up through `up`, record it and the session spawning it as each other's
-     :session link, stage a kickoff that starts its agent on a brief addressed back to the parent's
-     agent, and open a tab on it. `:ws-id` is passed to `up` and nothing else."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+    "Bring a child session up as `up` does and drive it on the brief addressed back to the parent's
+     agent: carried as `up` carries a session, occupying its workstream's whole seat when that seat
+     is free, and otherwise driven occupying no seat. Record it and the session spawning it as each
+     other's :session link, and open a tab that attaches to the child rather than starting a
+     conversation of its own. `:ws-id` is passed to `up` and nothing else."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]
+     :delegates [conductor/carry! seats/drive!]})
   (Operation status
     "Print status for the named session."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

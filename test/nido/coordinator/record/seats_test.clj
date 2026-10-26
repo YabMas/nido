@@ -60,7 +60,8 @@
     (fn []
       (let [[id add] (ledger)
             d (add :design (a-design ["agg" "split"]))]
-        (is (= [] (seats/seats :brian id)) "nothing is fixed until the design is approved")
+        (is (= [{:id 1 :whole true :interface "sh" :tensions []}] (seats/seats :brian id))
+            "nothing is fixed until the design is approved, so the generation has its whole seat")
         (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
         (is (= [{:id "agg" :interface "a total" :tensions []}
                 {:id "split" :interface "split's part" :tensions []}]
@@ -77,8 +78,8 @@
             t2 (stamped {:format :tension :by (seat "agg") :to "gone" :about ["agg"] :statement "s2"})
             t3 (stamped {:format :tension :by (seat "split") :to :conductor :about ["split"] :statement "s3"})
             state #(into {} (map (juxt :seq (juxt :to :state))) (seats/tensions :brian id))]
-        (is (= {t1 ["split" :open] t2 [:conductor :open] t3 [:conductor :open]} (state))
-            "a tension to a seat the generation lacks is the conductor's")
+        (is (= {t1 ["split" :open] t2 ["gone" :open] t3 [:conductor :open]} (state))
+            "a tension to a seat the generation lacks is nobody's, never the conductor's by default")
         (is (= [t1] (mapv :seq (:tensions (second (seats/seats :brian id))))))
         (testing "an accord from anyone but the addressee settles nothing"
           (stamped {:format :accord :by conductor :tension {:seq t1} :terms "t"})
@@ -88,6 +89,9 @@
           (is (= :accorded (get-in (state) [t1 1])))
           (is (= a (:settled-by (first (seats/tensions :brian id)))))
           (is (= [] (:tensions (second (seats/seats :brian id))))))
+        (testing "nobody can accord a tension addressed to no seat"
+          (stamped {:format :accord :by conductor :tension {:seq t2} :terms "t"})
+          (is (= :open (get-in (state) [t2 1]))))
         (testing "a withdrawal settles only from the one who raised it"
           (stamped {:format :withdrawal :by (seat "split") :tension {:seq t2}})
           (is (= :open (get-in (state) [t2 1])))
@@ -119,3 +123,18 @@
                (select-keys (seats/inherited :brian id) [:recut :words :ids :base-rev :tensions])))
         (add :design (a-design ["agg" "split"] :supersedes {:seq d1 :why "re-cut"}))
         (is (= ["a total" "split's part"] (mapv :interface (seats/seats :brian id))))))))
+
+(deftest a-generation-fixing-no-ids-has-one-whole-seat
+  (with-tmp
+    (fn []
+      (let [[id add stamped] (ledger)]
+        (is (= [{:id 1 :whole true :interface nil :tensions []}] (seats/seats :brian id))
+            "a generation always has a seat, before any design too")
+        (let [t (stamped {:format :tension :by conductor :to 1 :about ["agg"] :statement "s"})]
+          (is (= [t] (mapv :seq (:tensions (first (seats/seats :brian id)))))
+              "a tension to the whole seat is the whole seat's while it stands")
+          (let [d (add :design (a-design ["agg"]))]
+            (add :design-approved {:format :design-approved :design {:seq d} :at-seq d}))
+          (is (= ["agg"] (mapv :id (seats/seats :brian id))) "fixing ids replaces the whole seat")
+          (is (= :conductor (:to (first (seats/tensions :brian id))))
+              "once the whole seat is gone, what was addressed to it is the conductor's"))))))

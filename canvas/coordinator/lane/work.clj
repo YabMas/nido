@@ -6,6 +6,7 @@
    them holds state, and that is what lets the driver run them in any order it likes."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
+            [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.record.runs :as runs]
             [canvas.coordinator.record.session :refer [Session]]
             [canvas.coordinator.record.standing :as standing]
@@ -65,7 +66,9 @@
 
    The difference from a live spawn is deliberate — an incoming item waits for a human to pick
    it up, so nothing is provisioned until somebody decides it is worth provisioning."
-  (Operation enqueue-inbox! "Create a session-less incoming workstream for a queued fire."
+  (Operation enqueue-inbox!
+    "Create a session-less incoming workstream for a queued fire. One an earlier fire minted and
+     never penned is told by holding no entry and no session past its conductor's record."
     {:signature [:=> [:catn [:opts :map]] :any] :delegates [workstream/create!]})
   (Operation expire-stale!
     "Close incoming workstreams nobody picked up. An inbox that never expires stops being an
@@ -132,7 +135,8 @@
      :delegates [runs/find-for-session]})
   (Operation resume!
     "Give a session waiting on a person their input as its next instruction, admitted under the
-     global cap; refused for a conversation from before background sessions.
+     global cap, recorded as given for the session's Run when that Run awaits review and for no Run
+     otherwise; refused for a conversation from before background sessions.
 
      The session may be named by a caller that found it waiting before recording the person's
      answer: the answer ends the workstream owing the person its next move, so looking again
@@ -157,7 +161,8 @@
    described-intent leg does, so the inference and the marker stopped agreeing and the marker is
    the one that was always authored."
   (Operation bare?
-    "Whether a workstream holds nothing but its own :scratch birth, so discarding it loses nothing."
+    "Whether a workstream holds nothing but its own :scratch birth and what its conductor decided —
+     its :conduct-decision entries and the blockers they parked — so discarding it loses nothing."
     {:signature [:=> [:catn [:w Workstream]] :boolean]})
   (Operation scratch? "Whether a workstream is marked a one-off."
     {:signature [:=> [:catn [:w Workstream]] :boolean]})
@@ -169,11 +174,12 @@
   (Operation birth!
     "Ensure a workstream owns a named human session: the one named, or else whichever already holds
      the name, or else a minted one-off. Given a workstream, it is called before the session is
-     provisioned, so the record claims the name before any worktree exists."
+     provisioned, so the record claims the name before any worktree exists. A one-off minted for a
+     name another start took first is deleted, its conductor retired before it is."
     {:signature [:function
                  [:=> [:catn [:project ProjectName] [:session-name SessionName] [:weight [:maybe :keyword]]] :any]
                  [:=> [:catn [:project ProjectName] [:session-name SessionName] [:weight [:maybe :keyword]] [:ws-id [:maybe WorkstreamId]]] :any]]
-     :delegates [joinable workstream/create! workstream/list-ids]})
+     :delegates [joinable workstream/create! workstream/list-ids seats/retire-conductor! workstream/delete!]})
   (Operation settle-runtimes!
     "Move each live session onto the runtime it belongs on: its workstream's, or — for one no
      workstream holds — its own, keyed by its whole name. Returns the names it moved."
@@ -181,9 +187,11 @@
   (Operation reap!
     "Delete the one-off workstream owning a session — sparing every unmarked one, and every
      marked one that has since acquired an external ref. Two facts, not one: the marker says
-     it was born disposable, the absent ref says nothing outside has claimed it since."
+     it was born disposable, the absent ref says nothing outside has claimed it since. Neither its
+     conductor's record nor what its conductor decided keeps it, and the conductor is retired before
+     it is deleted."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
-     :delegates [scratch? workstream/list-ids workstream/read-ws workstream/delete!]}))
+     :delegates [scratch? workstream/list-ids workstream/read-ws seats/retire-conductor! workstream/delete!]}))
 
 (Module lane-backfill
   "Record as entries the status a workstream's mutable records already hold, so a status read off

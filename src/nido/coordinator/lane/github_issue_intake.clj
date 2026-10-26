@@ -12,6 +12,7 @@
    failures) opens it; while open the poll is skipped until breaker-cooldown-s,
    then one probe runs (success clears, failure re-arms)."
   (:require
+   [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.standing :as standing]
@@ -43,11 +44,12 @@
   (some #(when (= :github-issue (:adapter %)) (:id %)) (:external-refs w)))
 
 (defn- unpromoted?
-  "A github-issue workstream still in the queue: open, never put in progress, and no sessions."
+  "A github-issue workstream still in the queue: open, never put in progress, and no sessions
+   past its conductor's record."
   [project w]
   (and (nil? (ws/closure w))
        (not (standing/ever-chose? project (:id w) :in-progress))
-       (empty? (session/list-sessions project (:id w)))))
+       (empty? (remove :conductor (session/list-sessions project (:id w))))))
 
 (defn- upsert-issue!
   "Ensure a :ready workstream exists for one assigned issue, holding the :issue entry that records
@@ -80,6 +82,7 @@
           :let  [w  (ws/read-ws project ws-id)
                  id (some-> w issue-ref-id)]
           :when (and id (not (contains? assigned-ids id)) (unpromoted? project w))]
+    (seats/retire-conductor! project ws-id)
     (ws/delete! project ws-id)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :map] :any]}

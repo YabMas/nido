@@ -6,9 +6,12 @@
    (`nido.session.commit-gate/verdict`), which fails open, and for a seat's
    occupant that every commit and PR title names its seat and position
    (`nido.coordinator.lane.seats/gate-verdict`), which refuses a seat's
-   publication it cannot read. This composes them; it judges nothing itself."
+   publication it cannot read; and that a person's act is not run from the
+   conductor or a session on its instruction (`nido.coordinator.lane.conductor/refusal`).
+   This composes them; it judges nothing itself."
   (:require
    [cheshire.core :as json]
+   [nido.coordinator.lane.conductor :as conductor]
    [nido.coordinator.lane.seats :as seats]
    [nido.session.commit-gate :as gate]))
 
@@ -23,7 +26,7 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   gate-cmd [& _args]
-  (if-let [reason (when-let [in (hook-input)] (or (gate/verdict in) (seats/gate-verdict in)))]
+  (if-let [reason (when-let [in (hook-input)] (or (gate/verdict in) (seats/gate-verdict in) (conductor/refusal in)))]
     (do (binding [*out* *err*] (println reason))
         (System/exit 2))
     (System/exit 0)))

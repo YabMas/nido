@@ -53,15 +53,15 @@
   {:about [generation/record-generation standing/record-standing drive/lane-pipeline] :evidence "round"})
 
 (Claim seats-derived
-  "A seat is one of the current generation's fixed generation-defining ids, and its interface is that element's :interface in the governing design. The seats level reads the fixed ids from record-generation, takes no selection from its caller and names no sort of element itself; no entry or file stores a seat, and a generation whose ids are not yet fixed has no seats, so a draft design's marks occupy nothing."
+  "Which seats a generation has is [seats-of-a-generation]'s. A seat of an element is one of the current generation's fixed generation-defining ids, and its interface is that element's :interface in the governing design; a generation whose ids are not yet fixed has no seat of an element, so a draft design's marks occupy nothing. The seats level reads the fixed ids from record-generation, takes no selection from its caller and names no sort of element itself; no entry or file stores a seat."
   {:about [coordinator-record-seats/record-seats] :evidence "round"})
 
 (Claim tension-state-derived
-  "A :tension names the seat raising it, the seat or the conductor it is addressed to, and the element or claim ids at issue; the seats reading takes one addressed to anything but a seat of the current generation — an id the generation fixes — as addressed to the conductor. It is open until an :accord from the addressee that reading gives it, or a :withdrawal from its raiser, cites it; whether it is open is derived, never stored. Who wrote a :tension, :accord or :withdrawal is stamped, not stated: they are appended only through the occupancy lane's record!, which takes the writer from the session it runs in — a seat's occupant as its seat, the conductor as the conductor — and the generic appends refuse these kinds."
+  "A :tension names the seat raising it, the seat or the conductor it is addressed to, and the element or claim ids at issue; to whom one is addressed, and which addressees are accepted, is [conductor-addressed-by-role]'s. It is open until an :accord from the addressee that reading gives it, or a :withdrawal from its raiser, cites it; whether it is open is derived, never stored. Who wrote a :tension, :accord or :withdrawal is stamped, not stated: they are appended only through the occupancy lane's record!, which takes the writer from the session it runs in — a seat's occupant as its seat, the conductor as the conductor — and the generic appends refuse these kinds."
   {:about [coordinator-record-seats/record-seats report/coordinator-report] :evidence "round"})
 
 (Claim messages-through-conduct
-  "A message from a seat's occupant or the conductor to a seat or the conductor reaches its driven addressee only through conduct, tokened and attributed to its sender, so it never holds the recipient. Which messages a seat or the conductor is still owed is derived from the workstream's message log: those addressed to it in the current generation that no delivery recorded in the log answers, given in the order sent to whichever session holds the seat or conducts at the time, and none refused because another waits; no session record or conversation holds a seat message, so replacing an occupant loses none and a session that stops holds none. The conductor is the session whose record names it the conductor of the workstream; no record names both a seat and the conductor. A prompt with no token still holds a driven session as a person's."
+  "A message from a seat's occupant or the conductor to a seat or the conductor reaches its driven addressee only through conduct, tokened and attributed to its sender, so it never holds the recipient. Which messages a seat or the conductor is still owed is what lane-seats' owed derives from the workstream's message log, never stated here — given in the order sent to whichever session holds the seat or conducts at the time, and none refused because another waits; no session record or conversation holds a seat message, so replacing an occupant loses none and a session that stops holds none. The conductor is the session whose record names it the conductor of the workstream; no record names both a seat and the conductor. A prompt with no token still holds a driven session as a person's."
   {:about [conduct/lane-conduct coordinator-lane-seats/lane-seats] :evidence "round"})
 
 (Claim messages-logged-unjudged
@@ -77,7 +77,7 @@
   {:about [conduct/lane-conduct] :evidence "round"})
 
 (Claim new-generation-new-occupants
-  "When a generation opens, every seat occupant of the previous generation is retired, including those whose element survives the re-cut; once the new generation's ids are fixed and an embodiment carries it, each of its seats is occupied by a session that occupied no seat of an earlier generation. Until then the conductor's occupant, which continues throughout, is the only session carrying the workstream."
+  "When a generation opens, every seat occupant of the previous generation is retired, including those whose element survives the re-cut; each seat of the new generation that an embodiment carries is occupied by a session that occupied no seat of an earlier generation, as [one-occupant-per-seat] has every current seat occupied. The conductor continues throughout."
   {:about [coordinator-lane-seats/lane-seats] :evidence "round"})
 
 (Claim layers-name-their-stratum
@@ -89,7 +89,7 @@
   {:about [record/review-record] :evidence "round"})
 
 (Claim unseated-workstreams-unchanged
-  "A workstream whose ledger holds no :generation, :recut or :tension entry and whose designs mark no generation-defining element is read, checked and placed as it was before this change, except for what this design changes deliberately for every workstream: which design governs is the one record-status reading; in a project that declares a design, a design round escalates an undeclared stratum instead of dropping it; the review loop refuses a layer naming a stratum the governing design does not; and its sessions share one runtime."
+  "A workstream whose ledger holds no :generation, :recut or :tension entry and whose designs mark no generation-defining element is read, checked and placed as it was before this change, except for its whole seat and conductor ([seats-of-a-generation], [resident-conductor]) and for what this design changes deliberately for every workstream: which design governs is the one record-status reading; in a project that declares a design, a design round escalates an undeclared stratum instead of dropping it; the review loop refuses a layer naming a stratum the governing design does not; and its sessions share one runtime."
   {:about [generation/record-generation standing/record-standing] :evidence "round"})
 
 (Claim recut-proposed-by-anyone
@@ -121,7 +121,7 @@
   {:about [lifecycle/session-lifecycle] :evidence "round"})
 
 (Claim strata-first-embodiment
-  "An embodiment is how a seat is named and its occupant briefed; it selects nothing. Embodied strata is the one embodiment: it carries a workstream whose generation-defining ids are exactly its governing design's strata, refusing one that leaves a stratum unmarked or marks anything else and naming each such element; it names each seat by its stratum's id and briefs an occupant to raise a tension first with the strata its stratum rests on or that rest on it. It is written in the seats vocabulary — its refusal reads the governing design's elements, their sorts and which the generation fixes from the seats level — and nothing below it treats a stratum as a seat."
+  "An embodiment is how a seat is named and its occupant briefed; it selects nothing. Embodied strata is the embodiment for a generation whose ids are strata, as lane-seats' default embodiment is for the whole seat: it carries a workstream whose generation-defining ids are exactly its governing design's strata, refusing one that leaves a stratum unmarked or marks anything else and naming each such element; it names each seat by its stratum's id and briefs an occupant to raise a tension first with the strata its stratum rests on or that rest on it. Its refusal reads the governing design's elements, their sorts and which the generation fixes from record-generation and record-standing directly — a bypass of the seats level this design leaves as it is — and nothing below it treats a stratum as a seat."
   {:about [embodied-strata/lane-embodied-strata] :evidence "round"})
 
 (Claim test-db-own-on-shared-runtime

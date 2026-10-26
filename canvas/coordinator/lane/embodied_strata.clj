@@ -20,6 +20,10 @@
     "The strata embodiment's seat naming, brief practice and refusal of a workstream its strata do
      not carry, as the data occupancy takes — the refusal run inside each occupancy transaction."
     {:signature [:=> [:catn] :map]})
+  (Operation refused?
+    "Whether an exception is the embodiment refusing a workstream, as against an occupant whose
+     launch failed."
+    {:signature [:=> [:catn [:e :any]] :boolean]})
   (Operation carry!
     "Carry a workstream whose governing design marks exactly its strata: occupy each stratum's
      seat; refuse any other, naming each stratum left unmarked and each non-stratum marked."

@@ -78,13 +78,13 @@
 
 (def status-kinds
   "Entry kinds that record a decision about a workstream's status — settled, reopened, put at a
-   stage, findings resolved, born a one-off, a Notion status seen — rather than a record of the
-   work. They are the ledger's copy of what used to be overwritten in place.
+   stage, findings resolved, born a one-off, a Notion status seen, a conductor's answer to a
+   hand-back — rather than a record of the work. They are the ledger's copy of what used to be overwritten in place.
 
    Kept apart because the work's own records are what everything asking `what happened last`
    means: a close appended after a completed implementation must not become the answer to
    `how did the merge run end`."
-  #{:closed :reopened :stage-set :findings-resolved :scratch :notion-status})
+  #{:closed :reopened :stage-set :findings-resolved :scratch :notion-status :conduct-decision})
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] [:maybe :map]]}
   newest-record
@@ -1154,9 +1154,9 @@
 
 (def ^:private stamped-kinds
   "Kinds whose writer the appending verb stamps from where it runs: the talk of the seats and the
-   conductor, and a re-cut proposal. Appended only through `append-stamped!`, which the verb that
-   stamps them calls."
-  #{:tension :accord :withdrawal :recut})
+   conductor, a re-cut proposal, and the conductor's decision on a hand-back. Appended only
+   through `append-stamped!` or `appending!`, which the verb that stamps them calls."
+  #{:tension :accord :withdrawal :recut :conduct-decision})
 
 (defn- refuse-unguarded-gate!
   "A `:phase-gate` goes through `open-phase!`, a `:generation` through `open-generation!`, and a
@@ -1172,7 +1172,7 @@
     :phase-gate (throw (ex-info "A :phase-gate is appended only through open-phase!" {:kind kind}))
     :generation (throw (ex-info "A :generation is appended only through open-generation!" {:kind kind}))
     (when (contains? stamped-kinds kind)
-      (throw (ex-info (str "A " kind " is appended only through append-stamped!, its writer stamped"
+      (throw (ex-info (str "A " kind " is appended only through append-stamped! or appending!, its writer stamped"
                            " by the verb that calls it")
                       {:kind kind})))))
 
@@ -2026,10 +2026,10 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:or :map [:=> [:cat :Workstream] :map]]] :Path]}
   append-stamped!
-  "Append a `:tension`, `:accord`, `:withdrawal` or `:recut` whose `:by` the caller stamped from
+  "Append a `:tension`, `:accord`, `:withdrawal`, `:recut` or `:conduct-decision` whose `:by` the caller stamped from
    where it runs. The ledger cannot tell where that was; the one caller is the verb that can, and
-   the generic appends refuse these kinds so nothing else takes a writer on its word. Every other
-   check an append makes holds. `payload` is the entry, or a function of the workstream read under
+   the generic appends refuse these kinds so nothing else takes a writer on its word — `appending!`
+   alone takes them on the same terms. Every other check an append makes holds. `payload` is the entry, or a function of the workstream read under
    the append lock answering it — so a writer stamped from that read is stamped against the same
    generation the entry joins, which no generation can open between. Returns the absolute path."
   [project ws-id payload]
@@ -2045,6 +2045,37 @@
                                ", not " kind)
                           {:kind kind})))
         (append-locked! project ws-id w {:kind kind} (pr-str payload))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:=> [:cat :map] :any]] :any]}
+  appending!
+  "Answer `f` of `{:w :check! :append!}` under the workstream's append lock — `w` the workstream
+   read under it; `(check! entry content)` throwing exactly what appending it now would throw and
+   writing nothing; `(append! entry content)` appending it against the ledger as the last append
+   left it, as `append-entry!` does — or, for a stamped kind, as `append-stamped!` does, its writer
+   stamped by the caller — answering the absolute path. So the caller checks every entry it means
+   to write before it writes any, writes several, and acts on each once it is taken, as one step
+   that no other append, no generation's opening and no design approval falls between. Neither
+   takes the lock again: `f` must append through `append!` alone."
+  [project ws-id f]
+  (io/with-file-lock
+    (append-lock-path project ws-id)
+    (fn []
+      (let [read   #(or (read-ws project ws-id)
+                        (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+            guard! (fn [{:keys [kind]}]
+                     (when (= :design-cleared kind)
+                       (throw (ex-info "A :design-cleared is written at a position — through append-entry-at!"
+                                       {:kind kind :ws-id ws-id})))
+                     (when-not (contains? stamped-kinds kind) (refuse-unguarded-gate! kind)))]
+        (f {:w       (read)
+            :check!  (fn [entry content]
+                       (guard! entry)
+                       (let [[_ payload] (report/entry-payload (:kind entry) content)]
+                         (check-append! project (read) (:kind entry) payload)
+                         nil))
+            :append! (fn [entry content]
+                       (guard! entry)
+                       (append-locked! project ws-id (read) entry content))})))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:=> [:cat :Workstream] :any]] :any]}
   holding-ledger

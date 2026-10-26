@@ -11,6 +11,7 @@
    the coordinator already depends on nido.session.lifecycle, so the wiring is
    done at the task layer (tasks.nido-session) — the only place that sees both."
   (:require
+   [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.record.session :as session]
    [nido.session.lifecycle :as lifecycle]
    [nido.coordinator.record.standing :as standing]
@@ -71,7 +72,8 @@
       (:id w)
       (catch clojure.lang.ExceptionInfo e
         (if (= :name-held (:reason (ex-data e)))
-          (do (workstream/delete! project (:id w))
+          (do (seats/retire-conductor! project (:id w))
+              (workstream/delete! project (:id w))
               (:holder (ex-data e)))
           (throw e))))))
 
@@ -101,10 +103,16 @@
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] :boolean]}
   bare?
-  "Whether a workstream holds nothing but its own birth: no entry other than its :scratch mark.
-   Discarding it then loses nothing — the birth entry is the record that it could be discarded."
+  "Whether a workstream holds nothing but its own birth and what its conductor decided: no entry
+   other than its :scratch mark, its :conduct-decision entries and the blockers they parked.
+   Discarding it then loses nothing — the birth entry is the record that it could be discarded,
+   and a conductor's decisions are about the work, of which there is none."
   [w]
-  (every? #(= :scratch (:kind %)) (:entries w)))
+  (let [rows   (remove #(#{:scratch :conduct-decision} (:kind %)) (:entries w))
+        parked (when (and (seq rows) (some #(= :conduct-decision (:kind %)) (:entries w)))
+                 (into #{} (keep #(get-in % [:parked :seq]))
+                       (workstream/entries-of (:project w) (:id w) :conduct-decision)))]
+    (every? #(and (= :blocker (:kind %)) (contains? parked (:seq %))) rows)))
 
 (defn- birth*
   "The workstream `birth!` puts the session on, recording it there."
@@ -167,11 +175,13 @@
   [project session-name]
   (when-let [ws-id (session/workstream-id-for project session-name)]
     (let [w      (workstream/read-ws project ws-id)
+          ;; Read past the conductor's record: it is no session doing the work.
           others (->> (session/list-sessions project ws-id)
-                      (remove #(= session-name (:name %))))]
+                      (remove #(or (:conductor %) (= session-name (:name %)))))]
       (when (and (scratch? w)
                  (empty? (:external-refs w))
                  (bare? w)
                  (empty? others))
+        (seats/retire-conductor! project ws-id)
         (workstream/delete! project ws-id))))
   nil)

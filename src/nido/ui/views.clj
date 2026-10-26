@@ -2329,8 +2329,8 @@
    `position` is the workstream's pipeline position — the pane already has it for
    its heading — and is here because one of the buttons is owed by a PERSON
    rather than by a parked agent (work/awaiting-human)."
-  [project ws-id origin stage sessions report position plan]
-  (let [parked? (boolean (some :parked? sessions))
+  [project ws-id origin stage sessions report position plan replyable?]
+  (let [parked? (or (boolean (some :parked? sessions)) (boolean replyable?))
         session (:name (first (filter :parked? sessions)))]
     (action-bar project ws-id
                 (work/gate-actions stage parked? origin
@@ -2427,7 +2427,7 @@
    — see pane-fragment), so transient dev-env states (starting…) self-advance
    without the refresh closing whatever the reader has open."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan status]
+  ([{:keys [project ws-id origin stage label links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan status replyable?]
      :or {on-latest? true}} session-dev-states machine-facts]
    (let [pos  {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds
                :stage open-stage :history? history?}
@@ -2480,7 +2480,7 @@
             ;; which is the one thing they are not.
             (when (and on-latest? error-msg)
               [:div.action-err "⚠ " error-msg])
-            (when on-latest? (pane-action-bar project ws-id origin stage sessions action-report position plan))
+            (when on-latest? (pane-action-bar project ws-id origin stage sessions action-report position plan replyable?))
             (when (= :done stage) (file-findings-form project ws-id))
 
             ;; Collapsed by default. The arc above is the reading a driver

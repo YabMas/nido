@@ -14,6 +14,7 @@
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.session :as csession]
+   [nido.coordinator.work :as work]
    [nido.platform.task-args :as task-args]
    [nido.review.frontend :as frontend]
    [nido.review.render :as render]
@@ -133,7 +134,7 @@
   (let [at    (name (:at position))
         stage (:stage (:next position))
         mode  (:mode (:next position))
-        sname (:name (first (csession/list-sessions project ws-id)))]
+        sname (:name (first (remove :conductor (csession/list-sessions project ws-id))))]
     (into
      (into [(str "at " at (when stage (str " · next is " (name stage)
                                            (when mode (str " (" (name mode) ")")))))]
@@ -152,7 +153,8 @@
        :not-mechanical
        (if sname
          [(str "this is a turn in the tree, not a task — nothing runs it for you")
-          (str "  take it: bb nido:session:enter :project " (name project) " " sname)]
+          (str "  take it: " (or (work/attach-command project sname)
+                                 (str "bb nido:session:enter :project " (name project) " " sname)))]
          [(str "this is a turn in the tree, and there is no session to take it in")
           (str "  bring one up: bb nido:session:up :project " (name project) " <name>")])
 

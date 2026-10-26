@@ -6,6 +6,7 @@
             [canvas.coordinator.daemon.lifecycle :as daemon]
             [canvas.coordinator.executor :as executor]
             [canvas.coordinator.lane.conduct :as conduct]
+            [canvas.coordinator.lane.conductor :as conductor]
             [canvas.coordinator.lane.drive :as drive]
             [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.record.runs :as runs]
@@ -31,14 +32,21 @@
     {:signature [:=> [:catn [:opts :map]] :map]})
   (Operation dashboard-status-line "The dashboard's line in the status output."
     {:signature [:=> [:catn [:port [:maybe :int]] [:reachable? :boolean]] :string]})
-  (Operation execute! "Hand a run to the body that executes it."
-    {:signature [:=> [:catn [:rid RunId]] :any] :delegates [runs/read-run]})
+  (Operation execute!
+    "Hand a run to the body that executes it; the first prompt of a Run's conversation is recorded
+     as given for that Run."
+    {:signature [:=> [:catn [:rid RunId]] :any] :delegates [runs/read-run conductor/carry!]})
   (Operation drive-log-line "One line for a drive decision."
     {:signature [:=> [:catn [:entry :map]] :string]})
-  (Operation tick! "One iteration: brakes, drain, route, spawn, promote, reap."
+  (Operation tick!
+    "One iteration: brakes, drain, route, spawn, promote, reap. A Run is settled, timed out or
+     charged a slot only on an instruction conduct recorded as given for it, never by which Run
+     last ran on the session."
     {:signature [:=> [:catn] :any]
      :delegates [source/drain! source/route executor/tick! drive/tick! daemon/write! execute!
-                 conduct/conduct! seats/owed seats/delivered!]})
+                 conduct/conduct! seats/owed seats/delivered! seats/traffic
+                 conductor/conductors! conductor/reseat! conductor/hand-backs! conductor/answers!
+                 conductor/close-unanswered!]})
   (Operation shutdown-grace-ms
     "How long to let in-flight work finish before exiting. A daemon that killed its own runs on
      shutdown would leave exactly the mid-flight state reconcile exists to repair."

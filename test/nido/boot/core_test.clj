@@ -175,7 +175,8 @@
             (#'core/settle-turn-ends! {:turn-ends [{:project (:project r) :ws-id (:workstream-id r)
                                                     :session (:session-name r) :event {}
                                                     :instruction {:token "T" :at (clock/now-iso)
-                                                                  :seen? true}}]}))
+                                                                  :seen? true :for (:id r)}
+                                                    :run (:id r)}]}))
           (is (= :done (:state (runs/read-run (:id run))))
               "a turn that ended with no status file settles :done")))
       (finally (fs/delete-tree tmp)))))
@@ -1175,10 +1176,11 @@
                     :artifacts [] :error nil}))
 
 (defn- ended
-  "A turn end on `sname` as conduct reports it: the Stop of the instruction nido gave at `at`."
-  ([sname event] (ended sname event "2026-01-01T00:00:01Z"))
-  ([sname event at] {:project :brian :ws-id "ws-1" :session sname :event event
-                     :instruction {:token "T" :at at :seen? true}}))
+  "A turn end on `sname` as conduct reports it: the Stop of the instruction nido gave at `at`, for
+   the Run `run`."
+  ([sname event run] (ended sname event run "2026-01-01T00:00:01Z"))
+  ([sname event run at] {:project :brian :ws-id "ws-1" :session sname :event event
+                         :instruction {:token "T" :at at :seen? true :for run} :run run}))
 
 (deftest a-turns-end-settles-its-run-from-the-status-file
   (gate-with-tmp
@@ -1186,7 +1188,7 @@
       (running-run! "rt" "ws-1" "s-rt" :investigate-bug)
       (with-redefs [status-file/read-status          (fn [_] {:phase :awaiting-input})
                     runs/stop-session-for-parked-run! (fn [_] nil)]
-        (#'core/settle-turn-ends! {:turn-ends [(ended "s-rt" {:event :stop :last-message "asked"})]}))
+        (#'core/settle-turn-ends! {:turn-ends [(ended "s-rt" {:event :stop :last-message "asked"} "rt")]}))
       (is (= :awaiting-review (:state (runs/read-run "rt")))))))
 
 (deftest a-reply-turns-end-leaves-its-run-parked
@@ -1195,7 +1197,7 @@
       (running-run! "rp" "ws-1" "s-rp" :investigate-bug)
       (runs/transition! "rp" :awaiting-review)
       (session/create! :brian "ws-1" {:name "s-rp" :weight :light :autonomy autonomy-parked})
-      (#'core/settle-turn-ends! {:turn-ends [(ended "s-rp" {} (clock/now-iso))]})
+      (#'core/settle-turn-ends! {:turn-ends [(ended "s-rp" {} "rp" (clock/now-iso))]})
       (is (= :awaiting-review (:state (runs/read-run "rp"))) "the run was not settled again"))))
 
 (deftest a-merge-runs-turn-end-is-settled-by-the-ship-lane
@@ -1205,7 +1207,7 @@
       (runs/write-run! (assoc (runs/read-run "rm") :mode :merge))
       (let [settled (atom nil)]
         (with-redefs [ship/settle-drive-home! (fn [id r] (reset! settled [id r]) :awaiting-merge)]
-          (#'core/settle-turn-ends! {:turn-ends [(ended "s-rm" {})]}))
+          (#'core/settle-turn-ends! {:turn-ends [(ended "s-rm" {} "rm")]}))
         (is (= ["rm" {}] @settled))))))
 
 (deftest a-stop-settles-the-run-whose-instruction-it-ended
@@ -1221,9 +1223,9 @@
       (let [settled (atom [])]
         (with-redefs [ship/settle-drive-home! (fn [id r] (swap! settled conj [:merge id r]) :awaiting-merge)
                       core/settle-run!        (fn [id & _] (swap! settled conj [:run id]))]
-          (#'core/settle-turn-ends! {:turn-ends [(ended "s-q" {} "2026-01-01T00:01:00Z")]})
+          (#'core/settle-turn-ends! {:turn-ends [(ended "s-q" {} "re" "2026-01-01T00:01:00Z")]})
           (is (= [[:run "re"]] @settled) "the earlier turn's Stop settles the earlier Run only")
-          (#'core/settle-turn-ends! {:turn-ends [(ended "s-q" {} "2026-01-01T00:06:00Z")]})
+          (#'core/settle-turn-ends! {:turn-ends [(ended "s-q" {} "rq" "2026-01-01T00:06:00Z")]})
           (is (= [[:run "re"] [:merge "rq" {}]] @settled)
               "the Stop that ended /drive-home settles the merge Run"))))))
 
@@ -1287,7 +1289,7 @@
       (session/create! :brian "ws-1" {:name "s-rb" :weight :light :autonomy nil})
       (session/update-claude! :brian "ws-1" "s-rb"
                               (constantly (assoc driven-facet :pending {:token "T" :at "2026-01-01T00:00:00Z"
-                                                                        :via :send :seen? true})))
+                                                                        :via :send :seen? true :for "rb"})))
       (let [retired (atom nil)]
         (with-redefs [conduct/retire!                 (fn [& args] (reset! retired (vec (take 3 args))) nil)
                       runs/teardown-session-for-run!  (fn [_] nil)
@@ -1306,7 +1308,7 @@
       (session/create! :brian "ws-1" {:name "s-rw" :weight :light :autonomy nil})
       (session/update-claude! :brian "ws-1" "s-rw"
                               (constantly (assoc driven-facet :pending {:token "T" :at "2026-01-01T00:00:00Z"
-                                                                        :via :send :seen? true})))
+                                                                        :via :send :seen? true :for "rw"})))
       (with-redefs [conduct/retire! (fn [& _] (throw (ex-info "must not" {})))]
         (#'core/enforce-budgets! (.toEpochMilli (java.time.Instant/parse "2026-01-01T00:29:00Z"))
                                  (conduct/faceted-sessions {:projects [:brian]})))

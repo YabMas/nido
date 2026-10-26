@@ -11,7 +11,7 @@
    It exists because a session worktree is a jj workspace and jj runs none of the source
    repository's git hooks, so a convention a project enforces only there is unenforced in every
    session. It hides how a shell command is read for what it would publish — the push's range,
-   the PR's title — and how the hook is found behind a jj workspace.
+   the PR's title — and for the acts another gate refuses on its own terms, and how the hook is found behind a jj workspace.
 
    FAILING OPEN IS THE CONTRACT. Anything it cannot read or run lets the command through: it is
    installed in every session of every project, and one that blocked what it could not reason
@@ -24,6 +24,14 @@
      write made around jj. What it recognises is one list of publication verbs, which the
      installed hook's prefilter is read off too."
     {:signature [:=> [:catn [:command :string] [:cwd :string]] [:vector :map]]})
+  (Operation acts
+    "What a Bash command would do that a caller refuses on its own terms, beside what it would
+     publish: each `gh pr` verb by name, each `gh api` write that may merge a pull request, and
+     each nido task it runs by name — and, as publications does, each part it cannot read, named as
+     such. A push is none. What it reads is one list, which the installed hook's prefilter is read
+     off too, over the text with its quotes and backslashes removed as the parse removes them."
+    {:signature [:=> [:catn [:command :string] [:cwd :string]] [:vector :map]]
+     :delegates [publications]})
   (Operation checks
     "What a Bash command would publish that the project's hook should judge: each `jj git push`
      with its targets, each titled `gh pr create`/`edit` with its title, and the directory each
@@ -46,7 +54,8 @@
      :delegates [checks push-range commit-msg-hook]})
   (Operation with-gate
     "A Claude settings map with the gate added as a `PreToolUse` hook on Bash; every hook it
-     already declares stays."
+     already declares stays. The hook starts the gate on each Bash call the publication verbs, or
+     the verbs acts reads, could name."
     {:signature [:=> [:catn [:settings :map]] :map]})
   (Operation settings-json
     "The gate alone as a settings document, for `--settings` on a launch outside a session home."

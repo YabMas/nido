@@ -27,6 +27,45 @@
     (is (= [] (gate/checks "gh pr create --fill" "/s")))
     (is (= [] (gate/checks "git log | grep push" "/s")))))
 
+(deftest acts-reads-what-a-command-would-do
+  (testing "a gh pr verb"
+    (is (= [{:kind :gh-pr :verb "merge"}] (gate/acts "gh pr merge 12 --squash" "/s")))
+    (doseq [cmd ["gh pr --repo o/r merge 12 --squash" "gh --repo o/r pr merge 12" "gh -R o/r pr merge 12"
+                 "gh pr -R o/r merge 12" "gh pr --repo=o/r merge 12"]]
+      (is (= [{:kind :gh-pr :verb "merge"}] (gate/acts cmd "/s")) (str "an inherited option where gh takes it: " cmd)))
+    (is (= [{:kind :gh-pr :verb :unread}] (gate/acts "gh pr \"$V\" 12" "/s")) "a verb the gate cannot read")
+    (is (= [{:kind :gh-pr :verb "api"}] (gate/acts "gh --repo o/r api -X PUT repos/o/r/pulls/1/merge" "/s")))
+    (is (= [{:kind :gh-pr :verb "create"}] (gate/acts "gh pr create --draft --title t" "/s"))))
+  (testing "a gh api write that may merge a pull request, and no other"
+    (doseq [cmd ["gh api -X PUT repos/o/r/pulls/1/merge"
+                 "gh api graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'"
+                 "gh api graphql -F query=@q.graphql"
+                 "gh api graphql --input /tmp/request.json"
+                 "gh api graphql --input -"
+                 "gh api graphql --input=/tmp/request.json"
+                 "gh api /graphql --input /tmp/request.json"
+                 "gh api https://api.github.com/graphql --input req.json"
+                 "gh api -XPUT repos/o/r/pulls/1/merge"
+                 "gh api graphql -Fquery=@q.graphql"
+                 "gh api \"$ENDPOINT\" -X POST"]]
+      (is (= [{:kind :gh-pr :verb "api"}] (gate/acts cmd "/s")) cmd))
+    (doseq [cmd ["gh api repos/o/r/pulls/1" "gh api repos/o/r/pulls -f draft=false -f title=t"
+                 "gh api -X POST repos/o/r/issues/1/comments -f body=x"
+                 "gh api graphql -f query='{ viewer { login } }'"]]
+      (is (= [] (gate/acts cmd "/s")) cmd)))
+  (testing "a nido task, by bb or by the shell wrapper, with its arguments"
+    (is (= [{:kind :nido-task :task "nido:design:approve" :args [":design-seq" "4"]}]
+           (gate/acts "bb --config /n/bb.edn nido:design:approve :design-seq 4" "/s")))
+    (is (= ["nido:workstream:close"] (map :task (gate/acts "nido workstream:close" "/s")))))
+  (testing "a push is no act"
+    (is (= [] (gate/acts "jj git push -b main" "/s")))
+    (is (= [] (gate/acts "git push origin HEAD:main" "/s"))))
+  (testing "a command line handed to a shell is read as one; what it cannot read, it says so"
+    (is (= [{:kind :gh-pr :verb "merge"}] (gate/acts "sh -c 'gh pr merge 1'" "/s")))
+    (is (= [:unread] (map :kind (gate/acts "echo 'gh pr merge 1'" "/s"))))
+    (is (some #{{:kind :gh-pr :verb "merge"}} (gate/acts "sh -c 'gh pr merge 12 --squash' gh pr view" "/s"))
+        "a shell's command line is read even when another of its words reads as an act")))
+
 (deftest publications-name-what-the-gate-cannot-read
   ;; `checks` drops these, failing open; a seat's gate refuses on them, so each is named.
   (let [unread? (fn [cmd] (let [ks (map :kind (gate/publications cmd "/s"))]
@@ -44,7 +83,9 @@
     (is (unread? "bash -c 'jj git push -b x'"))
     (is (unread? "$(which jj) git push"))
     (is (unread? "env gh pr edit 7 --title 'Oops'"))
-    (is (unread? "gh api repos/o/r/pulls/7 -X PATCH -f title=Oops")))
+    (is (unread? "gh api repos/o/r/pulls/7 -X PATCH -f title=Oops"))
+    (is (unread? "git push --dry-run --no-dry-run origin main") "a dry run a later option undoes publishes")
+    (is (= [:push] (map :kind (gate/publications "jj git push --dry-run --dry-run=false" "/s")))))
   (testing "and nothing that publishes nothing"
     (is (= [] (gate/publications "jj git push --dry-run" "/s")))
     (is (= [] (gate/publications "git log | grep push" "/s")))
@@ -53,6 +94,7 @@
     (is (= [] (gate/publications "jj describe -m 'make jj git push safe'" "/s")))
     (is (= [] (gate/publications "bash -c 'bb nido:test'" "/s")))
     (is (= [] (gate/publications "gh api repos/o/r/pulls" "/s")))
+    (is (= [] (gate/publications "git push -n origin main" "/s")))
     (is (= [] (gate/publications "grep -r 'gh pr create' src" "/s"))))
   (testing "what it can read, it reads as `checks` does"
     (is (= (gate/checks "cd worktree && jj git push; gh pr edit 1 --title x" "/s")
@@ -78,7 +120,16 @@
     (doseq [cmd publishing]
       (is (seq (gate/publications cmd "/s")) (str "a publication: " cmd))
       (is (reached? cmd) (str "the hook starts the gate for: " cmd)))
-    (is (not (reached? "ls -la")) "and starts nothing for a command naming none")))
+    (is (not (reached? "ls -la")) "and starts nothing for a command naming none")
+    (doseq [cmd ["nido  design:approve" "nido\tdesign:approve" "bb nido:design:approve" "gh pr merge 7"
+                 ;; Quoting splices a word the parse reads whole, so the prefilter must too.
+                 "bb ni''do:design:approve" "n\\ido design:approve" "ni\"\"do design:approve"
+                 "g''h pr merge 7"
+                 "gh api graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'"
+                 ;; a subcommand the parse cannot read may be any
+                 "gh \"$SUB\" merge 12 --squash" "gh `echo pr` merge 12" "gh -R o/r $SUB merge 12"]]
+      (is (seq (gate/acts cmd "/s")) (str "an act: " cmd))
+      (is (reached? cmd) (str "the hook starts the gate for every act acts reads: " cmd)))))
 
 (def ^:private conventional-hook
   "#!/bin/sh\ngrep -qE '^(feat|fix)(\\([a-z-]+\\))?: .+' \"$1\" || { echo \"Expected: type(scope): message\"; exit 1; }\n")

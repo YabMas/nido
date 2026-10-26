@@ -58,8 +58,8 @@
    :rests-on    [record-status ledger record-vocabulary]})
 
 (Stratum seats
-  "A workstream as the seats an embodiment may occupy: the ids the current generation fixes, each
-   with the interface the governing design gives it once a design of the generation states it, its
+  "A workstream as the seats an embodiment may occupy: one per id the current generation fixes, or
+   the generation's one whole seat while it fixes none, each with the interface the governing design gives it once a design of the generation states it, its
    open tensions and the accords that settled others; the generation it belongs to and what that
    generation inherited. What occupancy and every embodiment are written in."
   {:provided-by [record-seats]

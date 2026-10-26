@@ -6,6 +6,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.lane.conduct :as conduct]
+   [nido.coordinator.lane.conductor :as conductor]
    [nido.coordinator.lane.embodied-strata :as embodied]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.workstream :as ws]
@@ -117,3 +118,21 @@
         (is (= [(str id "--canvas_dstrata_sledger-g1") (str id "--canvas_dstrata_sseats-g1")]
                (mapv :session (:occupied (embodied/carry! :brian id)))))
         (is (str/ends-with? (last @launched) "--canvas_dstrata_sseats-g1"))))))
+
+(deftest a-strata-seat-whose-launch-failed-is-escalated-and-answered-once-held
+  ;; A failed launch is no refusal: its escalation is answered by nido once a later pass holds
+  ;; every seat, as the whole seat's is.
+  (run
+    (fn [_]
+      (let [strata ["canvas.strata/ledger" "canvas.strata/seats"]
+            id     (ledger strata strata)]
+        (with-redefs [lifecycle/up! (fn [_ _] (throw (ex-info "no runtime" {})))]
+          (is (thrown? Exception (embodied/carry! :brian id)))
+          (conductor/reseat! :brian id))
+        (is (= ["seat canvas.strata/ledger, canvas.strata/seats could not be started"]
+               (mapv :needs (ws/entries-of :brian id :blocker))))
+        (conductor/reseat! :brian id)
+        (is (= [(:seq (first (ws/entries-of :brian id :blocker)))]
+               (mapv :blocker-seq (ws/entries-of :brian id :blocker-answered))))
+        (is (not (embodied/refused? (ex-info "no runtime" {}))))
+        (is (embodied/refused? (ex-info "x" {:reason :not-strata})))))))

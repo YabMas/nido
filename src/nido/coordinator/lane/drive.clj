@@ -118,6 +118,18 @@
               (str "\nAsked earlier in the same run: " (str/join " / " earlier)))
             (when (#{:proceed :asked} outcome) (declared-move design)))))))
 
+(defn ^{:malli/schema [:=> [:cat :map [:=> [:cat :map :string] :string]] :map]}
+  park-held!
+  "park!, its blocker appended by `append!` — `(append! entry content)` answering the path, as
+   `ws/appending!` gives one — so a caller holding the append lock parks as one step with what else
+   it appends there. Returns {:seq <ledger-seq>}, or {:refused <reason>} writing nothing."
+  [halt append!]
+  (let [record (halt-for halt)]
+    (if-not (try (report/validate-event :blocker record) (catch Throwable _ nil))
+      {:refused :invalid-halt :record record}
+      (let [path (append! {:kind :blocker} (pr-str record))]
+        {:seq (some->> path (re-find #"/(\d+)-blocker\.edn$") second parse-long)}))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   park!
   "Stop this workstream and record why. Returns {:seq <ledger-seq>}, or
@@ -127,11 +139,7 @@
    the workstream running with a stage already finished, which is worse than one
    that stopped and said it could not explain itself."
   [project ws-id halt]
-  (let [record (halt-for halt)]
-    (if-not (try (report/validate-event :blocker record) (catch Throwable _ nil))
-      {:refused :invalid-halt :record record}
-      (let [path (ws/append-entry! project ws-id {:kind :blocker} (pr-str record))]
-        {:seq (some->> path (re-find #"/(\d+)-blocker\.edn$") second parse-long)}))))
+  (park-held! halt #(ws/append-entry! project ws-id %1 %2)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :any]}
   park-on-escalate!
@@ -320,7 +328,7 @@
    ledger — from it. The session HOME is what answers that, and it is what
    resume.clj already uses for the same reason."
   [project ws-id]
-  (when-let [s (first (session/list-sessions project ws-id))]
+  (when-let [s (first (remove :conductor (session/list-sessions project ws-id)))]
     (let [home (str (session-state/session-home-dir (name project) (:name s)))]
       (when (fs/exists? home) home))))
 
@@ -559,7 +567,8 @@
                {:ws-id ws-id :at (:at position) :skipped :already-running}
 
                :else
-               (if-let [sname (:name (first (session/list-sessions project ws-id)))]
+               ;; Read past the conductor's record: a stage runs in a session doing the work.
+               (if-let [sname (:name (first (remove :conductor (session/list-sessions project ws-id))))]
                  (let [run (drive-run project ws-id (:fire decision) sname)]
                    (fs/create-dirs (cstate/run-dir (:id run)))
                    (runs/write-run! run)

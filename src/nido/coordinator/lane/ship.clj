@@ -232,7 +232,8 @@
                        :name session-name :cwd home :prompt "/drive-home"
                        :source (get-in (project/list-projects) [(name project) :directory])
                        :system-prompt (str (:briefing lc) "\n\n" (:run-paths lc))
-                       :mcp-config (:mcp-config lc) :add-dirs (:add-dirs lc)})
+                       :mcp-config (:mcp-config lc) :add-dirs (:add-dirs lc)
+                       :for (:id run)})
 
       (:hold facet)
       (throw (ex-info "A person holds this session — hand it back, then ship again"
@@ -243,7 +244,7 @@
             ;; The person's own `nido ship` is the hand-back: they asked nido to drive it.
             (conduct/adopt! {:project project :ws-id ws-id :session-name session-name
                              :session-id (:session-id facet)}))
-          (conduct/instruct! project ws-id session-name "/drive-home")))))
+          (conduct/instruct! project ws-id session-name "/drive-home" (:id run))))))
 
 (defn ^{:malli/schema [:=> [:cat :RunId] :any]}
   drive-home!

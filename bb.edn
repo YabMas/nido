@@ -659,10 +659,10 @@
    :doc "Replace a seat's occupant with a fresh Claude session on the same record, briefed from the records: :seat <id>."
    :task (apply nido-seats/replace-cmd *command-line-args*)}
 
-  nido:seats:conductor
+  nido:seats:decide
   {:requires ([tasks.nido-seats :as nido-seats])
-   :doc "Start the workstream's conductor — a session of its own that occupies no seat."
-   :task (apply nido-seats/conductor-cmd *command-line-args*)}
+   :doc "Record the conductor's one decision on a hand-back, from the conductor's session: :hand-back <id> and :escalate \"what the person is needed for\" | :seat <id> :text \"…\" | :instruct '[{:seat … :text …} …]'."
+   :task (apply nido-seats/decide-cmd *command-line-args*)}
 
   nido:seats:record
   {:requires ([tasks.nido-seats :as nido-seats])

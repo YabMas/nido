@@ -175,7 +175,7 @@
                   nido.session.state/session-home-dir (fn [_ _] "/tmp")
                   conduct/start!      (fn [o] (swap! did conj [:start (:prompt o) (:cwd o)]) {})
                   conduct/adopt!      (fn [o] (swap! did conj [:adopt (:session-id o)]) {})
-                  conduct/instruct!   (fn [_ _ _ t] (swap! did conj [:instruct t]) {})]
+                  conduct/instruct!   (fn [_ _ _ t _] (swap! did conj [:instruct t]) {})]
       {:returned (sut/drive-home! (:id run))
        :did      @did
        :run      (runs/read-run (:id run))})))

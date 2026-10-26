@@ -49,9 +49,15 @@
    [:pending [:maybe [:map {:closed true}
                       [:token string?] [:at string?] [:via [:enum :dispatch :send :wake]]
                       ;; The session's own prompt event carried the token: delivered, not yet ended.
-                      [:seen? boolean?]]]]
-   ;; One instruction waiting for the session to be ready for it.
+                      [:seen? boolean?]
+                      ;; The Run it was given for — absent for an instruction no Run gave, whose
+                      ;; turn end settles no Run.
+                      [:for {:optional true} string?]
+                      ;; The seat message it was, when it was one.
+                      [:message {:optional true} string?]]]]
+   ;; One instruction waiting for the session to be ready for it, and the Run it is for.
    [:queued [:maybe string?]]
+   [:queued-for {:optional true} [:maybe string?]]
    ;; The session's last Stop left work of its own running (background tasks, crons), so the
    ;; turn that follows is the session's own and not a person's.
    [:own-work? boolean?]
@@ -60,6 +66,8 @@
    [:cursor int?]
    ;; Since when nido has been driving it: turns recorded before this never hold it.
    [:driving-since [:maybe string?]]
+   ;; Its last turn, nido's, ended an instruction no Run gave — one the conductor answers for.
+   [:ended-unrun? {:optional true} boolean?]
    ;; The current entry into blocked has been announced; cleared when the session leaves it.
    [:announced-blocked? boolean?]
    ;; What nido has seen of the session idle since it last began driving it or gave it anything:
@@ -85,13 +93,27 @@
    ;; facet is written, and this cleared, once the session's full id is known.
    [:dispatching       {:optional true} [:maybe [:map {:closed true}
                                                  [:token string?] [:at string?]
+                                                 [:for {:optional true} string?]
                                                  [:policy {:optional true} [:maybe [:map-of keyword? any?]]]
                                                  [:bg-id {:optional true} [:maybe string?]]]]]
-   ;; The seat of its workstream this session occupies, and the generation it occupies it in.
-   ;; A seat is never occupied across generations: a new generation's seats get new sessions.
-   [:seat              {:optional true} [:map {:closed true} [:id string?] [:generation pos-int?]]]
+   ;; The seat of its workstream this session occupies, and the generation it occupies it in —
+   ;; its id an element's, or the generation's number for its whole seat. A seat is never occupied
+   ;; across generations: a new generation's seats get new sessions. :carried marks a session a
+   ;; person's or a Run's start brought, which re-seating releases rather than archives.
+   [:seat              {:optional true} [:map {:closed true}
+                                         [:id [:or [:string {:min 1}] pos-int?]]
+                                         [:generation pos-int?]
+                                         [:carried {:optional true} [:= true]]]]
+   ;; A carried session whose seat re-seating took away: it occupies none, and keeps saying its
+   ;; workstream was carried.
+   [:released          {:optional true} [:= true]]
    ;; The workstream's conductor, whatever the generation. Never also a seat's occupant.
    [:conductor         {:optional true} [:= true]]
+   ;; The instruction and model nido last started a conversation on this record with, so a start
+   ;; that failed is retried on what it was given rather than on a recipe rebuilt without it.
+   [:launched          {:optional true} [:map {:closed true}
+                                         [:prompt string?]
+                                         [:model {:optional true} [:maybe string?]]]]
    [:created-at        string?]])
 
 (defn- shed

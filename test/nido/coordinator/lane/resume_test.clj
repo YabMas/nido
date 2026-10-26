@@ -67,7 +67,8 @@
           (is (nil? @given) "and it has not been given yet — it is waiting for its slot")
           (ex/tick! (fn [_]) {})
           (ex/await-idle! 2000)
-          (is (= [:brian (:id w) "auto" "go"] @given) "the executor gave it once a slot was free"))))))
+          (is (= [:brian (:id w) "auto" "go" "r1"] @given)
+              "the executor gave it once a slot was free, for the Run awaiting it"))))))
 
 (deftest resume!-runs-inline-and-says-so-when-nothing-ticks-this-process
   ;; A standalone `bb nido:ui` starts the gate surface without the daemon. Queued there, the turn

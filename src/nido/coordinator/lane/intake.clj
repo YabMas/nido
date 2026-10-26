@@ -27,9 +27,9 @@
                                     (pr-str {:format :stage-set :stage :incoming :by :nido}))]
     (if existing
       ;; A workstream an earlier fire minted for the pen and died before penning holds nothing:
-      ;; no entry and no session. Anything else was put somewhere already.
+      ;; no entry and no session past its conductor's record. Anything else was put somewhere already.
       (if (and (empty? (:entries existing))
-               (empty? (session/list-sessions project (:id existing))))
+               (empty? (remove :conductor (session/list-sessions project (:id existing)))))
         (do (pen! (:id existing)) (ws/read-ws project (:id existing)))
         existing)
       (let [w (ws/create! project

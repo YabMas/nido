@@ -978,6 +978,12 @@
     (is (not (str/includes? html "/gate/brian/ws-1/apply"))
         "pane actions go through the pane route, not the home gate")))
 
+(deftest workstream-pane-offers-reply-to-a-conductors-escalation
+  ;; No agent is parked, but a conductor's escalation is owed the person's answer.
+  (let [html (views/workstream-pane (assoc sample-ws :stage :in-progress :sessions [] :on-latest? true
+                                                     :replyable? true) {})]
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/reply"))))
+
 (deftest workstream-pane-hides-stage-actions-on-older-entries
   (let [html (views/workstream-pane (assoc sample-ws :on-latest? false) {})]
     (is (not (str/includes? html "/workstreams/brian/ws-1/gate/"))
@@ -1620,7 +1626,7 @@
 (deftest the-panes-gate-form-carries-the-owed-criterion
   (let [html (str (h/html (#'views/pane-action-bar "nido" "ws-1" :notion :awaiting-gate [] nil
                                                    {:at :awaiting-gate :next {:stage :assert-gate :mode :human}}
-                                                   a-plan)))]
+                                                   a-plan nil)))]
     (is (str/includes? html "a quiet week"))
     (is (str/includes? html "/workstreams/nido/ws-1/gate/assert-gate"))))
 

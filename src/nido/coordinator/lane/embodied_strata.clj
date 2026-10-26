@@ -59,6 +59,13 @@
                       {:reason :not-strata :unmarked (vec unmarked) :foreign (vec foreign)})))
     fixed))
 
+(defn ^{:malli/schema [:=> [:cat :any] :boolean]}
+  refused?
+  "Whether `e` is the strata embodiment refusing a workstream (`carried-strata!`), as against an
+   occupant whose launch failed."
+  [e]
+  (contains? #{:no-design :nothing-fixed :not-strata} (:reason (ex-data e))))
+
 (defn ^{:malli/schema [:=> [:cat] :map]}
   embodiment
   "The strata embodiment as the occupancy lane takes it: a seat's session named by its stratum,

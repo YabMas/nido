@@ -13,6 +13,7 @@
    [clojure.set :as set]
    [clojure.string :as str]
    [nido.platform.config :as config]
+   [nido.platform.core :as core]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.lane.facets :as facets]
    [nido.coordinator.lane.findings :as findings]
@@ -24,6 +25,8 @@
    [nido.coordinator.lane.promote :as promote]
    [nido.coordinator.report :as report]
    [nido.coordinator.lane.conduct :as conduct]
+   [nido.coordinator.lane.conductor :as conductor]
+   [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.lane.resume :as resume]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.activity :as activity]
@@ -546,7 +549,7 @@
   [f]
   (binding [*rows-memo* (atom {})] (f)))
 
-(declare live-session-names resuming?)
+(declare live-session-names resuming? replyable?)
 
 (defn- band-of
   "The board band of an OPEN workstream, read off its ledger: in progress while status places it
@@ -622,7 +625,7 @@
                          (resuming? project ws-id)
                          (and (seq live-names)
                               (some #(contains? live-names (:name %))
-                                    (csession/list-sessions project ws-id))))
+                                    (remove :conductor (csession/list-sessions project ws-id)))))
               st     (when shown? (pipeline/status project ws-id live-names))]
           (cond-> (assoc spine :stage (if (= :dismissed outcome) :dismissed :done)
                                :dismissed? (= :dismissed outcome)
@@ -728,7 +731,8 @@
                       (when (or (and closed (not= :between-phases (:outcome closed)))
                                 (contains? done-ids (:id w)))
                         (let [sessions (csession/list-sessions project (:id w))
-                              live-s   (filterv #(contains? live (:name %)) sessions)]
+                              ;; Never the conductor's record: it is no work left winding down.
+                              live-s   (filterv #(and (not (:conductor %)) (contains? live (:name %))) sessions)]
                           (when (seq live-s)
                             {:ws-id     (:id w)
                              :project   (name project)
@@ -990,7 +994,7 @@
              {:keys [ws-id address open?]} (proposal/attempts pk)
              :when open?
              :let  [w        (cws/read-ws pk ws-id)
-                    sessions (csession/list-sessions pk ws-id)
+                    sessions (remove :conductor (csession/list-sessions pk ws-id))
                     state    (hold-state (engagement-of (pipeline/status pk ws-id)))]]
          (cond-> {:project    pname
                   :ws-id      ws-id
@@ -1149,7 +1153,8 @@
    impl session is still the environment (you Start it). :archived (torn-down)
    sessions are excluded. Callers use (:name env) to resolve dev-state/facts."
   [project ws-id]
-  (->> (csession/list-sessions project ws-id)
+  ;; Read past the conductor's record: it is heavy and live, and no environment of the work.
+  (->> (remove :conductor (csession/list-sessions project ws-id))
        (filter #(= :heavy (:weight %)))
        (filter csession/live?)
        (sort-by :created-at)
@@ -1395,6 +1400,8 @@
         ;; :on-latest? is false there and no actions render at all.
         :action-report (when latest? latest-r)
         :environment  (environment project ws-id)
+        ;; Whether :reply reaches anyone — a conductor's open escalation counts with a parked agent.
+        :replyable?   (replyable? project ws-id)
         :sessions     (let [waiting    (resume/waiting-session project ws-id)
                             run-states (into {} (map (juxt :session-name :state))
                                              (runs/runs-of project ws-id))]
@@ -1420,6 +1427,14 @@
    resolves against (`resume/waiting-session`)."
   [project ws-id]
   (resume/waiting-session project ws-id))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :boolean]}
+  replyable?
+  "Whether a :reply has someone to reach on the workstream: a session waiting on a person's reply
+   (`parked-session`), or a conductor's escalation owed the person's answer, whoever's session the
+   work runs in. What every surface offering Reply reads."
+  [project ws-id]
+  (boolean (or (parked-session project ws-id) (conductor/awaiting-answer? project ws-id))))
 
 (defn- resuming?
   "True iff a one-shot agent nido launched is running against the workstream right now, observed
@@ -1457,8 +1472,9 @@
   [project row]
   (let [psess   (parked-session project (:ws-id row))
         ;; A session to reply to, not merely a move a person owes: :reply resumes an agent, and
-        ;; a gate a round handed back to a person has no agent asleep in it.
-        parked? (some? psess)
+        ;; a gate a round handed back to a person has no agent asleep in it. A conductor's open
+        ;; escalation is one too: :reply records the answer it is owed, whoever's session it is.
+        parked? (replyable? project (:ws-id row))
         ;; Read once: the action set is derived from what the ledger holds last,
         ;; so the buttons and the report a reader is looking at cannot disagree.
         report  (latest-report project (:ws-id row))]
@@ -2522,7 +2538,8 @@
      :drop    -> close! :dropped            :done    -> set-stage! :done
      :apply   -> apply! the verdict and record the acceptance, iff `payload` still
                  names the latest report
-     :reply   -> resume! the parked agent with `payload`
+     :reply   -> answer a conductor's escalation with `payload`, else resume! the
+                 parked agent with it
      :approve -> record the grant (:design-approved) and resume, iff `payload`
                  still names the latest report AND the design still stands
      :redesign    -> confirm an invalidating verdict by retracting the design
@@ -2567,7 +2584,12 @@
        :done    (set-stage! project ws-id :done)
        :drop    (do (cws/close! project ws-id :dropped nil :person) {:decision :dropped})
        :apply   (apply! project ws-id {:at-seq payload})
-       :reply   (resume/resume! project ws-id (reply-input payload))
+       ;; A reply to a conductor's escalation is that blocker's answer, in the person's own words,
+       ;; and reaches the conductor as a hand-back on the next pass; any other resumes the parked
+       ;; agent.
+       :reply   (if (conductor/answer! project ws-id payload)
+                  {:decision :answered}
+                  (resume/resume! project ws-id (reply-input payload)))
        :approve (approve! project ws-id payload)
        :redesign     (redesign! project ws-id payload)
        :hold-design  (hold-design! project ws-id payload)
@@ -2582,11 +2604,20 @@
    is read back after, from what was provisioned. Idempotent on a live session. Returns the ws-id.
    `project` may be a keyword or string; `opts` are lifecycle/up!'s."
   [project session-name opts]
-  (let [p     (keyword (name project))
-        opts  (assoc opts :project (name project))
-        ws-id (scratch/birth! p session-name nil)]
+  (let [p      (keyword (name project))
+        opts   (assoc opts :project (name project))
+        first? (nil? (csession/workstream-id-for p session-name))
+        ws-id  (scratch/birth! p session-name nil)]
     (lifecycle/up! session-name (assoc opts :runtime-key ws-id))
-    (scratch/birth! p session-name (lifecycle/session-weight session-name opts) ws-id)))
+    (let [ws-id (scratch/birth! p session-name (lifecycle/session-weight session-name opts) ws-id)]
+      ;; A session this start first recorded is carried: on a workstream whose generation fixes
+      ;; no ids, it occupies the whole seat. A failure to carry leaves the session up and undriven.
+      (when first?
+        (try (conductor/carry! p ws-id session-name)
+             (catch Throwable t
+               (binding [*out* *err*]
+                 (println (str "nido: " session-name " is up but was not carried — " (ex-message t)))))))
+      ws-id)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] :any]}
   new!
@@ -2624,16 +2655,39 @@
   "Where `open` lands for a workstream: the most-recently-active LIVE session,
    else the most-recently-active session, else nil. Returns {:project :session}.
    Ordering reuses wsv/session-rows (newest-active first); only rows a nido session
-   record backs are candidates — a listed session no record names is not one to open."
+   record other than the conductor's backs are candidates — a listed session no record names is
+   not one to open."
   [project ws-id]
-  (let [rows       (filter :recorded? (wsv/session-rows project ws-id (workstream-listing project ws-id)))
-        live-names (->> (csession/list-sessions project ws-id)
+  (let [sessions   (csession/list-sessions project ws-id)
+        ;; Never the conductor's record: open lands on the work, not on who conducts it.
+        conductors (set (map :name (filter :conductor sessions)))
+        rows       (filter #(and (:recorded? %) (not (conductors (:name %))))
+                           (wsv/session-rows project ws-id (workstream-listing project ws-id)))
+        live-names (->> (remove :conductor sessions)
                         (filter csession/live?)
                         (map :name)
                         set)
         pick       (or (first (filter #(live-names (:name %)) rows))
                        (first rows))]
     (when pick {:project project :session (:name pick)})))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] [:maybe :string]]}
+  driven-conversation
+  "The background conversation a person entering `session` is to be put in front of: the one its
+   record names, unless nido retired it. nil for a session with none — a person's own shell."
+  [project session]
+  (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
+    (let [c (:claude (csession/read-session (keyword project) ws-id session))]
+      (when (not= :retired (:driver c)) (:session-id c)))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] [:maybe :string]]}
+  attach-command
+  "The command that attaches a terminal to `session`'s driven conversation, as a spawned child's
+   tab runs it; nil when it has none (`driven-conversation`)."
+  [project session]
+  (when-let [sid (driven-conversation project session)]
+    (str "bb --config " (str (fs/path (core/nido-source-dir) "bb.edn"))
+         " nido:session:attach :session-id " sid)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] :boolean]}
   reclaimed?
@@ -2840,12 +2894,13 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
   bring-down!
-  "Down every live session of a workstream — the winding-down band's one action.
+  "Down every live session of a workstream but its conductor — the winding-down band's one action.
    Synchronous and slow (lifecycle/down! per session); callers own async + UI
    optimism. Returns {:downed [names]}."
   [project ws-id]
   (let [live  (live-session-names project)
-        names (->> (csession/list-sessions project ws-id)
+        ;; The band's sessions, never the conductor's: retiring it is the conduct pass's.
+        names (->> (remove :conductor (csession/list-sessions project ws-id))
                    (map :name)
                    (filterv live))]
     (doseq [n names]
@@ -2878,16 +2933,19 @@
         owners-of (fn [n]
                     (filter (fn [w] (some #(= n (:name %))
                                           (csession/list-sessions project (:id w))))
-                            open))]
+                            open))
+        ;; A one-off is counted past its conductor's record: the conductor is no session it owns.
+        working   #(remove :conductor (csession/list-sessions project %))]
     (->> open
          (filter (fn [w] (and (scratch/scratch? w)
                               (empty? (:external-refs w))
                               (scratch/bare? w))))
          (keep (fn [w]
-                 (let [sess (csession/list-sessions project (:id w))]
+                 (let [sess (working (:id w))]
                    (when (and (= 1 (count sess))
                               (some #(not= (:id w) (:id %))
                                     (owners-of (:name (first sess)))))
+                     (seats/retire-conductor! project (:id w))
                      (cws/delete! project (:id w))
                      (:id w)))))
          vec)))

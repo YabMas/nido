@@ -21,11 +21,13 @@
    [nido.coordinator.daemon.reconcile :as reconcile]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.lane.conduct :as conduct]
+   [nido.coordinator.lane.conductor :as conductor]
    [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.lane.resume :as resume]
    [nido.coordinator.lane.review :as review]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
+   [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.lane.spawn :as spawn]
    [nido.coordinator.source.registry :as sources]
    [nido.coordinator.record.tickets :as tickets]
@@ -76,6 +78,10 @@
    ;; adopting live orphans into scratch workstreams (work/adopt-orphans!). First
    ;; tick after (re)start sweeps immediately (throttle clock starts at 0).
    :adopt-interval-ms (* 5 60 1000)   ; every 5 min
+   ;; Conductor sweep: start the conductor of each worked open workstream whose conductor is not
+   ;; running, retire each closed one's, record and post the person's acts, and re-seat carried
+   ;; workstreams. Hand-backs from turn ends are posted every pass; this is the rest.
+   :conductor-interval-ms (* 15 1000)
    ;; Review runs that died, or that a person stopped mid-repair, settled from
    ;; their run dirs so what they were holding reaches the workstream's ledger
    ;; without waiting for somebody to review that branch again. First tick after
@@ -274,37 +280,22 @@
 (declare registered-projects settle-run!)
 
 (defn- run-for-instruction
-  "The Run that owns the instruction given to a session at `given-at`: of the session's Runs, the
-   one that most recently entered :running at or before then — a Run queues its instruction only
-   once it runs, so one queued behind an earlier turn is not that turn's. nil when none had."
-  [project ws-id session given-at]
-  (let [t (java.time.Instant/parse given-at)]
-    (->> (runs/list-run-ids)
-         (keep runs/read-run)
-         (filter #(and (= (name (:project %)) (name project))
-                       (= (:workstream-id %) ws-id)
-                       (= (:session-name %) session)))
-         (keep (fn [r]
-                 (when-let [at (->> (:state-history r)
-                                    (filter #(= :running (:state %)))
-                                    (map #(java.time.Instant/parse (:at %)))
-                                    (remove #(.isAfter ^java.time.Instant % t))
-                                    sort last)]
-                   [at r])))
-         (sort-by first)
-         last
-         second)))
+  "The Run an instruction conduct gave was recorded as given for — its :for — or nil for one
+   recorded for no Run. Which Run last ran on the session decides nothing: an instruction a seat
+   or the conductor was given on a session a Run once used is no Run's."
+  [instruction]
+  (some-> (:for instruction) runs/read-run))
 
 (defn- settle-turn-ends!
-  "Settle the Run whose instruction each ended turn followed: a Run still :running moves to the
-   state its turn's outcome calls for; a parked Run whose reply turn ended is parked again for the
-   person. Only a turn conduct attributes to an instruction nido gave — the :instruction whose
-   token a recorded prompt carried — settles anything: a person's turn settles no Run."
+  "Settle the Run each ended turn's instruction was recorded as given for: a Run still :running
+   moves to the state its turn's outcome calls for; a parked Run whose reply turn ended is parked
+   again for the person. Only a turn ending an instruction conduct recorded for a Run settles
+   anything: a person's turn, and one ending an instruction given for no Run, settle no Run."
   [{:keys [turn-ends]}]
   (doseq [{:keys [project ws-id session event instruction]} turn-ends
-          :when (:at instruction)]
+          :when (:for instruction)]
     (try
-      (when-let [run (run-for-instruction project ws-id session (:at instruction))]
+      (when-let [run (run-for-instruction instruction)]
         (case (:state run)
           :running
           (if (= :merge (:mode run))
@@ -332,7 +323,7 @@
           :let [at (get-in facet [:pending :at])]
           :when (and at (= :nido (:driver facet)))]
     (try
-      (when-let [run (run-for-instruction project ws-id session-name at)]
+      (when-let [run (run-for-instruction (:pending facet))]
         (when (= :running (:state run))
           (let [budget-ms (agent/parse-budget-ms (-> run :limits :budget))]
             (when (> (- now-ms (.toEpochMilli (java.time.Instant/parse at))) budget-ms)
@@ -399,6 +390,37 @@
                   [{:project project :ws-id ws-id :session session-name} (:pending facet)]))
         faceted))
 
+(defonce ^:private !last-conductor-sweep-ms (atom 0))
+
+(defn- logged
+  "Run `f`, printing what threw under `what` rather than letting it end the pass."
+  [what f]
+  (try (f)
+       (catch Throwable t
+         (binding [*err* *err*]
+           (.println ^java.io.PrintWriter *err* (str "nido conductor: " what " failed — " (ex-message t))))
+         nil)))
+
+(defn- conductor-pass!
+  "What the conductor lane does with one conduct pass: post a hand-back for each turn end that
+   ended an instruction given for no Run, escalate what a conductor turn that ended left
+   unanswered, and — at most every :conductor-interval-ms — start and retire conductors, record
+   and post the person's acts, and re-seat every carried workstream."
+  [r now-ms]
+  (logged "posting hand-backs" #(conductor/hand-backs! r))
+  (doseq [{:keys [project ws-id session instruction]} (:turn-ends r)
+          :when (:conductor (session/read-session project ws-id session))]
+    (logged (str "closing " session "'s turn") #(conductor/close-unanswered! project ws-id session instruction)))
+  (when (>= (- now-ms @!last-conductor-sweep-ms) (:conductor-interval-ms defaults))
+    (reset! !last-conductor-sweep-ms now-ms)
+    (doseq [p (registered-projects)]
+      ;; Acts first: an act that closed its workstream is answered and posted before the
+      ;; conductor that answers for it is retired.
+      (logged (str "reading " (name p) "'s acts") #(conductor/answers! p))
+      (logged (str "starting " (name p) "'s conductors") #(conductor/conductors! p))
+      (doseq [ws-id (ws/list-ids p)]
+        (logged (str "re-seating " ws-id) #(conductor/reseat! p ws-id))))))
+
 (defn- conduct-pass!
   "One conduct pass over the background sessions: hold sends while the account is at its usage
    limit, settle the Runs whose turns ended, enforce budgets, say on its record why a session's
@@ -410,22 +432,28 @@
                                     :mail {:owed seats/owed :delivered! seats/delivered!}})]
     (when-not (:skipped r)
       (settle-turn-ends! r)
+      (conductor-pass! r now-ms)
       (let [faceted (conduct/faceted-sessions {:projects projects})
             pending (outstanding faceted)]
         (enforce-budgets! now-ms faceted)
         (surface-refusals! r)
         (surface-left-running! r faceted)
         (when-let [notify! @!notify-fn]
-          (let [ns (attention/blocked-notifications (:blocked r))]
+          ;; One blocked on an instruction the conductor answers for is handed back to the conductor,
+          ;; not announced to the person; the conductor's own is the person's to answer.
+          (let [ns (attention/blocked-notifications
+                    (remove (fn [{:keys [project ws-id session unrun?]}]
+                              (and unrun? (not (:conductor (session/read-session project ws-id session)))))
+                            (:blocked r)))]
             (when (seq ns) (future (doseq [n ns] (notify! n))))))
         (swap! !conduct
                (fn [c]
                  {:working (count (remove (fn [{:keys [project ws-id session] :as who}]
-                                            ;; The Run whose instruction the session is working on
-                                            ;; holds the slot, not whichever Run is newest.
-                                            (:uncapped? (if-let [at (:at (pending (select-keys who [:project :ws-id :session])))]
-                                                          (run-for-instruction project ws-id session at)
-                                                          (runs/find-for-session project ws-id session))))
+                                            ;; The Run the session's instruction was given for holds
+                                            ;; the slot; an instruction given for no Run is charged
+                                            ;; as capped work, whichever Run last ran there.
+                                            (:uncapped? (run-for-instruction
+                                                         (pending (select-keys who [:project :ws-id :session])))))
                                           (:working r)))
                   :denials (into (:denials c) (:denials r))}))))
     r))
@@ -861,8 +889,16 @@
                                :system-prompt system-prompt
                                :mcp-config    (:mcp-config lc)
                                :add-dirs      (:add-dirs lc)
-                               :policy        {:auto-respawn? true}})]
+                               :policy        {:auto-respawn? true}
+                               :for           (:id run)})]
     (persist-claude-session-id! (runs/read-run (:id run)) (:session-id facet))
+    ;; The Run's session is the first a start brings up on a fresh workstream: carried, it
+    ;; occupies the whole seat, and stays its Run's when a generation later fixes ids.
+    (try (conductor/carry! (:project run) (:workstream-id run) (:session-name run))
+         (catch Throwable t
+           (binding [*err* *err*]
+             (.println ^java.io.PrintWriter *err*
+                       (str "nido conductor: carrying " (:session-name run) " failed — " (ex-message t))))))
     {:started true}))
 
 (defn- run-blocking!

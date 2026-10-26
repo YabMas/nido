@@ -93,7 +93,10 @@
      ;; any number of times; keyed on the run-id alone submit!'s idempotence would swallow every
      ;; reply after the first.
      (let [run  (runs/find-for-session project ws-id (:name s))
-           body #(try (conduct/instruct! project ws-id (:name s) input)
+           ;; A reply to a Run that awaits review is that Run's turn; any other reply is no Run's,
+           ;; so its turn end settles no Run and goes to the workstream's conductor.
+           for  (when (= :awaiting-review (:state run)) (:id run))
+           body #(try (conduct/instruct! project ws-id (:name s) input for)
                       (catch Throwable t
                         (session/set-error! project ws-id (:name s)
                                             {:at      (clock/now-iso)

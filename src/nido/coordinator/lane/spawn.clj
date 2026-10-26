@@ -9,6 +9,7 @@
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.lane.facets :as facets]
+   [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.workstream :as ws]
@@ -110,7 +111,8 @@
           (ws/reopen! project (:id w) (initial-stage routed)))
         run)
       (catch Throwable t
-        (when (and minted? (empty? (session/list-sessions project (:id w))))
+        (when (and minted? (empty? (remove :conductor (session/list-sessions project (:id w)))))
+          (seats/retire-conductor! project (:id w))
           (ws/delete! project (:id w)))
         (throw t)))))
 

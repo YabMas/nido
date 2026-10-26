@@ -13,7 +13,10 @@
    :scratch           {:format :scratch :session "fix-typo"}
    :notion-status     {:format :notion-status :page-id "abc" :status "Review" :by :poller}
    :layer-completed   {:format :layer-completed :design {:seq 9} :layer 2 :of 5
-                       :bookmark "s--status"}})
+                       :bookmark "s--status"}
+   :conduct-decision  {:format :conduct-decision :hand-back "m-1" :position :implementing
+                       :next {:stage :implement :mode :working-copy} :by :conductor
+                       :decision [:instruct [{:seat 1 :text "carry on with layer two"}]]}})
 
 (deftest every-status-kind-validates-titles-and-renders
   (doseq [[kind r] samples]
@@ -44,3 +47,18 @@
       (is (str/starts-with? (report/report-title words) "Answered: use the new column")))
     (testing "half a branch is neither"
       (is (thrown? Exception (report/validate-event :blocker-answered (dissoc branch :label)))))))
+
+(deftest a-conductor-decision-instructs-seats-or-escalates
+  (let [escalation {:format :conduct-decision :hand-back "m-2" :position :design-decided :by :nido
+                    :decision [:escalate {:needs "the conductor reached no decision"}]
+                    :parked {:seq 7}}]
+    (is (= escalation (report/validate-event :conduct-decision escalation)))
+    (is (= "Conductor escalates: the conductor reached no decision" (report/report-title escalation)))
+    (is (str/includes? (report/report->markdown escalation) "entry 7"))
+    (testing "an instruction names at least one seat"
+      (is (thrown? Exception (report/validate-event :conduct-decision
+                                                    (assoc escalation :decision [:instruct []])))))
+    (testing "a seat is an element's id or a generation's number"
+      (is (thrown? Exception (report/validate-event :conduct-decision
+                                                    (assoc escalation :decision
+                                                           [:instruct [{:seat :x :text "t"}]])))))))

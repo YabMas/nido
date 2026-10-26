@@ -46,7 +46,8 @@
                      {:project (:project r) :ws-id (:workstream-id r) :session (:session-name r)
                       :event {:event :stop :last-message "done"}
                       ;; Its own instruction's Stop: given as the turn began, after the Run ran.
-                      :instruction {:token "T" :at (str (java.time.Instant/now)) :seen? true}}))
+                      :instruction {:token "T" :at (str (java.time.Instant/now)) :seen? true :for id}
+                      :run id}))
    :denials [] :held [] :blocked [] :delivered [] :failed [] :working []})
 
 (defn- every-running-turn-outstanding
@@ -57,7 +58,7 @@
              :let [r (runs/read-run id)]
              :when (= :running (:state r))]
          {:project (:project r) :ws-id (:workstream-id r) :session-name (:session-name r)
-          :facet {:driver :nido :pending {:token "T" :at (str (java.time.Instant/now))}}})))
+          :facet {:driver :nido :pending {:token "T" :at (str (java.time.Instant/now)) :for id}}})))
 
 (deftest manual-trigger-end-to-end
   (let [tmp     (fs/create-temp-dir)
@@ -72,6 +73,10 @@
                     ;; and maybe-refresh-titles!, whose sweep runs on a future that can
                     ;; outlive these redefs and call a real model over the real ~/.nido.
                     core/maybe-refresh-titles! (constantly nil)
+                    ;; and the conductor pass, which would bring a conductor's session up for real;
+                    ;; carrying the Run's session is the conductor lane's, tested there.
+                    core/conductor-pass!       (constantly nil)
+                    nido.coordinator.lane.conductor/carry! (constantly {:carried nil :why :stubbed})
                     ;; stub project listing — real shape is {project-name {...}}
                     project/list-projects    (constantly {"brian" {:directory "/tmp"}})
                     ;; stub session spawn — write a minimal session-home tree so
@@ -136,8 +141,10 @@
         no-session  (fn [_run] {})]
     (try
       (with-redefs [nido-core/nido-root            (constantly (str tmp))
-                    ;; see manual-trigger-end-to-end above — same core/tick! -> real-prune exposure.
+                    ;; see manual-trigger-end-to-end above — same core/tick! -> real-prune exposure,
+                    ;; and the same conductor pass.
                     work/prune-dead-registry!   (constantly [])
+                    core/conductor-pass!        (constantly nil)
                     project/list-projects       (constantly {"brian" {:directory "/tmp"}})
                     runs/spawn-session-for-run! no-session
                     ;; stub launch-context — avoids real I/O (jj/git) that would

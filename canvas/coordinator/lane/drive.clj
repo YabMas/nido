@@ -5,6 +5,7 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.lane.conduct :as conduct]
+            [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.executor :as executor]
             [canvas.coordinator.record.runs :as runs :refer [Run]]
             [canvas.coordinator.record.session :as session :refer [Session]]
@@ -76,13 +77,18 @@
      :delegates [workstream/goal-amendment standing/proceeding?]})
   (Operation disposition "What a finished status means for the workstream it finished on."
     {:signature [:=> [:catn [:status :keyword]] :keyword]})
+  (Operation settled-in-notion
+    "The Notion status by which a person settled a workstream's ticket since its last stage choice,
+     or nil — nil once it is closed, and while its current generation holds an unanswered
+     blocker. `of` places a workstream this answers for where a close is."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:whole Workstream]] [:maybe :map]]})
   (Operation of "Where a workstream stands and what should happen to it next."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
-     :delegates [workstream/read-ws intake-kind next-action baseline-verified?]})
+     :delegates [workstream/read-ws intake-kind next-action baseline-verified? settled-in-notion]})
   (Operation status
     "A workstream's position, who owes its next move, and whether anything is live — the one
      answer every surface renders. Stalled when an agent owes the move, nothing is live, and no
-     question is open."
+     question is open; its conductor's session is not what makes it live."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
                       [:live-names [:? [:maybe [:set :string]]]]] WorkstreamStatus]
      :delegates [of activity/read-live runs/live-runs]}))
@@ -108,9 +114,14 @@
      design, never the judge's prose — the move a grant owed a person would grant."
     {:signature [:=> [:catn [:outcome :keyword] [:decisions [:sequential :map]]
                             [:design [:? [:maybe :map]]]] [:maybe :string]]})
+  (Operation park-held!
+    "park!, its blocker appended by the append a caller holding the ledger's append lock gives
+     (workstream/appending!), so the park is one step with what else that caller appends."
+    {:signature [:=> [:catn [:halt :map] [:append! [:=> [:cat :map :string] :string]]] :map]
+     :delegates [halt-for]})
   (Operation park! "Stop a workstream and record why."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:halt :map]] :map]
-     :delegates [workstream/append-entry!]})
+     :delegates [park-held! workstream/append-entry!]})
   (Operation park-on-escalate! "Park only when the outcome's disposition says to."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts :map]] :any]
      :delegates [park!]})
@@ -134,7 +145,9 @@
      supply it. A second table tuned to what a PERSON may do would be a third participant in the
      disagreement `mechanical-stages` can already have with the projection."
     {:signature [:=> [:catn [:position :any]] :map]})
-  (Operation run-stage! "Run one mechanical stage to a settled outcome, then act on it."
+  (Operation run-stage!
+    "Run one mechanical stage to a settled outcome, then act on it. Given no :cwd, it runs in a
+     session of the workstream read past its conductor's record."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:stage :keyword]
                             [:opts [:? :map]]] :map]
      :delegates [park-on-escalate! decision-needs workstream/entries-of workstream/entry-at-seq]})
@@ -146,9 +159,9 @@
      A decline is not always a halt, and the five that mean nothing is wrong are left alone:
      waiting on a person, a mode this phase does not run, a drive Run already in flight, the
      claim held by somebody else, and a terminal position. Everything else — a :mechanical stage
-     with no runner, a driven workstream with no session — appends a :blocker naming the stage,
-     because a log line re-emitted every tick is not a record the next reader of that ledger will
-     ever see.
+     with no runner, a driven workstream with no session past its conductor's record — appends a
+     :blocker naming the stage, because a log line re-emitted every tick is not a record the next
+     reader of that ledger will ever see. A stage it fires runs in a session read past that record.
 
      Parking is self-limiting rather than guarded. A parked workstream reads :blocked, whose next
      action is a person's, so `fireable` skips it from the following tick onward and no second
@@ -172,9 +185,13 @@
   (Operation create-session-for-run! "Persist the authoritative autonomous session for a run."
     {:signature [:=> [:catn [:run Run] [:ws-id WorkstreamId]] Session]
      :delegates [autonomy-from session/create!]})
-  (Operation spawn-records! "Ensure the workstream, create the run, create its session."
+  (Operation spawn-records!
+    "Ensure the workstream, create the run, create its session. A workstream it minted is deleted
+     when that creation fails and it owns no session but its conductor's record, its conductor
+     retired before it is."
     {:signature [:=> [:catn [:routed :map] [:meta :map]] :map]
-     :delegates [ensure-workstream! runs/create-run! create-session-for-run!]})
+     :delegates [ensure-workstream! runs/create-run! create-session-for-run!
+                 seats/retire-conductor! workstream/delete!]})
   (Operation ref-has-pending-run? "Whether this fire's ref already has a run of its trigger in flight."
     {:signature [:=> [:catn [:routed :map]] :boolean]
      :delegates [external-ref workstream/find-by-ref runs/runs-of]})
@@ -205,8 +222,8 @@
     {:signature [:=> [:catn [:run-id RunId] [:result :map]] :keyword]
      :delegates [runs/read-run classify-outcome]})
   (Operation drive-home!
-    "The executor body for a merge run: give /drive-home to the run's background session and
-     return; the run settles when the session's Stop ends the turn."
+    "The executor body for a merge run: give /drive-home to the run's background session, recorded
+     as given for the run, and return; the run settles when the session's Stop ends that turn."
     {:signature [:=> [:catn [:run-id RunId]] :any]
      :delegates [runs/read-run conduct/start! conduct/adopt! conduct/instruct! settle-drive-home!]}))
 

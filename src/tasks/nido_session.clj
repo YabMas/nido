@@ -40,9 +40,13 @@
    [clojure.string :as str]
    [nido.coordinator.agent.substrate :as substrate]
    [nido.coordinator.lane.conduct :as conduct]
+   [nido.coordinator.lane.conductor :as conductor]
+   [nido.coordinator.lane.seats :as seats]
    [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.session-events :as session-events]
+   [nido.coordinator.work :as work]
+   [nido.platform.core :as core]
    [nido.platform.process :as process]
    [nido.platform.project :as project]
    [nido.platform.task-args :as task-args]
@@ -182,12 +186,24 @@
         (println (str "  (fleet budget unavailable: " (ex-message e) ")"))
         true))))
 
+(defn- carry
+  "Carry the workstream `session` was first recorded on by this start, its first instruction
+   `brief` when given, on `model` when given — carry!'s answer, or nil when it threw. The session
+   is up either way; a failure to carry leaves it undriven and says so."
+  [p ws-id session {:keys [brief model]}]
+  (try (conductor/carry! p ws-id session brief model)
+       (catch Throwable t
+         (println (str "  not carried — " (ex-message t)))
+         nil)))
+
 (defn- up*
   "Bring `session` up on `ws-id` (nil: the name's holder, else a minted
-   one-off) and print where it lives. Returns the session-home, or nil when
-   the person declined at the budget question. Exits 1 — before anything is
-   provisioned — when the session cannot join `ws-id`."
-  [project session ws-id opts]
+   one-off) and print where it lives. A session this start first recorded is
+   carried, `first-instruction` ({:brief :model}, either may be nil) what it is
+   first given. Returns {:home
+   :carried}, or nil when the person declined at the budget question. Exits 1
+   — before anything is provisioned — when the session cannot join `ws-id`."
+  [project session ws-id opts first-instruction]
   (let [p (keyword project)]
     (when-let [why (and ws-id (scratch/joinable p session ws-id))]
       (println (str "Refused — " session " cannot start on " ws-id ": "
@@ -204,19 +220,23 @@
         ;; The workstream is settled BEFORE up!, so the session comes up on its runtime at once.
         ;; Weight is read back AFTER up! — up! persists the resolved profile, so
         ;; the record describes what was really provisioned, not what was asked for.
-        (let [held-by (scratch/birth! p session nil ws-id)]
-          (lifecycle/up! session (assoc opts :runtime-key held-by))
-          (scratch/birth! p session (lifecycle/session-weight session opts) held-by))
-        (let [home (state/session-home-dir project session)]
+        (let [first?  (nil? (csession/workstream-id-for p session))
+              held-by (scratch/birth! p session nil ws-id)
+              _       (lifecycle/up! session (assoc opts :runtime-key held-by))
+              held-by (scratch/birth! p session (lifecycle/session-weight session opts) held-by)
+              carried (when first? (:carried (carry p held-by session first-instruction)))
+              home    (state/session-home-dir project session)]
           (println)
           (println (str "Session ready: " project "/" session
                         (when ws-id (str " on workstream " ws-id))))
           (when (false? (:wait opts))
             (println (str "  services are starting in the background — "
                           "bb nido:session:status :project " project " " session)))
+          (when carried
+            (println (str "  carried: it occupies the whole seat, driven by nido")))
           (println (str "  cd " home))
           (println (str "  bb nido:session:enter :project " project " " session))
-          home)))))
+          {:home home :carried carried})))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   up
@@ -242,7 +262,8 @@
         project (require-project opts)
         session (require-session-name pos)]
     (up* project session (some-> (:ws-id opts) str)
-         (-> (dissoc opts :ws-id) (update :wait #(if (nil? %) false %))))
+         (-> (dissoc opts :ws-id) (update :wait #(if (nil? %) false %)))
+         nil)
     nil))
 
 ;; ── revive: bring back what died with the host ──────────────────────────────
@@ -474,8 +495,13 @@
    `:model` is the child's claude model; given none, claude's default — it
    need not match the parent's.
 
-   In Warp the child's tab runs the kickoff as though typed at its prompt.
-   Outside Warp no tab opens, and the printed command starts the agent by hand."
+   The child is a driven background session on the kickoff, and the tab
+   attaches to it rather than starting a conversation of its own. It is carried
+   as `up` carries a session — occupying its workstream's whole seat when that
+   seat is free — and otherwise driven occupying no seat.
+
+   In Warp the tab runs its command as though typed at its prompt. Outside Warp
+   no tab opens, and the printed command is run by hand."
   [& args]
   (let [[pos opts]   (task-args/split-args args #{:parent-agent :brief-file :model})
         project      (require-project opts)
@@ -491,24 +517,45 @@
       (throw (ex-info "A session cannot spawn itself" {:session child})))
     ;; :yes — spawn is one command whoever issues it, so it never stops at the
     ;; budget question a person running it by hand would otherwise be asked.
-    (when-let [home (up* project child (some-> (:ws-id opts) str)
-                         (-> (dissoc opts :ws-id :parent-agent :brief-file :model)
-                             (assoc :yes true)))]
+    (when-let [{:keys [home carried]}
+               (up* project child (some-> (:ws-id opts) str)
+                    (-> (dissoc opts :ws-id :parent-agent :brief-file :model)
+                        (assoc :yes true))
+                    {:brief (kickoff-prompt {:parent-agent parent-agent :parent-project pp
+                                             :parent-session ps :child child :brief brief})
+                     :model (:model opts)})]
       (lifecycle/link-add! ps {:project pp :type :session :url (session-uri project child)
                                :title (str "child · agent " child)})
       (lifecycle/link-add! child {:project project :type :session :url (session-uri pp ps)
                                   :title (str "parent · agent " parent-agent)})
-      (let [by-hand (lifecycle/stage-kickoff!
-                     child {:project project :agent-name child
-                            :model (:model opts)
-                            :prompt (kickoff-prompt {:parent-agent parent-agent :parent-project pp
-                                                     :parent-session ps :child child :brief brief})})
+      (let [p       (keyword project)
+            ws-id   (csession/workstream-id-for p child)
+            ;; Not carried — its seat taken, or its generation fixing ids — it is driven on its
+            ;; brief all the same, occupying no seat.
+            driven  (or carried
+                        (try (seats/drive! p ws-id child
+                                           (kickoff-prompt {:parent-agent parent-agent :parent-project pp
+                                                            :parent-session ps :child child :brief brief})
+                                           (:model opts))
+                             true
+                             (catch Throwable t
+                               (println (str "  not driven — " (ex-message t)))
+                               false)))
+            sid     (get-in (csession/read-session p ws-id child) [:claude :session-id])
+            by-hand (if sid
+                      (str "bb --config " (str (fs/path (core/nido-source-dir) "bb.edn"))
+                           " nido:session:attach :session-id " sid)
+                      (str "bb nido:session:status :project " project " " child))
             tab?    (lifecycle/warp?)]
         (when tab? (lifecycle/spawn-tab! child {:project project :cd :home :command by-hand}))
         (println)
         (println (str "Spawned " project "/" child " — its agent answers to `" child "`."))
+        (when driven
+          (println (str "  It is driven by nido on its brief"
+                        (when carried ", in its workstream's whole seat")
+                        (if sid ", and its tab attaches to it." " — its conversation is still starting."))))
         (if tab?
-          (println "  Its tab is open, with the agent starting in it.")
+          (println "  Its tab is open.")
           (println (str "  Not in Warp: open a terminal and run  " by-hand)))
         home))))
 
@@ -572,7 +619,10 @@
 
    Refuses if the session is down and `:auto-up` was not passed, or if
    `:cd worktree` is requested and neither the session-home symlink nor
-   the on-disk worktree exists."
+   the on-disk worktree exists.
+
+   A session nido drives is then attached in this terminal (`work/driven-conversation`); the
+   cd follows its detach."
   [& args]
   (let [[pos opts] (task-args/split-args args)
         project    (require-project opts)
@@ -580,7 +630,13 @@
         opts'      (cond-> (on-its-workstream project session opts)
                      (contains? opts :auto-up) (-> (assoc :auto-up? (:auto-up opts))
                                                    (dissoc :auto-up)))]
-    (lifecycle/enter! session opts')))
+    (lifecycle/enter! session opts')
+    ;; A session nido drives is entered at its conversation: this terminal becomes its attach,
+    ;; and the shell wrapper's cd follows when the person detaches.
+    (when-let [sid (work/driven-conversation project session)]
+      (try (substrate/attach! sid {})
+           (catch clojure.lang.ExceptionInfo e
+             (binding [*out* *err*] (println (str "nido: " (ex-message e) " — landing without it"))))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   status
@@ -679,7 +735,9 @@
   (let [[pos opts] (task-args/split-args args)
         project    (require-project opts)
         session    (require-session-name pos)]
-    (conduct/hand-back! (keyword project) (session-ws! project session) session)
+    (let [ws-id (session-ws! project session)]
+      (conduct/hand-back! (keyword project) ws-id session)
+      (conductor/hand-back! (keyword project) ws-id session))
     (println (str "nido drives " session " again"))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}

@@ -1800,7 +1800,13 @@
    [:summary     string?]
    ;; The session told about it, or nil when there was none to tell — the honest
    ;; record of whether this answer reached an agent or is waiting to be read.
-   [:resumed     {:optional true} [:maybe string?]]]
+   [:resumed     {:optional true} [:maybe string?]]
+   ;; The person's act at a step a conductor escalated at, when that act — not a reply — is what
+   ;; answered the blocker. nido writes it; the act's own entry is the answer's record.
+   [:act         {:optional true} [:map {:closed true} [:seq int?]]]
+   ;; nido's own answer, to a blocker whose question no longer stands — a seat that could not be
+   ;; started and has since been occupied. No person gave it, so it is handed back as no act.
+   [:by          {:optional true} [:= :nido]]]
    [:fn {:error/message "a branch answer names both its letter and its label, a worded one neither"}
     (fn [{:keys [letter label]}] (= (some? letter) (some? label)))]])
 
@@ -3766,8 +3772,13 @@
 ;; settle disagreements with. Which entries belong to which generation is the ledger's reading;
 ;; these say only what each entry carries.
 
+(def SeatId
+  "A seat's id: the id of an element a generation fixes, or — for the whole seat of a generation
+   fixing none — the generation's own number."
+  [:or [:string {:min 1}] pos-int?])
+
 (def ^:private SeatWriter
-  [:map {:closed true} [:as [:= :seat]] [:seat [:string {:min 1}]] [:session [:string {:min 1}]]])
+  [:map {:closed true} [:as [:= :seat]] [:seat SeatId] [:session [:string {:min 1}]]])
 
 (def ^:private ConductorWriter
   [:map {:closed true} [:as [:= :conductor]] [:session [:string {:min 1}]]])
@@ -3791,7 +3802,7 @@
 (def ^:private tension-fields
   "What a tension says, wherever it is carried: on its own entry, or by value on a :generation."
   [[:by        Participant]
-   [:to        [:or [:= :conductor] [:string {:min 1}]]]
+   [:to        [:or [:= :conductor] [:string {:min 1}] pos-int?]]
    [:about     [:vector {:min 1} [:string {:min 1}]]]
    [:statement [:string {:min 1}]]])
 
@@ -3810,7 +3821,8 @@
 
 (def Tension
   "A disagreement raised by a seat or the conductor, addressed to a seat or to the conductor, about
-   the elements or claims named under :about. :to is a seat's id, or :conductor. Whether it is open is
+   the elements or claims named under :about. :to is a seat's id — an element's, or the generation's
+   number for its whole seat — or :conductor. Whether it is open is
    never stored: an :accord from its addressee or a :withdrawal from its raiser settles it."
   (into [:map {:closed true} [:format [:= :tension]]] tension-fields))
 
@@ -3829,6 +3841,24 @@
    [:by      Participant]
    [:tension [:map {:closed true} [:seq int?]]]
    [:note    {:optional true} string?]])
+
+(def ConductDecision
+  "The conductor's answer to one hand-back: instructions to one or more seats, or an escalation
+   naming what the person is needed for. :position and :next are what the pipeline derived when it
+   was decided — a reading kept for the record, never the workstream's current position. :by is
+   :nido for the escalation nido writes when a conductor turn ends leaving its hand-back
+   unanswered. An escalation cites the :blocker it parked the workstream on, which is appended
+   before it, so no accepted escalation is ever without its blocker."
+  [:map {:closed true}
+   [:format    [:= :conduct-decision]]
+   [:hand-back [:string {:min 1}]]
+   [:position  :keyword]
+   [:next      {:optional true} [:maybe :map]]
+   [:by        [:enum :conductor :nido]]
+   [:decision  [:or [:tuple [:= :instruct]
+                     [:vector {:min 1} [:map {:closed true} [:seat SeatId] [:text [:string {:min 1}]]]]]
+                    [:tuple [:= :escalate] [:map {:closed true} [:needs [:string {:min 1}]]]]]]
+   [:parked    {:optional true} [:map {:closed true} [:seq int?]]]])
 
 (def Generation
   "A person opening a new generation of the workstream's design from a :recut.
@@ -3898,7 +3928,8 @@
    :recut                    Recut
    :tension                  Tension
    :accord                   Accord
-   :withdrawal               Withdrawal})
+   :withdrawal               Withdrawal
+   :conduct-decision         ConductDecision})
 
 (def read-schemas
   "Kinds whose READ contract is wider than their write contract, because records
@@ -4476,7 +4507,9 @@
     :person    "a person"))
 
 (defn- addressee->text [to]
-  (if (= :conductor to) "the conductor" (str "seat `" to "`")))
+  (cond (= :conductor to) "the conductor"
+        (int? to)         (str "the whole seat of generation " to)
+        :else             (str "seat `" to "`")))
 
 (defn- ids->text [ids] (str/join ", " (map #(str "`" % "`") ids)))
 
@@ -4530,6 +4563,21 @@
                                 (str "_" (writer->text by) " withdraws the tension at entry "
                                      (:seq tension) "_")
                                 (when note (str "\n" note))])))
+
+(defn- conduct-decision->markdown [{:keys [hand-back position by decision parked]}]
+  (let [[verb body] decision]
+    (str/join "\n"
+              (remove nil?
+               (concat [(if (= :instruct verb) "# Conductor instructs" "# Conductor escalates")
+                       ""
+                       (str "_" (if (= :nido by) "nido, for a conductor turn that reached no decision"
+                                    "the conductor")
+                            " · hand-back `" hand-back "` · at " (name position) "_")
+                       ""]
+                      (if (= :instruct verb)
+                        (map #(str "- **" (addressee->text (:seat %)) "** — " (:text %)) body)
+                        [(str "**Needs** — " (:needs body))
+                         (when parked (str "\nParked on the blocker at entry " (:seq parked) "."))]))))))
 
 (defn- phase-gate->markdown [{:keys [design opens evidence]}]
   (str/join "\n" ["# Phase gate met"
@@ -5172,6 +5220,7 @@
     :implementation-completed (completed->markdown report)
     :blocker                  (blocker->markdown report)
     :blocker-answered         (blocker-answered->markdown report)
+    :conduct-decision         (conduct-decision->markdown report)
     :triage-accepted          (triage-accepted->markdown report)
     :pr-opened                (pr-opened->markdown report)
     :merged                   (merged->markdown report)
@@ -5258,6 +5307,10 @@
     :accord                   (str "Accord on entry " (:seq (:tension report)) ": "
                                    (first-line (:terms report)))
     :withdrawal               (str "Tension at entry " (:seq (:tension report)) " withdrawn")
+    :conduct-decision         (let [[verb body] (:decision report)]
+                                (if (= :instruct verb)
+                                  (str "Conductor instructs " (str/join ", " (map (comp addressee->text :seat) body)))
+                                  (str "Conductor escalates: " (first-line (:needs body)))))
     :issue                    (str "Issue " (:id report))
     :triage-accepted          (if-let [d (:direction report)]
                                 (str "Accepted: direction " (:letter d) " — " (:label d))

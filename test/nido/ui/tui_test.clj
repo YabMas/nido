@@ -655,3 +655,15 @@
 (deftest tick-rebuilds-after-the-backstop-whatever-the-stamp
   (is (= 2 (tick-builds [:a :a] [0 30000]))
       "what no stamp sees — a released lock, a dead port — still shows"))
+
+(deftest entering-a-driven-session-attaches-its-tab-to-the-conversation
+  (let [opened (atom [])]
+    (with-redefs [lifecycle/warp?                   (constantly true)
+                  lifecycle/spawn-tab!              (fn [sn opts] (swap! opened conj [sn opts]) "/home")
+                  nido.coordinator.work/driven-conversation
+                  (fn [_ sn] (when (= "driven" sn) "sid-1"))]
+      (#'tui/enter-session {} :brian "driven" :home)
+      (#'tui/enter-session {} :brian "mine" :worktree)
+      (is (str/ends-with? (:command (second (first @opened))) "nido:session:attach :session-id sid-1")
+          "a session nido drives opens at its conversation")
+      (is (nil? (:command (second (second @opened)))) "a session it drives none of opens a shell"))))
