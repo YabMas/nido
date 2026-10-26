@@ -59,6 +59,19 @@
           (is (not (fs/exists? dir)))
           (is (not (re-find #"nido-runtime" (:out (sh a "jj" "workspace" "list"))))))))))
 
+(deftest a-checkout-whose-directory-was-deleted-is-created-again
+  ;; Reclaiming an orphan state directory deletes the checkout without telling jj, which keeps the
+  ;; workspace name; a refresh that only re-adds it is refused for as long as that name stands.
+  (with-two-workspaces
+    (fn [a _]
+      (let [dir (checkout/refresh! "p--ws" {a "a"})]
+        (fs/delete-tree (state/instance-state-dir "p--ws"))
+        (spit (str (fs/path a "a.clj")) "(ns a)\n")
+        (is (= dir (checkout/refresh! "p--ws" {a "a"})))
+        (is (fs/exists? (fs/path dir "a.clj")) "it holds the members' working copies again")
+        (is (= 1 (count (re-seq #"nido-runtime" (:out (sh a "jj" "workspace" "list")))))
+            "under the one workspace")))))
+
 (deftest two-runtimes-whose-ids-fold-alike-get-two-checkouts
   ;; `feat/x` is kept as `feat~x`, beside a runtime keyed `feat-x`: two state directories, so two
   ;; jj workspaces, though jj's spelling of either id folds `~` to `-`.

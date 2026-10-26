@@ -136,12 +136,27 @@
                   (when (= :config-file type) (get-in runtime [:service-states name :path]))))
           (:service-defs runtime))))
 
+;; A checkout's workspace outlives its directory whenever something deletes the state directory
+;; without asking jj — reclaim of an orphan, a host reboot's prune, a hand `rm` — and `workspace
+;; add` refuses a name jj still holds. The name is this runtime's alone and its working-copy
+;; commit a copy nothing else descends from, so forgetting both loses nothing.
+(defn- forget-workspace!
+  "Forget runtime `instance-id`'s checkout workspace, running jj in `at` (any working copy of the
+   project), and abandon its working-copy commit. A no-op when jj holds no such workspace."
+  [instance-id at]
+  (let [ws (workspace-name instance-id)]
+    (when (some #{ws} (str/split-lines (jj! at false "workspace" "list" "-T" "name ++ \"\\n\"")))
+      (let [copy (jj! at false "log" "-r" (str ws "@") "--no-graph" "-T" "change_id")]
+        (jj! at false "workspace" "forget" ws)
+        (jj! at false "abandon" copy)))))
+
 (defn ^{:malli/schema [:function
                        [:=> [:cat :InstanceId [:map-of :string [:maybe :string]]] :Path]
                        [:=> [:cat :InstanceId [:map-of :string [:maybe :string]] :any] :Path]]}
   refresh!
   "Bring runtime `instance-id`'s checkout up to date with `members` (worktree to session name) —
-   every one a jj workspace — creating it on first use, and return its directory. `setup!` is
+   every one a jj workspace — creating it on first use, or when its directory is gone though jj
+   still holds its workspace, and return its directory. `setup!` is
    called with the directory once, when it is created, so the steps that prepare a working copy
    for a JVM prepare this one too. The files the runtime's services rendered into the checkout
    (`generated-paths`) hold across the refresh what they held before it, since the members' copies
@@ -177,6 +192,7 @@
            (doseq [[path content] held] (fs/write-bytes path content))
            (when (not= prior copy) (jj! dir false "abandon" prior)))
          (do (fs/create-dirs (fs/parent dir))
+             (forget-workspace! instance-id from)
              (jj! from true "workspace" "add" "--name" (workspace-name instance-id) "-r" copy dir)
              ;; `workspace add` puts an empty commit on top; edit the copy itself, which abandons it.
              (jj! dir true "edit" copy)
@@ -191,14 +207,8 @@
   [instance-id from]
   (let [dir (checkout-dir instance-id)]
     (try
-      (let [at (if (fs/exists? (fs/path dir ".jj")) dir from)]
-        (when at
-          (let [copy (try (jj! at false "log" "-r" (str (workspace-name instance-id) "@")
-                               "--no-graph" "-T" "change_id")
-                          (catch Exception _ nil))]
-            (jj! at false "workspace" "forget" (workspace-name instance-id))
-            (when copy
-              (jj! (or from at) false "abandon" copy)))))
+      (when-let [at (if (fs/exists? (fs/path dir ".jj")) dir from)]
+        (forget-workspace! instance-id at))
       (catch Exception _ nil))
     (when (fs/exists? dir) (fs/delete-tree dir))
     nil))
