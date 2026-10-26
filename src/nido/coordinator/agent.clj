@@ -1,5 +1,8 @@
 (ns nido.coordinator.agent
-  "Headless claude launcher (autonomous phase of a Run).
+  "Headless claude launcher for one-shot agent calls: a claude process its caller starts and
+   waits on for a value — a review loop's reviewers, fixer and amender, a design judge. No
+   conversation runs through it: those are background sessions nido starts and drives through
+   the substrate adapter and conduct.
 
    See spec §Agent launch."
   (:require
@@ -116,7 +119,7 @@
 (defn- build-cmd
   "Assemble the claude command vector. With :claude-session-id, the run is
    addressed by id: :resume? true CONTINUES that transcript (--resume) — a
-   gate reply; otherwise it RECORDS under it (--session-id) — the first burst.
+   review loop resuming its own fixer; otherwise it RECORDS under it (--session-id).
    first-message is the trailing positional argument."
   [{:keys [claude-bin first-message system-prompt claude-session-id resume?
            mcp-config add-dirs tools allowed model settings]}]
@@ -140,8 +143,6 @@
     ;; Variadic: the next option ends its list, and the `--` terminator below
     ;; keeps it off the prompt.
     :always                               (into (cons "--disallowedTools" headless-disallowed-tools))
-    ;; --resume is dormant until gate-reply turns start passing :resume? true;
-    ;; reactivates the moment a caller resumes a parked agent with new input.
     ;; Omitted by default, which is not the same as naming the default: a launch
     ;; passing no model gets whatever the CLI would have chosen, and that is the
     ;; behaviour every caller had before this key existed. Naming one here would
@@ -197,7 +198,8 @@
                       than silently meaning no budget at all.
      :resume?       — optional; nil/false records a new transcript under
                       --session-id, true continues the recorded one via --resume
-                      (a gate reply). Requires :claude-session-id.
+                      (the loop that launched it, resuming it). Requires
+                      :claude-session-id.
      :allowed       — optional; permission rules (`Read`, `Bash(jj log:*)`,
                       `Edit(//abs/path)`) that are ALL this agent may do. Every
                       call no rule matches is denied — nothing is asked, and

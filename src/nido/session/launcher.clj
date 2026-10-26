@@ -16,13 +16,13 @@
    [clojure.string :as str]
    [nido.design.check :as design]
    [nido.platform.config :as config]
-   [nido.session.resume-shim :as resume-shim]
    [nido.platform.core :as core]
    [nido.platform.io :as io]
    [nido.session.agent-guidance :as agent-guidance]
    [nido.session.commit-gate :as commit-gate]
    [nido.session.links :as links]
    [nido.session.profiles :as profiles]
+   [nido.session.run-link :as run-link]
    [nido.session.state :as state]))
 
 (defn- nido-task
@@ -1279,10 +1279,10 @@
           (core/log-step (str "warning: purge legacy artifacts: " (ex-message e)))))
       (when run-dir
         (try
-          (resume-shim/write! home run-dir)
-          (core/log-step (str "Wrote " home "/bin/claude (resume shim) + run-link"))
+          (run-link/write! home run-dir)
+          (core/log-step (str "Linked " home "/run-link to its Run"))
           (catch Exception e
-            (core/log-step (str "warning: run-shim: " (ex-message e)))))))))
+            (core/log-step (str "warning: run-link: " (ex-message e)))))))))
 
 (defn ^{:malli/schema [:=> [:cat :InstanceId [:maybe :Path]] [:maybe :string]]}
   live-services-prompt

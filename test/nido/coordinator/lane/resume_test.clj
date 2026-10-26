@@ -1,11 +1,10 @@
 (ns nido.coordinator.lane.resume-test
   (:require [babashka.fs :as fs]
-            [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [nido.platform.core :as core]
-            [nido.coordinator.agent :as agent]
             [nido.coordinator.executor :as ex]
-   [nido.coordinator.lane.resume :as resume]
+            [nido.coordinator.lane.conduct :as conduct]
+            [nido.coordinator.lane.resume :as resume]
             [nido.coordinator.record.runs :as runs]
             [nido.coordinator.record.session :as session]
             [nido.coordinator.record.state :as cstate]
@@ -14,10 +13,7 @@
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
     (try
-      ;; Stopping the re-parked session reads real instance state and probes the
-      ;; real machine; tests that assert it override this with their own spy.
-      (with-redefs [core/nido-root (constantly (str tmp))
-                    runs/stop-session-for-parked-run! (fn [_] nil)]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (f))
       (finally (fs/delete-tree tmp)))))
@@ -43,78 +39,54 @@
                     :artifacts [] :error nil})
   (runs/register! id))
 
-;; run-turn! is synchronous → unit-test the actual launch + re-park here.
-(deftest run-turn-launches-resume-and-reparks
+(defn- background!
+  "Give session `sname` the :claude facet of a background session nido drives."
+  [ws-id sname]
+  (session/update-claude! :brian ws-id sname
+                          (constantly {:session-id "bg-1" :bg-id "bg-1" :origin :nido :driver :nido
+                                       :hold nil :pending nil :queued nil :own-work? false
+                                       :policy {:auto-respawn? true} :cursor 0 :driving-since "t"
+                                       :announced-blocked? false :recovered-boot nil})))
+
+(deftest resume!-hands-the-reply-to-the-executor
+  ;; Admitted under the global cap like any turn, rather than given beside the executor.
   (with-tmp
     (fn []
       (let [w (ws/create! :brian {:external-refs []})
-            calls (atom nil)]
-        (session/create! :brian (:id w)
-                         {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [runs/home-present? (fn [_] true)
-                      agent/launch! (fn [opts] (reset! calls opts) {:exit-code 0 :num-turns 1})]
-          (let [s (first (session/list-sessions :brian (:id w)))]
-            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "do the fix")))
-        (is (= "sid-9" (:claude-session-id @calls)))
-        (is (true? (:resume? @calls)) "continues the recorded conversation")
-        (is (= "do the fix" (:first-message @calls)))
-        (is (= "30m" (:budget @calls)) "the run's budget bounds the turn")))))
-
-(deftest run-turn-reparks-when-launch-throws
-  (with-tmp
-    (fn []
-      (let [w (ws/create! :brian {:external-refs []})]
+            given (atom nil)]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [runs/home-present? (fn [_] true)
-                      agent/launch! (fn [_] (throw (ex-info "boom" {})))]
-          (let [s (first (session/list-sessions :brian (:id w)))]
-            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "x")))))))
-
-(deftest resume!-flips-running-then-hands-the-turn-to-the-executor
-  ;; The turn used to run on a bare future beside the executor, so the cap
-  ;; bounded the sessions nido had STARTED rather than the agents it was running.
-  (with-tmp
-    (fn []
-      (let [w (ws/create! :brian {:external-refs []})
-            ran (atom nil)]
-        (session/create! :brian (:id w)
-                         {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (write-run! "r1" (:id w) "auto" "sid-9")
+        (background! (:id w) "auto")
+        (write-run! "r1" (:id w) "auto" "bg-1")
         (ex/clear!)
         (ex/configure! {:global-cap 2})
         (ex/tick! (fn [_]) {})                    ; this process now drives one
-        (with-redefs [resume/run-turn! (fn [& args] (reset! ran (vec args)))]
+        (with-redefs [conduct/instruct! (fn [& args] (reset! given (vec args)))]
           (let [r (resume/resume! :brian (:id w) "go")]
             (is (= "auto" (:resumed r)))
-            (is (true? (:queued? r)) "queued rather than launched beside the executor"))
-          (is (nil? @ran) "and it has not run yet — it is waiting for its slot")
-          (is (= 1 (:queued (ex/snapshot))))
+            (is (true? (:queued? r)) "queued rather than given beside the executor"))
+          (is (nil? @given) "and it has not been given yet — it is waiting for its slot")
           (ex/tick! (fn [_]) {})
-          (Thread/sleep 250)
-          (is (some? @ran) "the executor ran it once a slot was free"))))))
+          (ex/await-idle! 2000)
+          (is (= [:brian (:id w) "auto" "go"] @given) "the executor gave it once a slot was free"))))))
 
 (deftest resume!-runs-inline-and-says-so-when-nothing-ticks-this-process
-  ;; A standalone `bb nido:ui` starts the gate surface without the daemon. Queued
-  ;; there, the turn would park forever in an atom nobody promotes from and say
-  ;; nothing. Running it is right; letting the caller believe it was slot-accounted
-  ;; is not.
+  ;; A standalone `bb nido:ui` starts the gate surface without the daemon. Queued there, the turn
+  ;; would park forever in an atom nobody promotes from and say nothing. Running it is right;
+  ;; letting the caller believe it was slot-accounted is not.
   (with-tmp
     (fn []
       (let [w (ws/create! :brian {:external-refs []})
-            ran (atom nil)]
-        (session/create! :brian (:id w)
-                         {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (write-run! "r1" (:id w) "auto" "sid-9")
+            given (atom nil)]
+        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
+        (background! (:id w) "auto")
+        (write-run! "r1" (:id w) "auto" "bg-1")
         (ex/clear!)                                ; nothing has ticked
         (is (false? (ex/driven?)))
-        (with-redefs [resume/run-turn! (fn [& args] (reset! ran (vec args)))]
+        (with-redefs [conduct/instruct! (fn [& args] (reset! given (vec args)))]
           (let [r (resume/resume! :brian (:id w) "go")]
             (is (false? (:queued? r)))
             (is (true? (:unaccounted? r)) "and it says the slot was not taken"))
-          (Thread/sleep 250)
-          (is (some? @ran) "it ran rather than parking in a queue nobody drains"))))))
+          (is (some? @given) "it was given rather than parked in a queue nobody drains"))))))
 
 (deftest resume!-throws-when-not-parked
   (with-tmp
@@ -138,206 +110,25 @@
         (is (= "auto" (:name (resume/waiting-session :brian (:id w)))))
         (with-redefs [ex/turn-pending? #(= "r1" %)]
           (is (nil? (resume/waiting-session :brian (:id w)))
-              "a reply already waiting for a slot leaves no session waiting on another"))
-        (with-redefs [runs/live? #(= "r1" %)]
-          (is (nil? (resume/waiting-session :brian (:id w)))
-              "nor does one whose agent is running"))))))
+              "a reply already waiting for a slot leaves no session waiting on another"))))))
 
-(deftest resume!-throws-when-no-claude-session-id
-  (with-tmp
-    (fn []
-      (let [w (ws/create! :brian {:external-refs []})]
-        (session/create! :brian (:id w)
-                         {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        ;; the run holds no claude-session-id either → no recoverable conversation
-        (write-run! "r1" (:id w) "auto" nil)
-        (is (thrown? clojure.lang.ExceptionInfo
-                     (resume/resume! :brian (:id w) "go")))))))
-
-(deftest resume!-records-error-when-no-claude-session
-  (with-tmp
-    (fn []
-      (let [w (ws/create! :brian {:external-refs []})]
-        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        ;; the run holds no claude-session-id either → no recoverable conversation
-        (write-run! "r1" (:id w) "auto" nil)
-        (is (thrown? clojure.lang.ExceptionInfo (resume/resume! :brian (:id w) "go")))
-        (is (= :no-claude-session
-               (-> (first (session/list-sessions :brian (:id w))) :autonomy :error :reason))
-            "the pre-flight failure is recorded on the parked session so the badge surfaces it")))))
-
-(deftest run-turn-skips-rehydrate-when-home-present
-  (with-tmp
-    (fn []
-      (let [w (ws/create! :brian {:external-refs []})
-            spawned (atom 0) launched (atom nil)]
-        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [runs/home-present? (fn [_] true)
-                      runs/spawn-session-for-run! (fn [& _] (swap! spawned inc))
-                      agent/launch! (fn [opts] (reset! launched opts) {:exit-code 0 :num-turns 1})]
-          (let [s (first (session/list-sessions :brian (:id w)))]
-            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "apply")))
-        (is (zero? @spawned) "home present → no re-provision")
-        (is (= "sid-9" (:claude-session-id @launched)) "launches --resume")))))
-
-(deftest run-turn-rehydrates-when-home-absent
-  (with-tmp
-    (fn []
-      (let [w (ws/create! :brian {:external-refs []})
-            spawned (atom 0) launched (atom nil)]
-        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [runs/home-present? (fn [_] false)
-                      runs/spawn-session-for-run! (fn [& _] (swap! spawned inc))
-                      agent/launch! (fn [opts] (reset! launched opts) {:exit-code 0})]
-          (let [s (first (session/list-sessions :brian (:id w)))]
-            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "apply")))
-        (is (= 1 @spawned) "home absent → re-provision once")
-        (is (some? @launched) "then launches --resume")))))
-
-(deftest run-turn-records-error-on-failure
+(deftest a-reply-to-a-conversation-from-before-background-sessions-is-refused
+  ;; No --print turn continues a conversation any more, so one whose record carries no :claude
+  ;; facet is refused, saying how a person continues it.
   (with-tmp
     (fn []
       (let [w (ws/create! :brian {:external-refs []})]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
         (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [runs/home-present? (fn [_] true)
-                      agent/launch! (fn [_] (throw (ex-info "boom" {})))]
-          (let [s (first (session/list-sessions :brian (:id w)))]
-            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "apply")))
-        (let [auto (:autonomy (first (session/list-sessions :brian (:id w))))]
-          (is (= :resume-failed (-> auto :error :reason)) "failure recorded on the session")
-          (is (= "boom" (-> auto :error :message))))))))
-
-(deftest run-turn-rehydrate-failure-tagged
-  (with-tmp
-    (fn []
-      (let [w (ws/create! :brian {:external-refs []})]
-        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [runs/home-present? (fn [_] false)
-                      runs/spawn-session-for-run! (fn [& _] (throw (ex-info "no branch" {})))
-                      agent/launch! (fn [_] {:exit-code 0})]
-          (let [s (first (session/list-sessions :brian (:id w)))]
-            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "apply")))
-        (is (= :rehydrate-failed
-               (-> (first (session/list-sessions :brian (:id w))) :autonomy :error :reason))
-            "a re-provision failure is tagged :rehydrate-failed")))))
-
-(deftest run-turn-clears-error-on-success
-  (with-tmp
-    (fn []
-      (let [w (ws/create! :brian {:external-refs []})]
-        (session/create! :brian (:id w)
-                         {:name "auto" :weight :heavy
-                          :autonomy (assoc autonomy-parked :error {:reason :resume-failed})})
-        (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [runs/home-present? (fn [_] true)
-                      agent/launch! (fn [_] {:exit-code 0})]
-          (let [s (first (session/list-sessions :brian (:id w)))]
-            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "apply")))
-        (is (nil? (-> (first (session/list-sessions :brian (:id w))) :autonomy :error))
-            "a clean turn clears the prior error")))))
-
-;; ---- NEW tests for session-first identity (Task 3.4) ----
-
-(deftest run-turn-uses-session-id-when-no-run
-  ;; Happy path: session carries the claude-session-id; run is nil (e.g. coordinator
-  ;; session spawned before a run.edn was ever written, or the run was cleaned up).
-  ;; Asserts the id came from the SESSION, not a run — the core claim of Task 3.4.
-  (with-tmp
-    (fn []
-      (let [w     (ws/create! :brian {:external-refs []})
-            calls (atom nil)]
-        (session/create! :brian (:id w)
-                         {:name "auto" :weight :heavy
-                          :autonomy (assoc autonomy-parked :claude-session-id "sid-on-session")})
-        (with-redefs [agent/launch! (fn [opts] (reset! calls opts) {:exit-code 0})]
-          (let [s (first (session/list-sessions :brian (:id w)))]
-            ;; nil run — no run.edn on disk for this session
-            (#'resume/run-turn! :brian (:id w) "auto" s nil "do the fix")))
-        (is (= "sid-on-session" (:claude-session-id @calls))
-            "id came from the session, not a run")
-        (is (true? (:resume? @calls)) "continues the recorded conversation")
-        (is (= "do the fix" (:first-message @calls)))
-        (is (= "30m" (:budget @calls)) "budget from session :limits")
-        (is (some? (:settings @calls)) "the commit gate reaches the turn although no Run exists")))))
-
-(deftest resume-errors-when-id-absent-from-both
-  ;; Neither the session NOR the run carries a claude-session-id → :no-claude-session.
-  (with-tmp
-    (fn []
-      (let [w (ws/create! :brian {:external-refs []})]
-        (session/create! :brian (:id w)
-                         {:name "auto" :weight :heavy
-                          :autonomy (assoc autonomy-parked :claude-session-id nil)})
-        (write-run! "r1" (:id w) "auto" nil)
-        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"No resumable conversation"
-              (resume/resume! :brian (:id w) "apply")))))))
-
-(deftest resume-cwd-picks-the-transcript-owning-dir
-  ;; Regression (the "No conversation found with session ID" strand): claude keys a
-  ;; transcript by its launch cwd. New runs are worktree-keyed; LEGACY parked reviews
-  ;; (spawned when cwd was the session-home) are home-keyed. resume-cwd must launch in
-  ;; whichever cwd actually owns <sid>.jsonl, else `claude --resume` fails and the
-  ;; parked review can never be applied. We plant a transcript under the real
-  ;; ~/.claude/projects/<encoded-cwd>/ (cwd is a unique temp path, so no collision)
-  ;; and clean up.
-  (let [home (str (fs/create-temp-dir))
-        wt   (str (fs/create-temp-dir))
-        sid  "sid-legacy-xyz"
-        enc  (fn [p] (str/replace (str p) #"[/.]" "-"))
-        proj (fs/path (System/getProperty "user.home") ".claude" "projects")
-        home-tr (fs/path proj (enc home))]
-    (try
-      (is (= wt (resume/resume-cwd sid wt home))
-          "no transcript anywhere ⇒ worktree default")
-      (fs/create-dirs home-tr)
-      (spit (str (fs/path home-tr (str sid ".jsonl"))) "{}")
-      (is (= home (resume/resume-cwd sid wt home))
-          "transcript lives under the home cwd ⇒ resume there, not the worktree")
-      (is (= wt (resume/resume-cwd sid wt nil))
-          "nil home is tolerated ⇒ worktree default")
-      (finally
-        (when (fs/exists? home-tr) (fs/delete-tree home-tr))
-        (fs/delete-tree home) (fs/delete-tree wt)))))
-
-;; A turn re-parks the session, so it stops it again: otherwise every session a
-;; reply ever reached would keep its JVM until someone remembered it.
-(deftest run-turn-stops-the-session-again-once-the-turn-ends
-  (with-tmp
-    (fn []
-      (let [w       (ws/create! :brian {:external-refs []})
-            phase   (atom nil)
-            stopped (atom [])]
-        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [runs/home-present? (fn [_] true)
-                      agent/launch! (fn [_] {:exit-code 0 :num-turns 1})
-                      runs/stop-session-for-parked-run!
-                      (fn [r]
-                        (reset! phase (:state (runs/read-run "r1")))
-                        (swap! stopped conj (:id r)))]
-          (let [s (first (session/list-sessions :brian (:id w)))]
-            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "x")))
-        (is (= ["r1"] @stopped) "the run's session is stopped after the turn")
-        (is (= :awaiting-review @phase)
-            "its run still parked for review, so the session waits on its person again")))))
-
-(deftest run-turn-stops-even-when-the-turn-fails
-  (with-tmp
-    (fn []
-      (let [w       (ws/create! :brian {:external-refs []})
-            stopped (atom [])]
-        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [runs/home-present? (fn [_] true)
-                      agent/launch! (fn [_] (throw (ex-info "boom" {})))
-                      runs/stop-session-for-parked-run! (fn [r] (swap! stopped conj (:id r)))]
-          (let [s (first (session/list-sessions :brian (:id w)))]
-            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "x")))
-        (is (= ["r1"] @stopped))))))
+        (ex/clear!)
+        (with-redefs [conduct/instruct! (fn [& _] (throw (ex-info "given" {})))]
+          (is (= :no-background-session
+                 (try (resume/resume! :brian (:id w) "go") nil
+                      (catch clojure.lang.ExceptionInfo e (:reason (ex-data e)))))))
+        (let [err (:error (:autonomy (session/read-session :brian (:id w) "auto")))]
+          (is (= :no-background-session (:reason err)) "recorded where the gate shows it")
+          (is (re-find #"claude --resume sid-9" (:message err))
+              "naming the conversation a person can continue"))))))
 
 (deftest a-reply-to-a-session-nido-has-no-id-for-is-refused
   (with-tmp
@@ -355,24 +146,18 @@
           (is (= :session-unnamed (get-in s [:autonomy :error :reason]))))))))
 
 (deftest a-reply-to-a-background-session-is-its-next-instruction
-  ;; No --print turn continues a conversation that is a background session: conduct gives the
-  ;; reply when the session is ready, and the session's own Stop re-parks it.
+  ;; Conduct gives the reply when the session is ready, and the session's own Stop re-parks it.
   (with-tmp
     (fn []
       (let [w (ws/create! :brian {:external-refs []})]
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
-        (session/update-claude! :brian (:id w) "auto"
-                                (constantly {:session-id "bg-1" :bg-id "bg-1" :origin :nido :driver :nido
-                                             :hold nil :pending nil :queued nil :own-work? false
-                                             :policy {:auto-respawn? true} :cursor 0 :driving-since "t"
-                                             :announced-blocked? false :recovered-boot nil}))
+        (background! (:id w) "auto")
         (write-run! "r1" (:id w) "auto" "bg-1")
         (ex/clear!)
         (ex/configure! {:global-cap 1})
         (ex/tick! (fn [_]) {} 1)                  ; this process drives one, its one slot taken
-        (with-redefs [resume/run-turn! (fn [& _] (throw (ex-info "no --print turn" {})))]
-          (is (= {:resumed "auto" :queued? true :via :substrate}
-                 (resume/resume! :brian (:id w) "use option B"))))
+        (is (= {:resumed "auto" :queued? true :via :substrate}
+               (resume/resume! :brian (:id w) "use option B")))
         (is (nil? (get-in (session/read-session :brian (:id w) "auto") [:claude :queued]))
             "not given to conduct while another working session fills the global cap")
         (ex/tick! (fn [_]) {} 0)                  ; the slot frees

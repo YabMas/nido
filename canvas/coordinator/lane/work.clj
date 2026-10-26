@@ -9,7 +9,7 @@
             [canvas.coordinator.record.runs :as runs]
             [canvas.coordinator.record.session :refer [Session]]
             [canvas.coordinator.record.standing :as standing]
-            [canvas.coordinator.record.state :refer [Path WorkstreamId SessionName]]
+            [canvas.coordinator.record.state :refer [WorkstreamId SessionName]]
             [canvas.coordinator.record.tickets :as tickets :refer [TicketId]]
             [canvas.coordinator.record.workstream :as workstream :refer [Workstream]]
             [canvas.integration.notion :as notion :refer [NotionToken]]
@@ -122,20 +122,19 @@
      :delegates [workstream/read-ws standing/governing-design workstream/open-phase!]}))
 
 (Module lane-resume
-  "Re-engaging a session waiting on a person with their answer. Which session waits is read off
-   run records, run locks, the executor and status — no stored phase says it."
-  (Operation resume-cwd
-    "Where to relaunch so the agent finds its own history. A resume in the wrong directory
-     starts a conversation that has forgotten everything."
-    {:signature [:=> [:catn [:sid :any] [:worktree Path] [:home Path]] Path]})
+  "Re-engaging a session waiting on a person with their answer, as the session's next instruction.
+   Which session waits is read off run records, the executor, status and the session's :claude
+   facet — no stored phase says it."
   (Operation waiting-session
-    "The session waiting on a person's reply: no agent of its run running, no reply to it queued,
-     and its run parked for review or a person owed the workstream's next move."
+    "The session waiting on a person's reply: no reply to it queued or pending, and its run parked
+     for review or a person owed the workstream's next move."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe Session]]
-     :delegates [runs/find-for-session runs/live?]})
-  (Operation resume! "Re-engage a session waiting on a person with their input."
+     :delegates [runs/find-for-session]})
+  (Operation resume!
+    "Give a session waiting on a person their input as its next instruction, admitted under the
+     global cap; refused for a conversation from before background sessions."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:input :string]] :any]
-     :delegates [waiting-session resume-cwd]}))
+     :delegates [waiting-session]}))
 
 (Module lane-scratch
   "Which workstream a session a person started by hand belongs to: the one the start names, or

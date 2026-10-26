@@ -39,7 +39,7 @@
    [nido.session.launcher :as launcher]
    [nido.session.links :as links]
    [nido.session.profiles :as profiles]
-   [nido.session.resume-shim :as resume-shim]
+   [nido.session.run-link :as run-link]
    [nido.session.services.postgresql :as pg]
    [nido.session.state :as state]
    [nido.session.test-pg :as test-pg]))
@@ -931,7 +931,7 @@
   [opts project-name name]
   (assoc opts
          :run-dir (or (:run-dir opts)
-                      (resume-shim/run-dir (state/session-home-dir project-name name)))
+                      (run-link/run-dir (state/session-home-dir project-name name)))
          :profile (or (:profile opts) (engine/read-profile-for-session project-name name))))
 
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
@@ -1329,8 +1329,8 @@
   stage-kickoff!
   "Leave a kickoff in the session-home that starts its agent through
    `nido work` in the worktree, named `:agent-name`, given `:prompt` as its
-   first turn, and run on `:model` when given — in the permission mode the
-   worktree's launch baseline sets, which a kickoff never overrides.
+   first turn, and run on `:model` when given — with permissions skipped, as
+   nido work starts every session; a kickoff passes no permission mode of its own.
    Returns the command that runs it — what spawn's tab runs, and what a
    person runs outside Warp. The prompt is kept beside it rather than
    inlined, because a brief of any length survives a file where it would not

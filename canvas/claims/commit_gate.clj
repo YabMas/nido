@@ -35,7 +35,7 @@
   {:about [checks verdict] :evidence "test"})
 
 (Claim gate-reaches-every-claude-launch
-  "Every claude nido starts for a session agent carries the gate: a claude started in a nido session home or worktree loads it from that directory's settings.local.json, which holds it as part of the launch baseline, and a lane-resume turn continuing a conversation whose session record carries no :claude facet is passed it as --settings built by the commit gate for that conversation's project, whether or not its Run still exists."
+  "Every claude nido starts for a session agent carries the gate: a claude started in a nido session home or worktree loads it from that directory's settings.local.json, which holds it as part of the launch baseline."
   {:about [with-gate settings-json session-launcher nido-work launch!] :evidence "round"})
 
 (Claim briefing-defers-subject-form

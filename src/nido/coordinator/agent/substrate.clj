@@ -300,6 +300,15 @@
                    "python3" "-I" "-c" accept-trust-script claude-bin)
           (trusted? dir))))
 
+(defn ^{:malli/schema [:=> [:cat :string] :string]}
+  resume-command
+  "The command line a person runs, in the directory conversation `session-id` was recorded in, to
+   continue it in the foreground of their terminal with permissions skipped — the posture the
+   launch baseline gives a session a person starts through nido work. Starts nothing: running it
+   is the person's, or a terminal tab's opened for them."
+  [session-id]
+  (str "claude --resume " session-id " --dangerously-skip-permissions"))
+
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   attach!
   "Put the person in front of the background session `session-id`, in this terminal: this

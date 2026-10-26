@@ -1418,9 +1418,11 @@
   (resume/waiting-session project ws-id))
 
 (defn- resuming?
-  "True iff an agent is running against the workstream right now — a resume or a burst genuinely
-   in flight, observed as a run whose agent holds its lock. Keeps 'Apply → working…' honest: the
-   gate stays visible but offers no actions until the agent exits.
+  "True iff a one-shot agent nido launched is running against the workstream right now, observed
+   as a run whose agent holds its launch lock. Keeps 'Apply → working…' honest: the gate stays
+   visible but offers no actions until the agent exits. A background session is not such an
+   agent: its liveness is the substrate's listing, and a reply given to it is a pending
+   instruction, which no gate offers a second reply over.
 
    The lock, never a session phase: a phase outlives the process it describes, and a
    failed-but-unarchived session left at a phase stranded a permanent 'working…' that hid the

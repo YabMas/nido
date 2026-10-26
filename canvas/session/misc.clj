@@ -1,6 +1,6 @@
 (ns canvas.session.misc
   "Self-spec: the smaller pieces around a session — the eval service, session-scoped commands,
-   orphan reclaim, the resume shim, agent guidance files, and the memory bench."
+   orphan reclaim, agent guidance files, and the memory bench."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [fukan.common.vocab.patterns.fulfilment :refer [Fulfilment]]

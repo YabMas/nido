@@ -15,5 +15,5 @@
   {:about [launch! parse-budget-ms] :evidence "round"})
 
 (Claim interactive-sessions-keep-claudes-defaults
-  "A session a person drives never passes through launch! and is started with none of the headless settings, other than the permission skip the resume shim passes during phase 1 when it resumes the conversation of a run whose session record has no :claude facet."
+  "A session a person drives never passes through launch! and is started with none of the headless settings."
   {:about [launch!] :evidence "round"})

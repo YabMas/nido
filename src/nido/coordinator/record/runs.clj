@@ -416,8 +416,8 @@
 (defn ^{:malli/schema [:=> [:cat :Run [:? :map]] :any]}
   spawn-session-for-run!
   "Bring up a session for the given Run. The launcher takes the :run-dir we resolve
-   here and writes the resume shim + run-link via nido.session.resume-shim — that
-   directory is what marks the session as this Run's. After session-up, also writes
+   here and links the session home's run-link to it — that directory is what marks the
+   session as this Run's. After session-up, also writes
    the reverse `<run-dir>/session-home` symlink the coordinator uses to locate the
    worktree (per spec §Runs / Identity & storage). The session comes up on its workstream's
    runtime. Returns whatever session-lifecycle/up! returns.

@@ -302,9 +302,6 @@
      :typical   (into {} (for [p (distinct (keep :project rows))]
                            [p (:typical (fleet/totals rows p))]))}))
 
-(defn- resume-command [conversation]
-  (str "claude --resume " (:id conversation) " --dangerously-skip-permissions"))
-
 (defn- plan-line [{:keys [row facts why estimated-bytes]} session running]
   (let [{:keys [casualty conversation]} facts
         who  (str (:project casualty) "/" (or session (:instance-id casualty)))
@@ -338,11 +335,11 @@
                   " — reach it with `claude agents`"))
 
     (lifecycle/warp?)
-    (do (lifecycle/spawn-tab! session {:dir (:cwd conversation) :command (resume-command conversation)})
+    (do (lifecycle/spawn-tab! session {:dir (:cwd conversation) :command (substrate/resume-command (:id conversation))})
         (println (str "    " session ": reopened in a new tab")))
 
     :else
-    (println (str "    " session ": cd " (:cwd conversation) " && " (resume-command conversation)))))
+    (println (str "    " session ": cd " (:cwd conversation) " && " (substrate/resume-command (:id conversation))))))
 
 (declare on-its-workstream)
 
@@ -687,8 +684,8 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   attach
-  "Attach this terminal to a background session: :session-id <uuid>. What the resume shim runs for
-   a run whose conversation is a background session; the session keeps running on detach."
+  "Attach this terminal to a background session: :session-id <uuid>. How a person enters a
+   session nido drives; the session keeps running on detach."
   [& args]
   (let [[_ opts] (task-args/split-args args #{:session-id})
         sid      (or (some-> (:session-id opts) str)

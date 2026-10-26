@@ -26,7 +26,7 @@
   {:about [stage-kickoff! work-cmd*] :evidence "round"})
 
 (Claim child-in-parents-permission-class
-  "spawn passes the child agent no permission mode, so the child runs in the one its worktree's launch baseline sets."
+  "spawn passes the child agent no permission mode of its own: the child's kickoff starts it through nido work, so it runs with permissions skipped, as one-launch-baseline states for every session a person starts through nido work."
   {:about [spawn stage-kickoff!] :evidence "round"})
 
 (Claim spawn-asks-no-question

@@ -126,7 +126,7 @@
             (is (= "/investigate-bug url=https://x" (:prompt @started))
                 "the background session started on the run's first message")
             (is (= "sess-e2e" (:claude-session-id run))
-                "the session's own id is on the Run (shim and replies resolve it)")
+                "the session's own id is on the Run (attach and replies resolve it)")
             (is (= "/investigate-bug url=https://x" (:first-message run))))))
       (finally (fs/delete-tree tmp)))))
 

@@ -54,6 +54,10 @@
   (Operation respawn!
     "Restart a session from its saved conversation."
     {:signature [:=> [:catn [:id :string] [:opts :map]] :boolean]})
+  (Operation resume-command
+    "The command line a person runs to continue a recorded conversation in their own terminal;
+     starts nothing."
+    {:signature [:=> [:catn [:session-id :string]] :string]})
   (Operation attach!
     "Put the person in front of a background session in this terminal, refused when the listing
      shows none by that id; the session keeps running when they detach."

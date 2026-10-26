@@ -12,7 +12,7 @@
    [nido.session.failure :as failure]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.profiles :as profiles]
-   [nido.session.resume-shim]
+   [nido.session.run-link]
    [nido.session.state :as state]))
 
 (def ^:private lock-name "session-brian--feat")
@@ -111,7 +111,7 @@
       (with-session {:stop  (fn [& _] (reset! stopped? true))
                      :start (fn [_ opts] (reset! started opts) nil)}
         (fn [_]
-          (with-redefs [nido.session.resume-shim/run-dir (fn [_] (when-not @stopped? "/runs/r1"))
+          (with-redefs [nido.session.run-link/run-dir (fn [_] (when-not @stopped? "/runs/r1"))
                         engine/read-profile-for-session  (fn [_ _] (when-not @stopped? lite))]
             (lifecycle/restart! "feat" {:project "brian" :runtime-key "ws-1"}))
           (is (= "/runs/r1" (:run-dir @started)) "the resume shim's run is written back")

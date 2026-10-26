@@ -456,7 +456,7 @@
 
 (deftest run-blocking-records-the-background-sessions-id-on-the-run
   ;; Claude Code names a background session when it starts it, so the run carries
-  ;; that id from then on — the one the shim attaches to and a reply reaches. No
+  ;; that id from then on — the one a person attaches to and a reply reaches. No
   ;; id is minted ahead of it: an id no session has would point at nothing.
   (gate-with-tmp
     (fn [_]
@@ -732,7 +732,7 @@
   ;; session is oriented before the human arrives. It bypasses the
   ;; skill-resolvable? gate (/continue-ticket is harness-injected). Here the
   ;; redefed launch! doesn't run the real skill, so the ticket stays :planning
-  ;; ⇒ the run parks at :awaiting-review (the human resumes via the shim).
+  ;; ⇒ the run parks at :awaiting-review (the human attaches to the session).
   (gate-with-tmp
     (fn [_]
       (let [notified  (atom nil)
@@ -757,7 +757,7 @@
           (is (= "/continue-ticket" (:first-message @launch-of))
               "the launched command is /continue-ticket, not the run's /plan-bug first-message")
           (is (= (:claude-session-id (runs/read-run "rplan")) (:claude-session-id @launch-of))
-              "launched under the pre-generated session-id so the shim can --resume it")
+              "launched under the pre-generated session-id the Run records")
           (is (= :awaiting-review (:state (runs/read-run "rplan")))
               "ticket still :planning (skill not really run) ⇒ parked ready-for-human"))))))
 

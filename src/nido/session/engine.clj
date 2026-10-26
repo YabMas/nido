@@ -12,7 +12,7 @@
    [nido.session.checkout :as checkout]
    [nido.session.context :as ctx]
    [nido.session.launcher :as launcher]
-   [nido.session.resume-shim :as resume-shim]
+   [nido.session.run-link :as run-link]
    [nido.session.service :as service]
    ;; Load service implementations (must be loaded before state for the
    ;; defmethods to register; state itself has no transitive deps on them).
@@ -653,7 +653,7 @@
   "The Run directory the session `session-name`'s home is linked to, or nil."
   [project-name session-name]
   (when session-name
-    (resume-shim/run-dir (state/session-home-dir project-name session-name))))
+    (run-link/run-dir (state/session-home-dir project-name session-name))))
 
 (defn- render-member!
   "Render runtime `runtime`'s config files into the worktree `project-dir` of its member

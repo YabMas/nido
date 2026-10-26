@@ -61,7 +61,8 @@
 
 (def ^:private unattended-modes
   "The permission modes a session nido drives may run in: neither stops a sent turn on a prompt
-   nobody is there to answer. bypassPermissions is the launch baseline; auto is the one before it."
+   nobody is there to answer. auto is the launch baseline's; bypassPermissions is a session's a
+   person started through nido work, which passes the permission skip on its command line."
   #{"bypassPermissions" "auto"})
 
 (defn ^{:malli/schema [:=> [:cat :map [:maybe :map]] [:maybe [:tuple :keyword :string]]]}
