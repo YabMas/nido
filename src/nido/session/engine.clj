@@ -537,7 +537,8 @@
                                            :instance-id instance-id
                                            :runtime-key (:runtime-key opts)
                                            :jvm jvm-cfg}
-                                    session-name (assoc :name session-name))})
+                                    session-name (assoc :name session-name)
+                                    (checkout? (keys all)) (assoc :git-dir (checkout/git-dir run-dir)))})
         ;; No session state is persisted unless every service starts.
         result (start-each! init-ctx services opts)
         final-ctx (:ctx result)

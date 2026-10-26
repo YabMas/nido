@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [babashka.process :refer [shell]]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.platform.core :as core]
    [nido.session.checkout :as checkout]
@@ -144,3 +145,16 @@
                    (catch clojure.lang.ExceptionInfo e e))]
         (is (= :checkout-unsnapshottable (:reason (ex-data e))))
         (is (= #{"a" "b"} (set (:members (ex-data e)))))))))
+
+(deftest git-resolves-from-a-checkout-only-when-told-its-git-dir
+  ;; The checkout lies outside every git repository, so a project that shells to git at startup
+  ;; (brian stamps its build from `git log`) found none and its JVM died before nREPL started.
+  (with-two-workspaces
+    (fn [a _]
+      (let [dir  (checkout/refresh! "p--ws" {a "a"})
+            git  #(apply shell (cond-> {:dir dir :out :string :err :string :continue true}
+                                 % (assoc :extra-env {"GIT_DIR" %}))
+                         "git" "log" "-1" "--format=%s" [])]
+        (is (not (zero? (:exit (git nil)))) "unaided, git finds no repository there")
+        (is (= "base" (str/trim (:out (git (checkout/git-dir dir)))))
+            "told the source's git dir, it reads the source's history")))))

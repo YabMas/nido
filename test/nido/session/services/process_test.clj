@@ -93,6 +93,30 @@
             (finally (proc/stop-process! (:pid state))))))
       (finally (fs/delete-tree tmp)))))
 
+;; A runtime run out of its own checkout is outside every git repository; its processes are told
+;; where git is, or a project that shells to git at boot dies before writing its port file.
+
+(deftest start-service-hands-the-process-the-sessions-git-dir
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-home (constantly (str tmp))
+                    core/log-step (constantly nil)]
+        (let [seen (str (fs/path tmp "seen"))
+              svc  {:type :process :name :repl
+                    :command (str "printf %s \"$GIT_DIR\" > " seen ".tmp && mv " seen ".tmp " seen)}
+              run  (fn [session]
+                     (fs/delete-if-exists seen)
+                     (service/start-service! svc {:session (merge {:project-name "proj"
+                                                                   :project-dir (str tmp)
+                                                                   :instance-id "inst-git"}
+                                                                  session)} {})
+                     (loop [n 0]
+                       (cond (fs/exists? seen) (slurp seen)
+                             (< n 100) (do (Thread/sleep 20) (recur (inc n))))))]
+          (is (= "/src/.git" (run {:git-dir "/src/.git"})))
+          (is (= "" (run {})) "and nothing, when the session names none")))
+      (finally (fs/delete-tree tmp)))))
+
 (deftest start-service-removes-the-pid-file-of-a-process-that-died-at-boot
   (let [tmp (fs/create-temp-dir)]
     (try

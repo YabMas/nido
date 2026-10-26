@@ -47,6 +47,15 @@
 (defn- commit-id [dir snapshot? rev]
   (jj! dir snapshot? "log" "-r" rev "--no-graph" "-T" "commit_id"))
 
+(defn ^{:malli/schema [:=> [:cat :Path] :Path]}
+  git-dir
+  "The git directory of the colocated source that checkout `dir` is a workspace of. git finds no
+   repository from a checkout, which lies outside every one, so a process run there that shells
+   to git — a project stamping its build with `git log` — has to be told this as `GIT_DIR`. A
+   member's worktree needs no telling only because it nests inside the source."
+  [dir]
+  (jj! dir false "git" "root"))
+
 (defn- created
   "The change `jj new --no-edit -m token` just made in `dir`, found by its unique description. A
    change id, not a commit id: a merge is rebased whenever a member snapshots while it exists."

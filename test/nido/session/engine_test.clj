@@ -497,7 +497,8 @@
                                                                        :paths ["x"]})))
                                          (swap! refreshes conj (set (vals members)))
                                          (str "/state/" id "/checkout"))
-                checkout/remove!       (fn [id _] (swap! refreshes conj [:removed id]) nil)]
+                checkout/remove!       (fn [id _] (swap! refreshes conj [:removed id]) nil)
+                checkout/git-dir       (constantly "/src/.git")]
     (f)))
 
 (deftest a-runtime-of-jj-workspaces-runs-out-of-its-own-checkout

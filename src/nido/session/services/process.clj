@@ -106,6 +106,7 @@
         project-name (get-in ctx [:session :project-name])
         project-dir (get-in ctx [:session :project-dir])
         instance-id (or (get-in ctx [:session :instance-id]) project-name)
+        git-dir (get-in ctx [:session :git-dir])
         log-path (state/log-file instance-id svc-name)]
 
     (when (str/blank? command)
@@ -138,8 +139,10 @@
           cmd (str "nohup " command " > "
                    (proc/quoted log-path)
                    " 2>&1 & printf %s $! > " (proc/quoted pid-path))
-          result (shell {:continue true :out :string :err :string
-                         :dir project-dir :shutdown nil}
+          ;; A runtime run out of its own checkout is told where git is (`checkout/git-dir`).
+          result (shell (cond-> {:continue true :out :string :err :string
+                                 :dir project-dir :shutdown nil}
+                          git-dir (assoc :extra-env {"GIT_DIR" git-dir}))
                         "bash" "-lc" cmd)
           pid (recorded-pid pid-path)]
       (when-not (zero? (:exit result))
