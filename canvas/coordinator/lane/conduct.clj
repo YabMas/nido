@@ -83,11 +83,13 @@
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [substrate/listing-cached]})
   (Operation current-boot
-    "This host boot's identity, or nil when it cannot be read."
-    {:signature [:=> [:catn] [:maybe :string]]
+    "This host boot — its identity and the instant it began — or nil when it cannot be read."
+    {:signature [:=> [:catn] [:maybe :map]]
      :delegates [process/host-boot]})
   (Operation recover!
-    "At nido's first start after a host boot, restart once each auto-respawn session without a
-     live process, recording only a restart Claude Code accepted; answer the rest as resumable."
+    "At nido's first start after a host boot, mark the boot recovered, then restart once each
+     auto-respawn session the boot stopped — a listed background session with no live process,
+     nothing recorded since the boot began, its directory still there — retrying none; answer a
+     listed session whose directory is gone as gone, and the other listed ones as resumable."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [current-boot faceted-sessions substrate/listing substrate/respawn!]}))

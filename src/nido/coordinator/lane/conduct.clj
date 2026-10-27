@@ -528,50 +528,86 @@
 
 ;; ── after a reboot ──────────────────────────────────────────────────────────
 
-(defn ^{:malli/schema [:=> [:cat] [:maybe :string]]}
+(defn ^{:malli/schema [:=> [:cat] [:maybe :map]]}
   current-boot
-  "This host boot's identity: the boot time the kernel reports, or nil when it cannot be read."
+  "This host boot as {:id :began-at} — the boot time the kernel reports and the instant it
+   names — or nil when it cannot be read."
   []
-  (:id (process/host-boot)))
+  (process/host-boot))
 
 (defn- boot-marker-path [] (str (fs/path (cstate/coordinator-dir) "recovered-boot.edn")))
 
+(defn- outlived-boot?
+  "Whether the session recorded anything after the host boot began at `boot-at` — a
+   notification included, since only a live session is sent one: it was alive in this boot, so
+   the boot is not what stopped it."
+  [session-id boot-at]
+  (boolean
+   (when boot-at
+     (when-let [at (->> (:events (events/events-since session-id nil))
+                        last :at)]
+       (try (.isAfter (java.time.Instant/parse at) (java.time.Instant/parse boot-at))
+            (catch Exception _ false))))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   recover!
-  "At nido's first start after a host boot, restart once each session with a :claude facet whose
-   policy is auto-respawn and that has no live process — whatever stopped it — and restart no
-   other. Every other such session without a live process is answered as resumable: attaching
-   to it resumes it from its saved conversation. A later start in the same boot restarts
-   nothing — but a restart Claude Code refused is no restart: it is answered under :failed,
-   its session is not marked, and the boot stays unrecovered so the next start tries it again.
-   Answers {:boot :first-start? :restarted :failed :resumable}."
+  "At nido's first start after a host boot, restart once each session the boot stopped: one with
+   a :claude facet whose policy is auto-respawn, that has no live process and that recorded
+   nothing after the boot began, and whose listing row is a background session in a directory
+   that exists. A listed session whose directory is gone cannot be restarted there and is
+   answered under :gone, unattempted. Every other listed background session without a live
+   process, in a directory that exists, is answered as resumable; one the listing does not name
+   is answered as neither.
+
+   The first start recovers the boot whatever it was refused, and a later start in the same boot
+   restarts nothing. A refused restart is answered under :failed for the caller to report, and
+   the session stays resumable. Retrying it at the next start is what this used to do, and a
+   refusal that never clears — a deleted worktree — then kept the boot unrecovered for good, so
+   every later start ran as the first: 80 sessions restarted on 2026-10-27, three days after
+   the boot, 26 of which had simply finished since.
+
+   `opts` may name the boot as :boot with its start as :boot-at; without :boot both are read
+   from the host. Answers {:boot :first-start? :restarted :failed :gone :resumable}."
   [opts]
-  (let [boot   (or (:boot opts) (current-boot))
+  (let [host   (when-not (:boot opts) (current-boot))
+        boot   (or (:boot opts) (:id host))
+        boot-at (if (:boot opts) (:boot-at opts) (:began-at host))
         first? (and boot (not= boot (io/read-edn (boot-marker-path))))
         listing (substrate/listing opts)
         idle   (for [{:keys [facet] :as s} (faceted-sessions opts)
                      :when (not (:pid (row-for listing facet)))]
                  s)
-        restart? (fn [{:keys [facet]}]
-                   (and first? (get-in facet [:policy :auto-respawn?])
-                        (not= boot (:recovered-boot facet)) (:bg-id facet)))
+        candidate? (fn [{:keys [facet]}]
+                     (and first? (get-in facet [:policy :auto-respawn?])
+                          (not= boot (:recovered-boot facet)) (:bg-id facet)
+                          (not (outlived-boot? (:session-id facet) boot-at))))
+        row      (fn [{:keys [facet]}] (row-for listing facet))
+        ;; A listed session whose directory is gone; one the listing does not name is neither
+        ;; gone nor resumable — nothing can be said of it.
+        gone?    (fn [s] (when-let [r (row s)] (not (some-> (:cwd r) fs/directory?))))
+        resumable? (fn [s] (when-let [r (row s)]
+                             (and (= "background" (:kind r)) (some-> (:cwd r) fs/directory?))))
+        restart? (fn [s] (and (candidate? s) (resumable? s)))
+        who      (fn [{:keys [project ws-id session-name]}]
+                   {:project project :ws-id ws-id :session session-name})
+        ;; Before any respawn: a start that dies mid-recovery must not leave the boot to the next.
+        _        (when first? (io/write-edn! (boot-marker-path) boot))
         attempts (doall
                   (for [{:keys [project ws-id session-name facet] :as s} idle
                         :when (restart? s)]
-                    (let [who {:project project :ws-id ws-id :session session-name}]
-                      (try
-                        (substrate/respawn! (:bg-id facet)
-                                            (assoc opts :cwd (:cwd (row-for listing facet))))
-                        (session/update-claude! project ws-id session-name #(assoc % :recovered-boot boot))
-                        [:restarted who]
-                        (catch Exception e
-                          [:failed (assoc who :because (ex-message e))])))))
-        by-kind (group-by first attempts)]
-    (when (and first? (empty? (:failed by-kind))) (io/write-edn! (boot-marker-path) boot))
+                    (try
+                      (substrate/respawn! (:bg-id facet)
+                                          (assoc opts :cwd (:cwd (row-for listing facet))))
+                      (session/update-claude! project ws-id session-name #(assoc % :recovered-boot boot))
+                      [:restarted (who s)]
+                      (catch Exception e
+                        [:failed (assoc (who s) :because (ex-message e))]))))
+        by-kind (group-by first attempts)
+        restarted (mapv second (:restarted by-kind))]
     {:boot        boot
      :first-start? (boolean first?)
-     :restarted   (mapv second (:restarted by-kind))
+     :restarted   restarted
      :failed      (mapv second (:failed by-kind))
-     :resumable   (vec (for [{:keys [project ws-id session-name] :as s} idle
-                             :when (not (restart? s))]
-                         {:project project :ws-id ws-id :session session-name}))}))
+     :gone        (vec (for [s idle :when (and (candidate? s) (gone? s))] (who s)))
+     :resumable   (vec (for [s idle :when (and (resumable? s) (not (some #{(who s)} restarted)))]
+                         (who s)))}))

@@ -1459,9 +1459,14 @@
        (catch Throwable t
          (println "nido coordinator: recording the sessions that died with the host failed —" (ex-message t))))
   ;; Background sessions survive the daemon; a host reboot does not keep them running.
-  (try (let [{:keys [first-start? restarted]} (conduct/recover! {:projects (registered-projects)})]
+  (try (let [{:keys [first-start? restarted failed gone]} (conduct/recover! {:projects (registered-projects)})]
          (when (and first-start? (seq restarted))
-           (println "nido coordinator: restarted" (count restarted) "background session(s) after a reboot")))
+           (println "nido coordinator: restarted" (count restarted) "background session(s) after a reboot"))
+         ;; Nothing retries a refused restart, so this line is the only place it is seen.
+         (doseq [{:keys [project session because]} failed]
+           (println "nido coordinator: could not restart" (str (name project) "/" session) "after the reboot —" because))
+         (when (seq gone)
+           (println "nido coordinator:" (count gone) "background session(s) not restarted: their directory is gone")))
        (catch Throwable t
          (println "nido coordinator: recovering background sessions failed —" (ex-message t))))
   (resubmit-queued! (load-all-triggers))

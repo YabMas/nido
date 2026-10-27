@@ -548,12 +548,16 @@
         (is (= {:skipped :listing-failed} (conduct/conduct! {:projects [:nido]}))))
       (is (= "next" (:queued (facet)))))))
 
+(def ^:private idle-row
+  "done-row with no live process, in a directory that exists — what recover! may restart."
+  (assoc (dissoc done-row :pid) :cwd (str (fs/temp-dir))))
+
 (deftest recover-restarts-a-policy-session-once-per-boot
   (with-tmp
     (fn []
       (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :policy {:auto-respawn? true})))
       (let [respawned (atom [])]
-        (with-redefs [substrate/listing  (constantly [(dissoc done-row :pid)])
+        (with-redefs [substrate/listing  (constantly [idle-row])
                       substrate/respawn! (fn [id _] (swap! respawned conj id) true)]
           (let [r1 (conduct/recover! {:projects [:nido] :boot "B1"})
                 r2 (conduct/recover! {:projects [:nido] :boot "B1"})
@@ -564,31 +568,92 @@
             (is (= 1 (count (:restarted r3))) "a new boot restarts it again")
             (is (= ["s" "s"] @respawned))))))))
 
-(deftest recover-records-only-a-restart-claude-code-accepted
+(deftest a-refused-restart-is-reported-and-not-retried
+  ;; Retrying a refusal at the next start kept a boot unrecovered for as long as one refusal never
+  ;; cleared, and every later start then ran as the first. A refused session stays resumable.
   (with-tmp
     (fn []
       (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :policy {:auto-respawn? true})))
       (let [refuse? (atom true)]
-        (with-redefs [substrate/listing  (constantly [(dissoc done-row :pid)])
+        (with-redefs [substrate/listing  (constantly [idle-row])
                       substrate/respawn! (fn [_ _] (if @refuse? (throw (ex-info "refused" {:reason :respawn-refused})) true))]
           (let [r1 (conduct/recover! {:projects [:nido] :boot "B1"})]
             (is (= [] (:restarted r1)))
-            (is (= 1 (count (:failed r1))))
+            (is (= 1 (count (:failed r1))) "the refusal is answered for the caller to report")
             (is (nil? (:recovered-boot (facet))) "not marked restarted"))
           (reset! refuse? false)
-          (is (= 1 (count (:restarted (conduct/recover! {:projects [:nido] :boot "B1"}))))
-              "a later start in the same boot tries it again")
-          (is (= "B1" (:recovered-boot (facet)))))))))
+          (let [r2 (conduct/recover! {:projects [:nido] :boot "B1"})]
+            (is (= [] (:restarted r2)) "a later start in the same boot restarts nothing")
+            (is (false? (:first-start? r2)))))))))
+
+(deftest recover-attempts-no-session-the-listing-does-not-name
+  (with-tmp
+    (fn []
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :policy {:auto-respawn? true})))
+      (with-redefs [substrate/listing  (constantly [])
+                    substrate/respawn! (fn [& _] (throw (ex-info "must not" {})))]
+        (let [r (conduct/recover! {:projects [:nido] :boot "B1"})]
+          (is (= [[] [] [] []] ((juxt :restarted :failed :gone :resumable) r))
+              "nothing can be said of it: neither gone nor resumable"))))))
+
+(deftest a-notification-after-the-boot-shows-the-session-outlived-it
+  (with-tmp
+    (fn []
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :policy {:auto-respawn? true})))
+      (events/append! "s" {:event :notification})
+      (with-redefs [substrate/listing  (constantly [idle-row])
+                    substrate/respawn! (fn [& _] (throw (ex-info "must not" {})))]
+        (is (= [] (:restarted (conduct/recover! {:projects [:nido] :boot "B1"
+                                                 :boot-at "2026-10-16T08:00:00Z"}))))))))
 
 (deftest recover-leaves-a-session-without-the-policy-resumable
   (with-tmp
     (fn []
       (session/update-claude! :nido "ws-1" "kid" (constantly driving))
-      (with-redefs [substrate/listing  (constantly [(dissoc done-row :pid)])
+      (with-redefs [substrate/listing  (constantly [idle-row])
                     substrate/respawn! (fn [& _] (throw (ex-info "must not" {})))]
         (let [r (conduct/recover! {:projects [:nido] :boot "B1"})]
           (is (= [] (:restarted r)))
           (is (= 1 (count (:resumable r)))))))))
+
+(deftest recover-answers-a-session-whose-directory-is-gone-and-still-recovers-the-boot
+  ;; A refused restart is retried at the next start, and the boot stays unrecovered until then.
+  ;; A session whose worktree was deleted is refused at every start, so counted as a failure it
+  ;; held the boot unrecovered for good — and every later start in that boot ran as the first.
+  (with-tmp
+    (fn []
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :policy {:auto-respawn? true})))
+      (with-redefs [substrate/listing  (constantly [(assoc idle-row :cwd "/nonexistent/worktree")])
+                    substrate/respawn! (fn [& _] (throw (ex-info "must not" {})))]
+        (let [r1 (conduct/recover! {:projects [:nido] :boot "B1"})
+              r2 (conduct/recover! {:projects [:nido] :boot "B1"})]
+          (is (= [{:project :nido :ws-id "ws-1" :session "kid"}] (:gone r1)))
+          (is (= [] (:failed r1)) "a session nothing can restart is not a failed restart")
+          (is (false? (:first-start? r2)) "so the boot is recovered, and a later start is not a first"))))))
+
+(deftest recover-leaves-a-session-that-ended-after-the-boot
+  ;; Only the boot's casualties are restarted. One that recorded anything after the boot began
+  ;; ended in this boot — finished, stopped — and restarting it brings back a finished session.
+  (with-tmp
+    (fn []
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :policy {:auto-respawn? true})))
+      (events/append! "s" {:event :stop})          ; at the test clock, 2026-10-16T09:00:00Z
+      (with-redefs [substrate/listing  (constantly [idle-row])
+                    substrate/respawn! (fn [& _] (throw (ex-info "must not" {})))]
+        (let [after  (conduct/recover! {:projects [:nido] :boot "B1" :boot-at "2026-10-16T08:00:00Z"})]
+          (is (= [] (:restarted after)))
+          (is (= [{:project :nido :ws-id "ws-1" :session "kid"}] (:resumable after))
+              "it stays resumable from its saved conversation"))))))
+
+(deftest recover-restarts-a-session-that-fell-silent-before-the-boot
+  (with-tmp
+    (fn []
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :policy {:auto-respawn? true})))
+      (events/append! "s" {:event :stop})
+      (with-redefs [substrate/listing  (constantly [idle-row])
+                    substrate/respawn! (constantly true)]
+        (is (= 1 (count (:restarted (conduct/recover! {:projects [:nido] :boot "B1"
+                                                       :boot-at "2026-10-16T10:00:00Z"})))))))))
 
 (deftest a-pass-reports-the-sessions-nido-drives-that-are-working
   (with-tmp

@@ -66,8 +66,8 @@
   {:about [listing lane-conduct] :evidence "round"})
 
 (Claim recovery-once-per-boot
-  "At nido's first start after a host boot, recover! restarts, once, each session with a :claude facet whose policy is auto-respawn and that has no live process, whatever stopped it, and restarts no other session; later starts in the same boot restart nothing. Every other session with a :claude facet and no live process stays in the substrate's listing, where attaching to it — one action — resumes it from its saved conversation, and appears as resumable in nido's session list when it is within that list's scope."
-  {:about [recover! session-rows] :evidence "round"})
+  "At nido's first start after a host boot, recover! attempts, once, each session with a :claude facet whose policy is auto-respawn, whose listing row is a background session with no live process in a directory that exists, and that recorded no event after the boot began; it attempts no other session. A listed session whose directory no longer exists is answered as gone and never attempted. The first start marks the boot recovered before it attempts any restart, a refused restart is not retried, and later starts in the same boot restart nothing."
+  {:about [recover!] :evidence "round"})
 
 (Claim a-crash-is-the-supervisors
   "nido leaves a background session whose process dies while the host stays up to Claude Code's supervisor: no nido code wakes or respawns a session for the death of its process, other than the restart recover! makes at nido's first start after a host boot, as recovery-once-per-boot states."
