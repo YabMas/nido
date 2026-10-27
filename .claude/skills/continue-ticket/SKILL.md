@@ -155,7 +155,17 @@ You now know the stage and have the prior stage's findings in front of you. **Ho
 
 Session reminders:
 - **Edit in `./worktree`**, not in nido's tree. The REPL / app / DB are nido-managed — connect to the running services, don't start your own.
-- **Don't WRITE to Notion** — nido already set the ticket's Notion status when this session was provisioned; the triage stage owns the Notion contract, not this one. Reading is not only allowed but required (Step 1.5).
+- **Don't WRITE to Notion on your own initiative** — nido already set the ticket's Notion status when this session was provisioned; the triage stage owns the Notion contract, not this one. Reading is not only allowed but required (Step 1.5).
+
+  **A person's answer is the exception.** When the branch a human chose at the gate — the
+  answer you were resumed with, or a `:blocker-answered` entry — names a Notion write (comment
+  on the ticket, close it, mark it done or a duplicate), carry it out yourself with the
+  `notion` CLI (`notion comment add <page-id> …`, `notion page set <page-id> "Status=Done"`;
+  see `~/Code/nido/docs/reference/notion-access.md`). Never hand it back as "you'd update
+  Notion": the person already decided, on the gate, and the gate is where they expect it to
+  end. Write only what the branch names. So the pick authorises something concrete, a
+  blocker option that ends in a Notion write says in its `:summary` what it will write — the
+  comment's gist and the status it sets.
 - If what you find contradicts the prior stage's findings (the bug doesn't reproduce, the root cause is elsewhere), say so plainly and reorient with the user rather than forcing the earlier hypothesis.
 
   Check which layer the contradiction is at. If the code merely differs from what triage expected, amend your design record and carry on. If it invalidates the *design* — the shape you committed to cannot hold — supersede the record rather than editing it (`/design` §5), and treat the open question as a blocker below.
