@@ -132,8 +132,15 @@
      :delegates [runs/find-for-session]})
   (Operation resume!
     "Give a session waiting on a person their input as its next instruction, admitted under the
-     global cap; refused for a conversation from before background sessions."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:input :string]] :any]
+     global cap; refused for a conversation from before background sessions.
+
+     The session may be named by a caller that found it waiting before recording the person's
+     answer: the answer ends the workstream owing the person its next move, so looking again
+     after writing it finds nobody."
+    {:signature [:function
+                 [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:input :string]] :any]
+                 [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:input :string]
+                             [:waiting [:maybe Session]]] :any]]
      :delegates [waiting-session]}))
 
 (Module lane-scratch

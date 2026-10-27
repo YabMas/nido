@@ -2208,7 +2208,7 @@
                   :summary     (:summary opt)
                   :resumed     (:name parked)}))
         (if parked
-          (assoc (resume/resume! project ws-id (option-input i opt)) :decision :answered)
+          (assoc (resume/resume! project ws-id (option-input i opt) parked) :decision :answered)
           ;; Nobody to tell. The answer is on the ledger and the gate has stopped
           ;; asking; this is a real outcome, not a failure, so it must not read as
           ;; one — see ui.server/resolve-failure-msg.
@@ -2284,7 +2284,7 @@
           (let [parked (parked-session project ws-id)]
             (grant! project ws-id (:seq design) entry-seq nil)
             (if parked
-              (assoc (resume/resume! project ws-id approval-input) :decision :approved)
+              (assoc (resume/resume! project ws-id approval-input parked) :decision :approved)
               ;; Nobody to tell, and that is a real outcome rather than a
               ;; failure: the grant is on the ledger and the next session reads
               ;; it — see ui.server/resolve-failure-msg.

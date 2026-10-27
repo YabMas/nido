@@ -41,7 +41,9 @@
                           (or (= :awaiting-review (:state run)) @owed-person?)))))
          first)))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string] :any]}
+(defn ^{:malli/schema [:function
+                        [:=> [:cat :ProjectName :WorkstreamId :string] :any]
+                        [:=> [:cat :ProjectName :WorkstreamId :string [:maybe :Session]] :any]]}
   resume!
   "Re-engage the session waiting on a person under `ws-id` (`waiting-session`) with `input`, as
    its next instruction: handed to the executor as a turn, which queues it through conduct once a
@@ -55,52 +57,58 @@
    (:not-parked), when the session nido started has no id from Claude Code yet
    (:session-unnamed), and when the session's record carries no :claude facet
    (:no-background-session) — a conversation from before background sessions, which nido no
-   longer continues."
-  [project ws-id input]
-  (let [s       (waiting-session project ws-id)
-        refuse! (fn [reason message]
-                  (session/set-error! project ws-id (:name s)
-                                      {:at (clock/now-iso) :reason reason :message message})
-                  (throw (ex-info message {:reason reason :project project :ws-id ws-id})))]
-    (when-not s
-      (throw (ex-info "No parked session to resume"
-                      {:reason :not-parked :project project :ws-id ws-id})))
-    (cond
-      ;; A start in flight: conduct names the session once a listing shows it, and there is no
-      ;; facet for a reply to be queued on before then.
-      (:dispatching s)
-      (refuse! :session-unnamed "The session nido started has no id from Claude Code yet — reply again once it does")
+   longer continues.
 
-      (nil? (:claude s))
-      (let [run (runs/find-for-session project ws-id (:name s))
-            sid (or (get-in s [:autonomy :claude-session-id]) (:claude-session-id run))]
-        (refuse! :no-background-session
-                 (str "This conversation predates background sessions, and nido no longer continues it"
-                      (if sid (str " — continue it yourself with " (substrate/resume-command sid)) "")
-                      ", or close the workstream"))))
-    ;; Queued through the executor like any turn, so the reply is admitted under the global cap
-    ;; before conduct may give it — its trigger's in-flight slot the parked run already holds
-    ;; (see executor/submit-turn!); once given, the session holds its global slot while the
-    ;; substrate reports it working. Keyed per turn, because a Run is spawned once and replied to
-    ;; any number of times; keyed on the run-id alone submit!'s idempotence would swallow every
-    ;; reply after the first.
-    (let [run  (runs/find-for-session project ws-id (:name s))
-          body #(try (conduct/instruct! project ws-id (:name s) input)
-                     (catch Throwable t
-                       (session/set-error! project ws-id (:name s)
-                                           {:at      (clock/now-iso)
-                                            :reason  (or (:reason (ex-data t)) :resume-failed)
-                                            :message (ex-message t)})))]
-      (session/set-error! project ws-id (:name s) nil)
-      (if (executor/driven?)
-        (do (executor/submit-turn!
-             {:run-id  (turn-key s run)
-              :turn    (str (random-uuid))
-              :trigger (:trigger run)
-              :body    body})
-            {:resumed (:name s) :queued? true :via :substrate})
-        ;; Nobody ticks the executor in this process — a standalone `bb nido:ui` rather than the
-        ;; daemon — so queueing would park the turn forever and say nothing. Run it, and SAY that
-        ;; it was not slot-accounted rather than letting the caller assume it was.
-        (do (body)
-            {:resumed (:name s) :queued? false :unaccounted? true :via :substrate})))))
+   The four-argument arity resumes `waiting`, a session its caller found waiting BEFORE recording
+   the person's answer. It cannot look again: an answer on the ledger is what stops the workstream
+   owing the person its next move, so a session held only by a driver's blocker — its run already
+   settled — no longer reads as waiting once the answer that releases it is written."
+  ([project ws-id input] (resume! project ws-id input (waiting-session project ws-id)))
+  ([project ws-id input waiting]
+   (let [s       waiting
+         refuse! (fn [reason message]
+                   (session/set-error! project ws-id (:name s)
+                                       {:at (clock/now-iso) :reason reason :message message})
+                   (throw (ex-info message {:reason reason :project project :ws-id ws-id})))]
+     (when-not s
+       (throw (ex-info "No parked session to resume"
+                       {:reason :not-parked :project project :ws-id ws-id})))
+     (cond
+       ;; A start in flight: conduct names the session once a listing shows it, and there is no
+       ;; facet for a reply to be queued on before then.
+       (:dispatching s)
+       (refuse! :session-unnamed "The session nido started has no id from Claude Code yet — reply again once it does")
+
+       (nil? (:claude s))
+       (let [run (runs/find-for-session project ws-id (:name s))
+             sid (or (get-in s [:autonomy :claude-session-id]) (:claude-session-id run))]
+         (refuse! :no-background-session
+                  (str "This conversation predates background sessions, and nido no longer continues it"
+                       (if sid (str " — continue it yourself with " (substrate/resume-command sid)) "")
+                       ", or close the workstream"))))
+     ;; Queued through the executor like any turn, so the reply is admitted under the global cap
+     ;; before conduct may give it — its trigger's in-flight slot the parked run already holds
+     ;; (see executor/submit-turn!); once given, the session holds its global slot while the
+     ;; substrate reports it working. Keyed per turn, because a Run is spawned once and replied to
+     ;; any number of times; keyed on the run-id alone submit!'s idempotence would swallow every
+     ;; reply after the first.
+     (let [run  (runs/find-for-session project ws-id (:name s))
+           body #(try (conduct/instruct! project ws-id (:name s) input)
+                      (catch Throwable t
+                        (session/set-error! project ws-id (:name s)
+                                            {:at      (clock/now-iso)
+                                             :reason  (or (:reason (ex-data t)) :resume-failed)
+                                             :message (ex-message t)})))]
+       (session/set-error! project ws-id (:name s) nil)
+       (if (executor/driven?)
+         (do (executor/submit-turn!
+              {:run-id  (turn-key s run)
+               :turn    (str (random-uuid))
+               :trigger (:trigger run)
+               :body    body})
+             {:resumed (:name s) :queued? true :via :substrate})
+         ;; Nobody ticks the executor in this process — a standalone `bb nido:ui` rather than the
+         ;; daemon — so queueing would park the turn forever and say nothing. Run it, and SAY that
+         ;; it was not slot-accounted rather than letting the caller assume it was.
+         (do (body)
+             {:resumed (:name s) :queued? false :unaccounted? true :via :substrate}))))))

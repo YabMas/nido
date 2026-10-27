@@ -18,6 +18,7 @@
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.session-events :as session-events]
    [nido.coordinator.lane.conduct :as conduct]
+   [nido.coordinator.executor :as executor]
    [nido.coordinator.source.queue :as queue]
    [nido.coordinator.source.state]
    [nido.coordinator.lane.spawn]
@@ -759,7 +760,7 @@
         (workstream/append-entry! :brian (:id w) {:kind :blocker}
           (pr-str {:format :blocker :summary "The modal offers a branch nothing implements."
                    :needs "A product decision on Keep Old." :options sample-options}))
-        (with-redefs [resume/resume! (fn [_ _ input] (reset! got input) {:decision :resumed})]
+        (with-redefs [resume/resume! (fn [_ _ input & _] (reset! got input) {:decision :resumed})]
           (is (= :answered (:decision (work/resolve-gate! :brian (:id w) :option-b 1)))
               "the click names the report it was rendered from — entry 1, still the latest")
           (let [answer (:report (work/workstream :brian (:id w) 2))]
@@ -802,6 +803,31 @@
                                       :options (:options (:action-report (work/workstream :brian (:id w))))}))
             "and the gate stops asking: the latest entry is the answer, not the
              question, so the buttons are gone")))))
+
+(deftest an-answer-reaches-a-session-held-only-by-its-blocker
+  ;; resume! un-mocked. A driver's blocker parks no run: the run settles :done, and only the
+  ;; workstream owing the person its next move says the session waits. The answer ends that
+  ;; owing — so a resume that looked the session up AFTER recording the answer found nobody,
+  ;; threw :not-parked, and the reply never reached the session (BR-5072, 2026-10-27).
+  (with-tmp
+    (fn [_]
+      (let [w     (workstream/create! :brian {:external-refs []})
+            given (atom nil)]
+        (session/create! :brian (:id w) {:name "run-x" :weight :heavy :autonomy parked-autonomy})
+        (session/update-claude! :brian (:id w) "run-x"
+                                (constantly {:session-id "sid" :bg-id "sid" :origin :nido
+                                             :driver :nido :hold nil :pending nil :queued nil
+                                             :own-work? false :policy {:auto-respawn? true}
+                                             :cursor 0 :driving-since "t"
+                                             :announced-blocked? false :recovered-boot nil}))
+        (write-run! "r1" (:id w) "run-x" "sid" :done)
+        (workstream/append-entry! :brian (:id w) {:kind :blocker}
+          (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+        (with-redefs [executor/driven?  (constantly false)
+                      conduct/instruct! (fn [_ _ sname text] (reset! given [sname text]))]
+          (is (= :answered (:decision (work/resolve-gate! :brian (:id w) :option-a 1))))
+          (is (= "run-x" (first @given)) "the session that asked is given the answer")
+          (is (str/includes? (second @given) "option A")))))))
 
 (deftest answering-twice-is-refused-by-the-same-position-check
   (with-tmp
@@ -1042,7 +1068,7 @@
     (fn [_]
       (let [[id _ d dd] (approvable)
             got (atom nil)]
-        (with-redefs [resume/resume! (fn [_ _ input] (reset! got input)
+        (with-redefs [resume/resume! (fn [_ _ input & _] (reset! got input)
                                        {:decision :resumed})
                       work/parked-session (constantly {:name "auto"})]
           (is (= :approved (:decision (work/resolve-gate! :brian id :approve dd))))
