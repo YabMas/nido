@@ -530,8 +530,8 @@
 
 (defn ^{:malli/schema [:=> [:cat] [:maybe :map]]}
   current-boot
-  "This host boot as {:id :began-at} — the boot time the kernel reports and the instant it
-   names — or nil when it cannot be read."
+  "This host boot as {:id :began-at} — the identity the kernel gives it and the instant it
+   began — or nil when it cannot be read."
   []
   (process/host-boot))
 

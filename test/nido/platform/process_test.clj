@@ -57,3 +57,23 @@
     ;; Per-session pg ports come from [5500 7500). Nothing points a browser at
     ;; postgres, but the allocator is shared and walks upward across ranges.
     (is (every? sut/browser-blocked-ports [6000 6566 6665 6697]))))
+
+(deftest host-boot-keeps-its-identity-when-the-clock-moves-the-boot-time
+  ;; macOS moves kern.boottime when it corrects the clock; on 2026-10-27 one boot read as
+  ;; ...351 then ...352, and a daemon restart took it for a new boot.
+  (let [sec (atom 1792861351)
+        out (fn [_ & args]
+              {:out (case (last args)
+                      "kern.boottime"        (str "{ sec = " @sec ", usec = 971631 } Sat Oct 24 19:02:31 2026")
+                      "kern.bootsessionuuid" "7C20755B-EE3A-4A46-B5BB-FA3BD0F0FFA1\n")})]
+    (with-redefs [babashka.process/shell out]
+      (let [a (sut/host-boot)]
+        (swap! sec inc)
+        (let [b (sut/host-boot)]
+          (is (= "7C20755B-EE3A-4A46-B5BB-FA3BD0F0FFA1" (:id a) (:id b)))
+          (is (= "2026-10-24T17:02:31Z" (:began-at a))))))
+    (testing "an unreadable boot session is an unknown boot, not one named by its time"
+      (with-redefs [babashka.process/shell (fn [_ & args]
+                                             {:out (if (= "kern.boottime" (last args))
+                                                     "{ sec = 1792861351, usec = 0 }" "")})]
+        (is (nil? (sut/host-boot)))))))

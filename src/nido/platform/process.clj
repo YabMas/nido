@@ -297,13 +297,19 @@
 
 (defn ^{:malli/schema [:=> [:cat] [:maybe :map]]}
   host-boot
-  "This host boot: its identity — the boot time the kernel reports, in epoch seconds, as a
-   string — and the instant it began, or nil when it cannot be read."
+  "This host boot: its identity — the session UUID the kernel gives the boot — and the instant
+   it began, from the kernel's boot time; nil when either cannot be read.
+
+   Not the boot time as identity: macOS moves kern.boottime when it corrects the clock, so its
+   seconds can change within one boot. On 2026-10-27 one boot read as 1792861351 and then
+   1792861352, and a daemon restart took the second for a new boot and restarted 51 sessions."
   []
   (try
     ;; By absolute path: the daemon runs under launchd, whose PATH has no /usr/sbin, and a bare
     ;; `sysctl` there reads as an unknown boot — every reboot then went unrecorded.
-    (when-let [sec (second (re-find #"sec = (\d+)" (:out (shell {:out :string :err :string}
-                                                                "/usr/sbin/sysctl" "-n" "kern.boottime"))))]
-      {:id sec :began-at (str (java.time.Instant/ofEpochSecond (parse-long sec)))})
+    (let [sysctl (fn [k] (:out (shell {:out :string :err :string} "/usr/sbin/sysctl" "-n" k)))
+          sec    (second (re-find #"sec = (\d+)" (sysctl "kern.boottime")))
+          id     (str/trim (str (sysctl "kern.bootsessionuuid")))]
+      (when (and sec (seq id))
+        {:id id :began-at (str (java.time.Instant/ofEpochSecond (parse-long sec)))}))
     (catch Exception _ nil)))
