@@ -255,13 +255,17 @@
                  along, or :queued when no merge run says — the lane takes one branch at a time,
                  so waiting for it is a state the board keeps saying.
      :session  — an agent holds its run's lock: `runs` carries each of the workstream's runs
-                 with :live? beside it.
+                 with :live? beside it. Failing that, a session of `sessions` is working
+                 through an instruction nido gave it or holds queued for it (its :claude
+                 facet's :pending or :queued), which reads :phase :answering — a reply sent
+                 from the gate leaves its run parked and holding no lock, so without this the
+                 agent answering it is invisible on every surface.
 
-   The claim outranks the other two because it is evidence of a process alive at the instant of
+   The claim outranks the others because it is evidence of a process alive at the instant of
    the read. A run parked for review is deliberately not `doing`: it is a gate, and calling it
-   activity would report a workstream waiting on a person as one that is busy. `claim` and the
-   runs' liveness arrive as ARGUMENTS, so this stays pure."
-  [{:keys [closed stage claim runs]}]
+   activity would report a workstream waiting on a person as one that is busy. `claim`, the
+   runs' liveness and the sessions arrive as ARGUMENTS, so this stays pure."
+  [{:keys [closed stage claim runs sessions]}]
   (cond
     (or (some? closed) (= :done stage)) nil
 
@@ -273,21 +277,25 @@
     {:source :merge :phase (or (merge-substate runs) :queued)}
 
     :else
-    (when-let [r (last (filter :live? runs))]
-      {:source :session :phase (:state r) :session (:session-name r)})))
+    (if-let [r (last (filter :live? runs))]
+      {:source :session :phase (:state r) :session (:session-name r)}
+      (when-let [s (first (filter #(or (get-in % [:claude :pending]) (get-in % [:claude :queued]))
+                                  sessions))]
+        {:source :session :phase :answering :session (:name s)}))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :map] [:maybe :keyword]] [:maybe :map]]}
   doing-at
   "What is underway in workstream `ws-id` right now, given the closure and band the caller
-   settled on — `doing` with the claim and the runs' liveness read here and the running round's
-   progress beside it. The board passes status's band, so what is underway and where the row sits
-   are one answer."
+   settled on — `doing` with the claim, the runs' liveness and the sessions read here and the
+   running round's progress beside it. The board passes status's band, so what is underway and
+   where the row sits are one answer."
   [project ws-id closed stage]
   (with-progress
-    (doing {:closed closed
-            :stage  stage
-            :claim  (activity/read-live project ws-id)
-            :runs   (mapv #(assoc % :live? (runs/live? (:id %))) (runs/runs-of project ws-id))})))
+    (doing {:closed   closed
+            :stage    stage
+            :claim    (activity/read-live project ws-id)
+            :runs     (mapv #(assoc % :live? (runs/live? (:id %))) (runs/runs-of project ws-id))
+            :sessions (session/list-sessions project ws-id)})))
 
 (defn- standing-design
   "The design whose plan governs the workstream (`standing/governing-design` — the one

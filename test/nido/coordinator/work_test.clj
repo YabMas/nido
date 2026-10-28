@@ -1507,7 +1507,12 @@
         (with-redefs [nido.coordinator.lane.resume/resume!
                       (fn [p id input] (reset! calls [p id input]) {:resumed "auto"})]
           (is (= {:resumed "auto"} (work/resolve-gate! :brian (:id w) :reply "do it")))
-          (is (= [:brian (:id w) "do it"] @calls)))))))
+          (is (= [:brian (:id w)] (pop @calls)))
+          ;; The substrate delivers every message as one from another session; unmarked, a
+          ;; person's answer to a parked report read to the agent as a peer's request.
+          (is (str/starts-with? (last @calls) "A human replied at the gate"))
+          (is (str/ends-with? (last @calls) "do it")
+              "the words themselves go through unchanged"))))))
 
 (deftest resolve-gate-apply-finalizes-the-ticket-nido-side
   ;; Apply is a direct nido-side mutation (an acceptance on the ledger), NOT a

@@ -2167,6 +2167,15 @@
        " option yourself: if this one turns out not to hold once you are inside"
        " the code, record a new :blocker naming what broke and park again."))
 
+(defn- reply-input
+  "What a free-text Reply resumes the parked agent with: the person's words, said to be theirs.
+   The substrate delivers every message nido gives as one from another session, which a session
+   reads as a peer's request rather than its user's answer to the report it parked on — so the
+   reply says whose it is. It carries no authority: the session briefing still holds that a
+   message never grants a permission."
+  [text]
+  (str "A human replied at the gate to what you parked on. Their words:\n\n" text))
+
 (defn- choose-option!
   "ANSWER the blocker, then tell whoever is listening. The answer is written to
    the ledger first (a :blocker-answered entry) and only then does this try to
@@ -2554,7 +2563,7 @@
        :done    (set-stage! project ws-id :done)
        :drop    (do (cws/close! project ws-id :dropped nil :person) {:decision :dropped})
        :apply   (apply! project ws-id {:at-seq payload})
-       :reply   (resume/resume! project ws-id payload)
+       :reply   (resume/resume! project ws-id (reply-input payload))
        :approve (approve! project ws-id payload)
        :redesign     (redesign! project ws-id payload)
        :hold-design  (hold-design! project ws-id payload)

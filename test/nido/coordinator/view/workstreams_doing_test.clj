@@ -160,3 +160,22 @@
 (deftest a-run-parked-for-review-is-a-gate-not-an-activity
   (testing "calling it activity would say a workstream waiting on a person is busy"
     (is (nil? (wsv/doing {:runs [(a-run :awaiting-review)]})))))
+
+(deftest a-session-answering-a-reply-is-activity
+  (testing "a reply leaves its run parked and lockless; the instruction nido gave the
+            session is what says the agent is at work on it"
+    (let [parked [(a-run :awaiting-review)]]
+      (is (= {:source :session :phase :answering :session "impl-1"}
+             (wsv/doing {:runs parked
+                         :sessions [{:name "impl-1" :claude {:pending {:token "t" :seen? true}}}]})))
+      (is (= {:source :session :phase :answering :session "impl-1"}
+             (wsv/doing {:runs parked :sessions [{:name "impl-1" :claude {:queued "go"}}]}))
+          "and so does one queued and not yet given")
+      (is (nil? (wsv/doing {:runs parked :sessions [{:name "impl-1" :claude {:pending nil}}]}))
+          "a session with nothing outstanding is still only a gate")))
+  (is (= "agent · answering" (wsv/doing-label {:source :session :phase :answering}))))
+
+(deftest a-live-run-outranks-a-session-answering
+  (is (= :running
+         (:phase (wsv/doing {:runs     [(a-run :running true)]
+                             :sessions [{:name "other" :claude {:pending {:token "t"}}}]})))))
