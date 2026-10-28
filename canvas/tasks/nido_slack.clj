@@ -17,6 +17,12 @@
   (Operation auth-check
     "bb nido:slack:auth:check — print whether the keychain has a token."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation app-auth-set
+    "bb nido:slack:app-auth:set — read an app-level token from stdin, store in macOS Keychain."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation app-auth-check
+    "bb nido:slack:app-auth:check — print whether the keychain has an app-level token."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation react
     "bb nido:slack:react :channel <C> :ts <ts> [:name eyes]"
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

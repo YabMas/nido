@@ -69,11 +69,6 @@
   (with-redefs [slack/http-request (fn [_ _ _] (ok-resp {:permalink "https://x.slack.com/p"}))]
     (is (= "https://x.slack.com/p" (slack/chat-permalink "C123" "1.0" "tok")))))
 
-(deftest owl-reacted?-detects-the-emoji
-  (is (true?  (slack/owl-reacted? {:reactions [{:name "eyes"} {:name "owl" :count 1}]} "owl")))
-  (is (false? (slack/owl-reacted? {:reactions [{:name "eyes"}]} "owl")))
-  (is (false? (slack/owl-reacted? {} "owl"))))
-
 (deftest post-message-posts-threaded
   (let [captured (atom nil)]
     (with-redefs [slack/http-request
@@ -96,3 +91,62 @@
       (is (= {:ok true} (slack/add-reaction "C1" "100.0" "tok" "eyes")))
       (let [b (json/parse-string (:body @captured) true)]
         (is (= "eyes" (:name b))) (is (= "100.0" (:timestamp b)))))))
+
+(deftest parse-id-reads-thread-and-ticket-ids-and-nothing-else
+  (is (= {:channel "C07N0U273AR" :ts "1718000000.000123"
+          :thread-id "slack-C07N0U273AR-1718000000.000123"}
+         (slack/parse-id "slack-C07N0U273AR-1718000000.000123")))
+  (is (= "login-bug"
+         (:key (slack/parse-id "slack-C07N0U273AR-1718000000.000123~login-bug"))))
+  (is (= "slack-C07N0U273AR-1718000000.000123"
+         (:thread-id (slack/parse-id "slack-C07N0U273AR-1718000000.000123~login-bug"))))
+  (is (nil? (slack/parse-id "slack-C123-1718000000.000123-2"))
+      "a trailing segment is malformed, not a channel with a dash in it")
+  (is (nil? (slack/parse-id "BR-1234")))
+  (is (nil? (slack/parse-id nil))))
+
+(deftest ticket-id-round-trips-and-refuses-what-would-not-parse
+  (let [thread (slack/message-id "C123" "1718000000.000123")
+        id     (slack/ticket-id thread "a-1")]
+    (is (= {:channel "C123" :ts "1718000000.000123" :thread-id thread :key "a-1"}
+           (slack/parse-id id))))
+  (is (thrown? clojure.lang.ExceptionInfo (slack/ticket-id "slack-C123-1.2" "Bad Key")))
+  (is (thrown? clojure.lang.ExceptionInfo (slack/ticket-id "slack-C123-1.2~a" "b"))))
+
+(deftest conversations-replies-pages-the-thread
+  (let [calls (atom [])]
+    (with-redefs [slack/http-request
+                  (fn [_ _ opts]
+                    (swap! calls conj (:query-params opts))
+                    (if (get-in opts [:query-params "cursor"])
+                      (ok-resp {:messages [{:ts "1.3"}] :has_more false})
+                      (ok-resp {:messages [{:ts "1.1"} {:ts "1.2"}] :has_more true
+                                :response_metadata {:next_cursor "c2"}})))]
+      (is (= ["1.1" "1.2" "1.3"]
+             (map :ts (:messages (slack/conversations-replies "C1" "1.1" "tok")))))
+      (is (= "1.1" (get (first @calls) "ts"))))))
+
+(deftest conversations-replies-maps-errors
+  (with-redefs [slack/http-request (fn [_ _ _] (err-resp "invalid_auth"))]
+    (is (= :auth (:error (slack/conversations-replies "C1" "1.1" "tok"))))))
+
+(deftest users-info-prefers-display-name-then-real-name
+  (with-redefs [slack/http-request (fn [_ _ _] (ok-resp {:user {:profile {:display_name "jaap"
+                                                                          :real_name "Jaap M"}}}))]
+    (is (= "jaap" (slack/users-info "U1" "tok"))))
+  (with-redefs [slack/http-request (fn [_ _ _] (ok-resp {:user {:profile {:display_name ""
+                                                                          :real_name "Jaap M"}}}))]
+    (is (= "Jaap M" (slack/users-info "U1" "tok"))))
+  (with-redefs [slack/http-request (fn [_ _ _] (err-resp "user_not_found"))]
+    (is (nil? (slack/users-info "U1" "tok")))))
+
+(deftest normalise-thread-keys-by-the-root-and-transcribes-every-reply
+  (let [p (slack/normalise-thread "C1"
+                                  [{:ts "1.1" :user "U1" :user-name "ann" :text "the export hangs"}
+                                   {:ts "1.2" :user "U2" :text "same for me"}]
+                                  "1.2" "https://perma")]
+    (is (= "slack-C1-1.1" (:id p)))
+    (is (= "1.2" (:reacted-ts p)))
+    (is (= "the export hangs" (:title p)))
+    (is (= "ann: the export hangs\n\nU2: same for me" (:text p)))
+    (is (= :slack-message (:adapter p)))))

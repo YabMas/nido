@@ -44,6 +44,10 @@
     (= :open (:breaker s)) (str "breaker OPEN: "
                                 (name (or (-> s :last-poll-result :error) :unknown)))
     (:held-by s)           (str "held by " (:held-by s) " at last poll")
+    (and (:connection s) (not= :open (-> s :connection :state)))
+    (let [{:keys [state since last-connected-at]} (:connection s)]
+      (str "not connected (" (name state) ") since " since
+           "; last connected " (or last-connected-at "never")))
     :else                  "OK"))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe [:vector :map]]] [:vector :string]]}

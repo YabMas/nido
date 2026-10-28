@@ -1823,6 +1823,7 @@
      :findings                 (md/render (report/report->markdown report))
      :phase-gate               (md/render (report/report->markdown report))
      :proposed-ticket          (md/render (report/report->markdown report))
+     :proposed-tickets         (md/render (report/report->markdown report))
      (md/render (:markdown report))))))
 
 ;; The position and arc vocabulary the workstream pane defines below; the gate pane names a

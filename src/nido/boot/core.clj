@@ -33,7 +33,7 @@
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.source.notion :as nsource]
    [nido.coordinator.source.slack :as slack-source]
-   [nido.coordinator.source.slack-reaction :as slack-reaction-source]
+   [nido.coordinator.source.slack-events :as slack-events-source]
    [nido.coordinator.source.improvement :as improvement-source]
    [nido.coordinator.source.start-failures :as start-failures-source]
    [nido.coordinator.source.sweep :as sweep-source]
@@ -727,12 +727,15 @@
    board-source-configs). Filters out :manual (the queue dir handles that).
    Merges :project from the trigger's owning project into each source-config
    so plugins that resolve per-project registry files (e.g. notion-views.edn)
-   know which project they are serving."
+   know which project they are serving. A trigger declaring :enabled? false
+   starts no source: nothing it would hear could fire, and a source can hold
+   what only one instance may (the Slack Socket Mode connection)."
   [triggers-by-project]
   (->> (concat
          (for [[project triggers] triggers-by-project, t triggers
                :let [src (assoc (:source t) :project project)]
                :when (and (not= :manual (:type src))
+                          (not (false? (:enabled? t)))
                           (sources/lookup (:type src)))]
            src)
          (board-source-configs triggers-by-project))
@@ -1542,7 +1545,7 @@
   (executor/configure! {:global-cap (:global-parallel-cap defaults)})
   (nsource/register!)                                 ; register Notion source plugin
   (slack-source/register!)                            ; register Slack source plugin
-  (slack-reaction-source/register!)                   ; register Slack-reaction source plugin
+  (slack-events-source/register!)                     ; register Slack Socket Mode source plugin
   (improvement-source/register!)                      ; register the approved-improvement source
   (sweep-source/register!)                            ; register the daily improvement sweep
   (review-queue-nightly-source/register!)             ; register the nightly review-queue grooming

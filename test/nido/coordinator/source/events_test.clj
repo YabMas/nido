@@ -139,3 +139,13 @@
                     :payload {:url "u"}}
                    tbp)]
     (is (= true (-> req first :uncapped?)))))
+
+(deftest route-broadcast-skips-a-trigger-declaring-enabled-false
+  (let [on  {:name :on  :source {:type :slack-events :emoji "owl"} :skill :s :payload ""}
+        off {:name :off :source {:type :slack-events :emoji "owl"} :skill :s :payload ""
+             :enabled? false}]
+    (is (= [:on]
+           (map (comp :name :trigger)
+                (events/route {:broadcast {:type :slack-events :source-config {:emoji "owl"}
+                                           :payload {:id "slack-C1-1.1"}}}
+                              {:brian [on off]}))))))

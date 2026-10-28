@@ -103,7 +103,7 @@
   "The entry kinds a ticket's triage leaves: the report it arrived as, the verdict on it, a
    person's acceptance, and an account of either. Any other record of work means the ticket is
    being worked past its triage."
-  #{:ticket :issue :triage :triage-accepted :proposed-ticket :note})
+  #{:ticket :issue :triage :triage-accepted :proposed-ticket :proposed-tickets :note})
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :any] [:maybe :keyword]]}
   status-of

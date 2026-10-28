@@ -1409,3 +1409,11 @@
        (#'core/enforce-budgets! hours-later (conduct/faceted-sessions {:projects [:brian]})))
       (is (= {:state :failed :reason :timeout}
              (let [r (runs/read-run "rx")] {:state (:state r) :reason (-> r :error :reason)}))))))
+
+(deftest a-disabled-trigger-starts-no-source
+  (let [_       (nido.coordinator.source.slack-events/register!)
+        configs (#'core/discover-source-configs
+                 {:brian [{:name :off :source {:type :slack-events :emoji "owl"} :enabled? false}]
+                  :nido  [{:name :on  :source {:type :slack-events :emoji "eyes"}}]})]
+    (is (= [{:type :slack-events :emoji "eyes" :project :nido}]
+           (filterv #(= :slack-events (:type %)) configs)))))

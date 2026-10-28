@@ -111,12 +111,6 @@
     (when-not (api-error resp)
       (:permalink (json/parse-string (:body resp) true)))))
 
-(defn ^{:malli/schema [:=> [:cat :map :string] :boolean]}
-  owl-reacted?
-  "True if `message` carries a reaction whose name = `emoji`."
-  [message emoji]
-  (boolean (some #(= emoji (:name %)) (:reactions message))))
-
 (defn- post-json
   "POST a JSON body to a Slack Web API method; map to {:ok true ...} or {:error :kw}.
    `ok-extra` pulls extra keys off the parsed body into the success map."
@@ -156,6 +150,73 @@
   [channel ts]
   (str "slack-" channel "-" ts))
 
+(def ^:private id-pattern
+  "A thread id is `slack-<channel>-<root ts>`; a ticket id scopes one by a key, `<thread id>~<key>`.
+   Channel ids are upper-case alphanumerics, a ts is `<seconds>.<micros>`, a key lower-case
+   alphanumerics and dashes — so nothing else can parse as either."
+  #"^slack-([A-Z0-9]+)-(\d+\.\d+)(?:~([a-z0-9][a-z0-9-]*))?$")
+
+(defn ^{:malli/schema [:=> [:cat :string :string] :string]}
+  ticket-id
+  "The id of the ticket proposed under `key` from the thread `thread-id`. Throws on a thread id
+   or key that would not parse back, so a malformed id is never minted."
+  [thread-id key]
+  (let [id (str thread-id "~" key)
+        p  (re-matches id-pattern id)]
+    (when-not (and p (nil? (re-find #"~" thread-id)))
+      (throw (ex-info "Not a thread id and ticket key" {:thread-id thread-id :key key})))
+    id))
+
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :map]]}
+  parse-id
+  "A thread id as {:channel :ts :thread-id}, a ticket id as the same plus :key — or nil for
+   anything that is not exactly one of the two forms. The one place a Slack id is read."
+  [id]
+  (when-let [[_ channel ts key] (and (string? id) (re-matches id-pattern id))]
+    (cond-> {:channel channel :ts ts :thread-id (message-id channel ts)}
+      key (assoc :key key))))
+
+(defn- get-json
+  "GET a Slack Web API method; {:parsed body} on success, or {:error :kw}."
+  [url token params]
+  (let [resp (try
+               (http-request :get url
+                             {:headers      {"Authorization" (str "Bearer " token)}
+                              :query-params params
+                              :timeout      10000})
+               (catch Exception e {:status 0 :exception e}))]
+    (or (api-error resp) {:parsed (json/parse-string (:body resp) true)})))
+
+(def ^:private max-reply-pages 10)
+
+(defn ^{:malli/schema [:=> [:cat :string :string :SlackToken] :map]}
+  conversations-replies
+  "GET conversations.replies for the message `ts` in `channel`, every page up to a cap. Returns
+   {:messages [...]} oldest first — the thread's root then its replies when `ts` is the root —
+   or {:error :kw}."
+  [channel ts token]
+  (loop [cursor nil, acc [], pages 0]
+    (let [{:keys [parsed] :as r} (get-json "https://slack.com/api/conversations.replies" token
+                                           (cond-> {"channel" channel "ts" ts "limit" "200"}
+                                             cursor (assoc "cursor" cursor)))]
+      (if-not parsed
+        r
+        (let [acc'   (into acc (:messages parsed))
+              cursor (get-in parsed [:response_metadata :next_cursor])]
+          (if (and (:has_more parsed) (seq cursor) (< (inc pages) max-reply-pages))
+            (recur cursor acc' (inc pages))
+            {:messages acc'}))))))
+
+(defn ^{:malli/schema [:=> [:cat :string :SlackToken] [:maybe :string]]}
+  users-info
+  "The display name Slack shows for `user` — its display name, else its real name — or nil
+   when Slack answers neither or the call fails."
+  [user token]
+  (let [{:keys [parsed]} (get-json "https://slack.com/api/users.info" token {"user" user})
+        profile          (get-in parsed [:user :profile])]
+    (some #(when-not (str/blank? %) %)
+          [(:display_name profile) (:real_name profile) (get-in parsed [:user :real_name])])))
+
 (defn- truncate [s n]
   (if (> (count s) n) (subs s 0 n) s))
 
@@ -174,3 +235,23 @@
      :title   (truncate text 80)
      :text    text
      :user    user}))
+
+(defn ^{:malli/schema [:=> [:cat :string [:vector :map] :string [:maybe :string]] :map]}
+  normalise-thread
+  "Turn a thread's messages (oldest first, each optionally carrying :user-name) into the event
+   payload the spawn pipeline consumes: keyed by the thread, its text the transcript — root
+   first, every reply after it, each under its author — and the reacted message's ts beside it."
+  [channel messages reacted-ts permalink]
+  (let [root       (first messages)
+        root-text  (or (:text root) "")
+        line       (fn [{:keys [user user-name text]}]
+                     (str (or user-name user "unknown") ": " (or text "")))]
+    {:adapter    :slack-message
+     :id         (message-id channel (:ts root))
+     :ts         (:ts root)
+     :channel    channel
+     :reacted-ts reacted-ts
+     :url        permalink
+     :title      (truncate root-text 80)
+     :text       (str/join "\n\n" (map line messages))
+     :user       (:user root)}))

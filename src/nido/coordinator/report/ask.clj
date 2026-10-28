@@ -185,24 +185,33 @@
    ;; Owed over a Notion triage or a Slack proposal alike (`standing/verdict-kinds`): the record is
    ;; whichever of the two the work plane handed, the newer when it handed both.
    {:holding  (fn [{:keys [format]}]
-                (if (= :proposed-ticket format)
-                  "Nothing is filed until you accept the proposal."
+                (case format
+                  :proposed-ticket  "Nothing is filed until you accept the proposal."
+                  :proposed-tickets "Nothing is filed for this thread until its verdict is carried out."
                   "The ticket stays untriaged, and no fix is built, until you accept the verdict."))
     :record   (fn [_ newest _]
                 (last (sort-by #(or (:seq %) 0)
-                               (keep newest [:triage-report :proposed-ticket]))))
-    :question (fn [{:keys [format title directions]}]
-                (if (= :proposed-ticket format)
-                  (str "File “" title "” as a ticket?")
+                               (keep newest [:triage-report :proposed-ticket :proposed-tickets]))))
+    :question (fn [{:keys [format title directions doubt]}]
+                (case format
+                  :proposed-ticket  (str "File “" title "” as a ticket?")
+                  :proposed-tickets (if doubt
+                                      (str "The triage doubts “" title "” is a problem — reply to override it, or dismiss it?")
+                                      (str "File the tickets proposed from “" title "”?"))
                   (str "Accept the triage of “" title "”"
                        (if (seq directions) ", and which fix should be built?" "?"))))
-    :context  (fn [{:keys [format summary determination ticket-type priority doubt] :as r}]
-                (if (= :proposed-ticket format)
+    :context  (fn [{:keys [format summary determination ticket-type priority doubt tickets] :as r}]
+                (case format
+                  :proposed-ticket
                   (into (non-blank (str "Proposed " (or ticket-type "ticket")
                                         (when priority (str ", priority " priority)) ".")
                                    doubt)
                         (keep (fn [{:keys [heading text]}] (when-not (str/blank? text) (str heading ": " text))))
                         (concat (report/product-sections r) (report/analysis-sections r)))
+                  :proposed-tickets
+                  (non-blank doubt
+                             (when (seq tickets)
+                               (str "Proposed: " (str/join "; " (map #(-> % :ticket :title) tickets)) ".")))
                   (non-blank (when determination (str "Determination: " (name determination) "."))
                              summary)))
     :options  (fn [{:keys [directions]} actions]

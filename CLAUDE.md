@@ -581,7 +581,24 @@ A trigger with `:source {:type :notion-view :database "..." :view "..." :poll "5
 
 A trigger with `:source {:type :slack-channel :channel "C..." :poll "2m"}` polls a Slack channel's top-level messages and emits one event per new message (watermarked on message `ts`). The first poll seeds the watermark and emits nothing — it does not replay channel history. Each new message auto-fires a triage session; the verdict stays in nido's ledger (no Slack/Notion writeback). The bot token needs `channels:history` (public) or `groups:history` (private) scope and the bot must be a channel member. Breaker opens on `invalid_auth` (or ≥3 consecutive server errors); rate-limit (429) and connectivity blips are transient and never trip it.
 
-**Reaction-gated Slack intake (`:slack-reaction`).** Replaces the passive `:triage-slack-bugs` queue above with a human-gated pull: a human drops an `:owl:` reaction on a message in the bug channel, which starts a `triage-slack` session that investigates against the running brian codebase and parks a proposed ticket in the gate inbox. The human Approves → nido creates a "Not started" ticket in brian's Task DB and posts the link back to the Slack thread. The source (`:type :slack-reaction :channel "C..." :emoji "owl" :window "3d" :poll "2m"`) scans a rolling 3-day window for newly-owl'd messages, dedups against a seen-set, and cold-starts silently (first poll seeds, emits nothing). Trigger shape: `:triage-slack-reactions` (`:intake :spawn`, `:skill :triage-slack`, `:session-profile :full`). Slack scopes: `reactions:read`, `chat:write` (plus `reactions:write` only if the optional 👀 start-ack is later wired up) — `channels:history` is already granted for the passive queue above.
+**Owl-gated Slack thread intake (`:slack-events`).** A person drops an `:owl:` on any message — top-level or a reply — in any channel, public or private, that the bot has been **added to by hand** (it never joins anything itself). That starts one `triage-slack` session for the whole **thread**: it reads the transcript (root first, every reply, each under its author's display name) and concludes one or more tickets, each a bug or an improvement, or a doubt about the thread. Each ticket gets a workstream of its own, is filed at *Needs verification* and linked in the thread, and waits at its own gate (Apply starts its drive; Dismiss closes it); the thread's workstream closes once it has handed them on. A doubt is posted in the thread and parks on the thread's workstream, where Reply overrides it. A thread nido already has a workstream for is never triaged again.
+
+The source is **push**, not a poll: it holds a Slack **Socket Mode** connection (one per daemon), acks every envelope, reconnects with backoff, and opens its breaker on an auth refusal. Reactions made while the connection is down are not recovered — `bb nido:coordinator:status` shows "not connected … since …" under Sources. Trigger, in `~/.nido/projects/brian/triggers.edn` (`:enabled? false` hears the source and fires nothing — flip it to switch the intake on):
+
+```clojure
+{:name            :triage-slack-threads
+ :source          {:type :slack-events :emoji "owl" :poll "30s"}
+ :intake          :spawn
+ :skill           :triage-slack
+ :session-profile :full
+ :enabled?        false
+ :max-in-flight   2
+ :payload         "Triage Slack thread: {{event/title}}\n\n{{event/text}}\n\n{{event/url}}"
+ :payload-key     :id
+ :limits          {:budget "8h" :max-failures 3}}
+```
+
+Slack app setup: turn on **Socket Mode** and make an app-level token with `connections:write` (store it with `bb nido:slack:app-auth:set`, check with `bb nido:slack:app-auth:check`); subscribe the bot to the **`reaction_added`** event; bot scopes `reactions:read`, `channels:history`, `groups:history`, `users:read`, `chat:write` (plus `reactions:write` for the 👀 pickup ack). Then `bb nido:coordinator:restart`.
 
 **Foreground (still supported for development):**
 

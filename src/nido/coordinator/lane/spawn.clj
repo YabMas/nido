@@ -129,14 +129,19 @@
    drop a reconcile re-emit instead of minting a duplicate run — the fix for the :queued-run
    pileup: a merely-queued triage records nothing on the ticket's ledger, so the ticket-status
    gate alone can't dedup it. Ref-less fires (no dedup key) are never suppressed. The run stores
-   its trigger as the trigger's :name keyword (runs/create-run!), so that is what is matched."
+   its trigger as the trigger's :name keyword (runs/create-run!), so that is what is matched.
+
+   A payload carrying :once-per-ref? true is the source saying its ref is worked once: such a
+   fire is dropped whenever the ref already has a workstream, whatever it holds — so an owl on a
+   Slack thread nido has triaged, or one the old message-keyed intake minted, starts nothing."
   [routed]
   (boolean
    (when-let [ref (external-ref (:payload routed))]
      (when-let [w (ws/find-by-ref (:project routed) (:adapter ref) (:id ref))]
-       (some #(and (= (-> routed :trigger :name) (:trigger %))
-                   (contains? pending-states (:state %)))
-             (runs/runs-of (:project routed) (:id w)))))))
+       (or (true? (:once-per-ref? (:payload routed)))
+           (some #(and (= (-> routed :trigger :name) (:trigger %))
+                       (contains? pending-states (:state %)))
+                 (runs/runs-of (:project routed) (:id w))))))))
 
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]}
   spawn-and-submit!

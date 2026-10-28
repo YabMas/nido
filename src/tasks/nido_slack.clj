@@ -1,10 +1,12 @@
 (ns tasks.nido-slack
   "Bb task entry points for Slack auth + write actions. The token is an
-   xoxb- bot token with channels:history (public) or groups:history
-   (private) scope, and the bot must be a member of the bug channel."
+   xoxb- bot token (reactions:read, channels:history, groups:history, users:read,
+   chat:write), read in every conversation a person has added the bot to; the
+   app-level xapp- token (connections:write) opens the Socket Mode connection."
   (:require
    [clojure.string :as str]
    [nido.slack.client :as slack]
+   [nido.slack.socket :as socket]
    [nido.platform.task-args :as task-args]))
 
 (def ^:private react-raw-keys
@@ -64,6 +66,33 @@
 
       :else
       (println "Slack token present in keychain (length" (count token) ")."))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  app-auth-set
+  "bb nido:slack:app-auth:set — read an app-level token from stdin, store in macOS Keychain.
+   The token (xapp-, scope connections:write) opens the Socket Mode connection the :slack-events
+   source holds. Stdin is echoed; clear the terminal scrollback afterwards."
+  [& _args]
+  (println "Paste your Slack app-level token (xapp-...) (input is echoed; clear terminal afterwards):")
+  (let [token (read-line)]
+    (if (or (nil? token) (str/blank? token))
+      (do (println "Empty token; aborted.") (System/exit 1))
+      (let [{:keys [exit err]} (socket/app-token-set! token)]
+        (if (zero? exit)
+          (println "App token stored. Run `bb nido:slack:app-auth:check` to verify, then `bb nido:coordinator:restart`.")
+          (do (println "security failed (exit" exit ").")
+              (println err)
+              (System/exit exit)))))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  app-auth-check
+  "bb nido:slack:app-auth:check — print whether the keychain has an app-level token."
+  [& _args]
+  (let [token (socket/app-token)]
+    (if (str/blank? token)
+      (do (println "No Slack app-level token in keychain. Run `bb nido:slack:app-auth:set`.")
+          (System/exit 1))
+      (println "Slack app-level token present in keychain (length" (count token) ")."))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   react

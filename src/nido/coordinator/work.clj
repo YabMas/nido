@@ -441,7 +441,8 @@
                                         entry-seq (assoc :seq entry-seq)
                                         ;; apply! files a Slack proposal as a new ticket
                                         ;; rather than writing a triage to its own.
-                                        (= :proposed-ticket report-format) (assoc :answers :proposal))]
+                                        (#{:proposed-ticket :proposed-tickets} report-format)
+                                        (assoc :answers :proposal))]
                           ;; Reply (free-text overrides/redo) resumes the agent; Dismiss takes it
                           ;; off the radar nido-side, writing nothing to Notion.
                           (cond
@@ -1610,7 +1611,7 @@
    a design verdict, a triage verdict or a Slack proposal, a published PR — and the intent the
    question is judged against. Which of them a question reads is the ask registry's to say; this
    only fetches them."
-  #{:design-decision :design-verdict :triage :proposed-ticket :pr-opened :intent})
+  #{:design-decision :design-verdict :triage :proposed-ticket :proposed-tickets :pr-opened :intent})
 
 (defn- ask-inputs
   "What `ask/ask` reads for a gate: a hydrated record of each of `ask-kinds`, oldest first — for
@@ -2378,14 +2379,6 @@
   [w]
   (some #(when (= :slack-message (:adapter %)) %) (:external-refs w)))
 
-(defn- parse-slack-id
-  "Split a Slack message id `slack-<channel>-<ts>` into {:channel <str> :ts <str>},
-   or nil. Channel is dashless (e.g. \"C07N0U273AR\"); ts is digits+dot — the greedy
-   channel group backtracks so the trailing numeric ts stays whole."
-  [slack-id]
-  (when-let [[_ channel ts] (re-matches #"^slack-(.+)-([0-9.]+)$" (str slack-id))]
-    {:channel channel :ts ts}))
-
 (def ^:private slack-ticket-owner
   "Who a Slack-born ticket is handed to: its Ball Holder, and who a doubt is put to."
   :jaap)
@@ -2396,11 +2389,13 @@
   "Engineering notes & history")
 
 (defn- slack-thread
-  "{:slack-id :channel :ts} of the workstream's originating Slack message, or nil."
+  "{:slack-id :channel :ts} of the thread the workstream's Slack ref names — its message, its
+   thread or, for a ticket proposed from a thread, that thread — or nil. :ts is the thread's root,
+   which is what a reply is threaded under."
   [w]
   (let [slack-id (:id (slack-ref-of w))]
-    (when-let [parsed (parse-slack-id slack-id)]
-      (assoc parsed :slack-id slack-id))))
+    (when-let [{:keys [channel ts]} (slack/parse-id slack-id)]
+      {:slack-id slack-id :channel channel :ts ts})))
 
 (defn- post-in-thread!
   "Post `text` as a reply in the Slack thread. Returns true on {:ok true}; never throws —
@@ -2512,6 +2507,13 @@
       (do (link-filed! project thread (:url page))
           {:decision :created :br (:br page)}))))
 
+(defn- thread-workstream?
+  "Whether `ws-id` came to exist for a Slack thread: it holds a run a :slack-events fire started.
+   Read off how the workstream came to be, never its ref's text or its newest verdict — a
+   once-per-ref fire lands a run only on a workstream its own fire minted (spawn)."
+  [project ws-id]
+  (boolean (some #(= :slack-events (-> % :source :type)) (runs/runs-of project ws-id))))
+
 (defn- apply-proposed!
   "Accept a Slack proposal: make sure its product page is filed, add the technical analysis
    to that page's engineering notes, record the acceptance, and only then claim the ticket and
@@ -2522,6 +2524,8 @@
    Returns {:decision :created :br …} | {:decision :error :error kw}."
   [project ws-id proposal w]
   (cond
+    ;; A thread's verdict is a :proposed-tickets; its own workstream files nothing.
+    (thread-workstream? project ws-id) {:decision :error :error :wrong-kind}
     (:doubt proposal)          {:decision :error :error :doubted}
     (nil? (:product proposal)) (file-legacy-proposal! project ws-id proposal w)
     :else
@@ -2540,6 +2544,50 @@
                                                   :url (:url page) :title (:title proposal)})
                 {:decision :created :br (:id page)})))))))
 
+(declare conclude!)
+
+(defn- ensure-ticket-workstream!
+  "The workstream of the ticket proposed under `key` from the thread workstream `w`, brought to
+   initialised: found by its ticket-scoped Slack id or minted with it, its ticket record opened,
+   and `ticket` appended as its :proposed-ticket — each only where missing, so an interrupted
+   fan-out is completed by running it again and never doubled. Returns the workstream."
+  [project w {:keys [key ticket]}]
+  (let [tid  (slack/ticket-id (:slack-id (slack-thread w)) key)
+        ref  {:adapter :slack-message :id tid :title (:title ticket) :url (:source-url ticket)}
+        tw   (or (cws/find-by-ref project :slack-message tid)
+                 (cws/create! project {:external-refs [ref]}))]
+    (when-not (tickets/read-meta project tid)
+      (tickets/open! project tid {:url (:source-url ticket) :title (:title ticket)
+                                  :opened-by :slack-thread}))
+    (when-not (seq (cws/entries-of project (:id tw) :proposed-ticket))
+      (cws/append-entry! project (:id tw) {:kind :proposed-ticket} (pr-str ticket)))
+    (cws/read-ws project (:id tw))))
+
+(defn- conclude-thread!
+  "Carry out a Slack thread's verdict (`report/ProposedTickets`). A doubt is put to the owner in
+   the thread and nothing is minted. Tickets each get a workstream of their own
+   (ensure-ticket-workstream!), which is then concluded as any single proposal is — filed for
+   verification and linked in the thread — so each is gated, accepted and driven on its own. The
+   thread workstream files nothing and is closed once every ticket's workstream is initialised;
+   a ticket whose filing failed is retried by its own workstream's gate, not by this one.
+   Returns {:decision :doubted} | {:decision :fanned-out :tickets [{:key :ws-id :decision …}]} |
+   {:decision :error :error kw}."
+  [project ws-id {:keys [doubt tickets]} w]
+  (if-let [thread (slack-thread w)]
+    (if doubt
+      (if (post-in-thread! thread (str (report/slack-mention slack-ticket-owner) " " doubt))
+        {:decision :doubted}
+        {:decision :error :error :slack-failed})
+      (let [results (mapv (fn [t]
+                            (let [tw (ensure-ticket-workstream! project w t)]
+                              (merge {:key (:key t) :ws-id (:id tw)}
+                                     (select-keys (conclude! project (:id tw))
+                                                  [:decision :error :br :url]))))
+                          tickets)]
+        (cws/close! project ws-id :done nil :nido)
+        {:decision :fanned-out :tickets results}))
+    {:decision :error :error :no-slack-ref}))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
   conclude!
   "Carry the workstream's concluded Slack proposal out before anyone accepts it. A :doubt is
@@ -2552,7 +2600,9 @@
   (if-let [w (cws/read-ws project ws-id)]
     (let [proposal (latest-report project ws-id)]
       (cond
+        (= :proposed-tickets (:format proposal)) (conclude-thread! project ws-id proposal w)
         (not= :proposed-ticket (:format proposal)) {:decision :error :error :no-proposal}
+        (thread-workstream? project ws-id)       {:decision :error :error :wrong-kind}
         (:doubt proposal)
         (if-let [thread (slack-thread w)]
           (if (post-in-thread! thread (str (report/slack-mention slack-ticket-owner) " "
@@ -2700,6 +2750,13 @@
   (cond
     (= :proposed-ticket (:format report))
     (apply-proposed! project ws-id report w)
+
+    ;; A thread's verdict is never accepted on the thread: a doubt is overridden by a Reply, and
+    ;; tickets are carried out by the fan-out, each then accepted on its own workstream.
+    (= :proposed-tickets (:format report))
+    (if (:doubt report)
+      {:decision :error :error :doubted}
+      (conclude-thread! project ws-id report w))
 
     (and (= :triage-report (:format report)) (:routing report) (wsv/notion-ref w))
     (apply-routed! project ws-id report w)

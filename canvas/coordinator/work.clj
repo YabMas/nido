@@ -166,7 +166,9 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts [:? :map]]] :any]})
   (Operation conclude!
     "Carry a concluded Slack proposal out before anyone accepts it: file the product ticket and
-     link it in the thread, or post the doubt mentioning its owner. Never starts a drive."
+     link it in the thread, or post the doubt mentioning its owner. A thread's verdict proposing
+     several tickets is carried out by giving each its own workstream and concluding that. Never
+     starts a drive."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]})
   (Operation start-triage-page! "Force a triage for a watched row that has no workstream yet."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]})

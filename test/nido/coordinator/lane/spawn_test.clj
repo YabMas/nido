@@ -183,3 +183,18 @@
   (with-tmp
     (fn [_]
       (is (false? (spawn/ref-has-pending-run? (assoc teacher-routed :payload {})))))))
+
+(deftest once-per-ref-fire-is-dropped-whenever-its-ref-has-a-workstream
+  ;; A Slack thread is triaged once: a later owl on it — after the first triage settled, or on a
+  ;; thread the old message-keyed intake already minted a workstream for — starts nothing.
+  (with-tmp
+    (fn [_]
+      (let [routed (assoc teacher-routed
+                          :trigger (assoc (:trigger teacher-routed) :name :triage-slack-threads)
+                          :payload {:adapter :slack-message :id "slack-C1-9.0" :once-per-ref? true})]
+        (is (false? (spawn/ref-has-pending-run? routed)) "no workstream yet ⇒ the first owl spawns")
+        (ws/create! :brian {:external-refs [{:adapter :slack-message :id "slack-C1-9.0"}]})
+        (is (true? (spawn/ref-has-pending-run? routed))
+            "a workstream with no run of this trigger at all still suppresses it")
+        (is (false? (spawn/ref-has-pending-run? (update routed :payload dissoc :once-per-ref?)))
+            "without the mark, only an in-flight run of the same trigger suppresses")))))

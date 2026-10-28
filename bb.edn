@@ -414,6 +414,16 @@
    :doc "Print whether a Slack token is present in the macOS Keychain."
    :task (apply nido-slack/auth-check *command-line-args*)}
 
+  nido:slack:app-auth:set
+  {:requires ([tasks.nido-slack :as nido-slack])
+   :doc "Store the Slack app-level token (xapp-) for Socket Mode in the macOS Keychain (interactive)."
+   :task (apply nido-slack/app-auth-set *command-line-args*)}
+
+  nido:slack:app-auth:check
+  {:requires ([tasks.nido-slack :as nido-slack])
+   :doc "Print whether a Slack app-level token is present in the macOS Keychain."
+   :task (apply nido-slack/app-auth-check *command-line-args*)}
+
   nido:slack:react
   {:requires ([tasks.nido-slack :as nido-slack])
    :doc "React to a Slack message. :channel <C> :ts <ts> [:name eyes]"

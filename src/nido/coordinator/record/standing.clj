@@ -628,9 +628,11 @@
                          (ws/entries-of project ws-id :reopened)))))
 
 (def verdict-kinds
-  "The reports a person accepts or dismisses: a Notion triage and a Slack proposal. Both are
-   answered by the same :triage-accepted, which cites the report's :seq whatever its kind."
-  #{:triage :proposed-ticket})
+  "The reports a person accepts or dismisses: a Notion triage, a Slack proposal, and a Slack
+   thread's verdict. Each is answered by the same :triage-accepted, which cites the report's :seq
+   whatever its kind — except a thread's, which is never accepted on its own workstream: its
+   tickets are, each on theirs."
+  #{:triage :proposed-ticket :proposed-tickets})
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] :int]}
   restored-at

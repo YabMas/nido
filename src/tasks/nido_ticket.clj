@@ -149,18 +149,27 @@
   conclude-cmd
   "bb nido:ticket:conclude :project <p> :br <slack-id> — carry out the workstream's concluded
    Slack proposal (work/conclude!): file its product page for verification and link it in the
-   thread, or post its doubt to the owner. The triage-slack skill's last step before parking.
+   thread, or post its doubt to the owner — for a thread's verdict, once per proposed ticket, on
+   each ticket's own workstream. The triage-slack skill's last step before parking.
    Prints the decision; exits non-zero on an error so the skill can report it."
   [& args]
   (let [[_ o] (task-args/split-args args)
         project (project-kw o)
         br      (str (:br o))]
     (if-let [w (workstream/find-by-ref-id project br)]
-      (let [{:keys [decision error url link]} (work/conclude! project (:id w))]
+      (let [{:keys [decision error url link tickets]} (work/conclude! project (:id w))]
         (println "conclude" br "->" (name decision)
                  (str (when url (str " " url)) (when link (str " (link " (name link) ")"))))
+        ;; A thread's verdict fans out: one line per ticket, each concluded on its own workstream.
+        (doseq [t tickets]
+          (println " " (:key t) "->" (name (:decision t))
+                   (str (when (:url t) (str " " (:url t))) (when (:error t) (str " " (name (:error t))))
+                        " (" (:ws-id t) ")")))
         (when (= :error decision)
           (binding [*out* *err*] (println "conclude failed:" (some-> error name)))
+          (exit! 1))
+        (when (some #(= :error (:decision %)) tickets)
+          (binding [*out* *err*] (println "conclude: some tickets failed to file; their own gates retry"))
           (exit! 1)))
       (do (binding [*out* *err*] (println "no workstream for" br))
           (exit! 1)))))

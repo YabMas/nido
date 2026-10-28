@@ -39,6 +39,8 @@
       (for [[project ts] triggers-by-project
             t ts
             :when (= type (-> t :source :type))
+            ;; a trigger declaring :enabled? false hears its source and fires nothing
+            :when (not (false? (:enabled? t)))
             ;; a project-tagged broadcast only matches that project's triggers
             :when (or (nil? (:project source-config))
                       (= project (:project source-config)))
@@ -55,7 +57,8 @@
      [{:project <kw> :trigger <trigger-map> :payload <m> :priority <int>} ...]
    Or, on routing errors for :target envelopes, a vector of error maps:
      [{:error <kw> :project ... :trigger ...}]
-   Broadcast envelopes with no matches return an empty vector."
+   Broadcast envelopes with no matches return an empty vector; a trigger declaring
+   :enabled? false matches no broadcast."
   [envelope triggers-by-project]
   (cond
     (:target envelope)    (route-direct envelope triggers-by-project)

@@ -198,7 +198,10 @@
     {:signature [:=> [:catn [:routed :map] [:meta :map]] :map]
      :delegates [ensure-workstream! runs/create-run! create-session-for-run!
                  seats/retire-conductor! workstream/delete!]})
-  (Operation ref-has-pending-run? "Whether this fire's ref already has a run of its trigger in flight."
+  (Operation ref-has-pending-run?
+    "Whether this fire's ref already has a run of its trigger in flight — or, for an event its
+     source marked :once-per-ref?, whether the ref resolves to a workstream at all, whatever it
+     holds and whichever intake minted it, so the ref is worked once."
     {:signature [:=> [:catn [:routed :map]] :boolean]
      :delegates [external-ref workstream/find-by-ref runs/runs-of]})
   (Operation spawn-and-submit! "Spawn the records and hand the run to the scheduler."

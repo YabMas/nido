@@ -136,7 +136,7 @@
     ;; one. A status entry, so `kinds` does not hold it — asked of the index directly.
     (some #(= :scratch (:kind %)) (:entries w)) :scratch
     (contains? kinds :triage)   :triaged
-    (contains? kinds :proposed-ticket) :proposal
+    (or (contains? kinds :proposed-ticket) (contains? kinds :proposed-tickets)) :proposal
     (contains? kinds :issue)    :issue
     :else                       :pickup))
 
@@ -169,7 +169,7 @@
    report/event-schemas. Almost all of them are on closed workstreams and place
    as :shipped from `:closed` alone, never reaching here. One open workstream
    does not, and it is the reason this set exists rather than a hypothetical."
-  #{:ticket :issue :triage :triage-accepted :proposed-ticket :intent
+  #{:ticket :issue :triage :triage-accepted :proposed-ticket :proposed-tickets :intent
     :baseline :baseline-review
     :design :design-decision :design-verdict :design-approved :design-cleared
     :implementation-plan :implementation-completed
@@ -193,6 +193,7 @@
    :triage-accepted :intent
    :issue           :intent
    :proposed-ticket :intent
+   :proposed-tickets :intent
    :intent          :intent
    :baseline        :baseline
    :baseline-review :baseline

@@ -278,6 +278,33 @@
   [:and ProposedTicketAny
    [:fn {:error/message "exactly one of :product (with :app-domain) or :doubt"} one-conclusion?]])
 
+(def ^:private TicketKey
+  "Names one ticket within a thread's verdict; it becomes part of that ticket's Slack id, so it is
+   only what the Slack adapter's ticket id accepts."
+  [:re #"^[a-z0-9][a-z0-9-]*$"])
+
+(def ProposedTickets
+  "A Slack THREAD's triage verdict: either the tickets the thread holds — each a ProposedTicket
+   concluding with :product, under a key unique within the record — or one :doubt about the whole
+   thread. Never both, never an empty list. Concluding it gives every ticket a workstream of its
+   own, where that ticket is filed, gated and driven exactly as a single proposal is."
+  [:and
+   [:map {:closed true}
+    [:format     [:= :proposed-tickets]]
+    [:title      :string]
+    [:source-url :string]
+    [:tickets    {:optional true}
+     [:vector {:min 1}
+      [:map {:closed true}
+       [:key    TicketKey]
+       [:ticket [:and ProposedTicket [:fn {:error/message "a thread's ticket concludes with :product"}
+                                      #(some? (:product %))]]]]]]
+    [:doubt      {:optional true} :string]]
+   [:fn {:error/message "exactly one of :tickets or :doubt"}
+    (fn [{:keys [tickets doubt]}] (not= (some? tickets) (some? doubt)))]
+   [:fn {:error/message "ticket keys must be unique"}
+    (fn [{:keys [tickets]}] (or (nil? tickets) (apply distinct? (map :key tickets))))]])
+
 (def ^:private standing-principles
   [:principles {:optional true} [:vector string?]])
 
@@ -3945,6 +3972,7 @@
    :improvement-plan         ImprovementPlan
    :improvement-claim-reserved ImprovementClaimReserved
    :proposed-ticket          ProposedTicket
+   :proposed-tickets         ProposedTickets
    :retraction               Retraction
    :design-approved          DesignApproved
    :design-cleared           DesignCleared
@@ -5247,6 +5275,21 @@
       (sections->markdown (analysis-sections report))
       ["" (str "Source: " source-url)])))
 
+(defn- proposed-tickets->markdown
+  "The gate card for a thread's verdict: its doubt, or the tickets it gives a workstream each."
+  [{:keys [title doubt tickets source-url]}]
+  (str/join "\n"
+    (concat
+      [(str "# " title) ""]
+      (if doubt
+        ["## Doubt" doubt ""]
+        (concat [(str "## " (count tickets) " ticket" (when (not= 1 (count tickets)) "s")
+                      " — each filed and gated on its own workstream")]
+                (for [{:keys [key ticket]} tickets]
+                  (str "- **" (:title ticket) "** (" (:ticket-type ticket) ", `" key "`)"))
+                [""]))
+      [(str "Source: " source-url)])))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe :LedgerEvent]] :string]}
   report->markdown
   "Render a `:format`-tagged report payload to markdown. Each event type → its own
@@ -5280,6 +5323,7 @@
     :improvement-plan         (improvement-plan->markdown report)
     :improvement-claim-reserved (improvement-claim-reserved->markdown report)
     :proposed-ticket          (proposed-ticket->markdown report)
+    :proposed-tickets         (proposed-tickets->markdown report)
     :closed                   (closed->markdown report)
     :reopened                 (reopened->markdown report)
     :stage-set                (stage-set->markdown report)

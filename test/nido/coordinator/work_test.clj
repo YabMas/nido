@@ -2202,12 +2202,6 @@
            :root-cause "CSS media-query regression; verified live in REPL."
            :fix "Restore the logo rule for the mobile breakpoint. pricing.clj:42. Revert-shaped, small."}))
 
-(deftest parse-slack-id-splits-channel-and-ts
-  (is (= {:channel "C07N0U273AR" :ts "1718000000.000123"}
-         (#'work/parse-slack-id "slack-C07N0U273AR-1718000000.000123"))
-      "id is slack-<channel>-<ts>: channel dashless, ts digits+dot")
-  (is (= {:channel "C1" :ts "100.0"} (#'work/parse-slack-id "slack-C1-100.0"))))
-
 (defn- legacy-append!
   "Append `edn` as an old-era entry: what the write contract accepted when it was written."
   [ref edn]
@@ -4347,3 +4341,120 @@
                    (map (juxt :runtime-key :session :worktree) owed))
                 "the person's session comes back, not the conductor it was registered under; a Run's
                  workstream, a closed one and one naming no readable workstream are owed nothing")))))))
+
+;; ── A Slack thread's verdict: one workstream per proposed ticket ─────────────
+
+(defn- slack-thread-ws!
+  "A thread workstream whose triage appended `verdict` (a :proposed-tickets)."
+  [verdict]
+  (let [ws (workstream/create! :brian {:external-refs [{:adapter :slack-message
+                                                        :id "slack-C1-100.0" :title "thread"}]})]
+    (tickets/open! :brian "slack-C1-100.0" {:title "thread"})
+    (workstream/append-entry! :brian (:id ws) {:kind :proposed-tickets} (pr-str verdict))
+    ws))
+
+(defn- thread-verdict [& keys]
+  {:format :proposed-tickets :title "thread" :source-url "https://slack/p100"
+   :tickets (vec (for [k keys] {:key k :ticket (assoc product-proposal :title (str "Ticket " k))}))})
+
+(defn- counting-create []
+  (let [n (atom 4900)]
+    (fn [_] (let [br (str "BR-" (swap! n inc))]
+              {:id br :page-id (str "pg-" br) :url (str "https://notion/" br)}))))
+
+(deftest conclude-thread-gives-each-ticket-a-workstream-and-closes-the-thread
+  (with-tmp
+    (fn [_]
+      (let [ws (slack-thread-ws! (thread-verdict "a" "b"))
+            r  (atom nil)
+            c  (with-slack-stubs {:create (counting-create)}
+                 #(reset! r (work/conclude! :brian (:id ws))))
+            ta (workstream/find-by-ref :brian :slack-message "slack-C1-100.0~a")
+            tb (workstream/find-by-ref :brian :slack-message "slack-C1-100.0~b")]
+        (is (= :fanned-out (:decision @r)))
+        (is (= [:filed :filed] (map :decision (:tickets @r))))
+        (is (= 2 (count (:created c))) "one page per ticket")
+        (is (and ta tb (not= (:id ta) (:id tb))))
+        (is (= (:id ta) (:id (workstream/find-by-ref-id :brian "BR-4901")))
+            "the page is a ref of its ticket's workstream, where its drive will land")
+        (is (nil? (some #(= :notion (:adapter %)) (:external-refs (workstream/read-ws :brian (:id ws)))))
+            "the thread workstream files nothing itself")
+        (is (= ["100.0" "100.0"] (map :thread-ts (:posted c))) "both links go into the thread")
+        (is (= :done (:outcome (workstream/closure (workstream/read-ws :brian (:id ws))))))
+        (is (empty? (:queued c)) "nothing is driven before a person accepts it")
+        (is (tickets/held-by-gate? :brian "BR-4901"))))))
+
+(deftest conclude-thread-re-run-completes-and-never-doubles
+  (with-tmp
+    (fn [_]
+      (let [ws (slack-thread-ws! (thread-verdict "a" "b"))]
+        ;; Filing fails definitely for both: the workstreams exist, nothing is filed.
+        (with-slack-stubs {:create (constantly {:error :http :status 400})}
+          #(work/conclude! :brian (:id ws)))
+        (let [ids (set (map :id (keep #(workstream/find-by-ref :brian :slack-message %)
+                                      ["slack-C1-100.0~a" "slack-C1-100.0~b"])))
+              c   (with-slack-stubs {:create (counting-create)} #(work/conclude! :brian (:id ws)))]
+          (is (= 2 (count ids)))
+          (is (= 2 (count (:created c))) "the re-run files what the first could not")
+          (is (= ids (set (map :id (keep #(workstream/find-by-ref :brian :slack-message %)
+                                         ["slack-C1-100.0~a" "slack-C1-100.0~b"]))))
+              "no second workstream for a key")
+          (is (= 1 (count (workstream/entries-of :brian (first ids) :proposed-ticket)))
+              "the ticket is appended once"))))))
+
+(deftest accepting-one-ticket-leaves-its-sibling-gated
+  (with-tmp
+    (fn [_]
+      (let [ws (slack-thread-ws! (thread-verdict "a" "b"))
+            _  (with-slack-stubs {:create (counting-create)} #(work/conclude! :brian (:id ws)))
+            ta (workstream/find-by-ref :brian :slack-message "slack-C1-100.0~a")
+            c  (with-slack-stubs {} #(work/apply! :brian (:id ta)))]
+        (is (= "BR-4901" (get-in (first (:queued c)) [:payload :id])))
+        (is (= :planning (tickets/status :brian "BR-4901")))
+        (is (tickets/held-by-gate? :brian "BR-4902") "the sibling still waits for a person")))))
+
+(deftest a-thread-doubt-is-posted-and-never-accepted
+  (with-tmp
+    (fn [_]
+      (let [ws (slack-thread-ws! {:format :proposed-tickets :title "thread"
+                                  :source-url "https://slack/p100" :doubt "Works as designed."})
+            c  (with-slack-stubs {}
+                 #(is (= {:decision :doubted} (work/conclude! :brian (:id ws)))))]
+        (is (empty? (:created c)))
+        (is (= "<@U08720YNAT1> Works as designed." (:text (first (:posted c)))))
+        (is (nil? (workstream/closure (workstream/read-ws :brian (:id ws))))
+            "a doubted thread stays at the gate for a Reply")
+        (with-slack-stubs {}
+          #(is (= {:decision :error :error :doubted} (work/apply! :brian (:id ws)))))
+        (is (empty? (workstream/entries-of :brian (:id ws) :triage-accepted)))))))
+
+(deftest a-thread-verdict-gates-its-workstream
+  (with-tmp
+    (fn [_]
+      (let [ws (slack-thread-ws! {:format :proposed-tickets :title "thread"
+                                  :source-url "https://slack/p100" :doubt "Works as designed."})]
+        (is (some #(= (:id ws) (:ws-id %)) (work/gates :brian)))))))
+
+(deftest a-single-proposal-on-a-thread-workstream-is-refused
+  (with-tmp
+    (fn [_]
+      ;; A thread triage that wrote the single-ticket kind under the thread id.
+      (let [ws (slack-proposal-ws! product-proposal)
+            id "run-thread-1"]
+        (fs/create-dirs (cstate/run-dir id))
+        (runs/write-run! {:id id :project :brian :trigger :triage-slack-threads
+                          :source {:type :slack-events :emoji "owl"}
+                          :event-payload {:id "slack-C1-100.0"} :skill :triage-slack
+                          :first-message "/triage-slack" :agent :claude :session-name "t"
+                          :workstream-id (:id ws) :claude-session-id "sid"
+                          :limits {:budget "30m"} :priority 0 :session-profile :full
+                          :uncapped? false :state :awaiting-review
+                          :state-history [{:at "2026-06-18T00:00:00Z" :state :queued}]
+                          :artifacts [] :error nil})
+        (runs/register! id)
+        (let [c (with-slack-stubs {}
+                  #(do (is (= {:decision :error :error :wrong-kind} (work/conclude! :brian (:id ws))))
+                       (is (= {:decision :error :error :wrong-kind} (work/apply! :brian (:id ws))))))]
+          (is (empty? (:created c)) "nothing is filed onto the thread")
+          (is (nil? (workstream/find-by-ref-id :brian "BR-4900")))
+          (is (empty? (workstream/entries-of :brian (:id ws) :triage-accepted))))))))
