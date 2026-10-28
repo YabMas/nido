@@ -71,25 +71,29 @@
   "Ordered [stage rows] pairs the board renders out of a `grouped` map, empty
    bands dropped: :shipping, :in-progress (most-advanced first), :awaiting-gate —
    closed between phases, live session or not, since what they wait on is a
-   person rather than a session — then :winding-down — finished workstreams still holding live resources, whether
+   person rather than a session — then :triage, the triages nido has a session on (in flight
+   or parked) — then :winding-down — finished workstreams still holding live resources, whether
    nido settled them or Notion did (bring-down! is their one action). The ONE
    place the band list lives, so no surface can disagree about it.
 
-   The board is work nido is driving, and nothing else. :triage, :incoming and
-   :dismissed rows are grouped but deliberately NOT banded — intake is not
-   something the surfaces offer — so a row in one of those stages is off the
-   board; it still shows on needs-you when gated. The backlog (:ready) and the archive (:done) live in Notion and are
-   never emitted by grouped-by-stage.
+   The board is work nido is driving, and nothing else. A triage with a session on it is
+   driven work: its sessions are the ones a person picks up, and with the band off the board
+   they were reachable only through the gate inbox, and not at all between a reply and the
+   next park. Queued triage, :incoming and :dismissed rows are grouped but deliberately NOT
+   banded — intake nido has not started is not something the surfaces offer — so a row in one
+   of those is off the board; it still shows on needs-you when gated. The backlog (:ready)
+   and the archive (:done) live in Notion and are never emitted by grouped-by-stage.
 
-   Every row `grouped-rows` emits outside those three stages is on exactly one
-   band — the guarantee that nothing nido drives can be hidden (a source filter
-   defaulting to :notion once hid every :in-progress row)."
+   Every row `grouped-rows` emits outside those is on exactly one band — the guarantee that
+   nothing nido drives can be hidden (a source filter defaulting to :notion once hid every
+   :in-progress row)."
   [grouped]
   (into []
         (keep (fn [[stage rows]] (when (seq rows) [stage (vec rows)])))
         [[:shipping      (:shipping grouped)]
          [:in-progress   (:in-progress grouped)]
          [:awaiting-gate (:awaiting-gate grouped)]
+         [:triage        (get-in grouped [:triage :in-flight])]
          [:winding-down  (:winding-down grouped)]]))
 
 (def ^:private workstream-less-actions

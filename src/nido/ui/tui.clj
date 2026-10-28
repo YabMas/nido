@@ -256,6 +256,7 @@
                (band :shipping         "Shipping"           (:shipping g))
                (band :in-progress      "In progress"        (:in-progress g))
                (band :awaiting-gate    "Awaiting gate"      (:awaiting-gate g))
+               (band :triage           "Triage"             (get-in g [:triage :in-flight]))
                ;; Winding-down rows carry :origin (so the origin filter composes via
                ;; `keep`) but no :facets — an ACTIVE facet selection hides them
                ;; (facet-match? treats facet-less rows as non-matching then). Acceptable:

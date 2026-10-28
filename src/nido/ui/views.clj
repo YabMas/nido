@@ -1785,6 +1785,7 @@
   [[:shipping    "Shipping"]
    [:in-progress "InProgress"]
    [:awaiting-gate "AwaitingGate"]
+   [:triage "Triage"]
    [:winding-down "WindingDown"]])
 
 (defn- ws-fold-signal

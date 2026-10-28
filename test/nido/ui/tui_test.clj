@@ -138,7 +138,8 @@
       (is (= ["p1"] (vec ids)) "origin filter keeps only scratch rows"))))
 
 (deftest board-rows-leaves-intake-off-the-board
-  ;; Queue and the two Triage bands are not on the board: only driven work is.
+  ;; Only driven work is on the board: a triage nido has a session on is, queued triage
+  ;; and incoming are not.
   (with-redefs [nido.coordinator.work/grouped
                 (fn [_ _]
                   {:incoming    [{:ws-id "s1" :origin :slack :label "can you link it"
@@ -153,8 +154,9 @@
     (let [rows   (#'tui/board-rows "brian" :all)
           ids    (set (keep #(get-in % [:data :ws-id]) rows))
           titles (map :title rows)]
-      (is (= #{"p1"} ids))
-      (is (not-any? #(re-find #"Queue|Triage" %) titles) "no intake band headers"))))
+      (is (= #{"p1" "f1"} ids))
+      (is (some #(re-find #"Triage \(1\)" %) titles) "the in-flight triage band, counting only it")
+      (is (not-any? #(re-find #"Queue|Incoming" %) titles) "no intake band headers"))))
 
 (deftest board-rows-folds-a-collapsed-band
   ;; A band in the collapsed set renders its header + count and no selectable rows;

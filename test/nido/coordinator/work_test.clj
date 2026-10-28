@@ -98,10 +98,11 @@
                  :shipping [{:ws-id "s"}]
                  :winding-down [{:ws-id "w"}]
                  :dismissed [{:ws-id "d"}]}]
-    (is (= [[:shipping ["s"]] [:in-progress ["p"]] [:winding-down ["w"]]]
+    (is (= [[:shipping ["s"]] [:in-progress ["p"]] [:triage ["tf"]] [:winding-down ["w"]]]
            (for [[stage rows] (work/board-bands grouped)]
              [stage (mapv :ws-id rows)]))
-        "shipping then in-progress then winding-down; no intake band")))
+        "shipping, in-progress, then the triages nido has a session on, then winding-down;
+         queued triage and the rest of intake are not banded")))
 
 (deftest board-bands-covers-every-driven-row-exactly-once
   ;; The guarantee this whole design exists for: nothing nido drives can be
@@ -119,7 +120,7 @@
                  :awaiting-gate [{:ws-id "g"}]
                  :winding-down [{:ws-id "w"}]
                  :dismissed [{:ws-id "d"}]}
-        intake  #{"i" "tf" "tq" "d"}
+        intake  #{"i" "tq" "d"}
         board   (map :ws-id (mapcat second (work/board-bands grouped)))]
     (is (= (set/difference (set (map :ws-id (work/grouped-rows grouped))) intake)
            (set board))

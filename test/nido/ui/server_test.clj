@@ -155,13 +155,14 @@
 
 (deftest workstreams-route-renders-the-driven-bands-end-to-end
   ;; parse → derive-screen → views. A legacy ?tab=intake bookmark opens the same
-  ;; board, which never shows intake.
+  ;; board, which never shows intake nido has not started.
   (with-redefs [nido.coordinator.work/all-grouped
                 (fn [] [{:project "brian"
                          :grouped {:incoming []
                                    :triage {:in-flight [{:ws-id "t" :origin :notion :stage :triage
                                                          :label "Triage-row"}]
-                                            :queued []}
+                                            :queued [{:ws-id "q" :origin :notion :stage :triage
+                                                      :label "Queued-row"}]}
                                    :in-progress [{:ws-id "p" :origin :scratch :stage :in-progress
                                                   :label "Scratch-row"}]
                                    :shipping []}}])
@@ -172,7 +173,8 @@
       (let [body (:body (server/handle-request {:request-method :get :uri "/workstreams"
                                                 :query-string q}))]
         (is (str/includes? body "Scratch-row") "the scratch row is reachable — the bug this fixes")
-        (is (not (str/includes? body "Triage-row")) "intake is off the board")))))
+        (is (str/includes? body "Triage-row") "a triage nido has a session on is on the board")
+        (is (not (str/includes? body "Queued-row")) "queued intake is off the board")))))
 
 (deftest workstream-pane-route-renders
   (with-redefs [nido.coordinator.work/grouped (fn [_] {:triage {:in-flight [] :queued []} :ready [] :in-progress [] :incoming []})

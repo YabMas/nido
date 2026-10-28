@@ -207,7 +207,7 @@
         html    (views/workstreams-fragment {:groups [{:project "brian" :grouped grouped}]
                                              :selection nil :scope "all"})]
     (is (str/includes? html "spike") "the in-progress row is on the board")
-    (is (not (str/includes? html "BR-1 · a")) "no triage band")
+    (is (str/includes? html "BR-1 · a") "the triage nido has a session on is banded")
     (is (not (str/includes? html "slack-report")) "no incoming band")
     (is (not (str/includes? html "BR-5 · vetoed")) "no dismissed band")
     (is (not (str/includes? html "ready")) "no :ready band — the backlog lives in Notion")))
