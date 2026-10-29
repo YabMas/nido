@@ -181,6 +181,12 @@
     {:signature [:=> [:catn [:facet-filter :map] [:row :map]] :boolean]})
   (Operation live-session-names "The sessions of a project that are actually up."
     {:signature [:=> [:catn [:project ProjectName]] :any] :delegates [sstate/session-live?]})
+  (Operation owed-revivals
+    "The unsettled casualties a person is owed a revive of, one per workstream: each whose
+     workstream is open and holds a session a person works in, carrying that session."
+    {:signature [:=> [:catn] casualties/Unsettled]
+     :delegates [casualties/unsettled workstream/read-ws workstream/closure session/list-sessions
+                 session/person? lifecycle/session-coords]})
   (Operation prune-dead-registry! "Drop registry entries whose session no longer holds a port."
     {:signature [:=> [:catn [:now-ms [:? :int]]] :any] :delegates [sstate/session-live? casualties/record!]})
   (Operation bring-down! "Down every live session of a workstream but its conductor."

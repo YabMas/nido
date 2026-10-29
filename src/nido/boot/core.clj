@@ -473,7 +473,7 @@
                                         :halt       halt-info
                                         :breakers   (breakers/auto-tripped-triggers)
                                         :denials    denials
-                                        :casualties (:casualties (casualties/unsettled))})]
+                                        :casualties (:casualties (work/owed-revivals))})]
           ;; Each denial is posted on the look it first appears in, then dropped.
           (swap! !conduct update :denials #(vec (drop (count denials) %)))
           ;; Off the loop's thread: a sender waiting on a permission prompt

@@ -45,5 +45,9 @@
   {:about [nido-session record-session-events session-lifecycle] :evidence "round"})
 
 (Claim daemon-announces-only
-  "The daemon starts no casualty's services and opens no tab for one. While any casualty of a boot is unsettled it is an attention item keyed by that boot, and the gate inbox shows a card listing them with the revive command. The first look's one summary still counts every waiting item, casualties among them, and when any are casualties it names how many sessions there are to revive — \"N things need your attention — M sessions to revive\"; it posts no second banner for them."
+  "The daemon starts no casualty's services and opens no tab for one. While any casualty of a boot is owed a revive it is an attention item keyed by that boot, and the gate inbox shows a card listing them with the revive command. The first look's one summary still counts every waiting item, casualties among them, and when any are casualties it names how many workstreams there are to revive — \"N things need your attention — M workstreams to revive\"; it posts no second banner for them."
   {:about [boot-core boot-attention] :evidence "round"})
+
+(Claim revive-owed-per-workstream
+  "A casualty is owed a revive while the workstream its runtime key names is open and holds a session a person works in — neither its conductor's nor a Run's — and is owed at most once per workstream; one whose workstream cannot be read is owed as it died. An owed casualty brings back the newest such session, in its own worktree, whatever session the runtime was last registered under. The revive plan, the daemon's attention item and the inbox card each read only owed casualties, and count workstreams."
+  {:about [coordinator-work nido-session session-casualties] :evidence "round"})

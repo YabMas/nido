@@ -62,6 +62,9 @@
   (Operation autonomous?
     "Whether an agent is driving this episode rather than a person."
     {:signature [:=> [:catn [:s Session]] :boolean]})
+  (Operation person?
+    "Whether `s` is a session a person works in: neither its workstream's conductor nor a Run's."
+    {:signature [:=> [:catn [:s Session]] :boolean] :delegates [autonomous?]})
   (Operation archive!
     "Flip a session to archived, recording when. Idempotent — archiving twice leaves one entry."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName]] Session]

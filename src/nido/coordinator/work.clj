@@ -2893,6 +2893,40 @@
      (sstate/remove-many-from-registry! (map first dead))
      (mapv (fn [[k entry]] (or (:instance-id entry) k)) dead))))
 
+(defn ^{:malli/schema [:=> [:cat] :Unsettled]}
+  owed-revivals
+  "The unsettled casualties a person is owed a revive of — one per workstream. A casualty whose
+   runtime key names a workstream is owed while that workstream is open and holds a session a
+   person works in, and carries that session — the newest such, with its worktree — whatever
+   session the runtime was last registered under: a workstream only Runs worked is the daemon's
+   to account for, and its conductor is the conduct pass's to start. A casualty whose workstream
+   cannot be read is kept as it died: nothing says it is not a person's."
+  []
+  (let [{:keys [casualties] :as unsettled} (casualties/unsettled)
+        owed (keep (fn [{:keys [project runtime-key] :as c}]
+                     (let [p (keyword project)
+                           w (when runtime-key (try (cws/read-ws p runtime-key) (catch Exception _ nil)))]
+                       (cond
+                         (nil? w)          c
+                         (cws/closure w)   nil
+                         :else
+                         (when-let [s (->> (try (csession/list-sessions p runtime-key) (catch Exception _ nil))
+                                           (filter csession/person?)
+                                           (sort-by #(str (:created-at %)))
+                                           last)]
+                           (let [wt (try (:wt-path (lifecycle/session-coords (:name s) {:project project}))
+                                         (catch Exception _ nil))]
+                             (cond-> (assoc c :session (:name s))
+                               wt (assoc :worktree (str wt))))))))
+                   casualties)]
+    (assoc unsettled :casualties
+           (->> owed
+                (reduce (fn [[seen acc] c]
+                          (let [k [(:project c) (or (:runtime-key c) (:instance-id c))]]
+                            (if (seen k) [seen acc] [(conj seen k) (conj acc c)])))
+                        [#{} []])
+                second))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
   bring-down!
   "Down every live session of a workstream but its conductor — the winding-down band's one action.

@@ -806,16 +806,16 @@
       " — latest: " (or (:tool-name (peek denials)) "?")])])
 
 (defn- casualty-card
-  "The sessions that died with the host, and the command that brings them back. A command and no
+  "The workstreams that died with the host, and the command that brings them back. A command and no
    button: reviving opens terminal tabs, which only a process in the person's terminal session
    can do, and the dashboard runs inside the daemon."
   [casualties]
   [:div.gate-card
-   [:div.gate-top [:span.lbl (count casualties) (if (= 1 (count casualties)) " session" " sessions")
+   [:div.gate-top [:span.lbl (count casualties) (if (= 1 (count casualties)) " workstream" " workstreams")
                    " to revive"] [:span.needs {:title "needs you"}]]
    [:div.gate-sub [:span "died with the host"]
     [:span "run " [:code "nido session:revive"] " in a terminal — " [:code ":dry-run true"] " to preview"]]
-   [:div.gate-prev (str/join ", " (map #(str (:project %) "/" (:instance-id %)) casualties))]])
+   [:div.gate-prev (str/join ", " (map #(str (:project %) "/" (or (:session %) (:instance-id %))) casualties))]])
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   needs-fragment

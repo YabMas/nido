@@ -13,8 +13,9 @@
    delivered for ends leaving it unanswered.
 
    Also the conductor's lifecycle against its workstream's: a workstream is WORKED once, since
-   conductors began on this host — the instant the first conductor pass recorded — a session other
-   than its conductor has been recorded on it or a hand-back has been logged on it, so a workstream
+   conductors began on this host — the instant the first conductor pass recorded — a session a
+   person works in has been recorded on it or a hand-back has been logged on it — a Run's session is
+   none, since a Run answers for its own turns and leaves none to conduct — so a workstream
    worked only before then, however long ago, is not worked until a session starts on it or nido
    gives it an instruction no Run gave — and every open, worked workstream has one
    conductor, started by a conduct pass while its session is not running and retired once the
@@ -65,10 +66,10 @@
         now)))
 
 (defn- worked?
-  "Whether, at or after `since`, an ISO instant, a session other than the conductor's has been
-   recorded on the workstream or a hand-back has been logged on it."
+  "Whether, at or after `since`, an ISO instant, a session a person works in — neither the
+   conductor's nor a Run's — has been recorded on the workstream or a hand-back has been logged on it."
   [project ws-id since]
-  (boolean (or (some #(and (not (:conductor %)) (not (neg? (compare (str (:created-at %)) since))))
+  (boolean (or (some #(and (session/person? %) (not (neg? (compare (str (:created-at %)) since))))
                      (session/list-sessions project ws-id))
                (seats/handed-back-since? project ws-id since))))
 
@@ -174,8 +175,8 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:sequential :map]]}
   conductors!
   "On every conduct pass: start, on its one conductor record and its brief, the conductor of each
-   open workstream of `project` that is worked — since conductors began on this host, a session
-   other than its conductor recorded on it or a hand-back logged on it — whose conductor's session
+   open workstream of `project` that is worked — since conductors began on this host, a session a
+   person works in recorded on it or a hand-back logged on it — whose conductor's session
    is not running, and retire the conductor of each closed or unworked one that still has a process
    or an up session — a ticket a person settled in Notion closes its workstream here as the
    pipeline places it (`pipeline/settled-in-notion`), and one taken back out starts it again. A workstream not worked since gets none.

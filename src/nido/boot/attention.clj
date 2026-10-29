@@ -60,16 +60,16 @@
     :sound    sound}])
 
 (defn- casualty-item
-  "One boot's unsettled casualties as one item. It carries how many sessions it holds, which the
-   first look's summary names; a notifier reads only the notification's own keys."
+  "One boot's casualties owed a revive as one item. It carries how many workstreams it holds,
+   which the first look's summary names; a notifier reads only the notification's own keys."
   [[boot-id cs]]
   (let [n (count cs)]
     [[:casualties boot-id]
-     {:title    "nido · sessions to revive"
-      :message  (str n (if (= 1 n) " session" " sessions")
-                     " died with the host — run `nido session:revive`")
-      :sound    sound
-      :sessions n}]))
+     {:title       "nido · workstreams to revive"
+      :message     (str n (if (= 1 n) " workstream" " workstreams")
+                        " died with the host — run `nido session:revive`")
+      :sound       sound
+      :workstreams n}]))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:map-of :any :map]]}
   items
@@ -78,7 +78,7 @@
    `breakers/auto-tripped-triggers` — a trigger a person paused on purpose is
    not news to them, so user-disabled breakers are not passed here. `:denials`
    is the permission denials recorded since the last look, each its own item.
-   `:casualties` is `casualties/unsettled`'s casualties, one item per boot.
+   `:casualties` is `work/owed-revivals`'s casualties — one per workstream — one item per boot.
    A blocked session is not an item: see blocked-notifications."
   [{:keys [gates halt breakers denials casualties]}]
   (into {}
@@ -103,10 +103,10 @@
     (if (empty? current)
       []
       (let [n (count current)
-            m (reduce + 0 (keep :sessions (vals current)))]
+            m (reduce + 0 (keep :workstreams (vals current)))]
         [{:title   "nido · waiting on you"
           :message (str n (if (= 1 n) " thing needs" " things need") " your attention"
-                        (when (pos? m) (str " — " m (if (= 1 m) " session" " sessions") " to revive")))
+                        (when (pos? m) (str " — " m (if (= 1 m) " workstream" " workstreams") " to revive")))
           :sound   sound}]))
     (->> current
          (remove (fn [[k _]] (contains? seen k)))

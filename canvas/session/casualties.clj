@@ -10,9 +10,11 @@
 
 (Kind Casualty
   "One session that died with the host, as its stored entry parses: the boot it died at, its
-   project, its worktree and when it was registered — nil when the entry carries no readable time."
+   project, its worktree, when it was registered — nil when the entry carries no readable time —
+   and the runtime key and session name it was registered under, each nil when the entry has none.
+   A workstream's runtime is keyed by its workstream id, so the key names the workstream it died on."
   [:map [:boot-id :string] [:instance-id InstanceId] [:project :string] [:worktree Path]
-        [:registered-at [:maybe :string]]])
+        [:registered-at [:maybe :string]] [:runtime-key [:maybe :string]] [:session [:maybe :string]]])
 
 (Kind CasualtyRecord
   "One boot's record as it is persisted: the boot, the registry entries held for it verbatim —

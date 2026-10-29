@@ -10,6 +10,7 @@
             [canvas.coordinator.lane.conduct :as conduct]
             [canvas.coordinator.lane.conductor :as conductor]
             [canvas.coordinator.lane.seats :as seats]
+            [canvas.coordinator.work :as work]
             [fukan.common.typing.malli]))
 
 (Module nido-session
@@ -33,10 +34,10 @@
     {:signature [:=> [:catn [:args [:* :any]]] :any]
      :delegates [conductor/carry!]})
   (Operation revive
-    "Bring back the sessions that died with the host: plan from the casualty records, bring the
-     admitted ones up in order, and reopen each one's latest conversation where it ran. A dry run
-     prints the plan and changes nothing."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+    "Bring back the workstreams that died with the host: plan from those owed a revive, bring the
+     admitted ones up in order on the session a person works in, and reopen its latest
+     conversation where it ran. A dry run prints the plan and changes nothing."
+    {:signature [:=> [:catn [:args [:* :any]]] :any] :delegates [work/owed-revivals]})
   (Operation down
     "Stop the named session. Worktree and on-disk state are preserved."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})

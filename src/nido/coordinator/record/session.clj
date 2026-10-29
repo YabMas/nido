@@ -228,6 +228,11 @@
   live?       [s] (= :live (:substrate s)))
 (defn ^{:malli/schema [:=> [:cat :Session] :boolean]}
   autonomous? [s] (some? (:autonomy s)))
+(defn ^{:malli/schema [:=> [:cat :Session] :boolean]}
+  person?
+  "Whether `s` is a session a person works in: neither its workstream's conductor nor a Run's."
+  [s]
+  (not (or (:conductor s) (autonomous? s))))
 (defn ^{:malli/schema [:=> [:cat :Session] [:maybe :map]]}
   claude-facet [s] (:claude s))
 

@@ -13,7 +13,6 @@
             [canvas.coordinator.report :as report]
             [canvas.coordinator.work :as work :refer [Screen]]
             [canvas.platform.project :refer [ProjectName]]
-            [canvas.session.casualties :as casualties]
             [fukan.common.typing.malli]))
 
 (Kind ViewState
@@ -141,9 +140,9 @@
     {:signature [:=> [:catn [:project ProjectName]] [:maybe :keyword]]
      :delegates [control/read-queue-blocker]})
   (Operation derive-screen
-    "Gather what the screen needs and derive it — the gate inbox's casualty card from unsettled,
-     beside the gates and never among them."
-    {:signature [:=> [:catn [:view-state :any]] Screen] :delegates [work/screen casualties/unsettled]})
+    "Gather what the screen needs and derive it — the gate inbox's casualty card from the
+     workstreams owed a revive, beside the gates and never among them."
+    {:signature [:=> [:catn [:view-state :any]] Screen] :delegates [work/screen work/owed-revivals]})
   (Operation wrap-slow-request-log
     "Wrap a handler so a request slower than the threshold leaves one line in the daemon log.
      The dashboard's own latency is otherwise unobservable after the fact."

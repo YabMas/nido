@@ -4107,3 +4107,37 @@
             "a registered run changing state")
         (is (moved? #(workstream/create! :brian {:external-refs []}))
             "a new workstream")))))
+
+(deftest a-revive-is-owed-to-a-workstream-a-person-works-in
+  (with-tmp
+    (fn [_]
+      (let [mk      (fn [] (:id (workstream/create! :brian {:external-refs []})))
+            person  (mk)
+            run     (mk)
+            closed  (mk)
+            human   (fn [id n] (session/create! :brian id {:name n :weight :heavy :autonomy nil}))
+            dead    (fn [id n] {:boot-id "b" :instance-id (str "brian--" id) :project "brian"
+                                :worktree (str "/wt/" n) :registered-at nil :runtime-key id :session n})]
+        (human person "fix-it")
+        (session/create! :brian person {:name (str person "--conductor") :weight :light :autonomy nil
+                                        :conductor true})
+        (session/create! :brian run {:name "review-analysis-x" :weight :light
+                                     :autonomy {:skill :x :first-message "x" :agent :claude
+                                                :claude-session-id nil :trigger :t
+                                                :limits {} :priority 0 :uncapped? false
+                                                :on-promote nil :phase :running
+                                                :phase-history [] :error nil}})
+        (human closed "done-already")
+        (workstream/close! :brian closed :done)
+        (with-redefs [nido.session.casualties/unsettled
+                      (constantly {:casualties [(dead person (str person "--conductor"))
+                                                (dead run (str run "--conductor"))
+                                                (dead closed "done-already")
+                                                (dead "not-a-ws" "legacy")]
+                                   :unreadable []})
+                      nido.session.lifecycle/session-coords (fn [n _] {:wt-path (str "/wt/" n)})]
+          (let [owed (:casualties (work/owed-revivals))]
+            (is (= [[person "fix-it" "/wt/fix-it"] ["not-a-ws" "legacy" "/wt/legacy"]]
+                   (map (juxt :runtime-key :session :worktree) owed))
+                "the person's session comes back, not the conductor it was registered under; a Run's
+                 workstream and a closed one are owed nothing; one naming no workstream is kept")))))))

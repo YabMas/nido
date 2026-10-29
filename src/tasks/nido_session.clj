@@ -367,9 +367,10 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   revive
-  "Bring back the sessions that died with the host: plan from the casualty records, bring the
-   admitted ones up in order, and reopen each one's latest conversation where it ran. A dry run
-   prints the plan and changes nothing.
+  "Bring back the workstreams that died with the host: plan from those owed a revive — open, and
+   holding a session a person works in — bring the admitted ones up in order on that session, and
+   reopen its latest conversation where it ran. A workstream only Runs worked, and a conductor, are
+   the daemon's, never revived here. A dry run prints the plan and changes nothing.
 
      bb nido:session:revive                       # newest first, under the memory budget
      bb nido:session:revive :dry-run true         # the plan, nothing started
@@ -380,13 +381,13 @@
   (let [[pos opts] (task-args/split-args args)
         _          (require-no-positional pos)
         names      (fn [k] (some->> (get opts k) (#(if (sequential? %) % [%])) (map str) set))
-        {:keys [casualties unreadable]} (casualties/unsettled)
-        named      (mapv (fn [c] [c (session-name-of c)]) casualties)
+        {:keys [casualties unreadable]} (work/owed-revivals)
+        named      (mapv (fn [c] [c (or (:session c) (session-name-of c))]) casualties)
         pick       (fn [wanted] (filterv (fn [[c s]] (or (wanted s) (wanted (:instance-id c)))) named))]
     (doseq [f unreadable] (println (str "  ! casualty record could not be read: " f)))
     (cond
       (empty? casualties)
-      (println "Nothing to revive — no session that died with the host is still down.")
+      (println "Nothing to revive — no workstream a person works in that died with the host is still down.")
 
       (names :dismiss)
       (let [hit (pick (names :dismiss))]
@@ -410,7 +411,7 @@
             rows    (revive/plan {:facts facts :machine (machine-facts) :only only
                                   :all? (boolean (:all opts))})
             sname   #(get session (get-in % [:facts :casualty :instance-id]))]
-        (println (str "Revive plan — " (count rows) " session" (when (not= 1 (count rows)) "s")
+        (println (str "Revive plan — " (count rows) " workstream" (when (not= 1 (count rows)) "s")
                       " that died with the host:"))
         (doseq [r rows] (println (plan-line r (sname r) running)))
         (when-not (:dry-run opts)

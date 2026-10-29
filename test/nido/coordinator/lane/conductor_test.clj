@@ -362,6 +362,23 @@
                  (:since (io/read-edn (str (fs/path (core/nido-root) "coordinator" "conductors-since.edn")))))
               "the instant conductors began never moves"))))))
 
+(deftest a-workstream-only-runs-worked-has-no-conductor
+  (with-tmp
+    (fn []
+      (let [[run-only] (workstream)]
+        (session/create! :brian run-only {:name "review-analysis-x" :weight :light
+                                          :autonomy {:skill :x :first-message "x" :agent :claude
+                                                     :claude-session-id nil :trigger :t
+                                                     :limits {} :priority 0 :uncapped? false
+                                                     :on-promote nil :phase :running
+                                                     :phase-history [] :error nil}})
+        (launching [launched]
+          (is (empty? (conductor/conductors! :brian))
+              "a Run answers for its own turns, so its session leaves nothing to conduct")
+          (session/create! :brian run-only {:name "take-over" :weight :heavy :autonomy nil})
+          (is (= [run-only] (map :ws-id (conductor/conductors! :brian)))
+              "a person's session on it makes it worked"))))))
+
 (deftest a-ticket-settled-in-notion-retires-its-conductor
   (with-tmp
     (fn []

@@ -37,13 +37,15 @@
 (defn- parse-casualty
   "One held entry as a Casualty, or nil when it does not carry what a Casualty needs."
   [boot-id {:keys [instance-id entry]}]
-  (let [{:keys [project-name project-dir created-at]} entry]
+  (let [{:keys [project-name project-dir created-at runtime-key session-name]} entry]
     (when (and (string? instance-id) (string? project-name) (string? project-dir))
       {:boot-id       boot-id
        :instance-id   instance-id
        :project       project-name
        :worktree      project-dir
-       :registered-at (when (string? created-at) created-at)})))
+       :registered-at (when (string? created-at) created-at)
+       :runtime-key   (when (string? runtime-key) runtime-key)
+       :session       (when (string? session-name) session-name)})))
 
 (defn ^{:malli/schema [:=> [:cat [:sequential :map]] :Holding]}
   record!
