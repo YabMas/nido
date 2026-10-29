@@ -57,9 +57,9 @@ bb nido:session:spawn :project <p> <child-session> \
   [:model <id>]                   # the child's model; default is claude's
 ```
 
-There is no permission mode to pass. The child runs in the one its worktree's
-launch baseline sets — auto, the same as yours — so the two of you are in one
-permission class and a message between you waits for nobody.
+There is no permission mode to pass. The child runs with permissions skipped,
+as every session nido starts does — the same as yours — so the two of you are in
+one permission class and a message between you waits for nobody.
 The model need not match yours — a cheaper model for focused child work is
 the usual reason to pass one.
 

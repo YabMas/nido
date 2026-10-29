@@ -129,9 +129,10 @@
   dispatch!
   "Start a background session in `:cwd` on `:prompt`, as {:bg-id :session-id}. `:name`, `:model`,
    `:system-prompt` (appended to Claude Code's own), `:mcp-config` and `:add-dirs` are the run's
-   context and are passed through; nothing of the launch baseline is — the directory's settings
-   carry it. The system prompt is recorded with the conversation on its first request, so a wake
-   keeps it.
+   context and are passed through. Of the launch baseline only the permission skip is passed —
+   Claude Code takes it from no settings file, so without the flag the session would run in the
+   baseline's auto — and the directory's settings carry the rest. The system prompt is recorded
+   with the conversation on its first request, so a wake keeps it.
 
    Throws, naming the cause, below `min-version` (:reason :claude-too-old) and in a directory
    Claude Code does not trust (:reason :workspace-untrusted) — nothing is started then. Throws
@@ -147,7 +148,7 @@
     (when-not (:ok? v)
       (throw (ex-info "Claude Code is older than the substrate needs"
                       (assoc v :reason :claude-too-old)))))
-  (let [cmd (cond-> [claude-bin "--bg"]
+  (let [cmd (cond-> [claude-bin "--bg" "--dangerously-skip-permissions"]
               name  (into ["--name" (str name)])
               model (into ["--model" (str model)])
               system-prompt (into ["--append-system-prompt" system-prompt])
@@ -214,14 +215,16 @@
   wake!
   "Continue the session `session-id`, which has no live process, in the background under its own
    id with `text` as its next prompt, run from `opts`'s :cwd — the directory the listing shows it
-   in, where Claude Code finds its conversation and the session loads that directory's settings.
+   in, where Claude Code finds its conversation and the session loads that directory's settings —
+   with permissions skipped, as dispatch! starts it, since a resume takes its mode from its own
+   command line and not from the conversation.
    Answers {:woke? true} or, when Claude Code started a copy
    instead — it does when the session turned out to be running — {:woke? false :copy <id>}, the
    copy stopped and removed again so nothing runs beside the session. Throws :reason
    :copy-cleanup-failed, naming the copy and the command Claude Code refused, when it was not —
    with the copy as :left-running only while its stop is unconfirmed."
   [session-id text {:keys [claude-bin cwd] :or {claude-bin "claude"}}]
-  (let [{:keys [exit out err]} (claude! [claude-bin "--resume" session-id "--bg" "--" text] {:dir cwd})]
+  (let [{:keys [exit out err]} (claude! [claude-bin "--resume" session-id "--bg" "--dangerously-skip-permissions" "--" text] {:dir cwd})]
     (if-let [copy (copy-note (str out err))]
       (let [cleanup! (fn [verb]
                        (let [r (claude! [claude-bin verb copy])]

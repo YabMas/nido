@@ -41,7 +41,7 @@
       (is (= {:bg-id "a56cda8b" :session-id "a56cda8b-3390"}
              (sub/dispatch! {:cwd "/wt" :prompt "--looks like a flag" :name "kid"})))
       (let [[cmd opts] (first (filter #(= "--bg" (second (first %))) @calls))]
-        (is (= ["claude" "--bg" "--name" "kid" "--" "--looks like a flag"] cmd)
+        (is (= ["claude" "--bg" "--dangerously-skip-permissions" "--name" "kid" "--" "--looks like a flag"] cmd)
             "the prompt after --, so nothing reads it as an option")
         (is (= "/wt" (:dir opts)))
         (is (not-any? #{"--permission-mode" "--settings"} cmd)
@@ -124,7 +124,9 @@
     (stubbing [#'sub/claude! (fake-claude calls {"--resume" {:exit 0 :out "backgrounded · a56cda8b\n"}})]
       (sub/wake! "a56cda8b-3390" "go" {:cwd "/wt"}))
     (is (= {:dir "/wt"} (second (first @calls)))
-        "where Claude Code finds the conversation and the directory's settings")))
+        "where Claude Code finds the conversation and the directory's settings")
+    (is (= ["claude" "--resume" "a56cda8b-3390" "--bg" "--dangerously-skip-permissions" "--" "go"] (ffirst @calls))
+        "with permissions skipped, which a resume takes from its command line alone")))
 
 (deftest trust-is-read-for-exactly-the-directory
   (let [dir (fs/create-temp-dir)
@@ -139,7 +141,7 @@
             "a trusted parent does not make its child trusted"))
       (finally (fs/delete-tree dir)))))
 
-(deftest dispatch-passes-the-runs-context-but-no-baseline
+(deftest dispatch-passes-the-runs-context-and-of-the-baseline-only-the-permission-skip
   (let [calls (atom [])]
     (stubbing [#'sub/claude! (fake-claude calls
                                           (merge new-enough
@@ -148,7 +150,7 @@
                                                                           [{:id "a56cda8b" :sessionId "a56cda8b-3390"}])}}))]
       (sub/dispatch! {:cwd "/wt" :prompt "p" :system-prompt "S" :mcp-config "/m.json" :add-dirs ["/a" "/b"]})
       (let [cmd (ffirst (filter #(= "--bg" (second (first %))) @calls))]
-        (is (= ["claude" "--bg" "--append-system-prompt" "S" "--mcp-config" "/m.json"
+        (is (= ["claude" "--bg" "--dangerously-skip-permissions" "--append-system-prompt" "S" "--mcp-config" "/m.json"
                 "--add-dir" "/a" "--add-dir" "/b" "--" "p"] cmd))))))
 
 (deftest dispatch-answers-only-the-id-the-listing-reports
