@@ -72,7 +72,8 @@
       :env {\"KEY\" \"{{val}}\"}    ; optional env overrides
       :lock \"brian-ci\"            ; optional machine-wide mutex name
       :lock-wait-ms 3600000        ; how long to queue for it (default: forever-ish)
-      :checkout :committed}        ; session commands only: see nido.session.run
+      :checkout :committed         ; session commands only: see nido.session.run
+      :keep [\"e2e-results\"]}       ; with :checkout, outputs copied back to the worktree
 
    :lock is what a project uses to say \"only one of these may run on this
    machine at a time\". nido is the only layer that knows a laptop hosts many

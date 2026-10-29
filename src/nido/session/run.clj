@@ -81,17 +81,41 @@
   ;; project's hooks (brian's post-checkout/commit hooks expect a dev tree).
   (apply sh! (core/nido-home) "git" (str "--git-dir=" git-dir) "-c" "core.hooksPath=/dev/null" args))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :string :Path ifn?] :any]}
+(defn- keep-outputs!
+  "Copy each path in `keep` (relative) from `dir` into `worktree`, replacing what
+   the worktree had there; a path the command did not write is skipped. Never
+   throws: a failed copy must not stop the checkout being removed."
+  [dir worktree keep]
+  (doseq [rel keep
+          :let [from (fs/path dir rel) to (fs/path worktree rel)]
+          :when (fs/exists? from)]
+    (try
+      (fs/delete-tree to)
+      (some-> (fs/parent to) fs/create-dirs)
+      (if (fs/directory? from)
+        (fs/copy-tree from to {:replace-existing true})
+        (fs/copy from to {:replace-existing true}))
+      (catch Exception e
+        (binding [*out* *err*]
+          (println (str "nido: could not keep " rel " from the checkout: " (ex-message e))))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string :Path [:sequential :string] ifn?] :any]}
   with-committed-checkout*
   "Call (f checkout-dir) with a detached git worktree of `worktree`'s committed
    tip, removing it afterwards whatever f does. The checkout's directory has the
    worktree's basename, so a command that names things after its checkout's
    directory names them as it would in the worktree.
 
+   `keep` names paths, relative to the checkout, that the command writes for a
+   reader to open afterwards (test reports); they are copied into the worktree
+   before the checkout goes, so they land where they did when the command ran
+   there. They should be paths the project ignores, or the copy dirties the
+   working copy the next run is gated on.
+
    Refuses a dirty working copy — prints its changes and returns {:exit 1}
    without calling f: the checkout would silently drop them, and a command run
    on it would report on code nobody committed."
-  [project-name session-name worktree f]
+  [project-name session-name worktree keep f]
   (let [{:keys [dirty commit git-dir]} (committed-tip worktree)]
     (if dirty
       (do (binding [*out* *err*]
@@ -108,6 +132,7 @@
           (git-at git-dir "worktree" "add" "--detach" "--quiet" dir commit)
           (f dir)
           (finally
+            (keep-outputs! dir worktree keep)
             (try (git-at git-dir "worktree" "remove" "--force" dir)
                  (catch Exception _ nil))
             (fs/delete-tree root)
@@ -119,7 +144,8 @@
    with live (inherited) IO. Returns the babashka.process result map (:exit ...).
    Throws if the project is unregistered, the worktree is missing, or the ref
    is not a declared command. A command with `:checkout :committed` runs with
-   {{session.checkout}} bound to a checkout of the committed tip; see
+   {{session.checkout}} bound to a checkout of the committed tip, and copies
+   the paths its `:keep` names back into the worktree; see
    with-committed-checkout*."
   [project-name session-name ref]
   (let [project-dir (resolve-project-dir project-name)
@@ -130,14 +156,16 @@
                        :hint "Bring the session up first: bb nido:session:up :project <p> <session>"})))
     (let [session-edn (engine/load-session-edn project-name)
           commands    (:project-commands session-edn)
+          cmd-def     (commands/resolve-command commands ref)
           context     (session-context project-name project-dir session-name worktree)
           run!        (fn [ctx]
                         (commands/run-command! commands ref ctx
                                                {:continue? true :out :inherit :err :inherit}))]
-      (case (:checkout (commands/resolve-command commands ref))
+      (case (:checkout cmd-def)
         nil        (run! context)
         :committed (with-committed-checkout* project-name session-name worktree
+                     (vec (:keep cmd-def))
                      #(run! (assoc-in context [:session :checkout] %)))
         (throw (ex-info (str "Unknown :checkout for project-command " ref)
-                        {:ref ref :checkout (:checkout (get commands ref))
+                        {:ref ref :checkout (:checkout cmd-def)
                          :hint "The only :checkout nido knows is :committed."}))))))

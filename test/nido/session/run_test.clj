@@ -94,7 +94,7 @@
       (testing "bare git in the workspace binds to the source repo"
         (is (= src (str/trim (:out (sh wt "git" "rev-parse" "--show-toplevel"))))))
       (let [seen (atom nil)
-            res  (run/with-committed-checkout* "p" "feat" wt
+            res  (run/with-committed-checkout* "p" "feat" wt []
                    (fn [dir]
                      (reset! seen {:dir      dir
                                    :toplevel (str/trim (:out (sh dir "git" "rev-parse" "--show-toplevel")))
@@ -116,7 +116,7 @@
     (fn [src wt]
       (let [seen (atom nil)]
         (is (thrown? Exception
-              (run/with-committed-checkout* "p" "feat" wt
+              (run/with-committed-checkout* "p" "feat" wt []
                 (fn [dir] (reset! seen dir) (throw (ex-info "boom" {}))))))
         (is (not (fs/exists? @seen)))
         (is (= 1 (count (str/split-lines (:out (sh src "git" "worktree" "list"))))))))))
@@ -127,7 +127,7 @@
       (spit (str (fs/path wt "uncommitted.txt")) "x\n")
       (let [called (atom false)
             res    (binding [*err* (java.io.StringWriter.)]
-                     (run/with-committed-checkout* "p" "feat" wt
+                     (run/with-committed-checkout* "p" "feat" wt []
                        (fn [_] (reset! called true))))]
         (is (= {:exit 1} res))
         (is (false? @called))))))
@@ -143,3 +143,19 @@
                                                        :cwd "{{session.checkout}}"
                                                        :cmd "test \"$(git rev-parse --show-toplevel)\" = \"$(pwd -P)\" && test -f f.txt && test \"{{session.worktree}}\" != \"$(pwd)\""}}})]
         (is (zero? (:exit (run/run-command-in-session! "p" "feat" :probe))))))))
+
+(deftest kept-outputs-reach-the-worktree
+  (with-nested-workspace
+    (fn [_ wt]
+      (spit (str (fs/path wt ".gitignore")) ".worktrees/\nresults/\n")
+      (sh wt "jj" "commit" "-m" "ignore results")
+      (fs/create-dirs (fs/path wt "results"))
+      (spit (str (fs/path wt "results" "stale.txt")) "old\n")
+      (run/with-committed-checkout* "p" "feat" wt ["results" "never-written"]
+        (fn [dir]
+          (fs/create-dirs (fs/path dir "results" "shard-1"))
+          (spit (str (fs/path dir "results" "shard-1" "junit.xml")) "<ok/>")))
+      (is (= "<ok/>" (slurp (str (fs/path wt "results" "shard-1" "junit.xml")))))
+      (is (not (fs/exists? (fs/path wt "results" "stale.txt"))) "replaced, not merged")
+      (is (not (fs/exists? (fs/path wt "never-written"))))
+      (is (= "" (str/trim (:out (sh wt "jj" "diff" "-s")))) "ignored, so the next run is not gated"))))
