@@ -53,6 +53,10 @@
                       ;; The Run it was given for — absent for an instruction no Run gave, whose
                       ;; turn end settles no Run.
                       [:for {:optional true} string?]
+                      ;; :start when the start that brought the session gave it — a person's start or
+                      ;; a spawn's brief, not the conductor's instruction — so the commit gate lets
+                      ;; its turn take a person's act the start asked for (an intent from a brief).
+                      [:given-by {:optional true} [:enum :start]]
                       ;; The seat message it was, when it was one.
                       [:message {:optional true} string?]]]]
    ;; One instruction waiting for the session to be ready for it, and the Run it is for.
@@ -94,6 +98,7 @@
    [:dispatching       {:optional true} [:maybe [:map {:closed true}
                                                  [:token string?] [:at string?]
                                                  [:for {:optional true} string?]
+                                                 [:given-by {:optional true} [:enum :start]]
                                                  [:policy {:optional true} [:maybe [:map-of keyword? any?]]]
                                                  [:bg-id {:optional true} [:maybe string?]]]]]
    ;; The seat of its workstream this session occupies, and the generation it occupies it in —
@@ -109,11 +114,13 @@
    [:released          {:optional true} [:= true]]
    ;; The workstream's conductor, whatever the generation. Never also a seat's occupant.
    [:conductor         {:optional true} [:= true]]
-   ;; The instruction and model nido last started a conversation on this record with, so a start
-   ;; that failed is retried on what it was given rather than on a recipe rebuilt without it.
+   ;; The instruction and model nido last started a conversation on this record with, and who
+   ;; gave it, so a start that failed is retried on what it was given rather than on a recipe
+   ;; rebuilt without it.
    [:launched          {:optional true} [:map {:closed true}
                                          [:prompt string?]
-                                         [:model {:optional true} [:maybe string?]]]]
+                                         [:model {:optional true} [:maybe string?]]
+                                         [:given-by {:optional true} [:enum :start]]]]
    [:created-at        string?]])
 
 (defn- shed

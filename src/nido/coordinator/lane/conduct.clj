@@ -258,18 +258,20 @@
   "The facet a start writes once Claude Code has named its session: nido drives it, and the first
    prompt — given under the token the :dispatching note recorded before the start — is
    outstanding."
-  [{:keys [token at policy for]} sess]
+  [{:keys [token at policy for given-by]} sess]
   (cond-> (assoc (fresh-facet :nido at sess)
                  :pending (cond-> {:token token :at at :via :dispatch :seen? false}
-                            for (assoc :for for)))
+                            for      (assoc :for for)
+                            given-by (assoc :given-by given-by)))
     policy (assoc :policy policy)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   start!
   "Start a conversation for an existing session record as a background session nido drives:
    {:project :ws-id :session-name :cwd :prompt} and optionally :policy, :name, :model, :for —
-   the Run the first prompt is given for — and :source — the repository `:cwd` was made from,
-   which vouches for trusting `:cwd` when Claude Code does not trust it yet.
+   the Run the first prompt is given for — :given-by — :start when a person's start or spawn, not
+   the conductor, gave that prompt — and :source — the repository `:cwd` was made from, which
+   vouches for trusting `:cwd` when Claude Code does not trust it yet.
 
    The first prompt's token, with the Run it is given for, is recorded in the record's
    :dispatching note before the session starts; the facet is written — and the note cleared — only once Claude Code has named the
@@ -283,7 +285,7 @@
    start for the record is in flight. Throws when the session cannot be started: the note is
    cleared, or — when the adapter says it left a process running that the listing has not named
    — kept with that process's :bg-id, for conduct! to name it."
-  [{:keys [project ws-id session-name cwd prompt policy source for] :as opts}]
+  [{:keys [project ws-id session-name cwd prompt policy source for given-by] :as opts}]
   (when-not (substrate/trusted? cwd)
     (if (and source (substrate/trusted? source))
       (substrate/ensure-trusted! cwd opts)
@@ -309,10 +311,11 @@
            (refuse :live (str "Its session " (:session-id claude) " is alive — retire it first")
                    {:session-id (:session-id claude)})))
        (assoc m :dispatching (cond-> {:token token :at now}
-                               policy (assoc :policy policy)
-                               for    (assoc :for for)))))
+                               policy   (assoc :policy policy)
+                               for      (assoc :for for)
+                               given-by (assoc :given-by given-by)))))
     (try
-      (let [named (substrate/dispatch! (-> opts (dissoc :for) (assoc :prompt (tagged prompt token))))]
+      (let [named (substrate/dispatch! (-> opts (dissoc :for :given-by) (assoc :prompt (tagged prompt token))))]
         (:claude (session/update-substrate!
                   project ws-id session-name
                   (fn [{:keys [dispatching claude]}]

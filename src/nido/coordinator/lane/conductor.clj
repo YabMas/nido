@@ -85,16 +85,17 @@
 
 ;; ── carrying a start ────────────────────────────────────────────────────────
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:? [:maybe :string]] [:? [:maybe :string]]] :map]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:? [:maybe :string]] [:? [:maybe :string]] [:? [:maybe [:enum :start]]]] :map]}
   carry!
   "Carry the workstream a start just brought `session-name` up on: when its current generation fixes
    no ids and its whole seat has no occupant, that session becomes the whole seat's occupant,
    driven by nido — its first instruction `brief` when the start was given one, on `model` when
-   given — and otherwise
+   given, given by `given-by` (:start when the start was a person's or a spawn's not made on the
+   conductor's instruction, `starter`; nil: the conductor answers for it) — and otherwise
    nothing changes. Called by the session-up verb, spawn, the work plane's start and the daemon's
    start of a Run's conversation, never by birth! or the orphan sweep. Answers {:carried {:seat
    :session}} or {:carried nil :why <reason>}; never throws for a seat it does not take."
-  [project ws-id session-name & [brief model]]
+  [project ws-id session-name & [brief model given-by]]
   (let [whole (first (filter :whole (rseats/seats project ws-id)))]
     (cond
       (nil? whole)
@@ -107,8 +108,9 @@
       (try
         {:carried (seats/occupy! project ws-id
                                  (cond-> (seats/default-embodiment)
-                                   brief (update :practice str "\n\nYour first instruction:\n\n" brief)
-                                   model (assoc :model model))
+                                   brief    (update :practice str "\n\nYour first instruction:\n\n" brief)
+                                   model    (assoc :model model)
+                                   given-by (assoc :given-by given-by))
                                  (:id whole) session-name)}
         (catch clojure.lang.ExceptionInfo e
           (if (#{:occupied :not-free :fixes-ids :closed} (:reason (ex-data e)))
@@ -675,13 +677,36 @@
 (defn- answering-for-conductor?
   "Whether session record `s` is the conductor, or conversation `conversation` is in a turn
    following an instruction the conductor answers for — one nido gave its driven conversation and
-   recorded for no Run. Another conversation in the same folder received no such instruction; one
-   whose conversation, or the record's, is unknown is taken to be the driven one."
+   recorded for no Run, and not given by the start that brought the session (:given-by :start:
+   a person's start, or a spawn's brief, whose turn may write the intent the brief states).
+   Another conversation in the same folder received no such instruction; one whose conversation,
+   or the record's, is unknown is taken to be the driven one."
   [s conversation]
   (or (:conductor s)
       (let [{:keys [pending driver session-id]} (:claude s)]
-        (and pending (= :nido driver) (nil? (:for pending))
+        (and pending (= :nido driver) (nil? (:for pending)) (not= :start (:given-by pending))
              (or (nil? session-id) (nil? conversation) (= session-id conversation))))))
+
+(defn- record-at
+  "The session record of the nido session `cwd` is in — its worktree or its home — or nil."
+  [cwd]
+  (when-let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd)
+                                           (when-let [[p n] (lifecycle/session-home-coords-from-cwd cwd)]
+                                             {:project p :session n}))]
+    (let [p (keyword project)]
+      (when-let [ws-id (session/workstream-id-for p session)]
+        (session/read-session p ws-id session)))))
+
+(defn ^{:malli/schema [:=> [:cat :string] [:maybe [:enum :start]]]}
+  starter
+  "Who gives a session's first instruction when a start is made from `cwd`: :start, unless `cwd`
+   is in a nido session whose turn — its conversation unknown here, so taken to be the driven one —
+   answers for the conductor; then nil, so a start made on the conductor's instruction cannot hand
+   its child the person's acts the gate refuses the conductor. A cwd that cannot be read is no
+   session's."
+  [cwd]
+  (when-not (some-> (try (record-at cwd) (catch Throwable _ nil)) (answering-for-conductor? nil))
+    :start))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :string]]}
   refusal
@@ -694,12 +719,7 @@
   [{:keys [tool_name tool_input cwd session_id]}]
   (when-let [s (try
                  (when (and (= "Bash" tool_name) (string? (:command tool_input)) (string? cwd))
-                   (when-let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd)
-                                                            (when-let [[p n] (lifecycle/session-home-coords-from-cwd cwd)]
-                                                              {:project p :session n}))]
-                     (let [p (keyword project)]
-                       (when-let [ws-id (session/workstream-id-for p session)]
-                         (session/read-session p ws-id session)))))
+                   (record-at cwd))
                  (catch Throwable _ nil))]
     (when (answering-for-conductor? s session_id)
       (when-let [act (some persons-act (commit-gate/acts (:command tool_input) cwd))]

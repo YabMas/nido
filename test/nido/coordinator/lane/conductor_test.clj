@@ -435,7 +435,34 @@
                                                                   :tool_input {:command "gh pr merge 3"}})))
                 "but in the driven one")
             (driving id "fix-it" "conv" {:token "t" :at "t" :via :send :seen? false :for "run-1"})
-            (is (nil? (in "fix-it" "gh pr merge 3")) "on a Run's instruction, the Run's own gates hold")))))))
+            (is (nil? (in "fix-it" "gh pr merge 3")) "on a Run's instruction, the Run's own gates hold")
+            (driving id "fix-it" "conv" {:token "t" :at "t" :via :dispatch :seen? true :given-by :start})
+            (is (nil? (in "fix-it" "bb nido:workstream:entry:add :kind intent"))
+                "on the first instruction its start gave — a spawn's brief — it writes the intent the brief states")))))))
+
+(deftest a-start-gives-its-first-instruction-unless-the-conductor-asked-for-it
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            given (atom [])]
+        (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+        (session/create! :brian id {:name "parent" :weight :heavy :autonomy nil})
+        (launching [_]
+          (with-redefs [conduct/start! (fn [o] (swap! given conj (:given-by o))
+                                         (session/update-substrate! (:project o) (:ws-id o) (:session-name o)
+                                                                    (fn [m] (assoc m :dispatching {:token "t" :at "now"})))
+                                         {})]
+            (conductor/carry! :brian id "fix-it" "the brief" nil :start)
+            (is (= [:start] @given) "the start's word reaches the conversation's first instruction")
+            (is (= :start (:given-by (:launched (session/read-session :brian id "fix-it"))))
+                "and is kept for a retried launch")))
+        (is (= :start (in-session nil #(conductor/starter "/elsewhere"))) "a start from outside every session")
+        (is (= :start (in-session "parent" #(conductor/starter "/wt"))) "a start from a session nido does not drive")
+        (driving id "parent" "conv" {:token "t" :at "t" :via :dispatch :seen? true :given-by :start})
+        (is (= :start (in-session "parent" #(conductor/starter "/wt"))) "a start from a turn its own start gave")
+        (driving id "parent" "conv" {:token "t" :at "t" :via :send :seen? true})
+        (is (nil? (in-session "parent" #(conductor/starter "/wt")))
+            "a start made on the conductor's instruction hands its child nothing the gate refuses the conductor")))))
 
 (deftest a-hand-back-is-work-and-a-conductor-on-no-work-is-retired
   (with-tmp

@@ -2611,9 +2611,10 @@
     (lifecycle/up! session-name (assoc opts :runtime-key ws-id))
     (let [ws-id (scratch/birth! p session-name (lifecycle/session-weight session-name opts) ws-id)]
       ;; A session this start first recorded is carried: on a workstream whose generation fixes
-      ;; no ids, it occupies the whole seat. A failure to carry leaves the session up and undriven.
+      ;; no ids, it occupies the whole seat, on a first instruction a person's start gives. A failure
+      ;; to carry leaves the session up and undriven.
       (when first?
-        (try (conductor/carry! p ws-id session-name)
+        (try (conductor/carry! p ws-id session-name nil nil :start)
              (catch Throwable t
                (binding [*out* *err*]
                  (println (str "nido: " session-name " is up but was not carried — " (ex-message t)))))))

@@ -63,11 +63,13 @@
      it up, or a Run's session once its conversation is started: when its current generation fixes
      no ids and its whole seat has no occupant, that session becomes the occupant, its first
      instruction the brief its start was given when one was, on the model it was given when one
-     was; otherwise nothing changes. Called by
+     was, given by the start when its caller says the start was not made on the conductor's
+     instruction (starter); otherwise nothing changes. Called by
      the session-up verb, spawn, the work plane's start and the daemon's start of a Run's
      conversation, never by birth or the orphan sweep."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session SessionName]
-                      [:brief [:? [:maybe :string]]] [:model [:? [:maybe :string]]]] :map]
+                      [:brief [:? [:maybe :string]]] [:model [:? [:maybe :string]]]
+                      [:given-by [:? [:maybe [:enum :start]]]]] :map]
      :delegates [seats/default-embodiment seats/occupy!]})
   (Operation conductors!
     "On every conduct pass: start, on its one conductor record and a brief of the seats, the
@@ -146,8 +148,14 @@
     "Why a command must not run, or nil: a person's act — an intent, a design grant, a triage
      acceptance, a phase gate, a blocker's answer, a landing, a PR merge or a close — run from the
      conductor's session, or from any other session's in a turn following an instruction the
-     conductor answers for, judged over what the commit gate reads the command to do. Pushing,
-     whatever the branch, and opening or readying a PR are not a person's act, and neither is a
-     design round, whose carried grant grants nothing the person did not."
+     conductor answers for and that no start gave, judged over what the commit gate reads the
+     command to do. Pushing, whatever the branch, and opening or readying a PR are not a person's
+     act, and neither is a design round, whose carried grant grants nothing the person did not."
     {:signature [:=> [:catn [:input :map]] [:maybe :string]]
-     :delegates [commit-gate/acts]}))
+     :delegates [commit-gate/acts]})
+  (Operation starter
+    "Who gives the first instruction of a session a start made from a directory carries or drives:
+     the start, unless the directory is in a nido session whose turn follows an instruction the
+     conductor answers for and no start gave — then no one, so the conductor answers for it and a
+     start made on its instruction hands its session no act the gate refuses the conductor."
+    {:signature [:=> [:catn [:cwd :string]] [:maybe [:enum :start]]]}))

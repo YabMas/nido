@@ -399,14 +399,17 @@
 (defn- launch!
   "Bring the session `session-name` up on the workstream's runtime — unless `up?` is false, for a
    session its own start already brought up — and start a background session nido drives in its
-   own working copy, on `prompt`, given for no Run, on `model` (nil: claude's default), recording
-   both on its record (:launched) first. Refused (:closed) on a closed workstream: every start of
-   a driven session comes through here. Answers the facet."
+   own working copy, on `prompt`, given for no Run, on `model` (nil: claude's default) and by
+   `given-by` (:start for a person's start or a spawn's brief; nil: the conductor answers for it),
+   recording them on its record (:launched) first. Refused (:closed) on a closed workstream:
+   every start of a driven session comes through here. Answers the facet."
   ([project ws-id session-name prompt] (launch! project ws-id session-name prompt {:up? true}))
-  ([project ws-id session-name prompt {:keys [up? model]}]
+  ([project ws-id session-name prompt {:keys [up? model given-by]}]
   (refuse-closed! project ws-id)
   (session/write! (assoc (session/read-session project ws-id session-name)
-                         :launched (cond-> {:prompt prompt} model (assoc :model model))))
+                         :launched (cond-> {:prompt prompt}
+                                     model    (assoc :model model)
+                                     given-by (assoc :given-by given-by))))
   (let [pname (name project)
         opts  {:project pname :runtime-key ws-id}]
     (when up? (lifecycle/up! session-name opts))
@@ -418,18 +421,20 @@
                        :source        (get-in (project/list-projects) [pname :directory])
                        :prompt        prompt
                        :model         model
+                       :given-by      given-by
                        :system-prompt (launcher/session-briefing pname session-name instance-id)
                        :mcp-config    (when (and mcp (fs/exists? mcp)) mcp)
                        :add-dirs      (launcher/nido-add-dirs)})))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName :string [:? [:maybe :string]]] :any]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName :string [:? [:maybe :string]] [:? [:maybe [:enum :start]]]] :any]}
   drive!
   "Start a background session nido drives on the live record `session-name`, already up, on
-   `prompt` given for no Run and on `model` when given, occupying no seat — so its turn ends are
-   the conductor's. Refused as conduct refuses a record whose session is running or starting. For
-   a start that brought a session up and could not carry it."
-  [project ws-id session-name prompt & [model]]
-  (launch! project ws-id session-name prompt {:up? false :model model}))
+   `prompt` given for no Run, on `model` when given and by `given-by` when given (as launch!
+   takes it), occupying no seat — so its turn ends are the conductor's. Refused as conduct refuses
+   a record whose session is running or starting. For a start that brought a session up and could
+   not carry it."
+  [project ws-id session-name prompt & [model given-by]]
+  (launch! project ws-id session-name prompt {:up? false :model model :given-by given-by}))
 
 (defn- occupancy-lock-path [project ws-id]
   (str (fs/path (cstate/workstream-dir project ws-id) ".occupancy.lock")))
@@ -484,7 +489,8 @@
    that fails throws, and nothing is started. The session is the embodiment's, on a record it
    names; or, when the caller names `session-name` — a live session record of the workstream that
    occupies no seat and is not its conductor — that record, which then occupies the seat as one
-   carried from its start, started on the brief unless nido already drives it. Refused as the
+   carried from its start, started on the brief — given by the embodiment's :given-by, as launch!
+   takes it — unless nido already drives it. Refused as the
    embodiment refuses the workstream (`:refuse`, read against the generation it seats), for an id
    that is not a seat and for a seat already occupied — a session started on its record, or a
    start in flight; a record left by a launch that failed is started on again. Answers {:seat
@@ -512,7 +518,7 @@
              ;; conversation is started here.
              (when-not (driven? s)
                (launch! project ws-id session-name (brief project ws-id embodiment seat-id)
-                        {:up? false :model (:model embodiment)}))
+                        {:up? false :model (:model embodiment) :given-by (:given-by embodiment)}))
              {:seat seat-id :session session-name})
            (let [n (or (:session o) (seat-session-name ws-id embodiment seat-id g))]
              (when (and o (started? (session/read-session project ws-id n)))
@@ -524,9 +530,9 @@
                                                :seat {:id seat-id :generation g}}))
              ;; A record a failed launch left is started again on what that launch was given — a
              ;; carried session's first instruction among it — not on a recipe rebuilt without it.
-             (let [{:keys [prompt model]} (when o (:launched (session/read-session project ws-id n)))]
+             (let [{:keys [prompt model given-by]} (when o (:launched (session/read-session project ws-id n)))]
                (if prompt
-                 (launch! project ws-id n prompt {:up? true :model model})
+                 (launch! project ws-id n prompt {:up? true :model model :given-by given-by})
                  (launch! project ws-id n (brief project ws-id embodiment seat-id)
                           {:up? true :model (:model embodiment)})))
              {:seat seat-id :session n})))))))
@@ -617,14 +623,17 @@
 (defn ^{:malli/schema [:=> [:cat] :map]}
   default-embodiment
   "The whole seat's embodiment, as occupancy takes it: its occupant's session named for the
-   workstream, briefed to work the recipe's next stage — leaving a person's step to the person,
-   and handing back naming it — and to hand back when the stage ends or it needs a decision.
+   workstream, briefed to work the recipe's next stage — writing the intent from its first
+   instruction when that states the goal, leaving any other person's step to the person and
+   handing back naming it — and to hand back when the stage ends or it needs a decision.
    Refuses a generation that fixes ids, which its seats' own embodiment carries."
   []
   {:seat-name (fn [_] "work")
    :practice  (str "Work the next stage of nido's recipe for this workstream — intent, baseline, design, "
-                   "implementation, and the review loop over each — as `bb nido:owed` places it. When that "
-                   "stage is a person's to take (an intent, a design approval, a merge), do not take it: end "
+                   "implementation, and the review loop over each — as `bb nido:owed` places it. When the "
+                   "workstream owes an intent and your first instruction states its goal, write the intent "
+                   "from it, as /design says. When a stage is a person's to take (an intent nothing given "
+                   "states, a design approval, a merge), do not take it: end "
                    "your turn saying what the person owes. End your turn when the stage is done or when you "
                    "need a decision; the workstream's conductor reads where you stopped and instructs you next.")
    :refuse    (fn [project ws-id]

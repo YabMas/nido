@@ -64,9 +64,11 @@
      :delegates [rseats/seats conduct/retire! conduct/release!]})
   (Operation drive!
     "Start a driven conversation, given for no Run and occupying no seat, on a live session record
-     already up, on the model given when one is — for a start that could not carry its session."
+     already up, on the model given when one is, and given by the start when its caller says so —
+     for a start that could not carry its session."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName]
-                      [:prompt :string] [:model [:? [:maybe :string]]]] :any]
+                      [:prompt :string] [:model [:? [:maybe :string]]]
+                      [:given-by [:? [:maybe [:enum :start]]]]] :any]
      :delegates [conduct/start!]})
   (Operation conductor!
     "Start the workstream's conductor on the brief its caller gives: a driven session on the one

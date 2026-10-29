@@ -188,10 +188,11 @@
 
 (defn- carry
   "Carry the workstream `session` was first recorded on by this start, its first instruction
-   `brief` when given, on `model` when given — carry!'s answer, or nil when it threw. The session
-   is up either way; a failure to carry leaves it undriven and says so."
+   `brief` when given, on `model` when given, given by whoever this start's cwd says made it
+   (`conductor/starter`) — carry!'s answer, or nil when it threw. The session is up either way; a
+   failure to carry leaves it undriven and says so."
   [p ws-id session {:keys [brief model]}]
-  (try (conductor/carry! p ws-id session brief model)
+  (try (conductor/carry! p ws-id session brief model (conductor/starter (System/getProperty "user.dir")))
        (catch Throwable t
          (println (str "  not carried — " (ex-message t)))
          nil)))
@@ -489,8 +490,8 @@
    link naming the other, a kickoff is staged, and a tab opens on the child.
    The child's agent answers to the child's session name.
 
-   The child is passed no permission mode: it runs in the one its worktree's
-   launch baseline sets, the same baseline the parent's session runs under, so
+   The child is passed no permission mode: like every session nido starts, it
+   runs with permissions skipped, the class the parent's session runs in too, so
    messages between the two are in one permission class and wait for nobody.
    `:model` is the child's claude model; given none, claude's default — it
    need not match the parent's.
@@ -536,7 +537,8 @@
                         (try (seats/drive! p ws-id child
                                            (kickoff-prompt {:parent-agent parent-agent :parent-project pp
                                                             :parent-session ps :child child :brief brief})
-                                           (:model opts))
+                                           (:model opts)
+                                           (conductor/starter (System/getProperty "user.dir")))
                              true
                              (catch Throwable t
                                (println (str "  not driven — " (ex-message t)))
