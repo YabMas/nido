@@ -47,7 +47,8 @@
    [nido.platform.project :as project]
    [nido.session.commit-gate :as commit-gate]
    [nido.session.launcher :as launcher]
-   [nido.session.lifecycle :as lifecycle]))
+   [nido.session.lifecycle :as lifecycle]
+   [nido.session.profiles :as profiles]))
 
 ;; ── reading who is where ────────────────────────────────────────────────────
 
@@ -88,6 +89,13 @@
         (occupants project ws-id)))
 
 (defn- conductor-name [ws-id] (str ws-id "--conductor"))
+
+(defn- conductor-profile
+  "The profile a conductor comes up with: a working copy of its own, made as the project's :full
+   profile makes one, and no services. A conductor instructs seats and reads code; it runs no app,
+   and a runtime it is the last member of runs nothing."
+  [project]
+  (assoc (profiles/resolve-profile (name project) :full) :services []))
 
 (defn- conductor-record
   "The workstream's one conductor record, whatever state its session is in — or nil."
@@ -401,10 +409,11 @@
    session its own start already brought up — and start a background session nido drives in its
    own working copy, on `prompt`, given for no Run, on `model` (nil: claude's default) and by
    `given-by` (:start for a person's start or a spawn's brief; nil: the conductor answers for it),
-   recording them on its record (:launched) first. Refused (:closed) on a closed workstream:
-   every start of a driven session comes through here. Answers the facet."
+   recording them on its record (:launched) first. A `profile` given is the one it comes up with;
+   none is the project's :full. Refused (:closed) on a closed workstream: every start of a driven
+   session comes through here. Answers the facet."
   ([project ws-id session-name prompt] (launch! project ws-id session-name prompt {:up? true}))
-  ([project ws-id session-name prompt {:keys [up? model given-by]}]
+  ([project ws-id session-name prompt {:keys [up? model given-by profile]}]
   (refuse-closed! project ws-id)
   (session/write! (assoc (session/read-session project ws-id session-name)
                          :launched (cond-> {:prompt prompt}
@@ -412,7 +421,7 @@
                                      given-by (assoc :given-by given-by))))
   (let [pname (name project)
         opts  {:project pname :runtime-key ws-id}]
-    (when up? (lifecycle/up! session-name opts))
+    (when up? (lifecycle/up! session-name (cond-> opts profile (assoc :profile profile))))
     (let [instance-id (:instance-id (lifecycle/runtime-of session-name opts))
           mcp         (launcher/session-mcp-path pname session-name)]
       (conduct/start! {:project       project :ws-id ws-id :session-name session-name
@@ -580,7 +589,7 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string] :map]}
   conductor!
   "Start the workstream's conductor on `brief`: a driven session on the one record naming it the
-   conductor, occupying no seat, in its own working copy brought up first. Refused while the
+   conductor, occupying no seat, in its own working copy brought up first with no services (`conductor-profile`). Refused while the
    conductor's session is running; on a record whose session is not — gone from the listing, or
    retired with its workstream's close — it is started again on the same record. Answers
    {:session}."
@@ -602,7 +611,7 @@
          ;; Stopped without retirement: its facet still names nido as driving a conversation that is
          ;; over. Retiring it says so before a new one starts on the record.
          (conduct/retire! project ws-id n {}))
-       (launch! project ws-id n brief)
+       (launch! project ws-id n brief {:up? true :profile (conductor-profile project)})
        {:session n}))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}

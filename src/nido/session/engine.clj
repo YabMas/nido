@@ -821,22 +821,36 @@
 (defn- leave!
   "Take the session in `project-dir` off runtime `session`, which other sessions are still on:
    drop its membership, its registry entry and its session home, restore the config files
-   rendered into its worktree, take its working copy out of the runtime's checkout, and stop
-   nothing."
+   rendered into its worktree, and take its working copy out of the runtime's checkout. Its
+   services keep running for the others — unless none of them asks for a service, as a conductor
+   does not: then the runtime is restarted cold under what they ask for, which is nothing, so the
+   last member that wanted a JVM takes it down with it."
   [project-dir session]
   (let [instance-id (:instance-id session)
-        session-name (get (state/members session) (str project-dir))]
+        session-name (get (state/members session) (str project-dir))
+        others       (dissoc (state/members session) (str project-dir))]
     (state/write-session! instance-id (-> (unrender-member! project-dir session)
-                                          (assoc :members (dissoc (state/members session) (str project-dir)))))
+                                          (assoc :members others)))
     (state/remove-from-registry! (str project-dir))
-    (sync-checkout! session (dissoc (state/members session) (str project-dir)))
+    (sync-checkout! session others)
     (when session-name
       (try (launcher/remove-artifacts! (:project-name session) session-name)
            (catch Exception e
              (core/log-step (str "warning: failed to remove launcher artifacts: "
                                  (ex-message e))))))
-    (println "Left session" instance-id "— still running for"
-             (str/join ", " (vals (dissoc (state/members session) (str project-dir)))))))
+    (if (and (seq (:service-defs session))
+             (= [] (runtime-services (:project-name session) {:services []} others)))
+      (let [[dir member] (first others)
+            session-edn  (load-session-edn (:project-name session))]
+        (core/log-step (str "Stopping " instance-id "'s services: "
+                            (str/join ", " (vals others)) " ask for none"))
+        (stop-services! session instance-id)
+        (start-services! dir (:project-name session) instance-id session-edn
+                         {:session-name member
+                          :profile      (read-profile-for-session (:project-name session) member)
+                          :runtime-key  (:runtime-key session)}
+                         (dissoc others dir) dir))
+      (println "Left session" instance-id "— still running for" (str/join ", " (vals others))))))
 
 (defn ^{:malli/schema [:=> [:cat :Path] :any]}
   stop-session!

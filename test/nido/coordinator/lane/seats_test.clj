@@ -126,6 +126,21 @@
         (let [id  (:id (ws/create! :brian {:external-refs []}))]
           (is (= :no-design (:reason (ex-data (try (embodied/carry! :brian id) (catch Exception e e)))))))))))
 
+(deftest the-conductor-comes-up-with-no-services
+  ;; It instructs seats and reads code: a JVM and app per conducted workstream is memory spent on
+  ;; nothing. A seat does the work, so it comes up as the project's :full does.
+  (with-tmp
+    (fn []
+      (let [[id] (ledger strata)
+            ups  (atom {})]
+        (launching [_ _]
+          (with-redefs [lifecycle/up! (fn [n opts] (swap! ups assoc n (:profile opts)))]
+            (embodied/carry! :brian id)
+            (seats/conductor! :brian id "conduct it")))
+        (is (= [] (:services (get @ups (str id "--conductor")))))
+        (is (some? (get-in @ups [(str id "--conductor") :worktree])) "a working copy of its own all the same")
+        (is (nil? (get @ups (str id "--canvas_dstrata_sledger-g1"))) "a seat's start names no profile")))))
+
 (deftest a-writer-is-stamped-from-where-it-runs
   (with-tmp
     (fn []

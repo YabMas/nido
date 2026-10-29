@@ -858,7 +858,10 @@
        :starting
        (str "## Services are starting\n\nThe REPL, app server, and database for this worktree are managed by\nnido and are still booting in the background — a minute or so for a\nlarge app. Don't run project-local scripts that spin up a REPL/app/DB.\n`nido session:status " session-name "` shows whether they are up and\nlists their ports once they are; until then there is no nREPL to\nconnect to and no postgres MCP in this session.\n\n")
        :lite
-       "## Lite session\n\nThis is a lite session with no background services. The worktree is a\nread-only symlink to the project source directory.\n\n")
+       (str "## Lite session\n\nThis is a lite session with no background services."
+            (if (= :symlink (-> profile :worktree :strategy))
+              " The worktree is a\nread-only symlink to the project source directory.\n\n"
+              " It has a working copy\nof its own, but no REPL, app or database.\n\n")))
      (when-not (str/blank? project-briefing) (str project-briefing "\n"))
      (cond
        (and nrepl-port checkout) (render-checkout-sync checkout)

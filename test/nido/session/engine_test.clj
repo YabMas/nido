@@ -265,6 +265,26 @@
           (engine/stop-session! wt-b)
           (is (nil? (state/read-session "p--ws-1")) "the last member takes the runtime down"))))))
 
+(deftest the-last-member-asking-for-services-takes-them-down-when-it-leaves
+  ;; A conductor asks for no services; a person's session leaving must not leave its JVM running
+  ;; for the conductor alone.
+  (with-runtime-home
+    (fn [wt-a wt-b]
+      (let [repl {:type :process :name :repl}
+            rt   (state/read-session "p--ws-1")]
+        (state/write-session! "p--ws-1" (assoc rt :service-defs [repl]))
+        (engine/write-profile-for-session! "p" "a" {:services :all :worktree {:strategy :git-worktree}})
+        (engine/start-session! wt-b {:runtime-key "ws-1" :session-name "b"
+                                     :profile {:services [] :worktree {:strategy :git-worktree}}})
+        (let [stopped (atom [])]
+          (with-redefs [service/stop-service! (fn [d _] (swap! stopped conj (:name d)))]
+            (engine/stop-session! wt-a))
+          (is (= [:repl] @stopped) "a was the last member asking for the repl")
+          (let [left (state/read-session "p--ws-1")]
+            (is (= {wt-b "b"} (:members left)) "b stays on the runtime")
+            (is (empty? (:service-defs left)) "which now runs nothing")
+            (is (= "p--ws-1" (engine/resolve-instance-id wt-b)))))))))
+
 (deftest a-joiner-is-rendered-a-test-database-of-its-own
   (with-runtime-home
     (fn [wt-a wt-b]
