@@ -31,9 +31,25 @@
   (Operation session-context "The substitution context for a session-scoped command."
     {:signature [:=> [:catn [:project-name ProjectName] [:project-dir Path] [:session-name :string]
                             [:worktree Path]] :map]})
+  (Operation committed-tip
+    "What a committed checkout of a worktree is made from: the git directory holding its commits,
+     the commit, and the listing of changes no commit holds (nil when clean)."
+    {:signature [:=> [:catn [:worktree Path]]
+                 [:map [:git-dir :string] [:commit :string] [:dirty [:maybe :string]]]]})
+  (Operation checkout-root
+    "Where one run's committed checkout is made — under nido's home, which Docker shares by
+     default, so a command may bind-mount the checkout's files."
+    {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string]] Path]})
+  (Operation with-committed-checkout*
+    "Call a function with a throwaway git checkout of a worktree's committed tip, keeping the
+     paths it names and removing the checkout whatever the function does. Refuses a dirty working
+     copy: a command on the checkout would report on code nobody committed."
+    {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string] [:worktree Path]
+                            [:keep [:sequential :string]] [:f [:=> [:cat Path] :any]]] :any]
+     :delegates [committed-tip checkout-root]})
   (Operation run-command-in-session! "Resolve a session's worktree and run a named command there."
     {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string] [:ref :any]] :any]
-     :delegates [session-context]}))
+     :delegates [session-context with-committed-checkout*]}))
 
 (Module session-reclaim
   "Reclaiming the state directories of instances nobody is using.

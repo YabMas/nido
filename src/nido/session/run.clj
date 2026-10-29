@@ -99,7 +99,7 @@
         (binding [*out* *err*]
           (println (str "nido: could not keep " rel " from the checkout: " (ex-message e))))))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :string :Path [:sequential :string] ifn?] :any]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string :Path [:sequential :string] [:=> [:cat :Path] :any]] :any]}
   with-committed-checkout*
   "Call (f checkout-dir) with a detached git worktree of `worktree`'s committed
    tip, removing it afterwards whatever f does. The checkout's directory has the
