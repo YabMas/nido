@@ -485,6 +485,23 @@
   [dirs]
   (and (seq dirs) (every? checkout/jj-workspace? dirs)))
 
+(defn- code-members
+  "The members of `members` (worktree to session name) whose working copies the runtime serves:
+   those whose profile asks for a service — `profiles` (worktree to profile) for a session whose
+   profile is not recorded yet, else the one recorded for it, and none recorded asks for all. A
+   member asking for none, as a conductor does, reads no code from the runtime, so its working copy
+   is never merged into the checkout: one on another base conflicts there and keeps every other
+   member's edits out of the JVM."
+  ([project-name members] (code-members project-name members {}))
+  ([project-name members profiles]
+   (into {}
+         (filter (fn [[dir n]]
+                   (let [p (if (contains? profiles dir)
+                             (get profiles dir)
+                             (when n (read-profile-for-session project-name n)))]
+                     (or (nil? p) (= :all (:services p)) (seq (:services p))))))
+         members)))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
   owes-checkout?
   "Does live runtime record `runtime` run out of a member's worktree though every member is a jj
@@ -492,10 +509,10 @@
    is moved onto one by restarting it, every member kept."
   [runtime]
   (boolean (and runtime (not (:checkout runtime))
-                (checkout? (keys (state/members runtime))))))
+                (checkout? (keys (code-members (:project-name runtime) (state/members runtime)))))))
 
 (defn- runtime-dir
-  "Where runtime `instance-id`, carrying `members` (worktree to session name), runs out of: its own
+  "Where runtime `instance-id`, serving `members` (worktree to session name; `code-members`), runs out of: its own
    checkout, brought up to date with them, when `checkout?` holds; else `fallback`, a member's
    worktree. Throws, changing nothing, when the members' working copies conflict."
   [instance-id members session-edn fallback]
@@ -505,7 +522,7 @@
     fallback))
 
 (defn- sync-checkout!
-  "Bring runtime `runtime`'s checkout up to date with `members`, when it runs out of one. A
+  "Bring runtime `runtime`'s checkout up to date with `members` (`code-members`), when it runs out of one. A
    conflict, or a working copy that cannot be snapshotted, is reported and the checkout kept as it
    was: a member coming up or going down is not refused for what another member's working copy
    holds."
@@ -527,7 +544,8 @@
   (core/log-step (str "Starting session " instance-id " (" project-dir ")"))
   (let [session-name (:session-name opts)
         all      (assoc others (str project-dir) session-name)
-        run-dir  (runtime-dir instance-id all session-edn fallback-dir)
+        code     (code-members project-name all {(str project-dir) (:profile opts)})
+        run-dir  (runtime-dir instance-id code session-edn fallback-dir)
         services (runtime-service-defs project-name session-edn instance-id (:profile opts) others)
         pre-allocated (pre-allocate-ports services run-dir)
         jvm-cfg (resolve-jvm-config (:defaults session-edn) opts)
@@ -538,7 +556,7 @@
                                            :runtime-key (:runtime-key opts)
                                            :jvm jvm-cfg}
                                     session-name (assoc :name session-name)
-                                    (checkout? (keys all)) (assoc :git-dir (checkout/git-dir run-dir)))})
+                                    (checkout? (keys code)) (assoc :git-dir (checkout/git-dir run-dir)))})
         ;; No session state is persisted unless every service starts.
         result (start-each! init-ctx services opts)
         final-ctx (:ctx result)
@@ -552,7 +570,7 @@
                               :context final-ctx
                               :created-at (core/now-iso)}
                        session-name              (assoc :name session-name)
-                       (checkout? (keys all))    (assoc :checkout run-dir))]
+                       (checkout? (keys code))   (assoc :checkout run-dir))]
     (state/write-session! instance-id session-data)
     ;; The profile is recorded before the briefing, which reads it to choose the full or lite one.
     (rebrief! project-dir session-name (:runtime-key opts) session-data session-edn
@@ -739,14 +757,15 @@
   [project-dir session-name existing session-edn opts]
   (let [others  (dissoc (state/members existing) (str project-dir))
         all     (assoc others (str project-dir) session-name)
+        code    (code-members (:project-name existing) all {(str project-dir) (:profile opts)})
         defs    (runtime-service-defs (:project-name existing) session-edn
                                       (:instance-id existing) (:profile opts) others)
         missing (remove #(contains? (:service-states existing) (:name %)) defs)
-        moving? (owes-checkout? (assoc existing :members all))]
+        moving? (and (not (:checkout existing)) (checkout? (keys code)))]
     (if (or (seq missing) moving?)
       (do
         ;; A conflict between the working copies refuses the join before anything is stopped.
-        (when (checkout? (keys all)) (runtime-dir (:instance-id existing) all session-edn nil))
+        (when (checkout? (keys code)) (runtime-dir (:instance-id existing) code session-edn nil))
         (core/log-step (str "Restarting " (:instance-id existing) " for " session-name
                             (if (seq missing)
                               (str ", which asks for " (str/join ", " (map (comp name :name) missing)))
@@ -758,7 +777,7 @@
       (let [runtime (assoc existing :members (assoc (state/members existing) (str project-dir) session-name))]
         (println "Joining running session" (:instance-id runtime))
         (state/write-session! (:instance-id runtime) runtime)
-        (sync-checkout! runtime (state/members runtime))
+        (sync-checkout! runtime code)
         (rebrief! project-dir session-name (:runtime-key opts) runtime session-edn
                   (select-keys opts [:run-dir :profile]))
         (reconcile-app! runtime)
@@ -832,7 +851,7 @@
     (state/write-session! instance-id (-> (unrender-member! project-dir session)
                                           (assoc :members others)))
     (state/remove-from-registry! (str project-dir))
-    (sync-checkout! session others)
+    (sync-checkout! session (code-members (:project-name session) others))
     (when session-name
       (try (launcher/remove-artifacts! (:project-name session) session-name)
            (catch Exception e
@@ -845,11 +864,14 @@
         (core/log-step (str "Stopping " instance-id "'s services: "
                             (str/join ", " (vals others)) " ask for none"))
         (stop-services! session instance-id)
-        (start-services! dir (:project-name session) instance-id session-edn
-                         {:session-name member
-                          :profile      (read-profile-for-session (:project-name session) member)
-                          :runtime-key  (:runtime-key session)}
-                         (dissoc others dir) dir))
+        (let [restarted (start-services! dir (:project-name session) instance-id session-edn
+                                         {:session-name member
+                                          :profile      (read-profile-for-session (:project-name session) member)
+                                          :runtime-key  (:runtime-key session)}
+                                         (dissoc others dir) dir)]
+          ;; Serving no member's code, it runs out of no checkout; nothing else would remove it.
+          (when (and (:checkout session) (not (:checkout restarted)))
+            (checkout/remove! instance-id dir))))
       (println "Left session" instance-id "— still running for" (str/join ", " (vals others))))))
 
 (defn ^{:malli/schema [:=> [:cat :Path] :any]}
@@ -928,8 +950,9 @@
    (let [runtime (some-> instance-id state/read-session)]
      (when-not (and runtime (= instance-id (resolve-instance-id project-dir)))
        (throw (ex-info (str "No session is up in " project-dir) {:reason :no-session})))
-     (when (:checkout runtime)
-       (checkout/refresh! (:instance-id runtime) (state/members runtime))))))
+     (let [code (code-members (:project-name runtime) (state/members runtime))]
+       (when (and (:checkout runtime) (seq code))
+         (checkout/refresh! (:instance-id runtime) code))))))
 
 (defn ^{:malli/schema [:=> [:cat :Path] :any]}
   session-status

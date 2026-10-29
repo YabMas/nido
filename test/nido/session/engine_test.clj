@@ -581,6 +581,28 @@
                          (do (reset! conflict? true) (engine/sync-runtime! wt-a)))
                 "a sync that conflicts is refused")))))))
 
+(deftest a-member-asking-for-no-services-stays-out-of-the-checkout
+  ;; A conductor on main beside a session on an older base conflicted in the merge, and every sync
+  ;; was refused: the session's edits stopped reaching its own JVM.
+  (with-runtime-home
+    (fn [wt-a wt-b]
+      (state/write-session! "p--ws-1" (assoc (state/read-session "p--ws-1")
+                                             :checkout "/co" :project-dir "/co"
+                                             :service-defs [{:type :process :name :repl}]))
+      (let [refreshes (atom [])]
+        (with-checkout-stubs refreshes (atom false)
+          (fn []
+            (with-redefs [service/stop-service! (fn [& _] nil)]
+              (engine/start-session! wt-b {:runtime-key "ws-1" :session-name "b"
+                                           :profile {:services [] :worktree {:strategy :git-worktree}}})
+              (is (= [#{"a"}] @refreshes) "b joins without its working copy merged in")
+              (engine/sync-runtime! wt-a)
+              (is (= #{"a"} (last @refreshes)) "nor does a sync merge it")
+              (engine/stop-session! wt-a)
+              (is (= [:removed "p--ws-1"] (last @refreshes))
+                  "a runtime left serving no member's code drops its checkout")
+              (is (= {wt-b "b"} (:members (state/read-session "p--ws-1")))))))))))
+
 (deftest joining-a-runtime-recorded-before-members-keeps-its-starter
   ;; A runtime written before runtimes recorded :members has one member, the session that
   ;; started it; a joiner is added beside it, so the starter leaving stops nothing.
