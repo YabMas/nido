@@ -581,10 +581,15 @@
   "done-row with no live process, in a directory that exists — what recover! may restart."
   (assoc (dissoc done-row :pid) :cwd (str (fs/temp-dir))))
 
+(def ^:private mid-turn
+  "A policy session the boot caught inside a turn nido gave it — what recover! may restart."
+  (assoc driving :policy {:auto-respawn? true}
+         :pending {:token "T" :at "t0" :via :send :seen? true}))
+
 (deftest recover-restarts-a-policy-session-once-per-boot
   (with-tmp
     (fn []
-      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :policy {:auto-respawn? true})))
+      (session/update-claude! :nido "ws-1" "kid" (constantly mid-turn))
       (let [respawned (atom [])]
         (with-redefs [substrate/listing  (constantly [idle-row])
                       substrate/respawn! (fn [id _] (swap! respawned conj id) true)]
@@ -602,7 +607,7 @@
   ;; cleared, and every later start then ran as the first. A refused session stays resumable.
   (with-tmp
     (fn []
-      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :policy {:auto-respawn? true})))
+      (session/update-claude! :nido "ws-1" "kid" (constantly mid-turn))
       (let [refuse? (atom true)]
         (with-redefs [substrate/listing  (constantly [idle-row])
                       substrate/respawn! (fn [_ _] (if @refuse? (throw (ex-info "refused" {:reason :respawn-refused})) true))]
@@ -618,7 +623,7 @@
 (deftest recover-attempts-no-session-the-listing-does-not-name
   (with-tmp
     (fn []
-      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :policy {:auto-respawn? true})))
+      (session/update-claude! :nido "ws-1" "kid" (constantly mid-turn))
       (with-redefs [substrate/listing  (constantly [])
                     substrate/respawn! (fn [& _] (throw (ex-info "must not" {})))]
         (let [r (conduct/recover! {:projects [:nido] :boot "B1"})]
@@ -628,7 +633,7 @@
 (deftest a-notification-after-the-boot-shows-the-session-outlived-it
   (with-tmp
     (fn []
-      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :policy {:auto-respawn? true})))
+      (session/update-claude! :nido "ws-1" "kid" (constantly mid-turn))
       (events/append! "s" {:event :notification})
       (with-redefs [substrate/listing  (constantly [idle-row])
                     substrate/respawn! (fn [& _] (throw (ex-info "must not" {})))]
@@ -651,7 +656,7 @@
   ;; held the boot unrecovered for good — and every later start in that boot ran as the first.
   (with-tmp
     (fn []
-      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :policy {:auto-respawn? true})))
+      (session/update-claude! :nido "ws-1" "kid" (constantly mid-turn))
       (with-redefs [substrate/listing  (constantly [(assoc idle-row :cwd "/nonexistent/worktree")])
                     substrate/respawn! (fn [& _] (throw (ex-info "must not" {})))]
         (let [r1 (conduct/recover! {:projects [:nido] :boot "B1"})
@@ -665,7 +670,7 @@
   ;; ended in this boot — finished, stopped — and restarting it brings back a finished session.
   (with-tmp
     (fn []
-      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :policy {:auto-respawn? true})))
+      (session/update-claude! :nido "ws-1" "kid" (constantly mid-turn))
       (events/append! "s" {:event :stop})          ; at the test clock, 2026-10-16T09:00:00Z
       (with-redefs [substrate/listing  (constantly [idle-row])
                     substrate/respawn! (fn [& _] (throw (ex-info "must not" {})))]
@@ -677,12 +682,54 @@
 (deftest recover-restarts-a-session-that-fell-silent-before-the-boot
   (with-tmp
     (fn []
-      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc driving :policy {:auto-respawn? true})))
-      (events/append! "s" {:event :stop})
+      (session/update-claude! :nido "ws-1" "kid" (constantly mid-turn))
+      (events/append! "s" {:event :notification})
       (with-redefs [substrate/listing  (constantly [idle-row])
                     substrate/respawn! (constantly true)]
         (is (= 1 (count (:restarted (conduct/recover! {:projects [:nido] :boot "B1"
                                                        :boot-at "2026-10-16T10:00:00Z"})))))))))
+
+(deftest recover-leaves-a-session-between-turns-resumable
+  ;; The policy outlives every turn, so a Run that finished long before the boot still carries it.
+  (with-tmp
+    (fn []
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc mid-turn :pending nil)))
+      (with-redefs [substrate/listing  (constantly [idle-row])
+                    substrate/respawn! (fn [& _] (throw (ex-info "must not" {})))]
+        (let [r (conduct/recover! {:projects [:nido] :boot "B1"})]
+          (is (= [] (:restarted r)))
+          (is (= [{:project :nido :ws-id "ws-1" :session "kid"}] (:resumable r))))))))
+
+(deftest recover-restarts-a-session-running-its-own-work
+  (with-tmp
+    (fn []
+      (session/update-claude! :nido "ws-1" "kid" (constantly (assoc mid-turn :pending nil :own-work? true)))
+      (with-redefs [substrate/listing  (constantly [idle-row])
+                    substrate/respawn! (constantly true)]
+        (is (= 1 (count (:restarted (conduct/recover! {:projects [:nido] :boot "B1"})))))))))
+
+(deftest recover-leaves-a-session-whose-stop-was-never-consumed
+  ;; The daemon was down when the turn ended: the facet still holds the token, the events do not.
+  (with-tmp
+    (fn []
+      (session/update-claude! :nido "ws-1" "kid" (constantly mid-turn))
+      (events/append! "s" {:event :stop})
+      (with-redefs [substrate/listing  (constantly [idle-row])
+                    substrate/respawn! (fn [& _] (throw (ex-info "must not" {})))]
+        (is (= [] (:restarted (conduct/recover! {:projects [:nido] :boot "B1"
+                                                 :boot-at "2026-10-16T10:00:00Z"}))))))))
+
+(deftest recover-leaves-a-session-whose-stop-a-notification-followed
+  ;; Claude Code notifies an idle session after its Stop; the notification starts no turn.
+  (with-tmp
+    (fn []
+      (session/update-claude! :nido "ws-1" "kid" (constantly mid-turn))
+      (events/append! "s" {:event :stop})
+      (events/append! "s" {:event :notification})
+      (with-redefs [substrate/listing  (constantly [idle-row])
+                    substrate/respawn! (fn [& _] (throw (ex-info "must not" {})))]
+        (is (= [] (:restarted (conduct/recover! {:projects [:nido] :boot "B1"
+                                                 :boot-at "2026-10-16T10:00:00Z"}))))))))
 
 (deftest a-pass-reports-the-sessions-nido-drives-that-are-working
   (with-tmp

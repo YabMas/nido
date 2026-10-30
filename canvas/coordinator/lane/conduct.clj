@@ -92,8 +92,9 @@
      :delegates [process/host-boot]})
   (Operation recover!
     "At nido's first start after a host boot, mark the boot recovered, then restart once each
-     auto-respawn session the boot stopped — a listed background session with no live process,
-     nothing recorded since the boot began, its directory still there — retrying none; answer a
-     listed session whose directory is gone as gone, and the other listed ones as resumable."
+     auto-respawn session the boot stopped mid-turn — a listed background session with no live
+     process, an instruction outstanding or work of its own running and its last prompt or
+     Stop not a Stop, nothing recorded since the boot began, its directory still there — retrying none; answer one
+     it would restart but whose directory is gone as gone, and the other listed ones as resumable."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [current-boot faceted-sessions substrate/listing substrate/respawn!]}))

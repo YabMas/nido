@@ -66,7 +66,7 @@
   {:about [listing lane-conduct] :evidence "round"})
 
 (Claim recovery-once-per-boot
-  "At nido's first start after a host boot, recover! attempts, once, each session with a :claude facet whose policy is auto-respawn, whose listing row is a background session with no live process in a directory that exists, and that recorded no event after the boot began; it attempts no other session. A listed session whose directory no longer exists is answered as gone and never attempted. The first start marks the boot recovered before it attempts any restart, a refused restart is not retried, and later starts in the same boot restart nothing."
+  "At nido's first start after a host boot, recover! attempts, once, each session with a :claude facet whose policy is auto-respawn, whose listing row is a background session with no live process in a directory that exists, that the boot stopped mid-turn — an instruction outstanding or work of its own running, and the last prompt or Stop it recorded not a Stop — and that recorded no event after the boot began; it attempts no other session, and a session between turns stays resumable. A session meeting every condition but the directory, whose listed directory no longer exists, is answered as gone and never attempted. The first start marks the boot recovered before it attempts any restart, a refused restart is not retried, and later starts in the same boot restart nothing."
   {:about [recover!] :evidence "round"})
 
 (Claim a-crash-is-the-supervisors

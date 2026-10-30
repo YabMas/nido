@@ -561,27 +561,38 @@
 
 (defn- boot-marker-path [] (str (fs/path (cstate/coordinator-dir) "recovered-boot.edn")))
 
+
 (defn- outlived-boot?
-  "Whether the session recorded anything after the host boot began at `boot-at` — a
-   notification included, since only a live session is sent one: it was alive in this boot, so
-   the boot is not what stopped it."
-  [session-id boot-at]
+  "Whether `latest`, the session's last recorded event, falls after the host boot began at
+   `boot-at` — a notification included, since only a live session is sent one: it was alive in
+   this boot, so the boot is not what stopped it."
+  [latest boot-at]
   (boolean
    (when boot-at
-     (when-let [at (->> (:events (events/events-since session-id nil))
-                        last :at)]
+     (when-let [at (:at latest)]
        (try (.isAfter (java.time.Instant/parse at) (java.time.Instant/parse boot-at))
             (catch Exception _ false))))))
 
+(defn- mid-turn?
+  "Whether the boot stopped `facet`'s session inside a turn: an instruction outstanding or work of
+   its own running, and the last prompt or Stop among `evs`, the session's recorded events, not a
+   Stop — a Stop the daemon never consumed ended the turn all the same, and a notification after
+   it starts no turn. A session between turns has nothing a restart would resume."
+  [facet evs]
+  (and (or (some? (:pending facet)) (:own-work? facet))
+       (not= :stop (:event (last (filter (comp #{:prompt :stop} :event) evs))))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   recover!
-  "At nido's first start after a host boot, restart once each session the boot stopped: one with
-   a :claude facet whose policy is auto-respawn, that has no live process and that recorded
-   nothing after the boot began, and whose listing row is a background session in a directory
-   that exists. A listed session whose directory is gone cannot be restarted there and is
-   answered under :gone, unattempted. Every other listed background session without a live
-   process, in a directory that exists, is answered as resumable; one the listing does not name
-   is answered as neither.
+  "At nido's first start after a host boot, restart once each session the boot stopped mid-turn:
+   one with a :claude facet whose policy is auto-respawn, that has no live process, that was
+   inside a turn when the boot came and recorded nothing after it began, and whose listing row is
+   a background session in a directory that exists. A session between turns is left resumable:
+   the auto-respawn policy outlives every turn, so on its own it would restart every Run that
+   ever finished in a worktree still standing. A session it would restart but whose listed
+   directory is gone cannot be restarted there and is answered under :gone, unattempted. Every
+   other listed background session without a live process, in a directory that exists, is
+   answered as resumable; one the listing does not name is answered as neither.
 
    The first start recovers the boot whatever it was refused, and a later start in the same boot
    restarts nothing. A refused restart is answered under :failed for the caller to report, and
@@ -604,7 +615,9 @@
         candidate? (fn [{:keys [facet]}]
                      (and first? (get-in facet [:policy :auto-respawn?])
                           (not= boot (:recovered-boot facet)) (:bg-id facet)
-                          (not (outlived-boot? (:session-id facet) boot-at))))
+                          (let [evs (:events (events/events-since (:session-id facet) nil))]
+                            (and (mid-turn? facet evs)
+                                 (not (outlived-boot? (last evs) boot-at))))))
         row      (fn [{:keys [facet]}] (row-for listing facet))
         ;; A listed session whose directory is gone; one the listing does not name is neither
         ;; gone nor resumable — nothing can be said of it.
