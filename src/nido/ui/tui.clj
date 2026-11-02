@@ -203,8 +203,9 @@
    ;; A row waiting on its gate says what the gate is, where the eye already
    ;; reads a row's second line; the gate is asserted from the dashboard or
    ;; `bb nido:phase:advance`.
-   ;; The ticket id leads it: the label is a generated title and never carries one.
-   :description (str (some-> (:br-id r) (str "  "))
+   ;; The stable identifier leads it — ticket id, else worktree name: the label
+   ;; is a generated title, never carries one, and moves when its basis does.
+   :description (str (some-> (:tag r) (str "  "))
                      (or (when (= :awaiting-gate (:stage r))
                            (some->> (get-in r [:phase :exit :criterion]) (str "gate: ")))
                          (:last-activity r) ""))

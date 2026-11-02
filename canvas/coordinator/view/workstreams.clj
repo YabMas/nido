@@ -52,6 +52,11 @@
     "A workstream's display label, resolved by fallback — its generated title, then the source's
      title, then an id. Never prefixed with a ticket id; the row carries that separately."
     {:signature [:=> [:catn [:ws Workstream] [:sessions :any]] :string]})
+  (Operation tag
+    "The identifier a person searches for to find a workstream — its ticket id, else its oldest
+     non-conductor session's (= worktree's) name, else its ws-id. Unlike the label it never moves
+     for the life of the workstream."
+    {:signature [:=> [:catn [:ws Workstream] [:sessions :any]] :string]})
   (Operation last-activity
     "The latest timestamp across the workstream and its sessions."
     {:signature [:=> [:catn [:ws Workstream] [:sessions :any]] [:maybe :string]]})
@@ -59,7 +64,7 @@
     "One display row: what the workstream is and where it came from. Where it sits on the board is
      status's answer, added above this."
     {:signature [:=> [:catn [:project ProjectName] [:ws Workstream] [:facts [:? :any]]] WorkstreamRow]
-     :delegates [label last-activity ws-source session/list-sessions]})
+     :delegates [label tag last-activity ws-source session/list-sessions]})
   (Operation doing
     "Which single source says what this workstream is doing right now — a held activity claim,
      the merge run, or an agent holding its run's lock — under a TOTAL precedence, so that

@@ -1178,6 +1178,7 @@
      :origin        (:origin row)
      :bare?         true
      :label         (:label row)
+     :tag           (:tag row)
      :br-id         (:br-id row)
      :stage         (:stage row)
      :notion-status (:status fct)
@@ -1352,6 +1353,7 @@
         :origin       (classify-origin w)
         :stage        (:stage row)
         :label        (:label row)
+        :tag          (:tag row)
         :links        (:links row)
         ;; What is underway right now, taken from the row rather than re-derived:
         ;; a second read is a second moment, and a pane whose heading disagreed
@@ -1483,6 +1485,7 @@
      :origin       (:origin row)
      :stage        (:stage row)
      :label        (:label row)
+     :tag          (:tag row)
      :links        (:links row)
      ;; A gate is a workstream too, and the one whose activity is easiest to
      ;; miss: a claim outranks session state, so a workstream parked on a human

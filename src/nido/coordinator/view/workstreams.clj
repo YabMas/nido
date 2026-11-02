@@ -156,6 +156,29 @@
         sname
         (:id ws))))
 
+(defn ^{:malli/schema [:=> [:cat :Workstream :any] :string]}
+  tag
+  "The identifier a person searches for to find this workstream, shown under its
+   generated title. The label is regenerated whenever its basis moves, so it is a
+   poor thing to look for; this never changes for the life of the workstream:
+     1. the ticket id — Notion BR-####, GitHub repo#number — what a ticket-driven
+        workstream is known by everywhere else
+     2. the session (= worktree) name a person or nido chose — what `cd`, the tab
+        and `nido session:*` all go by. The oldest session that is not the
+        conductor: a later seat or a conductor joins without renaming the work.
+     3. the ws-id, which every workstream has.
+   A Slack ref's slack-<channel>-<ts> id is skipped: nobody searches for it."
+  [ws sessions]
+  (or (:id (notion-ref ws))
+      (:id (github-ref ws))
+      (some->> sessions
+               (remove :conductor)
+               (filter (comp not-empty :name))
+               (sort-by :created-at)
+               first
+               :name)
+      (:id ws)))
+
 (defn- timestamps [ws sessions]
   (concat
    [(:created-at ws)]
@@ -328,6 +351,7 @@
       :promote-id      (or (:id (notion-ref ws))
                            (some #(when (= :github-issue (:adapter %)) (:id %)) (:external-refs ws)))
       :label           (label ws sessions)
+      :tag             (tag ws sessions)
       :links           (ref-links ws)
       :source          (ws-source ws)
       :priority        (max-priority sessions)
@@ -366,6 +390,7 @@
    :br-id           br
    :promote-id      br
    :label           (or title br "(untitled)")
+   :tag             (or br page-id)
    :links           (ref-links {:external-refs [{:adapter :notion
                                                  :id      (or br page-id)
                                                  :title   title

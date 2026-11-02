@@ -96,6 +96,25 @@
             :entries []}]
     (is (= "Fix drift" (wsv/label ws [])))))
 
+(deftest tag-is-the-stable-identifier-not-the-title
+  ;; The tag is what a person searches for: it ignores the generated title and
+  ;; any session a ticket also has, and a scratch workstream goes by the name of
+  ;; its first non-conductor session — its worktree.
+  (let [titled {:title {:text "Drift in the session index" :basis "x"} :entries []}]
+    (is (= "BR-1421" (wsv/tag (assoc titled :id "ws-1"
+                                     :external-refs [{:adapter :notion :id "BR-1421"}])
+                              [{:name "impl-br-1421" :created-at "2026-01-01"}])))
+    (is (= "brian#123" (wsv/tag (assoc titled :id "ws-1"
+                                       :external-refs [{:adapter :github-issue :id "brian#123"}])
+                                [])))
+    (is (= "drift-fix"
+           (wsv/tag (assoc titled :id "ws-1"
+                           :external-refs [{:adapter :slack-message :id "slack-C1-1781.0"}])
+                    [{:name "later-seat" :created-at "2026-02-01"}
+                     {:name "conductor" :conductor true :created-at "2025-01-01"}
+                     {:name "drift-fix" :created-at "2026-01-01"}])))
+    (is (= "ws-1" (wsv/tag (assoc titled :id "ws-1" :external-refs []) [])))))
+
 (deftest label-notion-ref-without-title-uses-id
   (let [ws {:id "ws-20260601-aaaaaa"
             :external-refs [{:adapter :notion :id "BR-1421"}]

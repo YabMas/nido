@@ -83,6 +83,9 @@
         .gate-top { display:flex; align-items:center; gap:8px; }
         .gate-top .lbl { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#e8e8e8; }
         .needs { width:7px; height:7px; border-radius:50%; background:#facc15; box-shadow:0 0 6px #facc15; }
+        .gate-tag { color:#8a8aa8; font-family:ui-monospace,Menlo,monospace; font-size:11px; margin:2px 0 0 26px;
+                    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .pane-tag { color:#8a8aa8; font-family:ui-monospace,Menlo,monospace; font-size:12px; margin:-6px 0 8px; user-select:all; }
         .gate-sub { display:flex; align-items:center; gap:8px; color:#666; font-size:11px; margin:3px 0 0 26px; }
         .gate-sub span:last-child { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .gate-prev { color:#7a7a98; font-size:11.5px; margin:5px 0 0 26px;
@@ -691,16 +694,26 @@
         [:span.link-k label]
         [:a {:href url :target "_blank" :title title} (or id url) " ↗"]])]))
 
+(defn- tag-line
+  "The workstream's stable identifier (wsv/tag — ticket id, else worktree name) on
+   its own line under the generated title, which is what a person cannot search
+   for: it moves whenever its basis does."
+  [tag]
+  (when tag [:div.gate-tag tag]))
+
 (defn- pane-heading
   "A detail pane's <h1>: origin badge + label, with the label linking out to the
-   primary (first) external ref when there is one. The badge stays outside the
-   anchor so only the title is clickable."
-  [origin label links]
+   primary (first) external ref when there is one, and the stable tag beneath it,
+   selectable in one click for pasting into a terminal. The badge stays outside
+   the anchor so only the title is clickable."
+  [origin label links tag]
   (let [primary (:url (first links))]
-    [:h1 (origin-badge origin) " "
-     (if primary
-       [:a {:href primary :target "_blank"} label " ↗"]
-       label)]))
+    (list
+     [:h1 (origin-badge origin) " "
+      (if primary
+        [:a {:href primary :target "_blank"} label " ↗"]
+        label)]
+     (when tag [:p.pane-tag tag]))))
 
 (defn- screen-query
   "Query string (leading ?) rebuilding the active scope from the screen, with
@@ -783,10 +796,11 @@
    `:doing` renders the same activity badge the workstream list shows: waiting on
    a person and having something underway are separate facts, and a gate can hold
    both at once."
-  [{:keys [project origin stage label report session resume-error pending? error-msg doing denials]} sel? href]
+  [{:keys [project origin stage label tag report session resume-error pending? error-msg doing denials]} sel? href]
   [:a {:class (str "gate-card" (when sel? " sel"))
        :href  href}
    [:div.gate-top (origin-badge origin) [:span.lbl label] [:span.needs {:title "needs you"}]]
+   (tag-line tag)
    [:div.gate-sub [:span project] (chip stage)
     [:span (cond pending? "working…" session (str "parked · " session) :else "decide")]
     ;; What a gate is PARKED on is the line above; this is what is running in it
@@ -1727,7 +1741,7 @@
    phase, so a poll can't flip it back to a fresh Apply button. `:error-msg` (a
    failed action) renders above the buttons, which stay clickable to retry. `:denials` —
    auto-mode denials in a session nido drives — render above the report."
-  [{:keys [ws-id project origin label links report actions session pending? error-msg doing
+  [{:keys [ws-id project origin label tag links report actions session pending? error-msg doing
            denials]
     :as gate}]
   (str
@@ -1735,7 +1749,7 @@
     (if-not gate
       [:div {:id "gate-pane"} [:p.empty "Nothing needs you right now."]]
       [:div {:id "gate-pane"}
-       (pane-heading origin label links)
+       (pane-heading origin label links tag)
        (links-row links)
        ;; Above the report, because the report was written at the moment the
        ;; agent stopped and this is the one line on the pane that says what is
@@ -1916,7 +1930,7 @@
   "One selectable list row. Its link carries the view-state (scope + selection),
    so selecting a workstream lands on the SAME list. `sel-id` highlights the
    open row (threaded from the screen so a poll preserves it)."
-  [screen sel-id project {:keys [ws-id origin label br-id needs-you open-findings position phase stage]
+  [screen sel-id project {:keys [ws-id origin label tag needs-you open-findings position phase stage]
                           :as row}]
   [:a {:class (str "gate-card" (when (= sel-id ws-id) " sel"))
        :href  (str "/workstreams" (screen-query screen {:sel (str project ":" ws-id)}))}
@@ -1924,7 +1938,8 @@
     (when needs-you [:span.needs {:title "needs you"}])
     (when (pos? (or open-findings 0))
       [:span.badge-findings (str "⚑ " open-findings " open findings")])]
-   [:div.gate-sub [:span project] (when br-id [:span.tid br-id]) (position-chip position) (status-chip (:status row))
+   (tag-line tag)
+   [:div.gate-sub [:span project] (position-chip position) (status-chip (:status row))
     ;; Where a workstream STANDS is the position chip; this is what is happening
     ;; in it right now, which is a different question and often has no answer.
     ;; A :shipping row reads its merge phase from HERE — the projection folds
@@ -2383,14 +2398,15 @@
    Keeps the 3s poll for two reasons: it is what carries :error-msg back from a
    failed action, and it is what upgrades this pane to the full one once Start
    triage's workstream exists (work/workstream resolves the page to it)."
-  [{:keys [project ws-id origin label stage br-id notion-status error-msg]}]
+  [{:keys [project ws-id origin label tag stage br-id notion-status error-msg]}]
   (let [actions       (work/gate-actions stage false origin {:bare? true})
         start-triage? (some #(= :start-triage (:id %)) actions)]
     [:div {:id "ws-pane"
            :data-on-interval__duration.3s
            (str "@get('/_fragment/workstream/" project "/" ws-id "')")}
      [:h1 (origin-badge origin) " " label]
-     [:p.meta (str/join " · " (keep identity [(name stage) br-id
+     (when-let [t (or tag br-id)] [:p.pane-tag t])
+     [:p.meta (str/join " · " (keep identity [(name stage)
                                               (when notion-status
                                                 (str "notion: " notion-status))]))]
      [:div.card
@@ -2427,7 +2443,7 @@
    — see pane-fragment), so transient dev-env states (starting…) self-advance
    without the refresh closing whatever the reader has open."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan status replyable?]
+  ([{:keys [project ws-id origin stage label tag links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan status replyable?]
      :or {on-latest? true}} session-dev-states machine-facts]
    (let [pos  {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds
                :stage open-stage :history? history?}
@@ -2444,11 +2460,11 @@
        (if-not label
          [:div {:id "ws-pane"} [:p.empty "Select a workstream."]]
          (if bare?
-           (bare-pane-body {:project project :ws-id ws-id :origin origin :label label
+           (bare-pane-body {:project project :ws-id ws-id :origin origin :label label :tag tag
                             :stage stage :br-id br-id :notion-status notion-status
                             :error-msg error-msg})
            [:div {:id "ws-pane" :data-on-interval__duration.3s (pane-fragment pos)}
-            (pane-heading origin label links)
+            (pane-heading origin label links tag)
             [:p.meta (name stage) " " (status-chip status)]
             (links-row links)
 
