@@ -314,24 +314,38 @@
           (.println ^java.io.PrintWriter *err*
                     (str "nido conduct: settling " session " failed — " (ex-message t))))))))
 
+(defn- overrun-result
+  "How a Run stopped past its budget ended, for settle-run!: a clean turn end when its skill had
+   already reported a phase that maps to a state — it finished and only its Stop was late or
+   never came — and an overrun otherwise."
+  [run-id]
+  (if (status-file/phase->state (:phase (status-file/read-status run-id)))
+    {:exit-code 0}
+    {:timed-out? true}))
+
 (defn- enforce-budgets!
-  "Stop, and fail as timed out, each Run whose outstanding instruction has been running longer
-   than its wall-clock budget. On the substrate nothing kills a turn by itself, so this is the
-   brake launch!'s timer was; a Run without a readable budget is not stopped here."
+  "Stop and settle each Run whose instruction is still outstanding past its wall-clock budget.
+   On the substrate nothing kills a turn by itself, so this is the brake launch!'s timer was; a
+   Run without a readable budget is not stopped here.
+
+   Outstanding is conduct/outstanding's answer at this check, not the facet's :pending: the
+   conductor sweep runs between this pass's fold and here, and can take minutes, so a Stop
+   recorded during it is on the log and not yet on the facet. Such a Run is left :running for
+   the next pass's fold to settle by its turn end."
   [now-ms faceted]
   (doseq [{:keys [project ws-id session-name facet]} faceted
-          :let [at (get-in facet [:pending :at])]
-          :when (and at (= :nido (:driver facet)))]
+          :when (and (get-in facet [:pending :at]) (= :nido (:driver facet)))]
     (try
-      (when-let [run (run-for-instruction (:pending facet))]
-        (when (= :running (:state run))
-          (let [budget-ms (agent/parse-budget-ms (-> run :limits :budget))]
-            (when (> (- now-ms (.toEpochMilli (java.time.Instant/parse at))) budget-ms)
-              (conduct/retire! project ws-id session-name {})
-              (if (= :merge (:mode run))
-                (ship/settle-drive-home! (:id run) {:timed-out? true})
-                (settle-run! (:id run) run (#{:plan-bug :plan-github-issue} (:skill run))
-                             {:timed-out? true}))))))
+      (when-let [pending (conduct/outstanding facet)]
+        (when-let [run (run-for-instruction pending)]
+          (when (= :running (:state run))
+            (let [budget-ms (agent/parse-budget-ms (-> run :limits :budget))]
+              (when (> (- now-ms (.toEpochMilli (java.time.Instant/parse (:at pending)))) budget-ms)
+                (conduct/retire! project ws-id session-name {})
+                (if (= :merge (:mode run))
+                  (ship/settle-drive-home! (:id run) {:timed-out? true})
+                  (settle-run! (:id run) run (#{:plan-bug :plan-github-issue} (:skill run))
+                               (overrun-result (:id run)))))))))
       (catch Throwable _ nil))))
 
 (defn- surface-refusals!

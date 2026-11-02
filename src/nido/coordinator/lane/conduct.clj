@@ -138,6 +138,21 @@
 
       acc)))
 
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
+  outstanding
+  "The instruction still outstanding on `facet` as its session's event log stands now: its
+   :pending as folding the events recorded past its cursor would leave it — the fold conduct!
+   applies — so nil once the session has recorded the Stop that ends it, whether or not a pass
+   has folded that Stop yet. Reads the log; writes nothing.
+
+   Anything outside conduct that acts on an instruction as unfinished asks this, not the
+   facet's :pending: a pass folds a session's events once, at its start, and a Stop recorded
+   after that read is on the log but not yet on the facet."
+  [facet]
+  (when (:pending facet)
+    (let [{evs :events} (events/events-since (:session-id facet) (:cursor facet))]
+      (get-in (reduce read-event {:facet facet :actions []} evs) [:facet :pending]))))
+
 (defn ^{:malli/schema [:=> [:cat :map [:maybe :map] [:sequential :map] :map] :map]}
   decide
   "The next facet and the actions it calls for, given a session's :claude facet, its row in the

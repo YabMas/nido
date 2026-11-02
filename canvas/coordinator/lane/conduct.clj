@@ -76,6 +76,13 @@
      the substrate took them; conduct keeps none itself."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [faceted-sessions decide baseline-shown events/events-since substrate/listing substrate/send! substrate/wake!]})
+  (Operation outstanding
+    "The instruction still outstanding on a session's facet as its event log stands now: the
+     facet's pending, unless a Stop recorded past the facet's cursor ends it — what conduct!'s
+     next fold will leave. The one answer a check outside conduct reads before acting on an
+     instruction as unfinished."
+    {:signature [:=> [:catn [:facet :map]] [:maybe :map]]
+     :delegates [events/events-since]})
   (Operation retire!
     "Stop driving a session and stop its process, before the session it belongs to is torn down;
      its facet marked retired, so it holds no session."

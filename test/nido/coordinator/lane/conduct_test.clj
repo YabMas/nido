@@ -788,3 +788,16 @@
                       substrate/send!   (fn [_ text] (is (str/starts-with? text "first")) {:delivered? true})]
           (is (= 1 (count (:delivered (conduct/conduct! {:projects [:nido] :mail mail}))))))
         (is (= ["m1"] @delivered))))))
+
+(deftest outstanding-is-what-the-next-fold-would-leave
+  (with-tmp
+    (fn []
+      (let [pending {:token "T" :at "2026-10-16T08:00:00Z" :via :send :seen? true :for "r1"}
+            f       {:session-id "o-1" :driver :nido :pending pending :cursor 1}]
+        (events/append! "o-1" {:event :prompt :prompt "go\n\n[nido-send T]"})
+        (is (= pending (conduct/outstanding f)) "nothing past the cursor ends it")
+        (events/append! "o-1" {:event :notification :notification-type "idle_prompt"})
+        (is (= pending (conduct/outstanding f)) "a notification is not a turn end")
+        (events/append! "o-1" {:event :stop :last-message "done" :background-tasks 0 :crons 0})
+        (is (nil? (conduct/outstanding f)) "a Stop no pass has folded yet ends it")
+        (is (nil? (conduct/outstanding (assoc f :pending nil))) "nothing given, nothing outstanding")))))

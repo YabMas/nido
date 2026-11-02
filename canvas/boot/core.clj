@@ -44,7 +44,7 @@
      last ran on the session."
     {:signature [:=> [:catn] :any]
      :delegates [source/drain! source/route executor/tick! drive/tick! daemon/write! execute!
-                 conduct/conduct! seats/owed seats/delivered! seats/traffic
+                 conduct/conduct! conduct/outstanding seats/owed seats/delivered! seats/traffic
                  conductor/conductors! conductor/reseat! conductor/hand-backs! conductor/answers!
                  conductor/close-unanswered!]})
   (Operation shutdown-grace-ms

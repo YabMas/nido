@@ -27,6 +27,9 @@
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.status-file :as status-file]
+   [nido.coordinator.record.session-events :as events]
+   [nido.coordinator.daemon.reconcile :as reconcile]
+   [nido.coordinator.agent.substrate :as substrate]
    [nido.session.lifecycle]
    [nido.coordinator.record.workstream :as ws]
    [nido.platform.project :as project]
@@ -1313,3 +1316,96 @@
         (#'core/enforce-budgets! (.toEpochMilli (java.time.Instant/parse "2026-01-01T00:29:00Z"))
                                  (conduct/faceted-sessions {:projects [:brian]})))
       (is (= :running (:state (runs/read-run "rw")))))))
+
+;; ── a recorded end the budget brake must not outrun ─────────────────────────
+;; The 2026-10-30 shape: a Run respawned after a reboot, already past its budget, whose skill
+;; wrote {:phase :complete} and whose session then recorded its Stop — while the pass that had
+;; already read the session's events was still running the conductor sweep.
+
+(defn- reported-complete! [run-id]
+  (spit (str (cstate/run-status-path run-id)) (pr-str {:phase :complete :note "Analysis filed"})))
+
+(defn- incident-session!
+  "Run `id` :running on session `sname`, its instruction given at 00:00 under token T and its
+   prompt folded — the facet's cursor sits just past it, as the pass's read left it."
+  [id sname]
+  (running-run! id "ws-1" sname :analyze-review-loop)
+  (runs/write-run! (assoc (runs/read-run id) :limits {:budget "1h"}))
+  (reported-complete! id)
+  (session/create! :brian "ws-1" {:name sname :weight :light :autonomy nil})
+  (let [sid (str "sid-" id)]
+    (events/append! sid {:event :session-start :cwd "/w" :source "startup"})
+    (events/append! sid {:event :prompt :cwd "/w" :permission-mode "bypassPermissions"
+                         :prompt "/analyze-review-loop x\n\n[nido-send T]"})
+    (session/update-claude! :brian "ws-1" sname
+                            (constantly (assoc driven-facet :session-id sid :bg-id sid :cursor 2
+                                               :pending {:token "T" :at "2026-01-01T00:00:00Z"
+                                                         :via :dispatch :seen? true :for id})))
+    sid))
+
+(defn- stopped! [sid]
+  (events/append! sid {:event :stop :cwd "/w" :permission-mode "bypassPermissions"
+                       :last-message "Analysis filed" :background-tasks 0 :crons 0}))
+
+(def ^:private hours-later (.toEpochMilli (java.time.Instant/parse "2026-01-01T05:00:00Z")))
+
+(defn- next-pass!
+  "What the next tick's conduct pass does with these sessions: fold, settle the turn ends, then
+   enforce budgets."
+  []
+  (with-redefs [substrate/listing (constantly [])]
+    (let [r (conduct/conduct! {:projects [:brian]})]
+      (#'core/settle-turn-ends! r)
+      (#'core/enforce-budgets! hours-later (conduct/faceted-sessions {:projects [:brian]})))))
+
+(defmacro ^:private quiet-brakes [& body]
+  `(with-redefs [conduct/retire!          (fn [& _#] nil)
+                 anomaly/record-failure   (fn [det# _#] det#)
+                 breakers/record-failure! (fn [& _#] nil)]
+     ~@body))
+
+(deftest a-stop-recorded-during-the-sweep-is-not-timed-out
+  (gate-with-tmp
+    (fn [_]
+      (let [sid (incident-session! "r13" "s-13")]
+        (quiet-brakes
+         ;; The Stop lands after this pass's conduct! read the log, during the conductor sweep.
+         (stopped! sid)
+         (#'core/enforce-budgets! hours-later (conduct/faceted-sessions {:projects [:brian]}))
+         (is (= :running (:state (runs/read-run "r13")))
+             "the brake leaves a Run whose Stop is recorded, though no pass has folded it")
+         (next-pass!)
+         (is (= {:state :done :error nil}
+                (select-keys (runs/read-run "r13") [:state :error]))
+             "the next pass's fold settles it by its turn end, from its status file"))))))
+
+(deftest a-recorded-stop-settles-on-the-first-pass-after-a-restart
+  (gate-with-tmp
+    (fn [_]
+      (let [sid (incident-session! "rr" "s-rr")]
+        (stopped! sid)
+        (quiet-brakes
+         (reconcile/reconcile!)
+         (is (= :running (:state (runs/read-run "rr"))) "startup leaves it to conduct")
+         (next-pass!)
+         (is (= :done (:state (runs/read-run "rr")))
+             "the persisted cursor's Stop is folded on the first pass, before any budget check"))))))
+
+(deftest an-overrun-that-reported-its-end-settles-from-the-status-file
+  (gate-with-tmp
+    (fn [_]
+      ;; Its session never comes back to Stop: the budget brake settles it, as the skill said.
+      (incident-session! "rn" "s-rn")
+      (quiet-brakes
+       (#'core/enforce-budgets! hours-later (conduct/faceted-sessions {:projects [:brian]})))
+      (is (= :done (:state (runs/read-run "rn")))))))
+
+(deftest an-overrun-that-reported-nothing-still-times-out
+  (gate-with-tmp
+    (fn [_]
+      (incident-session! "rx" "s-rx")
+      (fs/delete (cstate/run-status-path "rx"))
+      (quiet-brakes
+       (#'core/enforce-budgets! hours-later (conduct/faceted-sessions {:projects [:brian]})))
+      (is (= {:state :failed :reason :timeout}
+             (let [r (runs/read-run "rx")] {:state (:state r) :reason (-> r :error :reason)}))))))
