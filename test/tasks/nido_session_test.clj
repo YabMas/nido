@@ -254,7 +254,7 @@
               {:boot-id "b" :instance-id "brian--conflicted" :project "brian"
                :worktree (wt "conflicted") :registered-at "2026-10-24T12:00:00Z"}]]
     (try
-      (with-redefs [casualties/unsettled         (constantly {:casualties cs :unreadable []})
+      (with-redefs [nido.coordinator.work/owed-revivals (constantly {:casualties cs :unreadable []})
                     casualties/settle!           (fn [c] (swap! calls conj [:settle (mapv :instance-id c)]) true)
                     nido.platform.project/list-projects (constantly {"brian" {:directory "/x"}})
                     lifecycle/worktrees-dir      (constantly base)

@@ -4141,7 +4141,7 @@
                                    :unreadable []})
                       nido.session.lifecycle/session-coords (fn [n _] {:wt-path (str "/wt/" n)})]
           (let [owed (:casualties (work/owed-revivals))]
-            (is (= [[person "fix-it" "/wt/fix-it"] ["not-a-ws" "legacy" "/wt/legacy"]]
+            (is (= [[person "fix-it" "/wt/fix-it"]]
                    (map (juxt :runtime-key :session :worktree) owed))
                 "the person's session comes back, not the conductor it was registered under; a Run's
-                 workstream and a closed one are owed nothing; one naming no workstream is kept")))))))
+                 workstream, a closed one and one naming no readable workstream are owed nothing")))))))

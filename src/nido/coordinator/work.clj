@@ -2903,14 +2903,15 @@
    person works in, and carries that session — the newest such, with its worktree — whatever
    session the runtime was last registered under: a workstream only Runs worked is the daemon's
    to account for, and its conductor is the conduct pass's to start. A casualty whose workstream
-   cannot be read is kept as it died: nothing says it is not a person's."
+   cannot be read, or that names none, is owed nothing: every revive offered is known to be an
+   open workstream holding a person's session."
   []
   (let [{:keys [casualties] :as unsettled} (casualties/unsettled)
         owed (keep (fn [{:keys [project runtime-key] :as c}]
                      (let [p (keyword project)
                            w (when runtime-key (try (cws/read-ws p runtime-key) (catch Exception _ nil)))]
                        (cond
-                         (nil? w)          c
+                         (nil? w)          nil
                          (cws/closure w)   nil
                          :else
                          (when-let [s (->> (try (csession/list-sessions p runtime-key) (catch Exception _ nil))

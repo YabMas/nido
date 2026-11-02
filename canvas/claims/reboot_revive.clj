@@ -49,5 +49,5 @@
   {:about [boot-core boot-attention] :evidence "round"})
 
 (Claim revive-owed-per-workstream
-  "A casualty is owed a revive while the workstream its runtime key names is open and holds a session a person works in — neither its conductor's nor a Run's — and is owed at most once per workstream; one whose workstream cannot be read is owed as it died. An owed casualty brings back the newest such session, in its own worktree, whatever session the runtime was last registered under. The revive plan, the daemon's attention item and the inbox card each read only owed casualties, and count workstreams."
+  "A casualty is owed a revive while the workstream its runtime key names is open and holds a session a person works in — neither its conductor's nor a Run's — and is owed at most once per workstream; one whose workstream cannot be read, or that names none, is owed nothing. An owed casualty brings back the newest such session, in its own worktree, whatever session the runtime was last registered under. The revive plan, the daemon's attention item and the inbox card each read only owed casualties, and count workstreams."
   {:about [coordinator-work nido-session session-casualties] :evidence "round"})
