@@ -65,13 +65,21 @@
         (io/write-edn! (since-path) {:since now})
         now)))
 
+(defn- occupant-turn?
+  "Whether hand-back row `row` is the end of a turn nido gave a session no person works in — an
+   occupant nido created. Its key is the one hand-backs! writes."
+  [project ws-id row]
+  (boolean (and (str/starts-with? (str (:key row)) "turn:")
+                (some-> (session/read-session project ws-id (:session row)) session/person? not))))
+
 (defn- worked?
-  "Whether, at or after `since`, an ISO instant, a session a person works in — neither the
-   conductor's nor a Run's — has been recorded on the workstream or a hand-back has been logged on it."
+  "Whether, at or after `since`, an ISO instant, a session a person works in (`session/person?`)
+   has been recorded on the workstream or a hand-back other than an occupant nido created ending a
+   turn has been logged on it. Nothing nido starts on its own makes a workstream worked."
   [project ws-id since]
   (boolean (or (some #(and (session/person? %) (not (neg? (compare (str (:created-at %)) since))))
                      (session/list-sessions project ws-id))
-               (seats/handed-back-since? project ws-id since))))
+               (seats/handed-back-since? project ws-id since #(not (occupant-turn? project ws-id %))))))
 
 (defn- conductor-of
   "The workstream's conductor record, or nil."
@@ -233,14 +241,17 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
   reseat!
-  "On every conduct pass, for a carried workstream: retire each occupant whose seat the current
-   seats do not include, and occupy each current seat with the embodiment that carries it — the
+  "On every conduct pass, for a carried workstream that is worked as conductors! reads it — so one
+   only Runs and nido's own occupants ever seated is left as it is: retire each occupant whose seat
+   the current seats do not include, and occupy each current seat with the embodiment that carries it — the
    default embodiment while the generation fixes no ids, the strata embodiment while it fixes
    strata — escalating, by name, seats no embodiment carries and a seat whose start failed in this
    pass, and answering that escalation as nido once every seat is held. A closed workstream is
    left as it is. Answers {:retired :occupied :escalated}."
   [project ws-id]
-  (if-not (and (carried? project ws-id) (not (some-> (ws/read-ws project ws-id) ws/closure)))
+  (if-not (and (carried? project ws-id)
+               (worked? project ws-id (conducting-since))
+               (not (some-> (ws/read-ws project ws-id) ws/closure)))
     {}
     (let [{:keys [retired]} (seats/reseat! project ws-id)
           current  (rseats/seats project ws-id)

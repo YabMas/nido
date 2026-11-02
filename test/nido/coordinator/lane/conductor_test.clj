@@ -56,6 +56,13 @@
                 lifecycle/session-home-coords-from-cwd (fn [& _] nil)]
     (f)))
 
+(defn- conducting-since!
+  "Record that conductors began on this host at an instant before any session a test creates."
+  []
+  (io/write-edn! (doto (str (fs/path (core/nido-root) "coordinator" "conductors-since.edn"))
+                   (-> fs/parent fs/create-dirs))
+                 {:since "2025-01-01T00:00:00Z"}))
+
 (defn- workstream
   "A workstream with an intent and nothing designed, so its seat is the whole one. Returns [id add]."
   []
@@ -91,6 +98,7 @@
 (deftest a-carried-seat-whose-launch-failed-is-started-again-on-the-next-pass
   (with-tmp
     (fn []
+      (conducting-since!)
       (let [[id] (workstream)]
         (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
         (launching [launched]
@@ -378,6 +386,76 @@
           (session/create! :brian run-only {:name "take-over" :weight :heavy :autonomy nil})
           (is (= [run-only] (map :ws-id (conductor/conductors! :brian)))
               "a person's session on it makes it worked"))))))
+
+(defn- run-session!
+  "Record a Run's session `n` on workstream `id`."
+  [id n]
+  (session/create! :brian id {:name n :weight :light
+                              :autonomy {:skill :x :first-message "x" :agent :claude
+                                         :claude-session-id nil :trigger :t
+                                         :limits {} :priority 0 :uncapped? false
+                                         :on-promote nil :phase :running
+                                         :phase-history [] :error nil}}))
+
+(defn- review-analysis-workstream
+  "A workstream as a review-analysis Run leaves one: its ledger holds that Run's analysis and
+   nothing else, so its seat is the whole one. Returns its id."
+  []
+  (let [id (:id (ws/create! :brian {:external-refs [{:adapter :review-run :id "design-loop-x" :title "x"}]}))]
+    (ws/append-entry! :brian id {:kind :review-analysis}
+                      (pr-str {:format :review-analysis :verdict :healthy :run-id "design-loop-x" :status "asked"
+                              :rounds 1 :summary "s" :observations []}))
+    id))
+
+(deftest a-seat-only-a-run-held-is-not-reseated
+  ;; The shape ws-20261028-1d4787 was in on 2026-11-02, when a pass gave it a full session and
+  ;; a conductor: a review-analysis ledger, its Run's session carried and then archived.
+  (with-tmp
+    (fn []
+      (conducting-since!)
+      (let [id (review-analysis-workstream)]
+        (is (= [:review-analysis] (mapv :kind (:entries (ws/read-ws :brian id)))) "the ledger holds the analysis alone")
+        (run-session! id "review-analysis-x")
+        (launching [launched]
+          (is (= {:carried {:seat 1 :session "review-analysis-x"}} (conductor/carry! :brian id "review-analysis-x"))
+              "a Run's session is carried into the whole seat, as a person's start is")
+          (session/archive! :brian id "review-analysis-x")
+          (reset! launched [])
+          (is (= {} (conductor/reseat! :brian id)) "with the Run's session gone, the pass re-seats nothing")
+          (is (= [] @launched) "and starts no session")
+          (is (= ["review-analysis-x"] (mapv :name (session/list-sessions :brian id))) "nor writes a record for one")
+          (is (empty? (conductor/conductors! :brian)) "nor gives the workstream a conductor"))))))
+
+(deftest an-occupant-nido-started-does-not-make-its-workstream-worked
+  (with-tmp
+    (fn []
+      (conducting-since!)
+      (let [[id] (workstream)
+            occupant (str id "--work-g1")]
+        (run-session! id "review-analysis-x")
+        (launching [launched]
+          (conductor/carry! :brian id "review-analysis-x")
+          (session/archive! :brian id "review-analysis-x")
+          ;; What a pass did before nido read who works in a seat: fill the Run's emptied seat.
+          (seats/occupy! :brian id (seats/default-embodiment) 1)
+          (is (not (session/person? (session/read-session :brian id occupant)))
+              "the occupant nido created is no session a person works in")
+          (driving id occupant "conv" {:token "tok" :at "t" :via :send :seen? false})
+          (conductor/hand-backs! {:turn-ends [{:project :brian :ws-id id :session occupant
+                                               :instruction {:token "tok"} :run nil
+                                               :event {:last-message "done"}}]})
+          (is (= 1 (count (filter #(= :hand-back (:kind %)) (seats/traffic :brian id 1))))
+              "its turn end is still handed back")
+          (conduct/retire! :brian id occupant {})
+          (session/update-substrate! :brian id occupant #(assoc-in % [:claude :driver] :retired))
+          (reset! launched [])
+          (is (empty? (conductor/conductors! :brian)) "but neither its record nor its turn is work")
+          (is (= {} (conductor/reseat! :brian id)) "so the pass leaves the seat as it is")
+          (is (= [] @launched) "and relaunches nothing")
+          (testing "a person's hold on that occupant, handed back, is work"
+            (driving id occupant "conv" nil)
+            (conductor/hand-back! :brian id occupant)
+            (is (= [id] (mapv :ws-id (conductor/conductors! :brian))))))))))
 
 (deftest a-ticket-settled-in-notion-retires-its-conductor
   (with-tmp

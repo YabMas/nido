@@ -63,7 +63,8 @@
     "Whether an agent is driving this episode rather than a person."
     {:signature [:=> [:catn [:s Session]] :boolean]})
   (Operation person?
-    "Whether `s` is a session a person works in: neither its workstream's conductor nor a Run's."
+    "Whether `s` is a session a person works in: neither its workstream's conductor, nor a Run's,
+     nor an occupant nido created to fill a seat — a record whose seat is not marked :carried."
     {:signature [:=> [:catn [:s Session]] :boolean] :delegates [autonomous?]})
   (Operation archive!
     "Flip a session to archived, recording when. Idempotent — archiving twice leaves one entry."

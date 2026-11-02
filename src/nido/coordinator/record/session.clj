@@ -230,9 +230,12 @@
   autonomous? [s] (some? (:autonomy s)))
 (defn ^{:malli/schema [:=> [:cat :Session] :boolean]}
   person?
-  "Whether `s` is a session a person works in: neither its workstream's conductor nor a Run's."
+  "Whether `s` is a session a person works in: neither its workstream's conductor, nor a Run's,
+   nor an occupant nido created to fill a seat. A seat not marked :carried is how such an occupant
+   is told: a start that brings a session marks its seat :carried, and nothing else seats a record
+   but occupy! on one it created."
   [s]
-  (not (or (:conductor s) (autonomous? s))))
+  (not (or (:conductor s) (autonomous? s) (and (:seat s) (not (get-in s [:seat :carried]))))))
 (defn ^{:malli/schema [:=> [:cat :Session] [:maybe :map]]}
   claude-facet [s] (:claude s))
 

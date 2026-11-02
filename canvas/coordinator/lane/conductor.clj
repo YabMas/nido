@@ -85,7 +85,8 @@
                  seats/handed-back-since? rseats/seats standing/governing-design drive/of
                  drive/settled-in-notion]})
   (Operation reseat!
-    "On every conduct pass, for a carried workstream: retire each occupant whose seat the current
+    "On every conduct pass, for a carried workstream that is worked — as conductors! reads it, so a
+     workstream only Runs and nido's own occupants ever seated is left as it is: retire each occupant whose seat the current
      seats do not include, and occupy each current seat with the embodiment that carries it — the
      default embodiment while the generation fixes no ids, the strata embodiment while it fixes
      strata — escalating, by name, seats no embodiment carries and a seat whose start failed, and

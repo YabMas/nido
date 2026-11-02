@@ -128,9 +128,11 @@
      under."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:generation :int]] [:sequential :map]]})
   (Operation handed-back-since?
-    "Whether a hand-back to the conductor was logged on the workstream at or after an ISO instant —
-     read from the message log alone, with no ledger read."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:since :string]] :boolean]})
+    "Whether a hand-back to the conductor was logged on the workstream at or after an ISO instant,
+     that a given predicate of the logged row holds of (default: every one) — read from the message
+     log alone, with no ledger read."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:since :string]
+                      [:counts? [:? :any]]] :boolean]})
   (Operation owed
     "The seat messages a session is owed, oldest first, with no delivery recorded: those the log
      addresses, in the current generation, to the seat it occupies — or, when it conducts, those
