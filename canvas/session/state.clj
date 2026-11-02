@@ -169,9 +169,10 @@
   (Operation session-live?
     "Whether the session a registry entry records is up RIGHT NOW: one that recorded an app or nREPL
      port while one answers — the registry records what was started, the port says it is still
-     there — and a lite session, which records none, while its entry stands. The one predicate
+     there — and a lite session, which records none, while its entry stands and was registered in
+     this host boot. The one predicate
      every reader of liveness asks, whichever level it sits at. A boot placeholder is not up."
-    {:signature [:=> [:catn [:s :map]] :boolean] :delegates [entry-phase proc/tcp-open?]})
+    {:signature [:=> [:catn [:s :map]] :boolean] :delegates [entry-phase proc/tcp-open? proc/host-boot]})
   (Operation upsert-registry!
     "Record or update one worktree's entry.
 

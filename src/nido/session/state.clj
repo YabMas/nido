@@ -376,6 +376,19 @@
     (pos-int? (:boot-pid entry))                                       :booting
     (:instance-id entry)                                               :lite))
 
+(def ^:private boot-began
+  "The instant this host boot began, read once: a process outlives no boot. Nil when unreadable."
+  (delay (some-> (proc/host-boot) :began-at java.time.Instant/parse)))
+
+(defn- registered-before-boot?
+  "Whether registry entry `s` was registered before this host boot began. False when either
+   instant cannot be read."
+  [s]
+  (boolean
+   (when-let [began @boot-began]
+     (when-let [at (try (java.time.Instant/parse (str (:created-at s))) (catch Exception _ nil))]
+       (.isBefore ^java.time.Instant at began)))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :boolean]}
   session-live?
   "Is the session this registry entry records up RIGHT NOW? THE predicate for whether a session
@@ -385,7 +398,10 @@
    since the registry is only cleaned on a graceful `down!` (engine/stop-session! →
    state/remove-from-registry!), so a reboot, a JVM crash or a `kill` leaves an entry with its
    port numbers intact indefinitely. A `:lite` session (`:services []`) records no port and is in
-   use without one, so it is up while its entry stands — nil, or a map naming no instance, is a
+   use without one, so it is up while its entry stands and was registered in this host boot — a
+   reboot stops it without a word to the registry, and with no port to probe nothing else would
+   say so; one with no readable registration time is taken as standing. Nil, or a map naming no
+   instance, is a
    session that is down. A boot placeholder is a session whose services a background boot is
    still starting: not up, whether or not that boot still runs. Which of these an entry is, is
    `entry-phase`'s.
@@ -398,7 +414,7 @@
   (case (entry-phase s)
     :serving (boolean (or (and (pos-int? (:app-port s))   (proc/tcp-open? (:app-port s)))
                           (and (pos-int? (:nrepl-port s)) (proc/tcp-open? (:nrepl-port s)))))
-    :lite    true
+    :lite    (not (registered-before-boot? s))
     false))
 
 (defn- update-registry!

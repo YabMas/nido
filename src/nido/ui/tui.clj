@@ -103,8 +103,10 @@
 
 (defn- project-rows []
   (let [registry (state/read-registry)
+        ;; Up, not registered: a reboot or a crash leaves an entry behind for every session it stopped.
         running-by-project (reduce (fn [m [_ entry]]
-                                     (update m (:project-name entry) (fnil inc 0)))
+                                     (cond-> m
+                                       (state/session-live? entry) (update (:project-name entry) (fnil inc 0))))
                                    {}
                                    registry)]
     (->> (project/list-projects)

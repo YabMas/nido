@@ -2744,7 +2744,11 @@
     (is (false? (nido.session.state/session-live? {:instance-id "i" :boot-pid 77}))
         "a boot placeholder records no port and is not up")
     (is (false? (nido.session.state/session-live? {:instance-id "i" :app-port 4001}))
-        "a recorded port is probed, whatever else the entry holds")))
+        "a recorded port is probed, whatever else the entry holds")
+    (is (false? (nido.session.state/session-live? {:instance-id "i" :created-at "2000-01-01T00:00:00Z"}))
+        "a :lite entry registered before this host boot died with it")
+    (is (true?  (nido.session.state/session-live? {:instance-id "i" :created-at (str (java.time.Instant/now))}))
+        "a :lite entry registered in this boot stands")))
 
 (deftest machine-facts-keyed-by-session-name
   (with-redefs [work/machine-rows
