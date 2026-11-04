@@ -757,15 +757,6 @@
   (into [] (comp (map str/trim) (remove str/blank?))
         (str/split (str statement) #"(?<=[.;])\s+")))
 
-(defn- alternatives
-  "A :falsified-by cut into the counterexamples it names: at each sentence, and at each `or` that
-   opens another one (`…, or a caller that …`). An `or` inside one counterexample (`read or
-   written`) opens nothing and stays."
-  [falsified-by]
-  (into [] (comp (mapcat #(str/split % #",?\s+or\s+(?=(?:an?|any|some|the|one)\s)"))
-                 (map str/trim) (remove str/blank?))
-        (clauses falsified-by)))
-
 (def ^:private search-words
   "What marks a clause as true only of the whole tree: exclusivity (only, nothing, no other) and
    universality (every, never). A judge confirming one on the sites its subject cites has confirmed
@@ -791,7 +782,7 @@
                           (concat
                            (for [s (clauses (or (:statement part) (:property part) (:observation part)))]
                              [:statement s])
-                           (for [s (alternatives (:falsified-by part))] [:refuted-by s])
+                           (for [s (retreat/counterexamples (:falsified-by part))] [:refuted-by s])
                            (for [s (clauses (:hides part))] [:hides s])
                            (for [s (clauses (:interface part))] [:interface s])
                            (for [{:keys [lens verdict because]} (:readings part)]

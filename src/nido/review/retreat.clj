@@ -126,9 +126,38 @@
   #"(?i)\b(?:every|all|always|exactly|each|never|none|nothing|any|whatever|whichever)\b")
 
 (defn- clauses
-  "`s` cut at sentence and semicolon boundaries — the commitments a statement makes one by one."
+  "`s` cut at sentence and semicolon boundaries — the commitments a statement makes one by one. A
+   `!` or `?` glued to an identifier ends no sentence: `create-job! on…` and `valid? when…` name
+   a function mid-sentence. The price is a prose question ending on a word, which stays joined to
+   the sentence after it."
   [s]
-  (into [] (comp (map str/trim) (remove str/blank?)) (str/split (str s) #"(?<=[.!?;])\s+")))
+  (into [] (comp (map str/trim) (remove str/blank?))
+        (str/split (str s) #"(?<=[.;]|[^\w*+'<>=/!?-][!?])\s+")))
+
+(def ^:private spanning-re
+  "A qualifier in the last disjunct that reads as conditioning the whole disjunction: comma-led
+   `unless`/`except`/…, or a `neither … nor`."
+  #"(?i),\s*(?:unless|except|excepting|excluding|other than|save for)\b|\bneither\b")
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :string]] [:vector :string]]}
+  counterexamples
+  "A :falsified-by cut into the counterexamples it names, as a judge rules them one by one and as
+   `narrowing` counts what a falsifier lost. A cut falls at each sentence or semicolon, and at a
+   comma-led `, or` unless a qualifier in the last side spans the `or` (`spanning-re`), which
+   leaves the sentence one counterexample. A bare `or` never cuts: `launch! or any other --print
+   invocation, unless …` is one counterexample whose qualifiers bind both halves. A clause's
+   leading `or ` (`…; or a --print turn`) is the connective, not part of what it names, and is
+   dropped."
+  [falsified-by]
+  (into []
+        (comp (map #(str/replace (str/trim %) #"(?i)^or\s+" ""))
+              (mapcat (fn [s]
+                        (let [sides (str/split s #",\s+or\s+")]
+                          (if (and (next sides) (not (re-find spanning-re (peek sides))))
+                            sides
+                            [s]))))
+              (map str/trim) (remove str/blank?))
+        (str/split (str falsified-by) #"(?<=[.;])\s+")))
 
 (defn- items
   "`s` cut at every list boundary — punctuation and `or` — lowercased: the counterexamples a
@@ -183,7 +212,8 @@
    Read off the text because a claim's identity is its id and nothing else about it survives an
    amender: the wording changes whether the claim was corrected or quietly given up. Six signals,
    each one a way the counterexample set shrinks without the claim going away — a disjunct lost
-   (`a read or a write` → `a write`), an exception added (`… other than after a lease lapsed`), a
+   (`a read or a write` → `a write`; on :falsified-by, a whole counterexample, `counterexamples`,
+   since an `or` inside one is the judge's single clause), an exception added (`… other than after a lease lapsed`), a
    clause lost, a hedge added (`applies` → `can apply`), a scope condition put on an absolute
    commitment (`gets exactly today's answers` → `a read whose scope holds none answers exactly as
    today`), an absolute quantifier lost (`every` → `a`). On :falsified-by a qualifier counts only
@@ -197,7 +227,9 @@
     (when (and (not (str/blank? before)) (not (str/blank? after)) (not= before after))
       (not-empty
        (cond-> []
-         (< (n disjunct-re after) (n disjunct-re before))    (conj :disjunct-lost)
+         (if (= :falsified-by field)
+           (< (count (counterexamples after)) (count (counterexamples before)))
+           (< (n disjunct-re after) (n disjunct-re before))) (conj :disjunct-lost)
          (> (n exception-re q) (n exception-re before))      (conj :exception-added)
          (< (count (clauses after)) (count (clauses before))) (conj :clause-lost)
          (> (n hedge-re q) (n hedge-re before))              (conj :hedged)

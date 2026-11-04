@@ -561,7 +561,7 @@
                        :falsified-by "two analyses of one blob in flight at once"}
                       {:id "no-furniture" :about ["canvas.x/store"] :evidence {:by :round}
                        :statement "no page furniture reaches a passage"
-                       :falsified-by "furniture text in a block or in a passage"}]}})
+                       :falsified-by "furniture text that lands in a block, or furniture text that lands in a passage"}]}})
 
 (defn- narrowed [rs] (filter (comp #{:narrowed} :what) rs))
 
@@ -577,8 +577,63 @@
     (is (= [r] (retreat/unasked [r])) "nothing asked for it, so it is an unasked weakening")))
 
 (deftest a-lost-disjunct-is-a-narrowing
-  (let [curr (assoc-in model-design [:model :claims 1 :falsified-by] "furniture text in a passage")]
+  (let [curr (assoc-in model-design [:model :claims 1 :falsified-by] "furniture text that lands in a passage")]
     (is (= [[:disjunct-lost]] (map :signals (narrowed (retreat/design-retreats model-design curr)))))))
+
+(deftest an-or-dropped-inside-one-counterexample-loses-no-disjunct
+  ;; Seen live (design-loop-f53a0d1b): the amender dropped 'launch! or any other' from inside one
+  ;; counterexample — the fragment the judge had objected to — and was held for losing a disjunct.
+  (let [before "a claude process nido runs through launch! or any other --print invocation; or a --print turn that resumes a session"
+        after  "a claude process nido runs through anything but dispatch!; or a --print turn that resumes a session"
+        prev   (assoc-in model-design [:model :claims 0 :falsified-by] before)
+        curr   (assoc-in model-design [:model :claims 0 :falsified-by] after)]
+    (is (not-any? #{:disjunct-lost} (mapcat :signals (narrowed (retreat/design-retreats prev curr))))
+        "both counterexamples are still named")))
+
+(deftest a-falsifier-is-cut-only-between-counterexamples
+  (is (= ["A reader in variations that takes pages from one extraction and joined text or a slice key from another"
+          "a page/text reader that awaits extraction while serving-extraction finds something stored."]
+         (retreat/counterexamples
+          "A reader in variations that takes pages from one extraction and joined text or a slice key from another, or a page/text reader that awaits extraction while serving-extraction finds something stored."))
+      "X and Y or a Z from another: a bare `or` before an article is inside the counterexample")
+  (is (= ["A call to heading-pass/label! or the figure describer reachable from rag/build!, document-structure/document or structure-chunker/build."]
+         (retreat/counterexamples
+          "A call to heading-pass/label! or the figure describer reachable from rag/build!, document-structure/document or structure-chunker/build."))
+      "A call to F or G reachable from H keeps its scope on both")
+  (is (= ["a caller that sums lines" "a second path that writes totals"]
+         (retreat/counterexamples "a caller that sums lines, or a second path that writes totals"))
+      "a comma-led `or` between two predicated counterexamples cuts")
+  (is (= ["serving a blank text view as content" "a null page"]
+         (retreat/counterexamples "serving a blank text view as content, or a null page"))
+      "a noun phrase after a comma-led `or` is a counterexample of its own")
+  (is (= ["a process that reads the row, or one that writes it, unless the lease lapsed"]
+         (retreat/counterexamples "a process that reads the row, or one that writes it, unless the lease lapsed"))
+      "a trailing comma-led `unless` spans the `or`, so the sentence is one counterexample"))
+
+(deftest entry-104-and-107-falsifiers-are-cut-at-their-semicolons
+  ;; Seen live (design-loop-a27d8c3a, -f53a0d1b): both were cut at 'launch! or any other', each
+  ;; half losing the other's qualifier, and the judges refuted the fragments.
+  (is (= ["a claude process that is not a one-shot agent call as one-shot-calls-stay-calls defines it and is started through launch! or any other --print invocation, unless it is a lane-resume turn continuing a conversation whose session record carries no :claude facet;"
+          "a --print turn that resumes a session whose record carries a :claude facet;"
+          "a conversation nido starts, as this claim bounds it, that is not started through dispatch! and is not a conversation whose session record carries no :claude facet that lane-resume continues"]
+         (retreat/counterexamples
+          "a claude process that is not a one-shot agent call as one-shot-calls-stay-calls defines it and is started through launch! or any other --print invocation, unless it is a lane-resume turn continuing a conversation whose session record carries no :claude facet; a --print turn that resumes a session whose record carries a :claude facet; or a conversation nido starts, as this claim bounds it, that is not started through dispatch! and is not a conversation whose session record carries no :claude facet that lane-resume continues"))
+      "entry 104: three counterexamples, the third without its leading `or`")
+  (is (= ["a claude process nido runs through launch! or any other --print invocation that is neither a one-shot agent call as one-shot-calls-stay-calls defines it nor a lane-resume turn continuing a conversation whose session record has no :claude facet;"
+          "a --print turn that resumes a session whose record has a :claude facet"]
+         (retreat/counterexamples
+          "a claude process nido runs through launch! or any other --print invocation that is neither a one-shot agent call as one-shot-calls-stay-calls defines it nor a lane-resume turn continuing a conversation whose session record has no :claude facet; or a --print turn that resumes a session whose record has a :claude facet"))
+      "entry 107: the `neither … nor` stays on the counterexample it qualifies"))
+
+(deftest a-bang-named-function-mid-sentence-ends-no-clause
+  ;; Seen live (analysis ws-20261013-7105af, round 2): 'create-job! on…' was cut as a sentence end, so a
+  ;; rewording that no longer named create-job! read as losing a clause.
+  (let [before "One durable-job worker runs per handler type. Each enqueuer calls create-job! on the ambient pool, and create-job! inserts the row."
+        after  "Every job worker runs per handler type. Each enqueuer inserts its row on the ambient pool."
+        prev   (assoc-in model-design [:model :claims 0 :statement] before)
+        curr   (assoc-in model-design [:model :claims 0 :statement] after)]
+    (is (not-any? #{:clause-lost} (mapcat :signals (narrowed (retreat/design-retreats prev curr))))
+        "two sentences before, two after")))
 
 (deftest a-narrowing-the-round-asked-for-is-linked-to-its-finding
   ;; The narrowing is still reported — the record claims less — but a reader can see the judge

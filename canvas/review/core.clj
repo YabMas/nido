@@ -386,6 +386,12 @@
     {:signature [:=> [:catn [:prev :map] [:curr :map]
                             [:withdrawn [:? [:maybe [:map-of :string :string]]]]
                             [:findings [:? [:maybe [:sequential :map]]]]] :any]})
+  (Operation counterexamples
+    "A falsifier cut into the counterexamples it names — the one reading of a :falsified-by that
+     both the judge's refuted-by clauses and a narrowing's lost disjunct are counted in, so a ruling
+     and a retreat are never made on a fragment the other does not see. Cut at sentences,
+     semicolons and a comma-led `, or` that no trailing qualifier spans; never at a bare `or`."
+    {:signature [:=> [:catn [:falsified-by [:maybe :string]]] [:vector :string]]})
   (Operation claim-ids "The ids of a baseline's claims as the retreats read them."
     {:signature [:=> [:catn [:b :map]] [:set :string]]})
   (Operation design-retreats
