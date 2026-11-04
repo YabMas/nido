@@ -91,7 +91,7 @@
    Never touches the data of a running cluster. Returns its port."
   [bin-dir project-name max-connections settings]
   (let [dir      (data-dir project-name)
-        existing (pg/detect-running-postmaster dir)]
+        existing (pg/finish-stopping! dir (pg/detect-running-postmaster dir))]
     (if (= :running (:status existing))
       (:port existing)
       (let [preferred (proc/deterministic-port (cluster-dir project-name) 5500 7500)

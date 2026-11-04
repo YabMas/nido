@@ -277,31 +277,61 @@
       (some-> (slurp pid-file) str/split-lines first str/trim parse-long))))
 
 (defn- read-postmaster-pid-file
-  "Parse PGDATA/postmaster.pid into {:pid :port}. PG writes a fixed
-   line layout: line 1 = pid, line 4 = port. Returns nil if absent
-   or unparseable."
+  "Parse PGDATA/postmaster.pid into {:pid :port :pm-status}. PG writes a fixed
+   line layout: line 1 = pid, line 4 = port, line 8 = the postmaster's status
+   (\"starting\", \"ready\", \"standby\" or \"stopping\", space-padded; nil
+   when absent, as before the postmaster has written it). Returns nil if the
+   file is absent or its pid/port are unparseable."
   [data-dir]
   (let [pid-file (str (fs/path data-dir "postmaster.pid"))]
     (when (fs/exists? pid-file)
       (try
         (let [lines (str/split-lines (slurp pid-file))
               pid   (some-> (nth lines 0 nil) str/trim parse-long)
-              port  (some-> (nth lines 3 nil) str/trim parse-long)]
+              port  (some-> (nth lines 3 nil) str/trim parse-long)
+              pm    (some-> (nth lines 7 nil) str/trim not-empty)]
           (when (and (pos-int? pid) (pos-int? port))
-            {:pid pid :port port}))
+            {:pid pid :port port :pm-status pm}))
         (catch Exception _ nil)))))
 
 (defn ^{:malli/schema [:=> [:cat :Path] :map]}
   detect-running-postmaster
   "Inspect PGDATA for a live postmaster. Returns:
-     {:status :running :pid :port}    — live postmaster, adopt it
-     {:status :stale   :pid-file …}   — pid file present but process dead
+     {:status :running  :pid :port}   — live postmaster, adopt it
+     {:status :stopping :pid :port}   — live, but a shutdown was requested: it
+                                        refuses every new connection, so it must
+                                        not be adopted (see finish-stopping!)
+     {:status :stale    :pid-file …}  — pid file present but process dead
      nil                              — no pid file, free to start fresh"
   [data-dir]
-  (when-let [{:keys [pid port]} (read-postmaster-pid-file data-dir)]
-    (if (proc/process-alive? pid)
-      {:status :running :pid pid :port port}
-      {:status :stale :pid pid :pid-file (str (fs/path data-dir "postmaster.pid"))})))
+  (when-let [{:keys [pid port pm-status]} (read-postmaster-pid-file data-dir)]
+    (cond
+      (not (proc/process-alive? pid))
+      {:status :stale :pid pid :pid-file (str (fs/path data-dir "postmaster.pid"))}
+
+      (= "stopping" pm-status) {:status :stopping :pid pid :port port}
+      :else                    {:status :running :pid pid :port port})))
+
+(defn ^{:malli/schema [:=> [:cat :Path [:maybe :map]] [:maybe :map]]}
+  finish-stopping!
+  "Given `existing` from detect-running-postmaster: when it is :stopping, finish
+   that shutdown with pg-ctl-stop! and return the postmaster's state afterwards
+   (nil or :stale, ready for a fresh start); otherwise return `existing` as is.
+
+   A SMART shutdown (a bare SIGTERM to the postmaster — e.g. macOS terminating
+   the terminal app a cluster was started from) waits for every client to
+   disconnect, and long-lived session JVMs never do: the cluster then sits
+   refusing all new connections indefinitely while its pid is alive. Finishing
+   it costs the connected clients nothing they were not already losing, and is
+   the only way a start can succeed. Callers that adopt a running postmaster
+   call this first."
+  [data-dir existing]
+  (if (= :stopping (:status existing))
+    (do (core/log-step (str "PostgreSQL at " data-dir " (pid " (:pid existing)
+                            ") is shutting down and refusing connections; finishing the shutdown"))
+        (pg-ctl-stop! data-dir)
+        (detect-running-postmaster data-dir))
+    existing))
 
 (defn ^{:malli/schema [:=> [:cat :Path :int :string :string] :any]}
   dropdb!
@@ -412,7 +442,7 @@
           ;; bailing out. A stale pid-file (process gone) is removed so the
           ;; fresh start can proceed.
           existing (when already-initialized?
-                     (detect-running-postmaster data-dir))
+                     (finish-stopping! data-dir (detect-running-postmaster data-dir)))
           adopted? (= :running (:status existing))
           pg-port (cond
                     adopted? (:port existing)

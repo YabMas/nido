@@ -118,6 +118,10 @@
     {:signature [:=> [:catn [:data-dir Path]] [:maybe :int]]})
   (Operation detect-running-postmaster "Whether a data directory has a live postmaster, and which."
     {:signature [:=> [:catn [:data-dir Path]] :map]})
+  (Operation finish-stopping!
+    "Complete a postmaster's requested shutdown, so a start never adopts a cluster refusing connections."
+    {:signature [:=> [:catn [:data-dir Path] [:existing [:maybe :map]]] [:maybe :map]]
+     :delegates [pg-ctl-stop! detect-running-postmaster]})
   (Operation dropdb! "Drop a database if it exists."
     {:signature [:=> [:catn [:bin-dir Path] [:pg-port :int] [:db-user :string] [:db-name :string]] :any]
      :delegates [pg-cmd]})

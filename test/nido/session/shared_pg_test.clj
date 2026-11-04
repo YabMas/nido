@@ -68,6 +68,38 @@
       (is (true? @stop-called)))
     (fs/delete-tree tmp)))
 
+;; A shared cluster caught in a smart shutdown refuses every new connection
+;; while its pid stays alive; the start path must finish that shutdown and
+;; start a fresh postmaster rather than hand sessions a port nothing can use.
+
+(deftest start-existing-restarts-a-cluster-that-is-shutting-down
+  (let [calls (atom [])
+        state (atom {:status :stopping :pid 123 :port 6145})]
+    (with-redefs [state/shared-pg-data-dir     (fn [_] "/d")
+                  state/shared-log-file        (fn [_] "/d.log")
+                  state/read-shared-meta       (fn [_] {})
+                  state/write-shared-meta!     (fn [& _] nil)
+                  pg/find-pg-bin-dir           (constantly "/bin")
+                  pg/detect-running-postmaster (fn [_] @state)
+                  pg/pg-ctl-stop!              (fn [_] (swap! calls conj :stop) (reset! state nil) true)
+                  pg/pg-ctl-start!             (fn [& _] (swap! calls conj :start))
+                  pg/wait-for-tcp!             (fn [_] true)
+                  shared/resolve-shared-port   (constantly 6145)
+                  proc/tcp-open?               (fn [_] false)]
+      (is (= 6145 (#'shared/start-existing! "brian")))
+      (is (= [:stop :start] @calls)))))
+
+(deftest down-stops-a-cluster-that-is-shutting-down
+  (let [tmp (str (fs/create-temp-dir))
+        _ (spit (str (fs/path tmp "PG_VERSION")) "17")
+        stop-called (atom false)]
+    (with-redefs [state/shared-pg-data-dir (fn [_] tmp)
+                  pg/detect-running-postmaster (fn [_] {:status :stopping :pid 123 :port 6145})
+                  pg/pg-ctl-stop! (fn [_] (reset! stop-called true))]
+      (shared/down! "proj")
+      (is (true? @stop-called)))
+    (fs/delete-tree tmp)))
+
 ;; pick-shared-port — the shared cluster must keep its STABLE deterministic port
 ;; across restart/reset so it never strands sessions pinned to it. After down!
 ;; stops our own postmaster (pg-ctl -w waits for full shutdown), the port can

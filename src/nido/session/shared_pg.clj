@@ -89,7 +89,7 @@
   (let [data-dir (state/shared-pg-data-dir project-name)
         log-path (state/shared-log-file project-name)
         bin-dir  (pg/find-pg-bin-dir)
-        existing (pg/detect-running-postmaster data-dir)]
+        existing (pg/finish-stopping! data-dir (pg/detect-running-postmaster data-dir))]
     (cond
       (= :running (:status existing))
       (do (core/log-step (str "Shared cluster already running (pid " (:pid existing)
@@ -155,7 +155,7 @@
     (when (fs/exists? (str (fs/path data-dir "PG_VERSION")))
       (let [{:keys [status pid-file]} (pg/detect-running-postmaster data-dir)]
         (cond
-          (= :running status)
+          (#{:running :stopping} status)
           (do (pg/pg-ctl-stop! data-dir)
               (core/log-step (str "Stopped shared cluster for " project-name)))
 
