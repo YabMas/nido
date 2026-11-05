@@ -121,7 +121,7 @@
   ;; here so this genuinely proves board-rows drops it, rather than passing
   ;; vacuously because the mock never carried a :ready key at all.
   (with-redefs [nido.coordinator.work/grouped
-                (fn [_ _]
+                (fn [& _]
                   {:in-progress [{:ws-id "p1" :origin :scratch :label "spike"
                                   :needs-you false :engagement :active}]
                    :ready       [{:ws-id "r1" :origin :notion :label "BR-9 · ready row"
@@ -141,7 +141,7 @@
   ;; Only driven work is on the board: a triage nido has a session on is, queued triage
   ;; and incoming are not.
   (with-redefs [nido.coordinator.work/grouped
-                (fn [_ _]
+                (fn [& _]
                   {:incoming    [{:ws-id "s1" :origin :slack :label "can you link it"
                                   :needs-you true :engagement :idle}]
                    :triage      {:in-flight [{:ws-id "f1" :origin :slack :label "teacher report"
@@ -162,7 +162,7 @@
   ;; A band in the collapsed set renders its header + count and no selectable rows;
   ;; out of it, the same band renders its items.
   (with-redefs [nido.coordinator.work/grouped
-                (fn [_ _]
+                (fn [& _]
                   {:in-progress [{:ws-id "p1" :origin :scratch :label "spike"
                                   :needs-you false :engagement :active}]})
                 nido.coordinator.work/live-session-names (constantly #{})]
@@ -494,7 +494,7 @@
   ;; A closed workstream still holding live sessions renders as a trailing
   ;; "Winding down" band — the one place bring-down! applies.
   (with-redefs [nido.coordinator.work/grouped
-                (fn [_ _] {:incoming [] :in-progress [] :shipping []
+                (fn [& _] {:incoming [] :in-progress [] :shipping []
                           :triage {:in-flight [] :queued []}
                           :winding-down [{:ws-id "w" :origin :scratch
                                           :label "leftover" :outcome :done
@@ -638,7 +638,7 @@
 
 (deftest board-rows-draw-the-awaiting-gate-band-with-its-gate
   (with-redefs [nido.coordinator.work/grouped
-                (fn [_ _]
+                (fn [& _]
                   {:awaiting-gate [{:ws-id "g1" :origin :scratch :label "migration" :stage :awaiting-gate
                                     :phase {:current 1 :of 2 :landed? true
                                             :exit {:criterion "a quiet week"}

@@ -564,7 +564,7 @@
   [f]
   (binding [*rows-memo* (atom {})] (f)))
 
-(declare live-session-names resuming? replyable?)
+(declare live-session-names resuming? replyable? held-project winding-down* gates* board-stamp*)
 
 (defn- band-of
   "The board band of an OPEN workstream, read off its ledger: in progress while status places it
@@ -704,15 +704,46 @@
    so everything between authoring an intent and opening a draft PR looked
    identical: forty rows reading :in-progress, saying nothing about which of them
    was waiting on a baseline and which on a human."
-  ([project] (list-workstreams project (live-session-names project)))
+  ([project] (if-let [p (held-project project)]
+                (:rows p)
+                (list-workstreams project (live-session-names project))))
   ([project live-names]
    (if-let [memo *rows-memo*]
      (let [k [project live-names]]
-       (or (get @memo k)
+       (or (some-> (held-project project) :rows)
+           (get @memo k)
            (let [rows (read-rows project live-names)]
              (swap! memo assoc k rows)
              rows)))
-     (read-rows project live-names))))
+     (or (some-> (held-project project) :rows)
+         (read-rows project live-names)))))
+
+(def ^:private board-stages
+  "The stages `wsv/grouped-by-stage` draws a band for."
+  [:incoming :awaiting-gate :in-progress :shipping :triage :dismissed])
+
+(declare held-winding-down)
+
+(defn- held-grouped
+  "`grouped` from `p`'s held rows: the rows of the stages the board draws, and the
+   winding-down band."
+  [p]
+  (assoc (wsv/grouped-by-stage (into [] (mapcat #(get (:by-stage p) %)) board-stages))
+         :winding-down (held-winding-down p)))
+
+(defn- held-winding-down
+  "The winding-down band from `p`'s held rows: each finished workstream one of the registry's
+   live sessions belongs to, found by that session's name, so no other finished row is visited."
+  [p]
+  (let [live (:live p)
+        ids  (distinct (keep #(get (:finished-by-session p) %) live))]
+    (->> ids
+         (keep (fn [id]
+                 (let [w (:wind (get (:entries p) id))]
+                   (when-let [s (seq (filter live (:workers w)))]
+                     (-> (dissoc w :workers) (assoc :sessions (vec s) :needs-you false))))))
+         (sort-by :ws-id)
+         vec)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :any [:? :any]] [:vector :map]]}
   winding-down
@@ -733,31 +764,38 @@
    stage the board put it in."
   ([project live-names] (winding-down project live-names nil))
   ([project live-names rows]
-   (let [live     (set live-names)
-         done-ids (into #{} (comp (filter #(= :done (:stage %))) (map :ws-id)) rows)]
-     (if (empty? live)
-       []
-       (->> (cws/list-ids project)
-            (keep #(cws/read-ws project %))
-            (keep (fn [w]
-                    (let [closed (cws/closure w)]
-                      ;; Between phases is closed and not finished: it has its own band,
-                      ;; and a row is on exactly one.
-                      (when (or (and closed (not= :between-phases (:outcome closed)))
-                                (contains? done-ids (:id w)))
-                        (let [sessions (csession/list-sessions project (:id w))
-                              ;; Never the conductor's record: it is no work left winding down.
-                              live-s   (filterv #(and (not (:conductor %)) (contains? live (:name %))) sessions)]
-                          (when (seq live-s)
-                            {:ws-id     (:id w)
-                             :project   (name project)
-                             :stage     :winding-down
-                             :origin    (classify-origin w)
-                             :label     (wsv/label w sessions)
-                             :outcome   (or (:outcome closed) :done)
-                             :sessions  (mapv :name live-s)
-                             :needs-you false}))))))
-            vec)))))
+   (if-let [p (held-project project)]
+     (held-winding-down p)
+     (winding-down* project live-names rows))))
+
+(defn- winding-down*
+  "`winding-down` read off the records: every finished workstream's sessions."
+  [project live-names rows]
+  (let [live     (set live-names)
+        done-ids (into #{} (comp (filter #(= :done (:stage %))) (map :ws-id)) rows)]
+    (if (empty? live)
+      []
+      (->> (cws/list-ids project)
+           (keep #(cws/read-ws project %))
+           (keep (fn [w]
+                   (let [closed (cws/closure w)]
+                     ;; Between phases is closed and not finished: it has its own band,
+                     ;; and a row is on exactly one.
+                     (when (or (and closed (not= :between-phases (:outcome closed)))
+                               (contains? done-ids (:id w)))
+                       (let [sessions (csession/list-sessions project (:id w))
+                             ;; Never the conductor's record: it is no work left winding down.
+                             live-s   (filterv #(and (not (:conductor %)) (contains? live (:name %))) sessions)]
+                         (when (seq live-s)
+                           {:ws-id     (:id w)
+                            :project   (name project)
+                            :stage     :winding-down
+                            :origin    (classify-origin w)
+                            :label     (wsv/label w sessions)
+                            :outcome   (or (:outcome closed) :done)
+                            :sessions  (mapv :name live-s)
+                            :needs-you false}))))))
+           vec))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] :map]}
   grouped
@@ -765,13 +803,17 @@
    {:triage {:in-flight [..] :queued [..]} :ready [..] :in-progress [..]}.
    Scratch one-offs fold into :in-progress (done via list-workstreams' remap);
    :done is omitted. The board renders these groups directly."
-  ([project] (grouped project (live-session-names project)))
+  ([project] (if-let [p (held-project project)]
+                (held-grouped p)
+                (grouped project (live-session-names project))))
   ([project live-names]
-   (let [rows (list-workstreams project live-names)]
-     (assoc (wsv/grouped-by-stage rows)
-            ;; rows, not just the records: a Notion-driven row can be finished
-            ;; without nido ever writing :closed (see winding-down).
-            :winding-down (winding-down project live-names rows)))))
+   (if-let [p (held-project project)]
+     (held-grouped p)
+     (let [rows (list-workstreams project live-names)]
+       (assoc (wsv/grouped-by-stage rows)
+              ;; rows, not just the records: a Notion-driven row can be finished
+              ;; without nido ever writing :closed (see winding-down).
+              :winding-down (winding-down project live-names rows))))))
 
 (defn- dir-stamps
   "Last-modified millis of `dir` and of each of its subdirectories, in listing
@@ -783,37 +825,52 @@
         (keep #(when (.isDirectory ^java.io.File %) (.lastModified ^java.io.File %)))
         (.listFiles dir)))
 
+(defn- ws-files-stamp
+  "The workstream's own files, as `board-stamp` reads them: its directory, entries/,
+   entries.meta/, sessions/ and every session's, runs/, and each run it registers with that
+   run's locks/. Directory mtimes stand for the files in them, which every writer creates or
+   renames into place."
+  [^java.io.File wd]
+  (let [runs (java.io.File. wd "runs")]
+    [(.lastModified wd)
+     (.lastModified (java.io.File. wd "entries"))
+     (.lastModified (java.io.File. wd "entries.meta"))
+     (dir-stamps (java.io.File. wd "sessions"))
+     (.lastModified runs)
+     (mapv (fn [^java.io.File m]
+             (let [rd (java.io.File. (str (cstate/run-dir (.getName m))))]
+               [(.lastModified rd)
+                (.lastModified (java.io.File. rd "locks"))]))
+           (.listFiles runs))]))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
   board-stamp
-  "A value that changes whenever what `grouped` reads from disk for `project` has
-   changed, cheap enough to take on every board tick — so a board can skip a
-   rebuild while it is equal. Directory mtimes stand for the files in them, which
-   every ledger, session and run writer creates or renames into place: each
-   workstream's own directory, entries/, entries.meta/, sessions/ and every
-   session's, runs/, and each run it registers with that run's locks/. The
-   session registry and the Notion page facts are compared as values, because
-   their files are rewritten on every poll whether or not anything changed.
+  "A value that changes whenever what `grouped` answers for `project` may have changed,
+   cheap enough to take on every board tick — so a board can skip a rebuild while it is equal.
 
-   NOT covered, by construction: a lock released by a process exiting (an
-   activity claim, a run's agent), a session port that stops answering, and
-   claude's own agent listing. None of them touches disk, so a caller that must
-   show them has to rebuild on a clock as well."
+   While this process holds its rows (`hold!`) it is their version, which moves only when a
+   refresh changed a row: it reads no file, and a caller wanting the rows current makes the
+   refresh first (`refresh-list!`).
+
+   Otherwise it is read off the disk. Directory mtimes stand for the files in them, which
+   every ledger, session and run writer creates or renames into place (`ws-files-stamp`), and
+   the session registry and the Notion page facts are compared as values, because their files
+   are rewritten on every poll whether or not anything changed. NOT covered, by construction:
+   a lock released by a process exiting (an activity claim, a run's agent), a session port
+   that stops answering, and claude's own agent listing. None of them touches disk, so a
+   caller that must show them has to rebuild on a clock as well."
   [project]
-  (let [ws-root (java.io.File. (str (cstate/workstreams-dir project)))
-        per-ws  (fn [^java.io.File wd]
-                  (let [runs (java.io.File. wd "runs")]
-                    [(.lastModified wd)
-                     (.lastModified (java.io.File. wd "entries"))
-                     (.lastModified (java.io.File. wd "entries.meta"))
-                     (dir-stamps (java.io.File. wd "sessions"))
-                     (.lastModified runs)
-                     (mapv (fn [^java.io.File m]
-                             (let [rd (java.io.File. (str (cstate/run-dir (.getName m))))]
-                               [(.lastModified rd)
-                                (.lastModified (java.io.File. rd "locks"))]))
-                           (.listFiles runs))]))]
+  (if-let [p (held-project project)]
+    ;; Holding, the rows are what the board reads and only a refresh moves them, so their
+    ;; version is the stamp; no settled workstream is statted for it.
+    [:held (:version p)]
+    (board-stamp* project)))
+
+(defn- board-stamp*
+  [project]
+  (let [ws-root (java.io.File. (str (cstate/workstreams-dir project)))]
     [(.lastModified ws-root)
-     (mapv per-ws (filter #(.isDirectory ^java.io.File %) (.listFiles ws-root)))
+     (mapv ws-files-stamp (filter #(.isDirectory ^java.io.File %) (.listFiles ws-root)))
      (sstate/read-registry)
      (notion-cache/project-page-facts project)]))
 
@@ -1450,7 +1507,12 @@
      ;; find-by-ref-id is O(workstreams), but only runs on a read-ws miss — i.e.
      ;; only for a bare-row selection, never on the hot path.
      (let [fct (get (notion-cache/project-page-facts project) ws-id)
-           now (when-let [br (:br fct)] (cws/find-by-ref-id project br))]
+           ;; Holding, the coverage the rows keep answers which workstream took the page,
+           ;; without reading every workstream to find it.
+           now (when-let [br (:br fct)]
+                 (if-let [p (held-project project)]
+                   (some-> (or (get (:covered-by p) ws-id) (get (:covered-by p) br)) (#(cws/read-ws project %)))
+                   (cws/find-by-ref-id project br)))]
        (cond
          now (workstream project (:id now) selected-seq)
          fct (bare-pane project ws-id fct)
@@ -1558,8 +1620,16 @@
    just-dismissed row keeps its :needs-you until the daemon next ticks.
    `live-names` threads into status (read from `live-session-names` when omitted), so a
    person's session that is up reads live."
-  ([project] (gates project (live-session-names project)))
+  ([project] (if-let [p (held-project project)]
+                (:gates p)
+                (gates project (live-session-names project))))
   ([project live-names]
+   (if-let [p (held-project project)]
+     (:gates p)
+     (gates* project live-names))))
+
+(defn- gates*
+  [project live-names]
    (->> (list-workstreams project live-names)
         (remove #(= :dismissed (:stage %)))
         (filter #(or (:needs-you %) (seq (driven-denials project (:ws-id %)))))
@@ -1567,7 +1637,7 @@
         ;; person's :assert-gate, which only a gate carries.
         (remove #(and (= :settled (:engagement %))
                       (not= :awaiting-gate (:stage %))))
-        (mapv #(->gate project %)))))
+        (mapv #(->gate project %))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Gate]]}
   gate
@@ -1599,9 +1669,362 @@
   []
   (->> (project/list-projects)
        (mapcat (fn [[pname _entry]]
-                 (try (gates pname (live-session-names pname))
+                 (try (gates pname)
                       (catch Throwable _ []))))
        vec))
+
+;; ── The held model ──────────────────────────────────────────────────────────
+;;
+;; A process that renders the board over and over — the dashboard, the TUI — holds its rows
+;; instead of re-deriving every workstream on every render (`hold!`). Every reading above
+;; answers from what is held while a process holds, and reads the disk as it always has
+;; otherwise, so the CLI, the lanes and the tests see no change.
+;;
+;; What is held is derived and disposable: every part of it that came from a file can be
+;; recomputed from that file, it is never persisted, and nothing that writes a ledger entry,
+;; session or run reads it. Only three things move it — a list refresh, a selection refresh
+;; and the sweep — and which renders make which is the surfaces' to say; a reading never
+;; refreshes. Settled workstreams the registry shows no live session for are the sweep's
+;; alone, which is what keeps closed history off the render path.
+
+(def ^:private listing-lifetime-ms
+  "How old claude's agent listing may already be when a row reads it — the substrate caches
+   it this long. A row's liveness is counted from the listing's read, not from the row's."
+  5000)
+
+(def liveness-interval-ms
+  "The oldest a row's liveness observations may be while it is shown: an activity claim or a
+   run lock released by a process exiting, a session port gone dead, claude's agent listing,
+   none of which touches a file a stamp sees. Longer than the listing's cache lifetime, and no
+   longer than the TUI board's 30s backstop."
+  20000)
+
+(def sweep-period-ms
+  "How often the sweep runs. At most the liveness interval less the listing's lifetime, so a
+   row whose observations come due before the next run, refreshed now against a listing as old
+   as it may be, is still inside its interval when that run comes."
+  10000)
+
+(defonce ^:private model
+  ;; nil while this process holds nothing. Holding: {:projects {"<project>" P} :casualties U},
+  ;; where P is `refresh-project`'s value.
+  (atom nil))
+
+(defonce ^:private model-locks
+  ;; One lock per project, so a sweep over brian never holds a render of nido.
+  (atom {}))
+
+(defn- project-lock [pname]
+  (or (get @model-locks pname)
+      (get (swap! model-locks #(if (contains? % pname) % (assoc % pname (Object.)))) pname)))
+
+(declare owed-revivals)
+
+(defn- agent-states
+  "The agent listing as status reads it, at most `listing-lifetime-ms` old."
+  []
+  (vals (conduct/live-states {})))
+
+(defn- file-mtime [path] (.lastModified (java.io.File. (str path))))
+
+(defn- entry-stamp
+  "Everything a held row is derived from that a file records, as a value: the workstream's
+   own files, the event logs of the sessions nido drives under it, which of its sessions the
+   registry shows live, and the Notion facts of its own page. `files` is the files half,
+   taken before the row was read, so a write landing during the read moves it next time."
+  [files {:keys [driven sessions page-id]} facts live-names]
+  [files
+   (mapv #(file-mtime (cstate/session-events-path %)) driven)
+   (set (filter live-names sessions))
+   (get facts page-id)])
+
+(defn- liveness-probe
+  "A row's liveness as status observes it, read without reading the workstream's records: a
+   claim held under it, a run whose agent holds its lock, and which of its background sessions
+   the agent listing shows a process for — read, as status reads it, only for a row that has
+   one. The registry's half is in the row's stamp."
+  [project ws-id {:keys [listed]}]
+  (let [with-pid (when (seq listed)
+                   (into #{} (comp (filter :pid) (mapcat (juxt :sessionId :id))) (agent-states)))]
+    [(boolean (activity/held? project ws-id))
+     (resuming? project ws-id)
+     (into #{} (filter #(contains? with-pid %)) listed)]))
+
+(defn- compute-entry
+  "One held row for `ws-id`, read whole from its records, or nil when it no longer exists.
+   Carries what the refreshes compare it by and what the passes answer from."
+  [project ws-id files facts live-names]
+  (when-let [w (cws/read-ws project ws-id)]
+    (let [t0        (System/currentTimeMillis)
+          sessions  (csession/list-sessions project ws-id)
+          row       (with-status project live-names (wsv/workstream-row project w facts))
+          settled?  (= :settled (:engagement row))
+          page-id   (:page-id (wsv/notion-ref w))
+          denials   (when-not settled? (driven-denials project ws-id))
+          gate?     (and (not= :dismissed (:stage row))
+                         (or (:needs-you row) (seq denials))
+                         ;; Between phases is closed, so it reads :settled — and is still owed
+                         ;; a person's :assert-gate, which only a gate carries.
+                         (not (and settled? (not= :awaiting-gate (:stage row)))))
+          closed    (cws/closure w)
+          finished? (or (and closed (not= :between-phases (:outcome closed)))
+                        (= :done (:stage row)))
+          e         {:row       row
+                     :page-id   page-id
+                     :covers    (set (remove nil? [page-id (:id (wsv/ledger-ref w))]))
+                     :sessions  (set (map :name sessions))
+                     :driven    (vec (keep #(let [{:keys [driver session-id]} (:claude %)]
+                                              (when (= :nido driver) session-id))
+                                           sessions))
+                     ;; The ids the agent listing names its sessions by: a facet's full id, and
+                     ;; a start still in flight by the :bg-id its note keeps.
+                     :listed    (into #{} (remove nil?)
+                                      (concat (keep #(get-in % [:claude :session-id]) sessions)
+                                              (keep #(get-in % [:dispatching :bg-id]) sessions)))
+                     :settled?  settled?
+                     :gate      (when gate? (->gate project row))
+                     ;; The winding-down band's row, less its live sessions, which are the
+                     ;; registry's and change without this row being recomputed.
+                     :wind      (when finished?
+                                  {:ws-id   ws-id
+                                   :project (name project)
+                                   :stage   :winding-down
+                                   :origin  (classify-origin w)
+                                   :label   (wsv/label w sessions)
+                                   :outcome (or (:outcome closed) :done)
+                                   :workers (mapv :name (remove :conductor sessions))})
+                     :observed-at (- t0 listing-lifetime-ms)}]
+      (assoc e
+             :stamp (entry-stamp files e facts live-names)
+             :probe (liveness-probe project ws-id e)))))
+
+(defn- refresh-entry
+  "`e`, the held row for `ws-id`, as a refresh that reaches it leaves it: recomputed when its
+   stamp moved, or when its liveness is `due?` and `liveness-probe` finds it changed; kept
+   otherwise, a probe that found nothing renewing its liveness from the listing's read. nil
+   when the workstream is gone."
+  [project ws-id e facts live-names due?]
+  (let [wd    (java.io.File. (str (cstate/workstream-dir project ws-id)))
+        files (ws-files-stamp wd)
+        now   (System/currentTimeMillis)]
+    (cond
+      (not (.isDirectory wd))                                  nil
+      (or (nil? e)
+          (not= (:stamp e) (entry-stamp files e facts live-names))) (compute-entry project ws-id files facts live-names)
+      (not (due? e now))                                       e
+      (= (:probe e) (liveness-probe project ws-id e))
+      (assoc e :observed-at (- now listing-lifetime-ms))
+      :else (compute-entry project ws-id files facts live-names))))
+
+(defn- deadline [e] (+ (:observed-at e) liveness-interval-ms))
+
+(defn- index-project
+  "The selections the passes answer from, over `p`'s entries and the bare rows its page facts
+   leave uncovered: every row in listing order, each band's rows, the gates, and the finished
+   workstreams by session name — so a pass visits only the rows it returns."
+  [project p]
+  (let [entries (:entries p)
+        order   (filterv #(contains? entries %) (:order p))
+        covered (into #{} (mapcat :covers) (vals entries))
+        bare    (into [] (keep (fn [[page-id fct]]
+                                 (when-not (or (contains? covered page-id) (contains? covered (:br fct)))
+                                   (to-spine (wsv/bare-row project page-id fct)))))
+                      (:facts p))
+        rows    (into (mapv #(:row (get entries %)) order) bare)]
+    (assoc p
+           :order    order
+           :rows     rows
+           :by-stage (reduce (fn [m r] (if (= :done (:stage r)) m (update m (:stage r) (fnil conj []) r)))
+                             {} rows)
+           :gates    (into [] (keep #(:gate (get entries %))) order)
+           :covered-by (into {} (for [[id e] entries c (:covers e)] [c id]))
+           :finished-by-session (into {} (for [[id e] entries :when (:wind e) s (:workers (:wind e))] [s id])))))
+
+(defn- refresh-project
+  "`p`, a project's held value (nil for none), refreshed as `mode` says:
+     :list   every unsettled row, every settled one the registry shows a live session for, and
+             the rows whose own page's facts moved, plus a workstream new to the directory;
+     :sweep  those, and every row whose liveness deadline falls before the next run.
+   Both take the workstreams-directory stamp, listing it only when it moved, and the project's
+   page facts as a value."
+  [project p mode]
+  (let [root       (java.io.File. (str (cstate/workstreams-dir project)))
+        root-stamp (.lastModified root)
+        order      (if (and p (= root-stamp (:root-stamp p))) (:order p) (cws/list-ids project))
+        facts      (notion-cache/project-page-facts project)
+        live       (live-session-names project)
+        old-facts  (:facts p)
+        horizon    (if (= :sweep mode) sweep-period-ms 0)
+        due?       (fn [e now] (< (deadline e) (+ now horizon)))
+        reach?     (fn [e]
+                     (or (nil? e)
+                         (not (:settled? e))
+                         (some live (:sessions e))
+                         (not= (get facts (:page-id e)) (get old-facts (:page-id e)))
+                         (and (= :sweep mode) (due? e (System/currentTimeMillis)))))
+        entries    (reduce (fn [m id]
+                             (let [e (get (:entries p) id)]
+                               (if-let [e' (if (reach? e) (refresh-entry project id e facts live due?) e)]
+                                 (assoc m id e')
+                                 m)))
+                           {} order)]
+    (index-project project (assoc p :root-stamp root-stamp :order order :facts facts :live live
+                                    :entries entries))))
+
+(defn- refresh-one
+  "`p` with the row for `ws-id` alone refreshed against its own page's facts — the selection
+   refresh. A workstream not yet held is read and added; a page-id is a bare row, which only a
+   list refresh or the sweep moves."
+  [project p ws-id]
+  (let [facts (notion-cache/project-page-facts project)
+        live  (live-session-names project)
+        e     (get (:entries p) ws-id)
+        due?  (fn [e now] (<= (deadline e) now))]
+    (if (or e (fs/directory? (cstate/workstream-dir project ws-id)))
+      (let [e' (refresh-entry project ws-id e (cond-> (:facts p)
+                                                (:page-id e) (assoc (:page-id e) (get facts (:page-id e))))
+                              live due?)]
+        (index-project project
+                       (cond-> (assoc p :entries (if e' (assoc (:entries p) ws-id e') (dissoc (:entries p) ws-id)))
+                         (and e' (not (some #{ws-id} (:order p)))) (update :order conj ws-id))))
+      p)))
+
+(defn- swap-project!
+  "Replace `project`'s held value with `(f project old)` under the project's lock; answers the
+   new value. A no-op answering nil when this process holds nothing."
+  [project f]
+  (let [pname (name project)]
+    (when @model
+      (locking (project-lock pname)
+        (let [p  (get-in @model [:projects pname])
+              p' (f project p)
+              ;; What `board-stamp` reads while holding: it moves only when a row did.
+              p' (assoc p' :version (if (and p (= (:rows p) (:rows p'))) (:version p 0) (inc (:version p 0))))]
+          (swap! model #(when % (assoc-in % [:projects pname] p')))
+          p')))))
+
+(defn- held-project
+  "The held value for `project`, building it first — one full read, under its lock — when
+   this process holds and has not built it; nil when this process holds nothing."
+  [project]
+  (when-let [m @model]
+    (or (get-in m [:projects (name project)])
+        (swap-project! project (fn [pr p] (or p (refresh-project pr nil :list)))))))
+
+(defn ^{:malli/schema [:=> [:cat] :boolean]}
+  holding?
+  "Whether this process holds its rows (`hold!`)."
+  []
+  (some? @model))
+
+(defn ^{:malli/schema [:=> [:cat [:? :ProjectName]] :any]}
+  refresh-list!
+  "The list refresh, for `project` or every registered project: what the gate inbox, the
+   Workstreams overview without a selection and the TUI board make before they render. Reaches
+   every unsettled workstream, every settled one with a live session, the rows whose own page's
+   Notion facts moved and any workstream new to the directory, and recomputes the ones whose
+   stamp moved or whose liveness came due. A no-op when this process holds nothing."
+  ;; A project that cannot be read keeps the rows it had, as `all-gates` and `all-grouped` skip
+  ;; it: one unreadable project must not cost every other project's board.
+  ([] (doseq [[pname _] (project/list-projects)]
+        (try (refresh-list! pname) (catch Throwable _ nil))))
+  ([project]
+   (when (holding?)
+     (held-project project)
+     (swap-project! project (fn [pr p] (refresh-project pr p :list)))
+     nil)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
+  refresh-selected!
+  "The selection refresh: what a request selecting one workstream makes before it renders —
+   that workstream's row alone, against its own page's facts; every other row is drawn as
+   held. A no-op when this process holds nothing."
+  [project ws-id]
+  (when (holding?)
+    (held-project project)
+    (swap-project! project (fn [pr p] (refresh-one pr p ws-id)))
+    nil))
+
+(defn- sweep-project!
+  "The sweep's refresh of `project`, read outside the project's lock so no render waits on it,
+   then installed under it. A row some render refreshed meanwhile keeps that render's reading;
+   the sweep's stands for every row nothing else moved. A project not yet built is built under
+   the lock, as a render's first read would."
+  [project]
+  (let [pname (name project)
+        p0    (get-in @model [:projects pname])]
+    (if (nil? p0)
+      (held-project project)
+      (let [p1 (refresh-project project p0 :sweep)]
+        (swap-project! project
+                       (fn [pr cur]
+                         (if (identical? cur p0)
+                           p1
+                           (index-project
+                            pr (update cur :entries
+                                       (fn [es]
+                                         (reduce (fn [m id]
+                                                   (if (identical? (get m id) (get (:entries p0) id))
+                                                     (if-let [e (get (:entries p1) id)] (assoc m id e) (dissoc m id))
+                                                     m))
+                                                 es (keys (:entries p0)))))))))))))
+
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  sweep!
+  "One run of the sweep: every project refreshed as `refresh-project` :sweep says, then the
+   held casualty reading recomputed whole."
+  []
+  (doseq [[pname _] (project/list-projects)]
+    (try (sweep-project! pname)
+         (catch Throwable t
+           (binding [*out* *err*] (println "[nido] sweep of" (name pname) "failed:" (ex-message t))))))
+  (let [u (try (owed-revivals) (catch Throwable _ nil))]
+    (when u (swap! model #(when % (assoc % :casualties u))))))
+
+(defn ^{:malli/schema [:=> [:cat [:? :map]] :any]}
+  hold!
+  "Make this process hold its rows, and start the sweep that keeps them. Idempotent. Every
+   board reading answers from what is held from now on; a surface decides when to refresh
+   (`refresh-list!`, `refresh-selected!`). The first build runs on the sweep's thread, and a
+   render before it finishes waits for it. `{:sweep? false}` holds with no sweep running, for
+   a caller that drives `sweep!` itself — a test."
+  ([] (hold! {}))
+  ([{:keys [sweep?] :or {sweep? true}}]
+   (let [held {:projects {} :hold (Object.)}]
+     (when (and (compare-and-set! model nil held) sweep?)
+       ;; The thread belongs to this hold: it ends once the model is no longer the one it
+       ;; started with, so a release followed by a new hold never leaves two sweeps running.
+       (let [mine? #(identical? (:hold @model) (:hold held))
+             t     (Thread. ^Runnable
+                            (fn []
+                              (loop []
+                                (when (mine?)
+                                  (let [t0 (System/currentTimeMillis)]
+                                    (sweep!)
+                                    (Thread/sleep (long (max 0 (- sweep-period-ms (- (System/currentTimeMillis) t0)))))
+                                    (recur)))))
+                            "nido-held-rows-sweep")]
+         (.setDaemon t true)
+         (.start t))))
+   nil))
+
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  release!
+  "Stop holding: drop every held row and let the sweep end. Readings read the disk again."
+  []
+  (reset! model nil)
+  nil)
+
+(defn ^{:malli/schema [:=> [:cat] :Unsettled]}
+  shown-revivals
+  "`owed-revivals` as a render shows it: the held copy, which only the sweep computes, while
+   this process holds; computed directly otherwise. The daemon's attention notifier and the
+   revive command call `owed-revivals` and never read this."
+  []
+  (if-let [m @model]
+    (or (:casualties m)
+        (let [u (owed-revivals)] (swap! model #(when % (assoc % :casualties u))) u))
+    (owed-revivals)))
 
 (def ^:private canonical-default-target
   "Fallback when a project hasn't configured a default for the action."
@@ -2826,7 +3249,9 @@
   "Ordered distinct values present for facet `k` across the project's non-done
    workstreams, with :unclassified appended when any such row lacks a value."
   [project k]
-  (let [rows (remove #(= :done (:stage %)) (list-workstreams project))
+  (let [rows (if-let [p (held-project project)]
+               (into [] (mapcat val) (:by-stage p))
+               (remove #(= :done (:stage %)) (list-workstreams project)))
         present (->> rows (mapcat #(facet-row-values k %)) distinct vec)
         any-missing? (some #(nil? (facet-row-values k %)) rows)]
     (cond-> present any-missing? (conj :unclassified))))
@@ -3273,7 +3698,7 @@
   []
   (->> (project/list-projects)
        (keep (fn [[pname _]]
-               (try {:project (name pname) :grouped (grouped pname (live-session-names pname))}
+               (try {:project (name pname) :grouped (grouped pname)}
                     (catch Throwable _ nil))))
        vec))
 

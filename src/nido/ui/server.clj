@@ -72,6 +72,18 @@
   [project]
   (control/read-queue-blocker (keyword project) work/pickup-trigger))
 
+(defn- refresh-for!
+  "Bring the held rows up to what `view-state`'s render shows (`work/refresh-list!`,
+   `work/refresh-selected!`): a Workstreams view with a selection refreshes the selected
+   workstream alone and draws the list beside it as held; the Operations pages refresh
+   nothing, since the rail is all they draw from the rows; every other render — the gate
+   inbox, the overview without a selection, their polls — makes a list refresh."
+  [{:keys [surface selection]}]
+  (cond
+    (= :operations surface)                     nil
+    (and selection (= :workstreams surface))    (work/refresh-selected! (:project selection) (:ws-id selection))
+    :else                                       (work/refresh-list!)))
+
 (defn ^{:malli/schema [:=> [:cat :any] :Screen]}
   derive-screen
   "Impure wiring: gather what only IO can produce (grouped rows, gates, in-flight
@@ -80,6 +92,7 @@
    dev layer, which work must not depend on. Every /workstreams + / render route
    runs through this one function, so no two render sites disagree."
   [view-state]
+  (refresh-for! view-state)
   (let [{:keys [groups gates]}
         ;; Both inside ONE with-shared-rows: they are two folds of the same
         ;; per-project rows, and sharing is what stops the render reading every
@@ -96,7 +109,7 @@
     (-> screen
         ;; Beside the gates, never among them: a casualty is no workstream's gate, and the
         ;; inbox's count stays a count of gates. An unreadable record must not cost the inbox.
-        (assoc :casualties (try (:casualties (work/owed-revivals)) (catch Throwable _ [])))
+        (assoc :casualties (try (:casualties (work/shown-revivals)) (catch Throwable _ [])))
         (assoc :selection
                (when sel
                  (let [ws (when (= :workstreams (:surface view-state))
@@ -325,6 +338,7 @@
    optimistic confirm fragment, so it has to carry the bad news too."
   ([project ws-id] (ws-pane-fragment-response project ws-id nil))
   ([project ws-id {:keys [entry rounds stage history?]}]
+   (work/refresh-selected! project ws-id)
    (let [ws  (work/workstream project ws-id entry)
          err (get (dev/failed-ws-errors) (str project "/" ws-id))]
      (sse-response
@@ -839,6 +853,8 @@
   [{:keys [port] :or {port 8800}}]
   (when-let [old @server-atom]
     (old))
+  ;; The dashboard renders the board on every poll, so it holds its rows (`work/hold!`).
+  (work/hold!)
   (let [stop-fn (http/run-server (wrap-slow-request-log handle-request) {:port port})]
     (reset! server-atom stop-fn)
     (println (str "[nido] Dashboard running at http://localhost:" port))
@@ -849,4 +865,5 @@
   (when-let [stop-fn @server-atom]
     (stop-fn)
     (reset! server-atom nil)
+    (work/release!)
     (println "[nido] Dashboard stopped")))

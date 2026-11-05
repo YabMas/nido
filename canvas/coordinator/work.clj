@@ -81,11 +81,40 @@
     {:signature [:=> [:catn [:project ProjectName] [:live-names [:? :any]]] :map]
      :delegates [list-workstreams]})
   (Operation board-stamp
-    "A value equal across two calls exactly when nothing `grouped` reads from disk changed
-     between them — directory mtimes for the ledger, session and run records, the registry and
-     Notion page facts as values. Blind to what never touches disk: a lock released by an
-     exiting process, a session port gone dead, claude's agent listing."
+    "A value equal across two calls exactly when what `grouped` answers cannot have changed
+     between them. While the process holds its rows, their version, moved only by a refresh.
+     Otherwise read off the disk — directory mtimes for the ledger, session and run records, the
+     registry and Notion page facts as values — and blind to what never touches disk: a lock
+     released by an exiting process, a session port gone dead, claude's agent listing."
     {:signature [:=> [:catn [:project ProjectName]] :any]})
+  (Operation hold!
+    "Make this process hold its rows and start the sweep that keeps them: the surfaces that
+     render the board over and over call it, and every board reading answers from what is held
+     from then on. Idempotent; `{:sweep? false}` holds with no sweep thread."
+    {:signature [:=> [:catn [:opts [:? :map]]] :any]})
+  (Operation release!
+    "Stop holding: drop every held row, so readings read the records again."
+    {:signature [:=> [:catn] :any]})
+  (Operation holding? "Whether this process holds its rows."
+    {:signature [:=> [:catn] :boolean]})
+  (Operation refresh-list!
+    "The list refresh a list render makes first: every unsettled workstream, every settled one
+     with a live session, the rows whose own Notion page moved and any new workstream, each
+     recomputed only when its stamp moved or its liveness came due. Never closed history."
+    {:signature [:=> [:catn [:project [:? ProjectName]]] :any]})
+  (Operation refresh-selected!
+    "The selection refresh a render selecting one workstream makes first: that workstream's row
+     alone; every other row is drawn as held."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]})
+  (Operation sweep!
+    "One run of the sweep: every row whose liveness comes due before the next run, closed
+     history included, probed and recomputed if it moved; the held casualty reading recomputed."
+    {:signature [:=> [:catn] :any]})
+  (Operation shown-revivals
+    "The casualties a render shows: the sweep's held copy while the process holds its rows,
+     `owed-revivals` otherwise."
+    {:signature [:=> [:catn] casualties/Unsettled]
+     :delegates [owed-revivals]})
   (Operation latest-report "The workstream's most recent ledger entry."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]})
   (Operation environment "The workstream's current environment — its latest live session past its conductor's record."

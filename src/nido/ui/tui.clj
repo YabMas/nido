@@ -245,11 +245,13 @@
 
 (defn- board-rows
   "Rows for the spine board: work/grouped, filtered by `origin` and `facet-filter`,
-   as foldable bands with origin badges."
+   as foldable bands with origin badges. A list refresh first (`work/refresh-list!`): the
+   board is one of the renders that make one."
   ([project origin] (board-rows project origin #{} {}))
   ([project origin collapsed] (board-rows project origin collapsed {}))
   ([project origin collapsed facet-filter]
-   (let [g    (work/grouped project (work/live-session-names project))
+   (work/refresh-list! project)
+   (let [g    (work/grouped project)
          keep #(->> (filter-origin origin %)
                     (filterv (fn [r]
                                (or (not (contains? facet-bearing-origins origin))
@@ -459,11 +461,11 @@
 (def ^:private refresh-ms 1500)
 
 ;; The board is rebuilt on a tick only when `work/board-stamp` has moved, or this
-;; long after its last rebuild. The stamp sees every file the board reads; the
-;; clock is for what it cannot — a lock released by a process exiting, a session
-;; port gone dead, claude's agent listing — so those show within this, not
-;; within a tick. A rebuild reads every workstream (about 2s for brian's 419 on a
-;; loaded machine); the stamp only stats their directories.
+;; long after its last rebuild. The TUI holds its rows (`work/hold!`), so the tick
+;; makes a list refresh and the stamp is the rows' version: it moves when a refresh
+;; changed a row, and liveness that no file records — a lock released by a process
+;; exiting, a session port gone dead, claude's agent listing — comes due within
+;; `work/liveness-interval-ms`. The clock is the backstop behind both.
 (def ^:private board-backstop-ms 30000)
 
 (defn- tick-rows
@@ -473,7 +475,8 @@
   [state now]
   (if (not= :board (:screen state))
     (refresh-list state (current-rows state))
-    (let [stamp' (work/board-stamp (:project state))
+    (let [stamp' (do (work/refresh-list! (:project state))
+                     (work/board-stamp (:project state)))
           {:keys [stamp built-at]} (::board-tick state)]
       (if (and (= stamp' stamp) built-at (< (- now built-at) board-backstop-ms))
         state
@@ -1649,6 +1652,8 @@
   []
   (reset! exit-action :quit)
   (charm-patch/install!)
+  ;; The board re-renders on every tick, so this process holds its rows.
+  (work/hold!)
   (program/run {:init     init-fn
                 :update   update-fn
                 :view     view

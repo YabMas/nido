@@ -16,6 +16,7 @@
    [babashka.process :as p]
    [clojure.edn :as edn]
    [clojure.string :as str]
+   [nido.coordinator.work :as work]
    [nido.platform.core :as core]
    [nido.ui.server :as server]
    [nido.ui.tui :as tui]))
@@ -101,12 +102,14 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   measure
-  "In THIS process, against whatever store NIDO_HOME names: time the first render of a cold
-   process, then `runs` renders of each surface, and print the medians as EDN. The child half
-   of `surfaces`; run it directly only against a store you can lose."
+  "In THIS process, against whatever store NIDO_HOME names: hold rows as the dashboard and
+   the TUI do (`work/hold!`), time the first render of a cold process, then `runs` renders of
+   each surface, and print the medians as EDN. The child half of `surfaces`; run it directly
+   only against a store you can lose."
   [& args]
   (let [{:keys [project ws runs] :or {runs 5}} (parse-opts args)
         project (name project)
+        _       (work/hold!)
         timed   (surfaces-of project ws)
         cold    (ms (second (first timed)))
         warm    (into {} (for [[k f] timed]
