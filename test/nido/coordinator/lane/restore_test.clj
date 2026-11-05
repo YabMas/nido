@@ -6,13 +6,15 @@
    [nido.coordinator.lane.restore :as restore]
    [nido.coordinator.lane.spawn :as spawn]
    [nido.coordinator.record.runs :as runs]
+   [nido.coordinator.record.session-events :as session-events]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.triggers :as triggers]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.source.queue :as queue]
    [nido.platform.core :as core]
    [nido.session.failure :as failure]
-   [nido.session.lifecycle :as lifecycle]))
+   [nido.session.lifecycle :as lifecycle]
+   [nido.session.state :as sstate]))
 
 (defn- with-tmp
   "Call `f` with the ledger, the runs and the kept failures under a temp dir, the
@@ -22,6 +24,7 @@
         enqueued (atom [])]
     (try
       (with-redefs [core/nido-root          (constantly (str tmp))
+                    sstate/sessions-root    (constantly (str (fs/path tmp "sessions")))
                     failure/failures-dir    (constantly (str (fs/path tmp "failures")))
                     queue/enqueue!          (fn [env] (swap! enqueued conj env) "queued")
                     triggers/load-for-project
@@ -31,6 +34,14 @@
         (cstate/ensure-dirs!)
         (f enqueued))
       (finally (fs/delete-tree tmp)))))
+
+(defn- typed!
+  "A person typed a prompt in brian's session `n`, in its home, now."
+  [n]
+  (let [home (str (fs/path (sstate/sessions-root) "brian" n))]
+    (fs/create-dirs home)
+    (spit (str (fs/path home "CLAUDE.md")) "briefing")
+    (session-events/append! (str "conv-" n) {:event :prompt :cwd home :prompt "bring it up"})))
 
 (defn- keep-failure! [attempt message]
   (binding [*err* (java.io.StringWriter.)]
@@ -64,6 +75,7 @@
 (deftest a-persons-session-comes-back-and-the-recovery-closes
   (with-tmp
     (fn [enqueued]
+      (typed! "feat")
       (let [f      (keep-failure! {} "Timed out waiting for .nrepl-port")
             w      (recovery-ws! f)
             ups    (atom [])]
@@ -78,9 +90,44 @@
         (is (some? (ws/closure (ws/read-ws :nido w))))
         (is (= :restored (-> (ws/latest-entry :nido w :session-restored) :outcomes first :outcome)))))))
 
+(deftest a-start-nobody-typed-into-is-withdrawn-not-restored
+  ;; 2026-11-04: a shared-PG outage failed the starts conductors' agents had made — kept with a
+  ;; person's origin — and the recovery brought all nine back up, on workstreams nobody was in.
+  (with-tmp
+    (fn [enqueued]
+      (typed! "other")
+      (let [f   (keep-failure! {} "reading shared flyway history failed: FATAL: the database system is shutting down")
+            w   (recovery-ws! f)
+            ups (atom 0)]
+        (with-redefs [lifecycle/up! (fn [& _] (swap! ups inc))]
+          (let [{:keys [outcomes closed?]} (restore/restore! :nido w)]
+            (is (= [{:failure (:id f) :outcome :withdrawn :why :no-person}] outcomes)
+                "a prompt in another session is no one at work in this one")
+            (is closed? "nothing is left owed, so the recovery closes")))
+        (is (zero? @ups) "nothing is brought up")
+        (is (empty? @enqueued))))))
+
+(deftest a-start-whose-prompt-log-cannot-be-read-stays-owed
+  ;; An unreadable log says nothing about who typed: withdrawing on it would close a person's
+  ;; recovery on a disk error, and throwing would stop every other failure's restore.
+  (with-tmp
+    (fn [enqueued]
+      (let [f   (keep-failure! {} "Timed out waiting for .nrepl-port")
+            w   (recovery-ws! f)
+            ups (atom 0)]
+        (with-redefs [lifecycle/up!                (fn [& _] (swap! ups inc))
+                      session-events/prompts-since (fn [_] (throw (ex-info "disk gone" {})))]
+          (let [{:keys [outcomes closed?]} (restore/restore! :nido w)]
+            (is (= [:not-restored] (map :outcome outcomes)))
+            (is (nil? (:why (first outcomes))) "not withdrawn as nobody's")
+            (is (not closed?) "the failure stays owed")))
+        (is (zero? @ups))
+        (is (empty? @enqueued))))))
+
 (deftest a-start-that-fails-again-is-not-restored-and-the-recovery-stays-open
   (with-tmp
     (fn [_]
+      (typed! "feat")
       (let [f (keep-failure! {} "Timed out waiting for .nrepl-port")
             w (recovery-ws! f)]
         (with-redefs [lifecycle/up! (fn [& _] (throw (ex-info "Timed out waiting for .nrepl-port"
@@ -210,6 +257,7 @@
 (deftest a-persons-session-comes-back-on-the-workstream-holding-it
   (with-tmp
     (fn [_]
+      (typed! "feat")
       (let [f   (keep-failure! {} "Timed out waiting for .nrepl-port")
             w   (recovery-ws! f)
             ups (atom [])]

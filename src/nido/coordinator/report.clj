@@ -3651,7 +3651,9 @@
    says what. :withdrawn means there is no work left for this restore to
    continue: the workstream the failure's origin names was closed after the
    failure, or — with :continuation {:continued-by <run-id>} — another Run already
-   carries on the failed Run's work, so nothing was started. :not-restored
+   carries on the failed Run's work, so nothing was started — or, with :why
+   :no-person, the start was kept as a person's in a session nobody had typed
+   into in the day before it failed. :not-restored
    names, under :failure-left, the failure its own attempt kept.
 
    A failure named :restored or :withdrawn here is settled once this workstream
@@ -3664,6 +3666,7 @@
                 [:outcome      [:enum :restored :withdrawn :not-restored]]
                 [:continuation {:optional true} [:map-of keyword? any?]]
                 [:failure-left {:optional true} string?]
+                [:why          {:optional true} [:enum :no-person]]
                 [:note         {:optional true} string?]]]]])
 
 

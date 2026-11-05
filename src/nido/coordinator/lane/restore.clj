@@ -19,6 +19,7 @@
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
+   [nido.coordinator.record.session-events :as session-events]
    [nido.coordinator.record.triggers :as triggers]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.source.queue :as queue]
@@ -35,8 +36,10 @@
 (defn ^{:malli/schema [:=> [:cat :map :map] :map]}
   continuation
   "What continues failure `f` once its session is up, given `facts` read for it:
-   :run (the Run its origin names), :ws (the workstream its origin names) and
-   :continued-by (the id of a Run already carrying on a failed :run's work, or nil).
+   :run (the Run its origin names), :ws (the workstream its origin names),
+   :continued-by (the id of a Run already carrying on a failed :run's work, or nil) and
+   :typed? (whether a person typed a prompt in the failed session within
+   `session/worked-window-ms` before it failed).
 
      {:kind :none}                       a person's start; bringing it up is all
      {:kind :execute :run-id id}         a Run that parked on its failed start
@@ -49,12 +52,21 @@
      {:kind :withdrawn :continued-by id} a failed Run whose work Run `id` already
                                          carries on; another successor would do
                                          the same work twice
+     {:kind :unread}                     a person's start whose prompt log could not
+                                         be read: nothing is decided, and the failure
+                                         stays owed
+     {:kind :withdrawn :why :no-person}  a start kept as a person's in a session
+                                         nobody typed into in the day before it
+                                         failed — a start an agent nido drives
+                                         made reads as a person's, and restoring
+                                         it would only bring up what nobody is
+                                         working in
 
    Withdrawn for a closed workstream or an unnameable session — never because
    the session is gone, which the teardown of every failed Run makes true. An
    unnameable session predates the refusal: restoring it could only be refused
    again, and the refusal is not a failure, so it would stay owed forever."
-  [f {:keys [run ws continued-by]}]
+  [f {:keys [run ws continued-by typed?]}]
   (let [{:keys [kind] :as origin} (:origin f)]
     (cond
       (or (some-> (:session f) lifecycle/session-name-problem)
@@ -75,6 +87,12 @@
 
       (and (= :run kind) run (= :failed (:state run)))
       {:kind :successor :run run}
+
+      (and (#{nil :person} kind) (= :unread typed?))
+      {:kind :unread}
+
+      (and (#{nil :person} kind) (not typed?))
+      {:kind :withdrawn :why :no-person}
 
       :else
       {:kind :none})))
@@ -104,6 +122,20 @@
                   other-id))))
           (sort (runs/list-run-ids)))))
 
+(defn- typed-before?
+  "Whether a person typed a prompt in failure `f`'s session within `session/worked-window-ms`
+   before it failed, or :unread when the prompt log could not be read — which says nothing about
+   who typed. A failure whose time does not parse was typed into by no one."
+  [f]
+  (try
+    (boolean
+     (when-let [at-ms (try (.toEpochMilli (java.time.Instant/parse (str (:at f)))) (catch Exception _ nil))]
+       (let [typed (->> (session-events/prompts-since (- at-ms session/worked-window-ms))
+                         (filterv #(not (pos? (compare (str (:at %)) (str (:at f))))))
+                         session/prompted-sessions)]
+         (contains? typed [(name (:project f)) (str (:session f))]))))
+    (catch Exception _ :unread)))
+
 (defn- facts-for [f]
   (let [{:keys [kind run-id project ws-id session]} (:origin f)
         run (case kind
@@ -116,7 +148,8 @@
     {:run          run
      :ws           (when (and p ws-id) (ws/read-ws p ws-id))
      :continued-by (when (and (= :run kind) (= :failed (:state run)))
-                     (continued-by run))}))
+                     (continued-by run))
+     :typed?       (typed-before? f)}))
 
 (defn- successor!
   "A new Run of `run`'s trigger and payload on `run`'s own workstream, its session
@@ -154,9 +187,17 @@
   (let [facts  (facts-for f)
         cont   (continuation f facts)
         origin (assoc (:origin f) :restoring (:id f))]
-    (if (= :withdrawn (:kind cont))
+    (cond
+      (= :unread (:kind cont))
+      {:failure (:id f) :outcome :not-restored
+       :note    "the prompt log could not be read, so whether a person was working in it is unknown; left owed"}
+
+      (= :withdrawn (:kind cont))
       (cond-> {:failure (:id f) :outcome :withdrawn}
-        (:continued-by cont) (assoc :continuation {:continued-by (:continued-by cont)}))
+        (:continued-by cont) (assoc :continuation {:continued-by (:continued-by cont)})
+        (:why cont)          (assoc :why (:why cont)))
+
+      :else
       (try
         (let [handed
               (case (:kind cont)

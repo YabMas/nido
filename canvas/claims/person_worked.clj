@@ -7,6 +7,7 @@
    it is about — the same three the design record states, which the landing check compares."
   (:require [canvas.vocab.claim :refer [Claim]]
             [canvas.coordinator.lane.conductor :refer [conductors! prompted]]
+            [canvas.coordinator.lane.restore :refer [continuation]]
             [canvas.coordinator.record.session :refer [person-prompt? prompted-sessions]]))
 
 (Claim worked-is-a-recent-person-prompt
@@ -28,3 +29,7 @@
 (Claim one-reading-per-sweep
   "One conductor pass reads the prompt log once, through conductor/prompted, which answers the set of prompted sessions or :unread when the log could not be read. On a set, every conductors! and reseat! call in that pass judges worked by it; on :unread, the pass makes no conductor decision."
   {:about [prompted conductors!] :evidence "round"})
+
+(Claim restore-needs-a-person
+  "continuation withdraws, naming :why :no-person, a failure whose origin is a person's (or absent) when no person-prompt? prompt was attributed to its session in the 24 hours before the failure; a person-origin failure with such a prompt is restored as before. When the prompt log cannot be read, continuation answers :unread and restore-one! leaves the failure :not-restored, still owed — never withdrawn as :no-person, and without stopping the restore of the cause's other failures."
+  {:about [continuation] :evidence "round"})

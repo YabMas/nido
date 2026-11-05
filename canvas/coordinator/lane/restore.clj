@@ -20,7 +20,11 @@
   (Operation continuation
     "What continues a failed start once its session is up, read from the failure's origin: nothing
      for a person's start, the Run or its successor for a Run, the reply's turn for a resume.
-     Withdrawn when the workstream the origin names closed after the failure, or when the start
+     Withdrawn, naming :no-person, for a start kept as a person's in a session nobody typed a
+     prompt in within the day before it failed — a start an agent nido drives made is kept as a
+     person's, and restoring it brings up what nobody works in. When the prompt log cannot be read
+     it answers :unread and the failure is left :not-restored, still owed — an unreadable log says
+     nothing about who typed. Withdrawn when the workstream the origin names closed after the failure, or when the start
      named a session `up!` now refuses — restoring it could only be refused again, and a refusal
      is not a failure, so it would stay owed forever. Never because the session is gone, which
      every failed Run's teardown makes true."
