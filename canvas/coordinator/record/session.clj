@@ -66,6 +66,16 @@
     "Whether `s` is a session a person works in: neither its workstream's conductor, nor a Run's,
      nor an occupant nido created to fill a seat — a record whose seat is not marked :carried."
     {:signature [:=> [:catn [:s Session]] :boolean] :delegates [autonomous?]})
+  (Operation person-prompt?
+    "Whether a recorded prompt was typed by a person: it carries neither nido's [nido-send] tag nor
+     a wrapper the harness puts round what another agent delivers."
+    {:signature [:=> [:catn [:p :map]] :boolean]})
+  (Operation prompted-sessions
+    "The sessions a person typed one of the given prompts in, as #{[project session-name]}: the
+     session whose home, or whose worktree, holds the directory the prompt was submitted in. A
+     directory more than one session runs in, or a project's own checkout, names no one."
+    {:signature [:=> [:catn [:prompts [:sequential :map]]] [:set [:tuple :string :string]]]
+     :delegates [person-prompt?]})
   (Operation archive!
     "Flip a session to archived, recording when. Idempotent — archiving twice leaves one entry."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session-name SessionName]] Session]

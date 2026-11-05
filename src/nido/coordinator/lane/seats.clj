@@ -203,16 +203,6 @@
   [project ws-id generation]
   (filterv #(= generation (:generation %)) (with-deliveries (log-rows project ws-id))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string [:? :any]] :boolean]}
-  handed-back-since?
-  "Whether a hand-back to the conductor was logged on the workstream at or after `since`, an ISO
-   instant, that `counts?` (default: every one) holds of — given the logged row, its :key and
-   :session among it — read from the message log alone, with no ledger read."
-  [project ws-id since & [counts?]]
-  (boolean (some #(and (= :hand-back (:kind %)) (not (neg? (compare (str (:at %)) since)))
-                       ((or counts? any?) %))
-                 (log-rows project ws-id))))
-
 (defn- describe [{:keys [as seat]}]
   (case as
     :seat (if (int? seat) "the whole seat" (str "seat " seat))

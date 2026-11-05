@@ -427,13 +427,17 @@
     (logged (str "closing " session "'s turn") #(conductor/close-unanswered! project ws-id session instruction)))
   (when (>= (- now-ms @!last-conductor-sweep-ms) (:conductor-interval-ms defaults))
     (reset! !last-conductor-sweep-ms now-ms)
-    (doseq [p (registered-projects)]
-      ;; Acts first: an act that closed its workstream is answered and posted before the
-      ;; conductor that answers for it is retired.
-      (logged (str "reading " (name p) "'s acts") #(conductor/answers! p))
-      (logged (str "starting " (name p) "'s conductors") #(conductor/conductors! p))
-      (doseq [ws-id (ws/list-ids p)]
-        (logged (str "re-seating " ws-id) #(conductor/reseat! p ws-id))))))
+    ;; Who a person typed into is read once a sweep: every workstream's worked? reads it.
+    ;; On :unread no conductor is started, re-seated or retired: an unreadable log is no reading.
+    (let [typed-in (conductor/prompted)]
+      (doseq [p (registered-projects)]
+        ;; Acts first: an act that closed its workstream is answered and posted before the
+        ;; conductor that answers for it is retired.
+        (logged (str "reading " (name p) "'s acts") #(conductor/answers! p))
+        (when-not (= :unread typed-in)
+          (logged (str "starting " (name p) "'s conductors") #(conductor/conductors! p typed-in))
+          (doseq [ws-id (ws/list-ids p)]
+            (logged (str "re-seating " ws-id) #(conductor/reseat! p ws-id typed-in))))))))
 
 (defn- conduct-pass!
   "One conduct pass over the background sessions: hold sends while the account is at its usage

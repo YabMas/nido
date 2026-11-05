@@ -126,17 +126,14 @@
     (fn [_]
       (let [strata ["canvas.strata/ledger" "canvas.strata/seats"]
             id     (ledger strata strata)]
-        ;; Re-seating is for a workstream a person works in: one has a session on it, recorded
-        ;; after conductors began.
-        (spit (doto (fs/file (core/nido-root) "coordinator" "conductors-since.edn") (-> fs/parent fs/create-dirs))
-              (pr-str {:since "2025-01-01T00:00:00Z"}))
+        ;; Re-seating is for a workstream a person works in: one typed in a session on it.
         (session/create! :brian id {:name "by-hand" :weight :heavy :autonomy nil})
         (with-redefs [lifecycle/up! (fn [_ _] (throw (ex-info "no runtime" {})))]
           (is (thrown? Exception (embodied/carry! :brian id)))
-          (conductor/reseat! :brian id))
+          (conductor/reseat! :brian id #{["brian" "by-hand"]}))
         (is (= ["seat canvas.strata/ledger, canvas.strata/seats could not be started"]
                (mapv :needs (ws/entries-of :brian id :blocker))))
-        (conductor/reseat! :brian id)
+        (conductor/reseat! :brian id #{["brian" "by-hand"]})
         (is (= [(:seq (first (ws/entries-of :brian id :blocker)))]
                (mapv :blocker-seq (ws/entries-of :brian id :blocker-answered))))
         (is (not (embodied/refused? (ex-info "no runtime" {}))))

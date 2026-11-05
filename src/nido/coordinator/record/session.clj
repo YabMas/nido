@@ -13,7 +13,9 @@
    [malli.core :as m]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.state :as cstate]
-   [nido.platform.io :as io]))
+   [nido.platform.io :as io]
+   [nido.platform.project :as project]
+   [nido.session.state :as sstate]))
 
 (def Autonomy
   [:map {:closed true}
@@ -238,6 +240,66 @@
   (not (or (:conductor s) (autonomous? s) (and (:seat s) (not (get-in s [:seat :carried]))))))
 (defn ^{:malli/schema [:=> [:cat :Session] [:maybe :map]]}
   claude-facet [s] (:claude s))
+
+;; ── whether a person is at work ─────────────────────────────────────────────
+
+(def worked-window-ms
+  "How long a person's prompt keeps the session it was submitted in worked: a day."
+  (* 24 60 60 1000))
+
+(def ^:private delivered
+  "What marks a prompt no person typed: nido's tag on everything it sends, and the wrappers the
+   harness puts round what another agent delivers."
+  #"\[nido-send |<cross-session-message|<agent-message|<task-notification|\[Cross-session delivery notice\]")
+
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  person-prompt?
+  "Whether recorded prompt `p` ({:prompt …}) was typed by a person: it carries neither nido's tag
+   nor a harness wrapper for another agent's message."
+  [p]
+  (not (re-find delivered (str (:prompt p)))))
+
+(defn- real [p] (try (str (fs/real-path p)) (catch Exception _ nil)))
+
+(defn- session-dirs
+  "Every directory a session's conversations run in — its home, and the worktree the home links
+   to — as {dir #{[project session-name] …}}. Read off the homes under sessions-root; a name may
+   hold one slash (explore/x). A worktree that is a project's own checkout — what a :lite session
+   links to — is no session's: every conversation in that checkout would otherwise be counted for
+   whichever session linked it."
+  []
+  (let [root      (sstate/sessions-root)
+        checkouts (into #{} (keep (comp real :directory val)) (project/list-projects))]
+    (if-not (fs/directory? root)
+      {}
+      (apply merge-with into {}
+             (for [marker (mapcat #(fs/glob root %) ["*/*/worktree" "*/*/*/worktree" "*/*/CLAUDE.md" "*/*/*/CLAUDE.md"])
+                   :let   [home  (fs/parent marker)
+                           [project & parts] (map str (fs/relativize root home))
+                           owner [project (str/join "/" parts)]
+                           wt    (real (fs/path home "worktree"))]
+                   dir    (cond-> [(str home)] (and wt (not (checkouts wt))) (conj wt))]
+               {dir #{owner}})))))
+
+(defn ^{:malli/schema [:=> [:cat [:sequential :map]] [:set [:tuple :string :string]]]}
+  prompted-sessions
+  "The sessions a person typed one of `prompts` ({:cwd :prompt …}) in, as #{[project
+   session-name]}: a prompt counts for the session whose home, or whose worktree, holds the
+   directory it was submitted in — the deepest such directory. A directory more than one session
+   runs in (a :lite worktree is the project's own checkout) names no one, so a prompt there
+   counts for none."
+  [prompts]
+  (let [typed (filter person-prompt? prompts)]
+    (if (empty? typed)
+      #{}
+      (let [dirs  (session-dirs)
+            owner (fn [cwd]
+                    (let [[_ owners] (->> dirs
+                                          (filter (fn [[d _]] (or (= cwd d) (str/starts-with? (str cwd) (str d "/")))))
+                                          (sort-by (comp - count key))
+                                          first)]
+                      (when (= 1 (count owners)) (first owners))))]
+        (into #{} (keep (comp owner :cwd)) typed)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:=> [:cat :map] :map]] :Session]}
   update-substrate!

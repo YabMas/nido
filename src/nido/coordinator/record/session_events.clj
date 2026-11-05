@@ -65,6 +65,28 @@
                    (drop from lines))
      :cursor (max from (count lines))}))
 
+(defn ^{:malli/schema [:=> [:cat :int] [:vector :map]]}
+  prompts-since
+  "Every prompt recorded at or after `since-ms`, epoch milliseconds, in any conversation, as
+   {:at :cwd :prompt}, oldest first. Only logs written to since then are read, so the cost follows
+   recent activity, not every conversation ever recorded. A prompt whose time does not parse is
+   left out."
+  [since-ms]
+  (let [dir (fs/parent (cstate/session-events-path "_"))]
+    (if-not (fs/directory? dir)
+      []
+      (->> (for [^java.io.File f (.listFiles (fs/file dir))
+                 :when (and (str/ends-with? (.getName f) ".edn") (>= (.lastModified f) since-ms))
+                 :let  [id (str/replace (.getName f) #"\.edn$" "")]
+                 ev    (:events (events-since id nil))
+                 :when (= :prompt (:event ev))
+                 :let  [ms (try (.toEpochMilli (java.time.Instant/parse (str (:at ev))))
+                                (catch Exception _ nil))]
+                 :when (and ms (>= ms since-ms))]
+             (select-keys ev [:at :cwd :prompt]))
+           (sort-by :at)
+           vec))))
+
 (defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
   conversations
   "Every recorded conversation with the cwd and time of its last event that carried a cwd, as

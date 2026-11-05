@@ -8,6 +8,8 @@
             [canvas.coordinator.lane.embodied-strata :as embodied-strata]
             [canvas.coordinator.lane.seats :as seats]
             [canvas.coordinator.record.seats :as rseats :refer [SeatId]]
+            [canvas.coordinator.record.session :as session]
+            [canvas.coordinator.record.session-events :as session-events]
             [canvas.coordinator.record.standing :as standing]
             [canvas.coordinator.record.state :refer [WorkstreamId SessionName]]
             [canvas.coordinator.record.workstream :as workstream]
@@ -49,9 +51,10 @@
    person's act at the step is recorded as answering when the escalation was at a person's step;
    and each act of the person's recorded on the workstream is one hand-back to the conductor — the
    blocker's answer nido records for an act being carried by that act's. Also the
-   conductor's lifecycle against its workstream's — started by a conduct pass once work has started
-   on the open workstream since conductors began on the host — a session recorded or a hand-back
-   logged — and while its session is not running, retired by a pass once the workstream is closed — and
+   conductor's lifecycle against its workstream's — started by a conduct pass while the open
+   workstream is worked, a person having typed a prompt into one of its sessions within the last
+   day, and its session is not running; retired by a pass once the workstream is closed or no
+   longer worked — and
    what it is briefed with: the records at its start and an escalation guidance document edited
    without changing code. And that a workstream a person or a Run starts its first session on is
    carried: that session occupies its whole seat, and whenever the seats change the embodiment that carries them
@@ -71,28 +74,37 @@
                       [:brief [:? [:maybe :string]]] [:model [:? [:maybe :string]]]
                       [:given-by [:? [:maybe [:enum :start]]]]] :map]
      :delegates [seats/default-embodiment seats/occupy!]})
+  (Operation prompted
+    "The sessions a person typed a prompt in within the last day, as #{[project session-name]} —
+     read once a conduct pass and handed to conductors! and every reseat! — or :unread when the
+     prompt log could not be read, on which neither decides anything."
+    {:signature [:=> [:catn] [:or [:set [:tuple :string :string]] [:enum :unread]]]
+     :delegates [session/prompted-sessions session-events/prompts-since]})
   (Operation conductors!
     "On every conduct pass: start, on its one conductor record and a brief of the seats, the
      governing design and the position as the records give them at that start and the escalation
      guidance, the conductor of
-     each open workstream of a project that work has started on — a session other than its
-     conductor recorded on it, or a hand-back logged on it, since conductors began on the host, an
-     instant recorded once and never moved — whose conductor's session is not running, and retire
-     the conductor of each closed or unworked one — a ticket a person settled in Notion closing it as
-     the pipeline places it. A workstream not worked since gets none."
-    {:signature [:=> [:catn [:project ProjectName]] [:sequential :map]]
-     :delegates [workstream/list-ids workstream/read-ws seats/conductor! seats/retire-conductor!
-                 seats/handed-back-since? rseats/seats standing/governing-design drive/of
+     each open workstream of a project that is worked — a person typed a prompt into one of its
+     sessions within the window the pass read — whose conductor's session is not running, and
+     retire the conductor of each closed or unworked one — a ticket a person settled in Notion
+     closing it as the pipeline places it. A prompt nido sent or the harness delivered from another
+     agent is no person's, so nothing nido starts makes a workstream worked, and nothing worked
+     long ago keeps it so."
+    {:signature [:=> [:catn [:project ProjectName] [:prompted [:? [:or [:set [:tuple :string :string]] [:enum :unread]]]]]
+                 [:sequential :map]]
+     :delegates [prompted workstream/list-ids workstream/read-ws seats/conductor!
+                 seats/retire-conductor! rseats/seats standing/governing-design drive/of
                  drive/settled-in-notion]})
   (Operation reseat!
     "On every conduct pass, for a carried workstream that is worked — as conductors! reads it, so a
-     workstream only Runs and nido's own occupants ever seated is left as it is: retire each occupant whose seat the current
+     workstream nobody types into is left as it is: retire each occupant whose seat the current
      seats do not include, and occupy each current seat with the embodiment that carries it — the
      default embodiment while the generation fixes no ids, the strata embodiment while it fixes
      strata — escalating, by name, seats no embodiment carries and a seat whose start failed, and
      answering the latter once every seat is held."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
-     :delegates [seats/reseat! seats/held seats/default-embodiment seats/occupy! embodied-strata/carry! embodied-strata/refused? drive/park!]})
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]
+                      [:prompted [:? [:or [:set [:tuple :string :string]] [:enum :unread]]]]] :map]
+     :delegates [prompted seats/reseat! seats/held seats/default-embodiment seats/occupy! embodied-strata/carry! embodied-strata/refused? drive/park!]})
   (Operation hand-backs!
     "From one conduct pass's report, log to the workstream's conductor each turn end, on a session
      nido drives other than the conductor, that ended an instruction nido gave and recorded as

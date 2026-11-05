@@ -12,16 +12,13 @@
    :conduct-decision — the conductor's, or an escalation nido writes when the conductor turn it was
    delivered for ends leaving it unanswered.
 
-   Also the conductor's lifecycle against its workstream's: a workstream is WORKED once, since
-   conductors began on this host — the instant the first conductor pass recorded — a session a
-   person works in has been recorded on it or a hand-back has been logged on it — a Run's session is
-   none, since a Run answers for its own turns and leaves none to conduct — so a workstream
-   worked only before then, however long ago, is not worked until a session starts on it or nido
-   gives it an instruction no Run gave — and every open, worked workstream has one
-   conductor, started by a conduct pass while its session is not running and retired once the
-   workstream is closed. A workstream never worked — an item queued in the intake inbox — has
-   none. It is briefed from the records and an escalation guidance document a person edits
-   without changing code.
+   Also the conductor's lifecycle against its workstream's: a workstream is WORKED while a person
+   has typed a prompt into one of its sessions within the last day (`session/worked-window-ms`) —
+   a prompt nido sent, or one the harness delivered from another agent, is no person's, so an
+   occupant nido drives, a spawned child and a Run make nothing worked by their own turns — and
+   every open, worked workstream has one conductor, started by a conduct pass while its session is
+   not running and retired once the workstream is closed or no longer worked. It is briefed from
+   the records and an escalation guidance document a person edits without changing code.
 
    And that a start carries its session: the first session a person's start or a Run's start
    brings up on a workstream whose generation fixes no ids becomes its whole seat's occupant.
@@ -35,7 +32,6 @@
    [nido.coordinator.lane.embodied-strata :as embodied]
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.lane.seats :as seats]
-   [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.seats :as rseats]
    [nido.coordinator.record.session :as session]
@@ -52,34 +48,26 @@
 
 ;; ── reading the workstream ──────────────────────────────────────────────────
 
-(defn- since-path [] (str (fs/path (cstate/coordinator-dir) "conductors-since.edn")))
-
-(defn- conducting-since
-  "The instant conductors began on this host, as an ISO string: what the first call recorded,
-   and recorded now on that first call. Never moves once written — moving it forward would take a
-   conductor from a workstream that already has one by right."
+(defn ^{:malli/schema [:=> [:cat] [:or [:set [:tuple :string :string]] [:enum :unread]]]}
+  prompted
+  "The sessions a person typed a prompt in within the last `session/worked-window-ms`, as
+   #{[project session-name]} — what worked? reads — or :unread when the prompt log could not be
+   read. One conduct pass reads it once and hands it to conductors! and every reseat!; on :unread
+   neither decides anything, since a log nobody could read says nothing about who typed."
   []
-  (or (:since (io/read-edn (since-path)))
-      (let [now (clock/now-iso)]
-        (fs/create-dirs (fs/parent (since-path)))
-        (io/write-edn! (since-path) {:since now})
-        now)))
-
-(defn- occupant-turn?
-  "Whether hand-back row `row` is the end of a turn nido gave a session no person works in — an
-   occupant nido created. Its key is the one hand-backs! writes."
-  [project ws-id row]
-  (boolean (and (str/starts-with? (str (:key row)) "turn:")
-                (some-> (session/read-session project ws-id (:session row)) session/person? not))))
+  (try
+    (session/prompted-sessions
+     (session-events/prompts-since (- (System/currentTimeMillis) session/worked-window-ms)))
+    (catch Exception e
+      (binding [*out* *err*] (println "nido conductor: reading where a person typed failed —" (ex-message e)))
+      :unread)))
 
 (defn- worked?
-  "Whether, at or after `since`, an ISO instant, a session a person works in (`session/person?`)
-   has been recorded on the workstream or a hand-back other than an occupant nido created ending a
-   turn has been logged on it. Nothing nido starts on its own makes a workstream worked."
-  [project ws-id since]
-  (boolean (or (some #(and (session/person? %) (not (neg? (compare (str (:created-at %)) since))))
-                     (session/list-sessions project ws-id))
-               (seats/handed-back-since? project ws-id since #(not (occupant-turn? project ws-id %))))))
+  "Whether a person typed a prompt, within the window `prompted` was read over, into a session of
+   the workstream — its conductor's included, since talking to the conductor is work. Nothing nido
+   starts or sends makes a workstream worked, and nothing worked long ago keeps it so."
+  [project ws-id prompted]
+  (boolean (some #(prompted [(name project) (:name %)]) (session/list-sessions project ws-id))))
 
 (defn- conductor-of
   "The workstream's conductor record, or nil."
@@ -180,32 +168,34 @@
              (sstate/session-live? (get (sstate/read-registry) (str wt))))
            (catch Throwable _ false))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName] [:sequential :map]]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName [:? [:or [:set [:tuple :string :string]] [:enum :unread]]]] [:sequential :map]]}
   conductors!
   "On every conduct pass: start, on its one conductor record and its brief, the conductor of each
-   open workstream of `project` that is worked — since conductors began on this host, a session a
-   person works in recorded on it or a hand-back logged on it — whose conductor's session
-   is not running, and retire the conductor of each closed or unworked one that still has a process
-   or an up session — a ticket a person settled in Notion closes its workstream here as the
-   pipeline places it (`pipeline/settled-in-notion`), and one taken back out starts it again. A workstream not worked since gets none.
-   Answers [{:ws-id :started|:retired :session}] for what it did; a failure is logged and the
-   rest carried on with."
-  [project]
-  (let [live  (delay ((requiring-resolve 'nido.coordinator.lane.conduct/live-states) {}))
-        since (conducting-since)]
-    (vec
+   open workstream of `project` that is worked — a person typed into one of its sessions within
+   the window `prompted` was read over (default: read now) — whose conductor's session is not
+   running, and retire the conductor of each closed or unworked one that still has a process or an
+   up session — a ticket a person settled in Notion closes its workstream here as the pipeline
+   places it (`pipeline/settled-in-notion`), and one taken back out starts it again. A workstream
+   not worked gets none. Answers [{:ws-id :started|:retired :session}] for what it did; a failure
+   is logged and the rest carried on with."
+  [project & [prompted-sessions]]
+  (let [live     (delay ((requiring-resolve 'nido.coordinator.lane.conduct/live-states) {}))
+        typed-in (or prompted-sessions (prompted))]
+    (if (= :unread typed-in)
+      []
+     (vec
      ;; Sessions are read first and a ledger only where they leave a conductor to start or retire:
      ;; reading every ledger costs seconds a pass.
      (for [ws-id (ws/list-ids project)
-           :let  [c (conductor-of project ws-id)]
-           :when (or c (worked? project ws-id since))
+           :let  [c       (conductor-of project ws-id)
+                  worked  (worked? project ws-id typed-in)]
+           :when (or c worked)
            :let  [w (ws/read-ws project ws-id)
                   act (cond
                         (nil? w) nil
-                        (or (ws/closure w) (pipeline/settled-in-notion project ws-id w)
-                            (not (worked? project ws-id since)))
+                        (or (ws/closure w) (pipeline/settled-in-notion project ws-id w) (not worked))
                         (when (and c (needs-retiring? project c @live)) :retired)
-                        (and (worked? project ws-id since) (not (and c (running? c @live))))
+                        (not (and c (running? c @live)))
                         :started)]
            :when act
            :let  [r (try
@@ -217,7 +207,7 @@
                           (println (str "nido conductor: " (name act) " on " ws-id " failed — " (ex-message t))))
                         nil))]
            :when r]
-       (assoc r :ws-id ws-id :act act)))))
+       (assoc r :ws-id ws-id :act act))))))
 
 (declare deciding open-blockers)
 
@@ -239,18 +229,20 @@
                                           :summary "the seat it named has since been occupied"}))
                (:seq b))))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? [:or [:set [:tuple :string :string]] [:enum :unread]]]] :map]}
   reseat!
-  "On every conduct pass, for a carried workstream that is worked as conductors! reads it — so one
-   only Runs and nido's own occupants ever seated is left as it is: retire each occupant whose seat
+  "On every conduct pass, for a carried workstream that is worked as conductors! reads it, over
+   `prompted-sessions` when the pass read them (default: read now) — so one nobody types into is
+   left as it is: retire each occupant whose seat
    the current seats do not include, and occupy each current seat with the embodiment that carries it — the
    default embodiment while the generation fixes no ids, the strata embodiment while it fixes
    strata — escalating, by name, seats no embodiment carries and a seat whose start failed in this
    pass, and answering that escalation as nido once every seat is held. A closed workstream is
    left as it is. Answers {:retired :occupied :escalated}."
-  [project ws-id]
+  [project ws-id & [prompted-sessions]]
   (if-not (and (carried? project ws-id)
-               (worked? project ws-id (conducting-since))
+               (let [typed-in (or prompted-sessions (prompted))]
+                 (and (not= :unread typed-in) (worked? project ws-id typed-in)))
                (not (some-> (ws/read-ws project ws-id) ws/closure)))
     {}
     (let [{:keys [retired]} (seats/reseat! project ws-id)

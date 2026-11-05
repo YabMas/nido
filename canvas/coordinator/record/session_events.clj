@@ -19,6 +19,11 @@
   (Operation events-since
     "A session's events after a cursor, oldest first, with the cursor to read from next."
     {:signature [:=> [:catn [:session-id :string] [:cursor [:maybe :int]]] :map]})
+  (Operation prompts-since
+    "Every prompt recorded at or after an instant, in epoch milliseconds, in any conversation, with
+     its time, directory and text, oldest first — read from the logs written to since then only."
+    {:signature [:=> [:catn [:since-ms :int]] [:vector :map]]
+     :delegates [events-since]})
   (Operation conversations
     "Every recorded conversation with the cwd and time of its last event that carried a cwd —
      what ties a conversation nido did not drive to the session it ran in."

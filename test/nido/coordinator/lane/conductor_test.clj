@@ -22,11 +22,14 @@
    [nido.coordinator.record.standing :as standing]
    [nido.session.commit-gate :as commit-gate]
    [nido.session.launcher :as launcher]
-   [nido.session.lifecycle :as lifecycle]))
+   [nido.session.lifecycle :as lifecycle]
+   [nido.session.state :as sstate]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
-    (try (with-redefs [core/nido-root (constantly (str tmp))] (f))
+    (try (with-redefs [core/nido-root       (constantly (str tmp))
+                       sstate/sessions-root (constantly (str (fs/path tmp "sessions")))]
+           (f))
          (finally (fs/delete-tree tmp)))))
 
 (defmacro ^:private launching
@@ -56,12 +59,15 @@
                 lifecycle/session-home-coords-from-cwd (fn [& _] nil)]
     (f)))
 
-(defn- conducting-since!
-  "Record that conductors began on this host at an instant before any session a test creates."
-  []
-  (io/write-edn! (doto (str (fs/path (core/nido-root) "coordinator" "conductors-since.edn"))
-                   (-> fs/parent fs/create-dirs))
-                 {:since "2025-01-01T00:00:00Z"}))
+(defn- typed!
+  "Record a prompt typed in brian's session `n`, in its home: `prompt` (default one a person
+   typed) at `at` (default now)."
+  [n & {:keys [prompt at] :or {prompt "go on"}}]
+  (let [home (str (fs/path (sstate/sessions-root) "brian" n))]
+    (fs/create-dirs home)
+    (spit (str (fs/path home "CLAUDE.md")) "briefing")
+    (session-events/append! (str "conv-" n) (cond-> {:event :prompt :cwd home :prompt prompt}
+                                              at (assoc :at at)))))
 
 (defn- workstream
   "A workstream with an intent and nothing designed, so its seat is the whole one. Returns [id add]."
@@ -98,9 +104,9 @@
 (deftest a-carried-seat-whose-launch-failed-is-started-again-on-the-next-pass
   (with-tmp
     (fn []
-      (conducting-since!)
       (let [[id] (workstream)]
         (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+        (typed! "fix-it")
         (launching [launched]
           (with-redefs [conduct/start! (fn [_] (throw (ex-info "launch failed" {:reason :boom})))]
             (is (thrown? Exception (conductor/carry! :brian id "fix-it" "do the thing"))))
@@ -353,22 +359,22 @@
     (fn []
       (let [[worked]   (workstream)
             [unworked] (workstream)
-            [before]   (workstream)]
-        (session/create! :brian before {:name "long-ago" :weight :heavy :autonomy nil})
-        (session/write! (assoc (session/read-session :brian before "long-ago") :created-at "2020-01-01T00:00:00Z"))
-        (io/write-edn! (doto (str (fs/path (core/nido-root) "coordinator" "conductors-since.edn"))
-                         (-> fs/parent fs/create-dirs))
-                       {:since "2025-01-01T00:00:00Z"})
+            [before]   (workstream)
+            [sent]     (workstream)]
         (session/create! :brian worked {:name "fix-it" :weight :heavy :autonomy nil})
+        (typed! "fix-it")
+        (session/create! :brian unworked {:name "nobody-in" :weight :heavy :autonomy nil})
+        (session/create! :brian before {:name "long-ago" :weight :heavy :autonomy nil})
+        (typed! "long-ago" :at "2020-01-01T00:00:00Z")
+        (session/create! :brian sent {:name "driven" :weight :heavy :autonomy nil})
+        (typed! "driven" :prompt "do the thing\n\n[nido-send 304a711e]")
+        (typed! "driven" :prompt "<cross-session-message from=\"parent\">carry on</cross-session-message>")
         (launching [launched]
           (is (= [{:ws-id worked :act :started :session (str worked "--conductor")}]
                  (conductor/conductors! :brian)))
           (is (str/includes? (second (first @launched)) "bb nido:seats:decide") "briefed with how to decide")
-          (is (not-any? #(#{unworked before} (:ws-id %)) (conductor/conductors! :brian))
-              "a workstream never worked, or worked only before conductors began, gets none")
-          (is (= "2025-01-01T00:00:00Z"
-                 (:since (io/read-edn (str (fs/path (core/nido-root) "coordinator" "conductors-since.edn")))))
-              "the instant conductors began never moves"))))))
+          (is (not-any? #(#{unworked before sent} (:ws-id %)) (conductor/conductors! :brian))
+              "a session nobody typed in, a prompt older than the window, and a prompt nido sent or another agent delivered are no work"))))))
 
 (deftest a-workstream-only-runs-worked-has-no-conductor
   (with-tmp
@@ -384,8 +390,10 @@
           (is (empty? (conductor/conductors! :brian))
               "a Run answers for its own turns, so its session leaves nothing to conduct")
           (session/create! :brian run-only {:name "take-over" :weight :heavy :autonomy nil})
+          (is (empty? (conductor/conductors! :brian)) "a session nobody typed in is no work either")
+          (typed! "take-over")
           (is (= [run-only] (map :ws-id (conductor/conductors! :brian)))
-              "a person's session on it makes it worked"))))))
+              "a person typing in a session on it makes it worked"))))))
 
 (defn- run-session!
   "Record a Run's session `n` on workstream `id`."
@@ -412,7 +420,6 @@
   ;; a conductor: a review-analysis ledger, its Run's session carried and then archived.
   (with-tmp
     (fn []
-      (conducting-since!)
       (let [id (review-analysis-workstream)]
         (is (= [:review-analysis] (mapv :kind (:entries (ws/read-ws :brian id)))) "the ledger holds the analysis alone")
         (run-session! id "review-analysis-x")
@@ -429,7 +436,6 @@
 (deftest an-occupant-nido-started-does-not-make-its-workstream-worked
   (with-tmp
     (fn []
-      (conducting-since!)
       (let [[id] (workstream)
             occupant (str id "--work-g1")]
         (run-session! id "review-analysis-x")
@@ -449,22 +455,20 @@
           (conduct/retire! :brian id occupant {})
           (session/update-substrate! :brian id occupant #(assoc-in % [:claude :driver] :retired))
           (reset! launched [])
-          (is (empty? (conductor/conductors! :brian)) "but neither its record nor its turn is work")
+          (typed! occupant :prompt "the brief\n\n[nido-send tok]")
+          (is (empty? (conductor/conductors! :brian)) "but neither its record, its turn nor its brief is work")
           (is (= {} (conductor/reseat! :brian id)) "so the pass leaves the seat as it is")
           (is (= [] @launched) "and relaunches nothing")
-          (testing "a person's hold on that occupant, handed back, is work"
-            (driving id occupant "conv" nil)
-            (conductor/hand-back! :brian id occupant)
+          (testing "a person typing in that occupant is work"
+            (typed! occupant)
             (is (= [id] (mapv :ws-id (conductor/conductors! :brian))))))))))
 
 (deftest a-ticket-settled-in-notion-retires-its-conductor
   (with-tmp
     (fn []
       (let [[id add] (workstream)]
-        (io/write-edn! (doto (str (fs/path (core/nido-root) "coordinator" "conductors-since.edn"))
-                         (-> fs/parent fs/create-dirs))
-                       {:since "2025-01-01T00:00:00Z"})
         (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+        (typed! "fix-it")
         (launching [_]
           (with-redefs [seats/retire-conductor! (fn [_ _] {:retired true})]
             (is (= [:started] (mapv :act (conductor/conductors! :brian))))
@@ -474,15 +478,23 @@
             (is (= [] (conductor/conductors! :brian))
                 "a stage chosen since takes it back out, so its running conductor stays")))))))
 
-(deftest the-first-pass-records-when-conductors-began
+(deftest a-prompt-in-the-projects-own-checkout-is-no-sessions-work
+  ;; A :lite session's worktree is the project's checkout itself, so a prompt there — a person
+  ;; working in the checkout, not in that session — would otherwise make its workstream worked.
   (with-tmp
     (fn []
-      (let [[id] (workstream)]
-        (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+      (let [[id]     (workstream)
+            checkout (str (fs/create-dirs (fs/path (sstate/sessions-root) ".." "src" "brian")))
+            home     (str (fs/path (sstate/sessions-root) "brian" "lite"))]
+        (session/create! :brian id {:name "lite" :weight :light :autonomy nil})
+        (fs/create-dirs home)
+        (fs/create-sym-link (fs/path home "worktree") checkout)
+        (session-events/append! "conv-checkout" {:event :prompt :cwd (str (fs/real-path checkout)) :prompt "hi"})
         (launching [_]
-          (is (= [] (conductor/conductors! :brian)) "a session recorded before the first pass is not work since")
-          (session/create! :brian id {:name "fix-it-2" :weight :heavy :autonomy nil})
-          (is (= [id] (mapv :ws-id (conductor/conductors! :brian))) "one recorded after it is"))))))
+          (with-redefs [project/list-projects (fn [] {"brian" {:directory checkout}})]
+            (is (= [] (conductor/conductors! :brian)) "the checkout belongs to no session")
+            (session-events/append! "conv-home" {:event :prompt :cwd home :prompt "hi"})
+            (is (= [id] (mapv :ws-id (conductor/conductors! :brian))) "its home does")))))))
 
 (deftest a-persons-act-is-refused-for-the-conductor-and-its-instructions
   (with-tmp
@@ -559,20 +571,21 @@
         (is (nil? (in-session "parent" #(conductor/starter "/wt")))
             "a start made on the conductor's instruction hands its child nothing the gate refuses the conductor")))))
 
-(deftest a-hand-back-is-work-and-a-conductor-on-no-work-is-retired
+(deftest a-hand-back-is-no-work-and-a-conductor-on-no-work-is-retired
+  ;; 2026-11-05: conductors kept on workstreams nobody had touched for days, each driving an
+  ;; occupant whose own turns, handed back, were counted as work.
   (with-tmp
     (fn []
       (let [[old]  (workstream)
-            [idle] (workstream)
-            since  (str (fs/path (core/nido-root) "coordinator" "conductors-since.edn"))]
+            [idle] (workstream)]
         (session/create! :brian old {:name "long-ago" :weight :heavy :autonomy nil})
-        (session/write! (assoc (session/read-session :brian old "long-ago") :created-at "2020-01-01T00:00:00Z"))
-        (io/write-edn! (doto since (-> fs/parent fs/create-dirs)) {:since "2025-01-01T00:00:00Z"})
         (launching [_]
-          (is (= [] (conductor/conductors! :brian)) "a session from before is no work since")
+          (is (= [] (conductor/conductors! :brian)) "a session nobody typed in is no work")
           (conductor/hand-back! :brian old "long-ago")
+          (is (= [] (conductor/conductors! :brian)) "nor is a turn nido gave there, handed back")
+          (typed! "long-ago")
           (is (= [{:ws-id old :act :started :session (str old "--conductor")}] (conductor/conductors! :brian))
-              "an instruction nido gave there, handed back, is")
+              "a person typing there is")
           (testing "a conductor running where no work is"
             (session/create! :brian idle {:name (str idle "--conductor") :weight :heavy :autonomy nil :conductor true})
             (session/write! (assoc (session/read-session :brian idle (str idle "--conductor")) :dispatching {:token "t" :at "now"}))
@@ -580,6 +593,23 @@
               (with-redefs [seats/retire-conductor! (fn [_ id] (swap! retired conj id) {:session (str id "--conductor")})]
                 (conductor/conductors! :brian))
               (is (= [idle] @retired)))))))))
+
+(deftest an-unreadable-prompt-log-decides-nothing
+  ;; A log nobody could read says nothing about who typed: reading it as "nobody" would retire
+  ;; every conductor, the failure the guard exists for disarming it.
+  (with-tmp
+    (fn []
+      (let [[idle] (workstream)]
+        (session/create! :brian idle {:name (str idle "--conductor") :weight :heavy :autonomy nil :conductor true})
+        (session/write! (assoc (session/read-session :brian idle (str idle "--conductor")) :dispatching {:token "t" :at "now"}))
+        (let [retired (atom [])]
+          (with-redefs [seats/retire-conductor!     (fn [_ id] (swap! retired conj id) {:session (str id "--conductor")})
+                        session-events/prompts-since (fn [_] (throw (ex-info "disk gone" {})))]
+            (is (= :unread (conductor/prompted)))
+            (is (= [] (conductor/conductors! :brian)))
+            (is (= [] (conductor/conductors! :brian :unread)))
+            (is (= {} (conductor/reseat! :brian idle :unread))))
+          (is (= [] @retired) "no conductor retired on an unread log"))))))
 
 (deftest a-handed-back-hold-carries-its-last-message
   (with-tmp
