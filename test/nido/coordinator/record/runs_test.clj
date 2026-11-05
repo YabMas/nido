@@ -498,7 +498,9 @@
                   :artifacts [] :error nil}
                  overrides)]
     (fs/create-dirs (cstate/run-dir (:id r)))
-    (runs/write-run! r)))
+    (runs/write-run! r)
+    ;; As minting does: find-for-session reads a workstream's registered runs only.
+    (runs/register! (:id r))))
 
 (deftest find-for-session-returns-newest-matching
   (with-tmp

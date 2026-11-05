@@ -157,14 +157,19 @@
        (remove settled-workstream?)
        (reduce (fn [m r] (update m (:trigger r) (fnil inc 0))) {})))
 
+(declare runs-of)
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] [:maybe :Run]]}
   find-for-session
   "The newest Run owning (`ws-id`, `session-name`) in `project`, or nil. Fallback
    for resume identity: :claude-session-id lives on the session's autonomy facet
-   (the authoritative source); run.edn is the execution-driver/substrate record."
+   (the authoritative source); run.edn is the execution-driver/substrate record.
+
+   Reads only the workstream's own runs (`runs-of`), never every run on disk: the inbox
+   asks this for each live session under each gate, and a full scan cost seconds per
+   render. A run is visible here only once `register!` has named it, which minting does."
   [project ws-id session-name]
-  (->> (list-run-ids)
-       (keep read-run)
+  (->> (runs-of project ws-id)
        ;; `project` may arrive as a string (the web/gate facet stamps a gate's
        ;; :project as a string for URLs); a Run's :project is always a keyword.
        ;; Compare by name so a string lookup still matches a keyword-:project run.
