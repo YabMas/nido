@@ -130,9 +130,16 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :keyword] :any]}
   clear-breaker!
-  "Re-enable one (project, trigger): clears both the auto-trip and any user
-   disable. `clear-` rather than `enable-` because from a surface this is
-   undoing a trip, not turning a feature on."
+  "Clear one (project, trigger)'s automatic trip — its failure count and the trip
+   it caused. A person's pause, and its note, are left as they are: clearing a
+   trip is a repair, and a pause is a decision only `resume-trigger!` undoes."
+  [project trigger]
+  (breakers/record-success! project trigger))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :keyword] :any]}
+  resume-trigger!
+  "Undo a person's pause on one (project, trigger), and any trip with it — the
+   explicit act a surface offers only for a trigger a person paused."
   [project trigger]
   (breakers/enable! project trigger))
 

@@ -440,10 +440,34 @@
 
 (deftest ops-overlay-routes-c-to-clear-breaker
   (with-redefs [nido.coordinator.control/tripped-triggers
-                (constantly [{:project :brian :trigger :t :info {}}])]
+                (constantly [{:project :brian :trigger :t :info {:tripped? true}}])]
     (let [state {:screen :board :project "p" :origin :all :modal :ops}
           [s' _] (#'tui/update-fn state (msg/key-press "c"))]
       (is (= :clear-breaker (:modal s'))))))
+
+(deftest ops-overlay-offers-each-breaker-only-the-lever-that-acts-on-it
+  (let [paused  {:project :brian :trigger :smoke :info {:disabled-by-user? true :note "RAM"}}
+        tripped {:project :brian :trigger :t :info {:tripped? true}}
+        state   {:screen :board :project "p" :origin :all :modal :ops}
+        titles  (fn [s] (map :title (get-in s [:modal-target :picker :items])))]
+    (with-redefs [nido.coordinator.control/tripped-triggers (constantly [paused tripped])]
+      (let [[s-c _] (#'tui/update-fn state (msg/key-press "c"))
+            [s-r _] (#'tui/update-fn state (msg/key-press "r"))]
+        (is (= :clear-breaker (:modal s-c)))
+        (is (= 1 (count (get-in s-c [:modal-target :picker :items]))) "clear lists the trip alone")
+        (is (= :resume-trigger (:modal s-r)))
+        (is (= 1 (count (get-in s-r [:modal-target :picker :items]))) "resume lists the pause alone")))
+    (with-redefs [nido.coordinator.control/tripped-triggers (constantly [tripped])]
+      (is (nil? (:modal (first (#'tui/update-fn state (msg/key-press "r")))))
+          "no pause, no resume picker"))
+    (let [calls (atom [])]
+      (with-redefs [nido.coordinator.control/tripped-triggers (constantly [paused])
+                    nido.coordinator.control/resume-trigger!  (fn [p t] (swap! calls conj [:resume p t]))
+                    nido.coordinator.control/clear-breaker!   (fn [p t] (swap! calls conj [:clear p t]))]
+        (let [[s-r _] (#'tui/update-fn state (msg/key-press "r"))
+              [s' _]  (#'tui/update-fn s-r (msg/key-press "enter"))]
+          (is (= [[:resume :brian :smoke]] @calls) "enter on a pause resumes it, and clears nothing")
+          (is (nil? (:modal s'))))))))
 
 (deftest ops-overlay-routes-f-to-fire-trigger
   (with-redefs [nido.platform.project/list-projects (constantly {"brian" {}})

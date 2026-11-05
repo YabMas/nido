@@ -1,7 +1,10 @@
 ;; test/nido/coordinator/control_test.clj
 (ns nido.coordinator.control-test
-  (:require [clojure.test :refer [deftest is]]
-            [nido.coordinator.control :as control]))
+  (:require [babashka.fs :as fs]
+            [clojure.test :refer [deftest is]]
+            [nido.coordinator.control :as control]
+            [nido.coordinator.daemon.breakers :as breakers]
+            [nido.platform.core :as core]))
 
 (deftest daemon-health-state-priority
   ;; halted beats everything; breaker beats running; running+alive = up; else down.
@@ -56,3 +59,22 @@
   ;; daemon that is up and merely paused.
   (is (= :halted (control/queue-blocker {:alive? true :halted? true
                                         :status {:status :halted} :trigger-tripped? true}))))
+
+(deftest clearing-a-breaker-leaves-a-persons-pause
+  ;; 2026-10-27: clearing from the ops panel lifted four pauses and left their notes behind, so
+  ;; breakers.edn read as paused while the triggers fired.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (breakers/disable-by-user! :brian :triage-new "stopped for now")
+        (dotimes [_ 3] (breakers/record-failure! :brian :triage-new 3))
+        (control/clear-breaker! :brian :triage-new)
+        (let [e (get-in (breakers/read-all) [:brian :triage-new])]
+          (is (false? (:tripped? e)) "the trip is cleared")
+          (is (zero? (:consecutive-failures e)))
+          (is (true? (:disabled-by-user? e)) "the pause stays")
+          (is (= "stopped for now" (:note e)) "and so does its note")
+          (is (breakers/tripped? :brian :triage-new) "so the daemon still skips it"))
+        (control/resume-trigger! :brian :triage-new)
+        (is (not (breakers/tripped? :brian :triage-new)) "only resuming lifts it"))
+      (finally (fs/delete-tree tmp)))))

@@ -647,9 +647,12 @@
         (cond
           (= ["ops" "halt"] segs)   (control/halt! {:source :user :note "from dashboard"})
           (= ["ops" "resume"] segs) (control/resume!)
-          ;; /ops/breakers/:project/:trigger/clear
+          ;; /ops/breakers/:project/:trigger/clear — an automatic trip only
           (and (= 5 (count segs)) (= "breakers" (second segs)) (= "clear" (nth segs 4)))
           (control/clear-breaker! (keyword (nth segs 2)) (keyword (nth segs 3)))
+          ;; /ops/breakers/:project/:trigger/resume — a person's pause
+          (and (= 5 (count segs)) (= "breakers" (second segs)) (= "resume" (nth segs 4)))
+          (control/resume-trigger! (keyword (nth segs 2)) (keyword (nth segs 3)))
           ;; /ops/fire/:project/:trigger — placeholder values ride the JSON signal body
           (and (= 4 (count segs)) (= "fire" (second segs)))
           (let [project (keyword (nth segs 2))

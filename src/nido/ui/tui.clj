@@ -855,8 +855,9 @@
 ;;
 ;; `h` toggles the global halt: open :halt-confirm when running, or
 ;; :halt-resume-confirm when already halted. `c` opens :clear-breaker — a
-;; picker over tripped triggers; ↵ clears the highlighted one. Empty
-;; tripped list is a no-op (no modal opened) so users don't see an empty
+;; picker over automatically tripped triggers; ↵ clears the highlighted one.
+;; `r` opens :resume-trigger, the same picker over paused triggers; ↵ resumes
+;; it. An empty list is a no-op (no modal opened) so users don't see an empty
 ;; picker. Modal arms are wired into `update-fn` next to the other modal
 ;; cases.
 ;; ---------------------------------------------------------------------------
@@ -880,32 +881,41 @@
         [(-> state (close-modal) (assoc :status "Coordinator resumed.")) nil])
     :else [(close-modal state) nil]))
 
-(defn- open-clear-breaker-picker [state]
-  (let [tripped (control/tripped-triggers)]
-    (if (empty? tripped)
+(def ^:private breaker-levers
+  "The two things a person can do to an open breaker, each offered only for the breakers it acts on:
+   clearing an automatic trip, and resuming a person's pause. Clearing never lifts a pause."
+  {:clear-breaker  {:holds? :tripped?          :act! #'control/clear-breaker!  :done "Breaker cleared: "}
+   :resume-trigger {:holds? :disabled-by-user? :act! #'control/resume-trigger! :done "Trigger resumed: "}})
+
+(defn- open-breaker-picker
+  "A picker over the open breakers `lever` acts on, each with its reason — for a pause, the note its
+   person left. None to act on opens nothing."
+  [state lever]
+  (let [holds? (get-in breaker-levers [lever :holds?])
+        open   (filterv #(holds? (:info %)) (control/tripped-triggers))]
+    (if (empty? open)
       [state nil]
       [(-> state
-           (assoc :modal :clear-breaker)
+           (assoc :modal lever)
            (assoc :modal-target
                   {:picker (picker-list
                             (mapv (fn [{:keys [project trigger info] :as t}]
                                     {:title (str (name project) "/" (name trigger)
                                                  "  —  " (runs-view/breaker-reason info))
                                      :data  t})
-                                  tripped))}))
+                                  open))}))
        nil])))
 
-(defn- update-clear-breaker [state msg]
+(defn- update-breaker-picker [state msg]
   (cond
     (msg/key-match? msg "escape") [(close-modal state) nil]
 
     (msg/key-match? msg "enter")
     (if-let [{:keys [project trigger]} (picker-selected state)]
-      (do (control/clear-breaker! project trigger)
-          [(-> state (close-modal)
-               (assoc :status (str "Breaker cleared: "
-                                   (name project) "/" (name trigger))))
-           nil])
+      (let [{:keys [act! done]} (breaker-levers (:modal state))]
+        (act! project trigger)
+        [(-> state (close-modal) (assoc :status (str done (name project) "/" (name trigger))))
+         nil])
       [state nil])
 
     :else (picker-route state msg)))
@@ -1172,7 +1182,8 @@
   (cond
     (msg/key-match? msg "escape") [(close-modal state) nil]
     (msg/key-match? msg "h") (open-halt-confirm (close-modal state))
-    (msg/key-match? msg "c") (open-clear-breaker-picker (close-modal state))
+    (msg/key-match? msg "c") (open-breaker-picker (close-modal state) :clear-breaker)
+    (msg/key-match? msg "r") (open-breaker-picker (close-modal state) :resume-trigger)
     (msg/key-match? msg "f") (open-fire-trigger (close-modal state))
     (msg/key-match? msg "p") (open-pickup-input (close-modal state))
     :else [state nil]))
@@ -1298,8 +1309,8 @@
     (= :halt-resume-confirm (:modal state))
     (update-halt-resume-confirm state msg)
 
-    (= :clear-breaker (:modal state))
-    (update-clear-breaker state msg)
+    (#{:clear-breaker :resume-trigger} (:modal state))
+    (update-breaker-picker state msg)
 
     (= :stage-picker (:modal state))
     (update-stage-picker state msg)
@@ -1415,6 +1426,7 @@
                   :halt-confirm         "nido — halt coordinator?"
                   :halt-resume-confirm  "nido — resume coordinator?"
                   :clear-breaker        "nido — clear breaker"
+                  :resume-trigger       "nido — resume paused trigger"
                   :stage-picker         "nido — promote to…"
                   :pickup-input         (str "nido — " (:project state) " · pickup")
                   :ops                  (str "nido — " (:project state) " · ops")
@@ -1435,9 +1447,10 @@
                   :halt-confirm         "[y] halt  [n/esc] cancel"
                   :halt-resume-confirm  "[y] resume  [n/esc] cancel"
                   :clear-breaker        "[↑↓] move  [↵] clear  [esc] cancel"
+                  :resume-trigger       "[↑↓] move  [↵] resume  [esc] cancel"
                   :stage-picker         "[↑↓] move  [↵] promote here  [esc] cancel"
                   :pickup-input         "[↵] pickup  [esc] cancel"
-                  :ops                  "[h]alt  [c]lear breaker  [f]ire  [p]ickup  [esc] back"
+                  :ops                  "[h]alt  [c]lear breaker  [r]esume trigger  [f]ire  [p]ickup  [esc] back"
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
                     :board      "[↵/o] open  [i]nspect  [n]ew  [P] promote to…  [d]one/bring-down  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s] ops  [esc] back  [q]uit"
@@ -1565,7 +1578,7 @@
                 (when (:note h) (str " (" (:note h) ")"))
                 ".")))
 
-    :clear-breaker
+    (:clear-breaker :resume-trigger)
     (item-list/list-view (:picker (:modal-target state)))
 
     :stage-picker

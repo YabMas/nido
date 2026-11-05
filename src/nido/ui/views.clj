@@ -572,8 +572,8 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   ops-panel-fragment
-  "The ambient ops chrome: daemon state, halt/resume, open breakers with
-   per-trigger clear, and a fire form per manual trigger (placeholder-less →
+  "The ambient ops chrome: daemon state, halt/resume, open breakers with why
+   each is open — clear for a trip, resume for a person's pause — and a fire form per manual trigger (placeholder-less →
    one click; placeholder-carrying → one input per {{event/*}} key, signals
    fire_<trigger>_<key>). No route of its own — lives behind the rail dot."
   [{:keys [daemon halt breakers triggers fleet]}]
@@ -595,12 +595,18 @@
      [:div.card
       [:strong "Breakers"]
       (if (seq breakers)
-        (for [{:keys [project trigger]} breakers]
+        ;; A pause is a person's decision and a trip is a fault, so each gets its own lever:
+        ;; clearing a trip never lifts a pause, and only "resume" does.
+        (for [{:keys [project trigger info]} breakers
+              :let [lever (fn [verb label]
+                            [:button.btn {"data-on:click"
+                                          (str "@post('/ops/breakers/" (name project) "/" (name trigger) "/" verb "')")}
+                             label])]]
           [:div.actions
            [:span.mono (str (name project) "/" (name trigger))]
-           [:button.btn {"data-on:click"
-                         (str "@post('/ops/breakers/" (name project) "/" (name trigger) "/clear')")}
-            "clear"]])
+           [:span.meta (str " — " (runs-view/breaker-reason info))]
+           (when (:tripped? info) (lever "clear" "clear"))
+           (when (:disabled-by-user? info) (lever "resume" "resume"))])
         [:span.meta "none tripped"])]
      [:div.card
       [:strong "Fire trigger"]

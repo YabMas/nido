@@ -407,13 +407,21 @@
               {:daemon   {:state :breaker :heartbeat-at "2026-07-21T10:00:00Z"}
                :halt     nil
                :breakers [{:project :brian :trigger :triage-new
-                           :info {:consecutive-failures 3}}]
+                           :info {:consecutive-failures 3 :tripped? true}}
+                          {:project :brian :trigger :smoke-new-reports
+                           :info {:disabled-by-user? true :note "automated triage stopped for now"}}]
                :triggers {:brian [{:name :one-off :payload "{}"}
                                   {:name :with-args :payload "{\"u\":\"{{event/url}}\"}"}
                                   {:name :two-part-name :payload "{\"u\":\"{{event/page-url}}\"}"}]}})]
     (is (str/includes? html "id=\"ops-panel\""))
     (is (str/includes? html "/ops/halt"))
     (is (str/includes? html "/ops/breakers/brian/triage-new/clear"))
+    ;; A pause is a person's decision: it shows why, and offers resume — never clear, which would
+    ;; read as a repair and lift it (2026-10-27: four pauses lifted that way, notes left behind).
+    (is (str/includes? html "paused by you — automated triage stopped for now"))
+    (is (str/includes? html "/ops/breakers/brian/smoke-new-reports/resume"))
+    (is (not (str/includes? html "/ops/breakers/brian/smoke-new-reports/clear")))
+    (is (not (str/includes? html "/ops/breakers/brian/triage-new/resume")))
     (is (str/includes? html "/ops/fire/brian/one-off"))
     (is (str/includes? html "/ops/fire/brian/with-args"))
     ;; hyphenated trigger/placeholder names must sanitize to JS-identifier-safe

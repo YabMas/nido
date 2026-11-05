@@ -3,6 +3,7 @@
   (:require [fukan.common.vocab.code.kind :refer [Kind]]
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
+            [canvas.coordinator.daemon.brakes :as brakes]
             [canvas.coordinator.record.triggers :as triggers :refer [Trigger]]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
@@ -60,9 +61,15 @@
     "Every open breaker — auto-tripped or user-disabled, which is the set the daemon skips."
     {:signature [:=> [:catn] [:vector :map]]})
   (Operation clear-breaker!
-    "Re-enable one trigger, clearing both the auto-trip and any user disable. `clear-` because
-     from a surface this undoes a trip rather than turning a feature on."
-    {:signature [:=> [:catn [:project ProjectName] [:trigger :keyword]] :any]})
+    "Clear one trigger's automatic trip. A person's pause, and its note, stay: clearing a trip is a
+     repair, and a pause is a decision only resume-trigger! undoes."
+    {:signature [:=> [:catn [:project ProjectName] [:trigger :keyword]] :any]
+     :delegates [brakes/record-success!]})
+  (Operation resume-trigger!
+    "Undo a person's pause on one trigger, and any trip with it — the explicit act a surface offers
+     only for a trigger a person paused."
+    {:signature [:=> [:catn [:project ProjectName] [:trigger :keyword]] :any]
+     :delegates [brakes/enable!]})
   (Operation triggers-for
     "Every trigger a project declares. Unfiltered — the TUI's picker and the dashboard's form
      disagree about which subset they want."
