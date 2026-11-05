@@ -228,6 +228,16 @@
    :doc "List known bench levers"
    :task (apply nido-bench/levers *command-line-args*)}
 
+  nido:bench:surfaces
+  {:requires ([tasks.nido-bench-surfaces :as nido-bench-surfaces])
+   :doc "Time the dashboard pages and TUI screens on a clone of the store, live and enlarged: [:project <name>] [:ws <id>] [:synthetic <n>] [:runs <n>] [:out <path>]"
+   :task (apply nido-bench-surfaces/surfaces *command-line-args*)}
+
+  nido:bench:surfaces:measure
+  {:requires ([tasks.nido-bench-surfaces :as nido-bench-surfaces])
+   :doc "The bench's child half: time the surfaces against whatever store NIDO_HOME names"
+   :task (apply nido-bench-surfaces/measure *command-line-args*)}
+
   nido:ui
   {:requires ([tasks.nido-ui :as nido-ui])
    :doc "Start the nido dashboard [:port 8800]"
