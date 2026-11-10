@@ -905,7 +905,8 @@
         :start-triage "Starting triage… spawning the agent to investigate."
         :drop    "✓ Dropped — not pursued."
         :done    "✓ Marked done."
-        :reply   "Resuming… re-hydrating the session if needed, then resuming the conversation."
+        :reply   (str "Resuming the session if one is listening… With nobody listening, your "
+                      "words are recorded on the ledger as the blocker's answer.")
         ;; Both say what is being WRITTEN, because that is the whole of what
         ;; happens: neither answer resumes anything, and the next round reads the
         ;; ledger. Naming the record is also what makes the two distinguishable
@@ -966,7 +967,10 @@
   ([project ws-id actions session] (action-bar project ws-id actions session gate-route))
   ([project ws-id actions session route]
    (let [buttons   (filter #(or (= :mutation (:kind %)) (:input %)) actions)
-         free-text (some #(and (= :resume (:kind %)) (not (:input %))) actions)
+         free-text (some #(when (and (= :resume (:kind %)) (not (:input %))) %) actions)
+         ;; "Answer" is the free text a gate offers when nobody is parked: it is recorded on the
+         ;; ledger as the blocker's answer and resumes nobody, so the copy must not promise a resume.
+         answer?   (= "Answer" (:label free-text))
          evidence  (some #(when (= :evidence (:kind %)) %) actions)]
      (list
       (when evidence
@@ -984,13 +988,18 @@
               (for [a buttons] (action-button project ws-id a route))))
       (when free-text
         [:div.reply
-         [:div.meta {:style "text-transform:uppercase;font-size:11px"} "Reply & resume"]
-         [:textarea {"data-bind" "reply" :placeholder "Tell the agent what to do next…"}]
+         [:div.meta {:style "text-transform:uppercase;font-size:11px"}
+          (if answer? "Answer the blocker" "Reply & resume")]
+         [:textarea {"data-bind" "reply"
+                     :placeholder (if answer?
+                                    "Your answer, in your words. It is recorded on the ledger for whoever picks this up next…"
+                                    "Tell the agent what to do next…")}]
          [:div {:style "margin-top:9px"}
           [:button.btn.btn-primary
            {"data-on:click" (str "@post('" (route project ws-id :reply) "')")}
-           "Send & resume ▸"]
-          (when session [:span.meta {:style "margin-left:10px"} "resumes " session])]])))))
+           (if answer? "Record answer ▸" "Send & resume ▸")]
+          (when (and session (not answer?))
+            [:span.meta {:style "margin-left:10px"} "resumes " session])]])))))
 
 (defn- conf-chip [{:keys [level]}]
   [:span {:class (str "chip c-conf-" (name level))} (name level)])

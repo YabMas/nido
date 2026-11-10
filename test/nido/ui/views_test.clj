@@ -1651,3 +1651,16 @@
       (is (str/includes? pane "Write"))
       (is (str/includes? pane "Bash"))
       (is (str/includes? pane "rm -rf build") "the pane lists each, with what was denied"))))
+
+(deftest an-answer-box-promises-no-resume
+  (let [answer (str (h/html (views/action-bar "brian" "ws-1"
+                                              [{:id :reply :label "Answer" :kind :resume :style :default}]
+                                              "run-x")))
+        reply  (str (h/html (views/action-bar "brian" "ws-1"
+                                              [{:id :reply :label "Reply" :kind :resume :style :default}]
+                                              "run-x")))]
+    (is (str/includes? answer "Record answer"))
+    (is (not (str/includes? answer "resumes run-x"))
+        "nobody hears an Answer, so it names no session it would resume")
+    (is (str/includes? reply "Send &amp; resume"))
+    (is (str/includes? reply "resumes run-x"))))

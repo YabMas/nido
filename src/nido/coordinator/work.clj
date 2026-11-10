@@ -471,9 +471,13 @@
 
                           (not parked?) []
 
+                          ;; Done is left out while a blocker is owed an answer, for the reason
+                          ;; it is left out beside the branches above: settling the workstream is
+                          ;; no answer to the question it is halted on.
                           :else
-                          [{:id :reply :label "Reply" :kind :resume :style :default}
-                           {:id :done  :label "Done"  :kind :mutation :style :primary}])
+                          (cond-> [{:id :reply :label "Reply" :kind :resume :style :default}]
+                            (not answering?)
+                            (conj {:id :done :label "Done" :kind :mutation :style :primary})))
            ;; Blocked in the merge lane: any named branches first (a drive-home
            ;; halt is where they most often appear), then Reply to resume the agent
            ;; with a note and Drop to take it off the queue (back to :in-progress).

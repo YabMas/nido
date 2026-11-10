@@ -944,6 +944,12 @@
           (is (= [1 "Superseded by the redesign."] [(:blocker-seq answer) (:summary answer)])
               "the person's words, recorded against the blocker they answer"))))))
 
+(deftest a-blocker-owed-an-answer-offers-no-done
+  (is (= [:reply] (mapv :id (work/gate-actions :in-progress true nil {:awaiting :answer-blocker})))
+      "marking the workstream done is no answer to the blocker it is halted on")
+  (is (= [:reply :done] (mapv :id (work/gate-actions :in-progress true)))
+      "a parked gate that owes no blocker still offers Done"))
+
 (deftest an-unparked-blocker-without-branches-offers-an-answer
   (is (= [{:id :reply :label "Answer" :kind :resume :style :default}]
          (work/gate-actions :in-progress false nil {:awaiting :answer-blocker})))
