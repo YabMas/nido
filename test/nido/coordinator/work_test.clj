@@ -889,6 +889,67 @@
                  (work/resolve-gate! :brian (:id w) :option-a 2))
               "the same letter on the CURRENT report still answers"))))))
 
+;; ── A blocker buried under later records ───────────────────────────────────
+;; A blocker holds the workstream until an answer names it. When a review round, a verdict
+;; or a close-then-reopen lands on top of it, the latest report is not the blocker any more.
+;; A gate read only from that latest report then said "needs you" and offered nothing.
+
+(defn- bury-a-blocker!
+  "A workstream whose blocker (entry 1) sits under a later design verdict (entry 2), with nobody parked."
+  []
+  (let [w (workstream/create! :brian {:external-refs []})]
+    (workstream/append-entry! :brian (:id w) {:kind :blocker}
+      (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+    (workstream/append-entry! :brian (:id w) {:kind :design-verdict}
+      (pr-str {:format :design-verdict :verdict :sound :round 1 :reason "Nothing moved."}))
+    w))
+
+(deftest a-buried-blocker-is-still-the-question-the-gate-asks
+  (with-tmp
+    (fn [_]
+      (let [w (bury-a-blocker!)
+            g (work/gate :brian (:id w))]
+        (is (= [:blocker 1] [(:format (:report g)) (:seq (:report g))])
+            "the gate shows the blocker the workstream is halted on, not the verdict above it")
+        (is (= [:option-a :option-b :reply] (map :id (:actions g)))
+            "its branches, plus a free-text answer, though nobody is parked")
+        (is (= [1 1] (keep :seq (:actions g)))
+            "each branch carries the blocker's position, not the latest entry's")
+        (is (= "Answer" (:label (last (:actions g))))
+            "no agent hears it now, so the button says Answer rather than Reply")
+        (is (= 1 (:seq (:action-report (work/workstream :brian (:id w)))))
+            "the pane's action bar answers the same blocker the inbox does")))))
+
+(deftest a-buried-blocker-is-answered-by-its-letter-once
+  (with-tmp
+    (fn [_]
+      (let [w (bury-a-blocker!)]
+        (is (= {:decision :option-stale} (work/resolve-gate! :brian (:id w) :option-a 2))
+            "a letter against the verdict answers nothing: the verdict asked no question")
+        (is (= {:decision :answered-unresumed} (work/resolve-gate! :brian (:id w) :option-b 1)))
+        (let [answer (workstream/latest-entry :brian (:id w) :blocker-answered)]
+          (is (= [1 "B"] [(:blocker-seq answer) (:letter answer)])))
+        (is (= {:decision :option-stale} (work/resolve-gate! :brian (:id w) :option-a 1))
+            "once answered it is owed no longer, so a second click is refused")
+        (is (nil? (work/gate :brian (:id w)))
+            "and nothing is owed a person any more")))))
+
+(deftest a-buried-blocker-takes-a-free-text-answer-with-nobody-parked
+  (with-tmp
+    (fn [_]
+      (let [w (bury-a-blocker!)]
+        (is (= {:decision :answered-unresumed}
+               (work/resolve-gate! :brian (:id w) :reply "Superseded by the redesign.")))
+        (let [answer (workstream/latest-entry :brian (:id w) :blocker-answered)]
+          (is (= [1 "Superseded by the redesign."] [(:blocker-seq answer) (:summary answer)])
+              "the person's words, recorded against the blocker they answer"))))))
+
+(deftest an-unparked-blocker-without-branches-offers-an-answer
+  (is (= [{:id :reply :label "Answer" :kind :resume :style :default}]
+         (work/gate-actions :in-progress false nil {:awaiting :answer-blocker})))
+  (is (= [] (work/gate-actions :in-progress false nil {}))
+      "with nothing owed and nobody parked there is still nothing to offer"))
+
 
 ;; ── The answerable triage report: A/B/… rather than a bulleted list ────────
 ;; The report already enumerated the branches and already priced them. Until now
@@ -3404,10 +3465,10 @@
       "and when there is one, sending it back is still an answer"))
 
 (deftest only-the-approval-stage-offers-the-approval
-  (is (empty? (work/gate-actions :in-progress false nil
-                                 {:report-format :design-decision :seq 7
-                                  :awaiting :answer-blocker :grantable? true}))
-      "a blocker is a human stage too, and the question it asks is not this one")
+  (is (= [:reply] (mapv :id (work/gate-actions :in-progress false nil
+                                               {:report-format :design-decision :seq 7
+                                                :awaiting :answer-blocker :grantable? true})))
+      "a blocker is a human stage too: it is owed an answer, not the approval")
   (doseq [fmt [:baseline-review :design-verdict]]
     (is (= [{:id :approve :label "Approve" :kind :mutation :style :primary :seq 7}]
            (work/gate-actions :in-progress false nil

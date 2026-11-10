@@ -82,6 +82,12 @@
      or nil — nil once it is closed, and while its current generation holds an unanswered
      blocker. `of` places a workstream this answers for where a close is."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:whole Workstream]] [:maybe :map]]})
+  (Operation owed-blocker
+    "The :seq of the blocker `:blocked` places a workstream on — its current generation's newest
+     blocker no answer names — or nil. Public because the gate must answer the blocker the
+     position halts on, not whatever record was appended on top of it."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :int]]
+     :delegates [workstream/read-ws]})
   (Operation of "Where a workstream stands and what should happen to it next."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
      :delegates [workstream/read-ws intake-kind next-action baseline-verified? settled-in-notion]})

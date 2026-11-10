@@ -373,6 +373,11 @@
          ;; does: retracting a design or granting one against a stale page is not
          ;; a decision about what is there now.
          acknowledging? (= :acknowledge-invalidation awaiting)
+         ;; A person owes the blocker an answer, whether or not anyone is parked to hear it.
+         ;; With nobody parked, :reply records the words as the blocker's answer (`answer-owed!`).
+         ;; So the button is "Answer": no agent hears it now, and "Reply" would say one does.
+         answering?     (= :answer-blocker awaiting)
+         answer-action  {:id :reply :label "Answer" :kind :resume :style :default}
          actions
          (cond
            acknowledging?
@@ -456,7 +461,13 @@
                           ;; and beside A/B it reads as one.
                           (seq answers)
                           (cond-> answers
-                            parked? (conj {:id :reply :label "Reply" :kind :resume :style :default}))
+                            parked?          (conj {:id :reply :label "Reply" :kind :resume :style :default})
+                            (and (not parked?) answering?) (conj answer-action))
+
+                          ;; Halted on a blocker with nobody parked. A free-text answer is
+                          ;; still owed, and the :reply resolver records it against the
+                          ;; blocker. With neither, nothing here can be answered.
+                          (and (not parked?) answering?) [answer-action]
 
                           (not parked?) []
 
@@ -1145,6 +1156,23 @@
       (hydrate (entry->report base-dir newest))
       (intake-fallback project ws-id))))
 
+(defn- answered-report
+  "The report a gate's actions answer: `report` (the latest), unless `position` halts on a
+   blocker that some later record has buried. In that case it is the blocker's own report.
+
+   A blocker holds the workstream until an answer names it, whatever lands on top: a review
+   round, a verdict, or a close that a reopen undoes. A gate built from the latest report then
+   showed a design verdict with no options. Nobody was parked, so the gate offered nothing for
+   the one question the workstream was waiting on. The blocker's report carries its branches
+   and its :seq, so the buttons answer the question that is actually owed."
+  [project ws-id report position]
+  (let [owed (when (= :answer-blocker (awaiting-human position))
+               (pipeline/owed-blocker project ws-id))]
+    (if (and owed (not= owed (:seq report)))
+      (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
+        (or (report-at base-dir entries owed) report))
+      report)))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
   environment
   "The workstream's single current environment: its latest live HEAVY (impl)
@@ -1400,7 +1428,7 @@
         ;; including the Done the option branch deliberately withholds — for a
         ;; question that named its answers. nil once an OLDER entry is open:
         ;; :on-latest? is false there and no actions render at all.
-        :action-report (when latest? latest-r)
+        :action-report (when latest? (answered-report project ws-id latest-r position))
         :environment  (environment project ws-id)
         ;; Whether :reply reaches anyone — a conductor's open escalation counts with a parked agent.
         :replyable?   (replyable? project ws-id)
@@ -1479,7 +1507,8 @@
         parked? (replyable? project (:ws-id row))
         ;; Read once: the action set is derived from what the ledger holds last,
         ;; so the buttons and the report a reader is looking at cannot disagree.
-        report  (latest-report project (:ws-id row))]
+        report  (answered-report project (:ws-id row) (latest-report project (:ws-id row))
+                                 (:position row))]
     {:ws-id        (:ws-id row)
      :project      (name project)
      :origin       (:origin row)
@@ -2223,13 +2252,22 @@
    branches, :option-a would pick branch A of a question the human never read.
    A click whose position is not the latest entry, or which carries none, is
    refused. After answering, the answer IS the latest entry, so a double-click
-   refuses on the same check."
+   refuses on the same check.
+
+   The one other question a click may answer is the blocker the pipeline is halted on
+   (`pipeline/owed-blocker`) when later records have buried it. That is the blocker the gate
+   offers (`answered-report`), and it is owed until an answer names it. Answering it makes it
+   no longer owed, so a second click on it is refused just as above."
   [project ws-id action-id entry-seq]
-  (let [report (latest-report project ws-id)
+  (let [latest (latest-report project ws-id)
+        report (cond
+                 (nil? entry-seq)                   nil
+                 (= entry-seq (:seq latest))        latest
+                 (= entry-seq (pipeline/owed-blocker project ws-id))
+                 (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
+                   (report-at base-dir entries entry-seq)))
         i      (option-index action-id)]
-    (if-let [opt (and (some? entry-seq)
-                      (= entry-seq (:seq report))
-                      (get (vec (:options report)) i))]
+    (if-let [opt (get (vec (:options report)) i)]
       (let [parked (parked-session project ws-id)]
         (cws/append-entry!
          project ws-id {:kind :blocker-answered}
@@ -2246,6 +2284,21 @@
           ;; one — see ui.server/resolve-failure-msg.
           {:decision :answered-unresumed}))
       {:decision :option-stale})))
+
+(defn- answer-owed!
+  "Record `text`, the person's own words, as the answer to the blocker the pipeline is halted on
+   (`pipeline/owed-blocker`). Returns {:decision :answered-unresumed}, or nil when no blocker is
+   owed or the text is blank, so the caller falls through to its own refusal.
+
+   This is the free-text half of choose-option! for a gate nobody is parked on. It writes the same
+   entry `bb nido:workstream:blocker:answer` writes: the answer goes on the ledger, and whoever
+   picks the workstream up next reads it there."
+  [project ws-id text]
+  (when-let [n (and (not (str/blank? (str text))) (pipeline/owed-blocker project ws-id))]
+    (cws/append-entry! project ws-id {:kind :blocker-answered}
+                       (pr-str {:format :blocker-answered :blocker-seq n :summary (str text)
+                                :resumed nil}))
+    {:decision :answered-unresumed}))
 
 (defn- grant!
   "Append the :design-approved naming design `design-seq`, granted at ledger position `at-seq`.
@@ -2590,9 +2643,11 @@
        ;; A reply to a conductor's escalation is that blocker's answer, in the person's own words,
        ;; and reaches the conductor as a hand-back on the next pass; any other resumes the parked
        ;; agent.
-       :reply   (if (conductor/answer! project ws-id payload)
-                  {:decision :answered}
-                  (resume/resume! project ws-id (reply-input payload)))
+       :reply   (cond
+                  (conductor/answer! project ws-id payload) {:decision :answered}
+                  (parked-session project ws-id) (resume/resume! project ws-id (reply-input payload))
+                  :else (or (answer-owed! project ws-id payload)
+                            (resume/resume! project ws-id (reply-input payload))))
        :approve (approve! project ws-id payload)
        :redesign     (redesign! project ws-id payload)
        :hold-design  (hold-design! project ws-id payload)

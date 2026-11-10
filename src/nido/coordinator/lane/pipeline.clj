@@ -419,6 +419,19 @@
            last
            :seq))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :int]]}
+  owed-blocker
+  "The :seq of the blocker `:blocked` places the workstream on — the current generation's
+   newest blocker no :blocker-answered names — or nil.
+
+   PUBLIC because the gate has to answer the same blocker the position is halted on. Once
+   another record lands on top of the blocker, the gate's latest report is no longer that
+   blocker. A gate reading only the latest report then offers nothing for a question that
+   still holds the workstream."
+  [project ws-id]
+  (when-let [whole (ws/read-ws project ws-id)]
+    (unanswered-blocker project ws-id (update whole :entries generation/current-span))))
+
 (def ^:private notion-done
   "Notion statuses that are a person settling the ticket as far as nido is concerned. Review is
    among them: a ticket in human review has left nido's hands, and keeping it on the board until
