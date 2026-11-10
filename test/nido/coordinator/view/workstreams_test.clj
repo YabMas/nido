@@ -418,8 +418,22 @@
               {:ws-id "s2" :stage :shipping :needs-you false :last-activity "2026-06-04T00:00:00Z"}
               {:ws-id "r1" :stage :ready    :needs-you true  :last-activity "2026-06-01T00:00:00Z"}]
         g (wsv/grouped-by-stage rows)]
-    (is (= ["s1" "s2"] (map :ws-id (:shipping g))) "shipping rows collected; needs-you first")
+    (is (= ["s1" "s2"] (map :ws-id (:shipping g))) "shipping rows collected, newest first")
     (is (not (contains? g :ready)) "no :ready band — backlog is Notion's")))
+
+(deftest grouped-by-stage-orders-by-activity-not-needs-you
+  ;; An older row waiting on a person sorts below fresher work in every band that
+  ;; is not triage; swapping :needs-you between two rows never changes their order.
+  (doseq [stage [:incoming :awaiting-gate :in-progress :shipping]]
+    (let [rows    [{:ws-id "parked" :stage stage :needs-you true  :last-activity "2026-06-01T00:00:00Z"}
+                   {:ws-id "fresh"  :stage stage :needs-you false :last-activity "2026-06-02T00:00:00Z"}
+                   {:ws-id "blank"  :stage stage :needs-you true  :last-activity nil}]
+          swapped (mapv #(update % :needs-you not) rows)]
+      (is (= ["fresh" "parked" "blank"] (map :ws-id (get (wsv/grouped-by-stage rows) stage)))
+          (str stage ": newest activity first, nil last, needs-you ignored"))
+      (is (= (map :ws-id (get (wsv/grouped-by-stage rows) stage))
+             (map :ws-id (get (wsv/grouped-by-stage swapped) stage)))
+          (str stage ": needs-you has no effect on position")))))
 
 ;; ---------------------------------------------------------------------------
 ;; Notion-driven rows — stage/engagement derive from the Notion cache, not

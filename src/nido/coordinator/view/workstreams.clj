@@ -433,12 +433,6 @@
   [rows]
   (vec (sort-by :last-activity #(compare %2 %1) rows)))
 
-(defn- by-needs-then-newest
-  "needs-you rows first, newest-activity first within each band."
-  [rows]
-  (vec (concat (by-newest (filter :needs-you rows))
-               (by-newest (remove :needs-you rows)))))
-
 (defn- by-severity
   "Highest priority (severity) first; ties broken by longest-waiting (oldest
    activity at top). This mirrors the executor's pickup order — priority desc,
@@ -482,15 +476,18 @@
    backlog, which lives in Notion, not on the nido board.
 
    :dismissed needs no special-casing here — work/to-spine has already stamped
-   the stage, so a plain group-by collects the band for every origin. It is
-   ordered newest-first rather than needs-first because :needs-you is always
-   false there."
+   the stage, so a plain group-by collects the band for every origin.
+
+   Every band but :triage is newest-activity first and nothing else: a row
+   waiting on a person does not rise above fresher work. :needs-you is shown
+   on the row and is what the gate inbox lists, so sorting on it too would let
+   a long-parked row outrank work started minutes ago."
   [rows]
   (let [by (group-by :stage rows)]
-    {:incoming    (by-needs-then-newest (:incoming by []))
-     :awaiting-gate (by-needs-then-newest (:awaiting-gate by []))
-     :in-progress (by-needs-then-newest (:in-progress by []))
-     :shipping    (by-needs-then-newest (:shipping by []))
+    {:incoming    (by-newest (:incoming by []))
+     :awaiting-gate (by-newest (:awaiting-gate by []))
+     :in-progress (by-newest (:in-progress by []))
+     :shipping    (by-newest (:shipping by []))
      :triage      (triage-split (:triage by []))
      :dismissed   (by-newest (:dismissed by []))}))
 

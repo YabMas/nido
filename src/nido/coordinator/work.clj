@@ -1583,7 +1583,8 @@
 
 (defn ^{:malli/schema [:=> [:cat] [:vector :Gate]]}
   all-gates
-  "Gates across every registered project, needs-you/newest-first within each.
+  "Gates across every registered project, in list-projects order, each project's in
+   `gates` order — the order its workstream directories are listed in; nothing sorts them.
    Mirrors the dashboard's cross-project aggregation (see all-machine-rows).
    `->gate` canonicalizes each gate's :project to a string, so the raw
    list-projects key threads straight through. A project that can't be read
