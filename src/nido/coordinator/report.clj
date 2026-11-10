@@ -4043,11 +4043,14 @@
                     {:explain (m/explain schema report) :report report :kind kind}))))
 
 (def ^:private prose-enumerated-options
-  "What a choice looks like when it was written as prose. Deliberately narrow —
-   it matches the enumeration itself ('Option A', 'option 2'), not hedging words
-   like 'optional' or 'either' — because a false positive here refuses to record
-   a halt, and an unrecorded halt is worse than an unstructured one."
-  #"(?i)\boption\s+(a|b|1|2)\b")
+  "What a choice looks like when it was written as prose: 'Option A' / 'option 2',
+   '(a)' / '(2)', or a bare 'a)' / '2)' opening a branch. Deliberately narrow — it
+   matches the enumeration marker itself, not hedging words like 'optional' or
+   'either' — because a false positive here refuses to record a halt, and an
+   unrecorded halt is worse than an unstructured one. The bare form needs nothing
+   word-like before it and whitespace after it, and the parenthesised form nothing
+   word-like before it, so 'f(a)' or 'a)' closing a clause is not read as a marker."
+  #"(?i)\boption\s+(a|b|1|2)\b|(?<!\w)\((a|b|1|2)\)|(?<![\w(])(a|b|1|2)\)(?=\s)")
 
 (defn- prose-option-markers
   "The DISTINCT enumeration markers `text` names, case-folded so 'Option A' and
@@ -4056,7 +4059,7 @@
    branches — so only two or more are evidence that prose is standing in for
    :options."
   [text]
-  (into #{} (map (comp str/lower-case second))
+  (into #{} (map (fn [[_ & groups]] (str/lower-case (some identity groups))))
         (re-seq prose-enumerated-options (str text))))
 
 (defn- enforce-blocker-options

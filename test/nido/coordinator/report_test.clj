@@ -1785,6 +1785,24 @@
                         :needs "Obtain the Stripe test key for Option A."}))
       "ONE distinct marker names a branch; it takes two to enumerate a choice —
        this halt asks for a key, and refusing it would lose the halt entirely")
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :blocker {:format :blocker :summary "Students run AI dialogues in brian-mobile."
+                          :needs "Decide the student surface: (a) web only, through the Preview tab, or (b) brian-mobile too."}))
+      "a parenthesised enumeration is the same choice as 'Option A … Option B'")
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :blocker {:format :blocker :summary "Two ways out."
+                          :needs "Pick one: 1) keep the flag, 2) drop it."}))
+      "so is a bare 'n)' opening each branch")
+  (is (some? (report/validate-event
+              :blocker {:format :blocker :summary "The request handler (a) is slow."
+                        :needs "Profile the handler (a) before changing it."}))
+      "one distinct marker, however often repeated, is not an enumeration")
+  (is (some? (report/validate-event
+              :blocker {:format :blocker :summary "x"
+                        :needs "Is the formula f(a) or f(b)?"}))
+      "a marker glued to a word is a call, not a branch")
   (let [prose {:format :blocker
                :summary "The modal offers a branch nothing implements."
                :needs   "Option A: drop Keep Old. Option B: implement archive-and-clone."}]
