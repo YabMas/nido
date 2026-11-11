@@ -42,6 +42,18 @@
     (workstream/close! :p id :done)
     id))
 
+(defn- analysis-one!
+  "A finished review-loop analysis workstream: open, its analysis filed, with one session."
+  [label]
+  (let [w (workstream/create! :p {:external-refs [{:adapter :review-run :id (str "run-" label) :title label}]})]
+    (workstream/append-entry! :p (:id w) {:kind :review-analysis}
+                              (pr-str {:format :review-analysis :verdict :degraded :run-id (str "run-" label)
+                                       :status "clean" :rounds 2 :summary "s" :observations []}))
+    (session/create! :p (:id w) {:name (str label "-s") :weight :light :autonomy nil})
+    (:id w)))
+
+(defn- held-entry [id] (get-in @@#'work/model [:projects "p" :entries id]))
+
 (defn- reads-of
   "The workstream ids `f` reads the records of, in order."
   [f]
@@ -288,3 +300,51 @@
           (work/hold! {:sweep? false})
           (is (seq (reads-of #(work/list-workstreams :p))) (str "a snapshot that " why " is rebuilt from the records"))
           (is (not (fs/exists? (snapshot-file))) (str "and one that " why " is deleted")))))))
+
+;; ── at rest: finished review-loop analyses join settled history ─────────────
+
+(deftest a-finished-analysis-is-at-rest-and-keeps-its-gate
+  (let [live (atom #{})]
+    (with-store live
+      (fn []
+        (let [x (analysis-one! "x")
+              a (open-one! "a")
+              read-gates (work/gates :p)]
+          (work/hold! {:sweep? false})
+          (work/grouped :p)
+          (is (= :analysed (get-in (held-entry x) [:row :position :at])))
+          (is (:at-rest? (held-entry x)) "an analysis, by the position status gives it, is at rest")
+          (is (not (:settled? (held-entry x))) "and is not thereby settled")
+          (is (not (:at-rest? (held-entry a))) "open work is not at rest")
+          (is (= read-gates (work/gates :p)) "gates are derived as with nothing held"))))))
+
+(deftest a-list-refresh-skips-a-finished-analysis
+  (let [live (atom #{})]
+    (with-store live
+      (fn []
+        (let [x (analysis-one! "x")]
+          (work/hold! {:sweep? false})
+          (work/grouped :p)
+          (tick)
+          (workstream/append-entry! :p x {:kind :note} (pr-str {:format :note :text "decision"}))
+          (is (not (contains? (set (reads-of #(work/refresh-list! :p))) x))
+              "its stamp moved, but only the sweep reaches it")
+          (reset! live #{"x-s"})
+          (is (contains? (set (reads-of #(work/refresh-list! :p))) x)
+              "one with a live session is reached by a list refresh"))))))
+
+(deftest the-sweep-shows-a-decision-written-into-a-finished-analysis
+  (let [live (atom #{})]
+    (with-store live
+      (fn []
+        (let [x (analysis-one! "x")]
+          (work/hold! {:sweep? false})
+          (work/grouped :p)
+          (let [stamp (:stamp (held-entry x))]
+            (tick)
+            (workstream/append-entry! :p x {:kind :note} (pr-str {:format :note :text "decision"}))
+            (work/refresh-list! :p)
+            (is (= stamp (:stamp (held-entry x))) "a list refresh leaves it")
+            (with-redefs [work/liveness-interval-ms 0]
+              (work/sweep!))
+            (is (not= stamp (:stamp (held-entry x))) "the sweep recomputes it")))))))

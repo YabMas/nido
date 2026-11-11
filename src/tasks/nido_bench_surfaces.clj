@@ -1,7 +1,7 @@
 (ns tasks.nido-bench-surfaces
   "Bb task entry points for the surface bench: how long the dashboard's pages and the TUI's
    screens take to render, against a clone of the live store and against that clone enlarged
-   with synthetic settled workstreams.
+   with synthetic settled workstreams and finished analyses.
 
    Never reads or writes the live store in place. `surfaces` APFS-clones ~/.nido (less the
    per-session databases and checkouts, which no surface reads) into a temporary directory and
@@ -67,6 +67,36 @@
         (spit (str (fs/path dir "entries" "0002-scratch.edn")) (pr-str {:format :scratch}))
         (spit (str (fs/path dir "entries.meta" "0001.edn")) (pr-str e1))
         (spit (str (fs/path dir "entries.meta" "0002.edn")) (pr-str e2))
+        (spit (str (fs/path dir "sessions" sn "session.edn"))
+              (pr-str {:name sn :workstream-id id :project (keyword project) :weight :heavy
+                       :substrate :archived :substrate-history [{:at at :substrate :archived}]
+                       :autonomy nil :created-at at}))))))
+
+(defn- synthetic-analyses!
+  "Add `n` finished review-loop analysis workstreams to `project` under `home`: open, a
+   :review-run ref, a ledger holding only its filed analysis — which status reads as :analysed —
+   and one archived session, the shape of the analyses the review loop files and nobody closes."
+  [home project n]
+  (let [root (fs/path home "projects" project "workstreams")
+        at   "2026-01-01T00:00:00Z"]
+    (dotimes [i n]
+      (let [id  (format "ws-29990102-%06x" i)
+            sn  (str "bench-analysis-" i)
+            run (str "bench-run-" i)
+            dir (fs/path root id)
+            e1  {:kind :review-analysis :seq 1 :at at :file "entries/0001-review-analysis.edn"}]
+        (fs/create-dirs (fs/path dir "entries"))
+        (fs/create-dirs (fs/path dir "entries.meta"))
+        (fs/create-dirs (fs/path dir "sessions" sn))
+        (spit (str (fs/path dir "workstream.edn"))
+              (pr-str {:id id :project (keyword project)
+                       :external-refs [{:adapter :review-run :id run :title run}]
+                       :stage :scratch :stage-history [{:at at :stage :scratch}]
+                       :created-at at :entries [e1]}))
+        (spit (str (fs/path dir "entries" "0001-review-analysis.edn"))
+              (pr-str {:format :review-analysis :verdict :degraded :run-id run :status "clean"
+                       :rounds 2 :summary "bench" :observations []}))
+        (spit (str (fs/path dir "entries.meta" "0001.edn")) (pr-str e1))
         (spit (str (fs/path dir "sessions" sn "session.edn"))
               (pr-str {:name sn :workstream-id id :project (keyword project) :weight :heavy
                        :substrate :archived :substrate-history [{:at at :substrate :archived}]
@@ -156,14 +186,16 @@
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   surfaces
   "Time the dashboard's gate inbox, Workstreams overview and a workstream's detail, and the
-   TUI's board, detail screen and navigation, on a clone of the live store and on that clone
-   with `:synthetic` settled workstreams added to `:project`. Prints one column per store and
-   the store sizes; `:out <path>` also writes the results as EDN.
+   TUI's board, detail screen and navigation, on a clone of the live store, on that clone
+   with `:synthetic` settled workstreams added to `:project`, and on that one with `:analyses`
+   finished review-loop analyses added too (0 skips that store). Prints one column per store
+   and the store sizes; `:out <path>` also writes the results as EDN.
 
    Options: :project (default \"nido\"), :ws the detail's workstream (default the newest
-   workstream of :project), :synthetic (default 2000), :runs per surface (default 5)."
+   workstream of :project), :synthetic (default 2000), :analyses (default 2000), :runs per
+   surface (default 5)."
   [& args]
-  (let [opts  (merge {:project "nido" :synthetic 2000 :runs 5} (parse-opts args))
+  (let [opts  (merge {:project "nido" :synthetic 2000 :analyses 2000 :runs 5} (parse-opts args))
         opts  (update opts :project name)
         root  (fs/create-temp-dir {:prefix "nido-bench-"})
         home  (fs/path root "home")]
@@ -177,7 +209,11 @@
             _       (synthetic-settled! home (:project opts) (:synthetic opts))
             n1      (workstream-count home (:project opts))
             big     (measure-store! home opts)
-            results [[(str "live " n0) live] [(str "enlarged " n1) big]]]
+            _       (synthetic-analyses! home (:project opts) (:analyses opts))
+            n2      (workstream-count home (:project opts))
+            more    (when (pos? (:analyses opts)) (measure-store! home opts))
+            results (cond-> [[(str "live " n0) live] [(str "enlarged " n1) big]]
+                      more (conj [(str "+analyses " n2) more]))]
         (println (str "project " (:project opts) ", detail " (:ws opts) ", median of " (:runs opts) " runs"))
         (print-table results)
         (when-let [out (:out opts)]

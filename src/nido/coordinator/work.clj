@@ -1900,6 +1900,10 @@
                                       (concat (keep #(get-in % [:claude :session-id]) sessions)
                                               (keep #(get-in % [:dispatching :bg-id]) sessions)))
                      :settled?  settled?
+                     ;; At rest: only the sweep reaches it — settled history, or a review-loop
+                     ;; analysis, read off the position status gives it, whatever its band or
+                     ;; gate. Decides nothing else; the gate and denials above read `settled?`.
+                     :at-rest?  (or settled? (= :analysed (get-in row [:position :at])))
                      :gate      (when gate? (->gate project row))
                      ;; The winding-down band's row, less its live sessions, which are the
                      ;; registry's and change without this row being recomputed.
@@ -1960,7 +1964,7 @@
 
 (defn- refresh-project
   "`p`, a project's held value (nil for none), refreshed as `mode` says:
-     :list   every unsettled row, every settled one the registry shows a live session for, and
+     :list   every row not :at-rest?, every one at rest the registry shows a live session for, and
              the rows whose own page's facts moved, plus a workstream new to the directory;
      :sweep  those, and every row whose liveness deadline falls before the next run.
    Both take the workstreams-directory stamp, listing it only when it moved, and the project's
@@ -1976,7 +1980,7 @@
         due?       (fn [e now] (< (deadline e) (+ now horizon)))
         reach?     (fn [e]
                      (or (nil? e)
-                         (not (:settled? e))
+                         (not (:at-rest? e))
                          (some live (:sessions e))
                          (not= (get facts (:page-id e)) (get old-facts (:page-id e)))
                          (and (= :sweep mode) (due? e (System/currentTimeMillis)))))
@@ -2034,6 +2038,7 @@
    [:driven [:vector :string]]
    [:listed [:set :string]]
    [:settled? :boolean]
+   [:at-rest? :boolean]
    [:gate [:maybe :map]]
    [:wind [:maybe :map]]
    [:observed-at :int]
@@ -2133,9 +2138,10 @@
   refresh-list!
   "The list refresh, for `project` or every registered project: what the gate inbox, the
    Workstreams overview without a selection and the TUI board make before they render. Reaches
-   every unsettled workstream, every settled one with a live session, the rows whose own page's
+   every workstream not at rest, every one at rest with a live session, the rows whose own page's
    Notion facts moved and any workstream new to the directory, and recomputes the ones whose
-   stamp moved or whose liveness came due. A no-op when this process holds nothing."
+   stamp moved or whose liveness came due. At rest is settled history and finished review-loop
+   analyses; only the sweep reaches those. A no-op when this process holds nothing."
   ;; A project that cannot be read keeps the rows it had, as `all-gates` and `all-grouped` skip
   ;; it: one unreadable project must not cost every other project's board.
   ([] (doseq [[pname _] (project/list-projects)]
