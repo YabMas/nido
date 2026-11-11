@@ -321,6 +321,27 @@
               (is (not= "the conductor escalated a hand-back" (:summary b)))
               (is (str/includes? (:summary b) "intake")))))))))
 
+(deftest an-escalation-that-is-the-question-carries-its-choice
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")
+            opts [{:label "Web only" :summary "Students see it in the browser." :recommended? true}
+                  {:label "brian-mobile too" :summary "Students see it in the app."
+                   :consequence "A second ticket in another repo."}]]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (with-redefs [pipeline/of (constantly {:at :intake :next {:stage :establish-intent :mode :authoring}})]
+          (let [hb (:id (conductor/hand-back! :brian id c))
+                r  (in-session c #(conductor/decide! :brian id
+                                                     {:hand-back hb
+                                                      :decision [:escalate {:needs "Where should students see it?"
+                                                                            :summary "The teacher side is built."
+                                                                            :options opts}]}))]
+            (is (= :accepted (first r)) "the guidance's fields are the contract's")
+            (let [b (last (ws/entries-of :brian id :blocker))]
+              (is (= "The teacher side is built." (:summary b)))
+              (is (= opts (:options b)) "the choice reaches the blocker as options"))))))))
+
 (deftest an-escalation-parks-and-a-reply-answers-it
   (with-tmp
     (fn []

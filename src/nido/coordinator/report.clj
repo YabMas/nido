@@ -3865,7 +3865,8 @@
    naming what the person is needed for. :position and :next are what the pipeline derived when it
    was decided — a reading kept for the record, never the workstream's current position. :by is
    :nido for the escalation nido writes when a conductor turn ends leaving its hand-back
-   unanswered. An escalation cites the :blocker it parked the workstream on, which is appended
+   unanswered. An escalation's :summary and :options are those of the blocker it parks on, when it
+   parks one. An escalation cites the :blocker it parked the workstream on, which is appended
    before it, so no accepted escalation is ever without its blocker."
   [:map {:closed true}
    [:format    [:= :conduct-decision]]
@@ -3875,7 +3876,14 @@
    [:by        [:enum :conductor :nido]]
    [:decision  [:or [:tuple [:= :instruct]
                      [:vector {:min 1} [:map {:closed true} [:seat SeatId] [:text [:string {:min 1}]]]]]
-                    [:tuple [:= :escalate] [:map {:closed true} [:needs [:string {:min 1}]]]]]]
+                    ;; :summary and :options are the blocker's own, for an escalation that
+                    ;; becomes the question (`ask/guidance :escalation`); one riding on a move
+                    ;; already owed is a note, and only its :needs is read.
+                    [:tuple [:= :escalate] [:map {:closed true}
+                                            [:needs   [:string {:min 1}]]
+                                            [:summary {:optional true} [:string {:min 1}]]
+                                            [:options {:optional true}
+                                             [:vector {:min 2 :max authoring-branch-cap} BlockerOption]]]]]]
    [:parked    {:optional true} [:map {:closed true} [:seq int?]]]])
 
 (def Generation

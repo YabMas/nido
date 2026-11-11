@@ -1711,3 +1711,14 @@
                                     {})]
     (is (str/includes? html "Permission denials while nido drives it"))
     (is (str/includes? html "/etc/hosts"))))
+
+(deftest the-folded-record-is-the-one-the-ask-read
+  (let [html (views/gate-pane {:ws-id "w" :project "brian" :label "t"
+                               :report {:format :design-verdict :verdict :sound :reason "LATER-READING"}
+                               :ask-record {:format :design-verdict :verdict :invalidated :reason "OWED-READING"}
+                               :ask {:kind :acknowledge-invalidation :question "Redesign it?"
+                                     :context [] :options [] :answer-does []}
+                               :actions []})]
+    (is (str/includes? html "OWED-READING"))
+    (is (not (str/includes? html "LATER-READING")))))
+

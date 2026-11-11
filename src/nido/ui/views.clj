@@ -1788,9 +1788,9 @@
    phase, so a poll can't flip it back to a fresh Apply button. `:error-msg` (a
    failed action) renders above the buttons, which stay clickable to retry. `:denials` —
    auto-mode denials in a session nido drives — render above the question. `:ask` leads the
-   pane, with the record it was read from folded under it."
-  [{:keys [ws-id project origin label tag links report ask actions session pending? error-msg doing
-           denials]
+   pane, with the record it was read from (`:ask-record`) folded under it."
+  [{:keys [ws-id project origin label tag links report ask ask-record actions session pending?
+           error-msg doing denials]
     :as gate}]
   (str
    (h/html
@@ -1810,12 +1810,14 @@
           (into [:ul] (map denial-line) denials)])
        ;; The question leads; the record it was read from is one click away, for a reader who
        ;; wants the whole of it rather than what the question needs.
+       ;; Folded: the record the Ask was read from, not the gate's latest report — a verdict
+       ;; appended after an unanswered one is not the evidence behind the question.
        (if ask
          (list (ask-card ask)
-               (when report
+               (when-let [r (or ask-record report)]
                  [:details.ask-record
-                  [:summary "The record: " (some-> report :format name) " · " (:at report)]
-                  (report-body report)]))
+                  [:summary "The record: " (some-> r :format name) " · " (:at r)]
+                  (report-body r)]))
          (list (when report [:div.meta (some-> report :format name) " · " (:at report)])
                (report-body report)))
        (if pending?

@@ -3801,7 +3801,12 @@
           (pr-str {:format :design-verdict :verdict :sound :round 3 :design-seq d
                    :reason "a later reading" :needs "A later question?"}))
         (is (= :design-invalidated (:at (pipeline/of :brian id))) "the invalidation is still owed")
-        (let [a (:ask (first (filter #(= id (:ws-id %)) (work/gates :brian))))]
+        (let [g (first (filter #(= id (:ws-id %)) (work/gates :brian)))
+              a (:ask g)]
+          (is (= [v :invalidated] [(:seq (:ask-record g)) (:verdict (:ask-record g))])
+              "the card folded under the Ask is the record the Ask was read from")
+          (is (= :sound (:verdict (:report g)))
+              "while the actions' guards still read the latest report")
           (is (= "redesign the totalling seam" (:question a))
               (str "the Ask reads the verdict at " v ", not the one appended after it"))
           (is (= ["a second path sums lines"] (:context a)))

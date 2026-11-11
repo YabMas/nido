@@ -1616,7 +1616,8 @@
    for every other kind, its newest — the live intent (the newest :intent — an amendment is
    appended, so the newest is the one standing), and the conductor's note when its newest decision
    is an escalation that parked nothing at the move `position` owes, made after the record that
-   move answers."
+   move answers. `:source` is the record the Ask reads — the owed one, else `report` — which the
+   gate carries as `:ask-record` for the card folded under the Ask; it is not one of ask's inputs."
   [project ws-id report position actions]
   (let [{:keys [base-dir entries]} (active-ledger project ws-id)
         owed     (owed-seq project ws-id report position entries)
@@ -1627,6 +1628,7 @@
                       (map (fn [[k es]] (if (and owed-e (= k (:kind owed-e))) owed-e (last es))))
                       (sort-by :seq))
         records  (mapv #(hydrate (entry->report base-dir %)) chosen)
+        source   (or (when owed-e (some #(when (= owed (:seq %)) %) records)) report)
         intent   (last (filter #(= :intent (:format %)) records))
         decision (->> entries (filter #(= :conduct-decision (:kind %))) last)
         d        (some->> decision (entry->report base-dir))
@@ -1638,6 +1640,7 @@
                    (some-> (get-in d [:decision 1 :needs]) str/trim not-empty
                            (->> (str "The conductor adds: "))))]
     (cond-> {:report  report
+             :source  source
              :entries (vec (remove #(= :intent (:format %)) records))
              :actions (vec actions)}
       intent (assoc :intent intent)
@@ -1672,7 +1675,8 @@
                                 ;; open escalation before a parked agent.
                                 :reply-to       (when (conductor/awaiting-answer? project (:ws-id row))
                                                   :conductor)
-                                :seq            (:seq report)})]
+                                :seq            (:seq report)})
+        inputs   (ask-inputs project (:ws-id row) report (:position row) actions)]
     {:ws-id        (:ws-id row)
      :project      (name project)
      :origin       (:origin row)
@@ -1691,8 +1695,10 @@
      :actions      actions
      ;; The question the card leads with, for the move the position owes. Built here, once, so
      ;; the inbox row, the pane and the TUI all ask the same thing.
-     :ask          (ask/ask (or awaiting :generic)
-                            (ask-inputs project (:ws-id row) report (:position row) actions))
+     :ask          (ask/ask (or awaiting :generic) (dissoc inputs :source))
+     ;; The record the Ask was read from, for the card folded under it. Not :report, which is
+     ;; what the actions' position guards are rendered from and can be a later record.
+     :ask-record   (:source inputs)
      :session      (:name psess)
      :denials      (driven-denials project (:ws-id row))
      :resume-error (get-in psess [:autonomy :error])

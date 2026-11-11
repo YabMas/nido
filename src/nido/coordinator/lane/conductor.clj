@@ -150,7 +150,9 @@
          "Each hand-back nido gives you — a seat's turn that ended, or an act of the person's — you "
          "answer with exactly one decision, recorded with `bb nido:seats:decide :hand-back <id>` and "
          "either `:seat <id> :text \"…\"` (or `:instruct '[{:seat … :text …} …]'` for several seats) "
-         "or `:escalate \"…\"`, naming what the person is needed for.\n\n"
+         "or `:escalate \"…\"`, naming what the person is needed for — with `:summary \"…\"` and "
+         "`:options '[{:label … :summary … :consequence … :recommended? true} …]'` when it is the "
+         "question.\n\n"
          "Seats: " (seats-line (rseats/seats project ws-id)) "\n"
          "Governing design: " (design-line design) "\n"
          "Position: " (name position) (when next (str ", next " (pr-str next))) "\n\n"
@@ -421,10 +423,12 @@
         ;; leave the copy owed. So an escalation at a person's move parks nothing: the decision is
         ;; its record, and the card shows its :needs as a note.
         halt        (when (and (= :escalate verb) (parks? next))
-                      {:stage :conduct :outcome :escalated
-                       :summary (str "Raised by the workstream's conductor while it was "
-                                     (str/replace (name (or position :unplaceable)) "-" " ") ".")
-                       :needs (:needs body)})]
+                      (cond-> {:stage :conduct :outcome :escalated
+                               :summary (or (:summary body)
+                                            (str "Raised by the workstream's conductor while it was "
+                                                 (str/replace (name (or position :unplaceable)) "-" " ") "."))
+                               :needs (:needs body)}
+                        (:options body) (assoc :options (:options body))))]
     (ws/appending!
      project ws-id
      (fn [{:keys [check! append!]}]
@@ -452,7 +456,7 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :ConductDecision] :DecideResult]}
   decide!
   "Record the conductor's answer to a hand-back — {:hand-back <message id> :decision [:instruct
-   [{:seat :text} …]] | [:escalate {:needs}]} — with the position the pipeline derives now, and
+   [{:seat :text} …]] | [:escalate {:needs (:summary) (:options)}]} — with the position the pipeline derives now, and
    carry it out. Refused, by name, from any session but the conductor's (:not-the-conductor), for
    an id that is no hand-back (:not-a-hand-back) or one already answered (:already-answered), and
    for an instruction to anything that is not a current seat (:not-a-seat). Answers [:accepted
