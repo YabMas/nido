@@ -322,10 +322,14 @@
         ;; The reviewer is handed the prompt on stdin, so its transcript opens on an empty user
         ;; turn: without this file, which variant a reviewer was given cannot be read from the run.
         (spit (str (fs/path dir (artifact-name label iter "-prompt.txt"))) prompt)
-        (let [{:keys [exit judged-by unavailable] ran-log :log-path}
+        (let [{:keys [exit judged-by unavailable timed-out] ran-log :log-path}
               (codex/run-reviewer! {:reviewer reviewer :cwd cwd :schema-path schema-path
                                     :out-path out-path :log-path log-path
                                     :prompt prompt})]
+          (when timed-out
+            (throw (ex-info (str (name (:reviewer judged-by)) " was killed on its wall-clock budget")
+                            {:reason :timed-out :exit exit :cwd cwd :label label
+                             :judged-by judged-by})))
           (when (or (not (zero? exit)) (not (fs/exists? out-path)))
             ;; Two reasons, because they ask opposite things of a reader. A
             ;; classified failure is a condition outside the branch that must be

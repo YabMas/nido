@@ -1377,7 +1377,7 @@
    of the non-clean statuses stopped short of converging, which is a result, not a
    failure (mirrors nido.review's own reading — see tasks.nido-review/exit-code)."
   {:converged :ok :clean :ok :dry-run :ok
-   :review-failed :bad :reviewer-unavailable :bad})
+   :review-failed :bad :reviewer-unavailable :bad :timed-out :bad})
 
 (defn- review-chip [tone text]
   [:span {:class (str "chip c-rv-" (name tone))} text])

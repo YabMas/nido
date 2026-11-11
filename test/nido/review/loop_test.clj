@@ -2,6 +2,7 @@
 (ns nido.review.loop-test
   (:require
    [clojure.test :refer [deftest is]]
+   [nido.coordinator.agent]
    [nido.review.loop :as rloop]))
 
 (defn- stage [name f] {:name name :run f})
@@ -855,3 +856,26 @@
                                 (assoc c :findings [] :control :stop))))]
         out  (run-loop {:run-id "r1" :pipeline pipe :judged-after :judge})]
     (is (= :converged (:status out)))))
+
+;; ── wall clock ─────────────────────────────────────────────────────────────
+
+(deftest a-run-past-its-wall-clock-starts-no-further-round
+  (let [rounds (atom 0)
+        [events emit] (capturing)
+        pipe [(stage :review (fn [c] (swap! rounds inc) (Thread/sleep 60)
+                               (assoc c :findings [{:title (str "x" @rounds)}])))]
+        out (run-loop {:run-id "r1" :pipeline pipe :emit emit :wall-clock-ms 50})]
+    (is (= :timed-out (:status out)))
+    (is (= 1 @rounds) "the round in flight finishes; none starts after the clock")
+    (is (= :timed-out (:status (last @events))))))
+
+(deftest every-launch-in-a-round-sees-the-run-s-deadline
+  (let [seen (atom nil)
+        pipe [(stage :review (fn [c] (reset! seen nido.coordinator.agent/*deadline-ms*)
+                               (assoc c :control :stop)))]]
+    (run-loop {:run-id "r1" :pipeline pipe :wall-clock-ms 60000})
+    (is (some? @seen))
+    (is (<= (- @seen (System/currentTimeMillis)) 60000))
+    (reset! seen :unset)
+    (run-loop {:run-id "r1" :pipeline pipe})
+    (is (nil? @seen) "no wall clock binds no deadline")))

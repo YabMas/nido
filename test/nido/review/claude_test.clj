@@ -75,7 +75,7 @@
                       {:type "result" :is_error false
                        :structured_output {:findings [] :overall_correctness "correct"}}]
                  0)]
-        (is (= {:exit 0} result))
+        (is (= {:exit 0 :timed-out? false} result))
         (is (= {:findings [] :overall_correctness "correct"}
                (json/parse-string (slurp out-path) true))))
       (finally (fs/delete-tree dir)))))
@@ -87,7 +87,7 @@
             (run dir [{:type "result" :is_error true
                        :result "Claude AI usage limit reached|1790000000"}]
                  1)]
-        (is (= {:exit 1} result))
+        (is (= {:exit 1 :timed-out? false} result))
         (is (not (fs/exists? out-path))
             "an absent answer is how both callers tell a failed review from an empty one")
         (is (= "Claude AI usage limit reached|1790000000"

@@ -16,6 +16,10 @@
     "A duration like `30m`, `45m` or `2h` in milliseconds. Throws rather than degrading: nil for
      an unparseable budget is how agents came to run with no wall clock at all."
     {:signature [:=> [:catn [:s :string]] :int]})
+  (Operation capped-budget-ms
+    "A budget cut to what the bound run deadline leaves, never below zero; the budget itself when
+     no deadline is bound. Zero means the deadline has passed and nothing may be launched."
+    {:signature [:=> [:catn [:budget-ms [:maybe :int]]] [:maybe :int]]})
   (Operation launch!
     "Run an agent headlessly to completion, killed at its budget. Blocks.
 
@@ -23,4 +27,4 @@
      run — so it is offered no background tasks and no self-scheduling, and claude's own idle
      ceiling on pending work is lifted: the budget is the one clock."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [parse-budget-ms]}))
+     :delegates [parse-budget-ms capped-budget-ms]}))

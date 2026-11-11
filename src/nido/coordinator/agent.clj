@@ -76,6 +76,23 @@
     (* (Long/parseLong n)
        (case unit "s" 1000 "m" 60000 "h" 3600000 "d" 86400000))))
 
+(def ^:dynamic *deadline-ms*
+  "Epoch milliseconds after which no launch made on this thread may still be running, or nil for
+   none. A review loop binds it to its own wall clock, so every agent it launches — judge, warden,
+   fixer, amender — is cut to what the run has left, and a run cannot outlast its cap by a round.
+   Conveyed into futures by `binding`, as dynamic vars are."
+  nil)
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :int]] [:maybe :int]]}
+  capped-budget-ms
+  "`budget-ms` cut to what `*deadline-ms*` leaves, never below zero; `budget-ms` itself when no
+   deadline is bound. Zero means the deadline has passed: a caller launches nothing."
+  [budget-ms]
+  (if-let [d *deadline-ms*]
+    (let [left (max 0 (- d (System/currentTimeMillis)))]
+      (if budget-ms (min budget-ms left) left))
+    budget-ms))
+
 (def ^:private headless-env
   "What every headless claude runs with, merged over the caller's :env so no
    caller can undo it. Nobody is left to come back to a headless run once its
@@ -245,7 +262,7 @@
         ;; it used to be — beside the timer it arms — the refusal would fire with
         ;; claude already running and no timer to stop it, which is the exact
         ;; state being refused, now with an orphan attached.
-        budget-ms (parse-budget-ms budget)
+        budget-ms (capped-budget-ms (parse-budget-ms budget))
         _         (runs/register! run-id)
         log-path  (or out-file (cstate/run-agent-log run-id))
         lock-path (str (fs/path (cstate/run-locks-dir run-id) (str (random-uuid) ".lock")))

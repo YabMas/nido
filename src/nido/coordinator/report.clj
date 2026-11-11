@@ -2056,6 +2056,10 @@
                                ;; `:unavailable` carries the sentence that said
                                ;; so.
                                :reviewer-unavailable
+                               ;; A reviewer killed on its wall-clock budget, or a
+                               ;; run that reached its own: nothing past that point
+                               ;; was judged.
+                               :timed-out
                                ;; jj refused a step the loop needed on the stack
                                ;; — landing a repair, reading what a fixer wrote,
                                ;; putting the working copy back — after the

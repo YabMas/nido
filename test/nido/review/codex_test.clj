@@ -2,6 +2,7 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
+   [nido.coordinator.agent]
    [nido.review.claude :as claude]
    [nido.review.codex :as codex]
    [babashka.fs :as fs]))
@@ -286,3 +287,42 @@
   (is (= "/r/x.log" (codex/log-of "/r/x.log" {:reviewer :codex})))
   (is (= "/r/x-claude.log" (codex/log-of "/r/x.log" {:reviewer :claude :instead-of :codex}))
       "a stand-in streams beside the log of the reviewer it replaced"))
+
+;; ── wall clock ─────────────────────────────────────────────────────────────
+
+(deftest a-judge-killed-on-its-budget-is-neither-retried-nor-stood-in-for
+  (let [dir   (str (fs/create-temp-dir))
+        calls (atom [])]
+    (with-redefs [codex/run-codex!   (fn [{:keys [budget-ms]}]
+                                       (swap! calls conj [:codex budget-ms])
+                                       {:exit 143 :timed-out? true})
+                  claude/run-claude! (fn [_] (swap! calls conj [:claude]) {:exit 0})]
+      (let [out (codex/run-reviewer! {:cwd dir :prompt "p" :budget "2m"
+                                      :schema-path (str dir "/s.json")
+                                      :out-path (str dir "/o.json")
+                                      :log-path (str dir "/l.log")})]
+        (is (:timed-out out))
+        (is (nil? (:unavailable out)))
+        (is (= [[:codex 120000]] @calls) "one launch, under the budget it was given")))))
+
+(deftest a-judge-runs-under-the-default-budget-cut-to-the-deadline
+  (let [dir  (str (fs/create-temp-dir))
+        seen (atom nil)
+        opts {:cwd dir :prompt "p" :schema-path (str dir "/s.json")
+              :out-path (str dir "/o.json") :log-path (str dir "/l.log")}]
+    (with-redefs [codex/run-codex! (fn [{:keys [budget-ms]}] (reset! seen budget-ms) {:exit 0})]
+      (codex/run-reviewer! opts)
+      (is (= (* 30 60000) @seen) "judge-budget when the caller names none")
+      (binding [nido.coordinator.agent/*deadline-ms* (+ (System/currentTimeMillis) 60000)]
+        (codex/run-reviewer! opts))
+      (is (<= 55000 @seen 60000) "cut to what the deadline leaves"))))
+
+(deftest a-judge-past-the-deadline-is-not-launched
+  (let [dir      (str (fs/create-temp-dir))
+        launched (atom false)]
+    (with-redefs [codex/run-codex! (fn [_] (reset! launched true) {:exit 0})]
+      (binding [nido.coordinator.agent/*deadline-ms* (- (System/currentTimeMillis) 1)]
+        (let [out (codex/run-reviewer! {:cwd dir :prompt "p" :schema-path (str dir "/s.json")
+                                        :out-path (str dir "/o.json") :log-path (str dir "/l.log")})]
+          (is (:timed-out out))
+          (is (not @launched)))))))

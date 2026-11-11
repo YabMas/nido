@@ -77,3 +77,21 @@
                                              {:out (if (= "kern.boottime" (last args))
                                                      "{ sec = 1792861351, usec = 0 }" "")})]
         (is (nil? (sut/host-boot)))))))
+
+;; ---------------------------------------------------------------------------
+;; wait-within! — a wall clock on a launched process
+
+(deftest a-process-past-its-budget-is-killed-and-says-so
+  (let [proc (.start (ProcessBuilder. ["sleep" "30"]))
+        t0   (System/currentTimeMillis)
+        out  (sut/wait-within! proc 200)]
+    (is (:timed-out? out))
+    (is (not (.isAlive proc)))
+    (is (< (- (System/currentTimeMillis) t0) 15000) "killed on SIGTERM, not waited out")))
+
+(deftest a-process-inside-its-budget-answers-its-own-exit
+  (is (= {:exit 3 :timed-out? false}
+         (sut/wait-within! (.start (ProcessBuilder. ["sh" "-c" "exit 3"])) 10000)))
+  (is (= {:exit 0 :timed-out? false}
+         (sut/wait-within! (.start (ProcessBuilder. ["true"])) nil))
+      "nil is no limit"))

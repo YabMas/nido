@@ -110,6 +110,21 @@
   (try (f)
        (finally (swap! live-children disj proc))))
 
+(defn ^{:malli/schema [:=> [:cat :any [:maybe :int]] :map]}
+  wait-within!
+  "Wait for `proc` (a java.lang.Process) to exit, destroying it once `budget-ms` has passed — a
+   SIGTERM, then a forcible kill ten seconds later if it is still alive. nil waits without limit.
+   Answers {:exit <int> :timed-out? <bool>}; :timed-out? is true only when this killed it."
+  [^Process proc budget-ms]
+  (if (nil? budget-ms)
+    {:exit (.waitFor proc) :timed-out? false}
+    (if (.waitFor proc (long budget-ms) java.util.concurrent.TimeUnit/MILLISECONDS)
+      {:exit (.exitValue proc) :timed-out? false}
+      (do (.destroy proc)
+          (when-not (.waitFor proc 10 java.util.concurrent.TimeUnit/SECONDS)
+            (.destroyForcibly proc))
+          {:exit (.waitFor proc) :timed-out? true}))))
+
 (defn ^{:malli/schema [:=> [:cat :int] :boolean]}
   process-alive? [pid]
   (zero? (:exit (shell {:continue true :out :string :err :string}

@@ -12,6 +12,9 @@
     "Stop every registered child still running, returning how many. Called from the shutdown
      hook AND directly by tests — a reaper that only runs at JVM exit is one nothing can check."
     {:signature [:=> [:catn] :int]})
+  (Operation wait-within!
+    "Wait for a process to exit, killing it once its budget has passed; says whether it did."
+    {:signature [:=> [:catn [:proc :any] [:budget-ms [:maybe :int]]] :map]})
   (Operation with-child-registered
     "Run `f` with `proc` registered for shutdown, deregistering however f ends."
     {:signature [:=> [:catn [:proc :any] [:f [:=> [:catn] :any]]] :any]})

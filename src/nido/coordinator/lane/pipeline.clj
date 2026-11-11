@@ -983,6 +983,9 @@
    ;; remedy are the whole content of the outcome. The one thing a person can do
    ;; about it is the only thing that changes anything.
    :reviewer-unavailable :escalate
+   ;; A judge killed on its budget, or a run that reached its wall clock. Not :retry: the same
+   ;; launch meets the same clock, and whether the work is worth more room is a person's call.
+   :timed-out            :escalate
    ;; The account's usage limit refused an agent the run needed — the warden, a
    ;; fixer, an amender. :reviewer-unavailable's reasoning, for a different
    ;; agent: a five-second backoff cannot outwait a window that resets in hours

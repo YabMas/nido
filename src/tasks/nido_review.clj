@@ -12,6 +12,7 @@
 
    See docs/superpowers/specs/2026-06-30-review-tui-frontend-design.md."
   (:require
+   [nido.coordinator.agent :as agent]
    [babashka.fs :as fs]
    [clojure.edn :as edn]
    [clojure.string :as str]
@@ -991,10 +992,20 @@
 
    It exists because agent/launch! now refuses an undeclared budget. Before that,
    omitting it here meant every warden, fixer and amender ran with no timer at
-   all — which the record loop's own docstring already assumed was impossible,
-   calling this per-launch wall clock \"the only thing between a hung claude and a
-   loop that never returns.\""
+   all. It bounds one launch; `default-run-wall-clock` bounds the run."
   "30m")
+
+(def default-run-wall-clock
+  "The wall clock a whole review loop runs under when its caller names none (`:wall-clock`).
+   Rounds stay uncapped in NUMBER — the run ends on its own merits — but not in time: a round
+   that would start past this does not, and every launch inside the run is cut to what is left
+   (`nido.review.loop/run-loop`'s :wall-clock-ms), so the run ends :timed-out within it."
+  "2h")
+
+(defn- wall-clock-ms
+  "`wall-clock` (or `default-run-wall-clock`) as milliseconds; refuses one that does not parse."
+  [wall-clock]
+  (agent/parse-budget-ms (or wall-clock default-run-wall-clock)))
 
 (def ^:private record-loop-kinds
   "The record loops name themselves with a string that reaches the terminal and
@@ -1550,6 +1561,7 @@
    :nothing-to-review "every diff was empty — nothing was read, so this is not a clean bill; check the base you passed"
    :review-failed "the reviewer broke — this is not a clean bill, and the branch is unjudged"
    :reviewer-unavailable "the reviewer could not be run — every target it did not read is unjudged, and a loop launched in the next five minutes is refused rather than sent to the same wall"
+   :timed-out "a reviewer was killed on its wall-clock budget, or the run reached its own — every target not read by then is unjudged; re-run with more room (:wall-clock) if the work is worth it"
    :warden-indeterminate "the warden returned no decision, so nothing was attributed and no repair was attempted — re-run"
    :workspace-drifted "the working copy moved after the reviewers read it, so no further repair could land on the tree they judged — the repairs that landed first are kept; re-run"
    :usage-limited "the account's usage limit refused an agent the run needed, so nothing past that point was decided — no relaunch was attempted, since it meets the same limit; re-run after the reset named above"
@@ -1936,7 +1948,7 @@
   "The diff loop proper, on a cwd `no-yardstick` has already cleared. Split from
    `loop-cmd*` so the refusal reads as one branch rather than as a guard buried
    inside a forty-line binding."
-  [{:keys [cwd base max-iters dry-run? budget fixer-model reviewer]}]
+  [{:keys [cwd base max-iters dry-run? budget fixer-model reviewer wall-clock]}]
   (let [base       (or base "main")
         run-id     (str "review-" (random-uuid))
         clock      #(Instant/now)
@@ -1947,6 +1959,7 @@
                     ;; escalates, or stops making progress. :max-iters only
                     ;; caps it when the caller explicitly asks for a cap.
                     :max-iters max-iters
+                    :wall-clock-ms (wall-clock-ms wall-clock)
                     ;; The per-launch wall clock, which is a different thing and
                     ;; DOES default — see default-launch-budget.
                     :budget    (or budget default-launch-budget)
@@ -2050,7 +2063,8 @@
                :refused)))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  loop-cmd* [{:keys [cwd base max-iters dry-run? budget fixer-model reviewer ignore-unavailable?]}]
+  loop-cmd* [{:keys [cwd base max-iters dry-run? budget fixer-model reviewer ignore-unavailable?
+                     wall-clock]}]
   (let [;; Through the home-aware resolution WHETHER OR NOT a cwd was named. A
         ;; session home is a place an agent legitimately stands, and passing one
         ;; explicitly used to skip worktree-from-cwd entirely — so the run
@@ -2070,7 +2084,7 @@
                            (recently-unavailable (reviewer-of cwd reviewer) (Instant/now))))]
       (do (binding [*out* *err*] (run! println (:lines refusal)))
           (:reason refusal))
-      (loop-cmd-run! {:cwd cwd :base base :max-iters max-iters
+      (loop-cmd-run! {:cwd cwd :base base :max-iters max-iters :wall-clock wall-clock
                       :dry-run? dry-run? :budget budget
                       :fixer-model fixer-model :reviewer reviewer}))))
 
@@ -2123,6 +2137,7 @@
    :ledger-lost "the workstream this run was judging stopped resolving from its worktree mid-run — the session was restarting under it; nothing is missing, so re-run once the session is back up"
    :codex-failed "the judge did not run — this is NOT a clean result"
    :reviewer-unavailable "the judge's vendor would not run it, retries included — the judge phase's detail quotes why; NOT a clean result"
+   :timed-out "the judge was killed on its wall-clock budget, or the run reached its own — nothing was recorded as verified; NOT a clean result"
    :no-output  "the judge ran and wrote nothing — NOT a clean result"
    :unusable-answer "the judge answered, but not in a form a record accepts"
    :round-crashed "the round threw before it could degrade"
@@ -2323,7 +2338,7 @@
    command always did."
   [{:keys [cwd code-cwd survey-cwd kind run-id clock title report-path report-atom
            plain emit pipeline finding-key changed? max-iters dry-run? budget baseline
-           remedies epilogue reviewer judged-tree ledger]}]
+           remedies epilogue reviewer judged-tree ledger wall-clock]}]
   (let [final  (try
                  (frontend/with-live-frame
                    {:frame-fn #(render/record-frame @report-atom % {:title title})
@@ -2345,6 +2360,7 @@
                                  :ledger ledger
                                  :run-id run-id
                                  :max-iters max-iters
+                                 :wall-clock-ms (wall-clock-ms wall-clock)
                                  :dry-run? (boolean dry-run?)
                                  :budget budget
                                  :reviewer reviewer
@@ -2429,9 +2445,10 @@
 
    No default cap, for the same reason the diff loop has none: the run ends when
    it converges, escalates, retreats, stalls or fails. `:max-iters` only caps it
-   when a caller asks. `:budget` bounds each amender launch — with the iteration
-   count uncapped, that per-launch wall clock is the only thing between a hung
-   claude and a loop that never returns.
+   when a caller asks. `:budget` bounds each amender launch, `codex/judge-budget`
+   each judge's, and `:wall-clock` (`default-run-wall-clock`) the whole run: with
+   the iteration count uncapped, those clocks are what stands between a hung
+   agent and a loop that never returns.
 
    Two working directories, and keeping them apart is the whole of `:code-cwd`.
    `:cwd` anchors the LEDGER — it resolves the session and so the workstream
@@ -2454,7 +2471,7 @@
   [{:keys [kind pipeline finding-key changed? remedies epilogue]}
    ;; `seq-n`, not `seq` — see baseline-cmd*. Read here only to publish it as
    ;; the claim's target; which entry it names is baseline-at's business.
-   {:keys [cwd code-cwd max-iters dry-run? budget baseline reviewer caller] seq-n :seq
+   {:keys [cwd code-cwd max-iters dry-run? budget baseline reviewer caller wall-clock] seq-n :seq
     :or   {budget default-launch-budget}}]
   (let [;; Through the home-aware union whether the caller named a directory or
         ;; not. A session home is a place an agent legitimately stands — it is
@@ -2479,7 +2496,8 @@
                                         :machinery (provenance/loaded-from cwd)
                                         :launch (cond-> {:caller (or caller "cli")
                                                          :max-iters max-iters
-                                                         :budget budget}
+                                                         :budget budget
+                                                         :wall-clock (or wall-clock default-run-wall-clock)}
                                                   seq-n     (assoc :seq seq-n)
                                                   code-cwd  (assoc :code-cwd (str code-cwd))
                                                   reviewer  (assoc :reviewer (name reviewer))
@@ -2542,7 +2560,7 @@
               :clock clock :title title :report-path report-path
               :report-atom report-atom :plain plain :emit emit :pipeline pipeline
               :finding-key finding-key :changed? changed? :max-iters max-iters :dry-run? dry-run?
-              :budget budget :reviewer reviewer :ledger ledger
+              :budget budget :reviewer reviewer :ledger ledger :wall-clock wall-clock
               :baseline baseline :remedies remedies :epilogue epilogue}))))))))
 
 (def ^:private baseline-remedies
@@ -2681,7 +2699,7 @@
 (def ^:private record-loop-options
   "The options a person may give a record loop on the command line — what `record-loop-cmd*`
    reads, less what only another command passes (:caller, :baseline)."
-  #{:cwd :code-cwd :max-iters :budget :dry-run? :reviewer})
+  #{:cwd :code-cwd :max-iters :budget :dry-run? :reviewer :wall-clock})
 
 (defn- refuse!
   "Print why the command line was refused and exit 2, before any round runs."
@@ -2772,7 +2790,7 @@
                                           :answer answer :run-id run :iter iter}))]
     (if err
       (do (println (str "amend:append: " err)) 1)
-      (let [loop-opts (-> (select-keys opts [:max-iters :budget :reviewer])
+      (let [loop-opts (-> (select-keys opts [:max-iters :budget :reviewer :wall-clock])
                           (assoc :cwd cwd :caller "amend:append"))]
         (println (str "amend:append: " answer " appended as entry " (:seq record)))
         (some-> (retreat/summary retreats) println)

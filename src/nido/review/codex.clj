@@ -12,6 +12,7 @@
    [babashka.process :as p]
    [clojure.java.io :as io]
    [clojure.string :as str]
+   [nido.coordinator.agent :as agent]
    [nido.review.claude :as claude]))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
@@ -32,19 +33,20 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   run-codex!
-  "Run `codex exec` with output-schema. Seam for tests. Returns {:exit <int>}.
-   Writes the final JSON response to :out-path.
+  "Run `codex exec` with output-schema. Seam for tests. Returns {:exit <int> :timed-out? <bool>}.
+   Writes the final JSON response to :out-path. `:budget-ms` bounds the run: past it codex is
+   killed, :timed-out? is true and :out-path is left unwritten.
 
    Spawned rather than shelled so the judge can be stopped when this process is.
    A killed loop used to leave its judge running — still billing, still writing
    an answer nothing would ever read — because nido disables the destroy-tree
    hook globally to cure a macOS shutdown hang."
-  [opts]
+  [{:keys [budget-ms] :as opts}]
   (let [[opts' & cmd] (codex-argv opts)
         proc (apply p/process opts' cmd)]
     (nprocess/with-child-registered
       (:proc proc)
-      #(let [res @proc] {:exit (:exit res)}))))
+      #(nprocess/wait-within! (:proc proc) budget-ms))))
 
 (def ^:private unavailability-signatures
   "What codex prints when the REVIEWER could not be run, as against when it ran
@@ -296,6 +298,41 @@
   (when (or (not (zero? exit)) (not (fs/exists? out-path)))
     (unavailability (log-tail log-path unavailability-tail-chars))))
 
+(defn- run-within!
+  "`run-reviewer!` over a launch budget already settled: the primary, its transient retries, and
+   its stand-in."
+  [reviewer opts out-path log-path judged-by]
+  (let [[ran u]  (loop [waits transient-retries-ms]
+                   (let [{:keys [exit timed-out?]} (run-one! reviewer opts)
+                         ran (cond-> {:exit exit :log-path log-path :judged-by judged-by}
+                               timed-out? (assoc :timed-out true))
+                         u   (when-not timed-out? (why-unavailable ran out-path))]
+                     (if (and (transient-signals (:signal u)) (seq waits))
+                       (do (sleep! (first waits)) (recur (rest waits)))
+                       [ran u])))
+        stand-in (get fallbacks reviewer)]
+    (if (contains? (:on stand-in) (:signal u))
+      (let [log' (stand-in-log log-path (:reviewer stand-in))
+            {:keys [exit timed-out?]} (run-one! (:reviewer stand-in) (assoc opts :log-path log'))
+            ran' {:exit      exit
+                  :log-path  log'
+                  :judged-by {:reviewer   (:reviewer stand-in)
+                              :executes?  (executes? (:reviewer stand-in))
+                              :instead-of reviewer
+                              :because    (:message u)}}]
+        (cond-> ran'
+          timed-out? (assoc :timed-out true)
+          (and (not timed-out?) (why-unavailable ran' out-path))
+          (assoc :unavailable (why-unavailable ran' out-path))))
+      (cond-> ran u (assoc :unavailable u)))))
+
+(def judge-budget
+  "The wall clock one reviewer launch runs under when its caller names none. A judge only reads
+   and reports; one still reading after this long is not about to answer, and before this cap
+   existed a judge ran unbounded — 66 minutes on one baseline round — while its loop's declared
+   budget bounded only the amenders."
+  "30m")
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   run-reviewer!
   "Run `:reviewer` (`default-reviewer` when absent) over the rest of `opts`, the
@@ -317,27 +354,18 @@
 
    A primary whose run left a `transient-signals` signal is run again after each
    of `transient-retries-ms`, over the same log, and only the last attempt is
-   answered for. Still refused, it returns :unavailable like any other signal."
-  [{:keys [reviewer out-path log-path] :as opts}]
-  (let [reviewer (or reviewer default-reviewer)
-        [ran u]  (loop [waits transient-retries-ms]
-                   (let [{:keys [exit]} (run-one! reviewer opts)
-                         ran {:exit exit :log-path log-path
-                              :judged-by {:reviewer reviewer :executes? (executes? reviewer)}}
-                         u   (why-unavailable ran out-path)]
-                     (if (and (transient-signals (:signal u)) (seq waits))
-                       (do (sleep! (first waits)) (recur (rest waits)))
-                       [ran u])))
-        stand-in (get fallbacks reviewer)]
-    (if (contains? (:on stand-in) (:signal u))
-      (let [log' (stand-in-log log-path (:reviewer stand-in))
-            {:keys [exit]} (run-one! (:reviewer stand-in) (assoc opts :log-path log'))
-            ran' {:exit      exit
-                  :log-path  log'
-                  :judged-by {:reviewer   (:reviewer stand-in)
-                              :executes?  (executes? (:reviewer stand-in))
-                              :instead-of reviewer
-                              :because    (:message u)}}]
-        (cond-> ran'
-          (why-unavailable ran' out-path) (assoc :unavailable (why-unavailable ran' out-path))))
-      (cond-> ran u (assoc :unavailable u)))))
+   answered for. Still refused, it returns :unavailable like any other signal.
+
+   Every launch runs under `:budget` (`judge-budget` when absent), cut to what the
+   caller's `agent/*deadline-ms*` leaves. A launch killed on it answers :timed-out
+   true and is neither retried nor handed to a stand-in: the clock, not the vendor,
+   stopped it. With nothing left on the deadline nothing is launched, and the
+   answer is :timed-out with :exit -1."
+  [{:keys [reviewer out-path log-path budget] :as opts}]
+  (let [reviewer  (or reviewer default-reviewer)
+        budget-ms (agent/capped-budget-ms (agent/parse-budget-ms (or budget judge-budget)))
+        opts      (assoc opts :budget-ms budget-ms)
+        judged-by {:reviewer reviewer :executes? (executes? reviewer)}]
+    (if (zero? budget-ms)
+      {:exit -1 :log-path log-path :judged-by judged-by :timed-out true}
+      (run-within! reviewer opts out-path log-path judged-by))))

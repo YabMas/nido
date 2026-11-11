@@ -4,6 +4,8 @@
    until terminal, emitting typed lifecycle events to an injected `emit` fn.
    Pure control logic; stages and emit are injectable for tests. The engine
    never prints and never builds the report — it only emits."
+  (:require
+   [nido.coordinator.agent :as agent])
   (:import
    [java.time Instant]))
 
@@ -28,7 +30,7 @@
    :owes-reading. Both the diff loop and the record loops pass one, so it is here.
    `:stalled` likewise only by one that passes an :open (`stalled?`)."
   #{:converged :unresolved :escalated :unfixable :no-progress :max-iters
-    :owed-second-reading :stalled :review-failed :reviewer-unavailable})
+    :owed-second-reading :stalled :review-failed :reviewer-unavailable :timed-out})
 
 (def ^:private terminal-reasons
   "The `:reason`s a stage throws with that END the run rather than crash it —
@@ -38,7 +40,8 @@
    whether the REVIEWER could be run at all, which is the difference between a
    diff someone should open and a quota or a credential they must clear first;
    `nido.review.codex/unavailability` derives the second and carries the
-   sentence that said so. A refusal that belongs to one program — the diff
+   sentence that said so. `:timed-out` is the third: the reviewer ran and was
+   killed on its wall clock, so nothing about the diff was learned. A refusal that belongs to one program — the diff
    review's `:stack-unmovable` — is that program's to name, and its caller
    passes it as `run-loop`'s :terminal-reasons.
 
@@ -47,7 +50,7 @@
    not the other would emit an error the report keeps and then crash the loop out
    from under it. Both read the one set `run-loop` builds from this and the
    caller's."
-  #{:review-failed :reviewer-unavailable})
+  #{:review-failed :reviewer-unavailable :timed-out})
 
 (def ^:private failure-keys
   "What a terminal throw's ex-data says about the command that refused, carried
@@ -356,8 +359,11 @@
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   run-loop
   "Drive the pipeline until terminal. config:
-   {:cwd :base :run-id :max-iters :pipeline :finding-key :emit :clock :budget
+   {:cwd :base :run-id :max-iters :wall-clock-ms :pipeline :finding-key :emit :clock :budget
     :dry-run?}.
+   :wall-clock-ms caps the RUN: every launch inside it is cut to what is left
+   (`agent/*deadline-ms*`), and a round that would start past it does not — the
+   run ends :timed-out. nil leaves the run uncapped.
    :pipeline and :finding-key are REQUIRED: the engine runs what its caller
    passes and names no program of its own — the diff loop's are
    `nido.review.stages/diff-pipeline` and `nido.review.stages/default-finding-key`.
@@ -445,10 +451,19 @@
                  (let [owing (into #{} (map finding-key) (owed ctx))]
                    (filterv #(contains? owing (finding-key %)) (:findings ctx))))
                :findings)
-        impl-session-id (str (random-uuid))]
+        impl-session-id (str (random-uuid))
+        deadline (when-let [ms (:wall-clock-ms config)] (+ (System/currentTimeMillis) ms))]
     (emit {:event :run-started :run-id run-id
            :cwd (:cwd config) :base (:base config) :at (str (clock))})
     (loop [iter 1, counted 1, rereading? false, history [], prev-findings nil, carry nil, opens []]
+      (if (and deadline (> iter 1) (>= (System/currentTimeMillis) deadline))
+        (let [final {:config config :iter iter :history history :carry carry
+                     :findings (or prev-findings []) :status :timed-out
+                     :error (str "the run reached its wall clock of " (:wall-clock-ms config)
+                                 "ms before round " iter)}
+              final (assoc final :owed (vec (owed final)))]
+          (emit {:event :run-finalized :status :timed-out :ctx final :at (str (clock))})
+          final)
       (let [ctx0 {:config (assoc config :impl-session-id impl-session-id)
                   :iter iter :history history :control :continue
                   ;; The one thing a round may hand to the next one. Everything
@@ -474,8 +489,9 @@
                   :iter iter :counted counted :max-iters max-iters}
             end? (fn [c prior judged?] (terminal cfg c prior judged?))
             ctx  (try
-                   (run-pipeline ctx0 pipeline emit clock judged-after end? owed ends-run?
-                                 repair-before-escalate?)
+                   (binding [agent/*deadline-ms* (or deadline agent/*deadline-ms*)]
+                     (run-pipeline ctx0 pipeline emit clock judged-after end? owed ends-run?
+                                   repair-before-escalate?))
                    (catch clojure.lang.ExceptionInfo e
                      (let [{:keys [reason] :as data} (ex-data e)]
                        (if (ends-run? reason)
@@ -523,4 +539,4 @@
                                   (= :next-round (:control ctx))
                                   (boolean (owes-reading ctx)))]
             (recur (inc iter) (if reread-next? counted (inc counted)) reread-next?
-                   (:history ctx) (held ctx) (:carry ctx) opens)))))))
+                   (:history ctx) (held ctx) (:carry ctx) opens))))))))

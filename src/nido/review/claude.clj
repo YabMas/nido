@@ -105,8 +105,9 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   run-claude!
-  "Run claude as a reviewer over `opts` — the keys `codex/run-codex!` takes, plus an optional
-   :model. Returns {:exit <int>}, and writes the structured answer to :out-path only when the run
+  "Run claude as a reviewer over `opts` — the keys `codex/run-codex!` takes, :budget-ms among
+   them, plus an optional :model. Returns {:exit <int> :timed-out? <bool>}, and writes the
+   structured answer to :out-path only when the run
    produced one. A run that did not leaves :out-path absent, which is how both callers already
    tell a failed review from an empty one.
 
@@ -119,10 +120,11 @@
   [{:keys [schema-path out-path log-path] :as opts}]
   (let [[opts' & cmd] (claude-argv (assoc opts :schema (slurp schema-path)))
         proc (apply p/process opts' cmd)
-        exit (nprocess/with-child-registered (:proc proc) #(:exit @proc))
-        {:keys [is_error structured_output result]} (result-event log-path)]
-    (if (and (zero? exit) (not is_error) (some? structured_output))
+        {:keys [exit timed-out?]} (nprocess/with-child-registered
+                                   (:proc proc) #(nprocess/wait-within! (:proc proc) (:budget-ms opts)))
+        {:keys [is_error structured_output result]} (when-not timed-out? (result-event log-path))]
+    (if (and (zero? exit) (not timed-out?) (not is_error) (some? structured_output))
       (spit out-path (json/generate-string structured_output))
       (when-not (str/blank? (str result))
         (spit log-path (str "\n" (str/trim (str result)) "\n") :append true)))
-    {:exit exit}))
+    {:exit exit :timed-out? (boolean timed-out?)}))
