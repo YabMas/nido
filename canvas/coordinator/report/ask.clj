@@ -12,7 +12,8 @@
 (Kind Ask
   "One question for a person, in the one shape every gate kind is asked in: the question, the
    context it presupposes, the answers on offer with what each costs, what each of the gate's
-   actions does, and the goal the question is judged against. Derived from records, never stored,
+   actions does, the goal the question is judged against, and what the question holds up until
+   it is answered. Derived from records, never stored,
    and constructed only by `ask`."
   [:map [:kind :keyword]
         [:question [:re "\\S"]]
@@ -23,6 +24,7 @@
                                  [:action :keyword]]]]
         [:answer-does [:vector [:map [:action :keyword] [:label :string] [:does [:re "\\S"]]]]]
         [:goal {:optional true} :map]
+        [:holding {:optional true} [:re "\\S"]]
         [:note {:optional true} :string]])
 
 (Module report-ask

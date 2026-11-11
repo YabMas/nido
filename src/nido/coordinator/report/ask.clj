@@ -43,7 +43,8 @@
   "One question for a person. `:question` leads the card; `:context` is what the question
    presupposes, in reading order; `:options` are its branches, each tied to an action; `:answer-does`
    has one entry per action the gate offers; `:goal` is the workstream's live intent, done-whens in
-   the intent's order; `:note` is a conductor's escalation riding on the owed move."
+   the intent's order; `:holding` is what in the workstream waits on the answer, in a person's terms —
+   absent only on a :generic Ask; `:note` is a conductor's escalation riding on the owed move."
   [:map {:closed true}
    [:kind        :keyword]
    [:question    [:and :string [:fn {:error/message "a question is never blank"} (complement str/blank?)]]]
@@ -53,6 +54,7 @@
    [:goal        {:optional true} [:map {:closed true}
                                    [:goal :string]
                                    [:done-when [:vector :string]]]]
+   [:holding     {:optional true} [:and :string [:fn {:error/message "a holding is never blank"} (complement str/blank?)]]]
    [:note        {:optional true} :string]])
 
 ;; ── what an action does ─────────────────────────────────────────────────────
@@ -65,14 +67,17 @@
 (defn- does
   "What giving action `a` does, in the person's terms. Read off the action's id, kind and `:answers`
    — the resolver the gate says it reaches where one id has several — never off the kind of
-   question: the same button does the same thing on every card."
+   question: the same button does the same thing on every card.
+
+   A lettered action is worded without its letter, so every option on one gate does the same thing
+   in the same words and the card can say it once beneath them, rather than once per option."
   [{:keys [id kind answers]}]
   (or
-   (when-let [l (lettered "option" id)]
-     (str "Records " l " as your answer. A session parked on the question resumes with it; "
+   (when (lettered "option" id)
+     (str "Choosing an answer records it. A session parked on the question resumes with it; "
           "otherwise it waits on the ledger for whoever takes the workstream up next."))
-   (when-let [l (lettered "direction" id)]
-     (str "Accepts the triage verdict with direction " l " as the fix to build."))
+   (when (lettered "direction" id)
+     "Choosing a direction accepts the triage verdict with it as the fix to build.")
    (case id
      :approve      "Approves the design; the workstream goes on to implement it."
      :redesign     "Sends the design back to be redesigned against the review's finding."
@@ -136,10 +141,12 @@
   "One entry per move a person owes. `:record` picks the record the move's question lives in, from
    the gate's report, the record of each format the work plane handed (`newest` of a format) and
    the gate's actions; `:question`, `:context` and `:options` read it (with the actions, for
-   options); `:guidance` names the addendum in resources/asking/ its authors are briefed with.
-   `:generic` answers for anything unregistered."
+   options); `:holding` reads it for what waits on the answer, and every kind but `:generic` has one;
+   `:guidance` names the addendum in resources/asking/ its authors are briefed with. `:generic`
+   answers for anything unregistered."
   {:answer-blocker
    {:guidance "answer-blocker"
+    :holding  (fn [_] "The work this blocker stopped waits on your answer.")
     ;; The gate's report IS the owed blocker: the work plane hands the buried one when later
     ;; records covered it, because which blocker is owed is the position's to say.
     :record   (fn [report _ _] report)
@@ -150,6 +157,7 @@
 
    :approve-design
    {:guidance "approve-design"
+    :holding  (fn [_] "Implementation waits on this approval; no code is written against the design until it is given.")
     :record   (fn [_ newest _] (newest :design-decision))
     :question (fn [{:keys [asks]}] asks)
     :context  (fn [{:keys [reason recommend]}]
@@ -158,6 +166,7 @@
 
    :acknowledge-invalidation
    {:guidance "acknowledge-invalidation"
+    :holding  (fn [_] "The work stops at the design until you choose: a redesign, or building it as it stands.")
     :record   (fn [_ newest _] (newest :design-verdict))
     :question (fn [{:keys [needs]}]
                 (or (not-empty needs)
@@ -165,7 +174,8 @@
     :context  (fn [{:keys [reason]}] (non-blank reason))}
 
    :assert-gate
-   {:record   (fn [_ _ actions] {:criterion (some :criterion actions)})
+   {:holding  (fn [_] "The next phase cannot start until you have observed this phase's exit on the running system.")
+    :record   (fn [_ _ actions] {:criterion (some :criterion actions)})
     :question (fn [{:keys [criterion]}]
                 (str "Have you observed this on the running system: " (or criterion "the phase's exit criterion") "?"))
     :context  (fn [{:keys [claim]}]
@@ -174,7 +184,11 @@
    :accept-triage
    ;; Owed over a Notion triage or a Slack proposal alike (`standing/verdict-kinds`): the record is
    ;; whichever of the two the work plane handed, the newer when it handed both.
-   {:record   (fn [_ newest _]
+   {:holding  (fn [{:keys [format]}]
+                (if (= :proposed-ticket format)
+                  "Nothing is filed until you accept the proposal."
+                  "The ticket stays untriaged, and no fix is built, until you accept the verdict."))
+    :record   (fn [_ newest _]
                 (last (sort-by #(or (:seq %) 0)
                                (keep newest [:triage-report :proposed-ticket]))))
     :question (fn [{:keys [format title directions]}]
@@ -198,7 +212,8 @@
                               effort (assoc :consequence (str "Effort: " (report/effort-label effort)))))))}
 
    :land
-   {:record   (fn [_ newest _] (newest :pr-opened))
+   {:holding  (fn [_] "The change is built and reviewed; it waits on you to land it.")
+    :record   (fn [_ newest _] (newest :pr-opened))
     :question (fn [{:keys [title]}] (str "Land “" (or title "this pull request") "”?"))
     :context  (fn [{:keys [url summary]}] (non-blank url summary))}
 
@@ -241,6 +256,7 @@
                         :options     (if-let [f (:options entry)] (f record actions) [])
                         :answer-does (answer-does actions)}
                  (goal-of intent)              (assoc :goal (goal-of intent))
+                 (:holding entry)              (assoc :holding ((:holding entry) record))
                  (not (str/blank? (str note))) (assoc :note note))]
     (when (m/validate Ask out) out)))
 

@@ -125,3 +125,35 @@
   (is (str/includes? (ask/guidance :escalation) "When you escalate"))
   (is (= (ask/guidance :land) (str/trim (ask/guidance :generic)))
       "a kind with no addendum is briefed with the generic guidance alone"))
+
+(deftest every-registered-kind-says-what-waits-on-it
+  (doseq [[kind record] {:answer-blocker blocker
+                         :approve-design {:format :design-decision :recommend :proceed :asks "Worth an L now?"}
+                         :acknowledge-invalidation {:format :design-verdict :verdict :invalidated :reason "r"}
+                         :assert-gate {:criterion "p95 under 200ms for a week"}
+                         :accept-triage {:format :triage-report :title "Login loops" :determination :bug
+                                         :summary "s" :directions []}
+                         :land {:format :pr-opened :title "Fix login loop"}}]
+    (testing (name kind)
+      (let [a (ask/ask kind {:report record :entries [record]
+                             :actions [{:id :reply :label "Reply" :kind :resume}
+                                       {:id :assert-gate :label "Assert gate" :kind :evidence
+                                        :criterion (:criterion record)}]})]
+        (is (= kind (:kind a)))
+        (is (not (str/blank? (:holding a))) "a registered kind says what waits on its answer"))))
+  (is (nil? (:holding (ask/ask :something-new {:report {} :actions []})))
+      "a generic Ask has no holding: the card names the position instead"))
+
+(deftest options-on-one-gate-do-the-same-thing-in-the-same-words
+  (let [a    (ask/ask :answer-blocker {:report blocker :actions option-actions})
+        opts (filter #(#{:option-a :option-b} (:action %)) (:answer-does a))]
+    (is (= 1 (count (distinct (map :does opts))))
+        "the letter is not in the sentence, so the card can say it once")
+    (is (not-any? #(re-find #"(Records|direction) [AB]\b" (:does %)) opts)))
+  (let [a (ask/ask :accept-triage
+                   {:report nil
+                    :entries [{:format :triage-report :title "t" :determination :bug :summary "s"
+                               :directions [{:label "x" :shape "y"} {:label "z" :shape "w"}]}]
+                    :actions [{:id :direction-a :label "A" :kind :mutation}
+                              {:id :direction-b :label "B" :kind :mutation}]})]
+    (is (= 1 (count (distinct (map :does (:answer-does a))))))))
