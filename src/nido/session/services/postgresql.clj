@@ -222,11 +222,11 @@
   "Block until the given port accepts TCP connections, or throw on timeout."
   ([pg-port] (wait-for-tcp! pg-port 15000))
   ([pg-port timeout-ms]
-   (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
+   (let [deadline (+ (proc/awake-ms) timeout-ms)]
      (loop []
        (cond
          (proc/tcp-open? pg-port) true
-         (> (System/currentTimeMillis) deadline)
+         (> (proc/awake-ms) deadline)
          (throw (ex-info "Timed out waiting for PostgreSQL" {:port pg-port}))
          :else (do (Thread/sleep 250) (recur)))))))
 

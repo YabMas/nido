@@ -40,6 +40,10 @@
   (Operation stop-process-group!
     "SIGTERM a whole process group, escalating to SIGKILL."
     {:signature [:=> [:catn [:pgid :int]] :any]})
+  (Operation awake-ms
+    "Milliseconds on a clock that stands still while the host sleeps — the clock a timeout on a
+     process nido waits for belongs on, since a spawned process makes no progress asleep."
+    {:signature [:=> [:catn] :int]})
   (Operation port-free? "Can this port be bound?"
     {:signature [:=> [:catn [:port :int]] :boolean]})
   (Operation tcp-open? "Is something listening on this port?"

@@ -159,6 +159,18 @@
             (if (zero? (kill-pg! "KILL" pgid)) :killed :gone)
             :else (do (Thread/sleep 100) (recur (inc attempt)))))))))
 
+(defn ^{:malli/schema [:=> [:cat] :int]}
+  awake-ms
+  "Milliseconds on a clock that stands still while the host sleeps — only
+   differences between two readings mean anything. A timeout on a process
+   nido is waiting for belongs on this clock, not the wall's: a spawned JVM
+   makes no progress while the laptop sleeps, and a wall-clock deadline spent
+   asleep throws at the first wake, the process having had seconds of the
+   budget. On macOS `System/nanoTime` is `mach_absolute_time`, which excludes
+   sleep; if a platform's does not, this degrades to wall time, never worse."
+  []
+  (quot (System/nanoTime) 1000000))
+
 (defn ^{:malli/schema [:=> [:cat :int] :boolean]}
   port-free? [port]
   (try

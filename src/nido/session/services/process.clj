@@ -12,18 +12,19 @@
 (defn- wait-for-port-file!
   "Poll `port-file` until it holds a positive port. Returns `{:port n}` on
    success, `{:outcome :process-died}` when `pid` vanishes first, or
-   `{:outcome :timeout}` once `timeout-ms` elapses. The two failures are kept
+   `{:outcome :timeout}` once `timeout-ms` of awake time elapses (`proc/awake-ms` —
+   time the host spent asleep is not the process's). The two failures are kept
    apart deliberately: a process that died wants its log read, a slow one
    wants a longer :port-timeout-ms, and collapsing both into nil reported
    every startup crash as a timeout."
   [port-file pid timeout-ms]
-  (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
-    (loop [next-log-at (System/currentTimeMillis)]
+  (let [deadline (+ (proc/awake-ms) timeout-ms)]
+    (loop [next-log-at (proc/awake-ms)]
       (cond
         (not (proc/process-alive? pid)) {:outcome :process-died}
-        (> (System/currentTimeMillis) deadline) {:outcome :timeout}
+        (> (proc/awake-ms) deadline) {:outcome :timeout}
         :else
-        (let [now (System/currentTimeMillis)
+        (let [now (proc/awake-ms)
               _ (when (>= now next-log-at)
                   (core/log-step "Waiting for port file...")
                   nil)

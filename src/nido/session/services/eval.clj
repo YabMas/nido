@@ -249,13 +249,13 @@
        " copy of the working-copy commit rather than left on disk. "))
 
 (defn- wait-for-app-port! [host app-port timeout-ms]
-  (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
-    (loop [next-log-at (System/currentTimeMillis)]
+  (let [deadline (+ (proc/awake-ms) timeout-ms)]
+    (loop [next-log-at (proc/awake-ms)]
       (cond
         (proc/tcp-open? app-port) true
-        (> (System/currentTimeMillis) deadline) false
+        (> (proc/awake-ms) deadline) false
         :else
-        (let [now (System/currentTimeMillis)]
+        (let [now (proc/awake-ms)]
           (when (>= now next-log-at)
             (core/log-step (str "Waiting for app on http://" host ":" app-port "...")))
           (Thread/sleep 250)

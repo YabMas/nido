@@ -42,6 +42,24 @@
                 port-file 999999 1000))))
       (finally (fs/delete-tree tmp)))))
 
+;; A Run spawned while the laptop sleeps gets CPU only in ~2s DarkWake windows;
+;; a deadline on the wall clock expired across the sleep and threw at the next
+;; wake. Here the wall clock runs past the budget while the awake clock stands
+;; still, which is what sleep looks like — the wait must still see the port.
+
+(deftest wait-for-port-file-does-not-spend-its-budget-while-the-host-sleeps
+  (let [tmp (fs/create-temp-dir)
+        port-file (str (fs/path tmp ".nrepl-port"))]
+    (try
+      (future (Thread/sleep 400) (spit port-file "51818"))
+      (with-redefs [proc/process-alive? (constantly true)
+                    proc/awake-ms (constantly 0)
+                    core/log-step (constantly nil)]
+        (is (= {:port 51818}
+               (#'nido.session.services.process/wait-for-port-file!
+                port-file 999999 100))))
+      (finally (fs/delete-tree tmp)))))
+
 ;; End-to-end on the shape that actually bit us: the command exits before ever
 ;; writing its port file. The thrown message must say the process died — not
 ;; blame a timeout that never happened.
