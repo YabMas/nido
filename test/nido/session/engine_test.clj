@@ -503,6 +503,58 @@
         (is (zero? @calls) "nothing is stopped or started")))))
 
 ;; ---------------------------------------------------------------------------
+;; A runtime in its shutdown hooks is waited out, not joined
+;; ---------------------------------------------------------------------------
+
+(defn- with-deaf-runtime
+  "Run `f` in `with-runtime-home` with the runtime's repl recorded as having listened on a port
+   that is now closed — a JVM in its shutdown hooks. `alive?` answers whether its pid still runs."
+  [alive? f]
+  (with-runtime-home
+    (fn [wt-a wt-b]
+      (state/write-session! "p--ws-1" (assoc-in (state/read-session "p--ws-1")
+                                                [:service-states :repl] {:pid 1 :port 59999}))
+      (with-redefs [proc/process-alive? (fn [_] (alive?))
+                    proc/tcp-open?      (constantly false)]
+        (f wt-a wt-b)))))
+
+(deftest up-starts-fresh-once-an-exiting-jvm-has-gone
+  ;; The failure: up ran 11s into the repl JVM's shutdown, read its still-live pid as a live
+  ;; runtime, joined it, and the app start threw "nREPL is not listening" on the closed port.
+  (let [polls (atom 0)]
+    (with-deaf-runtime #(< (swap! polls inc) 4)
+      (fn [_ wt-b]
+        (let [started (atom 0)
+              app     (atom 0)]
+          (with-redefs [service/start-service! (fn [& _] (swap! started inc) {:state {} :context {}})
+                        eval-svc/start-app!    (fn [& _] (swap! app inc) true)]
+            (engine/start-session! wt-b {:runtime-key "ws-1" :session-name "b"}))
+          (is (zero? @app) "the exiting JVM is not joined, so no app start is aimed at it")
+          (is (= {(str wt-b) "b"} (select-keys (:members (state/read-session "p--ws-1")) [(str wt-b)]))
+              "b is on the runtime, started fresh")
+          (is (<= 4 @polls) "up waited for the pid to go before deciding"))))))
+
+(deftest up-refuses-a-runtime-whose-deaf-process-never-exits
+  (with-deaf-runtime (constantly true)
+    (fn [_ wt-b]
+      (with-redefs [engine/exiting-grace-ms 0]
+        (let [e (try (engine/start-session! wt-b {:runtime-key "ws-1" :session-name "b"}) nil
+                     (catch clojure.lang.ExceptionInfo e e))]
+          (is (= :process-wedged (:reason (ex-data e))))
+          (is (= [1] (:pids (ex-data e))))
+          (is (not (contains? (:members (state/read-session "p--ws-1")) (str wt-b)))
+              "the wedged runtime is not joined"))))))
+
+(deftest a-process-that-never-recorded-a-port-is-not-waited-on
+  (with-runtime-home
+    (fn [_ wt-b]
+      (with-redefs [proc/tcp-open?          (constantly false)
+                    engine/exiting-grace-ms 0]
+        (engine/start-session! wt-b {:runtime-key "ws-1" :session-name "b"})
+        (is (contains? (:members (state/read-session "p--ws-1")) wt-b)
+            "the live runtime is joined as before")))))
+
+;; ---------------------------------------------------------------------------
 ;; A runtime of jj workspaces runs out of a checkout of its own
 ;; ---------------------------------------------------------------------------
 

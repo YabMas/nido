@@ -592,6 +592,46 @@
               (proc/process-alive? pid)))
           svc-states)))
 
+(def ^:private exiting-grace-ms
+  "How long, on the awake clock, `await-exiting!` waits for a deaf process to go. A JVM's
+   shutdown hooks — closing pools, stopping mount state — take seconds; a minute is far past any
+   exit nido has seen and short enough that a wedged one is reported while someone is waiting."
+  60000)
+
+(defn- deaf-pids
+  "The pids of `session`'s processes that are alive but no longer listening on the port they
+   recorded. A recorded port is only ever written once the process was listening on it, so a
+   process in this state stopped listening: it is exiting, or wedged. A process with no recorded
+   port is never deaf — nothing says it ever listened."
+  [session]
+  (vec (for [[_ {:keys [pid port]}] (:service-states session)
+             :when (and pid (pos-int? port)
+                        (proc/process-alive? pid)
+                        (not (proc/tcp-open? port)))]
+         pid)))
+
+(defn- await-exiting!
+  "Wait until no process of runtime `instance-id` is deaf (`deaf-pids`), so the caller decides
+   between joining and starting on what will be true rather than on a JVM in its shutdown hooks:
+   its pid outlives its nREPL port by seconds, and joining it fails at the app start on a port
+   that is already closed. Throws :process-wedged naming the pids when they are still alive and
+   deaf after `exiting-grace-ms` — stopping a runtime other sessions may be on is not up's call.
+   Returns nil; the caller re-reads the runtime's record, which the exit may have rewritten."
+  [instance-id]
+  (let [deadline (+ (proc/awake-ms) exiting-grace-ms)]
+    (loop [logged? false]
+      (when-let [pids (some-> (state/read-session instance-id) deaf-pids not-empty)]
+        (when (> (proc/awake-ms) deadline)
+          (throw (ex-info (str "Runtime " instance-id " has a process that stopped listening and"
+                               " did not exit within " (quot exiting-grace-ms 1000) "s (pid "
+                               (str/join ", " pids) ") — stop it, then bring the session up.")
+                          {:reason :process-wedged :instance-id instance-id :pids pids})))
+        (when-not logged?
+          (core/log-step (str "Waiting for " instance-id "'s exiting process (pid "
+                              (str/join ", " pids) ") to stop before starting...")))
+        (Thread/sleep 250)
+        (recur true)))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   reconcile-app!
   "Re-start any :eval service of an already-running session whose app is no
@@ -791,7 +831,8 @@
    session stays on the runtime it is on; a worktree with neither is refused. The project's own
    checkout is always its own runtime.
 
-   Joins the runtime when it is live, starts its services when it is not. A session on another
+   Joins the runtime when it is live, starts its services when it is not; a runtime whose process
+   has stopped listening is waited out first (`await-exiting!`). A session on another
    runtime leaves that one first, so it is never on two.
    opts: {:runtime-key string, :session-name string, :profile <resolved-profile-map>,
           :jvm-heap-max string, :jvm-aliases [kw], :jvm-extra-opts [str], :run-dir path}"
@@ -807,6 +848,7 @@
         ;; Read before leaving another runtime, which removes the session home and its run link.
         opts         (assoc opts :run-dir (or (:run-dir opts)
                                               (home-run-dir project-name (:session-name opts))))
+        _            (await-exiting! instance-id)
         existing     (state/read-session instance-id)
         join?        (and existing (session-alive? existing))]
     ;; Refuse before leaving anything.
