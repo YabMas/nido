@@ -25,7 +25,8 @@ How "land in the session" works depends on the terminal:
 A session a person starts is a plain agent session: no conductor, no seat instruction, nothing
 owed — `nido owed` says "not activated". When the work has reached the point where nido's recipe
 (intent → baseline → design → review loops → implementation) should take over, run
-`nido activate` from inside the session (or press <kbd>A</kbd> on the TUI board). It appends an
+`/activate` in the session's chat, `nido activate` from inside the session, or press
+<kbd>A</kbd> on the TUI board. It appends an
 `:activated` entry to the ledger, once, and prints the instruction for the session's agent: write
 the owed records from what the session already understands, which the review loops then check.
 From then on the conduct pass starts the workstream's conductor as before. Runs (triggers,
