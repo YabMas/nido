@@ -2606,6 +2606,40 @@
           (is (= 2 (count (:entries (workstream/read-ws :brian (:id w)))))
               "and nothing was appended for the refusal either"))))))
 
+(deftest a-triage-under-an-escalation-is-accepted-from-the-triage
+  ;; A conductor escalating at accept-triage parks nothing and appends its decision over the
+  ;; verdict, which stays owed, as does a note appended after it. The gate's actions and the
+  ;; acceptance answer the verdict.
+  (with-tmp
+    (fn [_]
+      (with-routed-ws :deep :jaap "Teacher" {:directions sample-directions}
+        (fn [w]
+          (let [pos (pipeline/of :brian (:id w))]
+            (workstream/append-stamped! :brian (:id w)
+                                        {:format :conduct-decision :hand-back "m-1" :position (:at pos)
+                                         :next (:next pos) :by :conductor
+                                         :decision [:escalate {:needs "Take B."}]}))
+          ;; And a record of the work over it that answers nothing: notion-sync's account of a
+          ;; status it set. The conductor's decision is a status entry; this is not.
+          (workstream/append-entry! :brian (:id w) {:kind :note} "Status moved in Notion.")
+          (is (= :triage-awaiting (:at (pipeline/of :brian (:id w)))) "the verdict is still owed")
+          (let [g (work/gate :brian (:id w))]
+            (is (= [1 :triage-report] [(:seq (:report g)) (:format (:report g))])
+                "the gate answers the verdict, not the escalation above it")
+            (is (some #{:direction-a} (map :id (:actions g))) "its directions are still offered")
+            (is (every? #(= 1 (:seq %)) (filter :seq (:actions g))))
+            (is (= (set (map :action (:options (:ask g))))
+                   (set (filter (set (map :id (:actions g))) (map :action (:options (:ask g))))))
+                "every option the Ask offers is a button the gate offers"))
+          (let [props (atom nil) prepended (atom nil)]
+            (with-redefs-fn (notion-write-redefs props prepended)
+              (fn []
+                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :direction-a 1))))
+                (is (some? @props) "the verdict's routing reached Notion"))))
+          (is (= 1 (:triage-seq (workstream/latest-entry :brian (:id w) :triage-accepted)))
+              "the acceptance cites the verdict")
+          (is (:accepted? (standing/verdict :brian (:id w) (workstream/read-ws :brian (:id w))))))))))
+
 (deftest accepting-twice-is-refused-by-the-same-position-check
   (with-tmp
     (fn [_]
@@ -3805,8 +3839,9 @@
               a (:ask g)]
           (is (= [v :invalidated] [(:seq (:ask-record g)) (:verdict (:ask-record g))])
               "the card folded under the Ask is the record the Ask was read from")
-          (is (= :sound (:verdict (:report g)))
-              "while the actions' guards still read the latest report")
+          (is (= [v :invalidated] [(:seq (:report g)) (:verdict (:report g))])
+              "and the actions answer it too, the later verdict notwithstanding")
+          (is (every? #(= v (:seq %)) (filter :seq (:actions g))))
           (is (= "redesign the totalling seam" (:question a))
               (str "the Ask reads the verdict at " v ", not the one appended after it"))
           (is (= ["a second path sums lines"] (:context a)))

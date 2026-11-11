@@ -171,7 +171,7 @@
   position-carrying-action?
   "True for a gate action whose button is rendered with the ledger position it
    was read at, and whose resolver refuses a click that no longer names the
-   ledger's latest entry.
+   report the gate answers (`gate-report`).
 
    It answers a question about `gate-actions`' output, so it lives beside it: a
    surface that decided for itself which ids carry a position would be holding a
@@ -1232,22 +1232,56 @@
       (hydrate (entry->report base-dir newest))
       (intake-fallback project ws-id))))
 
+(defn- owed-seq
+  "The :seq of the record the move `position` owes a person was placed on — the record its
+   question was written in — or nil when the move reads none. The position's own reading, never
+   recency: a later record of the same kind leaves the move owed over the earlier one.
+
+   answer-blocker   the blocker the pipeline is halted on (`pipeline/owed-blocker`)
+   acknowledge-…    the unanswered invalidating verdict re-entry names as its :because
+   accept-triage    the standing verdict — a triage or a Slack proposal — `standing/verdict` reads
+   approve-design   the newest decision naming the governing design, which `proceeding?` reads
+   land             the newest published PR, whose presence placed :published"
+  [project ws-id position entries]
+  (case (awaiting-human position)
+    :answer-blocker           (pipeline/owed-blocker project ws-id)
+    :acknowledge-invalidation (get-in position [:re-entry :because :seq])
+    :accept-triage            (:seq (standing/verdict project ws-id (cws/read-ws project ws-id)))
+    :approve-design           (when-let [d (:seq (standing/governing-design project ws-id))]
+                                (->> (cws/entries-of project ws-id :design-decision)
+                                     (filter #(= d (:design-seq %)))
+                                     last
+                                     :seq))
+    :land                     (:seq (last (filter #(= :pr-opened (:kind %)) entries)))
+    nil))
+
 (defn- answered-report
-  "The report a gate's actions answer: `report` (the latest), unless `position` halts on a
-   blocker that some later record has buried. In that case it is the blocker's own report.
+  "The report a gate's actions answer: the record the move `position` owes a person was placed on
+   (`owed-seq`) — whatever was appended after it — or `report` (the latest) when the position owes
+   no such record, or its record cannot be read.
 
    A blocker holds the workstream until an answer names it, whatever lands on top: a review
-   round, a verdict, or a close that a reopen undoes. A gate built from the latest report then
-   showed a design verdict with no options. Nobody was parked, so the gate offered nothing for
-   the one question the workstream was waiting on. The blocker's report carries its branches
-   and its :seq, so the buttons answer the question that is actually owed."
+   round, a verdict, or a close that a reopen undoes. So does every other owed move: a triage
+   verdict until it is accepted, an invalidation until it is answered, a design decision until it
+   is granted. A gate built from the latest report then answered the wrong record: a note
+   appended over a triage took its directions away, and Apply accepted the note.
+
+   The one reading of which record a gate acts on. The gate builds its actions from it, the Ask
+   reads it (`ask-inputs`), and every resolver a positioned button reaches re-reads it
+   (`gate-report`) as its freshness check: a click is current while the record it was rendered
+   from is still the one owed."
   [project ws-id report position]
-  (let [owed (when (= :answer-blocker (awaiting-human position))
-               (pipeline/owed-blocker project ws-id))]
+  (let [{:keys [base-dir entries]} (active-ledger project ws-id)
+        owed (owed-seq project ws-id position entries)]
     (if (and owed (not= owed (:seq report)))
-      (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
-        (or (report-at base-dir entries owed) report))
+      (or (report-at base-dir entries owed) report)
       report)))
+
+(defn- gate-report
+  "The report a gate's actions answer NOW: `answered-report` over the latest report and the
+   position the pipeline derives at this moment. What a resolver checks a click's :seq against."
+  [project ws-id]
+  (answered-report project ws-id (latest-report project ws-id) (pipeline/of project ws-id)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
   environment
@@ -1587,29 +1621,6 @@
    only fetches them."
   #{:design-decision :design-verdict :triage :proposed-ticket :pr-opened :intent})
 
-(defn- owed-seq
-  "The :seq of the record the move `position` owes a person was placed on — the record its
-   question was written in — or nil when the move reads none. The position's own reading, never
-   recency: a later record of the same kind leaves the move owed over the earlier one.
-
-   answer-blocker   the owed blocker, which `report` already is (`answered-report`)
-   acknowledge-…    the unanswered invalidating verdict re-entry names as its :because
-   accept-triage    the standing verdict — a triage or a Slack proposal — `standing/verdict` reads
-   approve-design   the newest decision naming the governing design, which `proceeding?` reads
-   land             the newest published PR, whose presence placed :published"
-  [project ws-id report position entries]
-  (case (awaiting-human position)
-    :answer-blocker           (:seq report)
-    :acknowledge-invalidation (get-in position [:re-entry :because :seq])
-    :accept-triage            (:seq (standing/verdict project ws-id (cws/read-ws project ws-id)))
-    :approve-design           (when-let [d (:seq (standing/governing-design project ws-id))]
-                                (->> (cws/entries-of project ws-id :design-decision)
-                                     (filter #(= d (:design-seq %)))
-                                     last
-                                     :seq))
-    :land                     (:seq (last (filter #(= :pr-opened (:kind %)) entries)))
-    nil))
-
 (defn- ask-inputs
   "What `ask/ask` reads for a gate: a hydrated record of each of `ask-kinds`, oldest first — for
    the kind the owed move was placed on, that record (`owed-seq`), whatever was appended after it;
@@ -1620,7 +1631,7 @@
    gate carries as `:ask-record` for the card folded under the Ask; it is not one of ask's inputs."
   [project ws-id report position actions]
   (let [{:keys [base-dir entries]} (active-ledger project ws-id)
-        owed     (owed-seq project ws-id report position entries)
+        owed     (owed-seq project ws-id position entries)
         owed-e   (some #(when (= owed (:seq %)) %) entries)
         chosen   (->> entries
                       (filter #(ask-kinds (:kind %)))
@@ -2695,10 +2706,11 @@
       {:decision :applied})))
 
 (defn- accept!
-  "Execute the workstream's latest report and record that a human accepted it.
+  "Execute the report the gate answers (`gate-report`) — the verdict a person owes an acceptance,
+   whatever was appended after it, else the latest — and record that a human accepted it.
 
    `at-seq`, when given, is the ledger position the click was rendered at, and the
-   acceptance is refused unless that is still the ledger's latest entry.
+   acceptance is refused unless that is still the report the gate answers.
    `direction` is the index of the branch the human chose, or nil for an
    acceptance that chose none.
 
@@ -2706,7 +2718,7 @@
    for why the two writes happen in the order they do."
   [project ws-id at-seq direction checked?]
   (if-let [w (cws/read-ws project ws-id)]
-    (let [report (latest-report project ws-id)
+    (let [report (gate-report project ws-id)
           ;; Resolved against the CURRENT report, never against what the browser
           ;; was showing — the same discipline choose-option! holds, and for the
           ;; same reason: the ledger decides what the letter meant, and the
@@ -2752,7 +2764,8 @@
    `opts` is what a GATE click carries and a CLI apply does not:
 
      :at-seq    — the ledger position the button was rendered at. This arity
-                  CHECKS it: anything but the ledger's latest — a stale position,
+                  CHECKS it: anything but the report the gate answers
+                  (`gate-report`) — a stale position,
                   or none where the ledger holds one — is refused
                   ({:decision :triage-stale}) and nothing is written. The
                   two-argument arity is the CLI path and checks nothing: the agent
@@ -2985,8 +2998,8 @@
    Two refusals, and they are different questions.
 
    The POSITION, exactly as an option click is checked: an Approve carries the
-   entry it was rendered from, and one whose position is no longer the ledger's
-   latest is refused. A decision made against a stale page is not a decision
+   entry it was rendered from, and one whose position is no longer the report the
+   gate answers (`gate-report`) is refused. A decision made against a stale page is not a decision
    about what is there now — a retraction appended since, another tab's
    approval, or a second click of the same button all land here. After granting,
    the approval IS the latest entry, so the double-click refuses on the same
@@ -3004,7 +3017,7 @@
       (nil? design) {:decision :no-design}
 
       (or (nil? entry-seq)
-          (not= entry-seq (:seq (latest-report project ws-id))))
+          (not= entry-seq (:seq (gate-report project ws-id))))
       {:decision :approval-stale}
 
       :else
@@ -3175,7 +3188,7 @@
   [project ws-id entry-seq]
   (cond
     (or (nil? entry-seq)
-        (not= entry-seq (:seq (latest-report project ws-id))))
+        (not= entry-seq (:seq (gate-report project ws-id))))
     {:decision :acknowledge-stale}
 
     :else
@@ -3209,7 +3222,7 @@
   [project ws-id entry-seq]
   (cond
     (or (nil? entry-seq)
-        (not= entry-seq (:seq (latest-report project ws-id))))
+        (not= entry-seq (:seq (gate-report project ws-id))))
     {:decision :acknowledge-stale}
 
     :else
