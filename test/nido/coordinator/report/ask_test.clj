@@ -96,6 +96,24 @@
     (is (= [:direction-a] (mapv :action (:options a))))
     (is (str/includes? (:question a) "which fix"))))
 
+(deftest a-slack-proposal-is-asked-from-the-proposal
+  (let [a (ask/ask :accept-triage
+                   {:report nil
+                    :entries [{:format :proposed-ticket :seq 2 :title "Dialogue loses its draft"
+                               :ticket-type "bug" :source-url "https://slack/x"
+                               :problem "The draft vanishes on reload." :root-cause "r" :fix "f"}]
+                    :actions [{:id :apply :label "Apply" :kind :mutation :answers :proposal}]})]
+    (is (= "File “Dialogue loses its draft” as a ticket?" (:question a)))
+    (is (some #(str/includes? % "The draft vanishes on reload.") (:context a))
+        "the person can tell what they are accepting")
+    (is (str/includes? (:does (first (:answer-does a))) "files it as a ticket"))))
+
+(deftest an-answer-nobody-hears-promises-no-resume
+  (let [does (fn [a] (:does (first (:answer-does (ask/ask :answer-blocker {:report blocker :actions [a]})))))]
+    (is (str/includes? (does {:id :reply :label "Answer" :kind :resume :answers :ledger}) "Nobody is resumed"))
+    (is (str/includes? (does {:id :reply :label "Reply" :kind :resume :answers :conductor}) "conductor"))
+    (is (str/includes? (does {:id :reply :label "Reply" :kind :resume}) "parked session"))))
+
 (deftest a-note-rides-on-the-ask
   (is (= "The conductor adds: approve it." (:note (ask/ask :approve-design {:report nil :entries [{:format :design-decision :asks "Go?"}] :actions []
                                                                          :note "The conductor adds: approve it."})))))

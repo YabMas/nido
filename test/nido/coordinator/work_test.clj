@@ -973,8 +973,11 @@
       "a parked gate that owes no blocker still offers Done"))
 
 (deftest an-unparked-blocker-without-branches-offers-an-answer
-  (is (= [{:id :reply :label "Answer" :kind :resume :style :default}]
-         (work/gate-actions :in-progress false nil {:awaiting :answer-blocker})))
+  (is (= [{:id :reply :label "Answer" :kind :resume :style :default :answers :ledger}]
+         (work/gate-actions :in-progress false nil {:awaiting :answer-blocker}))
+      "it says its words reach the ledger alone, so the card cannot promise a resume")
+  (is (= [:conductor] (keep :answers (work/gate-actions :in-progress true nil {:reply-to :conductor})))
+      "a Reply that answers a conductor's escalation says so")
   (is (= [] (work/gate-actions :in-progress false nil {}))
       "with nothing owed and nobody parked there is still nothing to offer"))
 
@@ -3783,6 +3786,27 @@
             "and both carry the position they were rendered at")
         (is (not (work/grantable? :brian id))
             "while the ordinary Approve is refused — the design does not stand")))))
+
+(deftest an-invalidation-is-asked-from-its-own-verdict-whatever-came-after
+  (with-tmp
+    (fn [_]
+      (let [[id d v] (invalidated)
+            pos      (pipeline/of :brian id)]
+        ;; The conductor escalates the owed acknowledgement, and parks nothing.
+        (workstream/append-stamped! :brian id {:format :conduct-decision :hand-back "m-1"
+                                               :position (:at pos) :next (:next pos) :by :conductor
+                                               :decision [:escalate {:needs "Weigh the second path."}]})
+        ;; A later verdict that answers nothing: the invalidation is still owed.
+        (workstream/append-entry! :brian id {:kind :design-verdict}
+          (pr-str {:format :design-verdict :verdict :sound :round 3 :design-seq d
+                   :reason "a later reading" :needs "A later question?"}))
+        (is (= :design-invalidated (:at (pipeline/of :brian id))) "the invalidation is still owed")
+        (let [a (:ask (first (filter #(= id (:ws-id %)) (work/gates :brian))))]
+          (is (= "redesign the totalling seam" (:question a))
+              (str "the Ask reads the verdict at " v ", not the one appended after it"))
+          (is (= ["a second path sums lines"] (:context a)))
+          (is (= "The conductor adds: Weigh the second path." (:note a))
+              "the escalation stays on the move it was made about"))))))
 
 (deftest redesign-retracts-the-design-and-carries-the-verdict-as-its-evidence
   ;; This is what gives :retraction a writer. One exists across the whole ledger

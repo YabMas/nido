@@ -287,6 +287,10 @@
    one is mechanical and parks nobody, so `parked?` is false exactly when the
    grant is due.
 
+   `{:reply-to :conductor}` says a Reply answers a conductor's open escalation rather than resuming
+   a parked agent; the reply descriptors then carry `:answers :conductor`, as the free-text Answer
+   offered with nobody parked carries `:answers :ledger`.
+
    `{:bare? true}` marks a row with no workstream behind it (wsv/bare-row). On
    :triage that swaps the accept and Reply — which need a ledger and an agent
    respectively — for :start-triage. Then,
@@ -302,7 +306,7 @@
   ([stage parked?] (gate-actions stage parked? nil nil))
   ([stage parked? origin] (gate-actions stage parked? origin nil))
   ([stage parked? _origin {:keys [bare? report-format options directions awaiting grantable?
-                                  gate-criterion]
+                                  gate-criterion reply-to]
                            entry-seq :seq}]
    (let [;; The branches of the CURRENT blocker, or [] — offered whether or not a
          ;; session is parked, because answering no longer depends on one being
@@ -380,7 +384,13 @@
          ;; With nobody parked, :reply records the words as the blocker's answer (`answer-owed!`).
          ;; So the button is "Answer": no agent hears it now, and "Reply" would say one does.
          answering?     (= :answer-blocker awaiting)
-         answer-action  {:id :reply :label "Answer" :kind :resume :style :default}
+         ;; :answers says which resolver the words reach, so what the card says the button does is
+         ;; what it does: here the ledger alone, nobody resumed.
+         answer-action  {:id :reply :label "Answer" :kind :resume :style :default :answers :ledger}
+         ;; Reply reaches a parked agent, unless a conductor's escalation is owed the answer — then
+         ;; resolve-gate! records it for the conductor's next pass and resumes nobody (`reply-to`).
+         reply-action   (cond-> {:id :reply :label "Reply" :kind :resume :style :default}
+                          (= :conductor reply-to) (assoc :answers :conductor))
          actions
          (cond
            acknowledging?
@@ -390,7 +400,7 @@
                     (cond-> {:id :hold-design :label "Accept"
                              :kind :mutation :style :default}
                       entry-seq (assoc :seq entry-seq))]
-             parked? (conj {:id :reply :label "Reply" :kind :resume :style :default}))
+             parked? (conj reply-action))
 
            ;; A gate is asserted with what a person observed, so its one action
            ;; carries free text; the criterion rides on it for the surface to show.
@@ -402,7 +412,7 @@
            (cond-> [(cond-> {:id :approve :label "Approve"
                              :kind :mutation :style :primary}
                       entry-seq (assoc :seq entry-seq))]
-             parked? (conj {:id :reply :label "Reply" :kind :resume :style :default}))
+             parked? (conj reply-action))
 
            :else
            (case stage
@@ -428,7 +438,10 @@
                               accept  (cond-> {:id :apply :kind :mutation
                                                :label (if (seq dirs) "Defer decision" "Apply")
                                                :style (if (seq dirs) :default :primary)}
-                                        entry-seq (assoc :seq entry-seq))]
+                                        entry-seq (assoc :seq entry-seq)
+                                        ;; apply! files a Slack proposal as a new ticket
+                                        ;; rather than writing a triage to its own.
+                                        (= :proposed-ticket report-format) (assoc :answers :proposal))]
                           ;; Reply (free-text overrides/redo) resumes the agent; Dismiss takes it
                           ;; off the radar nido-side, writing nothing to Notion.
                           (cond
@@ -447,8 +460,7 @@
                             ;; agent.
                             :else   (cond-> (into (vec dirs) answers)
                                       true    (conj accept dismiss)
-                                      parked? (conj {:id :reply :label "Reply"
-                                                     :kind :resume :style :default}))))
+                                      parked? (conj reply-action))))
            ;; The nido-side veto, reversible: Restore clears the ticket status so the row
            ;; rejoins the triage queue and the auto-triage gate can pick it up again.
            :dismissed   [{:id :restore :label "Restore" :kind :mutation :style :default}]
@@ -464,7 +476,7 @@
                           ;; and beside A/B it reads as one.
                           (seq answers)
                           (cond-> answers
-                            parked?          (conj {:id :reply :label "Reply" :kind :resume :style :default})
+                            parked?          (conj reply-action)
                             (and (not parked?) answering?) (conj answer-action))
 
                           ;; Halted on a blocker with nobody parked. A free-text answer is
@@ -478,7 +490,7 @@
                           ;; it is left out beside the branches above: settling the workstream is
                           ;; no answer to the question it is halted on.
                           :else
-                          (cond-> [{:id :reply :label "Reply" :kind :resume :style :default}]
+                          (cond-> [reply-action]
                             (not answering?)
                             (conj {:id :done :label "Done" :kind :mutation :style :primary})))
            ;; Blocked in the merge lane: any named branches first (a drive-home
@@ -489,9 +501,9 @@
            :shipping    (cond
                           (seq answers) (cond-> answers
                                           parked?
-                                          (into [{:id :reply :label "Reply" :kind :resume   :style :default}
+                                          (into [reply-action
                                                  {:id :drop  :label "Drop"  :kind :mutation :style :danger}]))
-                          parked?       [{:id :reply :label "Reply" :kind :resume   :style :default}
+                          parked?       [reply-action
                                          {:id :drop  :label "Drop"  :kind :mutation :style :danger}]
                           :else         [])
            []))]
@@ -1570,24 +1582,51 @@
 
 (def ^:private ask-kinds
   "The ledger kinds a person's question can live in beside the gate's report — a design decision,
-   a design verdict, a triage verdict, a published PR — and the intent the question is judged
-   against. Which of them a question reads is the ask registry's to say; this only fetches them."
-  #{:design-decision :design-verdict :triage :pr-opened :intent})
+   a design verdict, a triage verdict or a Slack proposal, a published PR — and the intent the
+   question is judged against. Which of them a question reads is the ask registry's to say; this
+   only fetches them."
+  #{:design-decision :design-verdict :triage :proposed-ticket :pr-opened :intent})
+
+(defn- owed-seq
+  "The :seq of the record the move `position` owes a person was placed on — the record its
+   question was written in — or nil when the move reads none. The position's own reading, never
+   recency: a later record of the same kind leaves the move owed over the earlier one.
+
+   answer-blocker   the owed blocker, which `report` already is (`answered-report`)
+   acknowledge-…    the unanswered invalidating verdict re-entry names as its :because
+   accept-triage    the standing verdict — a triage or a Slack proposal — `standing/verdict` reads
+   approve-design   the newest decision naming the governing design, which `proceeding?` reads
+   land             the newest published PR, whose presence placed :published"
+  [project ws-id report position entries]
+  (case (awaiting-human position)
+    :answer-blocker           (:seq report)
+    :acknowledge-invalidation (get-in position [:re-entry :because :seq])
+    :accept-triage            (:seq (standing/verdict project ws-id (cws/read-ws project ws-id)))
+    :approve-design           (when-let [d (:seq (standing/governing-design project ws-id))]
+                                (->> (cws/entries-of project ws-id :design-decision)
+                                     (filter #(= d (:design-seq %)))
+                                     last
+                                     :seq))
+    :land                     (:seq (last (filter #(= :pr-opened (:kind %)) entries)))
+    nil))
 
 (defn- ask-inputs
-  "What `ask/ask` reads for a gate: the newest hydrated record of each of `ask-kinds`, oldest
-   first, the live intent (the newest :intent — an amendment is appended, so the newest is the
-   one standing), and the conductor's note when its newest decision is an escalation that parked
-   nothing at the move `position` owes, made after the record that move answers."
+  "What `ask/ask` reads for a gate: a hydrated record of each of `ask-kinds`, oldest first — for
+   the kind the owed move was placed on, that record (`owed-seq`), whatever was appended after it;
+   for every other kind, its newest — the live intent (the newest :intent — an amendment is
+   appended, so the newest is the one standing), and the conductor's note when its newest decision
+   is an escalation that parked nothing at the move `position` owes, made after the record that
+   move answers."
   [project ws-id report position actions]
   (let [{:keys [base-dir entries]} (active-ledger project ws-id)
-        newest   (->> entries
+        owed     (owed-seq project ws-id report position entries)
+        owed-e   (some #(when (= owed (:seq %)) %) entries)
+        chosen   (->> entries
                       (filter #(ask-kinds (:kind %)))
                       (group-by :kind)
-                      vals
-                      (map last)
+                      (map (fn [[k es]] (if (and owed-e (= k (:kind owed-e))) owed-e (last es))))
                       (sort-by :seq))
-        records  (mapv #(hydrate (entry->report base-dir %)) newest)
+        records  (mapv #(hydrate (entry->report base-dir %)) chosen)
         intent   (last (filter #(= :intent (:format %)) records))
         decision (->> entries (filter #(= :conduct-decision (:kind %))) last)
         d        (some->> decision (entry->report base-dir))
@@ -1595,7 +1634,7 @@
                             (= :escalate (first (:decision d)))
                             (nil? (:parked d))
                             (= (:next d) (:next position))
-                            (> (:seq decision) (or (:seq report) 0)))
+                            (> (:seq decision) (or owed (:seq report) 0)))
                    (some-> (get-in d [:decision 1 :needs]) str/trim not-empty
                            (->> (str "The conductor adds: "))))]
     (cond-> {:report  report
@@ -1629,6 +1668,10 @@
                                 :directions     (:directions report)
                                 :awaiting       awaiting
                                 :gate-criterion (get-in row [:phase :exit :criterion])
+                                ;; Whom a Reply reaches, in resolve-gate!'s order: a conductor's
+                                ;; open escalation before a parked agent.
+                                :reply-to       (when (conductor/awaiting-answer? project (:ws-id row))
+                                                  :conductor)
                                 :seq            (:seq report)})]
     {:ws-id        (:ws-id row)
      :project      (name project)

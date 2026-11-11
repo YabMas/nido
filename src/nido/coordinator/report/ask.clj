@@ -63,9 +63,10 @@
   (some #(when (= id (keyword (str prefix "-" (str/lower-case %)))) %) report/option-letters))
 
 (defn- does
-  "What giving action `a` does, in the person's terms. Read off the action's id and kind, never off
-   the kind of question: the same button does the same thing on every card."
-  [{:keys [id kind]}]
+  "What giving action `a` does, in the person's terms. Read off the action's id, kind and `:answers`
+   — the resolver the gate says it reaches where one id has several — never off the kind of
+   question: the same button does the same thing on every card."
+  [{:keys [id kind answers]}]
   (or
    (when-let [l (lettered "option" id)]
      (str "Records " l " as your answer. A session parked on the question resumes with it; "
@@ -77,16 +78,24 @@
      :redesign     "Sends the design back to be redesigned against the review's finding."
      :hold-design  "Accepts the design as it stands despite the finding; the work goes on."
      :assert-gate  "Records what you observed as the gate's evidence and opens the next phase."
-     :apply        "Accepts the triage verdict and writes it to the ticket, leaving the fix's direction open."
+     :apply        (if (= :proposal answers)
+                     "Accepts the proposal and files it as a ticket."
+                     "Accepts the triage verdict and writes it to the ticket, leaving the fix's direction open.")
      :dismiss      "Dismisses the workstream from the board; Restore brings it back."
      :done         "Marks the workstream done and stops its sessions."
      :drop         "Drops the workstream off the queue."
      :promote      "Starts implementing the workstream in a session of its own."
      :restore      "Puts the workstream back on the triage queue."
      :start-triage "Starts the triage that never ran."
-     :reply        (if (= :resume kind)
-                     "Sends your words to the parked session, which resumes with them."
-                     "Records your words as the answer.")
+     ;; `:answers` names the resolver the words reach when it is not a parked agent's resume.
+     :reply        (case answers
+                     :ledger    (str "Records your words on the ledger as the blocker's answer. Nobody "
+                                     "is resumed: whoever takes the workstream up next reads it there.")
+                     :conductor (str "Records your words as the answer to the conductor's escalation; "
+                                     "the conductor reads it on its next pass.")
+                     (if (= :resume kind)
+                       "Sends your words to the parked session, which resumes with them."
+                       "Records your words as the answer."))
      nil)
    "Acts on the workstream as its label says."))
 
@@ -125,9 +134,10 @@
 
 (def ^:private registry
   "One entry per move a person owes. `:record` picks the record the move's question lives in, from
-   the gate's report, the newest record of each format and the gate's actions; `:question`,
-   `:context` and `:options` read it (with the actions, for options); `:guidance` names the addendum
-   in resources/asking/ its authors are briefed with. `:generic` answers for anything unregistered."
+   the gate's report, the record of each format the work plane handed (`newest` of a format) and
+   the gate's actions; `:question`, `:context` and `:options` read it (with the actions, for
+   options); `:guidance` names the addendum in resources/asking/ its authors are briefed with.
+   `:generic` answers for anything unregistered."
   {:answer-blocker
    {:guidance "answer-blocker"
     ;; The gate's report IS the owed blocker: the work plane hands the buried one when later
@@ -162,13 +172,25 @@
                 (non-blank (when claim (str "This phase claims: " claim))))}
 
    :accept-triage
-   {:record   (fn [_ newest _] (newest :triage-report))
-    :question (fn [{:keys [title directions]}]
-                (str "Accept the triage of “" title "”"
-                     (if (seq directions) ", and which fix should be built?" "?")))
-    :context  (fn [{:keys [summary determination]}]
-                (non-blank (when determination (str "Determination: " (name determination) "."))
-                           summary))
+   ;; Owed over a Notion triage or a Slack proposal alike (`standing/verdict-kinds`): the record is
+   ;; whichever of the two the work plane handed, the newer when it handed both.
+   {:record   (fn [_ newest _]
+                (last (sort-by #(or (:seq %) 0)
+                               (keep newest [:triage-report :proposed-ticket]))))
+    :question (fn [{:keys [format title directions]}]
+                (if (= :proposed-ticket format)
+                  (str "File “" title "” as a ticket?")
+                  (str "Accept the triage of “" title "”"
+                       (if (seq directions) ", and which fix should be built?" "?"))))
+    :context  (fn [{:keys [format summary determination ticket-type priority doubt] :as r}]
+                (if (= :proposed-ticket format)
+                  (into (non-blank (str "Proposed " (or ticket-type "ticket")
+                                        (when priority (str ", priority " priority)) ".")
+                                   doubt)
+                        (keep (fn [{:keys [heading text]}] (when-not (str/blank? text) (str heading ": " text))))
+                        (concat (report/product-sections r) (report/analysis-sections r)))
+                  (non-blank (when determination (str "Determination: " (name determination) "."))
+                             summary)))
     :options  (fn [{:keys [directions]} actions]
                 (branches "direction" actions directions
                           (fn [{:keys [label shape effort]}]
@@ -231,9 +253,9 @@
                        :Ask]}
   ask
   "The Ask for one gate. `kind` is the move a person owes; `inputs` is {:report <the gate's report —
-   the owed blocker when one is owed> :entries <the newest record of each format a question can
-   live in> :actions <the gate's action descriptors> :intent <the live intent> :note <a conductor's
-   escalation on the owed move>}.
+   the owed blocker when one is owed> :entries <one record of each format a question can live in —
+   for the format the owed move was placed on, that record, else the newest> :actions <the gate's
+   action descriptors> :intent <the live intent> :note <a conductor's escalation on the owed move>}.
 
    The one place an Ask is made, and the one place it is checked: what a kind's entry yields that
    is not an Ask, like an unregistered kind, answers through the generic entry instead, so a kind
