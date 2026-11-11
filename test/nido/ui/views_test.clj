@@ -1,5 +1,5 @@
 (ns nido.ui.views-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
             [hiccup2.core :as h]
             [nido.coordinator.work :as work]
@@ -1688,6 +1688,57 @@
         (is (str/includes? pane s)))
       (is (< (at "Where should students") (at "The record: markdown") (at "bug — reproduced."))
           "the question leads, and the record it was read from is folded under it"))))
+
+(def ^:private oriented-gate
+  (assoc sample-gate
+         :actions [{:id :option-a :label "A" :kind :mutation :seq 3 :title "Web only"}
+                   {:id :option-b :label "B" :kind :mutation :seq 3 :title "brian-mobile too"}
+                   {:id :done :label "Done" :kind :mutation}
+                   {:id :reply :label "Reply" :kind :resume :style :default}]
+         :ask (assoc sample-ask
+                     :holding "The work this blocker stopped waits on your answer."
+                     :answer-does [{:action :option-a :label "A" :does "Choosing an answer records it."}
+                                   {:action :option-b :label "B" :does "Choosing an answer records it."}
+                                   {:action :done :label "Done" :does "Marks the workstream done."}
+                                   {:action :reply :label "Reply" :does "Sends your words to the parked session."}])
+         :position {:at :design-approved :next {:stage :answer-blocker :mode :human}}
+         :arc {:stages [{:stage :intent :state :done :entries 1 :visits 1}
+                        {:stage :design :state :current :entries 2 :visits 1}
+                        {:stage :implementation :state :ahead :entries 0 :visits 0}]
+               :excursions []}))
+
+(deftest the-gate-pane-orients-then-asks-then-offers
+  (let [pane (views/gate-pane oriented-gate)
+        at   #(or (str/index-of pane %) (throw (ex-info (str "missing " %) {})))]
+    (testing "orientation comes first, unfolded"
+      (is (< (at "What this workstream is for") (at "Where it is") (at "What this decision holds up")
+             (at "Where should students")))
+      (is (str/includes? pane "Let a teacher embed"))
+      (is (str/includes? pane "Approved") "the position named as the workstream pane names it")
+      (is (str/includes? pane "arc-step current") "the current stage marked")
+      (is (str/includes? pane "The work this blocker stopped waits on your answer.")))
+    (testing "each answer is its button, recommended one primary"
+      (is (re-find #"class=\"btn btn-primary\"[^>]*>A\. Web only<" pane))
+      (is (re-find #"class=\"btn\"[^>]*>B\. brian-mobile too<" pane))
+      (is (= 1 (count (re-seq #">A\. Web only<" pane))) "no second button for an option"))
+    (testing "what an option does is said once"
+      (is (= 1 (count (re-seq #"Choosing an answer records it\." pane)))))
+    (testing "other actions and the reply sit beside what they do, after the options"
+      (is (< (at "B. brian-mobile too") (at "Marks the workstream done.")
+             (at "Sends your words to the parked session.") (at "The record: markdown"))))
+    (testing "the question is the largest text"
+      (is (str/includes? pane "class=\"ask-q\"")))))
+
+(deftest a-pending-gate-offers-no-control
+  (let [pane (views/gate-pane (assoc oriented-gate :pending? true))]
+    (is (str/includes? pane "working… the agent is running."))
+    (is (str/includes? pane "Web only") "the options still show what was on offer")
+    (is (not (str/includes? pane "<button")) "no control at all while the agent runs")
+    (is (not (str/includes? pane "<textarea")))))
+
+(deftest a-failed-action-shows-above-the-first-control
+  (let [pane (views/gate-pane (assoc oriented-gate :error-msg "it broke"))]
+    (is (< (str/index-of pane "it broke") (str/index-of pane "A. Web only")))))
 
 (deftest notices-are-on-operations-not-the-needs-you-list
   (let [cards (str (views/operations-home-fragment

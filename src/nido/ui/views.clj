@@ -142,21 +142,43 @@
         .gate-prev { color:var(--text-faint); font-size:var(--fs-xs); margin:5px 0 0 26px;
                      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .gate-err { color:var(--failed); font-size:var(--fs-xs); margin:4px 0 0 26px; }
-        /* The ask leads the gate pane: the question, then what it presupposes, the answers on
-           offer, what each button does, and the goal it is judged against. */
-        .ask { margin:4px 0 18px; }
-        .ask-q { font-size:var(--fs-lg); color:var(--text-strong); margin:0 0 10px; line-height:1.4; }
-        .ask-ctx p { color:var(--text); margin:0 0 8px; }
-        .ask-note { color:var(--text-muted); font-style:italic; }
-        .ask h3 { font-size:var(--fs-xs); color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em;
-                  margin:14px 0 6px; }
-        .ask-opts { list-style:none; padding:0; margin:0; }
-        .ask-opts li { border-left:2px solid var(--border); padding:4px 10px; margin:0 0 6px; }
-        .ask-opts li.rec { border-left-color:var(--ok); }
-        .ask-does { margin:0; display:grid; grid-template-columns:max-content 1fr; gap:4px 12px; }
-        .ask-does dt { color:var(--text); } .ask-does dd { margin:0; color:var(--text-muted); }
-        .ask-goal ol { margin:4px 0 0; padding-left:20px; color:var(--text-muted); }
+        /* The gate pane: orientation first, then the one question, then a row per control. */
+        .orient { border:1px solid var(--border-subtle); border-radius:6px; background:var(--surface-raised);
+                  padding:12px 16px; margin:6px 0 18px; display:grid; gap:10px; }
+        .orient-k { font-size:var(--fs-xs); color:var(--text-faint); text-transform:uppercase;
+                    letter-spacing:.06em; margin:0 0 3px; }
+        .orient-goal { margin:0; color:var(--text); max-width:var(--measure); }
+        .orient-dw { margin:4px 0 0; padding-left:20px; color:var(--text-muted); font-size:var(--fs-sm);
+                     max-width:var(--measure); }
+        .orient-pos { margin:6px 0 0; color:var(--text); font-weight:600; font-size:var(--fs-sm); }
+        .orient-hold { margin:0; color:var(--needs); max-width:var(--measure); }
+        .orient .posn { margin:0; }
+        .arc-strip { display:flex; flex-wrap:wrap; gap:4px 14px; font-size:var(--fs-sm); color:var(--text-faint); }
+        .arc-step { display:inline-flex; gap:5px; align-items:baseline; }
+        .arc-step.done { color:var(--text-muted); } .arc-step.done .arc-step-g { color:var(--ok-dim); }
+        .arc-step.current { color:var(--text-strong); font-weight:600; } .arc-step.current .arc-step-g { color:var(--working-dim); }
+        .arc-step.stale { color:var(--waiting); }
+        .arc-step.skipped { color:var(--waiting-dim); }
+        .ask { margin:0 0 16px; }
+        .pane h2.ask-q, .ask-q { font-size:var(--fs-xl); font-weight:600; color:var(--text-strong);
+                                 margin:0 0 12px; line-height:1.3; max-width:var(--measure);
+                                 border-top:none; padding-top:0; }
+        .ask-ctx p { color:var(--text); margin:0 0 10px; max-width:var(--measure); }
+        .ask-note { color:var(--text-muted); font-style:italic; max-width:var(--measure); }
+        .controls { display:grid; gap:8px; margin:6px 0 20px; }
+        .ans-row { display:grid; grid-template-columns:minmax(150px, max-content) 1fr; gap:12px;
+                   align-items:start; padding:10px 12px; border:1px solid var(--border-subtle);
+                   border-radius:6px; background:var(--surface-raised); }
+        .ans-row.rec { border-color:var(--recommended-bg); }
+        .ans-row .btn { font-size:var(--fs-sm); padding:6px 12px; text-align:left; }
+        .ans-body p { margin:0 0 4px; max-width:var(--measure); }
+        .ans-body .chip { margin-left:0; }
+        .ans-cons { color:var(--text-muted); font-size:var(--fs-sm); }
+        .ans-letter { font-weight:600; color:var(--text-muted); }
+        .ans-does { margin:0; color:var(--text-faint); font-size:var(--fs-sm); max-width:var(--measure); }
+        .controls .reply { margin-top:0; }
         .ask-record > summary { cursor:pointer; color:var(--text-muted); font-size:var(--fs-xs); }
+        .md h1 { font-size:var(--fs-lg); } .md h2 { font-size:var(--fs-md); } .md h3, .md h4 { font-size:var(--fs-sm); }
         .chip { padding:0 7px; border-radius:3px; font-size:var(--fs-xs); text-transform:uppercase; }
         .c-triage{ background:var(--needs-bg); color:var(--needs); } .c-ready{ background:var(--ok-bg); color:var(--ok); }
         .c-in-progress{ background:var(--working-bg); color:var(--working); }
@@ -1803,45 +1825,123 @@
      :proposed-ticket          (md/render (report/report->markdown report))
      (md/render (:markdown report))))))
 
-(defn- ask-card
-  "The question a gate asks, in the one shape every kind is asked in (report.ask): the question,
-   what it presupposes, the answers on offer with what each costs, what each button does, and the
-   goal the answer is judged against, done-whens numbered as the intent numbers them."
-  [{:keys [question context options answer-does goal note]}]
+;; The position and arc vocabulary the workstream pane defines below; the gate pane names a
+;; position and marks a stage exactly as it does.
+(declare position-label position-line arc-label arc-glyph)
+
+(defn- arc-strip
+  "The arc as one line of marked stages, for a reader re-orienting rather than reading history:
+   each stage with its state's glyph, the current one marked. The workstream pane draws the same
+   arc as rows it can expand; this is the same reading, folded to a line."
+  [{:keys [stages]}]
+  (into [:div.arc-strip]
+        (for [{:keys [stage state active?]} stages]
+          [:span {:class (str "arc-step " (name state) (when active? " active"))}
+           [:span.arc-step-g (if active? [:span.arc-spin] (get arc-glyph state "·"))]
+           (get arc-label stage (name stage))])))
+
+(defn- orientation-band
+  "What a reader arriving cold needs before the question: what the workstream is for, where it is,
+   and what this decision holds up. Unfolded, because someone who has been elsewhere cannot judge
+   an answer without it. Every line is read off the gate — the Ask's goal and :holding, the gate's
+   arc and position — and the view adds no sentence of its own."
+  [{:keys [ask arc position doing]}]
+  (let [{:keys [goal holding]} ask]
+    [:section.orient
+     (when goal
+       [:div.orient-row
+        [:p.orient-k "What this workstream is for"]
+        [:p.orient-goal (:goal goal)]
+        (when (seq (:done-when goal))
+          (into [:ol.orient-dw] (map (fn [d] [:li d])) (:done-when goal)))])
+     [:div.orient-row
+      [:p.orient-k "Where it is"]
+      (when arc (arc-strip arc))
+      (when-let [at (:at position)]
+        [:p.orient-pos (get position-label at (name at))])
+      (when position (position-line position))
+      (when-let [d (wsv/doing-label doing)] [:p.doing-line "● " d])]
+     (when holding
+       [:div.orient-row
+        [:p.orient-k "What this decision holds up"]
+        [:p.orient-hold holding]])]))
+
+(defn- question-block
+  "The question the gate asks — the pane's largest text — with what it presupposes and any
+   conductor note, in reading order."
+  [{:keys [question context note]}]
   [:div.ask
    [:h2.ask-q question]
    (when (seq context) (into [:div.ask-ctx] (map (fn [c] [:p c])) context))
-   (when note [:p.ask-note note])
-   (when (seq options)
-     (list [:h3 "Answers on offer"]
-           (into [:ul.ask-opts]
-                 (map (fn [{:keys [letter label summary consequence recommended?]}]
-                        [:li {:class (when recommended? "rec")}
-                         [:strong letter ". " label] (when recommended? [:span.meta " · recommended"])
-                         (when-not (str/blank? summary) [:div summary])
-                         (when consequence [:div.meta consequence])]))
-                 options)))
-   (when (seq answer-does)
-     (list [:h3 "What each answer does"]
-           (into [:dl.ask-does]
-                 (mapcat (fn [{:keys [label does]}] [[:dt label] [:dd does]]))
-                 answer-does)))
-   (when goal
-     [:div.ask-goal [:h3 "What this workstream is for"]
-      [:p (:goal goal)]
-      (when (seq (:done-when goal)) (into [:ol] (map (fn [d] [:li d])) (:done-when goal)))])])
+   (when note [:p.ask-note note])])
+
+(defn- does-of
+  "What giving action `id` does, as the Ask words it."
+  [ask id]
+  (some #(when (= id (:action %)) (:does %)) (:answer-does ask)))
+
+(defn- control-rows
+  "Every control the gate offers, as rows in one order: the Ask's options, then each other mutation
+   beside what it does, then the reply and the evidence boxes beside what they do. Each option IS
+   its button — lettered and labelled as the option, beside its summary and consequence — and the
+   recommended one is the primary button. What choosing an option does is the same for every option
+   on a gate (report.ask words it without the letter), so it is said once, under them.
+
+   A failed action's error sits above the first row. A pending gate renders no control at all: the
+   option rows without buttons and the working message, so a poll cannot hand back a fresh button
+   while the agent runs."
+  [project ws-id {:keys [options] :as ask} actions session pending? error-msg]
+  (let [by-id      (into {} (map (juxt :id identity)) actions)
+        opt-ids    (set (map :action options))
+        option-row (fn [{:keys [letter label summary consequence recommended? action]}]
+                     [:div {:class (str "ans-row ans-opt" (when recommended? " rec"))}
+                      (if (or pending? (nil? (by-id action)))
+                        [:span.ans-letter letter]
+                        (action-button project ws-id
+                                       (assoc (by-id action)
+                                              :label (str letter ". " label)
+                                              :style (when recommended? :primary))
+                                       gate-route))
+                      [:div.ans-body
+                       (when (or pending? (nil? (by-id action))) [:strong label])
+                       (when recommended? [:span.chip.c-opt-rec "recommended"])
+                       (when-not (str/blank? summary) [:p summary])
+                       (when consequence [:p.ans-cons consequence])]])
+        opt-does   (distinct (keep #(does-of ask %) opt-ids))
+        others     (remove #(or (opt-ids (:id %))
+                                (not (or (= :mutation (:kind %)) (:input %))))
+                           actions)
+        boxes      (filter #(or (= :evidence (:kind %))
+                                (and (= :resume (:kind %)) (not (:input %))))
+                           actions)]
+    [:div.controls
+     (when (and error-msg (not pending?)) [:div.action-err "⚠ " error-msg])
+     (map option-row options)
+     (when (and (seq options) (seq opt-does))
+       (into [:div] (map (fn [d] [:p.ans-does d])) opt-does))
+     (if pending?
+       [:div.ans-row [:span.meta "working… the agent is running."]]
+       (list
+        (for [a others]
+          [:div.ans-row
+           (action-button project ws-id a gate-route)
+           [:div.ans-body [:p.ans-cons (does-of ask (:id a))]]])
+        (when (seq boxes)
+          (list (into [:div] (keep (fn [a] (when-let [d (does-of ask (:id a))] [:p.ans-does d]))) boxes)
+                (action-bar project ws-id boxes session)))))]))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   gate-pane
-  "The detail pane: rendered report + follow-actions. nil -> calm placeholder.
-   A `:pending?` gate (its agent is running after Apply/Reply) shows 'working…'
-   and no action buttons — deriving action availability from the agent's live
-   phase, so a poll can't flip it back to a fresh Apply button. `:error-msg` (a
-   failed action) renders above the buttons, which stay clickable to retry. `:denials` —
-   auto-mode denials in a session nido drives — render above the question. `:ask` leads the
-   pane, with the record it was read from (`:ask-record`) folded under it."
+  "The detail pane: one gate in full. nil -> calm placeholder.
+
+   Top to bottom: the title and links; the orientation band; any auto-mode denials recorded while
+   nido drives the session; the Ask's question, context and note; the control rows; and the record
+   the Ask was read from, folded. A `:pending?` gate (its agent is running after Apply/Reply) shows
+   no control — deriving that from the agent's live phase, so a poll can't flip it back to a fresh
+   Apply button. `:error-msg` (a failed action) renders above the controls, which stay clickable to
+   retry."
   [{:keys [ws-id project origin label tag links report ask ask-record actions session pending?
-           error-msg doing denials]
+           error-msg denials]
     :as gate}]
   (str
    (h/html
@@ -1850,31 +1950,27 @@
       [:div {:id "gate-pane"}
        (pane-heading origin label links tag)
        (links-row links)
-       ;; Above the report, because the report was written at the moment the
-       ;; agent stopped and this is the one line on the pane that says what is
-       ;; happening at the moment it is being read.
-       (when-let [d (wsv/doing-label doing)] [:p.doing-line "● " d])
+       (orientation-band gate)
        ;; Every auto-mode denial recorded while nido drives the session, whether or not
        ;; anything else here waits on a person.
        (when (seq denials)
          [:div.denials [:p.meta "Permission denials while nido drives it:"]
           (into [:ul] (map denial-line) denials)])
-       ;; The question leads; the record it was read from is one click away, for a reader who
-       ;; wants the whole of it rather than what the question needs.
-       ;; Folded: the record the Ask was read from, not the gate's latest report — a verdict
-       ;; appended after an unanswered one is not the evidence behind the question.
        (if ask
-         (list (ask-card ask)
+         (list (question-block ask)
+               (control-rows project ws-id ask actions session pending? error-msg)
+               ;; Folded: the record the Ask was read from, not the gate's latest report — a
+               ;; verdict appended after an unanswered one is not the evidence behind the question.
                (when-let [r (or ask-record report)]
                  [:details.ask-record
                   [:summary "The record: " (some-> r :format name) " · " (:at r)]
                   (report-body r)]))
          (list (when report [:div.meta (some-> report :format name) " · " (:at report)])
-               (report-body report)))
-       (if pending?
-         [:div.actions {:style "margin-top:16px"} [:span.meta "working… the agent is running."]]
-         (list (when error-msg [:div.action-err "⚠ " error-msg])
-               (action-bar project ws-id actions session)))]))))
+               (report-body report)
+               (if pending?
+                 [:div.actions [:span.meta "working… the agent is running."]]
+                 (list (when error-msg [:div.action-err "⚠ " error-msg])
+                       (action-bar project ws-id actions session)))))]))))
 
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]}
   needs-page

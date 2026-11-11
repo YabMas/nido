@@ -21,7 +21,7 @@
   {:about [report-ask] :evidence "round"})
 
 (Claim card-leads-with-the-question
-  "A needs-you row previews its Ask's question; the gate pane renders, after the title and doing line, the Ask — its question as the heading, then its context, its options with their consequences, what each answer does, and the goal with its done-whens numbered from 1 — and the kind's own record card after it, folded."
+  "A needs-you row previews its Ask question; the gate pane renders, top to bottom: the title and links; the orientation band; the permission denials recorded while nido drives the session, when there are any; the Ask question, set larger than every other text on the pane; its context and note; the control rows; and the kind's own record card last, folded. On a gate that is not pending the control rows are, in order, the Ask options, every other mutation the gate offers, the reply and the gate evidence, each present only when the gate offers it; on a pending gate they are the option rows without buttons and the working message. A failed action's error line, when there is one, sits directly above the first control row."
   {:about [gate-pane Ask] :evidence "round"})
 
 (Claim authors-briefed-from-one-guidance
