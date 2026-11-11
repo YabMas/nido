@@ -103,28 +103,41 @@
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   measure
   "In THIS process, against whatever store NIDO_HOME names: hold rows as the dashboard and
-   the TUI do (`work/hold!`), time the first render of a cold process, then `runs` renders of
-   each surface, and print the medians as EDN. The child half of `surfaces`; run it directly
-   only against a store you can lose."
+   the TUI do (`work/hold!`), time the first render of a cold process — of `first`, the gate
+   inbox unless it names another surface — then `runs` renders of each surface, and print the
+   medians as EDN. The child half of `surfaces`; run it directly only against a store you can
+   lose."
   [& args]
-  (let [{:keys [project ws runs] :or {runs 5}} (parse-opts args)
+  (let [{:keys [project ws runs first] :or {runs 5 first :inbox}} (parse-opts args)
         project (name project)
         _       (work/hold!)
         timed   (surfaces-of project ws)
-        cold    (ms (second (first timed)))
-        warm    (into {} (for [[k f] timed]
+        cold    (ms (some (fn [[k f]] (when (= first k) f)) timed))
+        warm    (into {} (for [[k f] timed :when (pos? runs)]
                            [k (median (repeatedly runs #(ms f)))]))]
     (prn {:cold-first-render cold :renders warm})))
 
-(defn- child-measure! [home opts]
-  (let [{:keys [out]} (p/shell {:out :string :extra-env {"NIDO_HOME" (str home)}
-                                :dir (core/nido-source-dir)}
-                               "bb" "--config" (str (fs/path (core/nido-source-dir) "bb.edn"))
-                               "nido:bench:surfaces:measure"
-                               ":project" (pr-str (:project opts))
-                               ":ws" (pr-str (:ws opts))
-                               ":runs" (str (:runs opts)))]
-    (edn/read-string (last (str/split-lines out)))))
+(defn- child-measure!
+  "Measure in a fresh child process against the store at `home`: its cold first render is the
+   gate inbox's, or the TUI board's — the TUI's cold open — with `first` :tui-board."
+  ([home opts] (child-measure! home opts :inbox))
+  ([home opts first]
+   (let [{:keys [out]} (p/shell {:out :string :extra-env {"NIDO_HOME" (str home)}
+                                 :dir (core/nido-source-dir)}
+                                "bb" "--config" (str (fs/path (core/nido-source-dir) "bb.edn"))
+                                "nido:bench:surfaces:measure"
+                                ":project" (pr-str (:project opts))
+                                ":ws" (pr-str (:ws opts))
+                                ":runs" (if (= :inbox first) (str (:runs opts)) "0")
+                                ":first" (str first))]
+     (edn/read-string (last (str/split-lines out))))))
+
+(defn- measure-store!
+  "Both measurements of the store at `home`: the renders, and the TUI's cold open in a process
+   of its own, so neither cold start is warmed by the other."
+  [home opts]
+  (assoc (child-measure! home opts)
+         :cold-tui-open (:cold-first-render (child-measure! home opts :tui-board))))
 
 (defn- workstream-count [home project]
   (count (fs/list-dir (fs/path home "projects" project "workstreams"))))
@@ -134,6 +147,8 @@
     (println (format "%-20s %s" "surface (ms)" (str/join "" (map #(format "%14s" (name (first %))) results))))
     (println (format "%-20s %s" "cold first render"
                      (str/join "" (map #(format "%14.0f" (:cold-first-render (second %))) results))))
+    (println (format "%-20s %s" "cold TUI open"
+                     (str/join "" (map #(format "%14.0f" (:cold-tui-open (second %))) results))))
     (doseq [k ks]
       (println (format "%-20s %s" (name k)
                        (str/join "" (map #(format "%14.0f" (get-in (second %) [:renders k])) results)))))))
@@ -158,10 +173,10 @@
       (let [opts    (update opts :ws #(or % (->> (fs/list-dir (fs/path home "projects" (:project opts) "workstreams"))
                                                  (map (comp str fs/file-name)) sort last)))
             n0      (workstream-count home (:project opts))
-            live    (child-measure! home opts)
+            live    (measure-store! home opts)
             _       (synthetic-settled! home (:project opts) (:synthetic opts))
             n1      (workstream-count home (:project opts))
-            big     (child-measure! home opts)
+            big     (measure-store! home opts)
             results [[(str "live " n0) live] [(str "enlarged " n1) big]]]
         (println (str "project " (:project opts) ", detail " (:ws opts) ", median of " (:runs opts) " runs"))
         (print-table results)

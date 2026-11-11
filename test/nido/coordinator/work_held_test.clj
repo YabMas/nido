@@ -222,3 +222,69 @@
             (with-redefs [activity/held? (fn [_ id] (= id a))]
               (is (= [a] (distinct (reads-of #(work/refresh-list! :p))))
                   "a claim taken under it is a change only liveness sees: the row is read again"))))))))
+
+;; ── phase 2: the snapshot a cold start seeds from ───────────────────────────
+
+(defn- snapshot-file [] (#'work/snapshot-path "p"))
+
+(deftest the-sweep-writes-a-snapshot-a-cold-start-seeds-from
+  (let [live (atom #{})]
+    (with-store live
+      (fn []
+        (let [a (open-one! "a")
+              _ (settled-one! "b")]
+          (work/hold! {:sweep? false})
+          (work/sweep!)
+          (is (fs/exists? (snapshot-file)) "the sweep wrote it")
+          (let [rows (set (work/list-workstreams :p))]
+            (work/release!)
+            (work/hold! {:sweep? false})
+            (is (empty? (reads-of #(work/list-workstreams :p)))
+                "a cold start seeds from the snapshot without reading a workstream")
+            (is (= rows (set (work/list-workstreams :p))) "and holds the same rows")
+            (is (some #(= a (:ws-id %)) (:in-progress (work/grouped :p))))))))))
+
+(deftest seeding-keeps-when-liveness-was-observed
+  (let [live (atom #{})]
+    (with-store live
+      (fn []
+        (open-one! "a")
+        (work/hold! {:sweep? false})
+        (work/sweep!)
+        (let [observed (->> (get-in @@#'work/model [:projects "p" :entries]) vals (map :observed-at) set)]
+          (work/release!)
+          (work/hold! {:sweep? false})
+          (work/grouped :p)
+          (is (= observed (->> (get-in @@#'work/model [:projects "p" :entries]) vals (map :observed-at) set))
+              "neither writing nor seeding renews a row's liveness"))))))
+
+(deftest a-seeded-row-whose-stamp-moved-is-recomputed
+  (let [live (atom #{})]
+    (with-store live
+      (fn []
+        (let [a (open-one! "a")]
+          (work/hold! {:sweep? false})
+          (work/sweep!)
+          (work/release!)
+          (tick)
+          (workstream/close! :p a :done)
+          (work/hold! {:sweep? false})
+          (work/refresh-list! :p)
+          (is (empty? (:in-progress (work/grouped :p)))
+              "the snapshot is a starting point, held as any row is: its stamp moved"))))))
+
+(deftest an-unusable-snapshot-is-discarded-whole
+  (doseq [[why spoil] [["does not parse"          #(spit (str (snapshot-file)) "{not transit")]
+                       ["another nido revision"   #(with-redefs [work/source-revision (delay "elsewhere")]
+                                                     (#'work/write-snapshot! "p" (get-in @@#'work/model [:projects "p"])))]]]
+    (let [live (atom #{})]
+      (with-store live
+        (fn []
+          (open-one! "a")
+          (work/hold! {:sweep? false})
+          (work/sweep!)
+          (spoil)
+          (work/release!)
+          (work/hold! {:sweep? false})
+          (is (seq (reads-of #(work/list-workstreams :p))) (str "a snapshot that " why " is rebuilt from the records"))
+          (is (not (fs/exists? (snapshot-file))) (str "and one that " why " is deleted")))))))

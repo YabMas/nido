@@ -12,6 +12,8 @@
    [babashka.fs :as fs]
    [clojure.set :as set]
    [clojure.string :as str]
+   [cognitect.transit :as transit]
+   [malli.core :as m]
    [nido.platform.config :as config]
    [nido.platform.core :as core]
    [nido.coordinator.record.clock :as clock]
@@ -1681,8 +1683,9 @@
 ;; otherwise, so the CLI, the lanes and the tests see no change.
 ;;
 ;; What is held is derived and disposable: every part of it that came from a file can be
-;; recomputed from that file, it is never persisted, and nothing that writes a ledger entry,
-;; session or run reads it. Only three things move it — a list refresh, a selection refresh
+;; recomputed from that file, the snapshot it is written to between processes is discarded
+;; whole whenever it is not exactly this source's (`read-snapshot`), and nothing that writes
+;; a ledger entry, session or run reads it. Only three things move it — a list refresh, a selection refresh
 ;; and the sweep — and which renders make which is the surfaces' to say; a reading never
 ;; refreshes. Settled workstreams the registry shows no live session for are the sweep's
 ;; alone, which is what keeps closed history off the render path.
@@ -1903,13 +1906,107 @@
           (swap! model #(when % (assoc-in % [:projects pname] p')))
           p')))))
 
+(def ^:private snapshot-schema-version 1)
+
+(def HeldEntry
+  "One held row as the snapshot carries it: the row the board draws, what a refresh compares
+   it by, and what the passes answer from."
+  [:map
+   [:row :map]
+   [:page-id [:maybe :string]]
+   [:covers [:set :string]]
+   [:sessions [:set :string]]
+   [:driven [:vector :string]]
+   [:listed [:set :string]]
+   [:settled? :boolean]
+   [:gate [:maybe :map]]
+   [:wind [:maybe :map]]
+   [:observed-at :int]
+   [:stamp [:vector :any]]
+   [:probe [:vector :any]]])
+
+(def HeldSnapshot
+  "A project's held rows as `write-snapshot!` writes them. Nothing in it is a record: every part
+   is recomputed from the record files when it is missing, malformed or from another revision."
+  [:map
+   [:format [:= :held-rows]]
+   [:schema [:= snapshot-schema-version]]
+   [:revision :string]
+   [:project :string]
+   [:held [:map
+           [:order [:vector :string]]
+           [:root-stamp :int]
+           [:facts [:maybe :map]]
+           [:live [:set :string]]
+           [:entries [:map-of :string HeldEntry]]]]])
+
+(def ^:private valid-snapshot? (m/validator HeldSnapshot))
+
+(def ^:private source-revision
+  ;; Read once per process: the source a process runs cannot change under it.
+  (delay
+    (let [root (fs/path (core/nido-source-dir) "src")
+          md   (java.security.MessageDigest/getInstance "SHA-256")]
+      (doseq [f (sort (map str (fs/glob root "**.clj")))]
+        (.update md (.getBytes (str (fs/relativize root f) "\n") "UTF-8"))
+        (.update md ^bytes (fs/read-all-bytes f)))
+      (apply str (map #(format "%02x" %) (.digest md))))))
+
+(defn- snapshot-path
+  "Where `project`'s snapshot lives: under the nido home's cache/, outside every workstream
+   directory, so writing it never moves a stamp. Deleting it costs one cold build."
+  [project]
+  (fs/path (core/nido-root) "cache" (name project) "held-rows.transit.json"))
+
+(def ^:private snapshot-keys [:order :root-stamp :facts :live :entries])
+
+(defn- write-snapshot!
+  "Write `p`, `project`'s held value, as its snapshot: the rows as they were observed, their
+   liveness times unrenewed. Written whole to a temporary file and renamed into place, so a
+   reader sees one snapshot or the previous one, never a torn one. Answers whether it was
+   written; a value transit cannot carry is a snapshot not written, never an error."
+  [project p]
+  (try
+    (let [path (snapshot-path project)
+          tmp  (fs/path (fs/parent path) (str ".held-rows." (System/nanoTime) ".tmp"))]
+      (fs/create-dirs (fs/parent path))
+      (with-open [out (java.io.FileOutputStream. (str tmp))]
+        (transit/write (transit/writer out :json)
+                       {:format   :held-rows
+                        :schema   snapshot-schema-version
+                        :revision @source-revision
+                        :project  (name project)
+                        :held     (select-keys p snapshot-keys)}))
+      (fs/move tmp path {:replace-existing true :atomic-move true})
+      true)
+    (catch Throwable _ false)))
+
+(defn- read-snapshot
+  "`project`'s held value seeded from its snapshot, or nil when there is none usable: one
+   that does not parse, does not conform to `HeldSnapshot`, or was written by another nido
+   source revision is discarded whole. A seeded row keeps the times its liveness was
+   observed at, so one whose deadline has passed is reached by the first refresh."
+  [project]
+  (let [path (snapshot-path project)]
+    (when (fs/exists? path)
+      (let [snap (try (with-open [in (java.io.FileInputStream. (str path))]
+                        (transit/read (transit/reader in :json)))
+                      (catch Throwable _ nil))]
+        (if (and (valid-snapshot? snap)
+                 (= (name project) (:project snap))
+                 (= @source-revision (:revision snap)))
+          (index-project project (:held snap))
+          (do (try (fs/delete-if-exists path) (catch Throwable _ nil))
+              nil))))))
+
 (defn- held-project
-  "The held value for `project`, building it first — one full read, under its lock — when
-   this process holds and has not built it; nil when this process holds nothing."
+  "The held value for `project`, seeding it from its snapshot or else building it — one full
+   read — under its lock, when this process holds and has neither; nil when this process
+   holds nothing."
   [project]
   (when-let [m @model]
     (or (get-in m [:projects (name project)])
-        (swap-project! project (fn [pr p] (or p (refresh-project pr nil :list)))))))
+        (swap-project! project (fn [pr p] (or p (read-snapshot pr) (refresh-project pr nil :list)))))))
 
 (defn ^{:malli/schema [:=> [:cat] :boolean]}
   holding?
@@ -1969,6 +2066,16 @@
                                                      m))
                                                  es (keys (:entries p0)))))))))))))
 
+(defn- persist!
+  "Write `project`'s snapshot when its rows moved since this process last wrote it — the
+   sweep's, after each run, so a process starting next seeds from rows at most one run old."
+  [project]
+  (let [pname (name project)
+        p     (get-in @model [:projects pname])]
+    (when (and p (not= (:version p) (get-in @model [:written pname])))
+      (when (write-snapshot! pname p)
+        (swap! model #(when % (assoc-in % [:written pname] (:version p))))))))
+
 (defn ^{:malli/schema [:=> [:cat] :any]}
   sweep!
   "One run of the sweep: every project refreshed as `refresh-project` :sweep says, then the
@@ -1976,6 +2083,7 @@
   []
   (doseq [[pname _] (project/list-projects)]
     (try (sweep-project! pname)
+         (persist! pname)
          (catch Throwable t
            (binding [*out* *err*] (println "[nido] sweep of" (name pname) "failed:" (ex-message t))))))
   (let [u (try (owed-revivals) (catch Throwable _ nil))]
@@ -1985,8 +2093,9 @@
   hold!
   "Make this process hold its rows, and start the sweep that keeps them. Idempotent. Every
    board reading answers from what is held from now on; a surface decides when to refresh
-   (`refresh-list!`, `refresh-selected!`). The first build runs on the sweep's thread, and a
-   render before it finishes waits for it. `{:sweep? false}` holds with no sweep running, for
+   (`refresh-list!`, `refresh-selected!`). The first build runs on the sweep's thread — seeded
+   from each project's snapshot when it has a usable one (`read-snapshot`) — and a render
+   before it finishes waits for it. `{:sweep? false}` holds with no sweep running, for
    a caller that drives `sweep!` itself — a test."
   ([] (hold! {}))
   ([{:keys [sweep?] :or {sweep? true}}]
