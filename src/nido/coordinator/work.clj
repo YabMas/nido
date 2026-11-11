@@ -1416,6 +1416,14 @@
 
 (declare driven-denials)
 
+(defn- arc-at
+  "The arc of stages `entries` travelled, read at `position` with what `doing` has running — the one
+   reading both the workstream pane and a gate show, so the two cannot mark different stages."
+  [entries position doing]
+  (pipeline/arc (current-phase-entries entries)
+                {:at     (:stage position)
+                 :active (pipeline/stage-active position doing)}))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? :any]] :map]}
   workstream
   "Full detail for one workstream: origin, spine stage, label, a light ledger
@@ -1498,9 +1506,7 @@
         ;; The stage the work is in comes off the position read above, so the
         ;; heading and the arc under it are one reading and cannot disagree.
         ;; What is running rides beside it, on the stage it is running in.
-        :arc          (pipeline/arc (current-phase-entries entries)
-                                    {:at     (:stage position)
-                                     :active (pipeline/stage-active position (:doing row))})
+        :arc          (arc-at entries position (:doing row))
         ;; A phased workstream's plan, phase by phase — nil for an unphased one.
         :plan         (plan project ws-id w)
         :holds        (holds project ws-id)
@@ -1674,7 +1680,10 @@
                                 :reply-to       (when (conductor/awaiting-answer? project (:ws-id row))
                                                   :conductor)
                                 :seq            (:seq report)})
-        inputs   (ask-inputs project (:ws-id row) report (:position row) actions)]
+        inputs   (ask-inputs project (:ws-id row) report (:position row) actions)
+        ;; Read as `workstream` reads it — the row's position, the active ledger — so the gate pane's
+        ;; orientation and the workstream pane name one position and mark one stage.
+        position (or (:position row) (pipeline/of project (:ws-id row)))]
     {:ws-id        (:ws-id row)
      :project      (name project)
      :origin       (:origin row)
@@ -1697,6 +1706,10 @@
      ;; The record the Ask was read from, for the card folded under it. Not :report, which is
      ;; what the actions' position guards are rendered from and can be a later record.
      :ask-record   (:source inputs)
+     ;; Where the workstream is, for the pane's orientation band: the position itself, and the arc of
+     ;; stages read at it.
+     :position     position
+     :arc          (arc-at (:entries (active-ledger project (:ws-id row))) position (:doing row))
      :session      (:name psess)
      :denials      (driven-denials project (:ws-id row))
      :resume-error (get-in psess [:autonomy :error])

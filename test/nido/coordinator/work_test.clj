@@ -942,6 +942,18 @@
           (is (= {:goal "Live goal." :done-when ["one" "two"]} (:goal a))
               "the newest intent is the one the question is judged against"))))))
 
+(deftest a-gate-shows-the-arc-and-position-the-pane-shows
+  (with-tmp
+    (fn [_]
+      (let [w  (bury-a-blocker!)
+            g  (work/gate :brian (:id w))
+            ws (work/workstream :brian (:id w))]
+        (is (some? (:arc g)) "the gate carries the arc of stages for its orientation band")
+        (is (= (:arc ws) (:arc g))
+            "and it is the arc the workstream pane shows, so the two mark one stage")
+        (is (= (:position ws) (:position g))
+            "and the position the pane names")))))
+
 (deftest a-buried-blocker-is-answered-by-its-letter-once
   (with-tmp
     (fn [_]
