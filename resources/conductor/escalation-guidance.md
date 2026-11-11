@@ -22,12 +22,12 @@ no code changes.
 
 - The next step is the person's: stating or amending the intent, approving a design, accepting a
   triage verdict, asserting a phase gate, answering a blocker, merging, marking ready for review,
-  pushing to main, closing. Say what they need to do and why.
+  pushing to main, closing.
 - An answer would change a claim, the intent or a stratum of the approved design.
 - Two seats disagree in a way the design does not settle.
 - Something is about to be destroyed or published that cannot be taken back, beyond a branch push
   or a draft PR.
 - You are not sure the work is still what the person asked for.
 
-An escalation names what the person is needed for in one or two sentences they can act on
-without reading the conversation.
+How to word an escalation is not this file's: the asking guidance that follows it in your brief
+says, and it is the same guidance every author of a question for the person is given.

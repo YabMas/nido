@@ -32,6 +32,7 @@
    [nido.coordinator.lane.embodied-strata :as embodied]
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.lane.seats :as seats]
+   [nido.coordinator.report.ask :as ask]
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.seats :as rseats]
    [nido.coordinator.record.session :as session]
@@ -140,7 +141,8 @@
 
 (defn- brief
   "The conductor's brief at a start: the seats, the governing design and the position as the
-   records give them at that start, and the escalation guidance."
+   records give them at that start, the escalation guidance (when to escalate), and the asking
+   guidance for an escalation (how to word one)."
   [project ws-id]
   (let [design (standing/governing-design project ws-id)
         {:keys [position next]} (position project ws-id)]
@@ -154,7 +156,8 @@
          "Position: " (name position) (when next (str ", next " (pr-str next))) "\n\n"
          "Decide on the position, governing design and seats each hand-back carries, read from the "
          "records at that hand-back, not on this brief or what you remember of this conversation.\n\n"
-         (guidance project))))
+         (guidance project) "\n\n"
+         (ask/guidance :escalation))))
 
 (defn- running?
   "Whether the conductor record `c` has a conversation running or a start in flight."
@@ -394,19 +397,34 @@
                 (second (lifecycle/session-home-coords-from-cwd cwd)))]
     (boolean (and n (:conductor (session/read-session project ws-id n))))))
 
+(defn- parks?
+  "Whether an escalation decided at the position whose next move is `next` parks the workstream on
+   a blocker: only when that move is not already a person's. Ledgers written before this rule hold
+   escalation blockers parked at a person's move; `answers!` still answers those."
+  [next]
+  (not= :human (:mode next)))
+
 (defn- record-decision!
   "Append the :conduct-decision `entry` and carry it out, as one step under the ledger's append lock
    (`ws/appending!`), so no opening or design approval falls between: everything is checked before
    anything is written — the seats an instruction names, the decision itself, and an escalation's
    blocker — and each effect runs only once what it depends on is taken. An escalation parks the
    workstream on its blocker, which the decision then cites; an instruction is posted to each seat
-   it names once the decision is recorded. A seat that is gone, or a decision or blocker the ledger
-   refuses, throws with nothing written or posted. Answers the entry."
-  [project ws-id {:keys [hand-back decision] :as entry}]
+   it names once the decision is recorded. An escalation made while the position owes a person a
+   move parks nothing: that move's card already asks them, and the decision rides on it as a note.
+   A seat that is gone, or a decision or blocker the ledger refuses, throws with nothing written or
+   posted. Answers the entry."
+  [project ws-id {:keys [hand-back decision position next] :as entry}]
   (let [[verb body] decision
-        halt        (when (= :escalate verb)
+        ;; A person who already owes a move has that move's card in front of them; a second
+        ;; blocker re-asking it is a second copy of one question, and answering the card would
+        ;; leave the copy owed. So an escalation at a person's move parks nothing: the decision is
+        ;; its record, and the card shows its :needs as a note.
+        halt        (when (and (= :escalate verb) (parks? next))
                       {:stage :conduct :outcome :escalated
-                       :summary "the conductor escalated a hand-back" :needs (:needs body)})]
+                       :summary (str "Raised by the workstream's conductor while it was "
+                                     (str/replace (name (or position :unplaceable)) "-" " ") ".")
+                       :needs (:needs body)})]
     (ws/appending!
      project ws-id
      (fn [{:keys [check! append!]}]

@@ -1997,7 +1997,11 @@
         owing  (record/design-prompt {:design (assoc design :standing {:relation :challenges :note "n"})})]
     (is (str/includes? modest "WHO READS asks: NOBODY, on a proceed"))
     (is (str/includes? owing "WHO READS asks: a person"))
-    (is (str/includes? modest "  ask      — stop for a person"))))
+    (is (str/includes? modest "  ask      — stop for a person"))
+    (is (str/includes? owing "HOW TO WRITE asks")
+        "a judge whose asks a person reads is briefed with the asking guidance every author gets")
+    (is (str/includes? owing "# Asking the person a question"))
+    (is (str/includes? owing "When a design round asks the person"))))
 
 (deftest the-judge-is-shown-what-is-already-decided
   ;; Shown neither the record's :open nor its grant, the judge re-posed a product decision the

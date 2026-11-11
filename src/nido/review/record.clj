@@ -49,6 +49,7 @@
    [malli.error :as me]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.report :as report]
+   [nido.coordinator.report.ask :as ask]
    [nido.coordinator.report.model :as model]
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.standing :as standing]
@@ -1789,6 +1790,11 @@
             "no one is stopped to read it. A question the build must not start without —\n"
             "what the intent means, whether this scope is the one wanted, whether it is\n"
             "worth its cost — is recommend ask, never a proceed with the question in asks.\n"))
+     ;; Whenever a person may read asks, write it the way every question for them is written:
+     ;; it is what leads their needs-you card.
+     (when-not carried
+       (str "\nHOW TO WRITE asks, when a person reads it — it leads their needs-you card:\n"
+            (ask/guidance :approve-design) "\n"))
      (when (seq open)
        (str "\nTHE RECORD'S OPEN NOTES — what its author states is decided, or left open on purpose:\n"
             (bullets open) "\n"

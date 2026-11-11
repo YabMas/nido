@@ -282,6 +282,45 @@
               (is (not (conductor/awaiting-answer? :brian id)) "a new generation owes its predecessor's blocker no reply")
               (is (nil? (conductor/answer! :brian id "yes"))))))))))
 
+(defn- legacy-decide!
+  "decide! as it was before an escalation at a person's move stopped parking a blocker — the
+   ledgers written then still hold such blockers, and `answers!` still answers them."
+  [& args]
+  (with-redefs [conductor/parks? (constantly true)]
+    (apply conductor/decide! args)))
+
+(deftest an-escalation-at-a-persons-move-parks-nothing
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (with-redefs [pipeline/of (constantly {:at :design-decided :next {:stage :approve-design :mode :human}})]
+          (let [hb (:id (conductor/hand-back! :brian id c))
+                [v entry] (in-session c #(conductor/decide! :brian id {:hand-back hb
+                                                                        :decision [:escalate {:needs "approve the design"}]}))]
+            (is (= :accepted v))
+            (is (empty? (ws/entries-of :brian id :blocker))
+                "the design's own card already asks; a blocker would be a second copy of the question")
+            (is (nil? (:parked entry)))
+            (is (= "approve the design" (get-in (last (ws/entries-of :brian id :conduct-decision)) [:decision 1 :needs]))
+                "the decision is the escalation's record, and its words ride on the card")
+            (is (not (conductor/awaiting-answer? :brian id)))))))))
+
+(deftest an-escalation-with-nothing-owed-says-where-the-work-stood
+  (with-tmp
+    (fn []
+      (let [[id] (workstream)
+            c    (str id "--conductor")]
+        (launching [_] (seats/conductor! :brian id "conduct it"))
+        (with-redefs [pipeline/of (constantly {:at :intake :next {:stage :establish-intent :mode :authoring}})]
+          (let [hb (:id (conductor/hand-back! :brian id c))]
+            (in-session c #(conductor/decide! :brian id {:hand-back hb :decision [:escalate {:needs "What is this workstream for?"}]}))
+            (let [b (last (ws/entries-of :brian id :blocker))]
+              (is (= "What is this workstream for?" (:needs b)))
+              (is (not= "the conductor escalated a hand-back" (:summary b)))
+              (is (str/includes? (:summary b) "intake")))))))))
+
 (deftest an-escalation-parks-and-a-reply-answers-it
   (with-tmp
     (fn []
@@ -309,7 +348,7 @@
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :triage-awaiting :next {:stage :accept-triage :mode :human}})]
           (let [hb (:id (conductor/hand-back! :brian id c))]
-            (in-session c #(conductor/decide! :brian id {:hand-back hb :decision [:escalate {:needs "accept the triage"}]})))
+            (in-session c #(legacy-decide! :brian id {:hand-back hb :decision [:escalate {:needs "accept the triage"}]})))
           (Thread/sleep 5)
           (let [amended (add :intent {:format :intent :goal "g2" :done-when ["d"] :supersedes {:seq 1 :why "amend"}})]
             (conductor/answers! :brian)
@@ -650,7 +689,7 @@
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :designed :next {:stage :approve-design :mode :human}})]
           (let [hb (:id (conductor/hand-back! :brian id c))]
-            (in-session c #(conductor/decide! :brian id {:hand-back hb :decision [:escalate {:needs "approve it"}]})))
+            (in-session c #(legacy-decide! :brian id {:hand-back hb :decision [:escalate {:needs "approve it"}]})))
           (Thread/sleep 5)
           (let [granted (add :design-approved {:format :design-approved :design {:seq d} :at-seq d :carried true})]
             (conductor/answers! :brian)
@@ -672,7 +711,7 @@
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :blocked :next {:stage :answer-blocker :mode :human}})]
           (let [hb (:id (conductor/hand-back! :brian id c))]
-            (in-session c #(conductor/decide! :brian id {:hand-back hb :decision [:escalate {:needs "answer it"}]})))
+            (in-session c #(legacy-decide! :brian id {:hand-back hb :decision [:escalate {:needs "answer it"}]})))
           (let [escalated (:seq (last (ws/entries-of :brian id :blocker)))
                 answer    (add :blocker-answered {:format :blocker-answered :blocker-seq b :summary "do y" :resumed nil})]
             (conductor/answers! :brian)
@@ -691,7 +730,7 @@
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :blocked :next {:stage :answer-blocker :mode :human}})]
           (let [hb (:id (conductor/hand-back! :brian id c))]
-            (in-session c #(conductor/decide! :brian id {:hand-back hb :decision [:escalate {:needs "answer it"}]})))
+            (in-session c #(legacy-decide! :brian id {:hand-back hb :decision [:escalate {:needs "answer it"}]})))
           (let [escalated (:seq (last (ws/entries-of :brian id :blocker)))
                 acts      #(keep (fn [a] (when (:act a) [(:blocker-seq a) (get-in a [:act :seq])]))
                                  (ws/entries-of :brian id :blocker-answered))]
@@ -710,7 +749,7 @@
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :published :next {:stage :land :mode :human}})]
           (let [hb (:id (conductor/hand-back! :brian id c))]
-            (in-session c #(conductor/decide! :brian id {:hand-back hb :decision [:escalate {:needs "land it"}]}))))
+            (in-session c #(legacy-decide! :brian id {:hand-back hb :decision [:escalate {:needs "land it"}]}))))
         (Thread/sleep 5)
         (let [merged (add :merged {:format :merged :commit "abc" :url "u" :title "t"})]
           (ws/close! :brian id :done)
@@ -734,7 +773,7 @@
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :triage-awaiting :next {:stage :accept-triage :mode :human}})]
           (let [hb (:id (conductor/hand-back! :brian id c))]
-            (in-session c #(conductor/decide! :brian id {:hand-back hb :decision [:escalate {:needs "accept it"}]}))))
+            (in-session c #(legacy-decide! :brian id {:hand-back hb :decision [:escalate {:needs "accept it"}]}))))
         (add :triage-accepted {:format :triage-accepted :triage-seq r1})
         (conductor/answers! :brian)
         (is (empty? (ws/entries-of :brian id :blocker-answered)) "accepting an older verdict answers nothing")
@@ -781,7 +820,7 @@
                                                 {:turn-ends [{:project :brian :ws-id id :session "fix-it"
                                                               :event {:last-message "done"}
                                                               :instruction {:token (name at)} :run nil}]})))]
-                           (in-session c #(conductor/decide! :brian id {:hand-back hb :decision [:escalate {:needs "x"}]})))
+                           (in-session c #(legacy-decide! :brian id {:hand-back hb :decision [:escalate {:needs "x"}]})))
                          (Thread/sleep 5)
                          (:seq (last (ws/entries-of :brian id :blocker)))))]
         (launching [_] (seats/conductor! :brian id "conduct it"))

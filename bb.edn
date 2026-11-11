@@ -820,6 +820,11 @@
    :doc "What nido asks for at a session's turn boundary — a Claude Code Stop hook. DISABLED (tasks.nido-boundary/enabled?): always exits 0. Enabled, exit 2 asks the turn to continue; 0 asks for nothing. [:cwd <dir>]"
    :task (apply nido-boundary/boundary-cmd *command-line-args*)}
 
+  nido:ask:guidance
+  {:requires ([tasks.nido-ask :as nido-ask])
+   :doc "How to word a question for the person: the generic asking guidance plus a kind's addendum. [:kind answer-blocker|approve-design|acknowledge-invalidation|escalation|…]"
+   :task (apply nido-ask/guidance-cmd *command-line-args*)}
+
   nido:owed
   {:requires ([tasks.nido-owed :as nido-owed])
    :doc "What this worktree's workstream owes, and whether a person owes it. A reading: exits 0 whatever it finds. [:cwd <dir>]"
