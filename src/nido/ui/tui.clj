@@ -974,7 +974,7 @@
     (let [label (or (:br-id ws) (:ws-id ws))
           msg   (try (if (:already? (work/activate! (:project state) (:ws-id ws) nil))
                        (str label " was already activated")
-                       (str "activated " label " — in its session's chat, /activate starts the agent on it"))
+                       (str "activated " label " — in its session's chat, /nido-pipeline starts the agent on it"))
                      (catch clojure.lang.ExceptionInfo e (str "not activated — " (ex-message e))))]
       [(-> state (refresh-list (current-rows state)) (assoc :status msg)) nil])
     [(assoc state :status "(no workstream selected)") nil]))

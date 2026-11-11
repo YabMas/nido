@@ -1,11 +1,11 @@
 ---
-name: activate
-description: Hand this session's workstream to nido's recipe from inside the chat — record the person's activation in the ledger, then write the records the recipe owes (intent, baseline, design) from what this session already understands, so the review loops can check that understanding. Run only when the person asks for it. Usage: /activate
+name: nido-pipeline
+description: Hand this session's workstream to nido's recipe from inside the chat — record the person's activation in the ledger, then write the records the recipe owes (intent, baseline, design) from what this session already understands, so the review loops can check that understanding. Run only when the person asks for it. Usage: /nido-pipeline
 ---
 
-# /activate
+# /nido-pipeline
 
-> **Harness-side skill, owned by nido.** Lives at `nido/.claude/skills/activate/`
+> **Harness-side skill, owned by nido.** Lives at `nido/.claude/skills/nido-pipeline/`
 > and is injected into every session's composed `.claude/skills/`. The in-chat
 > form of `nido activate` and of the TUI board's <kbd>A</kbd>.
 
