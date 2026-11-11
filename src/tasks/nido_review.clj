@@ -20,6 +20,7 @@
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.session :as csession]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.workstream :as ws]
@@ -310,8 +311,11 @@
            :because (str "no round of the run captured a design, and the workstream holds one,"
                          " so there is no design this judgement was made under")}
           (do (ws/append-entry! project ws-id {:kind :review}
-                                (pr-str (cond-> (review-event final report report-path)
-                                          d (assoc :design {:seq d}))))
+                                (pr-str (if d
+                                          (assoc (review-event final report report-path)
+                                                 :design {:seq d})
+                                          (assoc (review-event final report report-path)
+                                                 :yardstick :none))))
               {:ledger :appended :ws-id ws-id})))
       (catch Exception e
         {:ledger :refused :ws-id ws-id :because (refusal-reason e)}))
@@ -1440,6 +1444,21 @@
     {:has     (mapv first (filter second checks))
      :missing (mapv first (remove second checks))}))
 
+(defn- missing-line
+  "The line a run prints for what `run-context` found missing, or nil when nothing is.
+
+   Two lines, because the two absences cost different things. Outside a workstream the run
+   has no cache, ledger or design. Inside one, only the design (and perhaps the stance) is
+   missing: that is a plain workstream's design-less review, and it still skips converged
+   layers and records its entry."
+  [{:keys [missing]}]
+  (when (seq missing)
+    (str "review-loop: running WITHOUT " (str/join ", " missing)
+         (if (some #{"workstream ledger"} missing)
+           " — this run cannot skip converged layers, judge against a design, or record what it found"
+           (str " — a design-less review: no invariant is checked, and a structural finding"
+                " is parked for you rather than handed to a fixer")))))
+
 (defn ^{:malli/schema [:=> [:cat :any] [:maybe :map]]}
   no-yardstick
   "Why this cwd may not have its implementation reviewed, as `{:reason :lines}`,
@@ -1461,22 +1480,28 @@
    parked. A design question patched into invisibility is the exact outcome
    `review_prompt.md` names as the thing the `reach` field exists to prevent.
 
-   So the run is REFUSED rather than degraded. It used to print what it was
-   missing and review anyway, and the report it left was indistinguishable from
-   one produced against a design the change actually held to — same statuses,
-   same findings, same ledger entry, and no reader downstream could tell which
-   of the two they were holding.
+   So a workstream that runs nido's recipe (`standing/activated?`) is REFUSED
+   rather than degraded: it owes a design, and a review without one is the
+   failure above.
+
+   A PLAIN workstream owes none, and its review runs design-less instead. Both
+   of the costs above are answered there by something other than a refusal:
+   `stages/designless-ruling` parks the structural finding a fixer would have
+   patched, and the `:review` entry says `:yardstick :none`, so the run cannot
+   be mistaken for one judged against a design.
 
    Two grounds, because they have different remedies. A cwd belonging to no
-   workstream has nowhere for a record to live at all. A workstream without one
-   is owed a stage, and the ledger already knows which — `pipeline/of` is asked
+   workstream has nowhere for a record to live at all. An activated workstream
+   without one is owed a stage, and the ledger already knows which — `pipeline/of` is asked
    rather than the remedy being guessed, so a workstream that never got a
    baseline is not told to go and write a design.
 
    A third ground shares the second's check: a workstream whose design has
    LANDED holds a record and no yardstick — `stages/delivered-design` — and the
    diff on it is other work. Its remedy is a design for that work, never the
-   stage the ledger says is owed, which for a closed workstream is nothing.
+   stage the ledger says is owed, which for a closed workstream is nothing. It
+   refuses a plain workstream too: the design is still there, so the `:review`
+   entry would have no design to cite and be refused as `:no-design`.
 
    The record loops are not gated by this and must not be: `bb nido:review:baseline`
    and `bb nido:review:design` are how a workstream comes to HAVE a record, and
@@ -1496,19 +1521,20 @@
                   ""
                   "  Give this work its own workstream (bb nido:workstream:fork), or"
                   "  write a design record for it here, then review."]}
-        (let [due (:stage (:next (pipeline/of project ws-id)))]
-          {:reason :no-design-record
-           :lines  (cond-> ["review-loop: REFUSED — this workstream holds no design record."
-                            ""
-                            "  The loop judges an implementation against the design it"
-                            "  committed to. With no record the warden holds no invariant to"
-                            "  weigh a finding against, so a finding that puts the DESIGN in"
-                            "  question is handed to a fixer as an ordinary defect — which"
-                            "  settles it by making it invisible."
-                            ""]
-                     due       (conj (str "  This workstream is owed " (name due)
-                                          " — run that, then review."))
-                     (nil? due) (conj "  Write the design record first, then review."))})))
+        (when (some-> (ws/read-ws project ws-id) standing/activated?)
+          (let [due (:stage (:next (pipeline/of project ws-id)))]
+            {:reason :no-design-record
+             :lines  (cond-> ["review-loop: REFUSED — this workstream holds no design record."
+                              ""
+                              "  The loop judges an implementation against the design it"
+                              "  committed to. With no record the warden holds no invariant to"
+                              "  weigh a finding against, so a finding that puts the DESIGN in"
+                              "  question is handed to a fixer as an ordinary defect — which"
+                              "  settles it by making it invisible."
+                              ""]
+                       due       (conj (str "  This workstream is owed " (name due)
+                                            " — run that, then review."))
+                       (nil? due) (conj "  Write the design record first, then review."))}))))
     {:reason :no-workstream
      :lines  ["review-loop: REFUSED — this directory belongs to no nido workstream."
               ""
@@ -2032,11 +2058,7 @@
                                         :machinery (provenance/loaded-from cwd)}))
         _ (some-> (provenance/warning (:machinery @report-atom)) println)
         _ (some-> (diff-cap-warning max-iters) println)
-        _ (when (seq (:missing context))
-            (println (str "review-loop: running WITHOUT "
-                          (str/join ", " (:missing context))
-                          " — this run cannot skip converged layers, judge"
-                          " against a design, or record what it found")))
+        _ (some-> (missing-line context) println)
         _ (some-> (off-position-line cwd :diff-review) println)]
     ;; Everything from here runs under the claim, which is what makes a second
     ;; invocation join this run instead of reviewing the same tree from

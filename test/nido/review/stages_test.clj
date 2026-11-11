@@ -1787,6 +1787,27 @@
                  [{:id "aa11" :disposition :fix :because "b"}] {})]
       (is (= :fix (:disposition out))))))
 
+(deftest a-design-less-run-parks-the-structural-finding-a-fixer-would-patch
+  ;; With no design the warden's ground (a) cannot fire, so a finding the reviewer marked
+  ;; structural — "the design does not settle this" — would reach a fixer as an ordinary
+  ;; defect. A design-less run is a person's choice, so the question goes back to them.
+  (let [f {:id "aa11" :title "t" :reach :structural :disposition :fix :because "b"}
+        out (@#'stages/designless-ruling nil f)]
+    (is (= :park (:disposition out)))
+    (is (= :fix (:designless-of out)) "what the warden ruled is kept")
+    (is (str/includes? (:because out) "b") "and so is its reason"))
+  (testing "under a design the warden's ruling stands"
+    (is (= :fix (:disposition (@#'stages/designless-ruling
+                               {:seq 3} {:reach :structural :disposition :fix})))))
+  (testing "only a structural fix is moved"
+    (doseq [f [{:reach :local :disposition :fix}
+               {:reach :unclear :disposition :fix}
+               {:reach :structural :disposition :declined}
+               {:reach :structural :disposition :recut :kind :misplaced-cut}
+               ;; A composition finding has its own route — RECUT, NO MOVE, advisory.
+               {:reach :structural :disposition :fix :kind :aggregate}]]
+      (is (= f (@#'stages/designless-ruling nil f)) (pr-str f)))))
+
 (deftest a-parked-round-aimed-no-repair-anywhere
   ;; What the give-up counter in `nido.review.loop` asks: how many repairs were
   ;; tried and failed. A park launches no fixer and orders no reshape, so the

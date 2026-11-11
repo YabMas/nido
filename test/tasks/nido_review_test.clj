@@ -2396,12 +2396,17 @@
   (is (= 1 (t/exit-code :no-workstream)))
   (is (= 0 (t/exit-code :converged)) "an ordinary outcome is still a success"))
 
+(def ^:private activated-ws
+  "A workstream whose ledger holds the :activated grant — one that runs nido's recipe."
+  (constantly {:id "ws-1" :entries [{:kind :activated :seq 1}]}))
+
 (deftest the-gate-names-the-stage-the-ledger-says-is-due
   ;; Guessing the remedy would tell a workstream that never got a baseline to go
   ;; and write a design. The ledger already knows which stage it is owed.
   (with-redefs [stages/project+ws-from-cwd (constantly [:p "ws-1"])
                 stages/discover-design-record (constantly nil)
                 stages/delivered-design (constantly nil)
+                ws/read-ws activated-ws
                 pipeline/of (constantly {:next {:stage :write-baseline}})]
     (let [{:keys [reason lines]} (gate "/w")]
       (is (= :no-design-record reason))
@@ -2409,10 +2414,58 @@
   (with-redefs [stages/project+ws-from-cwd (constantly [:p "ws-1"])
                 stages/discover-design-record (constantly nil)
                 stages/delivered-design (constantly nil)
+                ws/read-ws activated-ws
                 pipeline/of (constantly {:next nil})]
     (is (some #(str/includes? % "Write the design record first")
               (:lines (gate "/w")))
         "a workstream owed nothing still gets an actionable line")))
+
+(deftest a-plain-workstream-with-no-design-record-is-reviewed-design-less
+  ;; A plain workstream owes no design, so there is nothing to refuse it for: the review
+  ;; runs, parks what the design would have settled, and says on its entry that it held none.
+  (with-redefs [stages/project+ws-from-cwd (constantly [:p "ws-1"])
+                stages/discover-design-record (constantly nil)
+                stages/delivered-design (constantly nil)
+                ws/read-ws (constantly {:id "ws-1" :entries [{:kind :scratch :seq 1}]})
+                pipeline/of (fn [& _] (throw (ex-info "not asked" {})))]
+    (is (nil? (gate "/w")) "not refused, and no stage is asked after"))
+  (with-redefs [stages/project+ws-from-cwd (constantly [:p "ws-1"])
+                stages/discover-design-record (constantly nil)
+                stages/delivered-design (constantly {:seq 45 :shape "x"})
+                ws/read-ws (constantly {:id "ws-1" :entries []})]
+    (is (= :design-delivered (:reason (gate "/w")))
+        "a landed design is still refused: its entry would have a design to cite and none judged")))
+
+(deftest a-design-less-run-says-so-on-its-review-entry
+  ;; The absence of `:design` is also what every entry written before the citation shows, so
+  ;; a design-less run says `:yardstick :none` rather than leaving it to be inferred.
+  (let [appended (atom [])]
+    (with-redefs [lifecycle/session-from-cwd (fn [_] {:project "nido" :session "s1"})
+                  csession/workstream-id-for (fn [_ _] "ws-1")
+                  ws/read-ws (fn [_ _] {:id "ws-1" :entries []})
+                  ws/append-entry! (fn [_ _ _ content] (swap! appended conj content) "/path")]
+      (is (= {:ledger :appended :ws-id "ws-1"}
+             (t/append-review-entry! "/w" {:status :converged :findings []}
+                                     {:summary {:rounds 1 :fix-attempts 0}
+                                      :target {:base "main" :base-rev "abc"}}
+                                     "/runs/r/report.json")))
+      (let [ev (clojure.edn/read-string (first @appended))]
+        (is (= :none (:yardstick ev)))
+        (is (nil? (m/explain report/ReviewReport ev)) "the ledger's closed schema admits it"))
+      (t/append-review-entry! "/w" {:status :converged :findings [] :design {:seq 3}}
+                              {:summary {:rounds 1 :fix-attempts 0}
+                               :target {:base "main" :base-rev "abc"}}
+                              "/runs/r/report.json")
+      (is (not (contains? (clojure.edn/read-string (second @appended)) :yardstick))
+          "a run that judged under a design cites it and claims no other yardstick"))))
+
+(deftest the-start-line-says-what-a-design-less-run-gives-up
+  (is (nil? (@#'t/missing-line {:missing []})))
+  (is (str/includes? (@#'t/missing-line {:missing ["design record"]}) "structural finding is parked")
+      "inside a workstream only the design is lost — the cache and the entry are not")
+  (is (str/includes? (@#'t/missing-line {:missing ["workstream ledger" "convergence cache"
+                                                "design record" "project stance"]})
+                     "cannot skip converged layers")))
 
 (deftest a-workstream-whose-design-has-landed-is-refused-as-holding-none
   ;; Four runs of unrelated explore work were judged against a DataPrivacy

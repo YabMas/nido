@@ -3426,6 +3426,32 @@
                          " so rearranging them now buys nothing that survives it."))
     f))
 
+(defn- designless-ruling
+  "With no `design` to judge against, park a `structural` finding the warden ruled `fix`, and
+   leave every other ruling alone.
+
+   `structural` is the reviewer saying the design does not settle this — a question about where
+   a boundary sits rather than a line to change. Holding a design, the warden weighs that against
+   the record's invariants; holding none, ground (a) cannot fire, so a design question would reach
+   a fixer as an ordinary defect and be settled by being patched out of sight. A design-less run
+   is one a person chose to take without a design, so the question goes back to that person.
+
+   A composition finding (one carrying a `kind`) is left out: its route is RECUT, NO MOVE and the
+   advisory kinds, none of which turns on a design. Enforced here rather than in the prompt for
+   `advisory-ruling`'s reason — a routing rule this consequential that lives only in prose is
+   ruled around."
+  [design f]
+  (if (and (nil? design)
+           (= :structural (:reach f))
+           (nil? (:kind f))
+           (= :fix (:disposition f)))
+    (assoc f :disposition :park
+           :designless-of :fix
+           :because (str (or (:because f) "the reviewer marked this structural")
+                         " — parked: this run holds no design record, so a question about"
+                         " where a boundary sits is a person's to decide, not a fixer's to patch."))
+    f))
+
 (defn ^{:malli/schema [:=> [:cat :any :any :any] :any]}
   apply-rulings
   "Merge the warden's per-finding rulings onto the findings, and file each under
@@ -4042,7 +4068,9 @@
                                                  (mapv :findings (:history ctx))
                                                  (:findings ctx))))
                        (of-a-claim (:toc ctx))
-                       (within-the-fence cwd (:toc ctx)))
+                       (within-the-fence cwd (:toc ctx))
+                       ;; Last, so it sees the disposition every rule above settled on.
+                       (mapv (partial designless-ruling design)))
             parks (carried-parks (get-in ctx [:carry :parks] {}) ruled (:iter ctx))
             declines (carried-while-open (get-in ctx [:carry :fixer-declines] {}) ruled)
             ;; The same lifetime rule over the other channel a fixer leaves

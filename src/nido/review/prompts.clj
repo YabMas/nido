@@ -2570,6 +2570,9 @@
           "the record was carrying, so a boundary question the loop cannot\n"
           "move is still a park here — not a `deviation`, which would\n"
           "settle it and report nothing remaining.\n"
+          "A `structural` finding with no `kind` is not a fixer's here either: with\n"
+          "no design to weigh it against it is a question for the person who chose\n"
+          "to run without one. Park it; a `fix` ruling on one is parked for you.\n"
           "The RECUT kinds above are still `recut`, and the kinds listed as NOT A\n"
           "FIXER'S WORK are still not a fixer's — neither case turns on the\n"
           "design record.\n\n"))

@@ -2343,7 +2343,12 @@
    ;; is conditional on the ledger and a schema sees one record. Absent on every
    ;; record written before the citation existed, which is what keeps those
    ;; readable; `reentry/generation` is their attribution and only theirs.
-   [:design {:optional true} [:map {:closed true} [:seq int?]]]])
+   [:design {:optional true} [:map {:closed true} [:seq int?]]]
+   ;; `:none` on a run judged against no design — a plain workstream's, which owes
+   ;; none (`tasks.nido-review/no-yardstick`). Said rather than left to the absence
+   ;; of `:design`, which every record written before the citation also shows:
+   ;; without it a design-less run and an unattributed old one read the same.
+   [:yardstick {:optional true} [:= :none]]])
 
 (def ReviewReportPreSettled
   "The shape :review was written in while the dispatch count was called
