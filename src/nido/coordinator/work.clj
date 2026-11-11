@@ -26,6 +26,7 @@
    [nido.coordinator.lane.pickup :as pickup]
    [nido.coordinator.lane.promote :as promote]
    [nido.coordinator.report :as report]
+   [nido.coordinator.report.ask :as ask]
    [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.lane.conductor :as conductor]
    [nido.coordinator.lane.seats :as seats]
@@ -1562,6 +1563,42 @@
                                             (java.time.Instant/parse driving-since)))))]
          (assoc (select-keys ev [:at :tool-name :tool-input]) :session (:name s)))))
 
+(def ^:private ask-kinds
+  "The ledger kinds a person's question can live in beside the gate's report — a design decision,
+   a design verdict, a triage verdict, a published PR — and the intent the question is judged
+   against. Which of them a question reads is the ask registry's to say; this only fetches them."
+  #{:design-decision :design-verdict :triage :pr-opened :intent})
+
+(defn- ask-inputs
+  "What `ask/ask` reads for a gate: the newest hydrated record of each of `ask-kinds`, oldest
+   first, the live intent (the newest :intent — an amendment is appended, so the newest is the
+   one standing), and the conductor's note when its newest decision is an escalation that parked
+   nothing at the move `position` owes, made after the record that move answers."
+  [project ws-id report position actions]
+  (let [{:keys [base-dir entries]} (active-ledger project ws-id)
+        newest   (->> entries
+                      (filter #(ask-kinds (:kind %)))
+                      (group-by :kind)
+                      vals
+                      (map last)
+                      (sort-by :seq))
+        records  (mapv #(hydrate (entry->report base-dir %)) newest)
+        intent   (last (filter #(= :intent (:format %)) records))
+        decision (->> entries (filter #(= :conduct-decision (:kind %))) last)
+        d        (some->> decision (entry->report base-dir))
+        note     (when (and d
+                            (= :escalate (first (:decision d)))
+                            (nil? (:parked d))
+                            (= (:next d) (:next position))
+                            (> (:seq decision) (or (:seq report) 0)))
+                   (some-> (get-in d [:decision 1 :needs]) str/trim not-empty
+                           (->> (str "The conductor adds: "))))]
+    (cond-> {:report  report
+             :entries (vec (remove #(= :intent (:format %)) records))
+             :actions (vec actions)}
+      intent (assoc :intent intent)
+      note   (assoc :note note))))
+
 (defn- ->gate
   "Hydrate one needs-you spine row into a gate. `:project` is canonicalized to a
    STRING (the web routes on it, e.g. /gate/<project>/…; all-machine-rows tags
@@ -1576,7 +1613,18 @@
         ;; Read once: the action set is derived from what the ledger holds last,
         ;; so the buttons and the report a reader is looking at cannot disagree.
         report  (answered-report project (:ws-id row) (latest-report project (:ws-id row))
-                                 (:position row))]
+                                 (:position row))
+        ;; From the row, not re-derived: the spine used this same reading to decide the
+        ;; workstream is a gate at all, and a second read is a second moment.
+        awaiting (awaiting-human (:position row))
+        actions  (gate-actions (:stage row) parked? (:origin row)
+                               {:report-format  (:format report)
+                                :grantable?     (grantable? project (:ws-id row))
+                                :options        (:options report)
+                                :directions     (:directions report)
+                                :awaiting       awaiting
+                                :gate-criterion (get-in row [:phase :exit :criterion])
+                                :seq            (:seq report)})]
     {:ws-id        (:ws-id row)
      :project      (name project)
      :origin       (:origin row)
@@ -1592,18 +1640,11 @@
      ;; moment.
      :doing        (:doing row)
      :report       report
-     :actions      (gate-actions (:stage row) parked? (:origin row)
-                                 {:report-format (:format report)
-                                  :grantable?    (grantable? project (:ws-id row))
-                                  :options       (:options report)
-                                  :directions    (:directions report)
-                                  ;; From the row, not re-derived: the spine used
-                                  ;; this same reading to decide the workstream is
-                                  ;; a gate at all, and a second read is a second
-                                  ;; moment.
-                                  :awaiting      (awaiting-human (:position row))
-                                  :gate-criterion (get-in row [:phase :exit :criterion])
-                                  :seq           (:seq report)})
+     :actions      actions
+     ;; The question the card leads with, for the move the position owes. Built here, once, so
+     ;; the inbox row, the pane and the TUI all ask the same thing.
+     :ask          (ask/ask (or awaiting :generic)
+                            (ask-inputs project (:ws-id row) report (:position row) actions))
      :session      (:name psess)
      :denials      (driven-denials project (:ws-id row))
      :resume-error (get-in psess [:autonomy :error])
@@ -1611,10 +1652,10 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :Gate]]}
   gates
-  "A project's gates: workstreams that want you now (needs-you), each hydrated
-   with its report + follow-actions — and every workstream with an auto-mode denial
-   recorded in a session nido drives, carried as :denials, so each is shown in the
-   inbox whether or not anything else waits on a person. A SETTLED (closed) workstream is never a gate,
+  "A project's gates: workstreams that owe a person a move now (needs-you), each hydrated
+   with its report, its follow-actions and the question it asks. A denial recorded in a
+   session nido drives rides on a gate as :denials but never makes one: a denial needs no
+   answer, so it is an operational notice (`all-denials`), not a card. A SETTLED (closed) workstream is never a gate,
    even if a stale stage-override still projects :needs-you.
    A DISMISSED row is never a gate either — and the filter is load-bearing, not
    cosmetic: Notion-driven rows ignore nido :closed for engagement, and the parked
@@ -1634,7 +1675,7 @@
   [project live-names]
    (->> (list-workstreams project live-names)
         (remove #(= :dismissed (:stage %)))
-        (filter #(or (:needs-you %) (seq (driven-denials project (:ws-id %)))))
+        (filter :needs-you)
         ;; Between phases is closed, so it reads :settled — and is still owed a
         ;; person's :assert-gate, which only a gate carries.
         (remove #(and (= :settled (:engagement %))
@@ -1674,6 +1715,28 @@
                  (try (gates pname)
                       (catch Throwable _ []))))
        vec))
+
+(defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
+  all-denials
+  "Every open workstream, across registered projects, with an auto-mode denial recorded in a session
+   nido drives: {:project <string> :ws-id :label :denials [{:session :at :tool-name :tool-input}]}.
+   An operational notice, not a gate — nothing in it is a move a person owes, so it is shown where
+   the daemon's health is, and on the workstream, never in the needs-you list. A project that can't
+   be read contributes nothing rather than failing the page."
+  []
+  (->> (project/list-projects)
+       (mapcat (fn [[pname _entry]]
+                 (try
+                   (->> (list-workstreams pname)
+                        (remove #(or (= :dismissed (:stage %)) (= :settled (:engagement %))))
+                        (keep (fn [row]
+                                (when-let [ds (not-empty (driven-denials pname (:ws-id row)))]
+                                  {:project (name pname) :ws-id (:ws-id row)
+                                   :label (:label row) :denials ds})))
+                        doall)
+                   (catch Throwable _ []))))
+       vec))
+
 
 ;; ── The held model ──────────────────────────────────────────────────────────
 ;;

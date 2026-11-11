@@ -553,8 +553,9 @@
                  (into {} (map (juxt :sessionId :baseline-shown?))
                        (work/workstream-listing :brian (:id w))))))))))
 
-(deftest a-denial-in-a-session-nido-drives-is-shown-in-the-gate-inbox
-  ;; Nothing else waits on a person here: the denial alone puts the workstream in the inbox.
+(deftest a-denial-is-an-operational-notice-not-a-gate
+  ;; Nothing waits on a person here: a denial needs no answer, so it is listed for Operations
+  ;; and never puts the workstream in the inbox.
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :brian {:external-refs []})]
@@ -569,11 +570,14 @@
                                          :tool-name "Old"})
         (session-events/append! "s-den" {:event :permission-denied :at "2026-01-02T00:00:00Z"
                                          :tool-name "Bash" :tool-input "{\"command\":\"rm\"}"})
-        (let [g (first (filter #(= (:id w) (:ws-id %)) (work/gates :brian)))]
-          (is (some? g) "the workstream is in the inbox")
-          (is (= [{:session "s" :at "2026-01-02T00:00:00Z" :tool-name "Bash" :tool-input "{\"command\":\"rm\"}"}]
-                 (:denials g))
-              "with the denial recorded since nido began driving it"))))))
+        (is (empty? (filter #(= (:id w) (:ws-id %)) (work/gates :brian)))
+            "the workstream is not in the inbox")
+        (with-redefs [nido.platform.project/list-projects (constantly {:brian {}})]
+          (is (= [{:project "brian" :ws-id (:id w)
+                   :denials [{:session "s" :at "2026-01-02T00:00:00Z" :tool-name "Bash"
+                              :tool-input "{\"command\":\"rm\"}"}]}]
+                 (map #(dissoc % :label) (work/all-denials)))
+              "it is listed for Operations, with the denial recorded since nido began driving it"))))))
 
 (deftest open-target-nil-when-no-sessions
   (with-tmp
@@ -918,7 +922,25 @@
         (is (= "Answer" (:label (last (:actions g))))
             "no agent hears it now, so the button says Answer rather than Reply")
         (is (= 1 (:seq (:action-report (work/workstream :brian (:id w)))))
-            "the pane's action bar answers the same blocker the inbox does")))))
+            "the pane's action bar answers the same blocker the inbox does")
+        (is (= ["n" [:option-a :option-b]] [(:question (:ask g)) (mapv :action (:options (:ask g)))])
+            "and its card asks the buried blocker's question, its branches tied to the buttons")))))
+
+(deftest every-gate-asks-with-the-live-intent-beside-it
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:external-refs []})]
+        (workstream/append-entry! :brian (:id w) {:kind :intent}
+          (pr-str {:format :intent :goal "Old goal." :done-when ["old"]}))
+        (workstream/append-entry! :brian (:id w) {:kind :intent}
+          (pr-str {:format :intent :goal "Live goal." :done-when ["one" "two"] :supersedes {:seq 1 :why "Amended."}}))
+        (workstream/append-entry! :brian (:id w) {:kind :blocker}
+          (pr-str {:format :blocker :summary "the conductor escalated a hand-back" :needs "Which way?"}))
+        (let [a (:ask (work/gate :brian (:id w)))]
+          (is (= "Which way?" (:question a)))
+          (is (= [] (:context a)) "how the question arrived is not context for it")
+          (is (= {:goal "Live goal." :done-when ["one" "two"]} (:goal a))
+              "the newest intent is the one the question is judged against"))))))
 
 (deftest a-buried-blocker-is-answered-by-its-letter-once
   (with-tmp
