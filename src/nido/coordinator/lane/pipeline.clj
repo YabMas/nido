@@ -1217,6 +1217,14 @@
         ;; The record `place` read to put the workstream here, where a person owes the move: what
         ;; a gate asks from and acts on, whatever was appended after it.
         :placed-by (placed-by pos facts)
+        ;; Which move a person owes, as an identity: its stage and the entry that put it there —
+        ;; the placing record, or for a phase gate the close that opened it. Two owed moves are
+        ;; the same move exactly when these are equal, which is what a note recorded over one is
+        ;; bound by.
+        :owes   (when (= :human (:mode nx))
+                  (when-let [n (or (placed-by pos facts)
+                                   (when (= :awaiting-gate pos) (:seq closed)))]
+                    {:stage (:stage nx) :seq n}))
         ;; The spine stage the work is IN, which the arc marks current. A halt
         ;; is not one, so a blocked unit reads at the stage it halted in — the
         ;; position the same facts place without the blocker.

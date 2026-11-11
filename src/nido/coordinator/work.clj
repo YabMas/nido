@@ -1611,8 +1611,8 @@
    the kind the owed move was placed on, that record (`owed-seq`), whatever was appended after it;
    for every other kind, its newest — the live intent (the newest :intent — an amendment is
    appended, so the newest is the one standing), and the conductor's note when its newest decision
-   is an escalation that parked nothing at the move `position` owes, made after the record that
-   move answers. `:source` is the record the Ask reads — the owed one, else `report` — which the
+   is an escalation that parked nothing and was recorded over the very move `position` owes — its
+   :owes equal to the position's. `:source` is the record the Ask reads — the owed one, else `report` — which the
    gate carries as `:ask-record` for the card folded under the Ask; it is not one of ask's inputs."
   [project ws-id report position actions]
   (let [{:keys [base-dir entries]} (active-ledger project ws-id)
@@ -1628,11 +1628,13 @@
         intent   (last (filter #(= :intent (:format %)) records))
         decision (->> entries (filter #(= :conduct-decision (:kind %))) last)
         d        (some->> decision (entry->report base-dir))
+        ;; Bound by identity, never by order: the escalation names the move it was written over
+        ;; (:owes), and rides only on that same move.
         note     (when (and d
                             (= :escalate (first (:decision d)))
                             (nil? (:parked d))
-                            (= (:next d) (:next position))
-                            (> (:seq decision) (or owed (:seq report) 0)))
+                            (some? (:owes position))
+                            (= (:owes d) (:owes position)))
                    (some-> (get-in d [:decision 1 :needs]) str/trim not-empty
                            (->> (str "The conductor adds: "))))]
     (cond-> {:report  report

@@ -3873,6 +3873,9 @@
    [:hand-back [:string {:min 1}]]
    [:position  :keyword]
    [:next      {:optional true} [:maybe :map]]
+   ;; The move a person owed when it was decided (`pipeline/of`'s :owes): an escalation over it
+   ;; rides on that move's Ask as a note while that same move is owed, and on no other.
+   [:owes      {:optional true} [:map {:closed true} [:stage :keyword] [:seq int?]]]
    [:by        [:enum :conductor :nido]]
    [:decision  [:or [:tuple [:= :instruct]
                      [:vector {:min 1} [:map {:closed true} [:seat SeatId] [:text [:string {:min 1}]]]]]

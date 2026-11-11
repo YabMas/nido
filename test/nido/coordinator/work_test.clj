@@ -3828,7 +3828,8 @@
             pos      (pipeline/of :brian id)]
         ;; The conductor escalates the owed acknowledgement, and parks nothing.
         (workstream/append-stamped! :brian id {:format :conduct-decision :hand-back "m-1"
-                                               :position (:at pos) :next (:next pos) :by :conductor
+                                               :position (:at pos) :next (:next pos) :owes (:owes pos)
+                                               :by :conductor
                                                :decision [:escalate {:needs "Weigh the second path."}]})
         ;; A later verdict that answers nothing: the invalidation is still owed.
         (workstream/append-entry! :brian id {:kind :design-verdict}
@@ -4043,6 +4044,42 @@
         (is (= [:awaiting-gate] (map first (work/board-bands g))))
         (is (= [:assert-gate] (map :id (:actions (work/gate :brian id))))
             "closed, so it reads settled — and is still in the gate inbox")))))
+
+(defn- escalate-over!
+  "Record a conductor escalation that parks nothing, over the move the workstream owes now."
+  [id needs]
+  (let [pos (pipeline/of :brian id)]
+    (workstream/append-stamped! :brian id (cond-> {:format :conduct-decision :hand-back "m-1"
+                                                   :position (:at pos) :by :conductor
+                                                   :decision [:escalate {:needs needs}]}
+                                            (:next pos) (assoc :next (:next pos))
+                                            (:owes pos) (assoc :owes (:owes pos))))))
+
+(deftest a-phase-gate-escalation-stays-on-the-gate-it-was-made-over
+  (with-tmp
+    (fn [_]
+      (let [id (landed-between-phases!)]
+        (escalate-over! id "Watch the error budget first.")
+        (workstream/append-entry! :brian id {:kind :note} "Status moved in Notion.")
+        (is (= :awaiting-gate (:at (pipeline/of :brian id))) "the same gate is still owed")
+        (is (= "The conductor adds: Watch the error budget first." (:note (:ask (work/gate :brian id))))
+            "an unrelated append does not take the escalation off the gate it concerns")))))
+
+(deftest an-escalation-over-one-blocker-is-not-a-note-on-another
+  (with-tmp
+    (fn [_]
+      (let [id   (:id (workstream/create! :brian {:external-refs []}))
+            add! (fn [k r] (workstream/append-entry! :brian id {:kind k} (pr-str r))
+                   (count (:entries (workstream/read-ws :brian id))))
+            b1   (add! :blocker {:format :blocker :summary "first" :needs "Which name?"})
+            b2   (add! :blocker {:format :blocker :summary "second" :needs "Which port?"})]
+        (is (= b2 (:placed-by (pipeline/of :brian id))))
+        (escalate-over! id "Take port 80.")
+        (is (= "The conductor adds: Take port 80." (:note (:ask (work/gate :brian id)))))
+        (add! :blocker-answered {:format :blocker-answered :blocker-seq b2 :summary "80"})
+        (is (= b1 (:placed-by (pipeline/of :brian id))) "the older halt holds the workstream again")
+        (is (nil? (:note (:ask (work/gate :brian id))))
+            "and the advice about the port is not shown on the question about the name")))))
 
 (deftest a-retracted-design-supplies-no-plan-and-opens-no-phase
   (with-tmp

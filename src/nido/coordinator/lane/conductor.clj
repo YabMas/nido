@@ -76,10 +76,11 @@
   (first (filter :conductor (session/list-sessions project ws-id))))
 
 (defn- position
-  "Where the pipeline places the workstream now, as {:position <kw> :next <map or nil>}."
+  "Where the pipeline places the workstream now, as {:position <kw> :next <map or nil> :owes <the
+   owed move's identity, or nil>}."
   [project ws-id]
-  (let [{:keys [at next]} (pipeline/of project ws-id)]
-    {:position (or at :unplaceable) :next next}))
+  (let [{:keys [at next owes]} (pipeline/of project ws-id)]
+    {:position (or at :unplaceable) :next next :owes owes}))
 
 ;; ── carrying a start ────────────────────────────────────────────────────────
 
@@ -469,12 +470,13 @@
       (nil? (hand-back-message project ws-id hand-back)) [:refused :not-a-hand-back]
       (answered? project ws-id hand-back)         [:refused :already-answered]
       :else
-      (let [{:keys [position next]} (position project ws-id)]
+      (let [{:keys [position next owes]} (position project ws-id)]
         (try
           [:accepted (record-decision! project ws-id (cond-> {:format :conduct-decision :hand-back hand-back
                                                                :position position :by :conductor
                                                                :decision decision}
-                                                        next (assoc :next next)))]
+                                                        next (assoc :next next)
+                                                        owes (assoc :owes owes)))]
           (catch clojure.lang.ExceptionInfo e
             (if (= :not-a-seat (:reason (ex-data e)))
               [:refused :not-a-seat]
@@ -500,11 +502,12 @@
        project ws-id
        #(if (answered? project ws-id (:id m))
           []
-          (let [{:keys [position next]} (position project ws-id)]
+          (let [{:keys [position next owes]} (position project ws-id)]
             [(record-decision! project ws-id (cond-> {:format :conduct-decision :hand-back (:id m)
                                                       :position position :by :nido
                                                       :decision [:escalate {:needs "the conductor reached no decision on this hand-back — decide it, or tell the conductor how"}]}
-                                               next (assoc :next next)))])))
+                                               next (assoc :next next)
+                                               owes (assoc :owes owes)))])))
       [])))
 
 ;; ── the person's acts ───────────────────────────────────────────────────────
