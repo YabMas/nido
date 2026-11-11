@@ -5,12 +5,23 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.activity :as activity]
+   [nido.coordinator.record.workstream :as ws]
    [tasks.nido-owed :as owed]))
 
-(defn- at [position]
+(defn- at
+  "What `position` owes on a workstream whose ledger is `entries` (default: one activated)."
+  [position & [entries]]
   (with-redefs [pipeline/of        (constantly position)
-                activity/read-live (constantly nil)]
+                activity/read-live (constantly nil)
+                ws/read-ws         (constantly {:entries (or entries [{:kind :activated}])})]
     (owed/owed :brian "ws-1")))
+
+(deftest a-workstream-not-activated-owes-nothing
+  (let [a (at {:at :intent-only :next {:stage :baseline :mode :authoring}} [])]
+    (is (false? (:activated? a)))
+    (is (str/includes? (owed/owed-line a) "not activated"))
+    (is (str/includes? (owed/owed-line a) "nido activate")
+        "and the line names the act that hands it the recipe")))
 
 (deftest a-terminal-position-owes-nothing
   (let [a (at {:at :shipped :next nil})]
@@ -47,7 +58,8 @@
   (let [a (with-redefs [pipeline/of (constantly {:at :baselined
                                                  :next {:stage :verify-baseline
                                                         :mode :mechanical}})
-                        activity/read-live (constantly {:run-id "baseline-loop-7"})]
+                        activity/read-live (constantly {:run-id "baseline-loop-7"})
+                        ws/read-ws (constantly {:entries [{:kind :activated}]})]
             (owed/owed :brian "ws-1"))]
     (is (= "baseline-loop-7" (:held-by a)))
     (is (str/includes? (owed/owed-line a) "held by baseline-loop-7")

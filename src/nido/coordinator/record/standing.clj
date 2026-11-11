@@ -674,6 +674,13 @@
   [w]
   (boolean (some #(= :scratch (:kind %)) (:entries w))))
 
+(defn ^{:malli/schema [:=> [:cat :any] :boolean]}
+  activated?
+  "Whether nido's recipe runs on the workstream: its ledger holds an :activated entry. Until
+   one is written a workstream is a plain one — nothing drives it and nothing is owed on it."
+  [w]
+  (boolean (some #(= :activated (:kind %)) (:entries w))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:maybe :map]]}
   newest-findings
   "The newest findings round filed on the workstream, as written, or nil when none was. Throws,

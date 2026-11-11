@@ -3191,6 +3191,26 @@
        :assert-gate  (advance-phase! project ws-id payload)
        (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id}))))))
 
+(def ^:private activation-preamble
+  (str "nido's recipe is now active on this workstream. Write the records it owes — intent, "
+       "baseline, design — from your understanding of this session so far, as /design says; the "
+       "review loops exist to check that understanding, so do not re-derive it from scratch. Then:\n\n"))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :map]}
+  activate!
+  "Activate nido's recipe on `ws-id` for a person: append its :activated entry (once — activating
+   twice changes nothing), from `session` when the person gave it from one. From then the conduct
+   pass starts its conductor once a person works in it, and a person's start on it is carried.
+   Answers {:ws-id :already? :instruction}, the instruction being what the session's agent is to
+   do now — the surface delivers it, since nido drives no conversation of a plain session."
+  [project ws-id session]
+  (let [p        (keyword (name project))
+        already? (boolean (some-> (cws/read-ws p ws-id) standing/activated?))]
+    (cws/activate! p ws-id session)
+    {:ws-id       ws-id
+     :already?    already?
+     :instruction (str activation-preamble (:practice (seats/default-embodiment)))}))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName :map] :any]}
   start!
   "Bring the session `session-name` up on the workstream holding it — a fresh one-off when none

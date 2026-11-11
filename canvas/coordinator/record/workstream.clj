@@ -100,6 +100,11 @@
      its close no longer stands."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:stage :keyword]] Workstream]
      :delegates [read-ws closure newest-choice append-lock-path]})
+  (Operation activate!
+    "Record a person's grant that nido's recipe runs on a workstream: an :activated entry, written
+     at most once and never on a closed workstream."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session [:maybe :string]]] Workstream]
+     :delegates [read-ws closure append-lock-path]})
   (Operation append-lock-path
     "The lock serialising appends to ONE workstream — per workstream, so two unrelated ones
      never queue behind each other."

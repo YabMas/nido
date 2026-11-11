@@ -78,13 +78,14 @@
 
 (def status-kinds
   "Entry kinds that record a decision about a workstream's status — settled, reopened, put at a
-   stage, findings resolved, born a one-off, a Notion status seen, a conductor's answer to a
-   hand-back — rather than a record of the work. They are the ledger's copy of what used to be overwritten in place.
+   stage, findings resolved, born a one-off, the pipeline activated, a Notion status seen, a
+   conductor's answer to a hand-back — rather than a record of the work. They are the ledger's copy of what used to be overwritten in place.
 
    Kept apart because the work's own records are what everything asking `what happened last`
    means: a close appended after a completed implementation must not become the answer to
    `how did the merge run end`."
-  #{:closed :reopened :stage-set :findings-resolved :scratch :notion-status :conduct-decision})
+  #{:closed :reopened :stage-set :findings-resolved :scratch :activated :notion-status
+    :conduct-decision})
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] [:maybe :map]]}
   newest-record
@@ -268,6 +269,21 @@
    (record-status! project ws-id
                    (fn [w] (when-not (and (nil? (closure w)) (= stage (:stage (newest-choice w))))
                              (cond-> {:format :reopened :stage stage} by (assoc :by by)))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :string]] :Workstream]}
+  activate!
+  "Append the person's :activated entry — the grant that nido's recipe runs on the workstream —
+   naming `session` when it was given from one. At most one is ever written: a second call
+   appends nothing. Throws if the workstream is absent or closed. Returns the record."
+  [project ws-id session]
+  (let [w (or (read-ws project ws-id)
+              (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
+    (when (closure w)
+      (throw (ex-info (str "Workstream " ws-id " is closed: there is nothing to activate")
+                      {:reason :closed :ws-id ws-id}))))
+  (record-status! project ws-id
+                  (fn [w] (when-not (some #(= :activated (:kind %)) (:entries w))
+                            (cond-> {:format :activated :by :person} session (assoc :session session))))))
 
 (def ^:private parsed-entries
   "Entry file → its parsed payload, keyed on [path kind file-stamp].

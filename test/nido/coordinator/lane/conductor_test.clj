@@ -70,12 +70,14 @@
                                               at (assoc :at at)))))
 
 (defn- workstream
-  "A workstream with an intent and nothing designed, so its seat is the whole one. Returns [id add]."
-  []
+  "A workstream with an intent and nothing designed, so its seat is the whole one — activated,
+   unless `:plain` is given. Returns [id add]."
+  [& [plain]]
   (let [id  (:id (ws/create! :brian {:external-refs []}))
         add (fn [kind record] (ws/append-entry! :brian id {:kind kind} (pr-str record))
               (count (:entries (ws/read-ws :brian id))))]
     (add :intent {:format :intent :goal "g" :done-when ["d"]})
+    (when-not (= :plain plain) (ws/activate! :brian id nil))
     [id add]))
 
 (defn- driving
@@ -637,13 +639,13 @@
     (fn []
       (let [[id add] (workstream)
             c        (str id "--conductor")
-            _        (add :baseline a-baseline)
-            _        (add :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "ok"})
+            b        (add :baseline a-baseline)
+            _        (add :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq b :reason "ok"})
             d        (add :design {:format :design :strata [] :summary "s" :shape "sh"
                                    :model {:elements [{:id "agg" :sort :module}]
                                            :claims [{:id "one" :about ["agg"] :statement "one path"
                                                      :falsified-by "a second" :evidence {:by :round}}]}
-                                   :standing {:relation :conforms} :baseline {:seq 2 :relation :within}
+                                   :standing {:relation :conforms} :baseline {:seq b :relation :within}
                                    :intent {:seq 1} :effort :S})]
         (launching [_] (seats/conductor! :brian id "conduct it"))
         (with-redefs [pipeline/of (constantly {:at :designed :next {:stage :approve-design :mode :human}})]
@@ -746,13 +748,13 @@
   (with-tmp
     (fn []
       (let [[id add] (workstream)
+            b        (add :baseline a-baseline)
             design   {:format :design :strata [] :summary "s" :shape "sh"
                       :model {:elements [{:id "agg" :sort :module}]
                               :claims [{:id "one" :about ["agg"] :statement "one path"
                                         :falsified-by "a second" :evidence {:by :round}}]}
-                      :standing {:relation :conforms} :baseline {:seq 2 :relation :within}
+                      :standing {:relation :conforms} :baseline {:seq b :relation :within}
                       :intent {:seq 1} :effort :S}
-            _        (add :baseline a-baseline)
             d1       (add :design (assoc design
                                          :holds {"one" :on-completion}
                                          :phases [{:claim "both" :habitable "h" :exit {:kind :soak :criterion "a week"}
@@ -806,3 +808,47 @@
         (is (not (conductor/awaiting-answer? :brian id))
             "under a newer blocker no conductor's, a reply has no escalation to answer")
         (is (nil? (conductor/answer! :brian id "go")) "as answer! records none")))))
+
+(deftest a-plain-workstream-is-driven-by-nothing-until-a-person-activates-it
+  (with-tmp
+    (fn []
+      (let [[id] (workstream :plain)]
+        (session/create! :brian id {:name "fix-it" :weight :heavy :autonomy nil})
+        (typed! "fix-it")
+        (launching [launched]
+          (is (= {:carried nil :why :not-activated} (conductor/carry! :brian id "fix-it" nil nil :start))
+              "a person's start stays a plain session")
+          (is (empty? (conductor/conductors! :brian)) "a worked plain workstream gets no conductor")
+          (is (= {} (conductor/reseat! :brian id)) "nor is it re-seated")
+          (is (= [] (conductor/hand-backs! {:turn-ends [{:project :brian :ws-id id :session "fix-it"
+                                                         :event {:last-message "done"}
+                                                         :instruction {:token "tok"} :run nil}]}))
+              "and no turn end is handed back")
+          (is (= {:posted nil :why :not-activated} (conductor/hand-back! :brian id "fix-it")))
+          (is (= [] @launched) "nothing was started")
+          (let [w (ws/activate! :brian id "fix-it")]
+            (is (standing/activated? w))
+            (is (= {:format :activated :by :person :session "fix-it"}
+                   (select-keys (first (ws/entries-of :brian id :activated)) [:format :by :session]))))
+          (ws/activate! :brian id nil)
+          (is (= 1 (count (ws/entries-of :brian id :activated))) "activation is written once")
+          (is (= [{:ws-id id :act :started :session (str id "--conductor")}] (conductor/conductors! :brian))
+              "once activated, a worked workstream gets its conductor")
+          (is (= {:carried {:seat 1 :session "fix-it"}} (conductor/carry! :brian id "fix-it" nil nil :start))
+              "and a person's start is carried"))))))
+
+(deftest a-runs-start-is-carried-whether-or-not-activated
+  (with-tmp
+    (fn []
+      (let [[id] (workstream :plain)]
+        (session/create! :brian id {:name "run-s" :weight :heavy :autonomy nil})
+        (launching [_]
+          (is (= {:carried {:seat 1 :session "run-s"}} (conductor/carry! :brian id "run-s"))))))))
+
+(deftest a-closed-workstream-cannot-be-activated
+  (with-tmp
+    (fn []
+      (let [[id] (workstream :plain)]
+        (ws/close! :brian id :done)
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"closed" (ws/activate! :brian id nil)))
+        (is (empty? (ws/entries-of :brian id :activated)))))))

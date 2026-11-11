@@ -3730,6 +3730,17 @@
    [:format  [:= :scratch]]
    [:session {:optional true} string?]])
 
+(def Activated
+  "A person's grant that nido's recipe runs on this workstream: from here a conductor drives it
+   and its seats are instructed stage by stage. Written at most once, by the activate verb. A
+   workstream whose ledger holds none is a plain one — nothing is owed and no conductor drives
+   it; a Run's own session is driven by its Run either way."
+  [:map {:closed true}
+   [:format  [:= :activated]]
+   [:by      [:= :person]]
+   [:session {:optional true} string?]
+   [:note    {:optional true} string?]])
+
 (def NotionStatus
   "The status a Notion page showed when the poller saw it change — or, from the backfill, the
    status the cache held when the ledger began to record it. Written by nido, never by an agent:
@@ -3928,6 +3939,7 @@
    :stage-set                StageSet
    :findings-resolved        FindingsResolved
    :scratch                  Scratch
+   :activated                Activated
    :notion-status            NotionStatus
    :layer-completed          LayerCompleted
    :issue                    Issue
@@ -4489,6 +4501,11 @@
 
 (defn- scratch->markdown [{:keys [session]}]
   (str "# One-off" (when session (str " for session " session))))
+
+(defn- activated->markdown [{:keys [session note]}]
+  (str/join "\n" (remove nil? ["# Pipeline activated by a person"
+                               (when session (str "_from session " session "_"))
+                               note])))
 
 (defn- notion-status->markdown [{:keys [page-id status by]}]
   (str/join "\n" (remove nil? [(str "# Notion status: " status) (str "_page " page-id "_")
@@ -5249,6 +5266,7 @@
     :stage-set                (stage-set->markdown report)
     :findings-resolved        (findings-resolved->markdown report)
     :scratch                  (scratch->markdown report)
+    :activated                (activated->markdown report)
     :notion-status            (notion-status->markdown report)
     :layer-completed          (layer-completed->markdown report)
     :generation               (generation->markdown report)
@@ -5304,6 +5322,7 @@
     :findings-resolved        (str "Findings round " (:round report) ": "
                                    (count (:items report)) " resolved")
     :scratch                  "One-off"
+    :activated                "Pipeline activated"
     :notion-status            (str "Notion status: " (:status report))
     :layer-completed          (str "Layer " (:layer report) "/" (:of report)
                                    (some->> (:seat report) (str " of "))  " done")

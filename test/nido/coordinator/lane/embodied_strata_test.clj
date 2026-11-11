@@ -47,6 +47,8 @@
     (add :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "ok"})
     (let [d (add :design (a-design strata marked))]
       (add :design-approved {:format :design-approved :design {:seq d} :at-seq d}))
+    ;; Re-seating drives only a workstream a person handed to the recipe.
+    (ws/activate! :brian id nil)
     id))
 
 (defn- run [f]

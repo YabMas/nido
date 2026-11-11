@@ -223,6 +223,12 @@
      :delegates [session/list-sessions lifecycle/down!]})
   (Operation orphan-live-sessions "The live sessions no workstream owns. Pure."
     {:signature [:=> [:catn [:live :any] [:owned :any]] :any]})
+  (Operation activate!
+    "Activate nido's recipe on a workstream for a person — its :activated entry, once — and answer
+     the instruction its session's agent is to follow now: write the owed records from what the
+     session already understands, then work the recipe as the whole seat's occupant would."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:session [:maybe :string]]] :map]
+     :delegates [workstream/activate! standing/activated? seats/default-embodiment]})
   (Operation start!
     "Bring a session up on the workstream holding it — a fresh one-off when none does — and on that
      workstream's runtime. The workstream is settled first so the session comes up on its runtime

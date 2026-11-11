@@ -17,6 +17,8 @@
   (:require
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.activity :as activity]
+   [nido.coordinator.record.standing :as standing]
+   [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.work :as work]
    [nido.platform.task-args :as task-args]
    [nido.review.stages :as stages]
@@ -25,7 +27,9 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
   owed
   "What `ws-id` owes: the position, the stage and mode due, the stage a PERSON
-   owes if one does, and whoever holds the activity claim.
+   owes if one does, whoever holds the activity claim, and whether the recipe was
+   activated on it — the position is what the recipe would owe, which nothing
+   owes before activation.
 
    `:person` is a stage rather than a boolean because the two callers want
    different halves of it — a boundary wants to know THAT somebody does, a
@@ -40,7 +44,8 @@
      :stage   (:stage (:next position))
      :mode    (:mode (:next position))
      :person  (work/awaiting-human position)
-     :held-by (:run-id (activity/read-live project ws-id))}))
+     :held-by (:run-id (activity/read-live project ws-id))
+     :activated? (boolean (some-> (ws/read-ws project ws-id) standing/activated?))}))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   owed-line
@@ -49,10 +54,14 @@
    Both read it, which is why it names the command as well as the stage: a
    person needs to know what to type and a model needs to know what it may run,
    and neither is served by a keyword on its own."
-  [{:keys [at stage mode person held-by]}]
+  [{:keys [at stage mode person held-by activated?]}]
   (cond
     held-by      (str "held by " held-by " — something is already advancing this"
                       " workstream; nothing is owed to you until it lets go")
+    (not activated?) (str "not activated — a plain session: nothing is owed and nothing drives it."
+                          " `nido activate` hands it nido's recipe"
+                          (when stage (str ", which would start at " (name stage)))
+                          " — at " (name at))
     (nil? stage) (str "nothing owed — at " (name at) ", and this arc is over")
     person       (str "a person owes " (name person) " — at " (name at)
                       ". Nothing runs until they answer, at the gate"

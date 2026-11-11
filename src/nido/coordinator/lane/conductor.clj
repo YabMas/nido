@@ -89,7 +89,8 @@
    driven by nido — its first instruction `brief` when the start was given one, on `model` when
    given, given by `given-by` (:start when the start was a person's or a spawn's not made on the
    conductor's instruction, `starter`; nil: the conductor answers for it) — and otherwise
-   nothing changes. Called by the session-up verb, spawn, the work plane's start and the daemon's
+   nothing changes. A person's start (:start) on a workstream not activated is not carried
+   (:not-activated): it stays a plain session, and only activation hands the recipe to nido. Called by the session-up verb, spawn, the work plane's start and the daemon's
    start of a Run's conversation, never by birth! or the orphan sweep. Answers {:carried {:seat
    :session}} or {:carried nil :why <reason>}; never throws for a seat it does not take."
   [project ws-id session-name & [brief model given-by]]
@@ -97,6 +98,9 @@
     (cond
       (nil? whole)
       {:carried nil :why :fixes-ids}
+
+      (and (= :start given-by) (not (some-> (ws/read-ws project ws-id) standing/activated?)))
+      {:carried nil :why :not-activated}
 
       (seq (seats/occupants project ws-id))
       {:carried nil :why :occupied}
@@ -173,10 +177,10 @@
   "On every conduct pass: start, on its one conductor record and its brief, the conductor of each
    open workstream of `project` that is worked — a person typed into one of its sessions within
    the window `prompted` was read over (default: read now) — whose conductor's session is not
-   running, and retire the conductor of each closed or unworked one that still has a process or an
-   up session — a ticket a person settled in Notion closes its workstream here as the pipeline
+   running, and retire the conductor of each closed, unworked or not activated one
+   (`standing/activated?`) that still has a process or an up session — a ticket a person settled in Notion closes its workstream here as the pipeline
    places it (`pipeline/settled-in-notion`), and one taken back out starts it again. A workstream
-   not worked gets none. Answers [{:ws-id :started|:retired :session}] for what it did; a failure
+   not worked, or not activated, gets none. Answers [{:ws-id :started|:retired :session}] for what it did; a failure
    is logged and the rest carried on with."
   [project & [prompted-sessions]]
   (let [live     (delay ((requiring-resolve 'nido.coordinator.lane.conduct/live-states) {}))
@@ -193,7 +197,8 @@
            :let  [w (ws/read-ws project ws-id)
                   act (cond
                         (nil? w) nil
-                        (or (ws/closure w) (pipeline/settled-in-notion project ws-id w) (not worked))
+                        (or (ws/closure w) (pipeline/settled-in-notion project ws-id w) (not worked)
+                            (not (standing/activated? w)))
                         (when (and c (needs-retiring? project c @live)) :retired)
                         (not (and c (running? c @live)))
                         :started)]
@@ -237,13 +242,14 @@
    the current seats do not include, and occupy each current seat with the embodiment that carries it — the
    default embodiment while the generation fixes no ids, the strata embodiment while it fixes
    strata — escalating, by name, seats no embodiment carries and a seat whose start failed in this
-   pass, and answering that escalation as nido once every seat is held. A closed workstream is
-   left as it is. Answers {:retired :occupied :escalated}."
+   pass, and answering that escalation as nido once every seat is held. A closed workstream, and
+   one not activated, is left as it is. Answers {:retired :occupied :escalated}."
   [project ws-id & [prompted-sessions]]
   (if-not (and (carried? project ws-id)
                (let [typed-in (or prompted-sessions (prompted))]
                  (and (not= :unread typed-in) (worked? project ws-id typed-in)))
-               (not (some-> (ws/read-ws project ws-id) ws/closure)))
+               (let [w (ws/read-ws project ws-id)]
+                 (and w (standing/activated? w) (not (ws/closure w)))))
     {}
     (let [{:keys [retired]} (seats/reseat! project ws-id)
           current  (rseats/seats project ws-id)
@@ -316,14 +322,16 @@
    for no Run — once per turn end, keyed on its instruction's token — with the session, its seat
    when it has one, the turn's last message, the position the pipeline derives at that moment, and
    the governing design and seats as the records give them then.
-   A turn nido did not give is the person's, and its end is logged to no one. Answers the
-   hand-backs posted."
+   A turn nido did not give is the person's, and its end is logged to no one; nor is any turn
+   end of a workstream not activated, which has no conductor to read it. Answers the hand-backs
+   posted."
   [{:keys [turn-ends]}]
   (vec
    (for [{:keys [project ws-id session event instruction run]} turn-ends
          :when (and instruction (nil? run))
          :let  [s (session/read-session project ws-id session)]
-         :when (and s (not (:conductor s)))]
+         :when (and s (not (:conductor s))
+                    (some-> (ws/read-ws project ws-id) standing/activated?))]
      (post-hand-back! project ws-id (str "turn:" session ":" (:token instruction))
                       {:what "a turn nido gave ended" :session session :seat (get-in s [:seat :id])
                        :said (:last-message event)}))))
@@ -332,8 +340,12 @@
   hand-back!
   "Log a person's hold on `session-name`, handed back, to the workstream's conductor — once per
    hand-back, keyed on when nido began driving it again — as hand-backs! logs a turn end, the
-   last message its conversation's newest turn end reported among it."
+   last message its conversation's newest turn end reported among it. On a workstream not
+   activated there is no conductor, and nothing is logged: answers {:posted nil :why
+   :not-activated}."
   [project ws-id session-name]
+  (if-not (some-> (ws/read-ws project ws-id) standing/activated?)
+    {:posted nil :why :not-activated}
   (let [s    (session/read-session project ws-id session-name)
         ;; The hold's last turn end is the newest stop its conversation reported.
         said (some->> (get-in s [:claude :session-id])
@@ -343,7 +355,7 @@
                       :last-message)]
     (post-hand-back! project ws-id (str "hold:" session-name ":" (get-in s [:claude :driving-since]))
                      {:what "a person's turn held this session and was handed back"
-                      :session session-name :seat (get-in s [:seat :id]) :said said})))
+                      :session session-name :seat (get-in s [:seat :id]) :said said}))))
 
 ;; ── decisions ───────────────────────────────────────────────────────────────
 

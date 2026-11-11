@@ -966,6 +966,19 @@
        nil])
     [(assoc state :status "(no workstream selected)") nil]))
 
+(defn- activate-selected
+  "Activate nido's recipe on the highlighted workstream (work/activate!). The TUI drives no
+   conversation, so the status line says how the session's agent gets its instruction."
+  [state]
+  (if-let [ws (selected-workstream state)]
+    (let [label (or (:br-id ws) (:ws-id ws))
+          msg   (try (if (:already? (work/activate! (:project state) (:ws-id ws) nil))
+                       (str label " was already activated")
+                       (str "activated " label " — in its session, `nido activate` prints the agent's instruction"))
+                     (catch clojure.lang.ExceptionInfo e (str "not activated — " (ex-message e))))]
+      [(-> state (refresh-list (current-rows state)) (assoc :status msg)) nil])
+    [(assoc state :status "(no workstream selected)") nil]))
+
 ;; ---------------------------------------------------------------------------
 ;; Gate Apply/Reply — parked workstream helpers
 ;; ---------------------------------------------------------------------------
@@ -1094,6 +1107,7 @@
       [(enter-workstream state (:ws-id ws) (:label ws)) nil] [state nil])
     (msg/key-match? msg "n") (open-create-session state (:project state))
     (msg/key-match? msg "P") (open-stage-picker state)
+    (msg/key-match? msg "A") (activate-selected state)
     (msg/key-match? msg "d")
     (let [sel (selected-workstream state)]
       (if (= :winding-down (:stage sel))
@@ -1456,7 +1470,7 @@
                   :ops                  "[h]alt  [c]lear breaker  [r]esume trigger  [f]ire  [p]ickup  [esc] back"
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
-                    :board      "[↵/o] open  [i]nspect  [n]ew  [P] promote to…  [d]one/bring-down  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s] ops  [esc] back  [q]uit"
+                    :board      "[↵/o] open  [i]nspect  [n]ew  [P] promote to…  [A]ctivate recipe  [d]one/bring-down  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s] ops  [esc] back  [q]uit"
                     :workstream "[↵] chat  [o] browser  [w]orktree  [u] start  [d] stop  [r] restart  [X] destroy  [esc] back  [q]uit"))))
 
 (defn- info-row [label value]
