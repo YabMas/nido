@@ -107,9 +107,6 @@
         sel (:selection view-state)
         ws-errors (dev/failed-ws-errors)]
     (-> screen
-        ;; Beside the gates, never among them: a casualty is no workstream's gate, and the
-        ;; inbox's count stays a count of gates. An unreadable record must not cost the inbox.
-        (assoc :casualties (try (:casualties (work/shown-revivals)) (catch Throwable _ [])))
         (assoc :selection
                (when sel
                  (let [ws (when (= :workstreams (:surface view-state))
@@ -297,8 +294,12 @@
     (sse-response (sse-fragment (views/review-queue-fragment qs (requested-projects qs))))))
 
 (defn- operations-home-cards []
+  ;; Notices are no workstream's question, so they are here rather than in the needs-you list. An
+  ;; unreadable record costs its notice, never the page.
   (views/operations-home-cards (all-proposals) (session-recovery nil) (improvement-holds)
-                               (review-queues)))
+                               (review-queues)
+                               {:casualties (try (:casualties (work/shown-revivals)) (catch Throwable _ []))
+                                :denials    (try (work/all-denials) (catch Throwable _ []))}))
 
 (defn- operations-home-fragment-response []
   (sse-response (sse-fragment (views/operations-home-fragment (operations-home-cards)))))

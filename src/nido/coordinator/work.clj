@@ -1383,6 +1383,8 @@
                  (and (< (:seq %) g) (phase-trail-kinds (:kind %))))
             entries)))
 
+(declare driven-denials)
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? :any]] :map]}
   workstream
   "Full detail for one workstream: origin, spine stage, label, a light ledger
@@ -1496,6 +1498,9 @@
         :environment  (environment project ws-id)
         ;; Whether :reply reaches anyone — a conductor's open escalation counts with a parked agent.
         :replyable?   (replyable? project ws-id)
+        ;; Shown on the workstream whether or not it is a gate: a denial needs no answer, so the
+        ;; inbox never carries it on its own, and this is where a reader of the work finds it.
+        :denials      (driven-denials project ws-id)
         :sessions     (let [waiting    (resume/waiting-session project ws-id)
                             run-states (into {} (map (juxt :session-name :state))
                                              (runs/runs-of project ws-id))]

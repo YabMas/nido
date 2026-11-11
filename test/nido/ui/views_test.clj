@@ -1664,3 +1664,50 @@
         "nobody hears an Answer, so it names no session it would resume")
     (is (str/includes? reply "Send &amp; resume"))
     (is (str/includes? reply "resumes run-x"))))
+
+(def ^:private sample-ask
+  {:kind :answer-blocker
+   :question "Where should students see interactive elements?"
+   :context ["Students run AI dialogues in brian-mobile."]
+   :options [{:letter "A" :label "Web only" :summary "Through the Preview tab." :recommended? true :action :option-a}
+             {:letter "B" :label "brian-mobile too" :summary "Mobile work." :consequence "A second ticket." :action :option-b}]
+   :answer-does [{:action :option-a :label "A" :does "Records A as your answer."}]
+   :goal {:goal "Let a teacher embed interactive elements." :done-when ["A teacher can attach one."]}
+   :note "The conductor adds: the seat waits on this."})
+
+(deftest a-card-leads-with-its-question
+  (let [g (assoc sample-gate :ask sample-ask)]
+    (is (str/includes? (views/needs-fragment {:gates [g] :selection nil :scope "all"})
+                       "Where should students see interactive elements?")
+        "the row previews the question, not the record's first line")
+    (let [pane (views/gate-pane g)
+          at   #(str/index-of pane %)]
+      (doseq [s ["Students run AI dialogues" "Web only" "recommended" "A second ticket."
+                 "Records A as your answer." "Let a teacher embed" "A teacher can attach one."
+                 "The conductor adds"]]
+        (is (str/includes? pane s)))
+      (is (< (at "Where should students") (at "The record: markdown") (at "bug — reproduced."))
+          "the question leads, and the record it was read from is folded under it"))))
+
+(deftest notices-are-on-operations-not-the-needs-you-list
+  (let [cards (str (views/operations-home-fragment
+                    (views/operations-home-cards [] nil [] [] {:casualties [{:project "brian" :session "s1"}]
+                                                               :denials [{:project "nido" :ws-id "ws-9" :label "Fix it"
+                                                                          :denials [{:session "s" :tool-name "Bash"}]}]})))]
+    (is (str/includes? cards "nido session:revive"))
+    (is (str/includes? cards "brian/s1"))
+    (is (str/includes? cards "/workstreams/nido/ws-9") "a denial links to its workstream")
+    (is (str/includes? cards "latest: Bash")))
+  (is (not (str/includes? (str (views/operations-home-fragment (views/operations-home-cards [] nil [] [] {})))
+                          "Permission denials"))
+      "no notice when there is nothing to know")
+  (is (str/includes? (views/needs-fragment {:gates [] :selection nil :scope "all" :casualties [{:project "brian"}]})
+                     "Nothing needs you right now.")
+      "a casualty is no card in the needs-you list"))
+
+(deftest the-workstream-pane-lists-its-denials
+  (let [html (views/workstream-pane (assoc sample-ws :denials [{:session "auto" :at "t" :tool-name "Write"
+                                                                :tool-input "/etc/hosts"}])
+                                    {})]
+    (is (str/includes? html "Permission denials while nido drives it"))
+    (is (str/includes? html "/etc/hosts"))))

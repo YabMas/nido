@@ -91,6 +91,21 @@
         .gate-prev { color:#7a7a98; font-size:11.5px; margin:5px 0 0 26px;
                      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .gate-err { color:#f87171; font-size:11px; margin:4px 0 0 26px; }
+        /* The ask leads the gate pane: the question, then what it presupposes, the answers on
+           offer, what each button does, and the goal it is judged against. */
+        .ask { margin:4px 0 18px; }
+        .ask-q { font-size:17px; color:#f0f0f8; margin:0 0 10px; line-height:1.4; }
+        .ask-ctx p { color:#c8c8dc; margin:0 0 8px; }
+        .ask-note { color:#a8b4c0; font-style:italic; }
+        .ask h3 { font-size:11px; color:#9a9ac0; text-transform:uppercase; letter-spacing:.06em;
+                  margin:14px 0 6px; }
+        .ask-opts { list-style:none; padding:0; margin:0; }
+        .ask-opts li { border-left:2px solid #2a2a4a; padding:4px 10px; margin:0 0 6px; }
+        .ask-opts li.rec { border-left-color:#4ade80; }
+        .ask-does { margin:0; display:grid; grid-template-columns:max-content 1fr; gap:4px 12px; }
+        .ask-does dt { color:#cfd8e3; } .ask-does dd { margin:0; color:#a8b4c0; }
+        .ask-goal ol { margin:4px 0 0; padding-left:20px; color:#a8b4c0; }
+        .ask-record > summary { cursor:pointer; color:#9a9ac0; font-size:12px; }
         .chip { padding:0 7px; border-radius:3px; font-size:10.5px; text-transform:uppercase; }
         .c-triage{ background:#2a2a1a; color:#facc15; } .c-ready{ background:#1a3a2a; color:#4ade80; }
         .c-in-progress{ background:#1a2a3a; color:#7eb8da; }
@@ -802,7 +817,7 @@
    `:doing` renders the same activity badge the workstream list shows: waiting on
    a person and having something underway are separate facts, and a gate can hold
    both at once."
-  [{:keys [project origin stage label tag report session resume-error pending? error-msg doing denials]} sel? href]
+  [{:keys [project origin stage label tag report ask session resume-error pending? error-msg doing denials]} sel? href]
   [:a {:class (str "gate-card" (when sel? " sel"))
        :href  href}
    [:div.gate-top (origin-badge origin) [:span.lbl label] [:span.needs {:title "needs you"}]]
@@ -813,7 +828,9 @@
     ;; right now. A claim outranks session state, so the two coexist — and the
     ;; queue would otherwise be the one surface silent about the round underway.
     (doing-badge doing)]
-   [:div.gate-prev (or (some-> report :markdown
+   ;; The question the card asks, so a reader scanning the list sees what each one wants of them.
+   [:div.gate-prev (or (:question ask)
+                       (some-> report :markdown
                                (str/replace #"^#.*\n+" "")
                                str/split-lines first)
                        "—")]
@@ -825,31 +842,18 @@
      [:div.gate-err "⚠ " (count denials) " permission denial" (when (< 1 (count denials)) "s")
       " — latest: " (or (:tool-name (peek denials)) "?")])])
 
-(defn- casualty-card
-  "The workstreams that died with the host, and the command that brings them back. A command and no
-   button: reviving opens terminal tabs, which only a process in the person's terminal session
-   can do, and the dashboard runs inside the daemon."
-  [casualties]
-  [:div.gate-card
-   [:div.gate-top [:span.lbl (count casualties) (if (= 1 (count casualties)) " workstream" " workstreams")
-                   " to revive"] [:span.needs {:title "needs you"}]]
-   [:div.gate-sub [:span "died with the host"]
-    [:span "run " [:code "nido session:revive"] " in a terminal — " [:code ":dry-run true"] " to preview"]]
-   [:div.gate-prev (str/join ", " (map #(str (:project %) "/" (or (:session %) (:instance-id %))) casualties))]])
-
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   needs-fragment
   "The needs-you queue column — initial render + SSE refresh. Renders from the
    screen so a poll preserves the open gate's highlight (selection is threaded
    from the screen, not reset to nil each tick). Each gate's link carries the
    view-state (scope + selection) so selecting one preserves scope."
-  [{:keys [gates selection casualties] :as screen}]
+  [{:keys [gates selection] :as screen}]
   (let [sel-id (:ws-id selection)]
     (str
      (h/html
-      (if (or (seq gates) (seq casualties))
+      (if (seq gates)
         [:div {:id "needs"}
-         (when (seq casualties) (casualty-card casualties))
          (for [g gates]
            (gate-card g (= sel-id (:ws-id g))
                       (str "/" (screen-query screen {:sel (str (:project g) ":" (:ws-id g))}))))]
@@ -1748,6 +1752,34 @@
      :proposed-ticket          (md/render (report/report->markdown report))
      (md/render (:markdown report))))))
 
+(defn- ask-card
+  "The question a gate asks, in the one shape every kind is asked in (report.ask): the question,
+   what it presupposes, the answers on offer with what each costs, what each button does, and the
+   goal the answer is judged against, done-whens numbered as the intent numbers them."
+  [{:keys [question context options answer-does goal note]}]
+  [:div.ask
+   [:h2.ask-q question]
+   (when (seq context) (into [:div.ask-ctx] (map (fn [c] [:p c])) context))
+   (when note [:p.ask-note note])
+   (when (seq options)
+     (list [:h3 "Answers on offer"]
+           (into [:ul.ask-opts]
+                 (map (fn [{:keys [letter label summary consequence recommended?]}]
+                        [:li {:class (when recommended? "rec")}
+                         [:strong letter ". " label] (when recommended? [:span.meta " · recommended"])
+                         (when-not (str/blank? summary) [:div summary])
+                         (when consequence [:div.meta consequence])]))
+                 options)))
+   (when (seq answer-does)
+     (list [:h3 "What each answer does"]
+           (into [:dl.ask-does]
+                 (mapcat (fn [{:keys [label does]}] [[:dt label] [:dd does]]))
+                 answer-does)))
+   (when goal
+     [:div.ask-goal [:h3 "What this workstream is for"]
+      [:p (:goal goal)]
+      (when (seq (:done-when goal)) (into [:ol] (map (fn [d] [:li d])) (:done-when goal)))])])
+
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   gate-pane
   "The detail pane: rendered report + follow-actions. nil -> calm placeholder.
@@ -1755,8 +1787,9 @@
    and no action buttons — deriving action availability from the agent's live
    phase, so a poll can't flip it back to a fresh Apply button. `:error-msg` (a
    failed action) renders above the buttons, which stay clickable to retry. `:denials` —
-   auto-mode denials in a session nido drives — render above the report."
-  [{:keys [ws-id project origin label tag links report actions session pending? error-msg doing
+   auto-mode denials in a session nido drives — render above the question. `:ask` leads the
+   pane, with the record it was read from folded under it."
+  [{:keys [ws-id project origin label tag links report ask actions session pending? error-msg doing
            denials]
     :as gate}]
   (str
@@ -1775,8 +1808,16 @@
        (when (seq denials)
          [:div.denials [:p.meta "Permission denials while nido drives it:"]
           (into [:ul] (map denial-line) denials)])
-       (when report [:div.meta (some-> report :format name) " · " (:at report)])
-       (report-body report)
+       ;; The question leads; the record it was read from is one click away, for a reader who
+       ;; wants the whole of it rather than what the question needs.
+       (if ask
+         (list (ask-card ask)
+               (when report
+                 [:details.ask-record
+                  [:summary "The record: " (some-> report :format name) " · " (:at report)]
+                  (report-body report)]))
+         (list (when report [:div.meta (some-> report :format name) " · " (:at report)])
+               (report-body report)))
        (if pending?
          [:div.actions {:style "margin-top:16px"} [:span.meta "working… the agent is running."]]
          (list (when error-msg [:div.action-err "⚠ " error-msg])
@@ -2458,7 +2499,7 @@
    — see pane-fragment), so transient dev-env states (starting…) self-advance
    without the refresh closing whatever the reader has open."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label tag links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan status replyable?]
+  ([{:keys [project ws-id origin stage label tag links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing plan status replyable? denials]
      :or {on-latest? true}} session-dev-states machine-facts]
    (let [pos  {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds
                :stage open-stage :history? history?}
@@ -2504,6 +2545,9 @@
             (when (seq (:stages arc))
               (arc-block pos arc entries report in-stage? (wsv/doing-label doing)))
             (when (seq holds) (holds-block holds))
+            (when (seq denials)
+              [:div.denials [:p.meta "Permission denials while nido drives it:"]
+               (into [:ul] (map denial-line) denials)])
             ;; The actions belong HERE and not under the log, because they act on
             ;; the workstream as it stands — pane-action-bar reads :action-report,
             ;; the CURRENT report, never the entry a reader happens to have open.
@@ -3036,13 +3080,50 @@
                    (str (:approved counts) " approved · " (:skipped counts) " skipped"))
                  more]})))
 
-(defn ^{:malli/schema [:=> [:cat :any [:maybe :map] [:maybe [:vector :map]] [:maybe [:vector :map]]] :any]}
+(defn- notice-card
+  "An operational notice: something to know that asks no move on any workstream. Not a link —
+   it has no page of its own; its lines say what to do, or link to the workstream it is about."
+  [{:keys [title headline lines]}]
+  [:div.ops-card
+   [:div.ops-card-title title]
+   [:div.ops-card-num headline]
+   (for [l lines :when l] [:div.meta l])])
+
+(defn- casualties-notice
+  "The workstreams that died with the host, and the command that brings them back. A command and no
+   button: reviving opens terminal tabs, which only a process in the person's terminal session
+   can do, and the dashboard runs inside the daemon."
+  [casualties]
+  (notice-card
+   {:title    "Host casualties"
+    :headline (str (count casualties) (if (= 1 (count casualties)) " session" " sessions") " to revive")
+    :lines    [(list "run " [:code "nido session:revive"] " in a terminal — "
+                     [:code ":dry-run true"] " to preview")
+               (str/join ", " (map #(str (:project %) "/" (or (:session %) (:instance-id %))) casualties))]}))
+
+(defn- denials-notice
+  "Every workstream whose driven session recorded an auto-mode denial, each linking to the
+   workstream, whose pane lists them."
+  [denied]
+  (notice-card
+   {:title    "Permission denials"
+    :headline (str (reduce + (map (comp count :denials) denied)) " in "
+                   (count denied) (if (= 1 (count denied)) " workstream" " workstreams"))
+    :lines    (for [{:keys [project ws-id label denials]} denied]
+                [:a {:href (str "/workstreams/" project "/" ws-id)}
+                 (or label ws-id) " — latest: " (or (:tool-name (peek denials)) "?")])}))
+
+(defn ^{:malli/schema [:=> [:cat :any [:maybe :map] [:maybe [:vector :map]] [:maybe [:vector :map]] [:maybe :map]] :any]}
   operations-home-cards
   "The card for each operational concern, read from the same values their own
    pages render — so a card and the page behind it cannot disagree about a count.
    A value that could not be read (nil) is said on its card rather than shown as
-   zero, since zero is the reading that nothing needs anyone."
-  [proposals recovery holds queues]
+   zero, since zero is the reading that nothing needs anyone.
+
+   `notices` — {:casualties [..] :denials [..]} — are what nido wants a person to know that is no
+   workstream's question, so they are here and never in the needs-you list. Shown only when there
+   is one: a notice of nothing is noise."
+  [proposals recovery holds queues {:keys [casualties denials]}]
   (let [{:keys [open queued waiting]} (group-by proposal-band proposals)
         stuck (count (filter #(#{:stuck :waiting-on-you} (:state %)) holds))
         {:keys [needs-you recovering waiting-rec]}
@@ -3077,7 +3158,9 @@
      (when (or (nil? queues) (seq queues))
        (if (nil? queues)
          (review-queue-card [{:stage nil}])
-         (review-queue-card queues)))]))
+         (review-queue-card queues)))
+     (when (seq casualties) (casualties-notice casualties))
+     (when (seq denials) (denials-notice denials))]))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :any]] :string]}
   operations-home-fragment
