@@ -111,6 +111,7 @@
   "How each trail kind on `w` stands against the design at `current`:
 
      {:current #{kinds holding at least one record made under it}
+      :records [{:kind :seq :under} …]  — those records, oldest first; :current is their kinds
       :stale   [{:kind :seq :under} …]  — records made under an older design}
 
    Only records written after the newest restart (`restart`) are graded; those
@@ -146,6 +147,7 @@
                                     (> (:seq %) (or (restart w) 0)))
                               (:entries w)))]
     {:current (into #{} (comp (filter #(>= (:under %) current)) (map :kind)) graded)
+     :records (filterv #(>= (:under %) current) graded)
      ;; BEHIND, not merely different. Callers pass the latest design, so a record
      ;; under a newer one cannot arise there — but `stale` should mean what it
      ;; says for any argument, and a `not=` here reports a record from the future
@@ -165,6 +167,16 @@
   [design-standing baseline-standing intent-standing]
   (or design-standing baseline-standing intent-standing))
 
+(defn ^{:malli/schema [:=> [:cat :Workstream [:maybe :map]] [:maybe [:vector :map]]]}
+  standing-trail-records
+  "The trail records `standing-trail` is the kinds of, oldest first — {:kind :seq …} each — or
+   nil when `w` holds no restart."
+  [w design]
+  (when-let [r (restart w)]
+    (if design
+      (:records (trail-standing w (:seq design)))
+      (filterv #(and (trail-kinds (:kind %)) (> (:seq %) r)) (:entries w)))))
+
 (defn ^{:malli/schema [:=> [:cat :Workstream [:maybe :map]] [:maybe [:set :keyword]]]}
   standing-trail
   "The trail kinds that stand on `w` since its newest `:phase-gate` or `:findings`,
@@ -176,11 +188,7 @@
    under it count, as in `trail-standing`; with no design, every trail record
    written since does."
   [w design]
-  (when-let [r (restart w)]
-    (if design
-      (:current (trail-standing w (:seq design)))
-      (into #{} (comp (filter #(and (trail-kinds (:kind %)) (> (:seq %) r))) (map :kind))
-            (:entries w)))))
+  (some->> (standing-trail-records w design) (into #{} (map :kind))))
 
 (defn ^{:malli/schema [:=> [:cat :Workstream [:maybe :map] [:maybe :Standing] [:maybe :map]]
                         [:maybe :map]]}
@@ -195,12 +203,13 @@
    most expensive part of a render to answer a question the caller had the inputs
    for.
 
-   Returns {:stage :trail :because (:indeterminate?)} or nil. `:because` is the
+   Returns {:stage :trail (:trail-records) :because (:indeterminate?)} or nil. `:because` is the
    standing's own :blocked map where standing is what decided, so a surface
    renders one vocabulary of reasons rather than a translation of it. `:trail` is
    the trail kinds that DO still stand — what the position fold may still read —
    and it is empty whenever the baseline, the design or the approval is what is
-   owed, because nothing above the approval may be reported at all.
+   owed, because nothing above the approval may be reported at all. `:trail-records` are the
+   records `:trail` is the kinds of, present only where `:trail` is not empty.
    `:indeterminate?` marks the answer standing could not derive, which the fold
    must not read as a design that is merely owed again."
   [w design st bst]
@@ -253,7 +262,7 @@
                             " the design at entry " (:seq design))}}
 
     :else
-    (let [{:keys [current stale]} (trail-standing w (:seq design))
+    (let [{:keys [current records stale]} (trail-standing w (:seq design))
           ;; A stage is owed when it holds records and none of them is current.
           ;; The LOWEST such stage is the answer: work resumes at the earliest
           ;; thing that no longer stands, and everything above it follows.
@@ -266,6 +275,7 @@
       (when owed
         {:stage owed
          :trail current
+         :trail-records records
          :because {:reason :trail-superseded
                    :seq (:seq design)
                    :records (vec stale)

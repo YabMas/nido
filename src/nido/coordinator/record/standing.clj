@@ -415,16 +415,23 @@
   (when-let [d (governing-design project ws-id)]
     {:design d :standing (of-design project ws-id d)}))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int] [:maybe :map]]}
+  proceeding-decision
+  "The newest decision round naming design `design-seq`, stamped, when it lets the design proceed
+   (`proceeding?`); nil when it does not or no round named it."
+  [project ws-id design-seq]
+  (some->> (ws/entries-of project ws-id :design-decision)
+           (filter #(= design-seq (:design-seq %)))
+           last
+           (#(when (report/proceeds? %) %))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int] :boolean]}
   proceeding?
   "Whether the newest decision round naming design `design-seq` lets it proceed — a :proceed,
    or a sendback over the advisory check alone. The NEWEST, not any: a design told to proceed
    and later sent back against code that moved is sent back. False when no round named it."
   [project ws-id design-seq]
-  (boolean (some->> (ws/entries-of project ws-id :design-decision)
-                    (filter #(= design-seq (:design-seq %)))
-                    last
-                    report/proceeds?)))
+  (some? (proceeding-decision project ws-id design-seq)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   of-baseline

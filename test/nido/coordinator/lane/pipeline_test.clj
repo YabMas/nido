@@ -761,6 +761,36 @@
             (is (= :implementation (:stage (:re-entry r))))
             (is (= :trail-superseded (:reason (:because (:re-entry r)))))))))))
 
+(deftest a-publication-places-by-the-record-under-the-governing-design
+  ;; A later :pr-opened may cite an older design. The workstream is published by the one under
+  ;; the design that governs, and that is the record the position names as what placed it.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            [b d1] (approved-and-implemented! add!)
+            d2 (add! :design (assoc (a-design b) :supersedes {:seq d1 :why "recut"}))]
+        (add! :design-decision (a-decision d2 :proceed))
+        (add! :design-approved {:format :design-approved :design {:seq d2} :at-seq d2})
+        (add! :implementation-completed {:format :implementation-completed :summary "done"
+                                         :artifacts [] :design {:seq d2}})
+        (let [pr2 (add! :pr-opened {:format :pr-opened :url "https://x/2" :title "under d2"
+                                    :design {:seq d2}})]
+          (add! :pr-opened {:format :pr-opened :url "https://x/1" :title "under d1"
+                            :design {:seq d1}})
+          (let [r (p/of :brian id)]
+            (is (= :published (:at r)))
+            (is (= pr2 (:placed-by r))
+                "the publication under the governing design placed it, not the newest one")))))))
+
+(deftest the-record-a-person-owes-a-move-over-is-named
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (let [blk (add! :blocker {:format :blocker :summary "s" :needs "n"})]
+          (add! :note "later")
+          (is (= blk (:placed-by (p/of :brian id))) "a halt names its blocker"))))))
+
 (deftest a-design-nobody-approved-cannot-be-reported-past-the-approval
   (with-tmp
     (fn [_]

@@ -1234,26 +1234,11 @@
 
 (defn- owed-seq
   "The :seq of the record the move `position` owes a person was placed on — the record its
-   question was written in — or nil when the move reads none. The position's own reading, never
-   recency: a later record of the same kind leaves the move owed over the earlier one.
-
-   answer-blocker   the blocker the pipeline is halted on (`pipeline/owed-blocker`)
-   acknowledge-…    the unanswered invalidating verdict re-entry names as its :because
-   accept-triage    the standing verdict — a triage or a Slack proposal — `standing/verdict` reads
-   approve-design   the newest decision naming the governing design, which `proceeding?` reads
-   land             the newest published PR, whose presence placed :published"
-  [project ws-id position entries]
-  (case (awaiting-human position)
-    :answer-blocker           (pipeline/owed-blocker project ws-id)
-    :acknowledge-invalidation (get-in position [:re-entry :because :seq])
-    :accept-triage            (:seq (standing/verdict project ws-id (cws/read-ws project ws-id)))
-    :approve-design           (when-let [d (:seq (standing/governing-design project ws-id))]
-                                (->> (cws/entries-of project ws-id :design-decision)
-                                     (filter #(= d (:design-seq %)))
-                                     last
-                                     :seq))
-    :land                     (:seq (last (filter #(= :pr-opened (:kind %)) entries)))
-    nil))
+   question was written in — or nil when the position owes a person nothing or its move reads no
+   record. The position's own reading (`:placed-by`, what `pipeline/of`'s fold read to place it),
+   never a second one: a later record of the same kind leaves the move owed over the earlier one."
+  [position]
+  (when (awaiting-human position) (:placed-by position)))
 
 (defn- answered-report
   "The report a gate's actions answer: the record the move `position` owes a person was placed on
@@ -1272,7 +1257,7 @@
    from is still the one owed."
   [project ws-id report position]
   (let [{:keys [base-dir entries]} (active-ledger project ws-id)
-        owed (owed-seq project ws-id position entries)]
+        owed (owed-seq position)]
     (if (and owed (not= owed (:seq report)))
       (or (report-at base-dir entries owed) report)
       report)))
@@ -1631,7 +1616,7 @@
    gate carries as `:ask-record` for the card folded under the Ask; it is not one of ask's inputs."
   [project ws-id report position actions]
   (let [{:keys [base-dir entries]} (active-ledger project ws-id)
-        owed     (owed-seq project ws-id position entries)
+        owed     (owed-seq position)
         owed-e   (some #(when (= owed (:seq %)) %) entries)
         chosen   (->> entries
                       (filter #(ask-kinds (:kind %)))

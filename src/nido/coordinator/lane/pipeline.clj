@@ -465,11 +465,6 @@
                 (unanswered-blocker project ws-id (update whole :entries generation/current-span)))
     (notion-settlement project ws-id whole)))
 
-(defn- triage-unaccepted?
-  "Whether the newest verdict report is one no :triage-accepted cites."
-  [project ws-id w]
-  (when-let [v (standing/verdict project ws-id w)] (not (:accepted? v))))
-
 (defn- layer-progress
   "{:done :of} for the layers finished under `design` after entry `since`, or nil when none.
    Counted per seat and summed: within a seat, done counts distinct layer indices and :of is what
@@ -578,7 +573,7 @@
    then the record arc. Each clause names a fact that is true of the ledger, so
    a position is always answerable by pointing at an entry."
   [{:keys [closed? closed-outcome findings-open? blocker-seq retraction ks decided? approved?
-           cleared? verified? re-entry restarted-trail layers triage-unaccepted?]}]
+           cleared? verified? re-entry trail-records layers triage-unaccepted?]}]
   ;; THE CLAMP. The four trail clauses below place a stage by whether a kind is
   ;; present in the index, and an index is append-only — so each of them, once
   ;; true, is true for ever. `re-entry` is the reading that says how far up the
@@ -602,11 +597,9 @@
   ;; is owed — the verification, or the design that replaces it. Indeterminate
   ;; standing is exempt: nothing is owed on a ledger nobody can read, so the
   ;; position stays where the design put it and the round refuses there.
-  (let [;; A restart — the newest :phase-gate or :findings — scopes the trail to
-        ;; what was written since, and a re-entry scopes it further still.
-        trail-ks       (cond re-entry        (:trail re-entry)
-                             restarted-trail restarted-trail
-                             :else           ks)
+  (let [;; The kinds of the records the trail clauses read (`trail-records`), so the record
+        ;; that placed a trail position is nameable (`placed-by`). Absent, the whole index.
+        trail-ks       (if trail-records (into #{} (map :kind) trail-records) ks)
         design-stands? (not (and (= :design (:stage re-entry))
                                  (not (:indeterminate? re-entry))))]
     (cond
@@ -692,6 +685,37 @@
     :unplaceable
 
     :else                          :intake)))
+
+(defn- trail-records
+  "The records `place`'s trail clauses read, oldest first: what a re-entry says still stands, else
+   what stands since the newest restart — a :phase-gate or :findings — else every entry but those
+   made under a design older than `design`. With no re-entry no stage is held by such records
+   alone, so dropping them changes no kind the clauses see; it changes which record placed one.
+   The one selection both the position and the record that placed it (`placed-by`) are read from."
+  [w design re-entry]
+  (cond re-entry (or (:trail-records re-entry) [])
+        :else    (or (reentry/standing-trail-records w design)
+                     (let [stale (when design
+                                   (into #{} (map :seq) (:stale (reentry/trail-standing w (:seq design)))))]
+                       (cond->> (:entries w) (seq stale) (filterv #(not (stale (:seq %)))))))))
+
+(defn- placed-by
+  "The :seq of the record `place` read to put the workstream at `pos` when a person owes the move
+   it names, or nil: the blocker it halts on, the invalidating verdict re-entry names, the
+   decision that let the governing design proceed, the verdict nobody accepted, the newest
+   publication among the trail records that placed :published. :awaiting-gate is placed by a close,
+   a status entry; the question it owes is the phase's exit criterion, not a record's.
+
+   Read from the same facts `place` read, so the record a gate asks from is the one that put
+   the workstream there — never a second, per-kind reading of the ledger."
+  [pos {:keys [blocker-seq re-entry trail-records verdict-seq decision-seq]}]
+  (case pos
+    :blocked            blocker-seq
+    :design-invalidated (get-in re-entry [:because :seq])
+    :design-decided     decision-seq
+    :triage-awaiting    verdict-seq
+    :published          (:seq (last (filter #(= :pr-opened (:kind %)) trail-records)))
+    nil))
 
 (def ^:private next-by-position
   "What each position hands to next: the stage, and the mode that stage runs in.
@@ -1126,9 +1150,13 @@
           ;; names none.
           settled (settled-in-notion project ws-id whole)
           layers (layer-progress project ws-id w design 0)
+          verdict (standing/verdict project ws-id whole)
+          decision (when design (standing/proceeding-decision project ws-id (:seq design)))
           facts  {:closed?        (some? (or closed settled))
                          :closed-outcome (:outcome closed)
-                         :restarted-trail (reentry/standing-trail w design)
+                         :trail-records  (trail-records w design re)
+                         :verdict-seq    (when (and verdict (not (:accepted? verdict))) (:seq verdict))
+                         :decision-seq   (:seq decision)
                          :findings-open? (boolean (seq (standing/open-findings project ws-id)))
                          :layers         (let [gate (newest-phase-gate w)]
                                            ;; Once the design was implemented, reviewed or
@@ -1143,7 +1171,7 @@
                                                                       (> (:seq %) (max gate (:seq design))))
                                                                 (:entries w)))
                                              (layer-progress project ws-id w design gate)))
-                         :triage-unaccepted? (triage-unaccepted? project ws-id whole)
+                         :triage-unaccepted? (boolean (and verdict (not (:accepted? verdict))))
                          :blocker-seq    blocker
                          :retraction     (retracted-position
                                           (reentry/current-standing st bst ist))
@@ -1158,7 +1186,8 @@
                          ;; blocks this design, and something said it may be
                          ;; built — a grant, or a round that owed nobody.
                          :cleared?       (boolean (:cleared? st))
-                         :decided?       (design-decided? project ws-id)
+                         ;; `design-decided?`'s answer, from the decision read above.
+                         :decided?       (some? decision)
                          ;; `baseline-verified?`'s answer, from the reading
                          ;; already in hand rather than a second closure.
                          :verified?      (boolean (:verified? bst))}
@@ -1185,6 +1214,9 @@
       (cond->
        {:at     pos
         :next   nx
+        ;; The record `place` read to put the workstream here, where a person owes the move: what
+        ;; a gate asks from and acts on, whatever was appended after it.
+        :placed-by (placed-by pos facts)
         ;; The spine stage the work is IN, which the arc marks current. A halt
         ;; is not one, so a blocked unit reads at the stage it halted in — the
         ;; position the same facts place without the blocker.

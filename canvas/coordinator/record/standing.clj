@@ -41,11 +41,16 @@
     "The governing design with its standing, or nil when none governs."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe [:map [:design :map] [:standing Standing]]]]
      :delegates [governing-design of-design]})
+  (Operation proceeding-decision
+    "The newest decision round naming a design, when it lets the design proceed — the record a
+     person owes the grant over; nil when it does not or none named it."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design-seq :int]] [:maybe :map]]
+     :delegates [workstream/entries-of]})
   (Operation proceeding?
     "Whether the newest decision round naming a design lets it proceed — the round's answer as
      it stands now, so a later sendback retracts an earlier proceed."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design-seq :int]] :boolean]
-     :delegates [workstream/entries-of]})
+     :delegates [proceeding-decision]})
   (Operation of-baseline
     "Whether a stamped baseline is still footing a design may be written on: found sufficient at
      its own number, and scoped for a goal nothing has replaced since."
