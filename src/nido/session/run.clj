@@ -6,10 +6,12 @@
 
    A command declaring `:checkout :committed` runs instead in a throwaway git
    checkout of the session's committed tip, reachable as {{session.checkout}}.
-   A jj-workspace worktree nests inside the colocated source repo, so git run in
-   it binds to the PARENT repo; a command that needs `git` to see the session's
-   own files as a checkout of their own (brian's CI lists its image context with
-   `git ls-files`) has no other way to get one."
+   A jj-workspace worktree nests inside the colocated source repo, and one jj made
+   without a git worktree of its own (every workspace before jj 0.47) leaves git
+   run in it bound to the PARENT repo. Either way its git index is not the
+   session's committed tip, so a command that needs `git` to see exactly those
+   files as a checkout of their own (brian's CI lists its image context with
+   `git ls-files`) gets them from this checkout."
   (:require
    [babashka.fs :as fs]
    [babashka.process :refer [shell]]

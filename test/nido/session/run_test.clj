@@ -91,8 +91,6 @@
     (fn [src wt]
       (spit (str (fs/path wt "g.txt")) "feat\n")
       (sh wt "jj" "commit" "-m" "feat")
-      (testing "bare git in the workspace binds to the source repo"
-        (is (= src (str/trim (:out (sh wt "git" "rev-parse" "--show-toplevel"))))))
       (let [seen (atom nil)
             res  (run/with-committed-checkout* "p" "feat" wt []
                    (fn [dir]
@@ -114,12 +112,14 @@
 (deftest a-committed-checkout-is-removed-when-the-command-throws
   (with-nested-workspace
     (fn [src wt]
-      (let [seen (atom nil)]
+      (let [seen      (atom nil)
+            worktrees #(set (str/split-lines (:out (sh src "git" "worktree" "list" "--porcelain"))))
+            before    (worktrees)]
         (is (thrown? Exception
               (run/with-committed-checkout* "p" "feat" wt []
                 (fn [dir] (reset! seen dir) (throw (ex-info "boom" {}))))))
         (is (not (fs/exists? @seen)))
-        (is (= 1 (count (str/split-lines (:out (sh src "git" "worktree" "list"))))))))))
+        (is (= before (worktrees)) "git's worktree list is as it was before the run")))))
 
 (deftest a-dirty-working-copy-is-refused
   (with-nested-workspace

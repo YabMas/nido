@@ -149,15 +149,28 @@
 ;; without asking jj — reclaim of an orphan, a host reboot's prune, a hand `rm` — and `workspace
 ;; add` refuses a name jj still holds. The name is this runtime's alone and its working-copy
 ;; commit a copy nothing else descends from, so forgetting both loses nothing.
+;;
+;; In a colocated repo jj (0.47 on) backs each workspace with a git worktree, and `workspace
+;; forget` removes that worktree only while its directory exists. One whose directory is already
+;; gone stays registered with git as prunable, and git then refuses to add a worktree at that path
+;; again — so the forget is followed by a prune, which drops only registrations whose directories
+;; are gone, and is a no-op where jj made no git worktree.
 (defn- forget-workspace!
   "Forget runtime `instance-id`'s checkout workspace, running jj in `at` (any working copy of the
-   project), and abandon its working-copy commit. A no-op when jj holds no such workspace."
+   project), abandon its working-copy commit, and prune the git worktree registrations whose
+   directories are gone. The forget is a no-op when jj holds no such workspace; the prune runs
+   regardless."
   [instance-id at]
   (let [ws (workspace-name instance-id)]
     (when (some #{ws} (str/split-lines (jj! at false "workspace" "list" "-T" "name ++ \"\\n\"")))
       (let [copy (jj! at false "log" "-r" (str ws "@") "--no-graph" "-T" "change_id")]
         (jj! at false "workspace" "forget" ws)
-        (jj! at false "abandon" copy)))))
+        (jj! at false "abandon" copy)))
+    (let [r (shell {:dir (str at) :out :string :err :string :continue true}
+                   "git" "--git-dir" (git-dir at) "worktree" "prune")]
+      (when-not (zero? (:exit r))
+        (throw (ex-info (str "git worktree prune failed for " at ": " (str/trim (:err r)))
+                        {:reason :git :dir (str at) :err (:err r)}))))))
 
 (defn ^{:malli/schema [:function
                        [:=> [:cat :InstanceId [:map-of :string [:maybe :string]]] :Path]
