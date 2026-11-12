@@ -1,81 +1,50 @@
 (ns nido.coordinator.lane.promote
-  "The shared promote action: gate a triaged ticket, record a person's choice to plan it, and
-   enqueue a direct-target envelope for the project's :plan-bug trigger. Used by
-   the `bb nido:ticket:promote` task and — via the identical envelope shape — by
-   the triage skill's in-chat `promote` command. See spec §The promote gesture."
+  "Whether a ticket may be started, and starting it: gate a triaged Notion ticket, or a GitHub
+   issue not yet started, and hand it to `lane.start/start-ticket!`, which activates its
+   workstream and brings its impl session up at once — no Run, no trigger. Used by the
+   `bb nido:ticket:promote` task and the surfaces' in-progress gesture."
   (:require
-   [babashka.fs :as fs]
-   [nido.coordinator.record.clock :as clock]
-   [nido.coordinator.source.queue :as queue]
    [nido.coordinator.lane.spawn :as spawn]
+   [nido.coordinator.lane.start :as start]
+   [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.triggers :as triggers]
    [nido.coordinator.record.workstream :as ws]
-   [nido.coordinator.view.workstreams :as wsv]
-   [nido.github.client :as gh]))
+   [nido.coordinator.view.workstreams :as wsv]))
 
-(defn- latest-entry-of-kind
-  "Absolute path to the most recent workstream-ledger entry of `kind` (workstream
-   resolved by the BR-#### ref), or nil."
-  [project br-id kind]
-  (when-let [w (ws/find-by-ref-id project br-id)]
-    (when-let [e (->> (:entries w) (filter #(= kind (:kind %))) last)]
-      (str (fs/path (cstate/workstream-dir project (:id w)) (:file e))))))
+(defn- started
+  "promote's answer for `start-ticket!`'s: :promote with where it started, or the refusal."
+  [{:keys [decision] :as r}]
+  (if (= :started decision)
+    (assoc (dissoc r :decision) :decision :promote)
+    r))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :map]}
   promote!
-  "Attempt to promote a ticket to a planning Run.
-   Returns {:decision <kw>}; on :promote also {:queued <envelope-path>}.
-   Side effects on :promote only: records a :stage-set :in-progress by :person on the ticket's
-   workstream — which `tickets/status` reads as :planning — and enqueues the envelope."
+  "Start a triaged ticket, or say why not.
+   Returns {:decision <kw>}: on :promote also {:ws-id :session} — the workstream activated and its
+   impl session brought up (`start/start-ticket!`); a gate refusal (`tickets/promote-decision`)
+   or a start's refusal otherwise, with nothing written."
   [project br-id]
   (let [decision (tickets/promote-decision project br-id)]
     (if (not= :promote decision)
       {:decision decision}
-      (let [m       (tickets/read-meta project br-id)
-            payload {:id             br-id
-                     :notion-page-id (:notion-page-id m)
-                     :url            (:url m)
-                     :title          (:title m)
-                     :report-path    (latest-entry-of-kind project br-id :triage)}]
-        (cstate/ensure-dirs!)
-        ;; The person's choice to plan it is what makes the ticket :planning until its plan
-        ;; run is open, and what moves its row off Ready now rather than when that run starts.
-        (ws/advance-stage! project (:id (ws/find-or-mint-by-ref! project br-id)) :in-progress
-                           :person)
-        {:decision :promote
-         :queued   (queue/enqueue! {:target  {:project (keyword (name project)) :trigger :plan-bug}
-                                    :payload payload})}))))
+      (let [m (tickets/read-meta project br-id)]
+        (started (start/start-ticket! project {:ref {:adapter :notion :id br-id
+                                                     :page-id (:notion-page-id m)
+                                                     :url (:url m) :title (:title m)}}))))))
 
 (defn- notion-br-id [w]
   (some #(when (= :notion (:adapter %)) (:id %)) (:external-refs w)))
 
-(defn- github-issue-ref [w]
-  (some #(when (= :github-issue (:adapter %)) %) (:external-refs w)))
-
-(defn- parse-issue-id
-  "\"owner/repo#42\" → {:repo \"owner/repo\" :number 42}."
-  [id]
-  (let [i (.lastIndexOf ^String id "#")]
-    {:repo (subs id 0 i) :number (parse-long (subs id (inc i)))}))
-
-(defn- promote-github! [project w]
+(defn- promote-github!
+  "Start a GitHub issue's workstream unless it is closed or was started before."
+  [project w]
   (if (or (ws/closure w) (standing/ever-chose? project (:id w) :in-progress))
     {:decision :skip-active}
-    (let [ref (github-issue-ref w)
-          {:keys [repo number]} (parse-issue-id (:id ref))
-          res (gh/view-issue repo number)]
-      (if (:error res)
-        {:decision :gh-error}
-        (let [{:keys [title url body]} (:issue res)
-              payload {:id (:id ref) :url url :title title :body body}]
-          (cstate/ensure-dirs!)
-          (ws/advance-stage! project (:id w) :in-progress)
-          {:decision :promote
-           :queued   (queue/enqueue! {:target  {:project (keyword (name project)) :trigger :plan-github-issue}
-                                      :payload payload})})))))
+    (started (start/start-ticket! project {:ws-id (:id w)}))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
   start-triage!
@@ -108,10 +77,9 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
   promote-workstream!
-  "Promote a workstream by id, dispatching on its source. :notion → the existing
-   triage-gated :plan-bug leg; :github → fetch the issue body + provision the
-   issue-impl leg; :slack at :incoming → run the deferred triage skill (start-triage!);
-   anything else isn't promotable. Returns {:decision}."
+  "Promote a workstream by id, dispatching on its source. :notion → the triage-gated start
+   (promote!); :github → the issue's start; :slack at :incoming → run the deferred triage skill
+   (start-triage!); anything else isn't promotable. Returns {:decision}."
   [project ws-id]
   (if-let [w (ws/read-ws project ws-id)]
     (case (wsv/ws-source w)

@@ -1017,8 +1017,8 @@
 ;; ---------------------------------------------------------------------------
 ;; Pickup — drive a Notion ticket (URL / page-id / BR-####) from the ops
 ;; overlay, no board browsing required. Front-end over
-;; `nido.coordinator.lane.pickup/pickup!` (which resolves the ref and enqueues the
-;; :plan-bug envelope). A single-field text-input like the create-session modal.
+;; `nido.coordinator.lane.pickup/pickup!` (which resolves the ref and starts the
+;; ticket). A single-field text-input like the create-session modal.
 ;; ---------------------------------------------------------------------------
 
 (defn- pickup-result-status
@@ -1026,7 +1026,7 @@
    framing (`tasks.nido-pickup`) so both surfaces read the same."
   [input result]
   (if (= :driving (:decision result))
-    (str "driving " (-> result :ref :id) " → queued " (:queued result))
+    (str "driving " (-> result :ref :id) " → session " (:session result))
     (str "could not resolve: " input " (" (name (:error result)) ")")))
 
 (defn- open-pickup-input

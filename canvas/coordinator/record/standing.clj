@@ -97,6 +97,11 @@
     "Whether a person activated nido's recipe on the workstream: its ledger holds the :activated
      entry. Nothing drives, and nothing is owed on, one that does not."
     {:signature [:=> [:catn [:w :any]] :boolean]})
+  (Operation person-started-at
+    "When a person last started the workstream, as the ledger records it — its :activated entry, or
+     a person's :in-progress choice or reopen, whichever is newest — or nil. What a conductor reads,
+     beside a typed prompt, as a person's grant to conduct."
+    {:signature [:=> [:catn [:w :any]] [:maybe :string]]})
   (Operation newest-findings
     "The newest findings round of the current generation's span as written — its number and the
      phase it belongs to are what the next round and its settling derive from. Fails closed on a

@@ -13,7 +13,8 @@
    delivered for ends leaving it unanswered.
 
    Also the conductor's lifecycle against its workstream's: a workstream is WORKED while a person
-   has typed a prompt into one of its sessions within the last day (`session/worked-window-ms`) —
+   has typed a prompt into one of its sessions, or started it (its :activated entry, or their
+   :in-progress choice), within the last day (`session/worked-window-ms`) —
    a prompt nido sent, or one the harness delivered from another agent, is no person's, so an
    occupant nido drives, a spawned child and a Run make nothing worked by their own turns — and
    every open, worked workstream has one conductor, started by a conduct pass while its session is
@@ -63,12 +64,28 @@
       (binding [*out* *err*] (println "nido conductor: reading where a person typed failed —" (ex-message e)))
       :unread)))
 
+(defn- started-within-window?
+  "Whether the ledger records a person's start of the workstream (`standing/person-started-at`)
+   within the last `session/worked-window-ms`. The ledger is read only when its entries directory
+   changed within the window: every workstream is asked on every pass, and reading them all costs
+   seconds, while a start inside the window always moved that directory."
+  [project ws-id]
+  (let [since (- (System/currentTimeMillis) session/worked-window-ms)
+        dir   (cstate/ws-entries-dir project ws-id)]
+    (boolean
+     (and (fs/exists? dir)
+          (> (.toMillis (fs/last-modified-time dir)) since)
+          (when-let [at (some-> (ws/read-ws project ws-id) standing/person-started-at)]
+            (> (.toEpochMilli (java.time.Instant/parse at)) since))))))
+
 (defn- worked?
-  "Whether a person typed a prompt, within the window `prompted` was read over, into a session of
-   the workstream — its conductor's included, since talking to the conductor is work. Nothing nido
-   starts or sends makes a workstream worked, and nothing worked long ago keeps it so."
+  "Whether a person worked the workstream within the window `prompted` was read over: typed a
+   prompt into one of its sessions — its conductor's included, since talking to the conductor is
+   work — or started it (`started-within-window?`). Nothing nido starts or sends makes a
+   workstream worked, and nothing worked long ago keeps it so."
   [project ws-id prompted]
-  (boolean (some #(prompted [(name project) (:name %)]) (session/list-sessions project ws-id))))
+  (boolean (or (some #(prompted [(name project) (:name %)]) (session/list-sessions project ws-id))
+               (started-within-window? project ws-id))))
 
 (defn- conductor-of
   "The workstream's conductor record, or nil."

@@ -10,12 +10,10 @@
    [nido.boot.attention :as attention]
    [nido.coordinator.daemon.anomaly :as anomaly]
    [nido.coordinator.daemon.breakers :as breakers]
-   [nido.coordinator.lane.brief :as brief]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.source.events :as events]
    [nido.coordinator.daemon.halt :as halt]
    [nido.coordinator.daemon.heartbeat :as heartbeat]
-   [nido.coordinator.daemon.notify :as notify]
    [nido.coordinator.daemon.pid :as pid]
    [nido.coordinator.source.queue :as queue]
    [nido.coordinator.daemon.reconcile :as reconcile]
@@ -49,7 +47,6 @@
    [nido.coordinator.lane.ship :as ship]
    [nido.coordinator.lane.titles :as titles]
    [nido.github.config :as gh-config]
-   [nido.notion.client :as client]
    [nido.notion.views :as views]
    [nido.coordinator.record.triggers :as triggers]
    [nido.platform.core :as nido-core]
@@ -96,15 +93,6 @@
    ;; workstream whose title basis moved, so it runs off the tick thread.
    :titles-interval-ms (* 5 60 1000)   ; every 5 min
    :system-prompt       "You are running inside a nido auto-triggered session. The user is not present yet."
-   ;; Pre-orientation burst for a promoted ticket (the /continue-ticket leg).
-   ;; Unlike triage, the human WILL own this exact session — they'll resume this
-   ;; conversation — so this prompt is about parking cleanly for them, not about
-   ;; artifacts/_run-status.edn (plan-bug derives Run state from the ticket).
-   :plan-system-prompt  "You are pre-orienting a nido impl session unattended: the human who owns this session is not here yet but will resume THIS conversation shortly. Run /continue-ticket to pick up where the pipeline left off, then do clear, low-risk implementation work autonomously as the skill directs. The moment you reach something that needs a human decision — a product/design call, genuine ambiguity, or a risky/destructive change — STOP and leave a concise summary of what you did, where things stand, and exactly what you need from the user; do not guess. Do not touch Notion (nido already set the ticket's status when this session was provisioned)."
-   ;; GitHub-issue promote leg. Like :plan-system-prompt but there's no ledger to
-   ;; continue from — the first message IS the issue body, so no /continue-ticket
-   ;; and no Notion.
-   :plan-issue-system-prompt  "You are pre-orienting a nido impl session unattended: the human who owns this session is not here yet but will resume THIS conversation shortly. Your first message is the GitHub issue to implement. Do clear, low-risk implementation work autonomously toward a draft PR. The moment you reach something that needs a human decision — a product/design call, genuine ambiguity, or a risky/destructive change — STOP and leave a concise summary of what you did, where things stand, and exactly what you need; do not guess."
    :dashboard           {:enabled? true :port 8800}
    ;; How often the daemon looks for new things wanting a person (gates, a halt,
    ;; a tripped breaker) and posts a desktop notification for each. A full read
@@ -300,7 +288,7 @@
           :running
           (if (= :merge (:mode run))
             (ship/settle-drive-home! (:id run) {})
-            (settle-run! (:id run) run (#{:plan-bug :plan-github-issue} (:skill run))
+            (settle-run! (:id run) run
                          {:exit-code 0 :result-text (:last-message event)}))
           ;; A reply turn on a run parked for review ended cleanly: the run stays parked for the
           ;; person, and the error a failed earlier reply left is cleared.
@@ -344,7 +332,7 @@
                 (conduct/retire! project ws-id session-name {})
                 (if (= :merge (:mode run))
                   (ship/settle-drive-home! (:id run) {:timed-out? true})
-                  (settle-run! (:id run) run (#{:plan-bug :plan-github-issue} (:skill run))
+                  (settle-run! (:id run) run
                                (overrun-result (:id run)))))))))
       (catch Throwable _ nil))))
 
@@ -439,6 +427,17 @@
           (doseq [ws-id (ws/list-ids p)]
             (logged (str "re-seating " ws-id) #(conductor/reseat! p ws-id typed-in))))))))
 
+(defn- capped-working
+  "How many of the `working` sessions ({:project :ws-id :session} each) hold a global slot, given
+   `pending`, the instruction outstanding on a session. The global cap bounds Runs: a session holds
+   a slot only while its instruction was given for a capped Run. A conductor's, a seat's or a
+   person's reply that is no Run's takes none, whichever Run last ran there."
+  [working pending]
+  (count (filter (fn [who]
+                   (let [run (run-for-instruction (pending (select-keys who [:project :ws-id :session])))]
+                     (and run (not (:uncapped? run)))))
+                 working)))
+
 (defn- conduct-pass!
   "One conduct pass over the background sessions: hold sends while the account is at its usage
    limit, settle the Runs whose turns ended, enforce budgets, say on its record why a session's
@@ -466,13 +465,7 @@
             (when (seq ns) (future (doseq [n ns] (notify! n))))))
         (swap! !conduct
                (fn [c]
-                 {:working (count (remove (fn [{:keys [project ws-id session] :as who}]
-                                            ;; The Run the session's instruction was given for holds
-                                            ;; the slot; an instruction given for no Run is charged
-                                            ;; as capped work, whichever Run last ran there.
-                                            (:uncapped? (run-for-instruction
-                                                         (pending (select-keys who [:project :ws-id :session])))))
-                                          (:working r)))
+                 {:working (capped-working (:working r) pending)
                   :denials (into (:denials c) (:denials r))}))))
     r))
 
@@ -795,23 +788,6 @@
   (some #(:session-failure/id (ex-data %))
         (take-while some? (iterate #(.getCause ^Throwable %) t))))
 
-(defn- provision-blocked?
-  "True when a provision-only (:plan-bug / :plan-github-issue) run's launch failed
-   in a way that should PARK the workstream as a blocked gate — surfacing the
-   blocker to the human — rather than mark the Run :failed. A :failed provision Run
-   owns its ticket no longer, so the ticket reads :triaged again and the board
-   bounces back to :ready, SILENTLY hiding the failure (the canonical
-   case: a shared-PG Flyway checksum mismatch blocks the session app boot, so the
-   promote appears to undo itself minutes later). Parking mirrors the merge lane's
-   :blocked handling (ship/settle-drive-home!): the parked run keeps the ticket
-   :planning (board stays :in-progress), the session parks, and set-error! carries the blocker into
-   the gate inbox. Scoped to provision-only runs so the triage path's breaker-
-   engaging :failed handling (the '36 sessions' no-op guard) is untouched."
-  [provision-only? result]
-  (boolean
-   (and provision-only?
-        (or (:spawn-error result) (:timed-out? result) (agent-no-op? result)))))
-
 (defn- skill-in-claude-dir?
   "True if `skill-name` resolves under a `.claude` dir as either a skill
    (skills/<name>/) or a slash command (commands/<name>.md)."
@@ -863,13 +839,6 @@
    is momentarily unreadable is one failed Run, and it charges no brake."
   [run]
   (contains? (set (registered-projects)) (keyword (name (:project run)))))
-
-(defn- issue-impl-brief
-  "First message for a promoted GitHub issue's provision-only session: the issue
-   itself as the brief (no slash command — there's no ledger to continue from)."
-  [{:keys [title url body]}]
-  (str "Implement this GitHub issue, then open a draft PR when the work is ready.\n\n"
-       "# " title "\n" url "\n\n" body))
 
 (defn- persist-claude-session-id!
   "Persist the captured claude conversation id onto run.edn AND mirror it onto
@@ -944,16 +913,7 @@
     (when-not (or (contains? restored run-id)
                   (runs/recovery? (runs/read-run run-id)))
       (swap! !detector anomaly/record-spawn (clock/now-iso))))
-  (let [;; :plan-bug is the "promote" leg: promote brings up the :full session,
-        ;; flips Notion → "In progress", then starts /continue-ticket so the
-        ;; session is already oriented (triage findings picked up, clear low-risk
-        ;; work underway) and parked by the time the human arrives — who attaches
-        ;; to the same background session. plan-bug bypasses only the
-        ;; skill-resolvable? gate (/continue-ticket is a harness-injected skill,
-        ;; always present regardless of checkout). (`:plan-bug` is the internal
-        ;; trigger id; the command is /continue-ticket.)
-        provision-only? (#{:plan-bug :plan-github-issue} (:skill (runs/read-run run-id)))
-        run          (runs/read-run run-id)
+  (let [run          (runs/read-run run-id)
         ;; Spawn the session + launch claude. If EITHER throws (e.g. session
         ;; build / worktree creation fails), don't let it escape — that would
         ;; leave the Run stuck :running forever (a zombie that permanently
@@ -972,9 +932,8 @@
         ;; fail fast WITHOUT building a session — no doomed spawn, and the
         ;; breaker still trips. See skill-resolvable?.
         result       (cond
-                       ;; Ahead of every other branch, including the promote leg:
-                       ;; all of them build a session, and session bring-up is
-                       ;; where an unregistered project throws.
+                       ;; Ahead of every other branch: all of them build a session,
+                       ;; and session bring-up is where an unregistered project throws.
                        (not (project-registered? run))
                        ;; Logged because this is the one terminal failure that
                        ;; rings no bell: it charges no breaker and no detector,
@@ -987,52 +946,6 @@
                                             ", which is not registered — failing it "
                                             "without charging the breaker")))
                            {:project-unregistered true :project (:project run)})
-
-                       ;; Promote leg: bring the :full session up, flip Notion,
-                       ;; then launch /continue-ticket headlessly so the session is
-                       ;; oriented + clear work underway by the time the human
-                       ;; arrives (they `--resume` this conversation via the shim).
-                       ;; next-state (see the cond below): the Notion leg derives
-                       ;; from the resulting ticket status (:implementing → :done,
-                       ;; slot freed; still :planning → :awaiting-review). The GitHub
-                       ;; leg has no ticket, so it goes straight to :done. In both
-                       ;; cases teardown is a no-op so the session survives for the human.
-                       provision-only?
-                       (try
-                         (runs/spawn-session-for-run! run)
-                         (notify/on-plan-spawn! run)        ; Notion nudge; no-op for the GitHub leg
-                         ;; A pickup bypasses triage, so its workstream starts
-                         ;; with an empty ledger and the ticket body is the only
-                         ;; statement of scope anywhere. Transcribe it onto the
-                         ;; ledger from the DAEMON's keychain credential, before
-                         ;; the agent starts: a Run under launchd inherits no
-                         ;; NOTION_TOKEN, and sessions have read that as having
-                         ;; no Notion access and parked on a scope the ticket
-                         ;; stated. No-op on a promoted ticket (its :triage entry
-                         ;; already states the goal) and best-effort throughout —
-                         ;; it must never fail a run that is otherwise fine.
-                         (when-not (= :plan-github-issue (:skill run))
-                           (brief/ensure-ticket-brief! (:project run)
-                                                       (:workstream-id run)
-                                                       (:event-payload run)
-                                                       (client/keychain-token)))
-                         ;; Notion leg → /continue-ticket (NOT the run's "/plan-bug …"
-                         ;; first-message; see note above). GitHub leg → the issue body
-                         ;; itself as the brief (no ledger to continue from).
-                         (let [github? (= :plan-github-issue (:skill run))
-                               lc      (runs/launch-context run)
-                               base-sp (if github?
-                                         (:plan-issue-system-prompt defaults)
-                                         (:plan-system-prompt defaults))]
-                           (start-conversation! run lc
-                                                (if github?
-                                                  (issue-impl-brief (:event-payload run))
-                                                  "/continue-ticket")
-                                                (str base-sp "\n\n" (:briefing lc)
-                                                     "\n\n" (:run-paths lc))))
-                         (catch Throwable t
-                           (cond-> {:spawn-error true :detail (.getMessage t)}
-                             (kept-failure-id t) (assoc :failure-id (kept-failure-id t)))))
 
                        (not (skill-resolvable? run))
                        {:skill-unavailable true :skill (:skill run)}
@@ -1050,7 +963,7 @@
     ;; A conversation that started is still running: its run settles when the
     ;; session's own Stop says the turn ended (settle-turn-ends!), not here.
     (when-not (:started result)
-      (settle-run! run-id run provision-only? result))))
+      (settle-run! run-id run result))))
 
 (defn- retire-run-session!
   "What every teardown of a Run's session does first: stop the Claude process working in it, its
@@ -1071,13 +984,8 @@
    asks of the brakes, the ticket and the session. `result` is how the turn
    ended: a failure to start it, or — for a conversation on the substrate — the
    turn's end as its Stop reported it."
-  [run-id run provision-only? result]
+  [run-id run result]
   (let [derived    (cond
-                     ;; Provision-only failures park a BLOCKED gate instead of
-                     ;; :failed — a :failed here reverts the ticket :planning→:triaged
-                     ;; (bounces the board back to :ready) and hides the blocker.
-                     ;; See provision-blocked?.
-                     (provision-blocked? provision-only? result) :awaiting-review
                      (:project-unregistered result) :failed
                      (:skill-unavailable result) :failed
                      (:spawn-error result) :failed
@@ -1088,12 +996,7 @@
                      (agent-no-op? result) :failed
                      (zero? (:exit-code result))
                      (cond
-                       ;; GitHub provision-only leg: no ticket to derive from. The
-                       ;; burst parked the session for the human, so the run is :done
-                       ;; (frees the trigger's slot) and the session OUTLIVES it (the
-                       ;; teardown no-op in runs/teardown-session-for-run!).
-                       (= :plan-github-issue (:skill run)) :done
-                       (#{:triage-bug :plan-bug :triage-slack} (:skill run))
+                       (#{:triage-bug :triage-slack} (:skill run))
                        (review/run-state-from-ticket
                          (tickets/status (:project run) (some-> run :event-payload :id)))
                        :else
@@ -1136,21 +1039,6 @@
                                            (assoc :reason :project-unregistered
                                                   :detail (str "project " (name (:project result))
                                                                " is not in projects.edn")))))))
-    ;; Provision-only spawn/timeout/no-op parked as a BLOCKED gate: surface the
-    ;; blocker on the session so the gate inbox shows WHY (mirrors the merge
-    ;; lane), and leave the ticket :planning (board stays :in-progress) rather
-    ;; than reverting to :ready. Best-effort — a missing/human session no-ops.
-    (when (provision-blocked? provision-only? result)
-      (let [note (cond
-                   (:spawn-error result) (str "Promote could not start the session: "
-                                              (:detail result))
-                   (:timed-out? result)  (str "/continue-ticket exceeded its "
-                                              (-> run :limits :budget) " budget")
-                   :else                 "/continue-ticket did no work (unknown command?)")]
-        (try
-          (session/set-error! (:project run) (:workstream-id run) (:session-name run)
-                              {:at (clock/now-iso) :reason :promote-blocked :message note})
-          (catch Throwable _ nil))))
     ;; Breaker update on terminal state. Default max-failures is 3; the
     ;; trigger's :limits.max-failures (snapshotted onto the Run at create
     ;; time) overrides this.

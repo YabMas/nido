@@ -8,6 +8,7 @@
   (:require [canvas.vocab.claim :refer [Claim]]
             [canvas.coordinator.lane.conductor :refer [carry! conductors! reseat! hand-backs! hand-back!]]
             [canvas.coordinator.record.standing :refer [activated?]]
+            [canvas.coordinator.lane.start :as start]
             [canvas.coordinator.record.workstream :refer [activate!]]
             [canvas.coordinator.work :as work]
             [canvas.coordinator.agent :refer [capped-budget-ms]]
@@ -16,8 +17,8 @@
             [canvas.ui.surface :refer [ui-tui]]))
 
 (Claim recipe-is-opt-in
-  "A workstream is activated exactly when its ledger holds an :activated entry, which only workstream/activate! appends — reached from the nido:activate verb and the TUI board's A key through work/activate! — at most once and never on a closed workstream. On a workstream not activated: carry! does not carry a person's start (:start), answering :not-activated; conductors! starts no conductor and retires a running one; reseat! retires, occupies and escalates nothing; hand-backs! and hand-back! post nothing to a conductor. A Run's start (given-by nil) is carried as before, whatever the ledger holds."
-  {:about [activated? activate! work/activate! carry! conductors! reseat! hand-backs! hand-back! nido-activate ui-tui] :evidence "test"})
+  "A workstream is activated exactly when its ledger holds an :activated entry, which only workstream/activate! appends — reached from the nido:activate verb and the TUI board's A key through work/activate!, and from start-ticket! when a person starts a ticket from a surface — at most once and never on a closed workstream. A session a person starts by hand (nido:session:up, the scratch intent bar) is not activated by starting it. On a workstream not activated: carry! does not carry a person's start (:start), answering :not-activated; conductors! starts no conductor and retires a running one; reseat! retires, occupies and escalates nothing; hand-backs! and hand-back! post nothing to a conductor. A Run's start (given-by nil) is carried as before, whatever the ledger holds."
+  {:about [activated? activate! work/activate! carry! conductors! reseat! hand-backs! hand-back! nido-activate ui-tui start/start-ticket!] :evidence "round"})
 
 (Claim activation-hands-over-understanding
   "work/activate! answers the instruction for the session's agent: write the records the recipe owes from what the session already understands — the review loops being what checks it — and then work the recipe as the whole seat's default embodiment says. nido:activate prints it; nido:owed reports a workstream not activated as owing nothing."

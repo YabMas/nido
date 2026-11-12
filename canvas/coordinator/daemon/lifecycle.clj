@@ -1,6 +1,6 @@
 (ns canvas.coordinator.daemon.lifecycle
   "Self-spec: keeping the daemon running and saying so — `heartbeat`, `launchctl`, `reconcile`,
-   `notify`, `preprocess`."
+   `preprocess`."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.clock :as clock]
@@ -93,18 +93,10 @@
     {:signature [:=> [:catn] :any]
      :delegates [runs/read-run runs/write-run! state/runs-dir session/read-session
                  runs/owns-session? runs/teardown-session-for-run!
-                 runs/stop-session-for-parked-run! runs/reclaims-session?]})
+                 runs/stop-session-for-parked-run!]})
   (Operation release-improvement-hold!
     "Close, as :orphaned, the open improvement claim a resolved Run leaves behind, unless an
      unanswered blocker holds it for a person — the close is the only thing that releases the
      sweep, and a dead Run writes none."
     {:signature [:=> [:catn [:run :map]] :any]
      :delegates [ws/read-ws ws/entries-of ws/close!]}))
-
-(Module daemon-notify
-  "Best-effort outbound notification on a Run's lifecycle events.
-
-   Best-effort by contract: a notification that failed must not fail the Run it was about."
-  (Operation on-plan-spawn!
-    "Tell the outside world a plan Run started."
-    {:signature [:=> [:catn [:run :map]] :any]}))

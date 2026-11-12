@@ -4,7 +4,7 @@
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
    [nido.coordinator.lane.findings :as findings]
-   [nido.coordinator.source.queue :as queue]
+   [nido.coordinator.lane.start :as start]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
@@ -22,11 +22,12 @@
     (ws/close! :brian (:id w) :done)
     w))
 
-(deftest file-appends-event-to-workstream-ledger-reopens-enqueues
+(deftest file-appends-event-to-workstream-ledger-reopens-starts
   (with-tmp
     (fn []
-      (let [enq (atom nil)]
-        (with-redefs [queue/enqueue! (fn [e] (reset! enq e) "/q/x.edn")]
+      (let [started (atom nil)]
+        (with-redefs [start/start-ticket! (fn [p st] (reset! started [p st])
+                                            {:decision :started :ws-id (:ws-id st) :session "impl-br-7-t"})]
           (let [w   (shipped-ticket-ws)
                 res (findings/file! :brian (:id w)
                                     {:items [{:summary "A" :severity :blocker}
@@ -40,8 +41,10 @@
               (is (= 1 (:round (ws/latest-entry :brian (:id w) :findings))))
               (is (nil? (ws/closure w2)))
               (is (= :in-progress (standing/chosen-stage :brian (:id w) w2))))
-            (is (= :plan-bug (-> @enq :target :trigger)))
-            (is (= "BR-7" (-> @enq :payload :id)))))))))
+            (is (= [:brian {:ws-id (:id w)}] @started) "the ticket is started again, as a person's")
+            (is (= :started (-> res :start :decision)))
+            (is (some? (standing/person-started-at (ws/read-ws :brian (:id w))))
+                "the reopen is the person's")))))))
 
 (deftest file-refuses-on-non-settled-workstream
   (with-tmp
@@ -54,7 +57,7 @@
 (deftest resolve-records-the-open-items-it-resolves
   (with-tmp
     (fn []
-      (with-redefs [queue/enqueue! (fn [_] "/q/x.edn")]
+      (with-redefs [start/start-ticket! (fn [_ st] {:decision :started :ws-id (:ws-id st) :session "s"})]
         (let [w (shipped-ticket-ws)]
           (findings/file! :brian (:id w)
                           {:items [{:summary "A" :severity :blocker}
@@ -73,7 +76,7 @@
 (deftest round-increments-on-second-filing
   (with-tmp
     (fn []
-      (with-redefs [queue/enqueue! (fn [_] "/q/x.edn")]
+      (with-redefs [start/start-ticket! (fn [_ st] {:decision :started :ws-id (:ws-id st) :session "s"})]
         (let [w (shipped-ticket-ws)]
           (findings/file! :brian (:id w) {:items [{:summary "A" :severity :tweak}]})
           (ws/close! :brian (:id w) :done)
@@ -81,16 +84,16 @@
             (is (= 2 (:round res2)))
             (is (= #{"f1"} (standing/open-findings :brian (:id w))))))))))
 
-(deftest file-on-non-notion-workstream-skips-provisioning
+(deftest file-on-a-ticketless-workstream-starts-nothing
   (with-tmp
     (fn []
       (let [enq (atom 0)]
-        (with-redefs [queue/enqueue! (fn [_] (swap! enq inc) "/q/x.edn")]
+        (with-redefs [start/start-ticket! (fn [& _] (swap! enq inc) nil)]
           (let [w (ws/create! :brian {})]   ; ref-less, non-Notion
             (ws/close! :brian (:id w) :done)
             (let [res (findings/file! :brian (:id w) {:items [{:summary "A" :severity :tweak}]})]
-              ;; no provisioning envelope for a non-Notion ws …
-              (is (nil? (:queued res)))
+              ;; no start for a workstream with no ticket …
+              (is (nil? (:start res)))
               (is (zero? @enq))
               ;; … but reopen + event still applied
               (is (= #{"f1"} (standing/open-findings :brian (:id w))))
@@ -99,7 +102,7 @@
 (deftest file-appends-to-own-entries-when-workstream-has-nonempty-entries
   (with-tmp
     (fn []
-      (with-redefs [queue/enqueue! (fn [_] "/q/x.edn")]
+      (with-redefs [start/start-ticket! (fn [_ st] {:decision :started :ws-id (:ws-id st) :session "s"})]
         (tickets/open! :brian "BR-8" {:title "T" :url "u"})
         (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-8"}]})]
           ;; a prior own-entry (mirrors notion-sync / review appending to the ws)
@@ -126,7 +129,7 @@
 (deftest resolving-a-round-filed-between-phases-returns-it-to-its-gate
   (with-tmp
     (fn []
-      (with-redefs [queue/enqueue! (constantly "/q/x.edn")]
+      (with-redefs [start/start-ticket! (constantly {:decision :started})]
         (let [w (shipped-ticket-ws)]
           (ws/close! :brian (:id w) :between-phases 3)
           (findings/file! :brian (:id w) {:items [{:summary "A" :severity :tweak}]})
@@ -140,7 +143,7 @@
 (deftest resolving-a-round-with-a-fix-published-leaves-the-landing-to-close-it
   (with-tmp
     (fn []
-      (with-redefs [queue/enqueue! (constantly "/q/x.edn")]
+      (with-redefs [start/start-ticket! (constantly {:decision :started})]
         (let [w (shipped-ticket-ws)]
           (ws/close! :brian (:id w) :between-phases 3)
           (findings/file! :brian (:id w) {:items [{:summary "A" :severity :tweak}]})
@@ -152,7 +155,7 @@
 (deftest resolving-a-round-on-a-done-workstream-leaves-it-open
   (with-tmp
     (fn []
-      (with-redefs [queue/enqueue! (constantly "/q/x.edn")]
+      (with-redefs [start/start-ticket! (constantly {:decision :started})]
         (let [w (shipped-ticket-ws)]
           (findings/file! :brian (:id w) {:items [{:summary "A" :severity :tweak}]})
           (findings/resolve! :brian (:id w) ["f1"] "commit abc")

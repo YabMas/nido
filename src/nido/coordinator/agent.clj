@@ -51,12 +51,6 @@
    an agent launched with no budget, or with `1w`, or with `30 minutes`, ran
    until it finished or the machine did.
 
-   That was not theoretical. brian's :plan-bug trigger declared
-   {:max-failures 3} and no :budget, above a comment asserting it ran nothing
-   headlessly — while core.clj's provision-only? branch launched /continue-ticket
-   under a prompt telling it to work unattended. Every promote started an
-   implementation agent with no wall clock, and the config said the opposite.
-
    A brake that silently is not there is worse than no brake, because the
    surrounding text goes on claiming it. So an undeclared or unreadable budget is
    now an error at the point of launch, where the caller can be named."

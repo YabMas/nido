@@ -1,10 +1,10 @@
 (ns nido.coordinator.lane.pickup
   "Pickup: turn a pasted Notion URL / page-id / BR-#### into the ticket ref, so a
-   human can hand nido a backlog item to drive. Front-end over the :plan-bug leg."
+   human can hand nido a backlog item to drive, and start it (`lane.start`)."
   (:require
    [clojure.string :as str]
    [nido.coordinator.lane.spawn :as spawn]
-   [nido.coordinator.source.queue :as queue]
+   [nido.coordinator.lane.start :as start]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.workstream :as ws]
    [nido.notion.client :as client]
@@ -54,63 +54,32 @@
             {:error :notion-error}))
         {:error :unrecognized-input}))))
 
-;; The leg every pickup fires. Named so the UI can ask whether THIS trigger's
-;; breaker is open before promising the user their ticket will be driven —
-;; without either side hardcoding the answer and drifting from the other.
-(def trigger :plan-bug)
-
-(def ^:private driving-statuses
-  "Ticket statuses that already mean nido is driving the ticket. Re-driving one
-   must not record a second choice to plan it — pickup is idempotent by design
-   (paste the same URL twice, get the same session)."
-  #{:planning :implementing})
-
-(defn- claim!
-  "Record the person's choice to drive the ticket — a :stage-set :in-progress by :person on its
-   workstream, minted here exactly as the daemon would mint it for the envelope — the claim
-   promote! makes when it hands the same :plan-bug leg a triaged ticket, minus the triage gate,
-   which is exactly what pickup exists to bypass.
-
-   Load-bearing, not bookkeeping. The ticket reads :planning from that choice: without it the
-   board would project the ticket into the :triage band (an un-triaged report), so a ticket you
-   explicitly asked nido to drive would show up in the Intake queue rather than under Active.
-
-   Leaves an already-driving ticket alone; otherwise opens (or refreshes) the ticket record so
-   the drive has one even when the ticket was never triaged in nido."
-  [project {:keys [id page-id url title]}]
-  (when-not (contains? driving-statuses (tickets/status project id))
-    (tickets/open! project id {:notion-page-id page-id :url url :title title
-                               :opened-by :pickup})
-    (let [w (spawn/ensure-workstream! project {:id id :page-id page-id :url url :title title})]
-      (ws/advance-stage! project (:id w) :in-progress :person))))
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName :map] :map]}
   claim-and-drive!
-  "Claim the resolved ticket `r` ({:id :page-id :url :title}) as in flight and enqueue the
-   :plan-bug envelope to drive it (the daemon find-or-creates the workstream by its Notion
-   ref → the shared Phase-B ledger). Reports whether an existing workstream ledger will be
-   continued (`:continuing?` + `:ws-id`) so the caller can say which path the daemon will
-   take. Returns {:decision :driving :ref … :continuing? … :ws-id … :queued …}.
+  "Start the resolved ticket `r` ({:id :page-id :url :title}) as a person's: open (or refresh)
+   its ticket record so it has one even when it was never triaged in nido, find or mint its
+   workstream by its Notion ref, and hand that to `start/start-ticket!` — its workstream
+   activated, its impl session brought up. Reports whether an existing workstream is continued.
 
-   Checks no gate: a caller reaching this has already decided the ticket may be driven.
+   Returns {:decision :driving :ref … :continuing? … :ws-id … :session …}, or {:decision
+   :unresolved :error <the start's refusal> :ref …}.
 
-   The payload carries the page id under BOTH keys on purpose: notify/on-plan-spawn!
-   reads :notion-page-id, spawn/external-ref reads :page-id. Emitting only the
-   former left a freshly-minted workstream ref without a page id, and a Notion ref
-   with no page id can never be matched against the board's page cache — so the
-   workstream stayed blind to its own ticket's Notion status for good."
-  [project r]
-  (let [existing (ws/find-by-ref-id project (:id r))]
-    (claim! project r)
-    {:decision    :driving
-     :ref         r
-     :continuing? (some? existing)
-     :ws-id       (:id existing)
-     :queued      (queue/enqueue!
-                    {:target  {:project (keyword (name project)) :trigger trigger}
-                     :payload {:id (:id r) :page-id (:page-id r)
-                               :notion-page-id (:page-id r)
-                               :url (:url r) :title (:title r)}})}))
+   Checks no gate: a caller reaching this has already decided the ticket may be driven, and
+   bypassing triage is what pickup exists for."
+  [project {:keys [id page-id url title] :as r}]
+  (let [existing (ws/find-by-ref-id project id)]
+    (tickets/open! project id {:notion-page-id page-id :url url :title title :opened-by :pickup})
+    (let [w   (or existing (spawn/ensure-workstream! project {:id id :page-id page-id :url url :title title}))
+          res (start/start-ticket! project {:ws-id (:id w)
+                                            :ref {:adapter :notion :id id :page-id page-id
+                                                  :url url :title title}})]
+      (if (= :started (:decision res))
+        {:decision    :driving
+         :ref         r
+         :continuing? (some? existing)
+         :ws-id       (:ws-id res)
+         :session     (:session res)}
+        {:decision :unresolved :error (:decision res) :ref r}))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string :NotionToken] :map]}
   pickup!

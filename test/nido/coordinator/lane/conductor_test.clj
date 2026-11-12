@@ -13,6 +13,7 @@
    [nido.coordinator.record.generation :as generation]
    [nido.coordinator.record.seats :as rseats]
    [nido.coordinator.lane.seats :as seats]
+   [nido.coordinator.record.clock :as clock]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.session-events :as session-events]
    [nido.coordinator.record.workstream :as ws]
@@ -80,13 +81,16 @@
 
 (defn- workstream
   "A workstream with an intent and nothing designed, so its seat is the whole one — activated,
-   unless `:plain` is given. Returns [id add]."
+   unless `:plain` is given. Returns [id add]. The activation is stamped long ago: a recent one is
+   a person's start, which works the workstream by itself (see
+   a-persons-recent-start-works-the-workstream), and these tests ask what a typed prompt does."
   [& [plain]]
   (let [id  (:id (ws/create! :brian {:external-refs []}))
         add (fn [kind record] (ws/append-entry! :brian id {:kind kind} (pr-str record))
               (count (:entries (ws/read-ws :brian id))))]
     (add :intent {:format :intent :goal "g" :done-when ["d"]})
-    (when-not (= :plain plain) (ws/activate! :brian id nil))
+    (when-not (= :plain plain)
+      (with-redefs [clock/now-iso (constantly "2020-01-01T00:00:00Z")] (ws/activate! :brian id nil)))
     [id add]))
 
 (defn- driving
@@ -469,6 +473,20 @@
           (typed! "take-over")
           (is (= [run-only] (map :ws-id (conductor/conductors! :brian)))
               "a person typing in a session on it makes it worked"))))))
+
+(deftest a-persons-recent-start-works-the-workstream
+  ;; A start from the web UI types nothing: its conversation is briefed by nido. The grant to
+  ;; conduct is the start itself, read off the ledger — recent, and a person's.
+  (with-tmp
+    (fn []
+      (let [[started] (workstream :plain)
+            [_long-ago] (workstream)
+            [nidos] (workstream :plain)]
+        (ws/activate! :brian started nil)
+        (ws/advance-stage! :brian nidos :in-progress :nido)
+        (launching [_]
+          (is (= [started] (map :ws-id (conductor/conductors! :brian)))
+              "a start within the window is work; one long ago, or nido's own stage choice, is not"))))))
 
 (defn- run-session!
   "Record a Run's session `n` on workstream `id`."

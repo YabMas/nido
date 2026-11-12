@@ -140,15 +140,9 @@
 (Module ui-server
   "The dashboard's HTTP surface.
 
-   `read-rail-daemon` and `read-pickup-blocker` are named seams over the daemon readings so a
-   test can stub them — and the second asks what blocks THIS envelope rather than reading the
-   rail dot, because the dot ranks a breaker above a healthy daemon and reading it as go/no-go
-   reported a healthy daemon as down whenever an unrelated trigger was tripped."
+   `read-rail-daemon` is a named seam over the daemon reading so a test can stub it."
   (Operation read-rail-daemon "The rail's daemon reading. A stubbing seam."
     {:signature [:=> [:catn] :map] :delegates [control/read-daemon-health]})
-  (Operation read-pickup-blocker "What would block a pickup for this project. A stubbing seam."
-    {:signature [:=> [:catn [:project ProjectName]] [:maybe :keyword]]
-     :delegates [control/read-queue-blocker]})
   (Operation derive-screen
     "Gather what the screen needs and derive it — the gate inbox's casualty card from the
      workstreams owed a revive, beside the gates and never among them."
@@ -163,7 +157,7 @@
     {:signature [:=> [:catn [:result :map]] :string]})
   (Operation handle-request "One request, routed."
     {:signature [:=> [:catn [:req :map]] :map]
-     :delegates [derive-screen parse-findings-lines resolve-failure-msg read-pickup-blocker
+     :delegates [derive-screen parse-findings-lines resolve-failure-msg
                  work/session-recovery
                  work/improvement-holds]})
   (Operation start! "Start the dashboard server."

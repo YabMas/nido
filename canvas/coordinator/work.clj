@@ -6,6 +6,7 @@
             [canvas.coordinator.lane.conductor :as conductor]
             [canvas.coordinator.lane.drive :as pipeline]
             [canvas.coordinator.lane.seats :as seats]
+            [canvas.coordinator.lane.start :as start]
             [canvas.coordinator.lane.work :as lanes]
             [canvas.coordinator.record.session :as session :refer [Session]]
             [canvas.coordinator.record.standing :as standing]
@@ -236,7 +237,7 @@
      at once. Idempotent on a live session. A session this start first recorded is carried once it
      is up. Returns the ws-id."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName] [:opts :map]] :any]
-     :delegates [lanes/birth! lifecycle/up! conductor/carry!]})
+     :delegates [start/start-session!]})
   (Operation adopt-orphans!
     "Enforce the invariant that every live session is reachable from a workstream — an orphan is
      a session doing work the board cannot show — and report every session name two workstreams

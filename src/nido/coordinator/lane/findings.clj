@@ -1,17 +1,15 @@
 (ns nido.coordinator.lane.findings
   "Staging findings round: a human files findings after reviewing the deployed
    staging build; nido records the immutable :findings event on the workstream's
-   active ledger, reopens the workstream to :in-progress, and provisions a fresh impl
-   session off current main. Each item's resolution is a later :findings-resolved
+   active ledger, reopens the workstream to :in-progress as the person's choice, and
+   starts it again (`lane.start`) — its impl session brought up at once. Each item's resolution is a later :findings-resolved
    entry, and what a round still owes is `standing/open-findings` — nothing tracks it
    beside the ledger. Modeled on nido.coordinator.lane.promote. See spec
    docs/superpowers/specs/2026-07-13-staging-findings-round-design.md."
   (:require
    [clojure.pprint :as pprint]
-   [nido.coordinator.source.queue :as queue]
+   [nido.coordinator.lane.start :as start]
    [nido.coordinator.record.standing :as standing]
-   [nido.coordinator.record.state :as cstate]
-   [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.workstream :as ws]))
 
 (defn- assign-ids
@@ -27,36 +25,20 @@
         entry   (cond-> {:kind :findings} session (assoc :session session))]
     (ws/append-entry! project (:id w) entry content)))
 
-(defn- notion-br
-  "The workstream's Notion BR-#### id, or nil. Only Notion-backed workstreams can be
-   auto-provisioned via the :plan-bug leg — its spawn path assumes a Notion ref, so a
-   non-Notion ws would mint a phantom workstream."
+(defn- startable?
+  "Whether the workstream carries a ticket a start can bring a session up for: a Notion ticket
+   or a GitHub issue. Any other workstream is reopened and left for a person to resume."
   [w]
-  (some #(when (= :notion (:adapter %)) (:id %)) (:external-refs w)))
-
-(defn- enqueue-impl!
-  "Enqueue a :plan-bug provisioning envelope so the daemon builds a fresh impl session
-   off current main. Only for Notion-backed workstreams (see notion-br). Returns the
-   envelope path, or nil when skipped (non-Notion ws — reopen and event still apply; a
-   human resumes the work)."
-  [project w]
-  (when-let [br (notion-br w)]
-    (cstate/ensure-dirs!)
-    (let [m       (tickets/read-meta project br)
-          payload (cond-> {:id br}
-                    m (assoc :notion-page-id (:notion-page-id m)
-                             :url            (:url m)
-                             :title          (:title m)))]
-      (queue/enqueue! {:target  {:project (keyword (name project)) :trigger :plan-bug}
-                       :payload payload}))))
+  (some #(#{:notion :github-issue} (:adapter %)) (:external-refs w)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   file!
   "File a staging findings round on a shipped (settled) workstream. `opts` =
    {:items [{:summary :severity (:id) (:area)} …] :staging-ref? :note? :session?}.
-   Appends the immutable :findings event, reopens to :in-progress, and enqueues a
-   provisioning envelope. Returns {:round n :queued p}. Throws if the workstream is
-   absent or not settled.
+   Appends the immutable :findings event, reopens to :in-progress as the person's
+   choice, and starts a ticket-backed workstream again (`start/start-ticket!`). Returns
+   {:round n :start <the start's answer, or nil when nothing could be started>}. Throws if
+   the workstream is absent or not settled.
 
    A round filed on a workstream closed :between-phases names the design that close
    named, as :between-phases: the round is about the phase that landed, and resolving
@@ -76,8 +58,9 @@
                     (= :between-phases (:outcome closed))
                     (assoc :between-phases (get-in closed [:design :seq])))]
       (append-event! project w round session)
-      (ws/reopen! project ws-id :in-progress)
-      {:round round-n :queued (enqueue-impl! project w)})))
+      (ws/reopen! project ws-id :in-progress :person)
+      {:round round-n
+       :start (when (startable? w) (start/start-ticket! project {:ws-id ws-id}))})))
 
 (defn- published-since-round?
   "Whether a :pr-opened was appended after the newest :findings — a fix for the

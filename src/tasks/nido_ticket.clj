@@ -177,13 +177,13 @@
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   promote-cmd
   "bb nido:ticket:promote :project <p> :br BR-#### (or positional BR-####)
-   Gate a triaged ticket → enqueue a :plan-bug planning Run. Exits non-zero
-   (and enqueues nothing) when the ticket isn't promotable."
+   Gate a triaged ticket and start it: its workstream activated, its impl session brought up.
+   Exits non-zero (and starts nothing) when the ticket isn't promotable."
   [& args]
   (let [[pos o] (task-args/split-args args)
         br      (str (or (:br o) (first pos)))
         res     (promote/promote! (project-kw o) br)]
     (case (:decision res)
-      :promote (println "promoted" br "→ queued" (:queued res))
+      :promote (println "started" br "→ session" (:session res) "on" (:ws-id res))
       (do (println "refused" br "—" (name (:decision res)))
           (System/exit 3)))))

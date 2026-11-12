@@ -100,15 +100,3 @@
   (is (= :awaiting-review (review/run-state-from-ticket :planning))
       "a clean plan exit while :planning ⇒ parked, not dropped"))
 
-(deftest sweep-resolves-a-parked-plan-run-once-work-is-recorded-past-it
-  (with-tmp
-    (fn [_]
-      (let [w (verdict! "BR-9")]
-        (tickets/complete! :brian "BR-9")
-        (ws/advance-stage! :brian (:id w) :in-progress :person)
-        (mk-run "plan-9" :awaiting-review {:id "BR-9"} :plan-bug)
-        (is (= 0 (review/sweep-resolved!)) "while the choice to plan it holds, the plan run is needed")
-        (ws/append-entry! :brian (:id w) {:kind :impl} "# work")
-        (with-redefs [runs/teardown-session-for-run! (fn [_] nil)]
-          (is (= 1 (review/sweep-resolved!))))
-        (is (= :done (:state (runs/read-run "plan-9"))))))))

@@ -26,22 +26,19 @@
     :done))
 
 (defn- in-review?
-  "True while a parked run's ticket still occupies the person's review queue: it reads
-   :investigating, :awaiting-input or :planning. A plan run is left out of its own ticket's
-   status — open while parked, it would answer :planning for itself — so it stays only while a
-   choice to plan the ticket holds, and is resolved once work is recorded past the plan or the
-   ticket is dismissed. A triage run counts itself: parked with no verdict accepted, it is still
-   waiting on its person. A run with no resolvable ticket, or one no workstream carries, is not in
-   review, so the sweep resolves it."
-  [{:keys [project skill] :as run}]
+  "True while a parked triage run's ticket still occupies the person's review queue: it reads
+   :investigating, :awaiting-input or :planning. The run counts itself: parked with no verdict
+   accepted, it is still waiting on its person. A run with no resolvable ticket, or one no
+   workstream carries, is not in review, so the sweep resolves it."
+  [{:keys [project] :as run}]
   (let [br (some-> run :event-payload :id)
         w  (when-not (str/blank? br) (cws/find-by-ref-id project br))]
     (contains? #{:investigating :awaiting-input :planning}
-               (tickets/status-of project w (when (= :plan-bug skill) (:id run))))))
+               (tickets/status-of project w))))
 
 (defn ^{:malli/schema [:=> [:cat] :any]}
   sweep-resolved!
-  "Transition every :awaiting-review triage or plan run whose ticket is no
+  "Transition every :awaiting-review triage run whose ticket is no
    longer in review (its verdict accepted, or the ticket dismissed) → :done,
    freeing the trigger's in-flight budget AND tearing down the now-finished
    session — once the human has resolved the ticket the review surface is no
@@ -50,7 +47,7 @@
   (->> (runs/list-run-ids)
        (keep runs/read-run)
        (filter #(and (= :awaiting-review (:state %))
-                     (#{:triage-bug :plan-bug :triage-slack} (:skill %))))
+                     (#{:triage-bug :triage-slack} (:skill %))))
        (remove in-review?)
        (reduce (fn [n r]
                  (runs/transition! (:id r) :done)

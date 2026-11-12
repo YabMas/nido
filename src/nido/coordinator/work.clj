@@ -37,6 +37,7 @@
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.session-events :as session-events]
    [nido.coordinator.lane.spawn :as spawn]
+   [nido.coordinator.lane.start :as start]
    [nido.coordinator.record.phase :as phase]
    [nido.coordinator.record.proposal :as proposal]
    [nido.coordinator.record.review-queue :as review-queue]
@@ -2261,7 +2262,7 @@
   "Move a workstream to `target` stage — the single mutation behind the
    new/promote/done surface verbs. A workstream-less ws-id (e.g. a bare
    watched-view row) is a no-op: {:decision :no-workstream}. Dispatch:
-     :in-progress → the full promote gesture (gate + provision the planning leg)
+     :in-progress → the full promote gesture (gate + start the ticket, its session brought up)
      :done        → close the workstream (:done outcome)
      other        → advance the stored stage only (no autonomous leg)
    Returns {:decision <kw>}: promote's decision verbatim, else :done / :advanced.
@@ -2479,7 +2480,7 @@
 (defn- apply-proposed!
   "Accept a Slack proposal: make sure its product page is filed, add the technical analysis
    to that page's engineering notes, record the acceptance, and only then claim the ticket and
-   start its :plan-bug drive. The acceptance comes first because a claim is a stage choice, and
+   start it, as a person's start. The acceptance comes first because a claim is a stage choice, and
    a record appended after a choice moves the work past it (standing/chosen-stage). A failed
    Notion write starts nothing and leaves the gate to retry; a doubt is refused, because
    overriding one means a revised proposal, not an accept.
@@ -2643,8 +2644,8 @@
         (if (:error page)
           ;; Can't read the current App Domain tags, so we can't honor "additive, never
           ;; clobber" — fail closed and leave the ticket parked for retry rather than
-          ;; write with incomplete data (see nido.coordinator.daemon.notify/merged-participants
-          ;; for the same additive-write contract).
+          ;; write with incomplete data (a start's Participants write in nido.coordinator.lane.start
+          ;; keeps the same additive contract).
           {:decision :notion-failed :error (:error page)}
           (let [current (keep :name (get-in page [:properties (keyword "App Domain") :multi_select]))
                 res     (notion/update-page-properties! page-id (triage-notion-props report current) token)]
@@ -3423,24 +3424,11 @@
   "Bring the session `session-name` up on the workstream holding it — a fresh one-off when none
    does — and on that workstream's runtime. Heavy and slow: surfaces wrap it in their own progress
    UI. The workstream is settled first so the session comes up on its runtime at once; its weight
-   is read back after, from what was provisioned. Idempotent on a live session. Returns the ws-id.
-   `project` may be a keyword or string; `opts` are lifecycle/up!'s."
+   is read back after, from what was provisioned, and a session this start first recorded is
+   carried on a person's start. Idempotent on a live session. Returns the ws-id. `project` may be
+   a keyword or string; `opts` are lifecycle/up!'s."
   [project session-name opts]
-  (let [p      (keyword (name project))
-        opts   (assoc opts :project (name project))
-        first? (nil? (csession/workstream-id-for p session-name))
-        ws-id  (scratch/birth! p session-name nil)]
-    (lifecycle/up! session-name (assoc opts :runtime-key ws-id))
-    (let [ws-id (scratch/birth! p session-name (lifecycle/session-weight session-name opts) ws-id)]
-      ;; A session this start first recorded is carried: on a workstream whose generation fixes
-      ;; no ids, it occupies the whole seat, on a first instruction a person's start gives. A failure
-      ;; to carry leaves the session up and undriven.
-      (when first?
-        (try (conductor/carry! p ws-id session-name nil nil :start)
-             (catch Throwable t
-               (binding [*out* *err*]
-                 (println (str "nido: " session-name " is up but was not carried — " (ex-message t)))))))
-      ws-id)))
+  (start/start-session! project session-name (dissoc opts :ws-id :carry? :brief :model :given-by)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] :any]}
   new!
@@ -4087,21 +4075,17 @@
    compute the arc today."
   pipeline/unit-stages)
 
-(def pickup-trigger
-  "The trigger name a pickup enqueues under. Surfaces need it to ask whether a pickup would
-   actually be processed, which is a question about that specific trigger's breaker."
-  pickup/trigger)
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string :NotionToken] :map]}
   pickup!
-  "Resolve a pasted Notion URL / page-id / BR-#### into a workstream and queue its provisioning."
+  "Resolve a pasted Notion URL / page-id / BR-#### and start its ticket: its workstream
+   activated, its impl session brought up."
   [project input token]
   (pickup/pickup! project input token))
 
 (def start-intent-trigger
-  "The leg a described intent is enqueued at. Named here for the same reason `pickup-trigger`
-   is: a surface asking whether a description would actually be processed is asking about this
-   specific trigger's breaker, and neither side should hardcode the answer."
+  "The leg a described intent is enqueued at. Named here because a surface asking whether a
+   description would actually be processed is asking about this specific trigger's breaker, and
+   neither side should hardcode the answer."
   :start-intent)
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string] :map]}

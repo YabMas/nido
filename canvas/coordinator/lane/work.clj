@@ -24,6 +24,8 @@
     {:signature [:=> [:catn [:ref :map] [:token NotionToken]] [:maybe :string]]
      :delegates [notion/walk-blocks notion/list-comments notion/blocks->markdown
                  notion/comments->markdown]})
+  (Operation owed? "Whether the ticket's own words are still owed to the ledger: no entry tells it."
+    {:signature [:=> [:catn [:w :any]] :boolean]})
   (Operation ensure-ticket-brief! "Append the ticket brief to a workstream, once."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:ref :map]
                             [:token NotionToken]] :any]
@@ -52,7 +54,8 @@
 
    Filing REOPENS a settled workstream, which is the whole point — findings are not a new ticket,
    they are the same work not being finished."
-  (Operation file! "File a findings round on a shipped workstream, reopening it."
+  (Operation file! "File a findings round on a shipped workstream, reopening it as the person's
+     choice and starting its ticket again (lane-start's start-ticket!)."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts :map]] :map]
      :delegates [workstream/read-ws workstream/closure workstream/append-entry!
                  workstream/reopen!]})
@@ -77,7 +80,7 @@
      :delegates [workstream/list-ids workstream/read-ws workstream/close!]}))
 
 (Module lane-pickup
-  "Turning a pasted reference into a claimed workstream.
+  "Turning a pasted reference into a started workstream.
 
    Accepts a URL, a page id or a ticket id, because what a person has in their clipboard is
    whichever of those they were looking at."
@@ -88,21 +91,22 @@
     {:signature [:=> [:catn [:project ProjectName] [:input :string] [:token NotionToken]] :map]
      :delegates [extract-page-id notion/retrieve-page notion/normalise-page]})
   (Operation claim-and-drive!
-    "Claim a resolved ticket as in flight and enqueue the leg that drives it."
+    "Open a resolved ticket's record and start it as a person's (lane-start's start-ticket!): its
+     workstream activated and its impl session brought up at once."
     {:signature [:=> [:catn [:project ProjectName] [:ref :map]] :map]
-     :delegates [tickets/status tickets/open! workstream/advance-stage!]})
-  (Operation pickup! "Resolve a reference and claim its ticket as in flight."
+     :delegates [tickets/open! workstream/find-by-ref-id]})
+  (Operation pickup! "Resolve a reference and start its ticket."
     {:signature [:=> [:catn [:project ProjectName] [:input :string] [:token NotionToken]] :map]
      :delegates [resolve-ref tickets/held-by-gate? claim-and-drive!]}))
 
 (Module lane-promote
-  "Moving a triaged ticket forward into planning.
+  "Whether a ticket may be started, and starting it (lane-start's start-ticket!).
 
    Gated on the ticket's own record rather than on the caller's intent, which is what stops a
    re-emitted event promoting the same ticket twice."
-  (Operation promote! "Promote a ticket to a planning run, or say why not."
+  (Operation promote! "Start a triaged ticket, or say why not."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] :map]
-     :delegates [tickets/promote-decision workstream/advance-stage!]})
+     :delegates [tickets/promote-decision tickets/read-meta]})
   (Operation start-triage! "Promote a queued incoming workstream by running its deferred triage."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map]
      :delegates [workstream/read-ws workstream/advance-stage!]})

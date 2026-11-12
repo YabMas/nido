@@ -80,14 +80,16 @@
             (is (nil? (brief/ensure-ticket-brief! :brian (:id w) tref "tok")))
             (is (= 1 (count (:entries (ws/read-ws :brian (:id w))))))))))))
 
-(deftest ensure-leaves-a-triaged-ledger-alone
+(deftest ensure-transcribes-whatever-else-the-ledger-holds
+  ;; Only an entry that TELLS the ticket answers for its words: a start's own entries, or a
+  ;; note, say nothing of what was asked.
   (with-tmp
     (fn []
       (with-notion {:blocks [(para "body")] :comments []}
         (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-1"}]})]
-          (ws/append-entry! :brian (:id w) {:kind :note} "a triage already read this")
-          (is (nil? (brief/ensure-ticket-brief! :brian (:id w) tref "tok")))
-          (is (= 1 (count (:entries (ws/read-ws :brian (:id w)))))))))))
+          (ws/append-entry! :brian (:id w) {:kind :note} "an account of something else")
+          (is (some? (brief/ensure-ticket-brief! :brian (:id w) tref "tok")))
+          (is (= [:note :ticket] (mapv :kind (:entries (ws/read-ws :brian (:id w)))))))))))
 
 (deftest ensure-never-throws
   (with-tmp

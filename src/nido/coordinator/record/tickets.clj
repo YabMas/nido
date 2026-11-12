@@ -111,8 +111,8 @@
   "Where triage of the ticket whose workstream is `w` stands, read off that workstream's ledger
    and its runs — nothing stored says it. The first that holds:
      :dismissed      — its standing close is a dismissal
-     :planning       — a plan run is open on it, or a person's choice to put it in
-                       progress still holds (`standing/chosen-stage`)
+     :planning       — a person's choice to put it in progress still holds
+                       (`standing/chosen-stage`)
      :implementing   — it is closed otherwise, or records work past its triage
      :triaged        — a person accepted its newest verdict
      :investigating  — a run investigating it is open
@@ -123,30 +123,24 @@
 
    Nothing recorded before a dismissal that was later restored counts, verdict or work
    (`standing/restored-at`): restoring a dismissed ticket returns it to triage as it was before
-   anyone looked at it.
-
-   `except`, a run id, is left out of the runs read: the status the ticket would have without
-   that run, which is how a parked run asks whether its ticket still needs it."
-  ([project w] (status-of project w nil))
-  ([project w except]
+   anyone looked at it."
+  [project w]
   (when w
     (let [ws-id  (:id w)
-          open   (into #{} (comp (filter #(and (open-run-states (:state %)) (not= except (:id %))))
-                                 (map :skill))
+          open   (into #{} (comp (filter #(open-run-states (:state %))) (map :skill))
                        (runs/runs-of project ws-id))
           closed (cws/closure w)
           v      (standing/verdict project ws-id w)]
       (cond
         (= :dismissed (:outcome closed))                            :dismissed
-        (or (open :plan-bug)
-            (= :in-progress (standing/chosen-stage project ws-id w)))   :planning
+        (= :in-progress (standing/chosen-stage project ws-id w))    :planning
         (or closed
             (some #(not (or (triage-kinds (:kind %)) (cws/status-kinds (:kind %))
                             (<= (:seq %) (standing/restored-at project ws-id w))))
                   (:entries w)))                                    :implementing
         (:accepted? v)                                              :triaged
         (some investigating-skills open)                            :investigating
-        v                                                           :awaiting-input)))))
+        v                                                           :awaiting-input))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] [:maybe :keyword]]}
   status

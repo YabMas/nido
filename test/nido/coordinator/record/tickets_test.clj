@@ -103,14 +103,6 @@
         (is (= :skip-completed (tickets/gate-decision :brian "BR-1")))
         (is (= :promote (tickets/promote-decision :brian "BR-1"))))
 
-      (testing "an open plan run is :planning, ahead of the verdict it plans from"
-        (a-run! "r2" "BR-1" :plan-bug :awaiting-review)
-        (is (= :planning (tickets/status :brian "BR-1")))
-        (is (= :skip-active (tickets/promote-decision :brian "BR-1")))
-        (a-run! "r2" "BR-1" :plan-bug :failed)
-        (is (= :triaged (tickets/status :brian "BR-1"))
-            "a plan run that ended owns the ticket no longer, so it is promotable again"))
-
       (testing "work recorded past triage is :implementing"
         (ws/append-entry! :brian (:id (ws-of "BR-1")) {:kind :note} "an account, not work")
         (is (= :triaged (tickets/status :brian "BR-1")))

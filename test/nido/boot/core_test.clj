@@ -19,7 +19,6 @@
    [nido.coordinator.daemon.anomaly :as anomaly]
    [nido.coordinator.daemon.breakers :as breakers]
    [nido.coordinator.lane.intake :as intake]
-   [nido.coordinator.daemon.notify :as notify]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.lane.ship :as ship]
@@ -80,7 +79,7 @@
       (#'core/run-blocking! id))
     (let [r (runs/read-run id)]
       (when (and (= :running (:state r)) @turn)
-        (#'core/settle-run! id r (#{:plan-bug :plan-github-issue} (:skill r)) @turn)))))
+        (#'core/settle-run! id r @turn)))))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
@@ -730,82 +729,6 @@
         (is (= :awaiting-review (:state (runs/read-run "rp")))
             "clean exit + a verdict waiting for a person ⇒ run parks at :awaiting-review, not :done")))))
 
-(deftest run-blocking-plan-bug-launches-continue-ticket-headlessly
-  ;; Promote leg: brings the :full session up, flips Notion, then launches
-  ;; /continue-ticket headlessly under the pre-generated session-id so the
-  ;; session is oriented before the human arrives. It bypasses the
-  ;; skill-resolvable? gate (/continue-ticket is harness-injected). Here the
-  ;; redefed launch! doesn't run the real skill, so the ticket stays :planning
-  ;; ⇒ the run parks at :awaiting-review (the human attaches to the session).
-  (gate-with-tmp
-    (fn [_]
-      (let [notified  (atom nil)
-            launch-of (atom nil)]
-        (promoted! "BR-12")
-        (runs/write-run! {:id "rplan" :project :brian :trigger :plan-bug
-                          :source {:type :manual} :event-payload {:id "BR-12" :notion-page-id "PG12"}
-                          :skill :plan-bug :first-message "/plan-bug x" :agent :claude
-                          :session-name "impl-br-12" :claude-session-id nil :limits {}
-                          :priority 0 :session-profile :full :uncapped? false
-                          :on-promote {:notion-status "In progress"}
-                          :state :queued :state-history [{:at "t" :state :queued}]
-                          :artifacts [] :error nil})
-        (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
-                      agent/launch! (fn [opts] (reset! launch-of opts) {:exit-code 0})
-                      cstate/run-session-home-link (constantly "/tmp/nope")
-                      notify/on-plan-spawn! (fn [run] (reset! notified (:id run)))
-                      breakers/record-success! (fn [& _] nil)]
-          (run-to-turn-end! "rplan")
-          (is (= "rplan" @notified) "Notion flip still happens at provision")
-          (is (some? @launch-of) "/continue-ticket launches headlessly at provision")
-          (is (= "/continue-ticket" (:first-message @launch-of))
-              "the launched command is /continue-ticket, not the run's /plan-bug first-message")
-          (is (= (:claude-session-id (runs/read-run "rplan")) (:claude-session-id @launch-of))
-              "launched under the pre-generated session-id the Run records")
-          (is (= :awaiting-review (:state (runs/read-run "rplan")))
-              "ticket still :planning (skill not really run) ⇒ parked ready-for-human"))))))
-
-(deftest run-blocking-plan-bug-spawn-failure-parks-blocked-not-reverts
-  ;; Promote regression (the shared-PG Flyway bounce): when a provision-only
-  ;; :plan-bug session fails to boot (canonically a shared-PG migration checksum
-  ;; mismatch), run-blocking! must PARK the workstream as a blocked gate — ticket
-  ;; stays :planning (board stays :in-progress), the blocker rides the session —
-  ;; NOT mark the run :failed. A :failed run owns its ticket no longer, so the
-  ;; ticket would read :triaged again, bouncing the board back to :ready and hiding
-  ;; the failure. (Triage runs are unaffected: they still :failed — see
-  ;; run-blocking-fails-cleanly-when-session-spawn-throws.)
-  (gate-with-tmp
-    (fn [_]
-      (let [w (ws/create! :brian {:external-refs [{:adapter :notion :id "BR-13"}]})]
-        (session/create! :brian (:id w)
-                         {:name "impl-br-13" :weight :heavy
-                          :autonomy (assoc autonomy-parked :skill :plan-bug :phase :running)})
-        (promoted! "BR-13")
-        (runs/write-run! {:id "rblock" :project :brian :trigger :plan-bug
-                          :source {:type :manual} :event-payload {:id "BR-13" :notion-page-id "PG13"}
-                          :skill :plan-bug :first-message "/plan-bug x" :agent :claude
-                          :session-name "impl-br-13" :workstream-id (:id w)
-                          :claude-session-id nil :limits {:budget "30m"}
-                          :priority 0 :session-profile :full :uncapped? false
-                          :on-promote {:notion-status "In progress"}
-                          :state :queued :state-history [{:at "t" :state :queued}]
-                          :artifacts [] :error nil})
-        (with-redefs [runs/spawn-session-for-run!
-                      (fn [_] (throw (ex-info "Database migration failed — Flyway checksum mismatch on V265" {})))
-                      notify/on-plan-spawn! (fn [_] nil)              ; unreached (spawn throws first)
-                      cstate/run-session-home-link (constantly "/tmp/nope")
-                      breakers/record-success! (fn [& _] nil)]
-          (run-to-turn-end! "rblock")
-          (is (= :awaiting-review (:state (runs/read-run "rblock")))
-              "spawn failure on a promote ⇒ parked (blocked gate), NOT :failed")
-          (is (= :planning (tickets/status :brian "BR-13"))
-              "ticket stays :planning ⇒ board stays :in-progress (no silent revert to :ready)")
-          (let [err (get-in (first (session/list-sessions :brian (:id w))) [:autonomy :error])]
-            (is (= :promote-blocked (:reason err))
-                "blocker recorded on the session so the gate inbox shows WHY")
-            (is (re-find #"Flyway" (:message err))
-                "the blocker detail is surfaced to the human")))))))
-
 (deftest queue-mode-trigger-parks-inbox-no-spawn
   (let [tmp (fs/create-temp-dir)]
     (try
@@ -1243,10 +1166,32 @@
                                                 :event {:event :stop} :instruction nil}]}))
       (is (= :running (:state (runs/read-run "rh")))))))
 
+(deftest the-cap-counts-only-capped-runs
+  ;; A cap full of Runs leaves a conductor's turn, a seat's and a no-Run reply free to be given:
+  ;; only a session working an instruction given for a capped Run takes a slot.
+  (with-redefs [runs/read-run {"capped" {:id "capped" :uncapped? false}
+                               "uncapped" {:id "uncapped" :uncapped? true}}]
+    (let [who     (fn [s] {:project :brian :ws-id "ws-1" :session s})
+          given   {"run-a" {:for "capped"} "run-b" {:for "capped"}
+                   "recovery" {:for "uncapped"} "conductor" {:token "t"} "seat" nil}
+          pending (fn [{:keys [session]}] (get given session))]
+      (is (= 2 (#'core/capped-working (map who ["run-a" "run-b" "recovery" "conductor" "seat"])
+                                      pending)))
+      (executor/configure! {:global-cap 2})
+      (let [spawned (atom [])]
+        (executor/submit! "queued" 0)
+        (executor/tick! #(swap! spawned conj %) {}
+                        (#'core/capped-working (map who ["run-a" "run-b" "conductor" "seat"]) pending))
+        (is (= [] @spawned) "two capped Runs fill the cap, so a queued Run still waits")
+        (executor/tick! #(swap! spawned conj %) {}
+                        (#'core/capped-working (map who ["recovery" "conductor" "seat"]) pending))
+        (executor/await-idle! 5000)
+        (is (= ["queued"] @spawned) "the conductor's, the seat's and an uncapped Run's turns take no slot")))))
+
 (deftest every-teardown-retires-the-background-session-first
   ;; The composition root installs retirement into teardown itself, so every path that tears a
   ;; Run's session down — settle-run!, reconcile, the review sweep — retires its conversation
-  ;; first; a provision Run's session is the person's and is neither; a stop the substrate
+  ;; first; a handed-over Run's session is the person's and is neither; a stop the substrate
   ;; refuses keeps the session whole.
   (with-tmp
     (fn []

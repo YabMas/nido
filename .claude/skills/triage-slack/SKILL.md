@@ -16,7 +16,7 @@ description: Read an owled Slack thread, investigate it against the running bria
    - **Tickets** (`:tickets`) — one entry per distinct problem or ask the thread raises. `conclude` gives each ticket a workstream of its own, files a Notion page for it at Status *Needs verification*, Lifecycle *Development*, its App Domain, Ball Holder Jaap, whose body is ONLY that ticket's product-terms text, and posts each link in the thread. No human gate before this. The thread's own workstream is then closed — it has handed everything on.
    - **A doubt** (`:doubt`) — `conclude` posts your short reasoning in the thread, mentioning Jaap. Nothing is filed, and the thread's workstream stays parked.
 3. **Park** — each ticket's workstream parks in the gate with that ticket's technical analysis. Jaap reads each on its own:
-   - **Apply** — nido adds the technical analysis to that ticket's page as a collapsed *Engineering notes & history* toggle and starts the `:plan-bug` implementation leg for it alone. Its siblings stay gated.
+   - **Apply** — nido adds the technical analysis to that ticket's page as a collapsed *Engineering notes & history* toggle and starts it as a person's start, its impl session coming up at once, for it alone. Its siblings stay gated.
    - **Dismiss** — nido closes that ticket's workstream.
    - A **doubt** parks on the thread's workstream instead, where **Reply** resumes you with feedback (see "Resume behaviour") — that is how a doubt is overridden. Apply on a doubt is refused.
 

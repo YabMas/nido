@@ -6,6 +6,7 @@
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
    [nido.platform.config]
+   [nido.coordinator.lane.start :as start]
    [nido.coordinator.lane.facets]
    [nido.coordinator.lane.drive :as drive]
    [nido.coordinator.lane.intake :as intake]
@@ -20,7 +21,6 @@
    [nido.coordinator.record.session-events :as session-events]
    [nido.coordinator.lane.conduct :as conduct]
    [nido.coordinator.executor :as executor]
-   [nido.coordinator.source.queue :as queue]
    [nido.coordinator.source.state]
    [nido.coordinator.lane.spawn]
    [nido.coordinator.record.state :as cstate]
@@ -2248,9 +2248,9 @@
 (defn- with-slack-stubs
   "Run `f` with Notion and Slack stubbed. `opts`: :create (fn [fields] result), :post (fn
    [opts] result), :toggle (fn [page-id title sections] result). Returns what was called:
-   {:created [fields …] :posted [opts …] :toggled [[page title sections] …] :queued [env …]}."
+   {:created [fields …] :posted [opts …] :toggled [[page title sections] …] :started [session …]}."
   [{:keys [create post toggle]} f]
-  (let [calls (atom {:created [] :posted [] :toggled [] :queued []})]
+  (let [calls (atom {:created [] :posted [] :toggled [] :started []})]
     (with-redefs [views/load-registry                  (fn [_] {:database "db-1"})
                   notion-client/keychain-token         (fn [] "ntok")
                   notion-client/resolve-data-source-id (fn [_ _] "ds-1")
@@ -2268,7 +2268,7 @@
                   (fn [_ch _tok opts]
                     (swap! calls update :posted conj opts)
                     ((or post (constantly {:ok true})) opts))
-                  queue/enqueue!                       (fn [env] (swap! calls update :queued conj env) "q.edn")]
+                  start/start-session!                 (fn [_ sname o] (swap! calls update :started conj sname) (:ws-id o))]
       (f)
       @calls)))
 
@@ -2293,7 +2293,7 @@
         (is (= (:id ws) (:id (workstream/find-by-ref-id :brian "BR-4900"))))
         (is (= "100.0" (:thread-ts (first (:posted c)))))
         (is (str/includes? (:text (first (:posted c))) "https://notion/pg"))
-        (is (empty? (:queued c)) "conclude never starts a drive")
+        (is (empty? (:started c)) "conclude never starts a drive")
         (is (tickets/held-by-gate? :brian "BR-4900"))
         (is (= :skip-active (tickets/gate-decision :brian "BR-4900"))
             "the Notion-side triage stands down for the filed page")))))
@@ -2356,8 +2356,7 @@
         (is (empty? (:created c)) "apply after conclude files nothing more")
         (is (= ["pg" "Engineering notes & history"] [page title]))
         (is (= ["Problem" "Root cause" "Fix"] (map :heading sections)))
-        (is (= :plan-bug (get-in (first (:queued c)) [:target :trigger])))
-        (is (= "BR-4900" (get-in (first (:queued c)) [:payload :id])))
+        (is (= 1 (count (:started c))) "the ticket is started at once, its impl session brought up")
         (is (= :planning (tickets/status :brian "BR-4900") (tickets/status :brian "slack-C1-100.0"))
             "both refs name the one workstream, whose drive is now claimed")))))
 
@@ -2368,7 +2367,7 @@
             c  (with-slack-stubs {:toggle (constantly {:error :server})}
                  #(is (= {:decision :error :error :server} (work/apply! :brian (:id ws)))))]
         (is (= 1 (count (:created c))) "an unfiled proposal is filed first")
-        (is (empty? (:queued c)))
+        (is (empty? (:started c)))
         (is (tickets/held-by-gate? :brian "BR-4900") "the gate keeps holding the ticket")))))
 
 (deftest apply-non-proposal-still-finalizes-nido-side
@@ -4391,7 +4390,7 @@
             "the thread workstream files nothing itself")
         (is (= ["100.0" "100.0"] (map :thread-ts (:posted c))) "both links go into the thread")
         (is (= :done (:outcome (workstream/closure (workstream/read-ws :brian (:id ws))))))
-        (is (empty? (:queued c)) "nothing is driven before a person accepts it")
+        (is (empty? (:started c)) "nothing is driven before a person accepts it")
         (is (tickets/held-by-gate? :brian "BR-4901"))))))
 
 (deftest conclude-thread-re-run-completes-and-never-doubles
@@ -4419,7 +4418,8 @@
             _  (with-slack-stubs {:create (counting-create)} #(work/conclude! :brian (:id ws)))
             ta (workstream/find-by-ref :brian :slack-message "slack-C1-100.0~a")
             c  (with-slack-stubs {} #(work/apply! :brian (:id ta)))]
-        (is (= "BR-4901" (get-in (first (:queued c)) [:payload :id])))
+        (is (= 1 (count (:started c))))
+        (is (re-find #"^impl-br-4901" (first (:started c))) "the accepted ticket's impl session comes up")
         (is (= :planning (tickets/status :brian "BR-4901")))
         (is (tickets/held-by-gate? :brian "BR-4902") "the sibling still waits for a person")))))
 

@@ -101,10 +101,10 @@
 
 (defn- teardown-due?
   "Whether reconcile tears down the session `run` ran in when it settles the Run at `state`:
-   resolved, a session it owns still :live, and one its end reclaims (runs/reclaims-session?).
-   The teardown retires the session's background conversation itself, first."
+   resolved, and a session it owns still :live. The teardown keeps a session its Run handed to a
+   person, and retires the session's background conversation itself, first."
   [run state]
-  (boolean (and (resolved-states state) (runs/reclaims-session? run) (live-owned? run))))
+  (boolean (and (resolved-states state) (live-owned? run))))
 
 (defn- settle-session!
   "Leave the session `run` owns as the executor would have left it at `state`:

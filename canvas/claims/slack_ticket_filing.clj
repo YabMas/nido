@@ -22,11 +22,11 @@
   {:about [conclude! apply!] :evidence "round"})
 
 (Claim no-drive-before-accept
-  "While the BR's ticket record is held by an unaccepted Slack proposal, nothing but apply! starts its drive: conclude! never enqueues :plan-bug or sets a ticket record :planning, and pickup! — the other verb that claims and enqueues a BR — refuses such a BR, saying the analysis waits in the gate."
+  "While the BR's ticket record is held by an unaccepted Slack proposal, nothing but apply! starts its drive: conclude! never starts the ticket or sets a ticket record :planning, and pickup! — the other verb that starts a BR — refuses such a BR, saying the analysis waits in the gate."
   {:about [conclude! apply! pickup!] :evidence "round"})
 
 (Claim accept-writes-then-drives
-  "Accepting a product proposal appends the technical sections to the filed page as a collapsed toggle titled \"Engineering notes & history\" — appended into an existing one of that title rather than doubled — and only then claims the BR :planning and enqueues :plan-bug with its page id, URL and title; a failed Notion write enqueues nothing and leaves the gate as it was."
+  "Accepting a product proposal appends the technical sections to the filed page as a collapsed toggle titled \"Engineering notes & history\" — appended into an existing one of that title rather than doubled — and only then starts the ticket through claim-and-drive! with its page id, URL and title; a failed Notion write starts nothing and leaves the gate as it was."
   {:about [apply! claim-and-drive!] :evidence "round"})
 
 (Claim doubt-replies-and-files-nothing

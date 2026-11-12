@@ -1,33 +1,29 @@
 (ns nido.coordinator.lane.brief
-  "Put a picked-up ticket's own words on its workstream ledger, at provision
-   time, from the daemon's credential.
+  "Put an untriaged ticket's own words on its workstream ledger when a person
+   starts it, read with the keychain's Notion credential.
 
-   A ticket that reaches nido through `bb nido:pickup` bypasses triage by
-   design, so the workstream it provisions starts with an empty ledger. Until
-   this existed, the session that got handed that workstream was handed the
-   ticket's TITLE and nothing else: `/continue-ticket` reads nido's ledgers, and
-   nothing in the chain read the ticket. Sessions parked on \"the title does not
-   say what this means\" — which was true, and answerable in one HTTP call.
+   A ticket started without triage — a pickup, an accepted proposal filed
+   elsewhere — reaches its workstream with nothing on the ledger saying what was
+   asked, and the session handed it gets the ticket's TITLE and nothing else:
+   `/continue-ticket` reads nido's ledgers, and nothing in the chain read the
+   ticket. Sessions parked on \"the title does not say what this means\" —
+   which was true, and answerable in one HTTP call.
 
-   The call was already being made. `nido.coordinator.lane.pickup/resolve-ref`
-   retrieves the page to learn its BR-#### and title, then keeps four fields and
-   drops the body on the floor. This namespace stops dropping it.
+   Two properties are the point:
 
-   Two properties are the point, and both come from doing it HERE rather than
-   in the skill:
-
-   - **It does not depend on the session's Notion access.** The daemon reads the
-     PAT from the Keychain; a coordinator-spawned Run under launchd never
-     inherits `NOTION_TOKEN`, so a session that reaches for `bb notion:*` gets a
-     missing-credential error and has historically read it as having no Notion
-     access at all. The ledger entry is already there before the agent starts.
+   - **It does not depend on the session's Notion access.** The credential is
+     read from the Keychain by nido; a session that reaches for `bb notion:*`
+     without `NOTION_TOKEN` gets a missing-credential error and has historically
+     read it as having no Notion access at all. The ledger entry is already
+     there before the agent starts.
    - **It is best-effort, never a gate.** A ticket nido could not read is
-     strictly no worse than today. Every failure path here returns nil and logs;
-     none of them can fail the run.
+     strictly no worse than one never transcribed. Every failure path here
+     returns nil and logs.
 
-   Only fires on an EMPTY ledger. A promoted ticket already carries a :triage
-   entry stating the goal, and a second telling of the same ticket would be a
-   second thing to reconcile, not a second source."
+   Only fires when nothing on the ledger tells the ticket yet (`owed?`). A
+   promoted ticket already carries a :triage entry stating the goal, and a
+   second telling of the same ticket would be a second thing to reconcile, not a
+   second source."
   (:require
    [clojure.string :as str]
    [nido.coordinator.record.workstream :as ws]
@@ -60,6 +56,19 @@
         (md/comments->markdown results)))
     (catch Exception _e nil)))
 
+(def ^:private told-kinds
+  "Entries that already tell a ticket on its ledger: a triage verdict or Slack proposal, an
+   intake's issue, or an earlier transcription."
+  #{:triage :proposed-ticket :issue :ticket})
+
+(defn ^{:malli/schema [:=> [:cat :any] :boolean]}
+  owed?
+  "Whether the workstream `w`'s ledger still owes its ticket's own words: none of its entries
+   tells the ticket yet. Stage choices, activation and notes are no telling, so a ledger holding
+   only those still owes one."
+  [w]
+  (not (some #(told-kinds (:kind %)) (:entries w))))
+
 (defn ^{:malli/schema [:=> [:cat :map :NotionToken] [:maybe :string]]}
   ticket-brief
   "Render `ref`'s Notion page — body and comments — as a markdown ledger entry.
@@ -70,9 +79,8 @@
    for one. It is a transcription; where it and the ticket differ, the ticket
    wins, and the URL is right there."
   [{:keys [id page-id notion-page-id url title]} token]
-  ;; Both keys, because the payload has carried the page id under either at
-  ;; different times — :notion-page-id is what notify/on-plan-spawn! reads,
-  ;; :page-id what spawn/external-ref reads, and pickup now emits both.
+  ;; Either key: a workstream's Notion ref carries :page-id, a ticket record
+  ;; :notion-page-id.
   (when-let [page-id (and (not (str/blank? token)) (or page-id notion-page-id))]
     (let [body     (body-markdown page-id token)
           comments (comments-markdown page-id token)]
@@ -82,8 +90,8 @@
          (concat
           [(str "# " (or title id "Ticket"))
            ""
-           (str "_Transcribed from Notion by nido at provision time — this ticket "
-                "reached nido through pickup, so no triage stage read it first. "
+           (str "_Transcribed from Notion by nido when a person started it — no "
+                "triage stage read this ticket first. "
                 "Rendering is partial; the ticket is authoritative._")
            ""
            (str "- **Ref:** " (or id "—"))
@@ -98,12 +106,11 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :NotionToken] :any]}
   ensure-ticket-brief!
   "Append a `:ticket` entry carrying the ticket's body and comments to workstream
-   `ws-id`, when — and only when — that workstream has no entries at all.
+   `ws-id`, when — and only when — its ledger still owes one (`owed?`).
 
    Total by construction: returns the entry path on success and nil on every
-   other outcome, including every failure. Callers run this on the provisioning
-   path, where a thrown exception would be read as a spawn failure and fail a
-   run that is otherwise fine.
+   other outcome, including every failure — a person's start calls it, and a
+   failed read must never stop the start.
 
    `:ticket` is deliberately not a registered entry kind. `report/entry-payload`
    stores an unregistered kind as verbatim markdown, which is exactly right for
@@ -116,7 +123,7 @@
         (nil? w)
         (do (warn (str "ticket brief: no workstream " ws-id)) nil)
 
-        (seq (:entries w))
+        (not (owed? w))
         nil
 
         :else

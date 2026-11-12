@@ -67,7 +67,7 @@
   (Operation status-of
     "Where triage of the ticket a workstream carries stands — dismissed, planning, implementing,
      triaged, investigating, awaiting input, or nil when it is re-triable — read off that
-     workstream's ledger and runs, optionally leaving one run out."
+     workstream's ledger and runs."
     {:signature [:=> [:catn [:project ProjectName] [:w :any]] [:maybe :keyword]]
      :delegates [runs/runs-of workstream/closure standing/verdict standing/chosen-stage
                  standing/restored-at]})

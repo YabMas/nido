@@ -478,17 +478,17 @@
                                 t))))
          true))))
 
-(def ^:private provision-only-skills
-  "Skills whose run hands its session to a human: once provisioned it is their
-   workspace, so no run lifecycle event may stop or reclaim it."
+(def ^:private handed-over-skills
+  "Skills whose Runs handed their session to a person: once provisioned it was theirs, so no Run
+   lifecycle event may stop or reclaim it. No Run of these is minted any more — a person's start
+   is no Run — but their records stay on disk, resolved, and reconcile settles resolved Runs on
+   every start: without this a restart would tear down a session a person is working in."
   #{:plan-bug :plan-github-issue})
 
-(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
-  reclaims-session?
-  "Whether a Run's resolved end reclaims the session it ran in: every Run's but a provision-only
-   one's, whose session is handed to the person. teardown-session-for-run! reclaims exactly these."
+(defn- reclaims-session?
+  "Whether a Run's resolved end reclaims the session it ran in: every Run's but a handed-over one's."
   [run]
-  (not (provision-only-skills (:skill run))))
+  (not (handed-over-skills (:skill run))))
 
 (defonce ^:private !before-teardown
   ;; Set by the composition root: what must happen to a session before its workspace goes — the
@@ -529,13 +529,8 @@
    agent.log, run.edn) under ~/.nido/runs is never touched, so a failed/done run
    stays inspectable.
 
-   NO-OP for provision-only runs (:plan-bug, :plan-github-issue): the impl session
-   is HANDED to the human at provision — it's their workspace, not a
-   coordinator-owned ephemeral surface. The run goes :done (to free the trigger's
-   slot) once the burst finishes — the Notion leg when /continue-ticket sets the
-   ticket :implementing, the GitHub leg immediately — but the session must OUTLIVE
-   the run; reclaiming it would delete the worktree out from under the person
-   working in it. The human brings it down explicitly (bb nido:session:down).
+   NO-OP for a handed-over Run (handed-over-skills): its session is a person's
+   workspace, and reclaiming it would delete the worktree out from under them.
 
    Every caller's teardown first runs the step set-before-teardown! installed — the
    background conversation in the session retired — and a session that step cannot
@@ -654,7 +649,7 @@
 
    Stops only what it can show is safe to stop:
      - a session this run spawned (owns-session?), never one it borrowed;
-     - not a provision-only run's, which belongs to a human from the start;
+     - not a handed-over Run's, which belongs to a person;
      - one with a service process actually running — a :lite session has none,
        so stopping it would free nothing and still drop its home;
      - one fleet/occupancy finds :vacant. :occupied (someone is in it) and
@@ -662,9 +657,9 @@
 
    Best-effort: logs and returns nil; never throws into a run's terminal path."
   [run]
-  (let [{:keys [project session-name skill]} run]
+  (let [{:keys [project session-name]} run]
     (try
-      (when (and (not (provision-only-skills skill)) (owns-session? run))
+      (when (and (reclaims-session? run) (owns-session? run))
         (let [{:keys [worktree instance-id]} (run-worktree run)
               states (vals (:service-states (some-> instance-id session-state/read-session)))
               pids   (into #{} (comp (keep :pid) (filter proc/process-alive?)) states)]

@@ -649,8 +649,8 @@
    `br` is the Notion BR-#### id, GitHub issue ref (e.g. \"o/r#42\"), or nil
    for a scratch/slack/ref-less workstream. Inbox→triage decisions
    (:triaging / :skip-not-inbox / :skip-no-trigger) are reported regardless of
-   `br`; `:promote` confirms the planning leg; every other refusal reads as why
-   it wasn't promotable."
+   `br`; `:promote` confirms the start; every other refusal reads as why it
+   wasn't started."
   [br decision]
   (case decision
     :triaging        "started triage"
@@ -659,12 +659,13 @@
     (if (nil? br)
       "nothing to promote on this workstream"
       (case decision
-        :promote             (str "promoted " br " → in progress")
+        :promote             (str "started " br " → in progress")
+        :ticket-unreadable   (str "couldn't read " br " to put it on the ledger — try again")
+        :name-held           (str br "'s session name belongs to another workstream")
         :skip-active         (str br " already promoted")
         :skip-completed      (str br " was skipped in triage — nothing to promote")
         :skip-no-record      (str br " has no triage record yet")
         :skip-untriaged      (str br " isn't triaged yet — not ready to pick up")
-        :gh-error            (str "couldn't reach GitHub for " br " — try again")
         :skip-not-promotable (str "nothing to promote on " br)
         (str "refused " br " — " (name decision))))))
 

@@ -258,7 +258,7 @@
          (wsv/format-row {:label "BR-2 · y" :needs-you false :engagement :queued}))))
 
 (deftest promote-result-message-reads-the-decision
-  (is (= "promoted BR-7 → in progress"           (wsv/promote-result-message "BR-7" :promote)))
+  (is (= "started BR-7 → in progress"            (wsv/promote-result-message "BR-7" :promote)))
   (is (= "BR-7 already promoted"                  (wsv/promote-result-message "BR-7" :skip-active)))
   (is (= "BR-7 isn't triaged yet — not ready to pick up"
          (wsv/promote-result-message "BR-7" :skip-untriaged)))
@@ -364,7 +364,7 @@
   ;; GitHub uses an issue ref id (e.g. "o/r#42") in place of a BR-####:
   (is (re-find #"in progress" (wsv/promote-result-message "o/r#42" :promote)))
   (is (= "o/r#42 already promoted" (wsv/promote-result-message "o/r#42" :skip-active)))
-  (is (re-find #"couldn't reach GitHub" (wsv/promote-result-message "o/r#42" :gh-error)))
+  (is (re-find #"couldn't read o/r#42" (wsv/promote-result-message "o/r#42" :ticket-unreadable)))
   ;; scratch / ref-less workstream (no promote id):
   (is (re-find #"nothing to promote" (wsv/promote-result-message nil :skip-not-promotable))))
 

@@ -2850,28 +2850,11 @@
       [:button.btn {"data-on:click" post} "Drive →"]]
      [:div {:id "pickup-result" :class "pickup-result"}]]))
 
-(defn- queued-blocked-note
-  "The warning under a queued envelope, worded for the reason it won't run — or
-   nil when it will. Each reason has a different fix, so they can't share copy:
-   a down daemon needs starting, a halted one needs resuming, and an open
-   breaker needs clearing while the daemon keeps running normally."
-  [blocked-by trigger project]
-  (when blocked-by
-    [:p.meta
-     (case blocked-by
-       :daemon-down "⚠ daemon is down — queued, but it won't run until the daemon is back up."
-       :halted      "⚠ coordinator is halted — queued, but it won't run until you resume it (bb nido:coordinator:resume)."
-       :breaker     (str "⚠ " (name trigger) "'s breaker is open — queued, but it won't run "
-                         "until it's cleared (bb nido:trigger:enable :project " project
-                         " " (name trigger) ").")
-       nil)]))
-
 (defn ^{:malli/schema [:=> [:cat :map :map] :string]}
   pickup-result-fragment
   "HTML string (root #pickup-result) reporting the outcome of a pickup POST.
-   `result` is pickup!'s return; opts is
-   {:project <str> :blocked-by <kw or nil> :trigger <kw>}."
-  [result {:keys [project blocked-by trigger]}]
+   `result` is pickup!'s return; opts is {:project <str>}."
+  [result {:keys [project]}]
   (str
    (h/html
     [:div {:id "pickup-result" :class "pickup-result" :style "margin-top:8px;"}
@@ -2883,6 +2866,9 @@
            :not-a-ticket)     (h/raw "Couldn't find that ticket.")
           :unrecognized-input "Paste a Notion URL, page id, or BR-####."
           :awaiting-gate      "Its technical analysis is waiting in the gate — accept it there to start."
+          :ticket-unreadable  "Couldn't read the ticket to put it on the ledger — try again."
+          :name-held          "Its session name belongs to another workstream."
+          :closed             "Its workstream is closed."
           "Notion lookup failed — try again.")]
        (let [{:keys [continuing? ws-id ref]} result
              {:keys [id title]} ref]
@@ -2891,9 +2877,9 @@
             [:p "✓ Continuing " [:strong id] " \"" title "\" → "
              [:a {:href (str "/workstreams/" project "/" ws-id)} "workstream ↗"]
              " (session spinning up…)"]
-            [:p "✓ Starting " [:strong id] " \"" title "\" (new workstream) — "
-             "it'll appear in the spine shortly."])
-          (queued-blocked-note blocked-by trigger project)]))])))
+            [:p "✓ Started " [:strong id] " \"" title "\" → "
+             [:a {:href (str "/workstreams/" project "/" ws-id)} "workstream ↗"]
+             " (session spinning up…)"])]))])))
 
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]}
   workstreams-page

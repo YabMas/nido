@@ -64,14 +64,6 @@
 (defn ^{:malli/schema [:=> [:cat] :map]}
   read-rail-daemon "Seam over health for stubbing in tests." [] (control/read-daemon-health))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :keyword]]}
-  read-pickup-blocker
-  "Seam over health for stubbing in tests. What blocks the leg a pickup fires,
-   or nil when nothing does — deliberately NOT read-rail-daemon, whose :state is
-   a severity ladder for the dot rather than a go/no-go for one envelope."
-  [project]
-  (control/read-queue-blocker (keyword project) work/pickup-trigger))
-
 (defn- refresh-for!
   "Bring the held rows up to what `view-state`'s render shows (`work/refresh-list!`,
    `work/refresh-selected!`): a Workstreams view with a selection refreshes the selected
@@ -551,17 +543,12 @@
         (dev/dev-action! project ws-id session action)
         (ws-pane-fragment-response project ws-id))
 
-      ;; POST /workstreams/pickup/:project — resolve a pasted Notion ref, enqueue
-      ;; the :plan-bug leg, and patch #pickup-result with the continuing/new report.
+      ;; POST /workstreams/pickup/:project — resolve a pasted Notion ref, start its ticket,
+      ;; and patch #pickup-result with the continuing/new report.
       (and (= 3 (count segs)) (= "workstreams" (first segs)) (= "pickup" (nth segs 1)))
       (let [project (nth segs 2)
             input   (str/trim (str (:pickup (parse-json-body body))))
-            ;; Ask what blocks THIS envelope, not what color the rail dot is.
-            ;; The dot ranks :breaker above :up, so reading it as go/no-go
-            ;; reported a healthy daemon as down whenever any unrelated
-            ;; trigger was tripped.
-            blocked (read-pickup-blocker project)
-            opts    {:project project :blocked-by blocked :trigger work/pickup-trigger}]
+            opts    {:project project}]
         (if (str/blank? input)
           (sse-response
            (sse-fragment

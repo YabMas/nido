@@ -70,6 +70,25 @@
           (is (= [:brian (:id w) "auto" "go" "r1"] @given)
               "the executor gave it once a slot was free, for the Run awaiting it"))))))
 
+(deftest a-reply-that-is-no-runs-is-given-at-once-under-a-full-cap
+  ;; A person's reply into a session whose Run is long done is no Run's: the cap bounds Runs, so
+  ;; it is handed to conduct in the same call, however full the executor is.
+  (with-tmp
+    (fn []
+      (let [w (ws/create! :brian {:external-refs []})
+            given (atom nil)]
+        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
+        (background! (:id w) "auto")
+        (write-run! "r1" (:id w) "auto" "bg-1")
+        (runs/write-run! (assoc (runs/read-run "r1") :state :done))
+        (ex/clear!)
+        (ex/configure! {:global-cap 1})
+        (ex/tick! (fn [_]) {} 1)                  ; driven, and its one slot taken
+        (with-redefs [conduct/instruct! (fn [& args] (reset! given (vec args)))]
+          (is (= {:resumed "auto" :queued? false :via :substrate}
+                 (resume/resume! :brian (:id w) "go" (session/read-session :brian (:id w) "auto")))))
+        (is (= [:brian (:id w) "auto" "go" nil] @given) "given at once, for no Run")))))
+
 (deftest resume!-runs-inline-and-says-so-when-nothing-ticks-this-process
   ;; A standalone `bb nido:ui` starts the gate surface without the daemon. Queued there, the turn
   ;; would park forever in an atom nobody promotes from and say nothing. Running it is right;
@@ -130,6 +149,22 @@
           (is (= :no-background-session (:reason err)) "recorded where the gate shows it")
           (is (re-find #"claude --resume sid-9" (:message err))
               "naming the conversation a person can continue"))))))
+
+(deftest a-reply-to-a-session-that-never-started-says-so
+  ;; No conversation id anywhere: nothing ran there, so it predates nothing.
+  (with-tmp
+    (fn []
+      (let [w (ws/create! :brian {:external-refs []})]
+        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
+        (write-run! "r1" (:id w) "auto" nil)
+        (ex/clear!)
+        (with-redefs [conduct/instruct! (fn [& _] (throw (ex-info "given" {})))]
+          (is (= :not-started
+                 (try (resume/resume! :brian (:id w) "go") nil
+                      (catch clojure.lang.ExceptionInfo e (:reason (ex-data e)))))))
+        (let [err (:error (:autonomy (session/read-session :brian (:id w) "auto")))]
+          (is (= :not-started (:reason err)))
+          (is (not (re-find #"predates" (:message err)))))))))
 
 (deftest a-reply-to-a-session-nido-has-no-id-for-is-refused
   (with-tmp

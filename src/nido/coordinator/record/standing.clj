@@ -690,6 +690,25 @@
   [w]
   (boolean (some #(= :activated (:kind %)) (:entries w))))
 
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :string]]}
+  person-started-at
+  "When a person last started the workstream `w`, as the ISO instant its ledger stamped — its
+   :activated entry, or a :stage-set or :reopened choosing :in-progress by :person, whichever is
+   newest — or nil when no person ever did. What a conductor reads, beside a typed prompt, as a
+   person's grant to conduct. A choice whose payload no longer reads is no start; nido's own
+   choices (a Notion sync's) never are."
+  [w]
+  (let [person-start? (fn [{:keys [kind seq]}]
+                        (or (= :activated kind)
+                            (let [p (ws/entry-at-seq (:project w) (:id w) seq)]
+                              (and (= :person (:by p)) (= :in-progress (:stage p))))))]
+    (->> (:entries w)
+         (filter #(#{:activated :stage-set :reopened} (:kind %)))
+         reverse
+         (filter person-start?)
+         first
+         :at)))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] [:maybe :map]]}
   newest-findings
   "The newest findings round filed on the workstream, as written, or nil when none was. Throws,

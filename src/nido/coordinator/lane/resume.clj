@@ -46,18 +46,22 @@
                         [:=> [:cat :ProjectName :WorkstreamId :string [:maybe :Session]] :any]]}
   resume!
   "Re-engage the session waiting on a person under `ws-id` (`waiting-session`) with `input`, as
-   its next instruction: handed to the executor as a turn, which queues it through conduct once a
-   slot frees — and, queued there, the turn is what stops a second reply being accepted for the
-   same session. Conduct gives it when the session is ready, and the session's own Stop re-parks
-   it. An instruction conduct refuses is recorded as the session's error.
+   its next instruction. A reply to a Run that awaits review is that Run's turn: handed to the
+   executor, which queues it through conduct once a global slot frees — and, queued there, the
+   turn is what stops a second reply being accepted for the same session. A reply that is no
+   Run's is handed to conduct at once, whatever the executor holds: the global cap bounds Runs,
+   and conduct's own :queued/:pending on the session is what refuses a second reply. Conduct
+   gives it when the session is ready, and the session's own Stop re-parks it. An instruction
+   conduct refuses is recorded as the session's error.
 
    Returns {:resumed <session-name> :queued? <bool> :via :substrate}, and :unaccounted? true when
-   the turn ran outside the executor because nothing in this process ticks it. Throws ex-info,
-   recording the reason as the session's error where there is a session, when no session waits
-   (:not-parked), when the session nido started has no id from Claude Code yet
-   (:session-unnamed), and when the session's record carries no :claude facet
-   (:no-background-session) — a conversation from before background sessions, which nido no
-   longer continues.
+   a Run's turn ran outside the executor because nothing in this process ticks it. Throws
+   ex-info, recording the reason as the session's error where there is a session, when no session
+   waits (:not-parked), when the session nido started has no id from Claude Code yet
+   (:session-unnamed), and when the session's record carries no :claude facet — :not-started
+   when no Claude session id is recorded for it either, so nothing has started there yet, and
+   :no-background-session when one is: a conversation from before background sessions, which
+   nido no longer continues.
 
    The four-argument arity resumes `waiting`, a session its caller found waiting BEFORE recording
    the person's answer. It cannot look again: an answer on the ledger is what stops the workstream
@@ -82,11 +86,14 @@
        (nil? (:claude s))
        (let [run (runs/find-for-session project ws-id (:name s))
              sid (or (get-in s [:autonomy :claude-session-id]) (:claude-session-id run))]
-         (refuse! :no-background-session
-                  (str "This conversation predates background sessions, and nido no longer continues it"
-                       (if sid (str " — continue it yourself with " (substrate/resume-command sid)) "")
-                       ", or close the workstream"))))
-     ;; Queued through the executor like any turn, so the reply is admitted under the global cap
+         (if sid
+           (refuse! :no-background-session
+                    (str "This conversation predates background sessions, and nido no longer continues it"
+                         " — continue it yourself with " (substrate/resume-command sid)
+                         ", or close the workstream"))
+           (refuse! :not-started
+                    "This session has not started a conversation yet — reply again once it has"))))
+     ;; A Run's reply is queued through the executor, so it is admitted under the global cap
      ;; before conduct may give it — its trigger's in-flight slot the parked run already holds
      ;; (see executor/submit-turn!); once given, the session holds its global slot while the
      ;; substrate reports it working. Keyed per turn, because a Run is spawned once and replied to
@@ -103,7 +110,12 @@
                                              :reason  (or (:reason (ex-data t)) :resume-failed)
                                              :message (ex-message t)})))]
        (session/set-error! project ws-id (:name s) nil)
-       (if (executor/driven?)
+       (cond
+         (nil? for)
+         (do (body)
+             {:resumed (:name s) :queued? false :via :substrate})
+
+         (executor/driven?)
          (do (executor/submit-turn!
               {:run-id  (turn-key s run)
                :turn    (str (random-uuid))
@@ -113,5 +125,6 @@
          ;; Nobody ticks the executor in this process — a standalone `bb nido:ui` rather than the
          ;; daemon — so queueing would park the turn forever and say nothing. Run it, and SAY that
          ;; it was not slot-accounted rather than letting the caller assume it was.
+         :else
          (do (body)
              {:resumed (:name s) :queued? false :unaccounted? true :via :substrate}))))))

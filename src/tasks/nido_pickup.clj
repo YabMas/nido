@@ -16,5 +16,5 @@
     (cstate/ensure-dirs!)
     (let [r (pickup/pickup! project input (client/keychain-token))]
       (if (= :driving (:decision r))
-        (println "driving" (:id (:ref r)) "→ queued" (:queued r))
+        (println "driving" (:id (:ref r)) "→ session" (:session r) "on" (:ws-id r))
         (println "could not resolve:" input "(" (name (:error r)) ")")))))

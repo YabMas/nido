@@ -12,10 +12,6 @@
             [canvas.coordinator.record.session :refer [person-prompt? prompted-sessions]]
             [canvas.ui.surface :refer [ui-views ui-tui]]))
 
-(Claim worked-is-a-recent-person-prompt
-  "conductors! and reseat! treat an open workstream as worked exactly when one of its sessions is in the set conductor/prompted answers: the sessions a person-prompt? prompt recorded within the last 24 hours was attributed to. Nothing else — a session's creation, its origin, its seat, a hand-back — makes a workstream worked."
-  {:about [conductors! prompted] :evidence "round"})
-
 (Claim delivered-prompts-are-no-persons
   "person-prompt? is false for a prompt whose text carries a nido send token ([nido-send …]) or a harness delivery wrapper (<cross-session-message, <agent-message, <task-notification, [Cross-session delivery notice]), and true for every other recorded prompt."
   {:about [person-prompt?] :evidence "round"})
