@@ -103,7 +103,7 @@
       ;; `tickets/status` derives from the ledger this is bringing level.
       (let [st (:status (tickets/read-meta project br))]
         (when-let [n (and (taken st) (unaccepted-triage project id))]
-          (add! {:format :triage-accepted :triage-seq n}))
+          (add! (tickets/acceptance project id n)))
         (when (and (= :dismissed st) (nil? (:closed w))
                    (not= :closed (:kind (newest project id #{:closed :reopened}))))
           (add! {:format :closed :outcome :dismissed :by :backfill}))))

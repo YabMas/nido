@@ -40,7 +40,7 @@
           (add! :baseline-review {:format :baseline-review :verdict :sufficient :baseline-seq 2 :reason "holds"})
           (let [d1 (add! :design a-design)]
             (add! :design-approved {:format :design-approved :design {:seq d1} :at-seq d1})
-            (add! :blocker {:format :blocker :summary "which way" :needs "a decision"})
+            (add! :blocker {:format :blocker :summary "which way" :needs "a decision?" :after "The work resumes once you answer."})
             (is (= :blocked (:at (p/of :brian id))))
             (ws/append-stamped! :brian id {:format :recut :by {:as :person} :ids ["agg"] :why "two secrets"})
             (ws/open-generation! :brian id {:format :generation :recut {:seq (count (:entries (ws/read-ws :brian id)))}

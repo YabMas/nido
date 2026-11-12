@@ -98,7 +98,7 @@
       (let [id (a-ws)]
         (baselined! id)
         (ws/append-entry! :brian id {:kind :blocker}
-                          (pr-str {:format :blocker :summary "s" :needs "n"}))
+                          (pr-str {:format :blocker :summary "s" :needs "n?" :after "The work resumes once you answer."}))
         (with-redefs [activity/read-live (constantly nil)
                       drive/run-stage! (fn [& _] (throw (ex-info "must not run" {})))]
           (is (= :waiting-on-a-human (attach/attach! :brian id "/wt/impl-1"))))))))
@@ -157,7 +157,7 @@
       (let [id (a-ws)]
         (baselined! id)
         (ws/append-entry! :brian id {:kind :blocker}
-                          (pr-str {:format :blocker :summary "s" :needs "n"}))
+                          (pr-str {:format :blocker :summary "s" :needs "n?" :after "The work resumes once you answer."}))
         (let [pos (pipeline/of :brian id)
               out (str/join "\n" (attach/skip-lines :brian id pos (drive/fireable pos)))]
           (is (str/includes? out "answer-blocker"))

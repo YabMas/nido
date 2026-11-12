@@ -65,8 +65,8 @@
   {:format :triage-report :ticket-key "BR-1" :determination :bug
    :title "t" :summary "s"
    :confidence {:level :high :reason "reproduced"}
-   :directions [{:label "d" :shape "sh" :effort :S
-                 :confidence {:level :high :reason "clear"}}]
+   :questions [{:question "Which fix should be built?" :context "" :after "The work resumes once you answer." :directions [{:label "d" :shape "sh" :effort :S
+                 :confidence {:level :high :reason "clear"}}]}]
    :notion-writes nil
    :trail []})
 
@@ -287,9 +287,9 @@
       (let [[id add!] (ledger)]
         (intent! add!)
         (let [blk (add! :blocker {:format :blocker :summary "which branch"
-                                  :needs "a call"
+                                  :needs "a call?"
                                   :options [{:label "A" :summary "a"}
-                                            {:label "B" :summary "b"}]})]
+                                            {:label "B" :summary "b"}] :after "The work resumes once you answer."})]
           (is (= :blocked (:at (p/of :brian id))))
           (is (= :human (:mode (:next (p/of :brian id)))))
           (add! :blocker-answered {:format :blocker-answered :blocker-seq blk
@@ -675,11 +675,11 @@
     (fn [_]
       (let [[id add!] (ledger)
             b1 (add! :blocker {:format :blocker :summary "a product decision"
-                               :needs "which way to name it"})]
+                               :needs "which way to name it?" :after "The work resumes once you answer."})]
         (is (= :blocked (:at (p/of :brian id))))
         (intent! add!)
         (is (= :blocked (:at (p/of :brian id))) "work going on is not an answer")
-        (let [b2 (add! :blocker {:format :blocker :summary "another" :needs "and this?"})]
+        (let [b2 (add! :blocker {:format :blocker :summary "another" :needs "and this?" :after "The work resumes once you answer."})]
           (add! :blocker-answered {:format :blocker-answered :blocker-seq b2 :summary "this way"})
           (is (= :blocked (:at (p/of :brian id)))
               "answering the newer halt leaves the older one holding the workstream"))
@@ -691,7 +691,7 @@
     (fn [_]
       (let [[id add!] (ledger)]
         (intent! add!)
-        (add! :blocker {:format :blocker :summary "stuck" :needs "a key"})
+        (add! :blocker {:format :blocker :summary "stuck" :needs "a key?" :after "The work resumes once you answer."})
         (is (= :blocked (:at (p/of :brian id))))))))
 
 (deftest another-halt-is-not-an-answer-to-the-first
@@ -701,8 +701,8 @@
     (fn [_]
       (let [[id add!] (ledger)]
         (intent! add!)
-        (add! :blocker {:format :blocker :summary "first" :needs "a"})
-        (let [second-seq (add! :blocker {:format :blocker :summary "second" :needs "b"})]
+        (add! :blocker {:format :blocker :summary "first" :needs "a?" :after "The work resumes once you answer."})
+        (let [second-seq (add! :blocker {:format :blocker :summary "second" :needs "b?" :after "The work resumes once you answer."})]
           (is (= :blocked (:at (p/of :brian id))))
           (is (= "second" (:summary (ws/latest-entry :brian id :blocker)))
               "and it is the later question that stands")
@@ -714,9 +714,9 @@
       (let [[id add!] (ledger)]
         (intent! add!)
         (let [blk (add! :blocker {:format :blocker :summary "which branch"
-                                  :needs "a call"
+                                  :needs "a call?"
                                   :options [{:label "A" :summary "a"}
-                                            {:label "B" :summary "b"}]})]
+                                            {:label "B" :summary "b"}] :after "The work resumes once you answer."})]
           (is (= :blocked (:at (p/of :brian id))))
           (add! :blocker-answered {:format :blocker-answered :blocker-seq blk
                                    :letter "A" :label "do a" :summary "took A"})
@@ -787,7 +787,7 @@
     (fn [_]
       (let [[id add!] (ledger)]
         (intent! add!)
-        (let [blk (add! :blocker {:format :blocker :summary "s" :needs "n"})]
+        (let [blk (add! :blocker {:format :blocker :summary "s" :needs "n?" :after "The work resumes once you answer."})]
           (add! :note "later")
           (is (= blk (:placed-by (p/of :brian id))) "a halt names its blocker"))))))
 
@@ -921,7 +921,7 @@
       (testing "a blocked unit reads at the stage it halted in"
         (let [[id add!] (ledger)]
           (approved-and-implemented! add!)
-          (add! :blocker {:format :blocker :summary "stuck" :needs "a key"})
+          (add! :blocker {:format :blocker :summary "stuck" :needs "a key?" :after "The work resumes once you answer."})
           (let [r (p/of :brian id)]
             (is (= :blocked (:at r)))
             (is (= :implementation (:stage r))))))
@@ -1288,7 +1288,7 @@
         (let [r (p/of :brian id)]
           (is (= :design (:stage (:next r))))
           (is (= [:design :decide-design] (mapv :stage (:owed (:next r))))))
-        (add! :blocker {:format :blocker :summary "s" :needs "n"})
+        (add! :blocker {:format :blocker :summary "s" :needs "n?" :after "The work resumes once you answer."})
         (is (nil? (:owed (:next (p/of :brian id))))
             "a blocker outranks it, and nothing rides beside another stage")))))
 
@@ -1331,7 +1331,7 @@
             (is (= {:stage :implement :mode :working-copy} (:next r)))
             (is (= {:done 1 :of 3} (:layers r)) "a layer recorded twice is one layer"))
           (testing "a blocker outranks the layers"
-            (let [b (add! :blocker {:format :blocker :summary "s" :needs "n"})]
+            (let [b (add! :blocker {:format :blocker :summary "s" :needs "n?" :after "The work resumes once you answer."})]
               (is (= :blocked (:at (p/of :brian id))))
               (add! :blocker-answered {:format :blocker-answered :blocker-seq b :summary "go"})))
           (testing "a findings round does not erase the progress the layers made"
@@ -1465,7 +1465,7 @@
     (fn [_]
       (let [[id add!] (ledger)]
         (intent! add!)
-        (let [b (add! :blocker {:format :blocker :summary "s" :needs "n"})]
+        (let [b (add! :blocker {:format :blocker :summary "s" :needs "n?" :after "The work resumes once you answer."})]
           (add! :notion-status {:format :notion-status :page-id "abc" :status "Done" :by :poller})
           (let [r (p/of :brian id)]
             (is (= :blocked (:at r)) "only an answer naming the blocker clears it")
@@ -1483,7 +1483,7 @@
           (is (false? (:live s)))
           (is (true? (:stalled s)) "an agent owes it and nothing is working on it"))
         (testing "a blocker is a person's"
-          (add! :blocker {:format :blocker :summary "s" :needs "n"})
+          (add! :blocker {:format :blocker :summary "s" :needs "n?" :after "The work resumes once you answer."})
           (let [s (p/status :brian id)]
             (is (= :person (:owed-by s)))
             (is (false? (:stalled s)))))

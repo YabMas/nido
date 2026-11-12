@@ -13,8 +13,12 @@
    :summary "Rounding applied per-line instead of on the total."
    :confidence {:level :high :reason "reproduced in the calc fn"}
    :routing {:owner :jaap :app-domain "Teacher" :depth :deep}
-   :directions [{:label "A" :shape "round once on the total"
-                 :effort :M :confidence {:level :medium :reason "touches money math"}}]
+   :questions [{:question "Where should the order total be rounded?"
+                :context "Each line is rounded before summing, so totals drift by a cent."
+                :recommendation "A — one rounding on the total is the whole fix."
+                :after "The ticket moves to Not started with the chosen direction."
+                :directions [{:label "A" :shape "round once on the total"
+                              :effort :M :confidence {:level :medium :reason "touches money math"}}]}]
    :notion-writes {:type "bug" :effort :M
                    :status-transition ["Needs verification" "Not started"]
                    :title "Checkout off by a cent"
@@ -44,10 +48,11 @@
 (deftest report->markdown-triage-has-sections-and-trail-last
   (let [md (report/report->markdown valid-report)]
     (is (str/includes? md "Checkout off by a cent"))
-    (is (str/includes? md "Solution directions"))
+    (is (str/includes? md "## Where should the order total be rounded?")
+        "each question is its own section, headed by the question")
     (is (str/includes? md "round once on the total"))
     (is (str/includes? md "Investigation trail"))
-    (is (< (str/index-of md "Solution directions")
+    (is (< (str/index-of md "## Where should the order total be rounded?")
            (str/index-of md "Investigation trail"))
         "trail (§5) renders last")
     (is (not (str/includes? md "dismiss instead")) "§4 is gone")))
@@ -478,7 +483,7 @@
     (is (str/includes? broke "rounding moved to the line item"))))
 
 (def ^:private valid-blocker
-  {:format :blocker :summary "Waiting on a Stripe test key." :needs "Stripe test key from ops"})
+  {:format :blocker :summary "Waiting on a Stripe test key." :needs "Can ops send the Stripe test key?" :after "The work resumes once you answer."})
 
 (def ^:private valid-pr
   {:format :pr-opened :url "https://github.com/org/repo/pull/42" :title "Fix rounding"})
@@ -515,17 +520,18 @@
 ;; live question, so refusing to offer it there answers nothing.
 
 (deftest a-direction-may-defer-its-own-size
-  (is (report/validate (assoc-in valid-report [:directions 0 :effort] :squirrel)))
-  (is (report/answerable? (:directions (assoc-in valid-report [:directions 0 :effort] :squirrel)))
+  (is (report/validate (assoc-in valid-report [:questions 0 :directions 0 :effort] :squirrel)))
+  (is (report/answerable? (get-in (assoc-in valid-report [:questions 0 :directions 0 :effort] :squirrel)
+                                  [:questions 0 :directions]))
       "and it stays pickable — the choice is recorded and /continue-ticket sizes
        it when it writes the design record, which is what :squirrel has always meant"))
 
 (deftest a-report-may-not-be-written-with-more-branches-than-the-authoring-cap
-  (let [dir (first (:directions valid-report))
+  (let [dir (get-in valid-report [:questions 0 :directions 0])
         n   report/authoring-branch-cap]
-    (is (report/validate (assoc valid-report :directions (vec (repeat n dir)))))
+    (is (report/validate (assoc-in valid-report [:questions 0 :directions] (vec (repeat n dir)))))
     (is (thrown? clojure.lang.ExceptionInfo
-                 (report/validate (assoc valid-report :directions (vec (repeat (inc n) dir)))))
+                 (report/validate (assoc-in valid-report [:questions 0 :directions] (vec (repeat (inc n) dir)))))
         "a question with seven branches is a conversation, not a question with an
          answer — and that is a judgement about what may be WRITTEN")))
 
@@ -566,13 +572,13 @@
   (is (str/includes? (report/report->markdown valid-completed) "Artifacts"))
   (is (str/includes? (report/report->markdown valid-completed) "org/repo#42"))
   (is (str/includes? (report/report->markdown valid-blocker) "Needs"))
-  (is (str/includes? (report/report->markdown valid-blocker) "Stripe test key from ops"))
+  (is (str/includes? (report/report->markdown valid-blocker) "Can ops send the Stripe test key?"))
   (is (str/includes? (report/report->markdown valid-pr) "Fix rounding")))
 
 (deftest report-title-per-event
   (is (= "Round once on the order total" (report/report-title valid-plan)))
   (is (= "Shipped the fix." (report/report-title valid-completed)))
-  (is (= "Stripe test key from ops" (report/report-title valid-blocker)))
+  (is (= "Can ops send the Stripe test key?" (report/report-title valid-blocker)))
   (is (nil? (report/report-title valid-report)) "triage falls through to (:title) at the call site")
   (is (nil? (report/report-title valid-pr))      "pr-opened falls through to (:title) at the call site"))
 
@@ -648,7 +654,7 @@
 (deftest entry-payload-accepts-blocker
   (let [edn (pr-str {:format :blocker
                      :summary "Root cause is in the statechart, not the UI."
-                     :needs "Confirm whether to widen scope or re-triage."})
+                     :needs "Should the scope widen, or the ticket be re-triaged?" :after "The work resumes once you answer."})
         [ext _] (report/entry-payload :blocker edn)]
     (is (= "edn" ext))))
 
@@ -938,13 +944,13 @@
    :title "Login loops on SSO" :summary "Looks like auth — Eric's area; not investigated."
    :confidence {:level :low :reason "routed without root-causing"}
    :routing {:owner :eric :app-domain "Backend" :depth :shallow}
-   :directions [] :notion-writes nil :trail []})
+   :questions [] :notion-writes nil :trail []})
 
 (deftest validate-accepts-a-shallow-routed-report
   (is (= shallow-report (report/validate shallow-report))))
 
 (deftest validate-accepts-nil-routing-for-slack
-  (is (report/validate (assoc valid-report :routing nil :notion-writes nil :directions []))))
+  (is (report/validate (assoc valid-report :routing nil :notion-writes nil :questions []))))
 
 (deftest validate-rejects-bad-owner
   (is (thrown? clojure.lang.ExceptionInfo
@@ -1730,7 +1736,8 @@
 (def ^:private blocker-with-options
   {:format  :blocker
    :summary "The modal offers a branch nothing implements."
-   :needs   "A product decision on the Keep Old branch."
+   :needs   "What should happen to the Keep Old branch?"
+   :after   "The modal is built to the branch you choose."
    :options [{:label "Drop Keep Old" :summary "Collapse the modal to Continue/Cancel."
               :consequence "Retires the /keep-old route." :recommended? true}
              {:label "Implement archive-and-clone" :summary "Build the archive path."
@@ -1738,9 +1745,9 @@
 
 (deftest a-blocker-may-name-the-branches-it-is-asking-between
   (is (= blocker-with-options (report/validate-event :blocker blocker-with-options)))
-  (is (= {:format :blocker :summary "s" :needs "The Stripe test key."}
+  (is (= {:format :blocker :summary "s" :needs "Can ops send the Stripe test key?" :after "The work resumes once you answer."}
          (report/validate-event :blocker {:format :blocker :summary "s"
-                                          :needs "The Stripe test key."}))
+                                          :needs "Can ops send the Stripe test key?" :after "The work resumes once you answer."}))
       ":options stays optional — not every halt is a choice"))
 
 (deftest one-option-is-not-a-choice-and-seven-is-not-a-gate
@@ -1770,19 +1777,19 @@
   (is (some? (report/validate-event
               :blocker {:format :blocker
                         :summary "Option A and Option B both fail without the test key."
-                        :needs   "The Stripe test key."}))
+                        :needs   "Can ops send the Stripe test key?" :after "The work resumes once you answer."}))
       ":needs is the question and :summary is the narrative around it — a halt
        that asks for a credential while DISCUSSING branches is not a choice, and
        refusing it would lose the halt entirely")
   (is (some? (report/validate-event
               :blocker {:format :blocker :summary "The optional callback is never invoked."
-                        :needs "Whether to keep it at all."}))
+                        :needs "Should it be kept at all?" :after "The work resumes once you answer."}))
       "narrow by design: 'optional' is not an enumeration, and a false positive
        here refuses to record a halt at all")
   (is (some? (report/validate-event
               :blocker {:format :blocker
                         :summary "The checkout path under option A is unreachable."
-                        :needs "Obtain the Stripe test key for Option A."}))
+                        :needs "Can ops send the Stripe test key for Option A?" :after "The work resumes once you answer."}))
       "ONE distinct marker names a branch; it takes two to enumerate a choice —
        this halt asks for a key, and refusing it would lose the halt entirely")
   (is (thrown? clojure.lang.ExceptionInfo
@@ -1797,11 +1804,11 @@
       "so is a bare 'n)' opening each branch")
   (is (some? (report/validate-event
               :blocker {:format :blocker :summary "The request handler (a) is slow."
-                        :needs "Profile the handler (a) before changing it."}))
+                        :needs "Should the handler (a) be profiled before it changes?" :after "The work resumes once you answer."}))
       "one distinct marker, however often repeated, is not an enumeration")
   (is (some? (report/validate-event
               :blocker {:format :blocker :summary "x"
-                        :needs "Is the formula f(a) or f(b)?"}))
+                        :needs "Is the formula f(a) or f(b)?" :after "The work resumes once you answer."}))
       "a marker glued to a word is a call, not a branch")
   (let [prose {:format :blocker
                :summary "The modal offers a branch nothing implements."
@@ -1929,7 +1936,8 @@
 (def ^:private a-driven-halt
   {:format :blocker
    :summary "the decision round could not settle the decomposition"
-   :needs   "which way to cut phase three"
+   :needs   "Which way should phase three be cut?"
+   :after   "The driver resumes the decide-design stage on the cut you choose."
    :tried   [{:stage :verify-baseline :outcome :sufficient :rounds 7}
              {:stage :decide-design :outcome :disputed :rounds 4
               :detail "decomposable, raised three rounds running"}]
@@ -1945,7 +1953,7 @@
   ;; destroy the distinction it exists to make.
   (is (report/validate-event :blocker
                              {:format :blocker :summary "no stripe key"
-                              :needs "the STRIPE_SECRET for the sandbox"})))
+                              :needs "Can ops send the sandbox's STRIPE_SECRET?" :after "The work resumes once you answer."})))
 
 (deftest an-attempt-names-the-terminal-itself-not-a-paraphrase
   ;; So the record a human reads and the value the driver classified are the
@@ -2255,3 +2263,66 @@
   (is (= "canvas.order/aggregate" (report/break-id "[canvas.order/aggregate] its interface moves"))
       "bracketed as a prompt renders ids")
   (is (= "p" (report/break-id " p "))))
+
+;; ── Questions in their parts ────────────────────────────────────────────────
+
+(deftest a-new-triage-may-not-be-written-as-one-directions-list
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"asks :questions now"
+                        (report/validate (-> valid-report (dissoc :questions)
+                                             (assoc :directions (get-in valid-report [:questions 0 :directions])))))
+      "the refusal says how to write it")
+  (let [legacy (-> valid-report (dissoc :questions)
+                   (assoc :directions (get-in valid-report [:questions 0 :directions])))]
+    (is (= legacy (report/parse-event :triage legacy)) "but one already stored still reads")
+    (is (= [{:question nil :directions (:directions legacy)}] (report/triage-questions legacy))
+        "as one question with no words of its own")))
+
+(deftest a-triage-question-needs-no-recommendation
+  (is (report/validate (update-in valid-report [:questions 0] dissoc :recommendation))
+      "a recommendation is given only when it is a genuine one"))
+
+(deftest triage-questions-reads-either-era
+  (is (= (:questions valid-report) (report/triage-questions valid-report)))
+  (is (= [] (report/triage-questions (assoc valid-report :questions []))))
+  (is (= [] (report/triage-questions nil))))
+
+(deftest accepted-answers-reads-either-era
+  (let [d {:letter "A" :label "l" :shape "s" :effort :M}]
+    (is (= [{:direction d}] (report/accepted-answers {:format :triage-accepted :direction d})))
+    (is (= [{:question "q?"} {:question "r?" :direction d}]
+           (report/accepted-answers {:format :triage-accepted
+                                     :answers [{:question "q?"} {:question "r?" :direction d}]})))
+    (is (= [] (report/accepted-answers {:format :triage-accepted})))))
+
+(deftest blocker-parts-reads-either-era
+  (is (= {:question "Can ops send the Stripe test key?" :context ["Waiting on a Stripe test key."]
+          :after "The work resumes once you answer."}
+         (report/blocker-parts valid-blocker)))
+  (is (= {:question report/legacy-blocker-question
+          :context ["Stripe test key from ops, for the sandbox run" "Waiting."]}
+         (report/blocker-parts {:format :blocker :summary "Waiting."
+                                :needs "Stripe test key from ops, for the sandbox run"}))
+      "a legacy blocker's needs is body text under a fixed question")
+  (is (= [] (:context (report/blocker-parts {:format :blocker :needs "Go?" :after "a"
+                                             :summary "the conductor escalated a hand-back"})))
+      "where a blocker came from is not context"))
+
+(deftest a-blocker-out-of-its-parts-is-refused-with-the-instruction
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not written in its parts.*one sentence"
+                        (report/validate-event :blocker {:format :blocker :summary "s" :needs "a key"
+                                                         :after "a"})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #":after says what happens"
+                        (report/validate-event :blocker {:format :blocker :summary "s" :needs "A key?"})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"never where the blocker came from"
+                        (report/validate-event :blocker {:format :blocker :needs "A key?" :after "a"
+                                                         :summary "the conductor escalated a hand-back"}))))
+
+(deftest an-escalation-at-a-persons-move-is-a-note
+  (let [e {:format :conduct-decision :hand-back "m" :position :design-decided :by :conductor
+           :next {:stage :approve-design :mode :human}
+           :decision [:escalate {:needs "Weigh the second path."}]}]
+    (is (= e (report/validate-event :conduct-decision e))
+        "it parks nothing and rides on the owed card, so it is not held to a question's parts")
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"escalation is not written in its parts"
+                          (report/validate-event :conduct-decision (dissoc e :next)))
+        "one that parks is the blocker's question, and is")))

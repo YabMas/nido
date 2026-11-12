@@ -50,10 +50,10 @@
 
 (deftest a-conductor-decision-instructs-seats-or-escalates
   (let [escalation {:format :conduct-decision :hand-back "m-2" :position :design-decided :by :nido
-                    :decision [:escalate {:needs "the conductor reached no decision"}]
+                    :decision [:escalate {:needs "the conductor reached no decision?" :after "The work resumes once you answer." :summary "The work stands at a step only a person takes."}]
                     :parked {:seq 7}}]
     (is (= escalation (report/validate-event :conduct-decision escalation)))
-    (is (= "Conductor escalates: the conductor reached no decision" (report/report-title escalation)))
+    (is (= "Conductor escalates: the conductor reached no decision?" (report/report-title escalation)))
     (is (str/includes? (report/report->markdown escalation) "entry 7"))
     (testing "an instruction names at least one seat"
       (is (thrown? Exception (report/validate-event :conduct-decision

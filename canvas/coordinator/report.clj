@@ -146,6 +146,28 @@
      offered as lettered answers. The bound is asked of the write shape and nowhere else: a gate
      deciding for itself which branches it could letter would hold a second copy of it."
     {:signature [:=> [:catn [:directions :any]] :boolean]})
+  (Operation triage-questions
+    "A triage report's questions, in either era: each {:question <words or nil> :directions [...]}.
+     A report written as one flat `:directions` list is one question with no words of its own, and
+     one with none asks none. The one reading of a report's questions — no reader takes
+     `:directions` or `:questions` off a report itself."
+    {:signature [:=> [:catn [:report [:maybe :map]]] [:vector :map]]})
+  (Operation blocker-parts
+    "A blocker's question in its parts, in either era: {:question :context :recommendation? :after?}.
+     A blocker written with :after gives its :needs as the one-sentence question; one written
+     before is legacy, asked under a fixed line with its :needs leading the context. A summary
+     that only says where the blocker came from is no context and is dropped."
+    {:signature [:=> [:catn [:blocker [:maybe :map]]] :map]})
+  (Operation open-answers
+    "The answers of an acceptance that chose nothing: one per question of the report, each left
+     open with the question's words when it has any."
+    {:signature [:=> [:catn [:report [:maybe :map]]] [:vector :map]]
+     :delegates [triage-questions]})
+  (Operation accepted-answers
+    "An acceptance's answers, in either era: one {:question? :direction?} per question of the
+     report it accepted. A stored single `:direction` is one answer; an acceptance that recorded
+     neither answers nothing."
+    {:signature [:=> [:catn [:accepted [:maybe :map]]] [:vector :map]]})
   (Operation findings-heading
     "What the findings under a verdict ARE. `:insufficient` reports no refused claim, so heading
      it that way would tell a reader the opposite of what the round found."

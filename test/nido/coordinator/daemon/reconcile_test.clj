@@ -510,7 +510,7 @@
       (let [w   (improvement-ws! :test "ws-p/1#0")
             run (claim-run w)]
         (ws/append-entry! :test (:id w) {:kind :blocker}
-                          (pr-str {:format :blocker :summary "s" :needs "n"}))
+                          (pr-str {:format :blocker :summary "s" :needs "n?" :after "The work resumes once you answer."}))
         (seed-run! run)
         (agent-started! (:id run))
         (reconcile/reconcile!)

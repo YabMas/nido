@@ -12,6 +12,7 @@
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as cws]
+   [nido.coordinator.report :as report]
    [nido.platform.io :as io]))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :Path]}
@@ -194,6 +195,17 @@
   [project br-id k]
   (update-meta! project br-id #(when % (dissoc % k))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :int]] :map]}
+  acceptance
+  "The :triage-accepted body for an acceptance of the report at `seq-n` on `ws-id` that chose no
+   fix: it cites the report and leaves each of its questions open. nil `seq-n` — the ticket
+   accepted as reported — cites nothing and answers nothing."
+  [project ws-id seq-n]
+  (let [answers (when seq-n (report/open-answers (cws/entry-at-seq project ws-id seq-n)))]
+    (cond-> {:format :triage-accepted}
+      seq-n          (assoc :triage-seq seq-n)
+      (seq answers)  (assoc :answers answers))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :any]}
   complete!
   "Terminal completion of a triage verdict: accept the newest verdict on the ticket's workstream
@@ -206,8 +218,7 @@
           v (standing/verdict project (:id w) w)]
       (when-not (:accepted? v)
         (cws/append-entry! project (:id w) {:kind :triage-accepted}
-                           (pr-str (cond-> {:format :triage-accepted}
-                                     (:seq v) (assoc :triage-seq (:seq v)))))))))
+                           (pr-str (acceptance project (:id w) (:seq v))))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :any]}
   dismiss!

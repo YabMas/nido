@@ -269,7 +269,7 @@
                      (pr-str {:format :triage-report :ticket-key br :determination :bug
                               :title "Verdict" :summary "bug — reproduced."
                               :confidence {:level :high :reason "r"}
-                              :routing nil :directions [] :notion-writes nil :trail []})))
+                              :routing nil :questions [] :notion-writes nil :trail []})))
 
 (defn- triaged!
   "A verdict on `br` a person accepted: the ticket reads :triaged."

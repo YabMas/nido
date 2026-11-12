@@ -221,7 +221,8 @@
     (fn []
       (let [id (:id (ws/create! :brian {:stage :in-progress}))
             b! #(ws/append-entry! :brian id {:kind :blocker}
-                                  (pr-str {:format :blocker :summary % :needs (str % "?")}))]
+                                  (pr-str {:format :blocker :summary % :needs (str % "?")
+                                           :after "The work resumes once you answer."}))]
         (is (thrown-with-msg? Exception #"No unanswered blocker"
                               (t/blocker-answer* {:project "brian" :ws-id id :answer "x"})))
         (b! "first") (b! "second")
@@ -288,7 +289,7 @@
                                            :external-refs [{:adapter :notion :id "BR-4"}]}))
             verdict (pr-str {:format :triage-report :ticket-key "BR-3" :determination :bug
                              :title "V" :summary "s" :confidence {:level :high :reason "r"}
-                             :routing nil :directions [] :notion-writes nil :trail []})]
+                             :routing nil :questions [] :notion-writes nil :trail []})]
         (ws/append-entry! :brian taken {:kind :triage} verdict)
         ;; What ticket records hold from before the ledger recorded either decision.
         (tickets/write-meta! :brian "BR-3" {:br-id "BR-3" :status :triaged})

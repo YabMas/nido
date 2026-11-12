@@ -146,7 +146,8 @@
    by later work, and a test down here has no business depending on that."
   {:format :blocker
    :summary "the importer bypasses the aggregate"
-   :needs   "a decision on whether it should"})
+   :needs   "Should the importer go through the aggregate?"
+   :after   "The importer is rewritten once you answer."})
 
 (deftest entry-add-keeps-a-typed-body-intact-through-the-arg-path
   (with-tmp

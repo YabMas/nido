@@ -6,7 +6,8 @@
             [canvas.coordinator.record.clock :as clock]
             [canvas.coordinator.record.runs :as runs]
             [canvas.coordinator.record.standing :as standing]
-            [canvas.coordinator.record.state :as state :refer [Path]]
+            [canvas.coordinator.record.state :as state :refer [Path WorkstreamId]]
+            [canvas.coordinator.report :as report]
             [canvas.coordinator.record.workstream :as workstream]
             [canvas.platform.io :as io]
             [canvas.platform.project :refer [ProjectName]]
@@ -87,11 +88,16 @@
   (Operation unmark! "Drop one field from an existing ticket record."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:k :keyword]] [:maybe Ticket]]
      :delegates [update-meta!]})
+  (Operation acceptance
+    "The acceptance body for a report on a workstream that chose no fix: it cites the report and
+     leaves each of its questions open; with no report, it cites and answers nothing."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:seq-n [:maybe :int]]] :map]
+     :delegates [workstream/entry-at-seq report/open-answers]})
   (Operation complete!
     "Terminal completion of a triage verdict: an acceptance of the newest verdict on the ticket's
-     workstream — or of the ticket as reported, when it holds none."
+     workstream — or of the ticket as reported, when it holds none — leaving its questions open."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] :any]
-     :delegates [workstream/find-or-mint-by-ref! standing/verdict workstream/append-entry!]})
+     :delegates [workstream/find-or-mint-by-ref! standing/verdict acceptance workstream/append-entry!]})
   (Operation dismiss!
     "Take a ticket off the triage radar: settle the workstream carrying it :dismissed, minting one
      when none does."

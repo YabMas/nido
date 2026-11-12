@@ -338,8 +338,8 @@
   {:format :triage-report :ticket-key "BR-7" :determination :bug
    :title "Checkout off by a cent" :summary "Rounding applied per line."
    :confidence {:level :high :reason "reproduced"}
-   :directions [{:label "A" :shape "round once on the total" :effort :M
-                 :confidence {:level :medium :reason "money math"}}]
+   :questions [{:question "Which fix should be built?" :context "" :after "The work resumes once you answer." :directions [{:label "A" :shape "round once on the total" :effort :M
+                 :confidence {:level :medium :reason "money math"}}]}]
    :notion-writes nil
    :trail [{:ref "src/order.clj:88" :note "per-line round here"}]})
 
@@ -864,7 +864,7 @@
       (let [w (ws/create! :brian {:external-refs []})]
         (seed-baseline! w)
         (ws/append-entry! :brian (:id w) {:kind :blocker}
-                          (pr-str {:format :blocker :summary "s" :needs "n"}))
+                          (pr-str {:format :blocker :summary "s" :needs "n?" :after "The work resumes once you answer."}))
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"not an :intent entry"
              (ws/append-entry! :brian (:id w) {:kind :design}

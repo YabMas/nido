@@ -162,9 +162,25 @@
    and strand a record that is already written."
   [:vector {:max authoring-branch-cap} Direction])
 
+(def TriageQuestion
+  "One question a triage puts to a person: one per independent defect the ticket carries. Its
+   :directions are alternatives to EACH OTHER — fixes of the same defect, of which one is built —
+   and a question may carry a single \"do this\" direction. Two independent fixes are two
+   questions, because one pick across them drops one of them.
+
+   The same parts every question nido asks carries (see Blocker): the question in one sentence,
+   its context, what happens after it, and the recommended answer only when the triage genuinely
+   holds a view on which fix is right — never as filler."
+  [:map {:closed true}
+   [:question       [:and string? [:fn {:error/message "a question is never blank"} (complement str/blank?)]]]
+   [:context        string?]
+   [:recommendation {:optional true} string?]
+   [:after          string?]
+   [:directions     [:vector {:min 1 :max authoring-branch-cap} Direction]]])
+
 (def ^:private triage-report-common
-  "Everything a triage report holds except `:directions`, whose shape is what the
-   two eras differ in."
+  "Everything a triage report holds except its questions, whose shape is what the eras differ
+   in: a flat `:directions` list before, `:questions` after."
   [[:format        [:= :triage-report]]
    [:ticket-key    string?]
    [:determination [:enum :bug :not-a-bug :needs-info]]
@@ -183,19 +199,23 @@
   "The §1–3 + §5 report. No §4 field — the dismiss recommendation is dropped at the
    schema level. `:at` is NOT here: the ledger stamps it at read time.
 
-   `:directions` is capped at the letter set, off the same constant Blocker's
-   `:options` uses. The cap belongs on the report rather than on the render: a
+   Each question's `:directions` is capped at the letter set, off the same constant
+   Blocker's `:options` uses. The cap belongs on the report rather than on the render: a
    seventh branch lettered nowhere would still be described on the card, so the
    card and the buttons would disagree about the question with nothing on screen
    saying why. Bounding it here is the one place that can say so once."
   (into [:map {:closed true}]
-        (conj triage-report-common [:directions AnswerableDirections])))
+        (conj triage-report-common [:questions [:vector TriageQuestion]])))
 
 (def ^:private TriageReportUncapped
   "The pre-2026-09 TriageReport: `:directions` was uncapped. Read-era only — see
    `read-schemas`."
   (into [:map {:closed true}]
         (conj triage-report-common [:directions [:vector Direction]])))
+
+(def ^:private TriageReportAny
+  "Every triage report ever writable: by questions, or by one directions list of either cap."
+  [:or TriageReport TriageReportUncapped])
 
 (def ^:private proposed-ticket-common
   "Fields shared by both proposed-ticket templates."
@@ -1772,8 +1792,10 @@
    [:recommended? {:optional true} boolean?]])
 
 (def Blocker
-  "A halt that needs a human. :needs is the question; :options is that same
-   question in answerable form — the branches the agent can already see, which
+  "A halt that needs a human, in four parts: :needs is the one-sentence question, :summary its
+   context, :recommendation the answer the writer supports — present only when the writer genuinely
+   holds a view, never filler, so it is optional — and :after what follows the answer.
+   :options is that same question in answerable form — the branches the agent can already see, which
    the gate renders as A/B/… and answers with one click (nido.coordinator.work/option-input
    builds the resume text nido-side from the option the human picked).
 
@@ -1784,8 +1806,17 @@
    answered by typing an essay back at it."
   [:map {:closed true}
    [:format  [:= :blocker]]
+   ;; The question's CONTEXT: what the work is, where it stands, what makes this a question.
    [:summary string?]
+   ;; The question itself, one sentence ending in '?'. A blocker written before the parts were
+   ;; separated holds situation, reasoning and question together here — see `blocker-parts`.
    [:needs   string?]
+   ;; The answer the writer's own reasoning supports, in words.
+   [:recommendation {:optional true} string?]
+   ;; What happens once the person answers: what runs, what waits. Its presence is what tells a
+   ;; blocker written in parts from one written before (`blocker-parts`), so the write contract
+   ;; requires it (`enforce-blocker-parts`) while the schema, which reads both eras, cannot.
+   [:after   {:optional true} string?]
    ;; What was already attempted. Optional because a halt raised at hour zero has
    ;; tried nothing and should not have to claim otherwise — but a halt the
    ;; machinery reached after four rounds says so here, and a reader can tell the
@@ -1837,6 +1868,20 @@
    [:fn {:error/message "a branch answer names both its letter and its label, a worded one neither"}
     (fn [{:keys [letter label]}] (= (some? letter) (some? label)))]])
 
+(def TriageAnswer
+  "The answer to one question of an accepted triage: the question's words when it had any, and
+   the direction chosen — copied in, letter and all, so the timeline reads without the report —
+   or none, for a question the person left open. :squirrel is a size a chosen direction may
+   defer, and stays one here."
+  [:map {:closed true}
+   [:question  {:optional true} string?]
+   [:direction {:optional true}
+    [:map {:closed true}
+     [:letter string?]
+     [:label  string?]
+     [:shape  string?]
+     [:effort TriageEffort]]]])
+
 (def TriageAccepted
   "The human's acceptance of a triage verdict at the gate — written by nido at the
    moment the button is clicked, never by an agent.
@@ -1847,13 +1892,12 @@
    ledger could not tell an accepted verdict from an unanswered one, or say when a
    person looked at it.
 
-   `:direction` is the branch the human picked, and its ABSENCE is the other
-   answer: the routing was accepted and the implementation direction deliberately
-   left open. Nothing separate marks the deferral, because whether one was on
-   offer is already readable from the report `:triage-seq` names — a report that
-   enumerated no directions asked no question to defer.
+   `:answers` holds one answer per question of the report, in its order, and an
+   answer with no direction is the other answer to that question: the routing was
+   accepted and that question deliberately left open. Nothing separate marks the
+   deferral; a report that asked no question has no :answers.
 
-   The branch is copied in rather than referenced, as a blocker's answer is, so a
+   Each branch is copied in rather than referenced, as a blocker's answer is, so a
    reader of the timeline learns what was decided without opening the entry this
    points at. It is the ONLY durable record of the choice: a direction's size
    lands on the ticket because that is a consequence a ticket is about, but which
@@ -1865,6 +1909,15 @@
    ;; naming it is what lets a reader pair the two entries afterwards. Absent when
    ;; the ledger held no report to cite: the ticket was accepted as reported, from
    ;; its intake text alone.
+   [:triage-seq {:optional true} int?]
+   ;; One answer per question of the report, in its order; absent when it asked none.
+   [:answers    {:optional true} [:vector TriageAnswer]]])
+
+(def ^:private TriageAcceptedDirection
+  "The acceptance before questions: at most one chosen `:direction`, its effort concrete. Read-era
+   only; `accepted-answers` reads it as one answer."
+  [:map {:closed true}
+   [:format     [:= :triage-accepted]]
    [:triage-seq {:optional true} int?]
    [:direction  {:optional true}
     [:map {:closed true}
@@ -3914,9 +3967,16 @@
                     ;; :summary and :options are the blocker's own, for an escalation that
                     ;; becomes the question (`ask/guidance :escalation`); one riding on a move
                     ;; already owed is a note, and only its :needs is read.
+                    ;; An escalation that parks is a question in its parts, like the blocker it parks
+                    ;; (`enforce-blocker-parts`): the one-sentence question, its context, the
+                    ;; recommended answer and what follows it. Older decisions carry :needs
+                    ;; alone, so the parts are optional here and required on write
+                    ;; (`enforce-escalation-parts`).
                     [:tuple [:= :escalate] [:map {:closed true}
                                             [:needs   [:string {:min 1}]]
                                             [:summary {:optional true} [:string {:min 1}]]
+                                            [:recommendation {:optional true} [:string {:min 1}]]
+                                            [:after   {:optional true} [:string {:min 1}]]
                                             [:options {:optional true}
                                              [:vector {:min 2 :max authoring-branch-cap} BlockerOption]]]]]]
    [:parked    {:optional true} [:map {:closed true} [:seq int?]]]])
@@ -4025,7 +4085,11 @@
    ;; with. A report written before that could enumerate any number and reads
    ;; under the uncapped shape — and stays fully answerable, because the letters
    ;; that answer branches are a longer vocabulary than the cap on writing them.
-   :triage TriageReportUncapped
+   ;; Questions replaced the flat list. Every report before carries :directions and reads as
+   ;; one question (`triage-questions`).
+   :triage TriageReportAny
+   ;; Acceptances recorded one optional :direction before a report could ask several questions.
+   :triage-accepted [:or TriageAccepted TriageAcceptedDirection]
    ;; `:findings-fixed` became `:fix-attempts` — the count never was defects
    ;; removed — and `:defects-settled`, which is, joined it as required. Every
    ;; :review entry written before that rename is in the old shape, and they are
@@ -4137,6 +4201,75 @@
                  "prose, the only way to answer is a free-text essay.")
             {:kind :blocker :report report}))))
 
+(def escalation-summary
+  "The fixed headline escalation blockers carried before an escalation said what it was about. It
+   says how a question arrived, not what it is, so it is never context."
+  "the conductor escalated a hand-back")
+
+(defn- provenance-only?
+  "True when a blocker's `summary` only says where the blocker came from — the escalation
+   headline, or the sentence a conductor wrote when an escalation carried no summary. Neither is
+   context: a question must not say how it reached the person."
+  [summary]
+  (let [t (str/trim (str summary))]
+    (or (= escalation-summary t)
+        (str/starts-with? t "Raised by the workstream's conductor"))))
+
+(def ^:private needs-max
+  "The longest a blocker's question may be written. One sentence a person reads at a glance; what
+   it presupposes belongs in :summary."
+  240)
+
+(defn- blocker-part-problems
+  "What is missing or malformed in a blocker written today, each as the instruction that fixes it."
+  [{:keys [needs summary after]}]
+  (let [q (str/trim (str needs))]
+    (cond-> []
+      (or (str/includes? q "\n") (> (count q) needs-max) (not (str/ends-with? q "?")))
+      (conj (str ":needs is the question alone — one sentence of at most " needs-max
+                 " characters ending in '?'; move the situation and your reasoning to :summary"))
+      (or (str/blank? summary) (provenance-only? summary))
+      (conj (str ":summary is the context the answer depends on — what the work is, where it "
+                 "stands, what makes this a question — never where the blocker came from"))
+      (str/blank? after)
+      (conj ":after says what happens once the person answers: what runs next, what waits"))))
+
+(defn- enforce-escalation-parts
+  "A conductor's :escalate that parks the workstream is the question its blocker will ask, so it is
+   held to the same parts on write (`enforce-blocker-parts`), with the same instruction for a
+   refusal. One decided while the next move is already a person's (`:next`'s :mode :human) parks
+   nothing and rides on that move's card as a note, so it is a note — not held to a question's
+   parts."
+  [{[verb body] :decision :as report}]
+  (if-let [problems (and (= :escalate verb)
+                         (not= :human (get-in report [:next :mode]))
+                         (seq (blocker-part-problems body)))]
+    (throw (ex-info (str "This escalation is not written in its parts. " (str/join "; " problems)
+                         ". If you genuinely hold a view on which answer is right, put it in :recommendation. "
+                         "See resources/asking/escalation.md.")
+                    {:kind :conduct-decision :report report :problems (vec problems)}))
+    report))
+
+(defn- enforce-blocker-parts
+  "THE OTHER FORCING FUNCTION. A blocker asks a person a question in four parts — the question in
+   one sentence, its context, the recommended answer and what happens after — so the card can set
+   the question apart from what supports it. A writer that puts all four in :needs produces a
+   paragraph nobody can scan; refuse it on write with the fix spelled out, so the agent re-emits
+   the halt at once. The message IS the instruction, not a schema dump, because an agent that
+   cannot read why it was refused cannot halt cleanly.
+
+   Write-contract only: a blocker recorded before the parts existed is legacy, read by
+   `blocker-parts`."
+  [report]
+  (if-let [problems (seq (blocker-part-problems report))]
+    (throw (ex-info
+            (str "This blocker is not written in its parts. "
+                 (str/join "; " problems)
+                 ". If you genuinely hold a view on which answer is right, put it in :recommendation. "
+                 "See resources/asking/ask.md.")
+            {:kind :blocker :report report :problems (vec problems)}))
+    report))
+
 (defn ^{:malli/schema [:=> [:cat :EntryKind :LedgerEvent] :LedgerEvent]}
   validate-event
   "THE WRITE CONTRACT. Validate `report` (parsed EDN) against the schema registered
@@ -4145,10 +4278,19 @@
    the emitting skill can fix + retry). Throws for an unregistered kind.
 
    Some kinds carry a rule the schema cannot express — see
-   enforce-blocker-options. Those run AFTER the schema, on the write path only."
+   enforce-blocker-options and enforce-blocker-parts. Those run AFTER the schema, on the write path only."
   [kind report]
+  (when (and (= :triage kind) (contains? report :directions))
+    (throw (ex-info (str "A triage report asks :questions now, not one :directions list: write one "
+                         "question per independent defect — {:question \"…?\" :context … "
+                         ":after … :directions [<the alternatives that fix that "
+                         "defect>]}, plus :recommendation only when you genuinely hold a view on which fix is right — "
+                         "and :questions [] when you route without directions. See "
+                         "the triage-bug skill's report template.")
+                    {:kind :triage :report report})))
   (cond-> (validate-against (schema-for :write kind) kind report)
-    (= :blocker kind) enforce-blocker-options))
+    (= :blocker kind)          (-> enforce-blocker-options enforce-blocker-parts)
+    (= :conduct-decision kind) enforce-escalation-parts))
 
 (defn ^{:malli/schema [:=> [:cat :any] :boolean]}
   answerable?
@@ -4168,6 +4310,60 @@
    outside it."
   [directions]
   (<= (count directions) (count option-letters)))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:vector :map]]}
+  triage-questions
+  "A triage report's questions, in either era: each {:question <words or nil> :context
+   :recommendation :after :directions}. A report written as one flat `:directions` list is one
+   question with no words of its own, and one with none asks none.
+
+   THE one reading of a report's questions: no reader takes `:directions` or `:questions` off a
+   report itself, so the two eras cannot be told apart anywhere but here."
+  [report]
+  (cond
+    (contains? report :questions) (vec (:questions report))
+    (seq (:directions report))    [{:question nil :directions (vec (:directions report))}]
+    :else                         []))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:vector :map]]}
+  accepted-answers
+  "An acceptance's answers, in either era: one {:question? :direction?} per question of the report
+   it accepted. A stored single `:direction` is one answer; an acceptance that recorded neither
+   answers nothing — the routing accepted, no question asked or none recorded."
+  [accepted]
+  (cond
+    (contains? accepted :answers) (vec (:answers accepted))
+    (:direction accepted)         [{:direction (:direction accepted)}]
+    :else                         []))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:vector :map]]}
+  open-answers
+  "The answers of an acceptance that chose nothing: one per question of `report`, each left open
+   and carrying the question's words when it has any. What every acceptance written without a
+   gate's choices records, so a reader tells \"left open\" from \"never asked\" by the count."
+  [report]
+  (mapv (fn [{:keys [question]}] (cond-> {} (not (str/blank? question)) (assoc :question question)))
+        (triage-questions report)))
+
+(def legacy-blocker-question
+  "The question line of a blocker written before its parts were separated, whose :needs holds the
+   whole of what it says and is read as body text."
+  "This work is waiting on your answer.")
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :map]}
+  blocker-parts
+  "A blocker's question in its parts, in either era: {:question :context [strings]
+   :recommendation? :after?}. A blocker written with :after gives its :needs as the one-sentence
+   question; one written before is legacy — asked under `legacy-blocker-question`, its :needs
+   leading the context, because a paragraph set as a heading cannot be scanned. A :summary that
+   only says where the blocker came from is no context and is dropped."
+  [{:keys [needs summary recommendation after]}]
+  (let [ctx (when-not (or (str/blank? summary) (provenance-only? summary)) summary)]
+    (if (str/blank? after)
+      {:question legacy-blocker-question
+       :context  (vec (remove str/blank? [needs ctx]))}
+      (cond-> {:question (str/trim (str needs)) :context (if ctx [ctx] []) :after after}
+        (not (str/blank? recommendation)) (assoc :recommendation recommendation)))))
 
 (defn ^{:malli/schema [:=> [:cat :EntryKind :any] :LedgerEvent]}
   parse-event
@@ -4206,7 +4402,7 @@
   {:ataberk "Ataberk" :eric "Eric" :jaap "Jaap"})
 
 (defn- triage->markdown [{:keys [title determination summary confidence
-                                 routing design-frame directions notion-writes trail]}]
+                                 routing design-frame notion-writes trail] :as report}]
   (str/join
    "\n"
    (concat
@@ -4229,11 +4425,17 @@
                (for [{:keys [rule source evidence]} violated]
                  (str "- " rule " (" source ") — `" evidence "`"))))
        [""]))
-    (when (seq directions)
-      (cons "## Solution directions"
-            (for [{:keys [label shape effort confidence]} directions]
-              (str "- **" label "** — " shape ". Effort: " (name effort)
-                   ". Confidence: " (name (:level confidence)) " — " (:reason confidence)))))
+    (mapcat (fn [{:keys [question context recommendation after directions]}]
+              (concat
+               [(str "## " (or question "Solution directions"))]
+               (remove str/blank? [context])
+               (for [[i {:keys [label shape effort confidence]}] (map-indexed vector directions)]
+                 (str "- " (option-letter i) ". **" label "** — " shape ". Effort: " (name effort)
+                      ". Confidence: " (name (:level confidence)) " — " (:reason confidence)))
+               (when-not (str/blank? recommendation) [(str "_Recommended:_ " recommendation)])
+               (when-not (str/blank? after) [(str "_Once answered:_ " after)])
+               [""]))
+            (triage-questions report))
     (when notion-writes
       (remove nil?
               ["" "## Proposed Notion writes (on `apply`)"
@@ -4474,10 +4676,12 @@
                   (for [d deviations] (str "- " d)))))))
      (when (seq open) (concat ["" "## Still open"] (for [o open] (str "- " o)))))))
 
-(defn- blocker->markdown [{:keys [summary needs tried options]}]
+(defn- blocker->markdown [{:keys [summary needs recommendation after tried options]}]
   (str/join "\n"
     (concat
      ["# Blocker" "" summary "" "## Needs" needs]
+     (when-not (str/blank? recommendation) ["" "## Recommended" recommendation])
+     (when-not (str/blank? after) ["" "## Once answered" after])
      ;; Before the options, because it is context for the choice rather than a
      ;; footnote to it — the same reason a design decision prints its trajectory
      ;; above its ask. A reader who has already been asked the question is
@@ -4512,17 +4716,27 @@
             "_")
        "" summary])))
 
-(defn- triage-accepted->markdown [{:keys [triage-seq direction]}]
-  (str/join "\n"
-    (remove nil?
-      (if direction
-        [(str "# Accepted: direction " (:letter direction) " — " (:label direction))
-         (str "_accepts the triage report at entry " triage-seq
-              "; effort " (name (:effort direction)) "_")
-         "" (:shape direction)]
-        [(str "# Accepted: no direction chosen")
-         (str "_accepts the triage report at entry " triage-seq
-              "; the implementation direction is left open_")]))))
+(defn- triage-accepted->markdown [{:keys [triage-seq] :as accepted}]
+  (let [answers (accepted-answers accepted)
+        chosen  (filter :direction answers)]
+    (str/join "\n"
+      (concat
+       [(cond
+          (empty? chosen)        "# Accepted: no direction chosen"
+          (= 1 (count answers))  (let [d (:direction (first chosen))]
+                                   (str "# Accepted: direction " (:letter d) " — " (:label d)))
+          :else                  (str "# Accepted: " (count chosen) " of " (count answers)
+                                      " questions answered"))
+        (str "_accepts the triage report at entry " triage-seq
+             (when (empty? chosen) "; the implementation direction is left open") "_")]
+       (when (or (> (count answers) 1) (seq chosen))
+         (cons ""
+               (for [{:keys [question direction]} answers]
+                 (str "- " (when question (str question " — "))
+                      (if direction
+                        (str "**" (:letter direction) ". " (:label direction) "** ("
+                             (effort-label (:effort direction)) "): " (:shape direction))
+                        "left open")))))))))
 
 (defn- pr-opened->markdown [{:keys [url title summary]}]
   (str/join "\n"
@@ -5401,9 +5615,14 @@
                                   (str "Conductor instructs " (str/join ", " (map (comp addressee->text :seat) body)))
                                   (str "Conductor escalates: " (first-line (:needs body)))))
     :issue                    (str "Issue " (:id report))
-    :triage-accepted          (if-let [d (:direction report)]
-                                (str "Accepted: direction " (:letter d) " — " (:label d))
-                                "Accepted: no direction chosen")
+    :triage-accepted          (let [answers (accepted-answers report)
+                                    chosen  (keep :direction answers)]
+                                (cond
+                                  (empty? chosen)       "Accepted: no direction chosen"
+                                  (= 1 (count answers)) (str "Accepted: direction " (:letter (first chosen))
+                                                             " — " (:label (first chosen)))
+                                  :else                 (str "Accepted: " (count chosen) " of "
+                                                             (count answers) " questions answered")))
     :review-report            (str "Review: " (name (:status report)))
     :baseline-review          (str "Baseline review: " (name (:verdict report))
                                    (when (held-once? report) held-once-words))

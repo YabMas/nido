@@ -24,7 +24,7 @@
                       (pr-str {:format :triage-report :ticket-key br :determination :bug
                                :title "Verdict" :summary "bug — reproduced."
                                :confidence {:level :high :reason "r"}
-                               :routing nil :directions [] :notion-writes nil :trail []}))))
+                               :routing nil :questions [] :notion-writes nil :trail []}))))
 
 (defn- ws-of [br] (ws/find-by-ref-id :brian br))
 
@@ -163,3 +163,22 @@
 (deftest tickets-no-longer-writes-entries
   (is (nil? (resolve 'nido.coordinator.record.tickets/append-entry!))
       "entry writes moved to the workstream ledger"))
+
+(deftest complete-leaves-every-question-of-the-verdict-open
+  (with-tmp
+    (fn [_]
+      (let [n (ws/seq-of-path
+               (ws/append-to-ref! :brian "BR-5" {:kind :triage}
+                                  (pr-str {:format :triage-report :ticket-key "BR-5" :determination :bug
+                                           :title "Two defects" :summary "s"
+                                           :confidence {:level :high :reason "r"}
+                                           :routing nil :notion-writes nil :trail []
+                                           :questions [{:question "Where should it round?" :context "c" :after "a"
+                                                        :directions [{:label "Once" :shape "s" :effort :S :confidence {:level :high :reason "r"}}]}
+                                                       {:question "Should the receipt show it?" :context "c" :after "a"
+                                                        :directions [{:label "Show" :shape "s" :effort :XS :confidence {:level :high :reason "r"}}]}]})))]
+        (tickets/complete! :brian "BR-5")
+        (is (= [{:format :triage-accepted :triage-seq n
+                 :answers [{:question "Where should it round?"} {:question "Should the receipt show it?"}]}]
+               (map #(dissoc % :seq :at) (ws/entries-of :brian (:id (ws-of "BR-5")) :triage-accepted)))
+            "an acceptance that chose nothing still answers each question — left open")))))

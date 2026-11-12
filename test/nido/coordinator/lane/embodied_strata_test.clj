@@ -133,7 +133,7 @@
         (with-redefs [lifecycle/up! (fn [_ _] (throw (ex-info "no runtime" {})))]
           (is (thrown? Exception (embodied/carry! :brian id)))
           (conductor/reseat! :brian id #{["brian" "by-hand"]}))
-        (is (= ["seat canvas.strata/ledger, canvas.strata/seats could not be started"]
+        (is (= ["How should seats canvas.strata/ledger, canvas.strata/seats be carried, now that they could not be started?"]
                (mapv :needs (ws/entries-of :brian id :blocker))))
         (conductor/reseat! :brian id #{["brian" "by-hand"]})
         (is (= [(:seq (first (ws/entries-of :brian id :blocker)))]
